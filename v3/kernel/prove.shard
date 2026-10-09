@@ -1,7 +1,8 @@
 ;;; v3/kernel/prove.shard — the producer's driver (v3/LANGUAGE.md §8.4 slice 3.22 rule 6;
 ;;; law §7.5):
-;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… FILE…
-;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… --measure FILE…
+;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… [--init-receipt FILE] FILE…
+;;;   eval direct v3/kernel/prove.shard --root DIR [--init CHUNK]… [--init-receipt FILE] --measure FILE…
+;;; `--init-receipt` as load.shard's (slice 3.23): the chunks a T0 run accepted stream in admit mode.
 ;;; loads each FILE as load.shard does, under the mode `solve`: an `auto` theorem (a
 ;;; fulfills, a discharge) without a valid sidecar entry is the engine's (engine.shard),
 ;;; and the block it finds is replayed before it is accepted. Then the sidecar of every
@@ -37,18 +38,19 @@
 (use kernel.sexpr.RAll)
 (use kernel.reader.Auto)
 
-(type PArgs (PArgs (List Int) (List (List Int)) (List (List Int)) Bool))   ; root, chunks, files, measure
+(type PArgs (PArgs (List Int) (List (List Int)) (List (List Int)) Bool (List Int)))   ; root, chunks, files, measure, the Init receipt
 (fn parse_pargs ((args (List (List Int))) (a PArgs)) PArgs
   (measure (struct args))
   (match a
-    ((PArgs root chunks files measure)
+    ((PArgs root chunks files measure rcpt)
      (match args
-       (Nil (PArgs root (rev chunks) (rev files) measure))
+       (Nil (PArgs root (rev chunks) (rev files) measure rcpt))
        ((Cons x r)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_pargs r2 (PArgs v chunks files measure))) (Nil (parse_pargs Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_pargs r2 (PArgs root (Cons v chunks) files measure))) (Nil (parse_pargs Nil a)))
-        (if (int_list_eq x "--measure") (parse_pargs r (PArgs root chunks files True))
-          (parse_pargs r (PArgs root chunks (Cons x files) measure))))))))))
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_pargs r2 (PArgs v chunks files measure rcpt))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_pargs r2 (PArgs root (Cons v chunks) files measure rcpt))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--measure") (parse_pargs r (PArgs root chunks files True rcpt))
+        (if (int_list_eq x "--init-receipt") (match r ((Cons v r2) (parse_pargs r2 (PArgs root chunks files measure v))) (Nil (parse_pargs Nil a)))
+          (parse_pargs r (PArgs root chunks (Cons x files) measure rcpt)))))))))))
 
 (fn prove_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
@@ -62,18 +64,20 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_pargs args (PArgs Nil Nil Nil False))
-       ((PArgs root chunks files measure)
+     (match (parse_pargs args (PArgs Nil Nil Nil False Nil))
+       ((PArgs root chunks files measure rcpt)
         (match (parts_of root)
           (None (exit 2 (write_line "prove: --root DIR is required" w1)))
           ((Some rootp)
            (if (int_eq (len rootp) 0)
              (exit 2 (write_line "prove: --root DIR is required" w1))
-             (if measure (main_measure rootp chunks files w1) (main_solve rootp chunks files w1))))))))))
+             (match (load_with_receipt rootp chunks rcpt w1)
+               ((Pair None w2) (exit 2 (write_line (append "prove: cannot read the receipt " rcpt) w2)))
+               ((Pair (Some l0) w2) (if measure (main_measure l0 files w2) (main_solve l0 files w2))))))))))))
 
 ;; ---- solve -------------------------------------------------------------------------------------
-(fn main_solve ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (w World)) World
-  (match (prove_files (ld_with_mode (load0 rootp chunks) (quote solve)) files (write_line (append "PROVE root=" (append (join_path rootp) (append " engine_version=" (show_nat (engine_version))))) w))
+(fn main_solve ((l0 Load) (files (List (List Int))) (w World)) World
+  (match (prove_files (ld_with_mode l0 (quote solve)) files (write_line (append "PROVE root=" (append (join_path (Load.root l0)) (append " engine_version=" (show_nat (engine_version))))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (match (write_sidecars l (proved_by_file l (ld_recs l) Nil) w2)
@@ -155,8 +159,8 @@
      (append "(proof-for " (append (show_name n) (append " " (append (show_int fp) (append " (by " (append (show_sexprs steps) (append "))\n" (render_entries r)))))))))))
 
 ;; ---- measure -----------------------------------------------------------------------------------
-(fn main_measure ((rootp (List (List Int))) (chunks (List (List Int))) (files (List (List Int))) (w World)) World
-  (match (prove_files (ld_with_mode (load0 rootp chunks) (quote measure)) files (write_line (append "MEASURE root=" (append (join_path rootp) (append " engine_version=" (show_nat (engine_version))))) w))
+(fn main_measure ((l0 Load) (files (List (List Int))) (w World)) World
+  (match (prove_files (ld_with_mode l0 (quote measure)) files (write_line (append "MEASURE root=" (append (join_path (Load.root l0)) (append " engine_version=" (show_nat (engine_version))))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (exit (load_failures cs)

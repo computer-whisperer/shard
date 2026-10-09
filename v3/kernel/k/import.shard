@@ -58,7 +58,7 @@
 (type Tabs (Tabs (IntMap Name) (IntMap Level) (IntMap Expr)))
 
 ;; the run's state: tables, environment, checker state, counters
-(type Run (Run Tabs CheckedEnv St Int Int Int Int Int Bool Bool AxMemo))   ; accepted rejected exhausted mismatched unsupported; pins mode; -a mode + its closure memo
+(type Run (Run Tabs CheckedEnv St Int Int Int Int Int Bool Bool AxMemo Bool))   ; accepted rejected exhausted mismatched unsupported; pins mode; -a mode + its closure memo; admit mode (the Init cache)
 
 (fn tabs_names ((t Tabs)) (IntMap Name) (match t ((Tabs n _ _) n)))
 (fn tabs_levels ((t Tabs)) (IntMap Level) (match t ((Tabs _ l _) l)))
@@ -448,28 +448,31 @@
 
 ;; ---- one record ---------------------------------------------------------------------------
 
-(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _ _ _ _) t)))
-(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _ _ _ _) e)))
-(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _ _ _) s)))
-(fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m _ _) m)))
-(fn run_ax_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ _ x _) x)))
-(fn run_memo ((r Run)) AxMemo (match r ((Run _ _ _ _ _ _ _ _ _ _ mm) mm)))
-(fn run_with_memo ((r Run) (mm AxMemo)) Run (match r ((Run t e s a b c d f m x _) (Run t e s a b c d f m x mm))))
-(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _ _ _) (list a b c d e))))
-(fn run_with_tabs ((r Run) (t Tabs) (s St)) Run (match r ((Run _ e _ a b c d f m x mm) (Run t e s a b c d f m x mm))))
-(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m x mm) (Run t e s a b c d f m x mm))))
+(fn run_tabs ((r Run)) Tabs (match r ((Run t _ _ _ _ _ _ _ _ _ _ _) t)))
+(fn run_env ((r Run)) CheckedEnv (match r ((Run _ e _ _ _ _ _ _ _ _ _ _) e)))
+(fn run_st ((r Run)) St (match r ((Run _ _ s _ _ _ _ _ _ _ _ _) s)))
+(fn run_pins_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ m _ _ _) m)))
+(fn run_ax_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ _ x _ _) x)))
+(fn run_memo ((r Run)) AxMemo (match r ((Run _ _ _ _ _ _ _ _ _ _ mm _) mm)))
+(fn run_with_memo ((r Run) (mm AxMemo)) Run (match r ((Run t e s a b c d f m x _ ad) (Run t e s a b c d f m x mm ad))))
+(fn run_admit_mode ((r Run)) Bool (match r ((Run _ _ _ _ _ _ _ _ _ _ _ ad) ad)))
+;; admit mode: declarations enter by `admit_decl_pinning` (add.shard) — the Init cache under a receipt
+(fn run_admitting ((r Run) (ad Bool)) Run (match r ((Run t e s a b c d f m x mm _) (Run t e s a b c d f m x mm ad))))
+(fn run_counts ((r Run)) (List Int) (match r ((Run _ _ _ a b c d e _ _ _ _) (list a b c d e))))
+(fn run_with_tabs ((r Run) (t Tabs) (s St)) Run (match r ((Run _ e _ a b c d f m x mm ad) (Run t e s a b c d f m x mm ad))))
+(fn run_with_env ((r Run) (e CheckedEnv) (s St)) Run (match r ((Run t _ _ a b c d f m x mm ad) (Run t e s a b c d f m x mm ad))))
 (fn run_count ((r Run) (which Int)) Run
   (match r
-    ((Run t e s a b c d f m x mm)
-     (if (int_eq which 0) (Run t e s (+ a 1) b c d f m x mm)
-     (if (int_eq which 1) (Run t e s a (+ b 1) c d f m x mm)
-     (if (int_eq which 2) (Run t e s a b (+ c 1) d f m x mm)
-     (if (int_eq which 3) (Run t e s a b c (+ d 1) f m x mm)
-     (Run t e s a b c d (+ f 1) m x mm))))))))
+    ((Run t e s a b c d f m x mm ad)
+     (if (int_eq which 0) (Run t e s (+ a 1) b c d f m x mm ad)
+     (if (int_eq which 1) (Run t e s a (+ b 1) c d f m x mm ad)
+     (if (int_eq which 2) (Run t e s a b (+ c 1) d f m x mm ad)
+     (if (int_eq which 3) (Run t e s a b c (+ d 1) f m x mm ad)
+     (Run t e s a b c d (+ f 1) m x mm ad))))))))
 
 ;; the verdict of checking one declaration and the run afterwards
 (fn check_into ((r Run) (d Declaration)) (Pair Run Verdict)
-  (match (check_decl_pinning (run_env r) (run_st r) d)
+  (match (if (run_admit_mode r) (admit_decl_pinning (run_env r) (run_st r) d) (check_decl_pinning (run_env r) (run_st r) d))
     ((KOk st1 env1)
      (Pair (run_count (run_with_env r (if (run_pins_mode r) (pin_names_unconditionally env1 (decl_pin_candidates d)) env1) st1) 0) (VAccept (decl_name d))))
     ((KFail (FRej (Unsupported s))) (Pair (run_count r 4) (VUnsupported s (decl_name d))))
@@ -601,7 +604,7 @@
        (append "  mismatched " (append (show_nat d) (append "  unsupported " (show_nat e)))))))))))
     (_ "")))
 
-(fn empty_run ((pins_mode Bool) (ax_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil 0) (st_init) 0 0 0 0 0 pins_mode ax_mode (ax_memo_empty)))
+(fn empty_run ((pins_mode Bool) (ax_mode Bool)) Run (Run (Tabs IMEmpty IMEmpty IMEmpty) (CheckedEnv IMEmpty False Nil 0) (st_init) 0 0 0 0 0 pins_mode ax_mode (ax_memo_empty) False))
 
 ;; pins mode (gen_pins.sh): every candidate is pinned as admitted — the
 ;; run that PRODUCES the table from the pinned export; never a checking run

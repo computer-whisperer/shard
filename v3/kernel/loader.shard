@@ -234,10 +234,12 @@
   (forms (IntMap (List (Pair Name (Pair Scope SExpr)))))
   (discharged (List (Pair Name (List Name))))   ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
-  (derived (List Derived)))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
+  (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
+  (receipt (List (Pair (List Int) Int))))   ; the Init receipt (slice 3.23): the export chunks a T0 run accepted, by path and byte count; empty = every chunk checked
 (fn load0 ((root (List (List Int))) (chunks (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil)))
+             (pending Nil) (stack Nil) (recs Nil) (chunks chunks) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (receipt Nil)))
+(fn ld_with_receipt ((l Load) (r (List (Pair (List Int) Int)))) Load (with Load l (receipt r)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -1080,7 +1082,10 @@
               (match (check_meta bs)
                 ((Pair None msg) (Pair (init_err l f (quote export_pin_mismatch) msg) w1))
                 ((Pair (Some after) _)
-                 (init_stream l (run_with_env (empty_run False False) (Load.env l) (st_for (Load.env l))) after rest target 0 (init_budget) w1))))))))
+                 (match (receipt_mode (Load.receipt l) f bs)
+                   (None (Pair (init_err l f (quote init_receipt_stale) (receipt_detail bs)) w1))
+                   ((Some ad)
+                    (init_stream l (run_admitting (run_with_env (empty_run False False) (Load.env l) (st_for (Load.env l))) ad) after rest target 0 (init_budget) w1))))))))))
        ((InitSt run rest files _ n)
         (init_stream l (run_with_env run (Load.env l) (st_for (Load.env l))) rest files target n (init_budget) w))))))
 
@@ -1095,7 +1100,10 @@
          ((Cons f rest)
           (match (read_file f w)
             ((Pair None w1) (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote missing_file) "the export chunk") w1))
-            ((Pair (Some bs2) w1) (init_stream l run bs2 rest target n (- fuel 1) w1))))))
+            ((Pair (Some bs2) w1)
+             (match (receipt_mode (Load.receipt l) f bs2)
+               (None (Pair (init_err (init_save l run Nil rest (init_prefix l) n) f (quote init_receipt_stale) (receipt_detail bs2)) w1))
+               ((Some ad) (init_stream l (run_admitting run ad) bs2 rest target n (- fuel 1) w1))))))))
       (_
        (match (json_parse bs)
          (JErr (Pair (init_err (init_save l run Nil files (init_prefix l) n) "Init" (quote init_malformed) "a record is not JSON") w))
@@ -1111,6 +1119,51 @@
                       (Pair (Pair (ld_rec (init_save l1 run1 rest files target (+ n 1)) (RInit target (+ n 1))) True) w)
                       (init_stream l1 run1 rest files target (+ n 1) (- fuel 1) w)))))
                (_ (Pair (init_err (init_save l run1 rest files (init_prefix l) n) "Init" (quote init_refused) (match (show_verdict v) ((Some t) t) (None "?"))) w))))))))))))
+
+;; ---- the Init receipt (slice 3.23) ----------------------------------------------------------
+;; `t0.shard --receipt FILE` writes, after a run that accepted every record of
+;; its chunks, one line per chunk: `PATH BYTES`; a line starting with `#` is the
+;; writer's (the suite's K hash) and is not read here. A chunk listed with its
+;; byte count enters in ADMIT mode (k/add.shard admit_decl_pinning): its axioms,
+;; definitions, theorems and opaques inserted without the typing judgments, the
+;; inductive blocks and the quotient checked as always. With a receipt set, a
+;; chunk not listed, or listed with another byte count, is refused —
+;; `init_receipt_stale` — never checked silently. No receipt: every chunk checked.
+(fn receipt_mode ((rcpt (List (Pair (List Int) Int))) (f (List Int)) (bs (List Int))) (Option Bool)
+  (match rcpt
+    (Nil (Some False))
+    (_ (if (receipt_lists rcpt f (len bs)) (Some True) None))))
+(fn receipt_lists ((rcpt (List (Pair (List Int) Int))) (f (List Int)) (n Int)) Bool
+  (measure (struct rcpt))
+  (match rcpt
+    (Nil False)
+    ((Cons (Pair path bytes) r) (if (int_list_eq path f) (if (int_eq bytes n) True (receipt_lists r f n)) (receipt_lists r f n)))))
+(fn receipt_detail ((bs (List Int))) (List Int)
+  (append "the chunk is not in the receipt at its byte count (" (append (show_nat (len bs)) " bytes); regenerate it (t0.shard --receipt)")))
+;; the load a driver starts from: with a receipt FILE named (`--init-receipt`), read and set; None = unreadable
+(fn load_with_receipt ((rootp (List (List Int))) (chunks (List (List Int))) (rcpt (List Int)) (w World)) (Pair (Option Load) World)
+  (if (int_eq (len rcpt) 0) (Pair (Some (load0 rootp chunks)) w)
+    (match (read_file rcpt w)
+      ((Pair None w1) (Pair None w1))
+      ((Pair (Some bs) w1) (Pair (Some (ld_with_receipt (load0 rootp chunks) (receipt_parse bs))) w1)))))
+;; the receipt's text: `PATH BYTES` per line, `#` lines skipped
+(fn receipt_parse ((bs (List Int))) (List (Pair (List Int) Int))
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    (_
+     (match (take_line bs Nil)
+       ((Pair line rest)
+        (match line
+          (Nil (receipt_parse rest))
+          ((Cons 35 _) (receipt_parse rest))
+          (_ (match (split_space line)
+               ((Pair path bytes) (Cons (Pair path (digits_val bytes 0)) (receipt_parse rest)))))))))))
+(fn split_space ((xs (List Int))) (Pair (List Int) (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil (Pair Nil Nil))
+    ((Cons c r) (if (int_eq c 32) (Pair Nil r) (match (split_space r) ((Pair a b) (Pair (Cons c a) b)))))))
 
 ;; ---- files and modules -----------------------------------------------------------------------
 (fn import_depth () Int 1000)

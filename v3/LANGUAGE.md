@@ -1,8 +1,8 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-10-06): the design of S, L, E and I as phase 3 builds
-> them — §13 items 1–38 ratified 2026-09-15, each later item for
-> ratification as its slice lands.** Normative parent:
+> **STATUS (2026-10-08): the design of S, L, E and I as phase 3 builds
+> them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
+> 2026-10-08, each later item for ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1796,6 +1796,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
 | 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
+| 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4394,6 +4395,77 @@ calc). 3: rule 7 (the store and `verify_release` on calc, in CI).
   forks is a branch per view, open until a consumer needs it. The
   store is per root; a release across roots is not a case yet.
 
+**Slice 3.23 — the Init cache: K's verdict on the pinned export,
+admitted under a receipt** (ruled 2026-10-08 on GPT-6's R75; §13 item
+57; records §4.11). The boundary after 3.22 held two items accepted
+from the trajectory review with their work deferred: the feedback
+cost (R75) and the connected path (R76). The user ruled the cache
+first, shallow — "something I expect us to iterate as we optimize and
+rework things" — and the path after it.
+
+*What the cost is.* Every load streams the pinned export through K up
+to the deepest name its modules cite (§3.1), and K checks every
+declaration on the way. Measured on the development machine over the
+two fixture chunks (3,523 declarations, 14 MB):
+
+| step | wall |
+|---|---|
+| reading and JSON-parsing every record | 9.2 s |
+| and building the name, level and expression tables | 13.1 s |
+| and K's check of every declaration (the T0 driver) | 47.2 s |
+| the same with the typing judgments skipped (admit mode, below) | 17.2 s |
+
+The check is 72 percent of a load's Init cost; the parse and the
+tables are the rest, and any on-disk form must build the same tables.
+A serialized environment therefore had a ceiling of a few seconds per
+load against a second format behind K's seal; the lever taken skips
+the check and keeps the export as the only form.
+
+**The rules of slice 3.23:**
+
+1. **The receipt.** `t0.shard --receipt FILE`, after a run that
+   accepted every record of its chunks (nothing rejected, exhausted,
+   mismatched or unsupported), writes one line per chunk: `PATH
+   BYTES`. A run with anything not accepted writes nothing. A line
+   starting with `#` is the writer's and is not read by the loader.
+2. **Admission.** `k/add.shard`'s `admit_decl_pinning` is the
+   environment effect of `check_decl_pinning` with the typing
+   judgments of an axiom, definition, theorem or opaque skipped: the
+   constant is inserted as the declaration states it, the node
+   watermark and the accelerator pins exactly as on the checked path.
+   An inductive block and the quotient take the checked path. The
+   import's run state carries the mode (`run_admitting`); nothing else
+   in K changes, and `check` — the raw entry of §3.5 — is untouched.
+3. **The loader.** `load.shard --init-receipt FILE` (and
+   `prove.shard`'s, the loader pins test's) sets the receipt on the
+   load; a chunk listed with its byte count streams in admit mode, a
+   chunk not listed or listed with another byte count is refused
+   (`init_receipt_stale`) before any record of it is read. Without a
+   receipt every chunk is checked, as before. The records and the
+   counts print exactly as without the flag — the loader pins' 212
+   expected outputs are the equivalence gate.
+4. **Currency.** `kernel/test/init_receipt.sh` keeps
+   `v3/.cache/init.receipt` current and prints its path: K's identity
+   for the receipt is a hash of the sealed module's sources, the
+   kernel files it imports and the fixture, written as the receipt's
+   `# k=` header; a mismatch regenerates (one T0 run over the
+   fixture). `v3/test.sh` runs it once and exports `INIT_RECEIPT`;
+   the shell tests add `--init-receipt` when it is set. The cache
+   directory is ignored by git; the receipt is never committed and
+   never an artifact.
+5. **The gate is untouched.** `verify_release` takes no receipt: the
+   release bundle is replayed by K alone over the export, as rule 7 of
+   slice 3.22 states. The T0 full replay on CI checks the whole export
+   as before; the receipt is a cache of that verdict for the
+   development loop and the suite.
+
+**Slice 3.23 as built** (2026-10-08): as the rules. The auto example
+(`--root v3`, Init streamed 1,509 declarations into the second chunk)
+loads in 8.3 s under the receipt against 13.7 s without, the records
+byte-identical; a receipt with a wrong byte count refuses the load
+(`LOAD-ERROR … init_receipt_stale`, modules 0, exit 1); an unreadable
+receipt exits 2 before any load. The 221 loader pins pass byte-identical under the receipt in 809 s on the development machine (beside parity and the define test; 1,361 s without the receipt beside the full suite — the clean comparison is pipeline 553's against 552's 3,327 s on the runner); parity byte-identical over 30 closures and 130,445 declarations; route 1's native driver, rebuilt locally, ties the interpreter on the first chunk and writes the receipt; the full suite's 36 entrypoints 0 failed in 927 s, the pins entrypoint its wall clock still.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5448,7 +5520,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     turn ambiguous when another file imports further; **closed by item
     55**); a measured function's obligations are stated over the
     arguments' tuple; `reduce_stuck` on an already normal target
-    (**closed by item 55**).
+    (**closed by item 55**). **Ratified 2026-10-08.**
+
 55. **Slice 3.21b (ruled 2026-10-06 on GPT-6's trajectory review,
     records §4.11; the design and the as-built, §8.4) — for
     ratification with item 54.** (a) **The expected type decides an
@@ -5461,7 +5534,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     reversed on the review's finding 3 — a proof was tied to how far
     the step before it went. *Carried to 3.22's design, by the same
     ruling:* a stored certificate keyed by its rows' statements, not
-    their positions; the dependent witness goal.
+    their positions; the dependent witness goal. **Ratified 2026-10-08.**
+
 56. **Slice 3.22's design (ruled 2026-10-07 on three leans; §8.4) —
     for ratification.** The producers. (a) **The engine emits `(arith
     only FACT… (farkas K…))`, the certificate written** — the rows named,
@@ -5480,4 +5554,28 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     far, and the gate ties each accepted declaration to its order line's
     name and fingerprint — K's acceptance is the guarantee, the tie says
     the bundle is the build's; the implementation forks of views are not
-    stored (open until a consumer needs it).
+    stored (open until a consumer needs it). **Ratified 2026-10-08.**
+57. **Slice 3.23, the Init cache (ruled 2026-10-08 on GPT-6's R75;
+    §8.4) — for ratification.** The user's ruling: a snapshot cache is
+    a practical need, kept shallow enough to rework as the pipeline is
+    optimized. *Decided here:* (a) **the cache is K's verdict, not a
+    second format** — the pinned export stays the only on-disk form
+    of Init, and a receipt written by a T0 run that accepted every
+    record names the chunks by path and byte count; rejected: a
+    serialized environment (a deserializer behind the seal, a format
+    to keep in step, and a ceiling of a few seconds since the tables
+    must be built either way — measured below). (b) **Admission skips
+    the typing judgments of axioms, definitions, theorems and
+    opaques and nothing else**: an inductive block and the quotient
+    take the checked path, since their constants are what that path
+    generates. (c) **A receipt is explicit and a stale one is
+    refused**, never checked silently: `--init-receipt` names it, a
+    chunk not listed at its byte count is `init_receipt_stale`. (d)
+    **The receipt is tied to K by the writer, not the reader**: the
+    suite's helper hashes the sealed module's sources and the fixture
+    into the receipt's header and regenerates on a change; the loader
+    reads only the chunk lines. (e) **`verify_release` takes no
+    receipt** — the release gate is K alone over the export as before.
+    *Left open, stated:* the loader pins' entrypoint re-streams Init
+    once per case in one process; a load shared across cases (the
+    persistent session, T9) is the next lever, not this one.

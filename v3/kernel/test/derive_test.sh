@@ -18,9 +18,10 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
 TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
 fail=0; checks=0
-load() { "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" "$@" 2>&1; }
+load() { "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" $RCPT "$@" 2>&1; }
 want() {   # NAME TEXT PATTERN
   checks=$((checks+1))
   if ! echo "$2" | grep -q -- "$3"; then echo "derive_test: $1 lacks '$3'"; echo "$2" | grep -E 'REFUSE|ERROR|DERIVE' | head -6; fail=$((fail+1)); fi

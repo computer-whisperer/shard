@@ -12,10 +12,11 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
 P=v3/pins/loader
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 fail=0; n=0
-run() { local c=$1 entry=$2; shift 2; "$EVAL" direct v3/kernel/load.shard --root $P/$c --init "$FIX" --run "$entry" $P/$c/main.shard -- "$@"; }
+run() { local c=$1 entry=$2; shift 2; "$EVAL" direct v3/kernel/load.shard --root $P/$c --init "$FIX" $RCPT --run "$entry" $P/$c/main.shard -- "$@"; }
 check() { n=$((n+1)); if ! cmp -s "$2" "$3"; then echo "wire_test: $1: output differs"; diff "$2" "$3" | head -6; fail=$((fail+1)); fi; }
 code() { n=$((n+1)); if [ "$2" -ne "$3" ]; then echo "wire_test: $1: exit $2, expected $3"; fail=$((fail+1)); fi; }
 

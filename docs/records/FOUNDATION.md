@@ -2660,6 +2660,30 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-08 — slice 3.23 built: the Init cache (`LANGUAGE.md` §8.4
+  slice 3.23; §13 item 57; GPT-6's R75, §4.11).** Ruled at the boundary
+  after 3.22 (items 54–56 ratified the same day): the feedback-cost
+  lever first and shallow, the connected path (R76) after it. The cost
+  measured over the two fixture chunks (3,523 declarations, 14 MB):
+  reading and parsing 9.2 s, the tables 13.1 s, K's check of every
+  declaration 47.2 s, the check skipped 17.2 s — the check is 72
+  percent and every on-disk form must build the same tables, so a
+  serialized environment was rejected for a receipt over the export.
+  `t0.shard --receipt FILE` writes `PATH BYTES` per chunk after a run
+  that accepted every record; `k/add.shard`'s `admit_decl_pinning`
+  inserts an axiom, definition, theorem or opaque without the typing
+  judgments (inductive blocks and the quotient checked as always; the
+  watermark and the pins as on the checked path), the import's run
+  carrying the mode; `load.shard --init-receipt FILE` (and
+  `prove.shard`'s, the loader pins test's) streams a listed chunk in
+  admit mode and refuses one not listed at its byte count
+  (`init_receipt_stale`); `kernel/test/init_receipt.sh` keeps
+  `v3/.cache/init.receipt` current against a hash of K's sources and
+  the fixture, `v3/test.sh` running it once and exporting
+  `INIT_RECEIPT`; `verify_release` and `t0_full.sh` take no receipt.
+  The auto example loads in 8.3 s against 13.7 s, the records
+  byte-identical; a wrong byte count refuses the load, an unreadable
+  receipt exits 2. The 221 loader pins pass byte-identical under the receipt in 809 s on the development machine (beside parity and the define test; 1,361 s without the receipt beside the full suite — the clean comparison is pipeline 553's against 552's 3,327 s on the runner); parity byte-identical over 30 closures and 130,445 declarations; route 1's native driver, rebuilt locally, ties the interpreter on the first chunk and writes the receipt; the full suite's 36 entrypoints 0 failed in 927 s, the pins entrypoint its wall clock still.
 - **2026-10-08 — pipeline 552 green on `8abe8c5`: slice 3.22's landing 3 on
   the full gate; slice 3.22 closed.** engine 57 s; corpus 1,470 s at the baseline; v3 6,394 s: 36 entrypoints with 0 failed, `store_test` 18 checks in 1,349 s (the example's 23 declarations stored once and accepted by K alone, the four tamper cases refused, calc's 376 declarations stored into `v3/release/calc` in 462 s and every one accepted by K alone in 136 s), `engine_test` 24 checks in 357 s, `tactic_test` 110 checks, `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 30 closures and 130,293 declarations in 693 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,449 s at 32.2 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned; the release store uploaded as the job's artifact (379 files under `v3/release/`, 1.2 MB zipped). The v3 job is 40 s shorter than pipeline 550's; the loader pins' entrypoint (3,327 s) is the suite's wall clock still, and `store_test` runs inside it.
 - **2026-10-08 — slice 3.22, landing 3 built: the store and

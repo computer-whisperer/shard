@@ -82,6 +82,7 @@ Notes recorded at drafting:
   `kernel/verify_release.shard` is K alone replaying it after the Init
   export; `kernel/test/store_test.sh` writes calc's into `v3/release/`
   (the CI artifact, ignored by git) and replays it.
+- **As built at slice 3.23 (2026-10-08; `LANGUAGE.md` §8.4):** the Init cache — `t0.shard --receipt` writes the chunks a clean T0 run accepted by path and byte count; `load.shard --init-receipt` (and `prove.shard`, the loader pins test) streams a listed chunk in admit mode (`k/add.shard` `admit_decl_pinning`: axioms, definitions, theorems and opaques inserted without the typing judgments, inductive blocks and the quotient checked), refusing a stale one; `kernel/test/init_receipt.sh` keeps `v3/.cache/init.receipt` current against K's sources, `v3/test.sh` exports it. The fixture's check 47 s → 17 s; `verify_release` takes no receipt.
 - **As built at slice 3.20 (2026-10-06; `LANGUAGE.md` §8.4):** a
   `theorem`'s proof may be `(by STEP…)` — I's opener, `kernel/tactic.shard`
   — and a measured `fn` has its equations by `WellFounded.fix_eq`

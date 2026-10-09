@@ -14,12 +14,13 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 FIX=v3/kernel/test/fixtures/init_prefix_int.ndjson
+RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (init_receipt.sh), set by v3/test.sh
 TAIL=v3/kernel/test/fixtures/init_prefix_str_tail.ndjson
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0
 bad() { echo "store_test: $*"; fail=$((fail+1)); }
-load_store() { "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" --store "$1" "$2"; }
+load_store() { "$EVAL" direct v3/kernel/load.shard --root v3 --init "$FIX" --init "$TAIL" $RCPT --store "$1" "$2"; }
 verify() { "$EVAL" direct v3/kernel/verify_release.shard "$1" "$FIX" "$TAIL"; }
 
 # ---- (1) the example
