@@ -2660,6 +2660,7 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — pipeline 559 green on `d0ee4f3`: engine 53 s; corpus 1,448 s at the baseline; v3 4,610 s of a 3 h limit — 891 s shorter than pipeline 556's 5,501 s (37 entrypoints with 0 failed in 1,491 s; the loader pins' entrypoint 87 s with 225 cases against 2,227 s; `store_test` 1,157 s, the suite's wall clock now; `path_test` 774 s; parity byte-identical over 30 closures and 130,551 declarations in 704 s; `engine_test` 254 s; route 1's native build of the kernel; the replay 2,498 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.25 is closed.**
 - **2026-10-09 — slice 3.25 built: the shared Init load (`LANGUAGE.md`
   §8.4 slice 3.25; §13 item 59).** Ruled at the boundary after R75 and
   R76 (item 57's stated lever, the user: "Agreed with A first, then C's
@@ -2682,6 +2683,12 @@ is `docs/FOUNDATION.md` §5.3.
   speaks for a native declaration bearing its name) stands for a lazy
   driver and `define_test.sh` reads that dump. Drivers stream lazily as
   before; `path_test`'s four loads are four processes, out of reach.
+  Found the same day, reading the export for the library arc's design:
+  `v3/std/list.shard` declares `(fn List.sum …)` and `List.sum` is an
+  Init definition at export line 882,911, past every fixture — the
+  driver accepts what the gate would refuse, in the repository's own
+  library; item 59(c)'s rejected name index is reopened on it, for the
+  library arc's first landing.
 - **2026-10-09 — items 57 and 58 ratified by the user** (the Init cache's
   five decisions, the connected path's three), without reservation;
   `LANGUAGE.md`'s status block carries them. Every §13 item through 58 is

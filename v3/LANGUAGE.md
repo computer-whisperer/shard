@@ -1799,7 +1799,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 | 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
-| 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
+| 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4622,7 +4622,9 @@ many roots has no reason to read it more than once. Three rules:
    constant under a name (`already_declared`) and the release gate
    holds the whole export; a driver whose lazy stream stopped short
    accepts what the gate refuses — the one place the lazy stream and the
-   gate disagree, stated, closed at the gate.
+   gate disagree, stated, closed at the gate (and found live the same
+   day in `v3/std/list.shard`'s `List.sum`, an Init definition past
+   every fixture: item 59 reopens the name index on it).
 3. **The loader pins' entrypoint streams once.** The two fixtures are
    streamed to their end under the receipt, each case loaded fresh on
    that state by `ld_reroot`; a case's records are its own module's,
@@ -5800,8 +5802,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     constant is refused wherever the environment holds it, which the
     release gate always does; a lazy driver that stopped short accepts
     what the gate refuses — stated as the one disagreement, closed at
-    the gate; rejected: a name index of the export for the driver (a
-    second file beside the receipt, for a case the gate catches). (d)
+    the gate. A name index of the export for the driver (a second file
+    beside the receipt) was rejected at the build and is **reopened the
+    same day on evidence**: `v3/std/list.shard` (slice 3.13) declares
+    `(fn List.sum …)`, and `List.sum` is an Init definition (export line
+    882,911) that no lazy stream of the fixtures reaches — the driver
+    accepts a file the release gate refuses, inside the repository's own
+    library; the library arc's first landing settles the index. (d)
     **The loader pins' entrypoint streams once** — 783 s to 33 s — and
     the three pins that leaned on the stream stopping short are
     restated, one of them (`registry_native`) now the refusal of (c).

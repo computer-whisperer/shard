@@ -1263,6 +1263,8 @@ clock.
 
 Gates: the 225 loader pins 0 failed in 33 s under the receipt and 57 s without, parity byte-identical over 30 closures and 130,551 declarations in 259 s, the full suite's 37 entrypoints in 597 s (store_test's 427 s its wall clock now; one failure, the calc harness's pattern variable shadowing the kit's `fixture` after it took the kit's `load_all` — renamed, parity and the two calc entrypoints rerun byte-identical).
 
+Slice 3.25 is closed: **pipeline 559 green on `d0ee4f3`: engine 53 s; corpus 1,448 s at the baseline; v3 4,610 s of a 3 h limit — 891 s shorter than pipeline 556's 5,501 s (37 entrypoints with 0 failed in 1,491 s; the loader pins' entrypoint 87 s with 225 cases against 2,227 s; `store_test` 1,157 s, the suite's wall clock now; `path_test` 774 s; parity byte-identical over 30 closures and 130,551 declarations in 704 s; `engine_test` 254 s; route 1's native build of the kernel; the replay 2,498 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical.**
+
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
