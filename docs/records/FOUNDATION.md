@@ -2660,6 +2660,33 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — slice 3.24 built: the connected path (`LANGUAGE.md`
+  §8.4 slice 3.24; §13 item 58; GPT-6's R76, §4.11).** The second
+  boundary item after 3.22, ruled as one slice. `(dif h C T F)` is the
+  dependent if with its hypothesis named (`kernel/elab.shard`
+  `elab_dif`: `dite C dec (λ h. T) (λ h. F)`), the one phase-3 joint of
+  law §12.4's path that was missing (T1's branch-local proof, carried
+  since slice 7; slice 3.18's `Fin` row removed the value-parameter
+  obstacle, the source form remained). `v3/examples/path/` is the path
+  on one program: `List.length` and `List.get?Internal` realized by
+  supplied bodies with their equations proved (the index's structural
+  recursion as an `if`, its equation by cases in the `equations`
+  clause); `at xs i : Option (Fin (List.length xs))` built from the
+  branch's proof; `pick` with a dependent parameter type; `at_some`,
+  `at_none` through I by `dif_pos`/`dif_neg`; the entry on a raw
+  argument; 56 declarations stored and accepted by K alone.
+  `kernel/test/path_test.sh` (18 checks) runs the path in order and
+  breaks each joint by name: a wrong body (`realize_2` refused
+  `conversion`), the proof outside its branch (`unknown_constant`) or
+  dropped (`type_mismatch`), an order line renamed (MISTIED), a stored
+  proof replaced (REJECT), a non-number at the entry (exit 6). The
+  cost under the Init receipt: load 18 s, run 23 s, store 18 s,
+  verify 47 s — the Init stream four times, the path's own work
+  seconds. Found, open: the dependent match (a local whose type
+  mentions the scrutinee generalized), which `List.get`'s own
+  realization needs; a `(view)` of `Option.getD` refused for its
+  matcher. Pins `dif_ok`, `dif_type`, `dif_needs_init`, `dif_scope`.
+  Gates: the 225 loader pins (four new) byte-identical in 783 s under the receipt, parity byte-identical over 30 closures and 130,489 declarations in 265 s, K's clients 7 of 7, `path_test` 18 checks in 279 s, the full suite's 37 entrypoints 0 failed (855 s).
 - **2026-10-09 — pipeline 554 green on `7ad18a6`: engine 55 s; corpus 1,479 s at the baseline; v3 5,455 s of a 3 h limit — 939 s shorter than pipeline 552's 6,394 s: 36 entrypoints with 0 failed, the loader pins' entrypoint 2,188 s against 3,327 s under the receipt, `store_test` 1,156 s against 1,349 s, `engine_test` 263 s against 357 s, parity byte-identical over 30 closures and 130,445 declarations in 712 s, route 1's native build of the kernel, the replay 2,518 s at 32.4 GB; T0 accepted 57,977, 20 pinned, closures identical. The pins' entrypoint is the suite's wall clock still. Slice 3.23 is closed.**
 - **2026-10-08 — slice 3.23 built: the Init cache (`LANGUAGE.md` §8.4
   slice 3.23; §13 item 57; GPT-6's R75, §4.11).** Ruled at the boundary

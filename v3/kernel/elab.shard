@@ -273,10 +273,11 @@
        (match args ((Cons l Nil) (match (elab_level e l) ((Some u) (check_expected e (mk_sort (LSucc u)) (mk_sort (LSucc (LSucc u))) expected)) (None (EErr (quote bad_level) "(Type LEVEL)")))) (_ (EErr (quote bad_shape) "(Type LEVEL)")))
      (if (sym_eq h (quote proj)) (elab_proj e args expected)
      (if (sym_eq h (quote if)) (elab_if e args expected)
+     (if (sym_eq h (quote dif)) (elab_dif e args expected)
      (if (sym_eq h (quote match)) (elab_match e args expected)
      (if (sym_eq h (quote list)) (elab_list e args expected)
      (if (sym_eq h (quote exists)) (elab_exists e args expected)
-     (elab_app e (SSym h) args expected)))))))))))))
+     (elab_app e (SSym h) args expected))))))))))))))
     ((SList (Cons h args)) (elab_app e h args expected))))
 
 ;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (law §5.2's
@@ -890,6 +891,63 @@
                ((Pair e3 (Some dec)) (op_apply_explicit e3 (n1 (quote ite)) (list (AVal cv cty) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) cv)) (ASrc t) (ASrc f)) expected))
                ((Pair _ None) (no_decision e2 (el_zonk e2 cv) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows: write (@ite C DEC T F) with the Decidable instance")))))))))))))))
     (_ (EErr (quote bad_shape) "(if C T F)"))))
+;; (dif h C T F): the dependent if, its hypothesis named (§8.4 slice 3.24 rule 1) —
+;; `dite C dec (λ h:C. T) (λ h:¬C. F)`, Lean's elaboration of `if h : c then t else e`; C as an
+;; if's condition (a proposition with a decision, or a Bool as `C = true`); each branch at the
+;; form's expected type, else the then-branch's own; a two-constructor value is no condition here
+(fn elab_dif ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match args
+    ((Cons (SSym hn) (Cons c (Cons t (Cons f Nil))))
+     (match (elab e c None)
+       ((EErr r m) (EErr r m))
+       ((EOk e1 cv cty)
+        (match (el_whnf e1 cty)
+          ((Pair e2 ctyw)
+           (if (is_const_named ctyw (nm_bool))
+             (match (first_missing e2 (list (nm_eq) (n1 (quote Decidable)) (n1 (quote instDecidableEqBool)) (n1 (quote dite)) (n1 (quote Not))))
+               ((Some k) (EErr (quote unknown_constant) (show_name k)))
+               (None (elab_dif_branches e2 hn (bool_is_true cv) (bool_decision cv) t f expected)))
+             (match (two_ctors e2 ctyw)
+               ((Some _) (EErr (quote dif_type) "a dif names the hypothesis of a proposition: a value of a two-constructor inductive has none (write if)"))
+               (None
+             (match (if_refusal e2 ctyw)
+               ((Some (Pair r m)) (EErr r m))
+               (None
+             (match (first_missing e2 (list (n1 (quote Decidable)) (n1 (quote dite)) (n1 (quote Not))))
+               ((Some k) (EErr (quote unknown_constant) (show_name k)))
+               (None
+             (match (decision_of e2 (el_zonk e2 cv))
+               ((Pair e3 (Some dec)) (elab_dif_branches e3 hn (el_zonk e3 cv) dec t f expected))
+               ((Pair _ None) (no_decision e2 (el_zonk e2 cv) (append "the condition " (append (show_expr (el_zonk e2 cv)) " has no decision the elaborator knows")))))))))))))))))
+    (_ (EErr (quote bad_shape) "(dif h C T F)"))))
+;; the branches under their hypotheses, then `dite p dec lamT lamF` at the result type
+(fn elab_dif_branches ((e El) (hn Symbol) (p Expr) (dec Expr) (t SExpr) (f SExpr) (expected (Option Expr))) ERes
+  (match (dif_branch e hn p t expected)
+    ((EErr r m) (EErr r m))
+    ((EOk e1 lam_t ret)
+     (match (dif_branch e1 hn (mk_app (mk_const (n1 (quote Not)) Nil) p) f (Some ret))
+       ((EErr r m) (EErr r m))
+       ((EOk e2 lam_f _)
+        (op_apply_explicit e2 (n1 (quote dite))
+          (list (AVal p (mk_sort LZero)) (AVal dec (mk_app (mk_const (n1 (quote Decidable)) Nil) p))
+                (AVal lam_t (mk_pi_anon p ret)) (AVal lam_f (mk_pi_anon (mk_app (mk_const (n1 (quote Not)) Nil) p) ret)))
+          expected))))))
+;; `λ h:hyp. BRANCH`; the result is the branch's type, closed over nothing (the hypothesis is a
+;; proof, and the branch's type does not mention it: a dif's type is its position's)
+(fn dif_branch ((e El) (hn Symbol) (hyp Expr) (br SExpr) (expected (Option Expr))) ERes
+  (match (el_local e (n1 hn) hyp BDefault)
+    ((Pair e1 h)
+     (match (elab e1 br expected)
+       ((EErr r m) (EErr r m))
+       ((EOk e2 v vty)
+        (match (el_lams e2 (list h) v)
+          ((Pair e3 lam)
+           (let ((ret (el_zonk e3 vty)))
+             (if (match h ((FVar _ hid) (mem_int hid (expr_fvars ret Nil))) (_ False))
+               (EErr (quote dif_type) (append "the branch's type mentions the hypothesis " (chars_of_sym hn)))
+               (EOk (el_restore e3 e) lam ret))))))))))
+(fn mk_pi_anon ((dom Expr) (cod Expr)) Expr (mk_pi Anon BDefault dom cod))
+
 ;; a condition that is a value, not a proposition, and not of a Bool or a two-constructor
 ;; inductive (§6.2; GPT-6 R56): a sig type's observation is the type's to export (private_if),
 ;; any other type has no binary rule to inherit (if_type)

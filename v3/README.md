@@ -1200,6 +1200,43 @@ The 221 loader pins pass byte-identical under the receipt in 809 s on the develo
 
 Slice 3.23 is closed: **pipeline 554 green on `7ad18a6`: engine 55 s; corpus 1,479 s at the baseline; v3 5,455 s of a 3 h limit — 939 s shorter than pipeline 552's 6,394 s: 36 entrypoints with 0 failed, the loader pins' entrypoint 2,188 s against 3,327 s under the receipt, `store_test` 1,156 s against 1,349 s, `engine_test` 263 s against 357 s, parity byte-identical over 30 closures and 130,445 declarations in 712 s, route 1's native build of the kernel, the replay 2,518 s at 32.4 GB; T0 accepted 57,977, 20 pinned, closures identical. The pins' entrypoint is the suite's wall clock still.**
 
+**Slice 3.24 landed (2026-10-09) — the connected path: law §12.4's path
+assembled, the branch-local proof joint built, each joint broken**
+(`LANGUAGE.md` §8.4 slice 3.24; §13 item 58; GPT-6's R76, records
+§4.11). The second boundary item after 3.22, ruled as one slice.
+
+- **`(dif h C T F)`** — the dependent if with its hypothesis named,
+  `dite C dec (λ h. T) (λ h. F)`: `h : C` in the then-branch, `h : ¬C`
+  in the else; the one phase-3 joint that was missing (T1's "a `dite`
+  whose `h` is used only in a `Fin.mk` field", carried since slice 7).
+  Refused by name where it has no reading: a two-constructor value as
+  the condition, the E-first route, the hypothesis outside its branch.
+- **`v3/examples/path/`** — the path on one program: `List.length` and
+  `List.get?Internal` realized by supplied bodies with their equations
+  proved; `at xs i` returns `Option (Fin (List.length xs))`, the index
+  in bounds built from the branch's proof and nothing else; `pick`
+  takes the index (a dependent parameter type) and reads through it;
+  `at_some`/`at_none` through I by `dif_pos`/`dif_neg`; `path_main`
+  prints the digit at a raw index; 56 declarations stored, every one
+  accepted by K alone.
+- **`kernel/test/path_test.sh`** (the 37th entrypoint, 18 checks): the
+  path in order, its cost printed, then the law's five breaks by name —
+  a wrong body (`realize_2` refused `conversion`), the proof outside
+  its branch (`unknown_constant: h`) or dropped (`type_mismatch`), an
+  order line renamed (MISTIED), a stored proof replaced (REJECT), a
+  non-number at the entry (exit 6).
+- **The cost** (R76's number, under the Init receipt): load 18 s, run
+  23 s, store 18 s, verify 47 s — the Init stream four times over, the
+  path's own work seconds. The interfaces compose; the cost is the
+  stream, which the persistent session (T9) is to remove.
+- **Found, open:** `List.get`'s own realization needs a match that
+  generalizes a local whose type mentions the scrutinee (slice 3.13
+  rule 2's narrower guarantee has its consumer); a `(view)` of an Init
+  definition whose matcher K does not regenerate (`Option.getD`) is
+  refused.
+
+Gates: the 225 loader pins (four new) byte-identical in 783 s under the receipt, parity byte-identical over 30 closures and 130,489 declarations in 265 s, K's clients 7 of 7, `path_test` 18 checks in 279 s, the full suite's 37 entrypoints 0 failed (855 s).
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

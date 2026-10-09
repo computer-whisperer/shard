@@ -1797,6 +1797,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
 | 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
 | 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
+| 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4466,6 +4467,127 @@ byte-identical; a receipt with a wrong byte count refuses the load
 (`LOAD-ERROR … init_receipt_stale`, modules 0, exit 1); an unreadable
 receipt exits 2 before any load. The 221 loader pins pass byte-identical under the receipt in 809 s on the development machine (beside parity and the define test; 1,361 s without the receipt beside the full suite — the clean comparison is pipeline 553's against 552's 3,327 s on the runner); parity byte-identical over 30 closures and 130,445 declarations; route 1's native driver, rebuilt locally, ties the interpreter on the first chunk and writes the receipt; the full suite's 36 entrypoints 0 failed in 927 s, the pins entrypoint its wall clock still.
 
+**Slice 3.24 — the connected path: law §12.4's path assembled, the
+branch-local proof joint built, each joint broken** (ruled 2026-10-09 on
+GPT-6's R76; §13 item 58; law §12.4, §12.5 T1, T5). The second boundary
+item after 3.22. Law §12.4 names the first connected path — *one
+imported logical declaration → one checked E realization → one caller
+using a branch-local proof → a claim constructed through I → its
+retained P verified without the elaborator → repeated execution through
+a prepared handle* — assembled incrementally as each capability lands,
+then broken deliberately at each joint, "to learn whether the
+interfaces compose at tolerable cost before a large library, the full
+engine or a certified host exists". Where the joints stand: an
+imported declaration enters by citation and a `(realize NAME (view))`
+attaches Init's own body (slices 5b, 3.18); a claim through I is
+slices 3.20–3.21; retained P verified by K alone is slice 3.22's rule
+7 with its tamper cases; the prepared handle is phase 4's (T6). The
+one phase-3 joint still missing is the **caller with a branch-local
+proof** — T1's "a `dite` whose `h` is used only in a `Fin.mk` field",
+carried since slice 7 because `Fin n` needed a value parameter at E.
+Slice 3.18 removed that obstacle (`Fin n` is `Fin`, `Fin.mk i h` erases
+to `i`); what is still missing is the source form — an `if` elaborates
+to `ite`, so its branches have no hypothesis a program can cite, and
+the dependent form is elaborated only inside a recursive function for
+the descent obligations (slice 3.13 rule 2), its hypothesis never
+named in source. The erasure already reads `dite` back as an `if`
+with the branches applied to their erased proof.
+
+**The rules of slice 3.24:**
+
+1. **`(dif h C T F)` — the dependent if, its hypothesis named.** `C`
+   is elaborated as an `if`'s condition is (a proposition with a
+   decision the elaborator knows, or a `Bool` as `C = true` with
+   `Bool`'s decidable equality); `T` is elaborated under a local
+   `h : C` and `F` under `h : ¬C`, each at the form's expected type
+   (the then-branch's own type when the position leaves it open, as
+   an `if`'s); the term is `dite C dec (λ h. T) (λ h. F)`, Lean's
+   elaboration of `if h : c then t else e`. The name comes first, as
+   `fn` and `let` put a binder's name first; `if` is not overloaded
+   with a fourth argument, which a reader would have to count. A
+   value of a two-constructor inductive is not a condition here
+   (`dif_type`): there is no proposition to name. On the E-first
+   route (a file without Init) the form is refused by name
+   (`dif_needs_init`): `Decidable` and `dite` are Init's. The
+   erasure is the existing one; the equations of a measured
+   function see the branch as they see an `if`'s.
+2. **The example, `v3/examples/path/`.** The path on one program: an
+   imported Init function with its realization attached; a
+   bounds-checked access `at xs i` that returns the element under
+   `(dif h (< i (List.length xs)) …)` through `Fin.mk i h` and
+   `none` otherwise; a theorem about it constructed through I; an
+   entry that runs it on raw arguments; the store written from the
+   load and replayed by K alone.
+3. **The test, `kernel/test/path_test.sh`, one entrypoint.** The path
+   in order — load, run on a valid argument, store, verify by K alone
+   — then the law's five breaks, each required to fail by name: a
+   wrong executable body in a `realize` (refused at the equation
+   check), missing bound evidence (the `Fin.mk` outside its branch,
+   or with the hypothesis dropped, refused by the elaborator), a
+   mismatched revision (the sidecar's entry stale, the store's order
+   line mistied), a tampered result (a stored proof replaced, rejected
+   by K), an invalid raw argument (refused at the entry, exit 6). The
+   breaks slice 3.22 already tests are re-exercised on this example,
+   not re-implemented.
+4. **The measurement.** The cost of the whole path on the example,
+   load through verify, is R76's number; the as-built reports it.
+
+*Not in this slice, stated:* the prepared handle (T6) and the
+World-alias fixture are phase 4's; the example stays pure.
+
+**Slice 3.24 as built** (2026-10-09): as the rules, with what the
+path found.
+
+- **Rule 1.** `elab_dif` in `kernel/elab.shard`: the condition as
+  `elab_if` reads it; each branch elaborated under its hypothesis as
+  an `el_local`, closed by `el_lams`, the result type held to be free
+  of the hypothesis (`dif_type` otherwise); `dite` applied by
+  `op_apply_explicit` at the expected type. The classifier refuses
+  the form by name on the E-first route (`dif_needs_init`). Pins:
+  `dif_ok` (a `Fin.mk` field, a `Bool` condition, both branches'
+  hypotheses in theorems by `dif_pos`/`dif_neg`), `dif_type`,
+  `dif_needs_init`, `dif_scope` (the hypothesis outside its branch:
+  the typed route's `unknown_constant: h`, carried by the E-first
+  refusal that follows).
+- **Rule 2, the example.** `at` returns `Option (Fin (List.length
+  xs))`; `pick` takes the index, its parameter type dependent, and
+  reads through `List.get?Internal`; `read` composes them; the entry
+  prints the digit at a raw index of a fixed list. `List.length` and
+  `List.get?Internal` are realized by supplied bodies with their
+  equations proved: `get?Internal`'s structural recursion on the
+  index is an `if` (`Nat`'s constructors are not E patterns), its
+  second equation by cases on the index, named in the `equations`
+  clause. The claims `at_some`, `at_none` are `(by (unfold at) (rw
+  (dif_pos h)) rfl)` and its `dif_neg` twin. Fifty-six declarations
+  stored, every one accepted by K alone.
+- **Rule 3, the test.** `kernel/test/path_test.sh`, the suite's 37th
+  entrypoint, 18 checks: the path in order, then the five breaks — a
+  wrong body refused at `List.length.realize_2` (`conversion`), the
+  hypothesis cited outside its branch (`unknown_constant: h`), the
+  `Fin.mk` without its proof (a `type_mismatch`: a function of the
+  bound where a `Fin` is expected), the order line naming another
+  declaration (MISTIED), the stored proof replaced by its statement
+  (REJECT), a non-number at the entry (exit 6).
+- **Rule 4, the cost.** On the development machine under the Init
+  receipt: load 18 s, load and run 23 s, load and store 18 s, verify
+  by K alone 47 s (45 s of it the Init fixture's replay, the 56
+  declarations the rest); the test 279 s. The path composes; its cost
+  is the Init stream four times over, which slice 3.23 halved and the
+  persistent session (T9) is to remove.
+- **Found on the way, open:** `List.get`'s own realization — the
+  access with the `Fin` as its argument — needs a match that
+  generalizes a local whose type mentions the scrutinee (`i : Fin
+  (List.length xs)` under `match xs`), so that the nil row can refute
+  its bound; today only the expected type is generalized (slice 3.19
+  rule 9), and slice 3.13 rule 2's narrower guarantee states the
+  gap. The path reads through `List.get?Internal` on the index's
+  value instead, the proof carried by the type. The dependent match
+  has its consumer now; it is not built here. Also: a `(realize NAME
+  (view))` of an Init definition whose body is a matcher
+  (`Option.getD`) is refused for want of the matcher's realization —
+  Lean's `Option.getD.match_1` is not what K regenerates from its
+  type — so the example writes its own `or_zero`.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5579,3 +5701,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     *Left open, stated:* the loader pins' entrypoint re-streams Init
     once per case in one process; a load shared across cases (the
     persistent session, T9) is the next lever, not this one.
+58. **Slice 3.24, the connected path (ruled 2026-10-09 on GPT-6's R76;
+    §8.4) — for ratification.** (a) **`(dif h C T F)`** is the source
+    form of the dependent if, the hypothesis named first; `if` is not
+    overloaded with a fourth argument. (b) **The path is one example
+    and one test**, the five breaks of law §12.4 required to fail by
+    name, the three slice 3.22 tests re-exercised rather than
+    re-implemented. (c) **The prepared handle and the World-alias
+    fixture stay phase 4's.** *Found at the build, open:* the dependent
+    match (a local whose type mentions the scrutinee generalized),
+    the consumer `List.get`'s realization; a view of an Init
+    definition whose matcher K does not regenerate (`Option.getD`).
