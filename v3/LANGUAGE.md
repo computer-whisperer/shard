@@ -1,8 +1,9 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-10-08): the design of S, L, E and I as phase 3 builds
+> **STATUS (2026-10-09): the design of S, L, E and I as phase 3 builds
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
-> 2026-10-08, each later item for ratification as its slice lands.** Normative parent:
+> 2026-10-08, items 57–58 ratified 2026-10-09, each later item for
+> ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -5701,6 +5702,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     *Left open, stated:* the loader pins' entrypoint re-streams Init
     once per case in one process; a load shared across cases (the
     persistent session, T9) is the next lever, not this one.
+    **Ratified 2026-10-09.**
 58. **Slice 3.24, the connected path (ruled 2026-10-09 on GPT-6's R76;
     §8.4) — for ratification.** (a) **`(dif h C T F)`** is the source
     form of the dependent if, the hypothesis named first; `if` is not
@@ -5712,3 +5714,4 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     match (a local whose type mentions the scrutinee generalized),
     the consumer `List.get`'s realization; a view of an Init
     definition whose matcher K does not regenerate (`Option.getD`).
+    **Ratified 2026-10-09.**
