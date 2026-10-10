@@ -1,0 +1,154 @@
+;;; v3/std/list.shard — Init's list library realized and extended (LANGUAGE.md §8.4 slice 3.27
+;;; landing 3, rules 6–8; the record in std/README.md). Init's functions by supplied bodies with
+;;; their equations theorems K proves — by rfl where the body follows Init's recursion, by cases
+;;; on the count where Init recurses on it first (take, drop), by cases on the index
+;;; (get?Internal) —, Option.getD through its own matcher's definition (the derived view, rule 6),
+;;; List.getD through both; List.get under the dependent match (rule 7): the Fin index re-bound
+;;; at each row's type, the nil row refuted by Init's absurd; the old std/list's requirements as
+;;; theorems citing Init (rule 8); and what Init lacks — sum_append at Nat, and the ghost
+;;; refinement phase 3 owes: a sorted list as Subtype (List.Pairwise Nat.le) with an insertion
+;;; keeping it. A realize's binders are E types: a Fin is `Fin`, the registry's row. The horizon
+;;; is the highest ordinal cited.
+(import Init List.take_succ_cons)
+
+;; ---- 1. Init's functions realized by supplied bodies (rule 6) --------------------------------
+(realize List.length ((a Type) (xs (List a))) Nat (measure (struct xs))
+  (match xs (List.nil 0) ((List.cons _ t) (+ (List.length t) 1))))
+(realize List.append ((a Type) (xs (List a)) (ys (List a))) (List a) (measure (struct xs))
+  (match xs (List.nil ys) ((List.cons x t) (List.cons x (List.append t ys)))))
+(realize List.reverseAux ((a Type) (xs (List a)) (r (List a))) (List a) (measure (struct xs))
+  (match xs (List.nil r) ((List.cons x t) (List.reverseAux t (List.cons x r)))))
+(realize List.reverse ((a Type) (xs (List a))) (List a) (List.reverseAux xs List.nil))
+;; take and drop recurse on the count first in Init: the body recurses on the list, its
+;; equations by cases on the count
+(theorem take_nil_eq ((a Type) (n Nat)) (= (List.take n (@List.nil a)) (@List.nil a))
+  (exact (match n (Nat.zero (Eq.refl (@List.nil a))) ((Nat.succ m) (Eq.refl (@List.nil a))))))
+(theorem take_cons_eq ((a Type) (n Nat) (x a) (t (List a)))
+  (= (List.take n (List.cons x t)) (if (= n 0) List.nil (List.cons x (List.take (- n 1) t))))
+  (exact (match n (Nat.zero (Eq.refl (@List.nil a))) ((Nat.succ m) (Eq.refl (List.cons x (List.take m t)))))))
+(realize List.take ((a Type) (n Nat) (xs (List a))) (List a) (measure (struct xs))
+  (match xs (List.nil List.nil) ((List.cons x t) (if (= n 0) List.nil (List.cons x (List.take (- n 1) t)))))
+  (equations take_nil_eq take_cons_eq))
+(theorem drop_nil_eq ((a Type) (n Nat)) (= (List.drop n (@List.nil a)) (@List.nil a))
+  (exact (match n (Nat.zero (Eq.refl (@List.nil a))) ((Nat.succ m) (Eq.refl (@List.nil a))))))
+(theorem drop_cons_eq ((a Type) (n Nat) (x a) (t (List a)))
+  (= (List.drop n (List.cons x t)) (if (= n 0) (List.cons x t) (List.drop (- n 1) t)))
+  (exact (match n (Nat.zero (Eq.refl (List.cons x t))) ((Nat.succ m) (Eq.refl (List.drop m t))))))
+(realize List.drop ((a Type) (n Nat) (xs (List a))) (List a) (measure (struct xs))
+  (match xs (List.nil List.nil) ((List.cons x t) (if (= n 0) (List.cons x t) (List.drop (- n 1) t))))
+  (equations drop_nil_eq drop_cons_eq))
+;; the optional access: Init's structural recursion on the index is an `if` here, the
+;; equation by cases on it (slice 3.24's path)
+(theorem get_opt_nil ((a Type) (i Nat)) (= (List.get?Internal (@List.nil a) i) (@Option.none a))
+  (exact (Eq.refl (@Option.none a))))
+(theorem get_opt_cons ((a Type) (i Nat) (x a) (t (List a)))
+  (= (List.get?Internal (List.cons x t) i) (if (= i 0) (Option.some x) (List.get?Internal t (- i 1))))
+  (exact (match i (Nat.zero (Eq.refl (Option.some x))) ((Nat.succ j) (Eq.refl (List.get?Internal t j))))))
+(realize List.get?Internal ((a Type) (xs (List a)) (i Nat)) (Option a) (measure (struct xs))
+  (match xs (List.nil Option.none) ((List.cons x t) (if (= i 0) (Option.some x) (List.get?Internal t (- i 1)))))
+  (equations get_opt_nil get_opt_cons))
+;; Option.getD is a match in Init: its matcher's own definition, a casesOn, erased as any value's
+(realize Option.getD (view))
+;; List.getD is `as[i]?.getD fallback`: the index under GetElem?'s instance is get?Internal (law §10.3 row 8)
+(realize List.getD ((a Type) (xs (List a)) (i Nat) (d a)) a
+  (Option.getD (List.get?Internal xs i) d))
+
+;; ---- 2. List.get under the dependent match (rule 7) -------------------------------------------
+;; the index's bound carried into the tail: n < m + 1 and n ≠ 0 give n - 1 < m
+(theorem get_bound ((n Nat) (m Nat) (h1 (< n (+ m 1))) (h2 (Not (= n 0)))) (< (- n 1) m)
+  (exact (Nat.sub_lt_right_of_lt_add (Nat.pos_of_ne_zero h2) h1)))
+;; the nil row: i : Fin (List.length List.nil) refutes itself; the cons row: the head at index 0,
+;; else the tail at the index less one under the bound — the realized body's two leaves
+(theorem get_nil_eq ((a Type) (i (Fin (List.length (@List.nil a))))) (= (List.get List.nil i) (absurd (Fin.isLt i) (Nat.not_lt_zero (Fin.val i))))
+  (exact (absurd (Fin.isLt i) (Nat.not_lt_zero (Fin.val i)))))
+(theorem get_cons_eq ((a Type) (x a) (t (List a)) (i (Fin (List.length (List.cons x t)))))
+  (= (List.get (List.cons x t) i) (dif h (= (Fin.val i) 0) x (List.get t (Fin.mk (- (Fin.val i) 1) (get_bound (Fin.val i) (List.length t) (Fin.isLt i) h)))))
+  (exact (match i ((Fin.mk v hv) (match v (Nat.zero (Eq.refl x)) ((Nat.succ j) (Eq.refl (List.get t (Fin.mk j (Nat.le_of_succ_le_succ hv))))))))))
+(realize List.get ((a Type) (xs (List a)) (i Fin)) a (measure (struct xs))
+  (match xs
+    (List.nil (absurd (Fin.isLt i) (Nat.not_lt_zero (Fin.val i))))
+    ((List.cons x t) (dif h (= (Fin.val i) 0) x (List.get t (Fin.mk (- (Fin.val i) 1) (get_bound (Fin.val i) (List.length t) (Fin.isLt i) h))))))
+  (equations get_nil_eq get_cons_eq))
+
+;; ---- 3. the record's evidence: the old std/list's requirements, Init's theorems by name (rule 8) --
+(theorem list_append_nil_left ((a Type) (ys (List a))) (= (List.append List.nil ys) ys) (exact (List.nil_append ys)))
+(theorem list_append_cons ((a Type) (x a) (t (List a)) (ys (List a))) (= (List.append (List.cons x t) ys) (List.cons x (List.append t ys))) (by (apply List.cons_append)))
+(theorem list_rev_nil ((a Type)) (= (List.reverse (@List.nil a)) (@List.nil a)) (exact (Eq.refl (@List.nil a))))
+(theorem list_rev_cons ((a Type) (x a) (t (List a))) (= (List.reverse (List.cons x t)) (List.append (List.reverse t) (List.cons x List.nil))) (by (apply List.reverse_cons)))
+(theorem list_len_nil ((a Type)) (= (List.length (@List.nil a)) 0) (exact (Eq.refl 0)))
+(theorem list_len_cons ((a Type) (x a) (t (List a))) (= (List.length (List.cons x t)) (+ (List.length t) 1)) (exact (Eq.refl (+ (List.length t) 1))))
+(theorem list_take_nil ((a Type) (n Nat)) (= (List.take n (@List.nil a)) (@List.nil a)) (by (apply List.take_nil)))
+(theorem list_drop_nil ((a Type) (n Nat)) (= (List.drop n (@List.nil a)) (@List.nil a)) (by (apply List.drop_nil)))
+(theorem list_take_zero ((a Type) (xs (List a))) (= (List.take 0 xs) List.nil) (by (apply List.take_zero)))
+(theorem list_take_succ_cons ((a Type) (n Nat) (x a) (t (List a))) (= (List.take (+ n 1) (List.cons x t)) (List.cons x (List.take n t))) (by (apply List.take_succ_cons)))
+(theorem list_drop_zero ((a Type) (xs (List a))) (= (List.drop 0 xs) xs) (by (apply List.drop_zero)))
+(theorem list_drop_succ_cons ((a Type) (n Nat) (x a) (t (List a))) (= (List.drop (+ n 1) (List.cons x t)) (List.drop n t)) (by (apply List.drop_succ_cons)))
+(theorem list_len_nonneg ((a Type) (xs (List a))) (<= 0 (List.length xs)) (exact (Nat.zero_le (List.length xs))))
+(theorem list_append_nil_right ((a Type) (xs (List a))) (= (List.append xs List.nil) xs) (exact (List.append_nil xs)))
+(theorem list_append_assoc ((a Type) (xs (List a)) (ys (List a)) (zs (List a))) (= (List.append (List.append xs ys) zs) (List.append xs (List.append ys zs))) (exact (List.append_assoc xs ys zs)))
+(theorem list_len_append ((a Type) (xs (List a)) (ys (List a))) (= (List.length (List.append xs ys)) (+ (List.length xs) (List.length ys))) (by (apply List.length_append)))
+(theorem list_len_rev ((a Type) (xs (List a))) (= (List.length (List.reverse xs)) (List.length xs)) (by (apply List.length_reverse)))
+(theorem list_rev_append ((a Type) (xs (List a)) (ys (List a))) (= (List.reverse (List.append xs ys)) (List.append (List.reverse ys) (List.reverse xs))) (by (apply List.reverse_append)))
+(theorem list_rev_rev ((a Type) (xs (List a))) (= (List.reverse (List.reverse xs)) xs) (exact (List.reverse_reverse xs)))
+(theorem list_drop_len ((a Type) (n Nat) (xs (List a))) (= (List.length (List.drop n xs)) (- (List.length xs) n)) (by (apply List.length_drop)))
+(theorem list_drop_le ((a Type) (n Nat) (xs (List a))) (<= (List.length (List.drop n xs)) (List.length xs))
+  (by (rw (list_drop_len a n xs)) (exact (Nat.sub_le (List.length xs) n))))
+(theorem list_drop_shortens ((a Type) (n Nat) (xs (List a)) (h1 (<= 1 n)) (h2 (<= 1 (List.length xs)))) (<= (+ (List.length (List.drop n xs)) 1) (List.length xs))
+  (by (rw (list_drop_len a n xs)) (exact (Nat.sub_lt h2 h1))))
+(theorem list_take_le ((a Type) (n Nat) (xs (List a))) (<= (List.length (List.take n xs)) (List.length xs)) (by (apply List.length_take_le')))
+(theorem list_take_len ((a Type) (n Nat) (xs (List a)) (h (<= n (List.length xs)))) (= (List.length (List.take n xs)) n) (exact (List.length_take_of_le h)))
+
+;; ---- 4. what Init lacks ----------------------------------------------------------------------
+;; the sum of an append at Nat (law §5.3's schematic): Init's sum_append asks for instances the
+;; table does not hold (Std.LawfulLeftIdentity), so the induction is here
+(theorem sum_append ((xs (List Nat)) (ys (List Nat))) (= (List.sum (List.append xs ys)) (+ (List.sum xs) (List.sum ys)))
+  (by (induction xs
+        ((nil () (exact (Eq.symm (Nat.zero_add (List.sum ys)))))
+         (cons (x t ih)
+           (have e1 (= (List.sum (List.append (List.cons x t) ys)) (+ x (List.sum (List.append t ys)))) (exact (Eq.refl (+ x (List.sum (List.append t ys))))))
+           (have e2 (= (List.sum (List.cons x t)) (+ x (List.sum t))) (exact (Eq.refl (+ x (List.sum t)))))
+           (rw e1) (rw e2) (rw ih) (arith))))))
+;; the ghost refinement: a sorted list is a list with a proof of List.Pairwise Nat.le beside it
+;; — Subtype, the registry's row, runs as the list (Subtype.mk v h is v) —, and insertion keeps
+;; the proof. The theorems take the hypothesis as an implication so the induction quantifies it
+(fn insert ((x Nat) (xs (List Nat))) (List Nat) (measure (struct xs))
+  (match xs (List.nil (List.cons x List.nil)) ((List.cons y t) (if (<= x y) (List.cons x (List.cons y t)) (List.cons y (insert x t))))))
+(theorem mem_insert ((x Nat) (xs (List Nat)) (z Nat)) (-> (List.Mem z (insert x xs)) (or (= z x) (List.Mem z xs)))
+  (by (induction xs
+        ((nil () (rw (insert.eq_1 x)) (intro h)
+                 (cases (Iff.mp List.mem_cons h) ((inl (e) (exact (Or.inl e))) (inr (m) (exact (Or.inr m))))))
+         (cons (y t ih) (rw (insert.eq_2 x y t))
+           (cases (Nat.lt_or_ge y x)
+             ((inl (hlt) (rw (if_neg (Iff.mpr (@Nat.not_le x y) hlt))) (intro h)
+                (cases (Iff.mp List.mem_cons h)
+                  ((inl (e) (exact (Or.inr (Iff.mpr List.mem_cons (Or.inl e)))))
+                   (inr (m) (cases (ih m) ((inl (e) (exact (Or.inl e))) (inr (m2) (exact (Or.inr (Iff.mpr List.mem_cons (Or.inr m2)))))))))))
+              (inr (hge) (have hle (<= x y) (exact hge)) (rw (if_pos hle)) (intro h)
+                (cases (Iff.mp List.mem_cons h)
+                  ((inl (e) (exact (Or.inl e))) (inr (m) (exact (Or.inr m)))))))))))))
+(theorem insert_sorted ((x Nat) (xs (List Nat))) (-> (List.Pairwise Nat.le xs) (List.Pairwise Nat.le (insert x xs)))
+  (by (induction xs
+        ((nil () (intro h) (rw (insert.eq_1 x))
+           (have hall (forall ((z Nat)) (-> (List.Mem z List.nil) (<= x z))) (intro z hz) (exact (absurd hz (@List.not_mem_nil Nat z))))
+           (exact (Iff.mpr List.pairwise_cons (And.intro hall (@List.Pairwise.nil Nat Nat.le)))))
+         (cons (y t ih) (intro h) (rw (insert.eq_2 x y t))
+           (have hy (forall ((z Nat)) (-> (List.Mem z t) (<= y z))) (exact (And.left (Iff.mp List.pairwise_cons h))))
+           (have ht (List.Pairwise Nat.le t) (exact (And.right (Iff.mp List.pairwise_cons h))))
+           (cases (Nat.lt_or_ge y x)
+             ((inl (hlt) (rw (if_neg (Iff.mpr (@Nat.not_le x y) hlt)))
+                (have hall (forall ((z Nat)) (-> (List.Mem z (insert x t)) (<= y z)))
+                  (intro z hz) (cases (mem_insert x t z hz) ((inl (e) (rw e) (exact (Nat.le_of_lt hlt))) (inr (m) (exact (hy z m))))))
+                (exact (Iff.mpr List.pairwise_cons (And.intro hall (ih ht)))))
+              (inr (hge) (have hle (<= x y) (exact hge)) (rw (if_pos hle))
+                (have hall (forall ((z Nat)) (-> (List.Mem z (List.cons y t)) (<= x z)))
+                  (intro z hz) (cases (Iff.mp List.mem_cons hz) ((inl (e) (rw e) (exact hle)) (inr (m) (exact (Nat.le_trans hle (hy z m)))))))
+                (exact (Iff.mpr List.pairwise_cons (And.intro hall h)))))))))))
+(def Sorted () Type (@Subtype (List Nat) (List.Pairwise Nat.le)))
+(fn sorted_insert ((x Nat) (s Sorted)) Sorted
+  (Subtype.mk (insert x (Subtype.val s)) (insert_sorted x (Subtype.val s) (Subtype.property s))))
+(theorem sorted_insert_val ((x Nat) (s Sorted)) (= (Subtype.val (sorted_insert x s)) (insert x (Subtype.val s))) (by (unfold sorted_insert) rfl))
+(fn sorted_nil () Sorted (@Subtype.mk (List Nat) (List.Pairwise Nat.le) List.nil (@List.Pairwise.nil Nat Nat.le)))
+(fn sorted_demo () (List Nat) (Subtype.val (sorted_insert 2 (sorted_insert 3 (sorted_insert 1 sorted_nil)))))
+;; the access at a proven index, run through List.get's realization
+(theorem one_lt_two () (< 1 (List.length (List.cons 5 (List.cons 7 List.nil)))) (by (decide)))
+(fn get_demo () Nat (List.get (List.cons 5 (List.cons 7 List.nil)) (@Fin.mk (List.length (List.cons 5 (List.cons 7 List.nil))) 1 one_lt_two)))

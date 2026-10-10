@@ -1802,7 +1802,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
-| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5295,6 +5295,140 @@ law §5.3's "lowercase constructors"; `==`, `&&`, `||` are not operator
 symbols of the elaborator — `and`, `or`, `not` at `Bool` operands are
 `Bool.and`, `Bool.or`, `Bool.not`. **Gates run:** the 231 loader pins 0 failed in 56 s, `std_test` 76 checks 0 failed in 117 s (the root loaded and stored in 69 s, K's replay 48 s; 158 s inside the suite), `tactic_test` 110 checks (calc's 100 claims) 0 failed in 43 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `define_test` 12 checks 0 failed, `derive_test` 14 checks, `unify_test` 0 failed, `k_clients_test` 7 tests in 70 s, parity byte-identical over 31 closures and 133,785 declarations in 292 s, the full suite's 39 entrypoints with 0 failed in 640 s (`store_test` 505 s, `parity_test` 364 s, `path_test` 316 s, `calc_test` 300 s, `define_test` 297 s). Route 1's kernel build, the full replay and the corpus are CI's.
 
+**Slice 3.27 as built, landing 3 (2026-10-10) — `std/list` and `std/bits`.**
+Rules 6–9 built, calc retired onto the library, five pins. **Rule 6, the
+realizations** (`v3/std/list.shard`): `List.length`, `List.append`,
+`List.reverseAux`, `List.reverse`, `List.take`, `List.drop`,
+`List.get?Internal` and `List.getD` by supplied bodies, their equations
+theorems K proves — by `rfl` where the body follows Init's recursion, by
+`cases` on the count where Init recurses on it first (`take n [] = []`
+is `take_nil_eq`, a term-level match on `n` with `Eq.refl` at both
+constructors), by cases on the index for `get?Internal` (slice 3.24's
+path); `List.getD` is one leaf, `Option.getD (List.get?Internal xs i) d`,
+K unfolding `as[i]?` through `GetElem?`'s instance (law §10.3 row 8).
+**The matcher of an Init definition realized through its own
+definition**, as the rule said it would be measured: `(realize
+Option.getD (view))` is refused before this landing — `Option.getD.match_1:
+no realization attached` — and accepted after, the derived view
+(`erasure.shard`) unfolding a definition named `NAME.match_N` that has no
+descriptor of this run at its arguments (`beta_head`) and erasing the
+`casesOn` it is, an application whose head is a lambda now beta-reduced
+on the way; the view attaches no equations, the E body being the value's
+erasure. **Rule 7, the dependent match** (`elab.shard`): a `match` on a
+local generalizes, beside the expected type (slice 3.19 rule 9), every
+local in scope whose type mentions the scrutinee or one of these,
+outermost first — Lean's revert: the motive is the expected type under a
+Pi over them, each arm reads its body with them re-bound at the pattern's
+type under the names the context binds them by (a realize's telescope
+local carries Lean's binder name, `a._@._internal._hyg.0`; the body knows
+it as `i`), and the matcher's result is applied back to them. The
+dependent reading is tried first, then the expected type's, then the
+constant motive; the first reading's error is the one reported. Under
+`match xs` with `i : Fin (List.length xs)` the nil row sees `i : Fin
+(List.length List.nil)` and refutes it: **the refuted row is Init's
+`absurd`** (or `False.elim`) applied to a proof and its negation, an L
+term of the row's type — `(absurd (Fin.isLt i) (Nat.not_lt_zero (Fin.val
+i)))` — erased to `EAbsurd`, a node of `ETerm` that `ev` lowers to
+`LAbsurd` and is stuck `unreachable` if a program K did not warrant ever
+reaches it; the E-first route refuses the form by name
+(`absurd_needs_init`), as it refuses `dif`. What followed from the
+generalization: a matcher applied past its alternatives (the generalized
+locals) is read by the erasure with each alternative instantiated at
+them under its fields (`alt_with_extra`) and by the realizer's leaf
+splitting, which took one extra argument (the measured function's
+`Eq.refl`) and takes any number now; and a leaf's binders are ordered so
+that a kept binder re-typed by the split — `i : Fin (List.length (x ::
+t))` — follows the fields it names (`leaf_binders`: the binders the
+split left, the fields, the re-typed ones), where the as-built of slice
+3.16 put every kept binder before the fields and the equation of a
+dependent `fn` was `fvar_in_type`. `List.get` is realized so, its two
+equations `get_nil_eq` (proved by the refutation itself) and
+`get_cons_eq` (a term-level match on the `Fin`, then on its value under
+its bound — the dependent match again —, `Eq.refl` at both), its cons
+row `dif` on `Fin.val i = 0` with the bound carried into the tail by
+`Nat.sub_lt_right_of_lt_add`. **A realize's binders are E types**: the
+`Fin` index is written `Fin`, the registry's row (`(i Fin)`), since an E
+type names no term; the signature check said so (`realize_signature:
+… another type than the L type's erasure`). **Rule 8, what Init lacks**:
+`sum_append` at `Nat` by induction (Init's `List.sum_append` asks for
+`Std.LawfulLeftIdentity`, which the table does not hold), and the ghost
+refinement phase 3 owes — `Sorted` is `(@Subtype (List Nat) (List.Pairwise
+Nat.le))`, `sorted_insert` keeps the proof by `insert_sorted`, proved by
+induction on the list with the hypothesis stated as an implication
+(`cases` and `induction` generalize the target only) over `mem_insert`,
+`List.pairwise_cons` and `List.mem_cons` as iffs (both inductives are
+indexed families: `cases` on a hypothesis of either is a later form),
+the `if` split by `cases` on `Nat.lt_or_ge` and `if_pos`/`if_neg`. For
+that, **`Subtype` is a row of the registry** (law §10.3 row 11; `erase.shard`
+`rep_row`): one constructor, one runtime field, `Subtype.mk v h` runs as
+`v`, `Subtype.val s` as `s`; a row constructor's parameters are opened
+unclassified before its fields (`tele_of_fields`) — `Subtype`'s
+predicate `p : α → Prop` is neither a type, a proposition nor data, and
+the field walk refused the row on it. The carrier is named by a `def`
+(`(def Sorted () Type …)`): a `fn` signature reads `(@Subtype (List Nat)
+P)` at `Sort 0` and `(Subtype P)` with its carrier unsolved — a finding,
+the def the idiom until it is fixed. **The old `std/list`'s 24
+requirements** are `list_*` theorems citing Init by name (`apply` for the
+implicit-binder ones, `exact` with the arguments for the explicit), so the
+record is checked; `length_nil`, `length_cons` and `reverse_nil` by
+`Eq.refl` rather than past-horizon citations. **Rule 9, the three
+recurrences** (`std/facts.shard`, horizon `Nat.and_mod_two_eq_one`):
+`band_rec`, `bor_rec`, `bxor_rec` at `Nat`, each the Euclidean split of
+the operation by 2 — Init's `and_div_two`, `or_div_two`, `xor_div_two` for
+the quotient; `land_low`, `lor_low`, `lxor_low` for the remainder, four
+cases of `a % 2` and `b % 2` on `Nat.mod_two_eq_zero_or_one` with the
+operation's low bit decided by Init's `and_mod_two_eq_one`,
+`or_mod_two_eq_one`, `xor_mod_two_eq_one` iffs (the xor case needs
+`¬(p = 1 ↔ q = 1)`: `intro` on the negation, `Iff.refl` after rewriting
+both sides, `absurd`) — joined by `arith` over `Nat.div_add_mod`. Stated
+subtraction-free, the product moved to the left (`lor a b + p·q = 2·lor' +
+p + q`), since `arith` reads `Nat.sub` as an atom. **`std/bits.shard`**
+(horizon `Nat.le_sub_one_iff_lt`): the old module's 37 requirements as
+theorems under the old names citing Init at `Nat`, `pow2 k` as `(Nat.pow
+2 k)` — **one spelling with Init's `2 ^ k`** by a row of the table for
+`HPow`/`Pow` at `Nat` (`spelling.shard`; `Nat.pow` in the kit), without
+which `Nat.or_lt_two_pow ha hb` could not read `a < Nat.pow 2 32` —, the
+width instances at 32 and 64 bits through a `Nat.pow` hypothesis (a
+literal does not determine the exponent: `2 ^ ?n` against `4294967296`
+is refused by the unifier, `exact` between `Nat.pow 2 32` and the literal
+is K's conversion), the masks at 8, 32 and 64, the literal shifts (one
+step by `Eq.refl`, a count by `Nat.shiftLeft_eq` with the power rewritten
+to its literal and `arith`). **Calc retired onto the library**: its
+`examples/calc/list.shard` deleted, seven files `(use std.list)` and
+`(import "../../std/list.shard")`, `append`/`len` re-spelled
+`List.append`/`List.length`, its two append laws Init's `List.append_nil`
+and `List.append_assoc`, and one `rfl`-proved equation re-oriented —
+`List.length (x :: t)` is `length t + 1` where calc's `len` was `1 + len
+t`, and the two are not convertible. Two kernel facilities for that:
+**the reducer reads a realization's equations** (`tactic.shard`
+`equations_of`: a fn's `f.eq_k`, else `M.f.realize_k` for the module M
+that attached the realization — this module, or one it opens), so
+`(reduce)` over `List.length (cons h t)` steps by `realize_2` as it
+stepped by calc's own `len.eq_2`, where K's whnf had unfolded Init's
+structural recursion into its `brecOn` encoding (`proj 0 (PProd.mk …)`
+atoms to `arith`, `rw_no_match` on the appended list); and **the loader
+marks a use needed when a token of the file hits an identity the module
+realized** (`mark_hits`: the entry's module beside the prefix above the
+token), so calc's `(use std.list)`, under which it runs Init's
+`List.append`, is not recorded UNUSED for the prune. **The gate**:
+`std_test.sh` holds the three new files' theorems and the realizations'
+equations by name (181 checks), `Option.getD`'s view by
+its record. **Pins**: `dependent_match` (the fn, the term-level match
+under a bound, `List.get` realized), `matcher_view`, `refined_row`
+(`Pos` = `Subtype Nat (Nat.le 1)`, `bump` running as its value),
+`absurd_e_first` (the pointer). **Findings for `LEAN.md` at landing 4**:
+`arith` reads `Nat.sub` and `2 ^ k` as atoms (state subtraction-free;
+rewrite a literal power first); an exponent is not inferred from a
+literal; `@NAME` with an unknown implicit order is a guess — prefer
+unification from a hypothesis; `cases`/`induction` generalize the target
+only — state the hypothesis as an implication; `cases` on an indexed
+family's hypothesis is refused — use Init's iff; a `fn` signature cannot
+name `@Subtype T P` — name the carrier by a `def`; `--run` takes a World
+entry; `List.length (x :: t)` is `length t + 1`; a `def` has no E body —
+a value a program calls is a `fn`. Measured: the std root's three new
+files load in 82 s alone (facts' demand 1,705 declarations at horizon
+56,062; bits' 256; list's 68). Gates run: the 235 loader pins 0 failed in 56 s, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 53 s, `calc_test` byte-identical over 21 inputs in 249 s, `calc_main_test` byte-identical to the model world in 112 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged) in 193 s, `define_test` 12 checks 0 failed in 246 s, `derive_test` 14 checks 0 failed, `unify_test` 0 failed, `k_clients_test` 7 tests in 78 s, `std_test` 181 checks 0 failed in 167 s (the root's 8 files and 336 declarations loaded and stored in 97 s, K's replay 70 s), `path_test` 18 checks 0 failed in 251 s, parity byte-identical over 31 closures and 133,990 declarations in 278 s, the full suite's 39 entrypoints with 0 failed in 559 s (`store_test` 424 s, `parity_test` 301 s, `define_test` 278 s, `calc_test` 265 s, `path_test` 257 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -6543,4 +6677,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     5's opener with these records as its calibration data — a stated
     departure from law §12.3's "calibrated on `std` in phase 3".
     **Ratified 2026-10-10 as designed: (j) and the tier-0 departure in
-    (l) taken as proposed.**
+    (l) taken as proposed.** *As built at landing 3 (2026-10-10), for
+    the user's eye — four readings the rules left open:* (i) the refuted
+    row of a dependent match is Init's `absurd` (or `False.elim`), an L
+    term of the row's type, erased to a stuck row; the E-first route
+    refuses it by name; (ii) a `realize`'s binders are E types, so a
+    `Fin` index is written `Fin`; (iii) `Subtype` is a row of the
+    registry (law §10.3 row 11), the refinement running as its value;
+    (iv) `HPow`/`Pow` at `Nat` is `Nat.pow` in the one spelling. Beside
+    them two facilities the retirement of calc's `list.shard` needed:
+    the reducer reads a realization's equations where the realizing
+    module is open, and the loader marks that `use` needed.

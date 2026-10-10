@@ -23,17 +23,22 @@ theorem so the claim is checked rather than asserted.
 
 | file | what it holds | gate |
 |---|---|---|
-| `facts.shard` | the fifteen former axioms of the old `kernel/facts.shard` as theorems: twelve by Init's names (landing 2); the three bitwise recurrences `band_rec`, `bor_rec`, `bxor_rec` with `bits.shard` (landing 3) | `kernel/test/std_test.sh` |
+| `facts.shard` | the fifteen former axioms of the old `kernel/facts.shard` as theorems: twelve by Init's names (landing 2); the three bitwise recurrences `band_rec`, `bor_rec`, `bxor_rec` (landing 3) — each the Euclidean split of the operation by 2 (Init's `and_div_two`, `or_div_two`, `xor_div_two`) joined by `arith` to its low bit, which `land_low`, `lor_low`, `lxor_low` decide from the operands' low bits through Init's `*_mod_two_eq_one` iffs (four cases each) | `std_test.sh` | `kernel/test/std_test.sh` |
 | `migration.shard` | one theorem per row of law §10.3 — the row's V3 spelling and the exceptional behavior its third column names, on this pin — and the records' evidence theorems for `order`, `nat`, `div` and `arith` | `std_test.sh` |
 | `bytes.shard`, `derive.shard`, `fresh.shard`, `host.shard` | slices 3.17–3.19: bytes and text, the derived views, the fresh-name supply, the host's externs | `define_test.sh`, `derive_test.sh`, `calc_main_test.sh`, `std_test.sh` |
-| `list.shard`, `bits.shard` | landing 3, not yet in the tree: the realizations of Init's list functions, `List.get` under the dependent match, `List.Pairwise`'s ghost refinement; the three recurrences and the width material | `std_test.sh` |
+| `list.shard` | landing 3: Init's list functions realized by supplied bodies with their equations (`List.length`, `append`, `reverseAux`, `reverse`, `take`, `drop`, `get?Internal`, `getD`), `Option.getD` through its matcher's own definition (the derived view), `List.get` under the dependent match with its nil row refuted; the old `std/list`'s requirements as theorems citing Init (`list_*`); what Init lacks — `sum_append` at `Nat`, and the ghost refinement: `insert`, `mem_insert`, `insert_sorted`, `Sorted` = `Subtype (List.Pairwise Nat.le)`, `sorted_insert` | `std_test.sh`; calc's files run `List.append` and `List.length` through it |
+| `bits.shard` | landing 3: the old `std/bits`'s requirements as theorems citing Init at `Nat`, and the width material Init lacks — the powers `pow2_8`, `pow2_32`, `pow2_64` by `Eq.refl`, the instances at 32 and 64 bits (`bor_le32`, `bxor_le32`, `bxor_lt32`, `bxor_lt64`), the masks at 8, 32 and 64, the literal shifts | `std_test.sh` |
 
 `kernel/test/std_test.sh` (the 39th entrypoint) loads every file of this
 directory in one process — Init on demand, shared across the files — stores
 every declaration and replays the store with K alone (slice 3.22's gate),
 holding the records' theorems by name. Slice 3.13's first library file,
-`list.shard` with V3's own `List.sum`, is retired: `List.sum` is Init's under
-the instance table (slice 3.27 rule 3; the `instance_table` pin).
+`list.shard` with V3's own `List.sum`, was retired at landing 2: `List.sum` is
+Init's under the instance table (slice 3.27 rule 3; the `instance_table` pin);
+landing 3's `list.shard` is the library's. Calc's `examples/calc/list.shard`
+(its own `append` and `len` "until `v3/std` exists") retired onto it at landing
+3: calc's claims re-spelled `List.append`/`List.length`, its proofs reducing by
+the realizations' equations as they did by its own functions'.
 
 ## `std/order` — 22 claims about `Int`'s order (no file)
 
@@ -116,22 +121,36 @@ Linear identities over `Int`, each `arith`'s; `migration.shard` states each
 | `cap_idx` `(0 + (x - 1)) - 0 = (0 + x) - 1` | the same | `arith_cap_idx` |
 | `idx_pred` `s - (base + 1) = (s - base) - 1` | the same | `arith_idx_pred` |
 
-## `std/list` — five opaque functions and 24 requirements (`list.shard` at landing 3)
+## `std/list` — five opaque functions and 24 requirements (`list.shard`, landing 3)
 
 The old module's operations were opaque `sig fn`s over `(List T)` with
 `Int`-valued lengths and counts; its requirements were their defining
 equations and algebra. The functions are Init's, realized by supplied
-bodies at landing 3 (rule 6); the requirements are Init's theorems, cited by
-name (each checked against the export's index), the counts and lengths at
-`Nat`. Class: typed throughout (`Int` → `Nat`, Bool → Prop).
+bodies in `list.shard` (rule 6) — `take` and `drop` recurse on the list where
+Init recurses on the count first, their equations by cases on the count —;
+the requirements are Init's theorems, each cited by name in a `list_*`
+theorem of `list.shard` (so the record is checked, not asserted), the counts
+and lengths at `Nat`. Class: typed throughout (`Int` → `Nat`, Bool → Prop).
+Beyond the old module: `List.get?Internal` and `List.getD` realized,
+`Option.getD` through its matcher's own definition, and `List.get` under the
+dependent match (rule 7) — its nil row `(absurd (Fin.isLt i) (Nat.not_lt_zero
+(Fin.val i)))`, the index re-bound at `Fin (List.length List.nil)`; a
+realize's binders are E types, so the `Fin` index is written `Fin`, the
+registry's row. What Init lacks: `sum_append` at `Nat` (Init's `sum_append`
+asks for `Std.LawfulLeftIdentity`, which the instance table does not hold)
+and the ghost refinement phase 3 owes — `Sorted` is `Subtype (List.Pairwise
+Nat.le)` (named by a `def`, since a `fn` signature reads `@Subtype` at the
+wrong universe today), `sorted_insert` keeps the proof by `insert_sorted`,
+proved by induction with the hypothesis as an implication (`cases` and
+`induction` generalize the target only).
 
 | old | V3 | evidence |
 |---|---|---|
-| `append xs ys` | `List.append` | realized, landing 3 |
-| `len xs` (`Int`) | `List.length` (`Nat`) | realized, landing 3 |
-| `rev xs` | `List.reverse` (`List.reverseAux`) | realized, landing 3 |
-| `take n xs` (`n : Int`) | `List.take` (`Nat`) | realized by `cases` on the count, landing 3 |
-| `drop n xs` (`n : Int`) | `List.drop` (`Nat`) | realized by `cases` on the count, landing 3 |
+| `append xs ys` | `List.append` | realized (`list.shard`) |
+| `len xs` (`Int`) | `List.length` (`Nat`) | realized (`list.shard`) |
+| `rev xs` | `List.reverse` (`List.reverseAux`) | realized (`list.shard`) |
+| `take n xs` (`n : Int`) | `List.take` (`Nat`) | realized, the equations by `cases` on the count (`take_cons_eq`, `drop_cons_eq`) |
+| `drop n xs` (`n : Int`) | `List.drop` (`Nat`) | realized, the equations by `cases` on the count (`take_cons_eq`, `drop_cons_eq`) |
 | `append_nil_left` `append Nil ys = ys` | `List.nil_append` | cited |
 | `append_cons` `append (Cons h t) ys = Cons h (append t ys)` | `List.cons_append` | cited |
 | `rev_nil` | `List.reverse_nil` | cited |
@@ -143,26 +162,29 @@ name (each checked against the export's index), the counts and lengths at
 | `drop_cons` `drop n (Cons h t) = if n ≤ 0 then Cons h t else drop (n - 1) t` | `List.drop_zero`, `List.drop_succ_cons` | cited |
 | `take_zero` `n ≤ 0 → take n xs = Nil` | `List.take_zero` (`n = 0` at `Nat`) | cited |
 | `drop_zero` `n ≤ 0 → drop n xs = xs` | `List.drop_zero` | cited |
-| `len_nonneg` `0 ≤ len xs` | `Nat.zero_le` — the type | cited |
+| `len_nonneg` `0 ≤ len xs` | `Nat.zero_le` — the type | `list_len_nonneg` |
 | `append_nil_right` | `List.append_nil` | cited |
 | `append_assoc` | `List.append_assoc` | cited |
 | `len_append` | `List.length_append` | cited |
 | `len_rev` | `List.length_reverse` | cited |
 | `rev_append` `rev (append xs ys) = append (rev ys) (rev xs)` | `List.reverse_append` | cited |
 | `rev_rev` | `List.reverse_reverse` | cited |
-| `drop_le` `len (drop n xs) ≤ len xs` | `List.length_drop` with `Nat.sub_le` | cited |
-| `drop_shortens` `1 ≤ n → 1 ≤ len xs → len (drop n xs) + 1 ≤ len xs` | `List.length_drop` with `Nat.sub_lt` | cited |
+| `drop_le` `len (drop n xs) ≤ len xs` | `List.length_drop` with `Nat.sub_le` | `list_drop_le` |
+| `drop_shortens` `1 ≤ n → 1 ≤ len xs → len (drop n xs) + 1 ≤ len xs` | `List.length_drop` with `Nat.sub_lt` | `list_drop_shortens` |
 | `take_le` `len (take n xs) ≤ len xs` | `List.length_take_le'` | cited |
-| `take_len` `0 ≤ n → n ≤ len xs → len (take n xs) = n` | `List.length_take_of_le` | cited |
+| `take_len` `0 ≤ n → n ≤ len xs → len (take n xs) = n` | `List.length_take_of_le` | `list_take_len` |
 | `drop_len` `0 ≤ n → n ≤ len xs → len (drop n xs) = len xs - n` | `List.length_drop` (unconditional at `Nat`) | cited |
 
-## `std/bits` — one function and 37 requirements (`bits.shard` at landing 3)
+## `std/bits` — one function and 37 requirements (`bits.shard`, landing 3)
 
 The old module (2,135 lines of proofs from the former recurrences) is Init's
 bitwise library at `Nat`: the former `0 ≤` premises are the type, `pow2 k`
-is `2 ^ k` (`Nat.pow 2 k`), and the width instances at 8, 32 and 64 are
-`bits.shard`'s at landing 3, each one application of the general theorem to
-a literal. Class: typed throughout.
+is `(Nat.pow 2 k)` — one spelling with Init's `2 ^ k` since landing 3 —,
+every row below a theorem of `bits.shard` under the old name, and the width
+instances at 8, 32 and 64 each one application of the general theorem to a
+literal (through a `Nat.pow` hypothesis: a literal does not determine the
+exponent, so `Nat.or_lt_two_pow ha hb` reads `a < Nat.pow 2 32`, and the
+literal form is `exact`'s conversion or `arith`'s). Class: typed throughout.
 
 | old | V3 | evidence |
 |---|---|---|
@@ -170,7 +192,7 @@ a literal. Class: typed throughout.
 | `pow2_z` `pow2 0 = 1` | `Nat.pow_zero 2` | cited |
 | `pow2_s` `pow2 (k + 1) = 2 · pow2 k` | `Nat.pow_succ` (`2 ^ k * 2`) | cited |
 | `pow2_pos` `0 < pow2 k` | `Nat.two_pow_pos k` | cited |
-| `pow2_32`, `pow2_64` | `Eq.refl` (the literal computes) | — |
+| `pow2_8`, `pow2_32`, `pow2_64` | `Eq.refl` (the literal computes) | — |
 | `band_zero_l` `band 0 b = 0` | `Nat.zero_and` | cited (the `one_spelling` pin applies it) |
 | `bor_zero_l` `bor 0 b = b` | `Nat.zero_or` | cited |
 | `bxor_zero_l` `bxor 0 b = b` | `Nat.zero_xor` | cited |
@@ -181,19 +203,21 @@ a literal. Class: typed throughout.
 | `band_le_l` `band a b ≤ a` | `Nat.and_le_left` | cited |
 | `band_le_r` `band a b ≤ b` | `Nat.and_le_right` | cited; `migration.shard`'s `land_nat` states it |
 | `bor_le_pow2` `a ≤ pow2 k - 1 → b ≤ pow2 k - 1 → bor a b ≤ pow2 k - 1` | `Nat.or_lt_two_pow` through `Nat.le_sub_one_iff_lt (Nat.two_pow_pos k)` | cited |
-| `bor_le32` (the instance at 32) | `bits.shard`, landing 3 | — |
+| `bor_le32` (the instance at 32) | `bits.shard` | — |
 | `bxor_le_pow2` | `Nat.xor_lt_two_pow`, the same bridge | cited |
-| `bxor_le32`, `bxor_lt32`, `bxor_lt64` | `bits.shard`, landing 3 | — |
+| `bxor_le32`, `bxor_lt32`, `bxor_lt64` | `bits.shard` | — |
 | `shl1_mul` `bshl a 1 = 2 · a` | `Eq.refl` (`Nat.shiftLeft` computes one step) | — |
 | `shl8_mul`, `shl5_mul`, `shl13_mul` `bshl a k = 2^k · a` | `Nat.shiftLeft_eq a k` with `Nat.mul_comm`, the power a literal | cited |
-| `shr1_div` `bshr a 1 = ediv a 2` | `Nat.shiftRight_succ_inside a 0` with `Nat.shiftRight_zero`; `facts.shard`'s `bshr_s` | cited |
+| `shr1_div` `bshr a 1 = ediv a 2` | `Eq.refl` (`Nat.shiftRight` computes one step) | — |
 | `shr8_div`, `shr17_div` `bshr a k = ediv a 2^k` | `Nat.shiftRight_eq_div_pow a k` | cited |
 | `shl_pow2` `bshl a k = a · pow2 k` | `Nat.shiftLeft_eq` | cited |
 | `shr_pow2` `bshr a k = ediv a (pow2 k)` | `Nat.shiftRight_eq_div_pow` | cited |
 | `shl_nonneg`, `shr_nonneg` | `Nat.zero_le` — the type | cited |
 | `mask_pow2` `band a (pow2 k - 1) = mod a (pow2 k)` | `Nat.and_two_pow_sub_one_eq_mod a k` | cited |
-| `mask_byte`, `mask_word32`, `mask_word64` | `bits.shard`, landing 3 (`Nat.and_two_pow_sub_one_eq_mod` at 8, 32, 64) | — |
+| `mask_byte`, `mask_word32`, `mask_word64` | `Nat.and_two_pow_sub_one_eq_mod` at 8, 32, 64 | cited |
 
 The three recurrences the old proofs started from — `band_rec`, `bor_rec`,
-`bxor_rec` of `kernel/facts.shard` — are `facts.shard`'s at landing 3 (rule
-9's last row).
+`bxor_rec` of `kernel/facts.shard` — are `facts.shard`'s (rule 9's last row),
+stated at `Nat` and subtraction-free, the product moved to the left: `lor a b
++ (a%2)·(b%2) = 2·lor (a/2) (b/2) + a%2 + b%2` and `xor a b + 2·(a%2)·(b%2) =
+2·xor (a/2) (b/2) + a%2 + b%2`, since `arith` reads `Nat.sub` as an atom.

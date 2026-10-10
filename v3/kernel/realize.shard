@@ -159,7 +159,8 @@
     ((EIf a b c)
      (match (check_calls es env id rec flags a)
        ((Some x) (Some x))
-       (None (match (check_calls es env id rec flags b) ((Some x) (Some x)) (None (check_calls es env id rec flags c))))))))
+       (None (match (check_calls es env id rec flags b) ((Some x) (Some x)) (None (check_calls es env id rec flags c))))))
+    (EAbsurd None)))
 (fn check_all ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (ts (List ETerm))) (Option (Pair Symbol (List Int)))
   (measure (struct ts))
   (match ts (Nil None) ((Cons x r) (match (check_calls es env id rec flags x) ((Some y) (Some y)) (None (check_all es env id rec flags r))))))
@@ -404,7 +405,7 @@
         ;; a matcher that carries its equation (a measured function's, define.shard's pj_match_eq)
         ;; has one argument more, `Eq.refl s`: the alternative's last binder at a leaf
         (let ((args (get_app_args body)) (n0 (+ np (+ 2 (len rows)))))
-          (if (bool_or (lt (len args) n0) (lt (+ n0 1) (len args))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+          (if (lt (len args) n0) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))   ; past the alternatives: the measured function's Eq.refl, the dependent match's generalized locals (slice 3.27 landing 3)
             (match (nth args (+ np 1))
               (None (Pair t None))
               ((Some s) (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) (drop n0 args) fuel acc))))))
@@ -487,9 +488,23 @@
                          ((Pair t7 rl2)
                           (match (subst_pairs t7 body1 pairs)
                             ((Pair t8 body2)
-                             (match (pj_leaves t8 lhs2 (append kept0 (field_fvars fields)) rl2 body2 (- fuel 1) acc)
+                             (match (pj_leaves t8 lhs2 (leaf_binders kept0 pairs (field_fvars fields)) rl2 body2 (- fuel 1) acc)
                                ((Pair t9 None) (Pair t9 None))
                                ((Pair t9 (Some acc1)) (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
+;; the leaf's binders after a split: the kept binders the split left as they were, the
+;; constructor's fields, then the kept binders re-opened at a type mentioning the fields
+;; (`i : Fin (List.length xs)` under `match xs`, slice 3.27 rule 7) — each after what its type names
+(fn leaf_binders ((kept (List Expr)) (pairs (List (Pair Int Expr))) (fields (List Expr))) (List Expr)
+  (append (kept_unrefreshed kept pairs) (append fields (kept_refreshed kept pairs))))
+(fn kept_refreshed ((kept (List Expr)) (pairs (List (Pair Int Expr)))) (List Expr)
+  (measure (struct kept))
+  (match kept (Nil Nil) ((Cons fv r) (if (is_refreshed fv pairs) (Cons fv (kept_refreshed r pairs)) (kept_refreshed r pairs)))))
+(fn kept_unrefreshed ((kept (List Expr)) (pairs (List (Pair Int Expr)))) (List Expr)
+  (measure (struct kept))
+  (match kept (Nil Nil) ((Cons fv r) (if (is_refreshed fv pairs) (kept_unrefreshed r pairs) (Cons fv (kept_unrefreshed r pairs))))))
+(fn is_refreshed ((fv Expr) (pairs (List (Pair Int Expr)))) Bool
+  (measure (struct pairs))
+  (match pairs (Nil False) ((Cons (Pair _ v) r) (if (int_eq (fvar_id_of v) (fvar_id_of fv)) True (is_refreshed fv r)))))
 (fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
   (measure (struct es))
   (match es

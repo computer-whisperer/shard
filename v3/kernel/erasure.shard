@@ -109,6 +109,10 @@
   (match (tele_of (Tr.w t) (Tr.es t) (Tr.sc t) info)
     ((TeleErr _ _) (Pair t None))
     ((TeleOk w1 es1 tele) (Pair (with Tr t (w w1) (es es1)) (Some tele)))))
+(fn tr_tele_fields ((t Tr) (info ConstantInfo) (k Int)) (Pair Tr (Option Tele))
+  (match (tele_of_fields (Tr.w t) (Tr.es t) (Tr.sc t) info k)
+    ((TeleErr _ _) (Pair t None))
+    ((TeleOk w1 es1 tele) (Pair (with Tr t (w w1) (es es1)) (Some tele)))))
 (fn level_one () Level (LSucc LZero))
 ;; the result type against the expected type binds type parameters too
 ;; let: sequential, each value's type inferred
@@ -334,7 +338,7 @@
     ((Some info)
      (match info
        ((CtorInfo _ _ _ nparams _ _)
-        (match (tr_tele t info)
+        (match (tr_tele_fields t info nparams)
           ((Pair t1 None) (Pair t1 None))
           ((Pair t1 (Some (Tele _ binds _ _))) (Pair t1 (Some (data_flags (drop nparams binds)))))))
        (_ (Pair t None))))
@@ -368,6 +372,9 @@
             ((Pair (Some (Pair e m)) _) (ErErr e m))
             ((Pair None (Pair t1 as)) (ErOk t1 (ECall c as))))))
        (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
+    ((Lam _ _ _ _ _)
+     (match (beta_head (w_st (Tr.w t)) head args)
+       ((Pair st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1)))))
     (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
 (fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
@@ -389,6 +396,7 @@
   (erase_const_at t env c (if (native_decl (Tr.sc t) c) Anon c) args fuel))
 (fn erase_const_at ((t Tr) (env (List ErEnt)) (c Name) (k Name) (args (List Expr)) (fuel Int)) ErRes
   (let ((lc (last_component c)))
+    (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim)))) (ErOk t EAbsurd)   ; a refuted row (slice 3.27 landing 3)
     (if (name_eq k (n2 (quote OfNat) (quote ofNat)))
       (match args ((Cons (Const _ nn _) (Cons (Lit _ (LitNat n)) _)) (if (name_eq nn (nm_nat)) (ErOk t (ELit (LNat n))) (ErErr (quote no_realization) "OfNat.ofNat off Nat"))) (_ (ErErr (quote no_realization) "OfNat.ofNat")))
     (if (name_eq k (nm_nat_zero)) (ErOk t (ELit (LNat 0)))
@@ -467,7 +475,25 @@
                        (None
                         (match (proj_fn_app info args)
                           ((Some (Pair (Pair sn i) x)) (erase_proj t env sn i x fuel))
-                          (None (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)"))))))))))))))))))))))))))))))))
+                          (None (erase_unfold_matcher t env c info args fuel))))))))))))))))))))))))))))))))
+;; a definition without a realization: Lean's own matcher (`NAME.match_N`, no descriptor of this
+;; run) is a definition over `casesOn` — unfolded at its arguments and erased as any definition's
+;; value (slice 3.27 rule 6); anything else has no realization
+(fn erase_unfold_matcher ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int)) ErRes
+  (match info
+    ((DefnInfo _ v _ _ _)
+     (if (is_match_name c)
+       (match (beta_head (w_st (Tr.w t)) v args)
+         ((Pair st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1))))
+       (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)"))))
+    (_ (ErErr (quote no_realization) (append (show_name c) ": no realization attached — realize it first (§7.1)")))))
+(fn is_match_name ((c Name)) Bool (match c ((Str _ s) (is_match_prefix (chars_of_sym s))) (_ False)))
+(fn is_match_prefix ((cs (List Int))) Bool   ; "match_"
+  (match cs
+    ((Cons c1 (Cons c2 (Cons c3 (Cons c4 (Cons c5 (Cons c6 _))))))
+     (bool_and (int_eq c1 109) (bool_and (int_eq c2 97) (bool_and (int_eq c3 116) (bool_and (int_eq c4 99) (bool_and (int_eq c5 104) (int_eq c6 95)))))))
+    (_ False)))
+
 ;; ---- decisions: a value and a condition (slice 3.19) -------------------------------------------
 ;; A `Decidable` value is one of the type's two cells — a match by constructor reads it, a
 ;; function returns it, a derived decision is built of them. The registry's decisions answer a
@@ -565,17 +591,17 @@
   (match desc
     ((MtDesc np nd rows)
      (if (bool_not (int_eq nd 1)) (ErErr (quote no_realization) (append (show_name c) ": a match on several scrutinees has no E form"))
-     (if (bool_not (int_eq (len args) (+ np (+ 2 (len rows))))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+     (if (lt (len args) (+ np (+ 2 (len rows)))) (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
        (match (nth args (+ np 1))
          (None (ErErr (quote function_value) (show_name c)))
          ((Some scrut)
           (match (erase t env scrut (- fuel 1))
             ((ErErr e m) (ErErr e m))
             ((ErOk t1 s1)
-             (match (erase_alts t1 env rows (drop (+ np 2) args) fuel Nil)
+             (match (erase_alts t1 env rows (drop (+ np 2) args) (drop (+ np (+ 2 (len rows))) args) fuel Nil)
                ((Pair (Some (Pair e m)) _) (ErErr e m))
                ((Pair None (Pair t2 arms)) (ErOk t2 (EMatch s1 arms)))))))))))))
-(fn erase_alts ((t Tr) (env (List ErEnt)) (rows (List (List MtPat))) (alts (List Expr)) (fuel Int) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List EArm)))
+(fn erase_alts ((t Tr) (env (List ErEnt)) (rows (List (List MtPat))) (alts (List Expr)) (extra (List Expr)) (fuel Int) (acc (List EArm))) (Pair (Option (Pair Symbol (List Int))) (Pair Tr (List EArm)))
   (measure (struct rows))
   (match rows
     (Nil (Pair None (Pair t (rev acc))))
@@ -586,10 +612,33 @@
         (match (mt_epat t p True 64)
           ((Pair t1 None) (Pair (Some (Pair (quote no_realization) "a pattern on an erased field, or on a type that is not an E type")) (Pair t1 Nil)))
           ((Pair t1 (Some (Pair ep roles)))
-           (match (erase_alt t1 env a roles fuel)
-             ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) (Pair t1 Nil)))
-             ((Pair None (Pair t2 body)) (erase_alts t2 env r ar fuel (Cons (EArm (match ep ((Some q) q) (None PVar)) body) acc)))))))))
+           (match (alt_with_extra t1 a (len roles) extra Nil)
+             ((Pair t1x a1)
+           (match (erase_alt t1x env a1 roles fuel)
+             ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) (Pair t1x Nil)))
+             ((Pair None (Pair t2 body)) (erase_alts t2 env r ar extra fuel (Cons (EArm (match ep ((Some q) q) (None PVar)) body) acc)))))))))))
     (_ (Pair (Some (Pair (quote no_realization) "a match on several scrutinees has no E form")) (Pair t Nil)))))
+;; an alternative under a matcher applied past its alternatives (the dependent match, slice 3.27
+;; landing 3): its field lambdas opened, the lambdas after them instantiated at the extra arguments
+;; — the generalized locals, re-bound in the arm —, the fields closed again
+(fn alt_with_extra ((t Tr) (a Expr) (k Int) (extra (List Expr)) (fvs (List Expr))) (Pair Tr Expr)
+  (measure k)
+  (match extra
+    (Nil (Pair t a))
+    (_
+     (if (le k 0)
+       (match (inst_extra t a extra) ((Pair t1 b) (tr_lams t1 (rev fvs) b)))
+       (match (open_lam t a)
+         ((Pair t1 None) (Pair t1 a))
+         ((Pair t1 (Some (Pair fv body))) (alt_with_extra t1 body (- k 1) extra (Cons fv fvs))))))))
+(fn inst_extra ((t Tr) (a Expr) (extra (List Expr))) (Pair Tr Expr)
+  (measure (struct extra))
+  (match extra
+    (Nil (Pair t a))
+    ((Cons x r)
+     (match a
+       ((Lam _ _ _ _ body) (match (tr_inst1 t body x) ((Pair t1 b) (inst_extra t1 b r))))
+       (_ (match (tr_apps t a (list x)) ((Pair t1 b) (inst_extra t1 b r))))))))
 ;; a row's pattern in E and its variables' runtime flags in slot order: a variable binds a
 ;; slot where its position is runtime data and vanishes where it is erased; a constructor
 ;; keeps its runtime fields

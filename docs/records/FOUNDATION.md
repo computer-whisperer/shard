@@ -2661,6 +2661,38 @@ is `docs/FOUNDATION.md` §5.3.
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 - **2026-10-10 — pipeline 572 green on `bd30a48`: engine 55 s; corpus 1,511 s at the baseline; v3 4,429 s of a 3 h limit, 87 s under pipeline 570's 4,516 (the export 129 s; the index driver built by route 1 in 12 s and the export's index built in 93 s on the runner; 39 entrypoints with 0 failed in 1,281 s against 1,256 — `store_test` 960 s against 968, parity byte-identical over 31 closures and 133,785 declarations in 750 s against 751, `path_test` 676 against 681, `define_test` 648 against 656, `calc_test` 609 against 611, `wire_test` 440 against 436, `engine_test` 410 against 405, `derive_test` 323 against 317, `std_test` 309 s new — the std root loaded and stored in 174 s and K's replay of its 211 declarations 134 s, against 69 and 48 on the dev box —, `k_clients_test` 196 against 193, the loader pins' entrypoint 138 against 130 (one case more, `arith_eq_bare`, under `Int.lt_mul_ediv_self_add`'s demand), `tactic_test` 116 against 113, `route2_test` 74 against 76; route 1's native build of the kernel 424 s; the replay 2,378 s at 32.3 GB against 2,544 at 31.5); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 3.27 holds on the full gate; landing 3 — `std/list` and `std/bits`, calc's `list.shard` retired onto the library — is open.**
+- **2026-10-10 — slice 3.27 landing 3 built: `std/list` and `std/bits`
+  (`LANGUAGE.md` §8.4 "as built, landing 3").** Rules 6–9. `v3/std/list.shard`:
+  eight of Init's list functions realized by supplied bodies with their
+  equations (`take` and `drop` by cases on the count), `Option.getD`
+  through its own matcher's definition — the derived view unfolds Lean's
+  `NAME.match_N` at its arguments (refused before, accepted after: rule 6's
+  measure) —, `List.get` under the dependent match: a `match` generalizes
+  the locals whose types mention the scrutinee (Lean's revert; the arm
+  re-binds them under the context's names, the matcher's result applied
+  back), the nil row refuted by Init's `absurd`, which erases to a stuck
+  row (`EAbsurd`/`LAbsurd`; `absurd_needs_init` on the E-first route);
+  the realizer's leaf binders ordered after the fields they name; a
+  realize's binders E types (`Fin`). The old module's 24 requirements as
+  `list_*` theorems citing Init; `sum_append` at `Nat`; the ghost
+  refinement — `Sorted` = `Subtype (List.Pairwise Nat.le)`, `sorted_insert`
+  keeping `insert_sorted` — with `Subtype` a row of the registry (a row
+  constructor's parameters opened unclassified before its fields).
+  `v3/std/facts.shard`: the three recurrences at `Nat`, subtraction-free,
+  the Euclidean split by 2 (Init's `*_div_two`) joined by `arith` to the
+  low bit decided by four cases through Init's `*_mod_two_eq_one`.
+  `v3/std/bits.shard`: the old 37 requirements citing Init at `Nat`, `2 ^
+  k` one spelling with `Nat.pow` (a table row), the width instances
+  through a `Nat.pow` hypothesis, the masks and literal shifts. Calc's
+  `examples/calc/list.shard` retired onto the library: seven files
+  re-spelled, Init's append laws, one `rfl` equation re-oriented
+  (`length t + 1`); the reducer reads a realization's equations through
+  the realizing module, the loader marks that `use` needed. Pins
+  `dependent_match`, `matcher_view`, `refined_row`, `absurd_e_first`.
+  Findings for `LEAN.md`: `arith` reads `Nat.sub` and `2 ^ k` as atoms; an
+  exponent is not inferred from a literal; `cases`/`induction` generalize
+  the target only; a `fn` signature cannot name `@Subtype T P`; a `def`
+  has no E body. Gates run: the 235 loader pins 0 failed in 56 s, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 53 s, `calc_test` byte-identical over 21 inputs in 249 s, `calc_main_test` byte-identical to the model world in 112 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged) in 193 s, `define_test` 12 checks 0 failed in 246 s, `derive_test` 14 checks 0 failed, `unify_test` 0 failed, `k_clients_test` 7 tests in 78 s, `std_test` 181 checks 0 failed in 167 s (the root's 8 files and 336 declarations loaded and stored in 97 s, K's replay 70 s), `path_test` 18 checks 0 failed in 251 s, parity byte-identical over 31 closures and 133,990 declarations in 278 s, the full suite's 39 entrypoints with 0 failed in 559 s (`store_test` 424 s, `parity_test` 301 s, `define_test` 278 s, `calc_test` 265 s, `path_test` 257 s). Route 1's kernel build, the full replay and the corpus are CI's.
 - **2026-10-10 — slice 3.27 landing 2 built: the records (`LANGUAGE.md`
   §8.4 "as built, landing 2"; law §10.3 row 8 corrected in place).**
   `v3/std/facts.shard`: the twelve former axioms as theorems by Init's

@@ -55,11 +55,12 @@
 ;; so the two routes cannot disagree on the cells
 (fn rep_row ((n Name)) Bool
   (bool_or (name_eq n (n1 (quote Fin)))
+  (bool_or (name_eq n (n1 (quote Subtype)))   ; the ghost refinement (law §10.3 row 11; slice 3.27 landing 3)
   (bool_or (name_eq n (n1 (quote BitVec)))
   (bool_or (name_eq n (n1 (quote UInt8)))
   (bool_or (name_eq n (n1 (quote Array)))
   (bool_or (name_eq n (n1 (quote ByteArray)))
-           (name_eq n (nm_string))))))))
+           (name_eq n (nm_string)))))))))
 
 ;; ---- levels (§7.5): a constant's level parameters solved so that its Sort binders are Type ----
 (fn solve_levels ((info ConstantInfo)) (Option (List Level))
@@ -344,6 +345,27 @@
      (match (binder_role w1 es sc r (tparams_of acc))
        ((Pair (Pair w2 es2) (Some (BData rt))) (TeleOk w2 es2 (Tele ls (rev acc) rt r)))
        ((Pair (Pair w2 es2) _) (TeleErr (quote realize_signature) "the result is not an E type (a proposition, a type, a function)")))))))
+;; a constructor's telescope with its first k binders — the inductive's parameters — opened
+;; unclassified: a Sort-typed one a type parameter, any other erased (Subtype's predicate is
+;; neither a type, a proposition nor data; the fields after it are what a row needs; slice
+;; 3.27 landing 3)
+(fn tele_of_fields ((w W) (es ESt) (sc Scope) (info ConstantInfo) (k Int)) TeleRes
+  (match (type_at_levels w info)
+    ((Pair w1 None) (TeleErr (quote realize_signature) (append (show_name (ci_name info)) ": its universe parameters do not solve to Type")))
+    ((Pair w1 (Some (Pair ls ty))) (tele_params w1 es sc ty Nil ls k (budget_depth)))))
+(fn tele_params ((w W) (es ESt) (sc Scope) (ty Expr) (acc (List TBind)) (ls (List Level)) (k Int) (fuel Int)) TeleRes
+  (measure k)
+  (if (le k 0) (tele_walk w es sc ty acc ls fuel)
+    (match (w_whnf w ty)
+      ((Pair w1 (Some (Pi _ n bi dom body)))
+       (match (w_whnf w1 dom)
+         ((Pair w2 dw)
+          (let ((role (match dw ((Some (Sort _ _)) BType) (_ BErased))))
+            (match (w_local w2 n dom)
+              ((Pair w3 fv)
+               (match (w_inst1 w3 body fv)
+                 ((Pair w4 body1) (tele_params w4 es sc body1 (Cons (TBind n role fv) acc) ls (- k 1) fuel)))))))))
+      ((Pair w1 _) (TeleErr (quote realize_signature) "a constructor with fewer binders than its inductive has parameters")))))
 ;; the type parameters' locals in order, from the reversed binders
 (fn tparams_of ((acc (List TBind))) (List Expr) (rev (tparams_rev acc)))
 (fn tparams_rev ((acc (List TBind))) (List Expr)

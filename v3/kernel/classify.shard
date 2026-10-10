@@ -275,11 +275,12 @@
      (if (sym_eq h (quote let)) (read_elet r args)
      (if (sym_eq h (quote if)) (read_eif r args)
      (if (sym_eq h (quote dif)) (TErr (quote dif_needs_init) "a dif names the hypothesis of a decided proposition (§8.4 slice 3.24): Decidable and dite are Init's, and this body is read E-first")
+     (if (sym_eq h (quote absurd)) (TErr (quote absurd_needs_init) "a refuted row is Init's absurd applied to a proof and its negation (§8.4 slice 3.27 landing 3): it reads on the typed route, and this body is read E-first")
      (if (sym_eq h (quote quote))
        (match args ((Cons (SSym q) Nil) (TOk (ELit (LSym q)))) (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
      (if (sym_eq h (quote list))
        (read_elist r args)
-     (read_eapp r h args))))))))
+     (read_eapp r h args)))))))))
     ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
 
 ;; a bare name: bound, else a constructor without fields, else the refusal it earns
@@ -683,7 +684,8 @@
     ((EExt _ as) (c_exh_all es as))
     ((EMatch s arms) (bool_and (c_exh es s) (bool_and (matrix_exh es (arm_rows arms) 1 (matrix_fuel)) (c_exh_arms es arms))))
     ((ELet rs b) (bool_and (c_exh_all es rs) (c_exh es b)))
-    ((EIf a b c) (bool_and (c_exh es a) (bool_and (c_exh es b) (c_exh es c))))))
+    ((EIf a b c) (bool_and (c_exh es a) (bool_and (c_exh es b) (c_exh es c))))
+    (EAbsurd True)))
 (fn c_exh_all ((es ESt) (ts (List ETerm))) Bool
   (measure (struct ts))
   (match ts (Nil True) ((Cons t r) (bool_and (c_exh es t) (c_exh_all es r)))))
@@ -775,7 +777,8 @@
        (None
         (match (if_bad es (c_type es tys a))
           ((Some x) (Some x))
-          (None (match (c_leak es tys b) ((Some x) (Some x)) (None (c_leak es tys c))))))))))
+          (None (match (c_leak es tys b) ((Some x) (Some x)) (None (c_leak es tys c))))))))
+    (EAbsurd None)))
 ;; an `if`'s condition (§6.2; GPT-6 R56, slice 10): where the declarations determine its static type,
 ;; that type must be a transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type —
 ;; whose second constructor is the observation `if` makes. A sig type is the leak (`private_if`: the
@@ -922,11 +925,16 @@
     ((EExt f args) (match (es_find_decl es f) ((Some (EExtern _ _ ps rt)) (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt))) (_ None)))
     ((EPrim n args) (match (prim_find n) ((Some (Prim code _)) (Some (prim_static es tys code args))) (None None)))
     ((EMatch s arms)
-     (match arms
-       ((Cons (EArm p b) _) (c_type es (rev_onto (pat_types es (c_type es tys s) p) tys) b))
-       (Nil None)))
+     (match (live_arm arms)
+       ((Some (EArm p b)) (c_type es (rev_onto (pat_types es (c_type es tys s) p) tys) b))
+       (None None)))
     ((ELet rs b) (c_type_let es tys rs b))
-    ((EIf _ b _) (c_type es tys b))))
+    ((EIf _ b _) (c_type es tys b))
+    (EAbsurd None)))
+;; the first arm that is not a refuted row: a match's static type is read off it
+(fn live_arm ((arms (List EArm))) (Option EArm)
+  (measure (struct arms))
+  (match arms (Nil None) ((Cons (EArm _ EAbsurd) r) (live_arm r)) ((Cons a _) (Some a))))
 ;; a primitive's static result: + - * at two Nat operands is Nat (§8.1 rule 2: a numeral's E type is
 ;; the binder's; §8.4 rule 3 resolves the identity by this type), else the table's result type
 (fn prim_static ((es ESt) (tys (List (Option EType))) (code Int) (args (List ETerm))) EType

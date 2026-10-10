@@ -36,6 +36,7 @@
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.scope)
+(use kernel.scope.Open)
 (use kernel.sexpr)
 (use kernel.spelling)
 (use kernel.unify)
@@ -1165,14 +1166,29 @@
 (type Redex (Redex Expr Expr (Option (Pair Expr (Pair Expr Expr))) Bool))   ; subterm, replacement, (ty, heq, —) when propositional, whether an unfolding at a closed occurrence
 (type Found (FoundOk El Redex) (FoundNone El) (FoundErr Symbol (List Int)))
 
-;; the equations of a constant, in order, until one is missing
-(fn equations_of ((e El) (f Name)) (List Name) (equations_go e f 1 Nil))
-(fn equations_go ((e El) (f Name) (k Int) (acc (List Name))) (List Name)
+;; the equations of a constant, in order, until one is missing: a fn's `f.eq_k`; else a
+;; realization's `M.f.realize_k` for the module M that attached it — this module, or one it
+;; opens (slice 3.27 landing 3: calc runs Init's List.length through std/list's realization
+;; and reduces by its equations, as it did by its own fn's; a use of the realizing module is
+;; needed for that, as the loader records)
+(fn equations_of ((e El) (f Name)) (List Name)
+  (match (equations_go e f "eq_" 1 Nil)
+    (Nil (realize_equations e f (Cons (sc_module (cx_scope (el_cx e))) (opened_modules (sc_opened (cx_scope (el_cx e)))))))
+    (eqs eqs)))
+(fn realize_equations ((e El) (f Name) (ms (List Name))) (List Name)
+  (measure (struct ms))
+  (match ms
+    (Nil Nil)
+    ((Cons m r) (match (equations_go e (name_append m f) "realize_" 1 Nil) (Nil (realize_equations e f r)) (eqs eqs)))))
+(fn opened_modules ((os (List Open))) (List Name)
+  (measure (struct os))
+  (match os (Nil Nil) ((Cons (OpenAll m) r) (Cons m (opened_modules r))) ((Cons (OpenSome m _) r) (Cons m (opened_modules r)))))
+(fn equations_go ((e El) (f Name) (kind (List Int)) (k Int) (acc (List Name))) (List Name)
   (measure (- 64 k))
   (if (lt 64 k) (rev acc)
-    (let ((n (name_append f (n1 (sym_of_chars (append "eq_" (show_nat k)))))))
+    (let ((n (name_append f (n1 (sym_of_chars (append kind (show_nat k)))))))
       (match (env_find (el_env e) n)
-        ((Some _) (equations_go e f (+ k 1) (Cons n acc)))
+        ((Some _) (equations_go e f kind (+ k 1) (Cons n acc)))
         (None (rev acc))))))
 ;; an equation applied to a subterm: its instantiated right side, and whether the equation's
 ;; proof is Eq.refl (then the replacement is by conversion)

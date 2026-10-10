@@ -1403,6 +1403,22 @@ equation path, whose ill-typed term K refused (`lin_eq`, pin
 
 Landing 2 holds on the full gate: **2026-10-10 — pipeline 572 green on `bd30a48`: engine 55 s; corpus 1,511 s at the baseline; v3 4,429 s of a 3 h limit, 87 s under pipeline 570's 4,516 (the export 129 s; the index driver built by route 1 in 12 s and the export's index built in 93 s on the runner; 39 entrypoints with 0 failed in 1,281 s against 1,256 — `store_test` 960 s against 968, parity byte-identical over 31 closures and 133,785 declarations in 750 s against 751, `path_test` 676 against 681, `define_test` 648 against 656, `calc_test` 609 against 611, `wire_test` 440 against 436, `engine_test` 410 against 405, `derive_test` 323 against 317, `std_test` 309 s new — the std root loaded and stored in 174 s and K's replay of its 211 declarations 134 s, against 69 and 48 on the dev box —, `k_clients_test` 196 against 193, the loader pins' entrypoint 138 against 130 (one case more, `arith_eq_bare`, under `Int.lt_mul_ediv_self_add`'s demand), `tactic_test` 116 against 113, `route2_test` 74 against 76; route 1's native build of the kernel 424 s; the replay 2,378 s at 32.3 GB against 2,544 at 31.5); T0 accepted 57,977, 20 pinned, closures identical. Landing 3 — `std/list` and `std/bits`, calc's `list.shard` retired onto the library — is open.**
 
+**Landing 3 built 2026-10-10 — `std/list` and `std/bits`** (`LANGUAGE.md`
+§8.4 "as built, landing 3"): Init's list functions realized by supplied
+bodies with their equations, `Option.getD` through its own matcher's
+definition (the derived view, rule 6's measure), `List.get` under the
+dependent match — a `match` generalizes the locals whose types mention
+the scrutinee, the nil row refuted by Init's `absurd`, which erases to a
+stuck row —, the old `std/list`'s requirements as theorems citing Init,
+`sum_append`, and the ghost refinement `Sorted` = `Subtype (List.Pairwise
+Nat.le)` with `Subtype` a row of the registry; `std/facts.shard` completes
+its fifteen with the three bitwise recurrences at `Nat`; `std/bits.shard`
+the old 37 requirements and the width material, `2 ^ k` one spelling with
+`Nat.pow`. Calc's `examples/calc/list.shard` retired onto the library
+(its claims re-spelled `List.append`/`List.length`); for that the reducer
+reads a realization's equations through the realizing module and the
+loader marks that `use` needed. Four pins. Gates run: the 235 loader pins 0 failed in 56 s, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 53 s, `calc_test` byte-identical over 21 inputs in 249 s, `calc_main_test` byte-identical to the model world in 112 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged) in 193 s, `define_test` 12 checks 0 failed in 246 s, `derive_test` 14 checks 0 failed, `unify_test` 0 failed, `k_clients_test` 7 tests in 78 s, `std_test` 181 checks 0 failed in 167 s (the root's 8 files and 336 declarations loaded and stored in 97 s, K's replay 70 s), `path_test` 18 checks 0 failed in 251 s, parity byte-identical over 31 closures and 133,990 declarations in 278 s, the full suite's 39 entrypoints with 0 failed in 559 s (`store_test` 424 s, `parity_test` 301 s, `define_test` 278 s, `calc_test` 265 s, `path_test` 257 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

@@ -5,9 +5,12 @@
 # and the store replayed by K alone (verify_release.shard, slice 3.22's gate) after the
 # closure of Init it cites. The records' theorems are held by name, each under no axiom but
 # Lean's own (propext, Quot.sound, Classical.choice — what the cited Init theorems carry):
-# std/facts.shard's former axioms (twelve at landing 2, fifteen at landing 3),
-# std/migration.shard's one per row of law §10.3 and the records' evidence. Exit code = the
-# number of checks that failed.
+# std/facts.shard's fifteen former axioms (twelve at landing 2, the three bitwise recurrences
+# with their low-bit lemmas at landing 3), std/migration.shard's one per row of law §10.3 and the
+# records' evidence, std/bits.shard's record (landing 3), std/list.shard's realizations' equations,
+# its record's evidence and the ghost refinement (landing 3). The run of the sorted list's demo
+# through the realizations — List.get's refuted row, Subtype's row — is checked by its value.
+# Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -33,7 +36,7 @@ e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the std root did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|ERROR|POLICY|PENDING' "$OUT/load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^LOAD: modules $n .* refused 0  pending 0 .* errors 0$" "$OUT/load.txt" || { bad "not every one of the $n files loaded clean"; grep '^LOAD:' "$OUT/load.txt"; }
 # the former axioms of kernel/facts.shard, each a theorem under its old name
-for t in mod_lo mod_hi ediv_mod_id div_unique mod_unique mul_comm mul_assoc mul_dist bshl_z bshl_s bshr_z bshr_s; do
+for t in mod_lo mod_hi ediv_mod_id div_unique mod_unique mul_comm mul_assoc mul_dist bshl_z bshl_s bshr_z bshr_s land_low lor_low lxor_low band_rec bor_rec bxor_rec; do
   checks=$((checks+1)); held std.facts.$t || bad "std/facts.shard: $t not accepted under Lean's axioms alone"
 done
 # law §10.3's rows, one theorem each
@@ -47,6 +50,16 @@ for t in order_le_refl order_lt_irrefl order_eq_refl order_lt_succ_from_lt order
          arith_idx_inner_simp arith_sub_zero arith_sub_sub_one arith_reassoc_succ arith_idx_cancel arith_cap_idx arith_idx_pred; do
   checks=$((checks+1)); held std.migration.$t || bad "std/migration.shard: the record's $t not accepted under Lean's axioms alone"
 done
+# std/bits.shard: the bits record's requirements as theorems (landing 3)
+for t in pow2_z pow2_s pow2_pos pow2_8 pow2_32 pow2_64 band_zero_l bor_zero_l bxor_zero_l bxor_self bxor_cancel_right band_zero_r band_lo bor_lo bxor_lo shl_nonneg shr_nonneg band_le_l band_le_r bor_le_pow2 bxor_le_pow2 bor_le32 bxor_le32 bxor_lt32 bxor_lt64 shl1_mul shl_pow2 shl5_mul shl8_mul shl13_mul shr1_div shr_pow2 shr8_div shr17_div mask_pow2 mask_byte mask_word32 mask_word64; do
+  checks=$((checks+1)); held std.bits.$t || bad "std/bits.shard: $t not accepted under Lean's axioms alone"
+done
+# std/list.shard: the realizations' equations, the list record's evidence, sum_append, the refinement (landing 3)
+for t in List.length.realize_1 List.length.realize_2 List.append.realize_1 List.append.realize_2 List.reverseAux.realize_1 List.reverseAux.realize_2 List.reverse.realize_1 List.take.realize_1 List.take.realize_2 List.drop.realize_1 List.drop.realize_2 List.get?Internal.realize_1 List.get?Internal.realize_2 List.getD.realize_1 List.get.realize_1 List.get.realize_2 \
+         take_nil_eq take_cons_eq drop_nil_eq drop_cons_eq get_opt_nil get_opt_cons get_bound get_nil_eq get_cons_eq list_append_nil_left list_append_cons list_rev_nil list_rev_cons list_len_nil list_len_cons list_take_nil list_drop_nil list_take_zero list_take_succ_cons list_drop_zero list_drop_succ_cons list_len_nonneg list_append_nil_right list_append_assoc list_len_append list_len_rev list_rev_append list_rev_rev list_drop_len list_drop_le list_drop_shortens list_take_le list_take_len sum_append insert mem_insert insert_sorted Sorted sorted_insert sorted_insert_val sorted_nil sorted_demo one_lt_two get_demo; do
+  checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
+done
+checks=$((checks+1)); grep -q '^REALIZE Option.getD view ' "$OUT/load.txt" || bad "Option.getD is not realized through its matcher's definition (the view)"
 decls=$(wc -l < "$OUT/std/order" 2>/dev/null || echo 0)
 checks=$((checks+1)); grep -q "^STORE: .* new=$decls shared=0$" "$OUT/load.txt" || { bad "the store's count is not the order's $decls"; grep '^STORE:' "$OUT/load.txt"; }
 echo "std_test: the std root — $n files, $decls declarations — loaded and stored in one process in $((e-s)) s"

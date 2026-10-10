@@ -14,7 +14,7 @@ family; the rest follow the contract.**
 |---|---|---|---|---|
 | `kernel/` | 39 | 35,224 | new code; `facts.shard`'s 15 axioms PORT as theorems (phase 3); `proof.shard`'s Step roster is the I vocabulary's source | §3, §7 |
 | `meta/` | 38 | 17,704 | new code onto the goal graph (§7.3); theorems PORT | §6–§7 |
-| `std/list`, `order`, `nat`, `div`, `bits`, `arith`, `map` | 18 | 3,390 | PORT (phase 3, named) | the naming law; `Nat` sizes; `order`, `nat`, `div`, `arith` are records in `v3/std/README.md` and no file (slice 3.27 landing 2, 2026-10-10); `list`, `bits` at landing 3; `map` open |
+| `std/list`, `order`, `nat`, `div`, `bits`, `arith`, `map` | 18 | 3,390 | PORT (phase 3, named) | the naming law; `Nat` sizes; `order`, `nat`, `div`, `arith` are records in `v3/std/README.md` and no file (slice 3.27 landing 2, 2026-10-10); `list`, `bits` are `v3/std/list.shard` and `v3/std/bits.shard` (landing 3, 2026-10-10); `map` open |
 | `std/str`, `std/bytes`, `std/word` | 15 | 3,475 | PORT — typed representation change onto `String`/`ByteArray`/`UInt*` (INVENTORY.md) | §10.3 |
 | `std/mem` | 7 | 2,198 | PORT | the counted heap's substrate |
 | `std/rat`, `std/f32`, `std/f64`, `std/float` | 16 | 38,005 | PORT — floats as their own line (phase 5) | `FLOATS.md` kept; #39 (f64 = f32 substituted) resolved by the port, not copied |

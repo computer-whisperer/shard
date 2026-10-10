@@ -1183,16 +1183,22 @@
                 ((Pair e2 (Some rs))
                  (match (el_whnf e2 rs)
                    ((Pair e3 (Sort _ l))
-                    (let ((gen (match_gen (el_zonk e3 sv) ret)))
-                      (match (match_arms e3 dty ret l sv gen arms Nil Nil expected)
-                        ((EOk e4 v vt) (EOk e4 v vt))
-                        ((EErr r m)
-                         (match gen
-                           (None (EErr r m))
-                           ((Some _)
-                            (match (match_arms e3 dty ret l sv None arms Nil Nil expected)
-                              ((EOk e4 v vt) (EOk e4 v vt))
-                              ((EErr _ _) (EErr r m)))))))))
+                    (let ((sv1 (el_zonk e3 sv)))
+                      (let ((gen (match_gen sv1 ret)) (svid (match sv1 ((FVar _ id) (Some id)) (_ None))))
+                        (let ((deps (match svid ((Some id) (match_deps e3 id)) (None Nil))))   ; (name, local) pairs, outermost first
+                          ;; the dependent reading first (slice 3.27 rule 7), then the expected type's, then the constant motive; the first reading's error
+                          (match (match deps (Nil (EErr (quote none) Nil)) (_ (match_try e3 dty ret l sv1 deps svid arms expected)))
+                            ((EOk e4 v vt) (EOk e4 v vt))
+                            ((EErr r0 m0)
+                             (match (match_try e3 dty ret l sv1 Nil gen arms expected)
+                               ((EOk e4 v vt) (EOk e4 v vt))
+                               ((EErr r m)
+                                (match gen
+                                  (None (match deps (Nil (EErr r m)) (_ (EErr r0 m0))))
+                                  ((Some _)
+                                   (match (match_try e3 dty ret l sv1 Nil None arms expected)
+                                     ((EOk e4 v vt) (EOk e4 v vt))
+                                     ((EErr _ _) (match deps (Nil (EErr r m)) (_ (EErr r0 m0)))))))))))))))
                    ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret) (append " : " (show_expr other))))))))))))))))
     (Nil (EErr (quote bad_shape) "(match TERM (PATTERN BODY)…)"))))
 ;; ---- a literal match (slice 3.17 rule 3) ----------------------------------------------------
@@ -1262,6 +1268,59 @@
   (match expected
     (None None)
     ((Some x) (match (el_finish e x) ((FinOk r) (Some r)) ((FinErr _ _) None)))))
+;; one reading of the match. With `deps` — the locals in scope whose types mention the scrutinee,
+;; outermost first (slice 3.27 rule 7: Lean's revert) — the motive is the expected type under a Pi
+;; over them, each arm reads its body with them re-bound at the pattern's type, and the matcher's
+;; result is applied back to them; so under `match xs` with `i : Fin (List.length xs)` the nil row
+;; sees `i : Fin (List.length List.nil)` and refutes it. Without deps, the reading of slice 3.19
+(fn match_try ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (deps (List (Pair Name Expr))) (gen (Option Int)) (arms (List SExpr)) (expected (Option Expr))) ERes
+  (match deps
+    (Nil (match_arms e dty ret l sv gen Nil arms Nil Nil expected))
+    (_
+     (match (el_pis e (bound_fvars deps) ret)
+       ((Pair e1 ret2)
+        (match (el_infer e1 ret2)
+          ((Pair _ None) (EErr (quote not_a_type) (show_expr ret2)))
+          ((Pair e2 (Some rs2))
+           (match (el_whnf e2 rs2)
+             ((Pair e3 (Sort _ l2))
+              (match (match_arms e3 dty ret2 l2 sv gen (bound_names deps) arms Nil Nil None)
+                ((EErr r m) (EErr r m))
+                ((EOk e4 v _) (check_expected e4 (mk_app_n v (bound_fvars deps)) ret expected))))
+             ((Pair _ other) (EErr (quote not_a_type) (append (show_expr ret2) (append " : " (show_expr other)))))))))))))
+;; the locals in scope whose types mention the scrutinee, or one of these (transitively), outermost
+;; first, each under the name the context binds it by (a realize's telescope local carries Lean's
+;; binder name; the body knows it by the signature's)
+(fn match_deps ((e El) (id Int)) (List (Pair Name Expr))
+  (deps_among e (rev (cx_bound (el_cx e))) (list id)))
+(fn deps_among ((e El) (bs (List (Pair Name Expr))) (ids (List Int))) (List (Pair Name Expr))
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (Pair n fv) r)
+     (if (mem_int (fvar_id_of fv) ids) (deps_among e r ids)
+       (if (match (w_local_type (el_w e) (fvar_id_of fv)) ((Some t) (ids_meet ids (expr_fvars (el_zonk e t) Nil))) (None False))
+         (Cons (Pair n fv) (deps_among e r (Cons (fvar_id_of fv) ids)))
+         (deps_among e r ids))))))
+(fn bound_names ((bs (List (Pair Name Expr)))) (List Name)
+  (measure (struct bs))
+  (match bs (Nil Nil) ((Cons (Pair n _) r) (Cons n (bound_names r)))))
+(fn ids_meet ((xs (List Int)) (ys (List Int))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons x r) (if (mem_int x ys) True (ids_meet r ys)))))
+;; an arm's result type under the generalized locals: one Pi binder per name opened as a local under it
+(fn match_peel ((e El) (ty Expr) (names (List Name)) (acc (List Expr))) (Pair El (Pair (List Expr) Expr))
+  (measure (struct names))
+  (match names
+    (Nil (Pair e (Pair (rev acc) ty)))
+    ((Cons n r)
+     (match ty
+       ((Pi _ _ bi dom body)
+        (match (el_local e n dom bi)
+          ((Pair e1 fv)
+           (match (w_inst1 (el_w e1) body fv)
+             ((Pair w2 b2) (match_peel (el_set_w e1 w2) b2 r (Cons fv acc)))))))
+       (_ (Pair e (Pair (rev acc) ty)))))))
 ;; the local the motive generalizes: the scrutinee, when it is a local the expected type mentions
 (fn match_gen ((sv Expr) (ret Expr)) (Option Int)
   (match sv ((FVar _ id) (if (mem_int id (expr_fvars ret Nil)) (Some id) None)) (_ None)))
@@ -1270,7 +1329,7 @@
   (match gen
     (None (Pair e ret))
     ((Some id) (match (w_subst (el_w e) ret id v) ((Pair w1 r) (Pair (el_set_w e w1) r))))))
-(fn match_arms ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (gen (Option Int)) (arms (List SExpr)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
+(fn match_arms ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (gen (Option Int)) (dnames (List Name)) (arms (List SExpr)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
   (measure (struct arms))
   (match arms
     (Nil (match_close e dty ret l sv gen (rev rows) (rev alts) expected))
@@ -1280,11 +1339,13 @@
        ((PtOk e1 mp pt _ vars)
         (match (match_ret_at e1 ret gen pt)
           ((Pair e1a ret1)
-        (match (elab e1a body (Some ret1))
+        (match (match_peel e1a ret1 dnames Nil)
+          ((Pair e1b (Pair dvars ret1b))
+        (match (elab e1b body (Some ret1b))
           ((EErr x m) (EErr x m))
           ((EOk e2 v _)
-           (match (el_lams e2 vars v)
-             ((Pair e3 alt) (match_arms (el_restore e3 e) dty ret l sv gen r (Cons (list mp) rows) (Cons alt alts) expected))))))))))
+           (match (el_lams e2 (append vars dvars) v)
+             ((Pair e3 alt) (match_arms (el_restore e3 e) dty ret l sv gen dnames r (Cons (list mp) rows) (Cons alt alts) expected))))))))))))
     (_ (EErr (quote bad_shape) "a match arm is (PATTERN BODY)"))))
 (fn match_close ((e El) (dty Expr) (ret Expr) (l Level) (sv Expr) (gen (Option Int)) (rows (List (List MtPat))) (alts (List Expr)) (expected (Option Expr))) ERes
   (match (match_params e dty)
