@@ -2,8 +2,9 @@
 
 > **STATUS (2026-10-09): the design of S, L, E and I as phase 3 builds
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
-> 2026-10-08, items 57–58 ratified 2026-10-09, each later item for
-> ratification as its slice lands.** Normative parent:
+> 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
+> at slice 3.26 landing 3), each later item for ratification as its
+> slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -6111,7 +6112,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     persisting across the roots of a process (`ld_reroot` over the
     loader's Init state). (d)'s number is 42 s by the walk, every
     record checked (3.25's 33 s was the stream admitted under the
-    receipt, since dropped).
+    receipt, since dropped). **Ratified 2026-10-09, as amended.**
 60. **Slice 3.26, Init on demand (ruled 2026-10-09 at the boundary
     after slice 3.25; §8.4) — for ratification.** (a) **The export is
     indexed, never streamed, by a load**: a record table and a name
@@ -6155,4 +6156,4 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     fixtures and the receipt go, and item 57 is retired; (f) the loader
     native is the lever that pays: the suite's entrypoints of many
     short loads doubled on the runner at landing 2 (`wire_test` 155 s
-    to 436), each process walking its demand on the bootstrap.
+    to 436), each process walking its demand on the bootstrap. **Ratified 2026-10-09, as amended.**
