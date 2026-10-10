@@ -1334,6 +1334,8 @@ cases 42 s checked against 33 s admitted; `index_test` 9 s against
 
 Gates: the full suite's 38 entrypoints with 0 failed in 455 s against 613 s at landing 1 (parity byte-identical over 31 closures and 133,465 declarations in 267 s; `store_test` 350 s, the suite's wall clock; `path_test` 228 s; `define_test` 230 s; `calc_test` 215 s; `k_clients_test` 69 s; the loader pins' entrypoint 42 s).
 
+Landing 2 holds on the full gate: **2026-10-09 — pipeline 563 green on `615a98b`: engine 52 s; corpus 1,487 s at the baseline; v3 4,421 s of a 3 h limit, 205 s shorter than pipeline 561's 4,626 (the export 132 s; the index driver built by route 1 in 12 s and the export's index built in 97 s on the runner; 38 entrypoints with 0 failed in 1,255 s against 1,518 — `store_test` 967 s against 1,160, `path_test` 667 against 788, parity byte-identical over 31 closures and 133,465 declarations in 745 s, `calc_test` 600 against 645, `index_test` under 30 s against 164; the entrypoints made of many short loads rose, each process checking its demand's closure where the receipt admitted the fixture's prefix: `define_test` 657 s against 337, `wire_test` 436 against 155 (locally 150 against 65), `engine_test` 392 against 267, `derive_test` 318 against 204, the loader pins' entrypoint 109 against 89; route 1's native build of the kernel 419 s; the replay 2,438 s at 32.4 GB); T0 accepted 57,977, 20 pinned, closures identical. The checked-against-admitted difference is the receipt's measured value for landing 3.**
+
 Landing 3 (the receipt over the export, CI reordered) follows.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
