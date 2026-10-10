@@ -1006,7 +1006,7 @@ declared migrated.
 | `andb orb notb` | `and or not` (Prop); `&& \|\| !` for Bool values | | typed |
 | `True`/`False` (Bool ctors) | `true`/`false`; `True`/`False` are propositions | | name |
 | `Some None Cons Nil Pair` | `some none cons nil Prod.mk` | | name |
-| `len append rev inth memb` | `List.length` (`Nat`), `List.append`, `List.reverse`, `List.get?`, `List.contains`/`List.Mem` | `get?` is `Option`; `getD` is the named default | typed |
+| `len append rev inth memb` | `List.length` (`Nat`), `List.append`, `List.reverse`, `l[i]?` (`GetElem?.getElem?` under `List`'s instance — `List.get?Internal` by definition; the row said `List.get?`, no constant of the pinned Lean v4.33.1: corrected 2026-10-10 at slice 3.27 landing 2, `v3/std/migration.shard` row 8), `List.contains`/`List.Mem` | `l[i]?` is `Option`; `getD` is the named default | typed |
 | `band bor bxor bshl bshr` (premised `0 ≤`) | `Nat.land lor xor shiftLeft shiftRight` | none on `Nat` | typed |
 | `Nat` former | `Nat` | `Nat.sub` saturates | name |
 | `(refine Int nonneg)` | `Nat` where a size; `Subtype` otherwise | | typed |

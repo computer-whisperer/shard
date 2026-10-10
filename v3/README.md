@@ -1387,6 +1387,20 @@ Five pins. Gates: the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `
 
 Landing 1 holds on the full gate: **2026-10-10 — pipeline 570 green on `52b960c`: engine 56 s; corpus 1,494 s at the baseline; v3 4,516 s of a 3 h limit, 59 s over pipeline 565's 4,457 (the export 129 s; the index driver built by route 1 in 11 s and the export's index built in 95 s on the runner; 38 entrypoints with 0 failed in 1,256 s against 1,253 — `store_test` 968 s against 962, parity byte-identical over 31 closures and 133,762 declarations in 751 s against 743, `path_test` 681 against 691, `define_test` 656 against 670, `calc_test` 611 against 603, `wire_test` 436 against 453, `engine_test` 405 against 409, `derive_test` 317 against 311, `k_clients_test` 193 against 196, the loader pins' entrypoint 130 against 106 (five cases more, and every demand 39 declarations larger by `sp_kit`), `tactic_test` 113, `route2_test` 76 against 73; route 1's native build of the kernel 414 s; the replay 2,544 s at 31.5 GB against 2,479 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 — the records — is open.**
 
+**Landing 2 built 2026-10-10 — the records** (`LANGUAGE.md` §8.4 "as
+built, landing 2"): `std/facts.shard` holds the twelve former axioms as
+theorems by Init's names; `std/migration.shard` one theorem per row of
+law §10.3 (row 8 corrected: `List.get?` is no constant of this pin —
+`l[i]?` is `List.get?Internal` under `GetElem?`; row 14's `String` carries
+its UTF-8 validity proof) and the records' evidence for `order`, `nat`,
+`div` and `arith` as theorems; `std/README.md` the six per-interface
+records; `kernel/test/std_test.sh` the 39th entrypoint — the std root in
+one process, stored, replayed by K alone, the records' theorems held by
+name under Lean's axioms alone. V3's own `List.sum` is gone. Two fixes
+with pins: the instance table's any-type row (`BEq Int`), and `arith`'s
+equation path, whose ill-typed term K refused (`lin_eq`, pin
+`arith_eq_bare`). Gates: the 231 loader pins 0 failed in 56 s, `std_test` 76 checks 0 failed in 117 s (the root loaded and stored in 69 s, K's replay 48 s; 158 s inside the suite), `tactic_test` 110 checks (calc's 100 claims) 0 failed in 43 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `define_test` 12 checks 0 failed, `derive_test` 14 checks, `unify_test` 0 failed, `k_clients_test` 7 tests in 70 s, parity byte-identical over 31 closures and 133,785 declarations in 292 s, the full suite's 39 entrypoints with 0 failed in 640 s (`store_test` 505 s, `parity_test` 364 s, `path_test` 316 s, `calc_test` 300 s, `define_test` 297 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
@@ -1499,7 +1513,7 @@ v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in
 v3/CANON.md       the canonical form of S — layout, the term tier over E, the L layer (phase 2, slice 8; the gate at phase 6)
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
-v3/std/           phase 3: the first library under the naming law
+v3/std/           phase 3: the library under the naming law — Init is the library; std/README.md holds the records of the old modules (slice 3.27)
 v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```

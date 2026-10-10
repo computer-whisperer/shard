@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # v3/kernel/test/define_test.sh — Stage 1's `fn` = `def` + `realize` on real
-# files (LANGUAGE.md §8.4, slice 3.13): the V3 loader loads v3/std/list.shard
-# and calc's spec file with the export through Int.decEq and must define the
-# named functions (DEFINE with their equations; parse_rest by course-of-values,
-# slice 3.14) and accept the theorems that cite the equations. Exit code = the number of files that failed.
+# files (LANGUAGE.md §8.4, slice 3.13): the V3 loader loads calc's spec file
+# with the export through Int.decEq and must define the named functions
+# (DEFINE with their equations; parse_rest by course-of-values, slice 3.14)
+# and accept the theorems that cite the equations. Slice 3.13's first file,
+# v3/std/list.shard with V3's own List.sum, retired at slice 3.27 landing 2:
+# List.sum is Init's under the instance table (the instance_table pin), the
+# library's files are std_test.sh's. Exit code = the number of files that failed.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -23,9 +26,6 @@ check() {
     fi
   done
 }
-check v3/std/list.shard \
-  'DEFINE std.list.List.sum equations=std.list.List.sum.eq_1,std.list.List.sum.eq_2' \
-  'ACCEPT std.list.List.sum_cons '
 check v3/examples/calc/calc_spec.shard \
   'DEFINE examples.calc.calc.eval equations=examples.calc.calc.eval.eq_1,examples.calc.calc.eval.eq_2,examples.calc.calc.eval.eq_3' \
   'DEFINE examples.calc.calc.parse_rest equations=' \

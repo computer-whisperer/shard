@@ -103,9 +103,17 @@
 (fn lin_all_zero ((xs (List Int))) Bool
   (measure (struct xs))
   (match xs (Nil True) ((Cons x r) (if (int_eq x 0) (lin_all_zero r) False))))
-;; the same combination: the constants and the coefficients, a missing entry 0
-(fn lin_same ((a Lin) (b Lin)) Bool
-  (bool_and (int_eq (lin_const a) (lin_const b)) (lin_all_zero (lin_zip (lin_coeffs a) (lin_coeffs b) 1 (- 0 1)))))
+;; the same combination exactly — the constants and the coefficient lists entry for entry, so
+;; the two sides have ONE evaluation term (slice 3.27 landing 2's finding: a missing trailing
+;; entry read as 0 let `[1]` pass for `[1, 0]`, and K's conversion of the two evaluations is
+;; stuck at `0 * x` for a symbolic x — the app_type_mismatch on `n = 10 * (n / 10) + n % 10`)
+(fn lin_eq ((a Lin) (b Lin)) Bool
+  (bool_and (int_eq (lin_const a) (lin_const b)) (lin_coeffs_eq (lin_coeffs a) (lin_coeffs b))))
+(fn lin_coeffs_eq ((xs (List Int)) (ys (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x r) (match ys (Nil False) ((Cons y s) (if (int_eq x y) (lin_coeffs_eq r s) False))))))
 (fn ar_xlin ((l Lin)) Expr
   (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote mk))) (list (ar_xint (lin_const l)) (ar_xlist (ar_xints (lin_coeffs l) Nil)))))
 (fn ar_xeval ((l Lin) (v Expr)) Expr
@@ -748,7 +756,8 @@
              (if (sym_eq op (quote eq))
                (ar_prove_eq e car a b raws certs)
                (ar_prove_cmp e op car a b raws (ar_cert certs 0)))))))))))
-;; an equation: the two sides' evaluations where they have one normal form, else ≤ both ways
+;; an equation: the two sides' evaluations where they have one normal form (lin_eq: the same
+;; term), else ≤ both ways
 (fn ar_prove_eq ((e El) (car Symbol) (a Expr) (b Expr) (raws (List ArRaw)) (certs (List (List Int)))) ARes
   (let ((ai (if (sym_eq car (quote Int)) a (sp_cast a))) (bi (if (sym_eq car (quote Int)) b (sp_cast b))))
     (let ((atoms (ar_collect bi (ar_collect ai Nil 4000) 4000)))
@@ -759,7 +768,7 @@
            (match (ar_lin e atoms v bi 4000)
              ((ArLinErr x m) (ar_err x m))
              ((ArLinOk lb pb)
-              (if (lin_same la lb)
+              (if (lin_eq la lb)
                 (match (ar_kit_missing e (ar_kit))
                   ((Some n) (ar_err (quote arith_unreached) (append (show_name n) " is past the Init prefix in scope: import Init through Lean.Omega.Int.ofNat_lt_of_lt (line 91,131 of the export)")))
                   (None

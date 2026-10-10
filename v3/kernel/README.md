@@ -186,6 +186,11 @@ prints its cost, and breaks each joint: a wrong body, the proof outside
 its branch or dropped, an order line renamed, a stored proof replaced,
 a non-number at the entry.
 
+`test/std_test.sh` (the 39th entrypoint, 76 checks; slice 3.27 landing 2)
+loads the std root's files in one process, stores every declaration and
+replays the store with K alone, holding `std/facts.shard`'s and
+`std/migration.shard`'s theorems by name under Lean's axioms alone.
+
 Two more since slice 7 (2026-09-13), both `v3/test.sh` entrypoints:
 **the primitive suite** — `test/prims_test.shard` runs every entry of
 `prog.shard`'s table under `ev` with a positive, a negative and a

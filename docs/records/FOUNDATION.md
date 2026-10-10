@@ -2660,6 +2660,31 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-10 — slice 3.27 landing 2 built: the records (`LANGUAGE.md`
+  §8.4 "as built, landing 2"; law §10.3 row 8 corrected in place).**
+  `v3/std/facts.shard`: the twelve former axioms as theorems by Init's
+  names (horizon `Nat.shiftRight_zero`, 1,440 declarations, 38 s).
+  `v3/std/migration.shard`: one theorem per row of law §10.3 (twenty and
+  a `def`), two rows corrected on the pin — `List.get?` is no constant of
+  v4.33.1 (`l[i]?` is `GetElem?.getElem?`, `List.get?Internal` by
+  definition), `String` is a structure over its UTF-8 `ByteArray` with
+  its validity proof — and the records' evidence, thirty-nine theorems for
+  `order`, `nat`, `div`, `arith` (horizon `List.getD`, 1,706 declarations,
+  41 s; `String.toList_ofList` measured at 3,282 declarations and 277 s,
+  cited in the record, not loaded). `v3/std/README.md`: the six
+  per-interface records, `list`'s and `bits`' Init names checked against
+  the index, their files at landing 3. `kernel/test/std_test.sh`, the 39th
+  entrypoint: six files in one process, 211 declarations stored and
+  replayed by K alone, 76 checks. `v3/std/list.shard` (V3's own
+  `List.sum`) deleted; `define_test`'s expectation on it removed. Fixed
+  with pins: the instance table's dispatch never reached the any-type row
+  for `Int`/`Nat`/`Bool`/`List` carriers (`BEq Int` had no instance;
+  `sp_inst_typed` falls through); `arith`'s equation path equated two
+  evaluation terms with coefficient lists of different lengths — K refused
+  the ill-typed term (`app_type_mismatch`), `lin_eq` compares entry for
+  entry, the differing case proved as two inequalities (pin
+  `arith_eq_bare`). For `LEAN.md`: bare `true`/`some`/`cons` are patterns'
+  only, `==`/`&&`/`||` are no operator symbols. Gates: the 231 loader pins 0 failed in 56 s, `std_test` 76 checks 0 failed in 117 s (the root loaded and stored in 69 s, K's replay 48 s; 158 s inside the suite), `tactic_test` 110 checks (calc's 100 claims) 0 failed in 43 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `define_test` 12 checks 0 failed, `derive_test` 14 checks, `unify_test` 0 failed, `k_clients_test` 7 tests in 70 s, parity byte-identical over 31 closures and 133,785 declarations in 292 s, the full suite's 39 entrypoints with 0 failed in 640 s (`store_test` 505 s, `parity_test` 364 s, `path_test` 316 s, `calc_test` 300 s, `define_test` 297 s). Route 1's kernel build, the full replay and the corpus are CI's.
 - **2026-10-10 — pipeline 570 green on `52b960c`: engine 56 s; corpus 1,494 s at the baseline; v3 4,516 s of a 3 h limit, 59 s over pipeline 565's 4,457 (the export 129 s; the index driver built by route 1 in 11 s and the export's index built in 95 s on the runner; 38 entrypoints with 0 failed in 1,256 s against 1,253 — `store_test` 968 s against 962, parity byte-identical over 31 closures and 133,762 declarations in 751 s against 743, `path_test` 681 against 691, `define_test` 656 against 670, `calc_test` 611 against 603, `wire_test` 436 against 453, `engine_test` 405 against 409, `derive_test` 317 against 311, `k_clients_test` 193 against 196, the loader pins' entrypoint 130 against 106 (five cases more, and every demand 39 declarations larger by `sp_kit`), `tactic_test` 113, `route2_test` 76 against 73; route 1's native build of the kernel 414 s; the replay 2,544 s at 31.5 GB against 2,479 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 1 of slice 3.27 holds on the full gate; landing 2 — the records — is open.**
 - **2026-10-10 — slice 3.27 landing 1 built: the seams (`LANGUAGE.md`
   §8.4 "as built, landing 1").** Rule 2 as a table, not a transparency:

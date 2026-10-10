@@ -1802,7 +1802,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
-| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5227,6 +5227,73 @@ materialize-and-retry at the horizon (slice 3.26's one mechanism).
   `List.length_take`), `init_above_horizon` (never loaded, cited bare),
   `init_above_horizon_by` (inside a by block); `unify_test` gains the
   one-spelling case in both orders. **Gates run:** the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 44 s, `define_test` 12 checks 0 failed in 241 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `derive_test` 14 checks, `wire_test` 15 checks, `k_clients_test` 7 tests in 72 s, parity byte-identical over 31 closures and 133,762 declarations in 350 s, the full suite's 38 entrypoints with 0 failed in 553 s (under contention with the targeted gates; `store_test` 400 s, `parity_test` 333 s, `define_test` 308 s, `calc_test` 298 s, `path_test` 289 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
+**Slice 3.27 as built, landing 2 (2026-10-10) — the records.** Rules
+1, 8 and 9's twelve, with the gate the design named. `v3/std/facts.shard`:
+the twelve former axioms as theorems under their old names — `mod_lo`,
+`mod_hi` by `Int.emod_nonneg` (its premise `d ≠ 0` by `Int.ne_of_gt`) and
+`Int.emod_lt_of_pos`; `ediv_mod_id` by `arith` over `Int.emod_def`;
+`div_unique` and `mod_unique` as the two halves of
+`@Int.ediv_emod_unique n d r q`, the divisor's positivity and the
+identity's orientation two `have`s by `arith`; `mul_comm`, `mul_assoc`,
+`mul_dist` by Init's ring laws; `bshl_z`, `bshl_s`, `bshr_z`, `bshr_s` at
+`Nat` by the shift lemmas, the `0 ≤` premises the type, the two with
+implicit binders written `@` — twelve lines, the horizon
+`Nat.shiftRight_zero` (1,440 declarations admitted, 38 s on the
+bootstrap). `v3/std/migration.shard`: one theorem per row of law §10.3
+(twenty, with a `def Nonneg` for row 11), each the row's V3 spelling and
+the exceptional behavior its third column names — `Int.tdiv x 0 = 0`,
+`Int.tmod x 0 = x`, `x / 0 = 0`, `x % 0 = x` by Init's theorems; the
+decision bridges `decide (a ≤ b) = true ↔ a ≤ b` and `BEq.beq a b = true ↔
+a = b` by `decide_eq_true_iff`; `Bool.and_eq_true`; `Nat.zero_sub`;
+`Nat.and_le_right` as the unpremised bound; the rest `Eq.refl` — and, after
+the rows, the records' evidence: `std/order`'s claims (twenty-one; the `if`
+swap waits for a consumer), `std/nat`'s four, `std/div`'s seven and
+`std/arith`'s seven as theorems, Init's name where one exists and `arith`
+where the claim is an entailment, so each record is checked rather than
+asserted (horizon `List.getD`, 1,706 declarations, 41 s). Two rows
+corrected on the pin: row 8's `List.get?` is no constant of Lean v4.33.1 —
+the index `l[i]?` is `GetElem?.getElem?` under `List`'s instance,
+`List.get?Internal` by definition, `List.getD` the named default (law
+§10.3's row amended in place, dated); row 14's `String` is a structure
+over its UTF-8 `ByteArray` and the proof it is valid (`String.ofByteArray
+b h`), the view's round trip `String.toList_ofList` cited in the record
+and not loaded: its closure is 3,282 declarations of the export, 277 s,
+against the file's 1,700 without it. `v3/std/README.md`: the six
+per-interface records (law §10.1) — every declaration of the old
+`mod.req.shard`, its V3 spelling or Init's name, the evidence, the class —
+`order` (22), `nat` (7), `div` (7, and the two it cited from the old
+`kernel/facts.shard`), `arith` (7) with no file; `list` (29)
+and `bits` (38) with Init's names each checked against the export's
+index, their files at landing 3. `kernel/test/std_test.sh`, the 39th
+entrypoint: the std root's six files loaded in one process (Init on
+demand, shared), 211 declarations stored and replayed by K alone, the
+records' theorems held by name under no axiom but Lean's own (`propext`,
+`Quot.sound`, `Classical.choice` — what the cited Init theorems carry):
+76 checks. Slice 3.13's `v3/std/list.shard` with V3's own `List.sum` is
+deleted (rule 1) and `define_test`'s expectation on it removed; the
+library's files are `std_test`'s. **Found and fixed on the way, each with
+a pin.** (i) The instance table's dispatch (landing 1) tried the type's
+own rows and stopped: `BEq Int` reached the `Int` rows, which have no
+`BEq`, and never the any-type row — `sp_inst_typed` falls through to
+`sp_inst_any`; the `instance_table` pin gains `BEq.beq` at `Int` and
+`Nat`. (ii) `arith`'s equation path (slice 3.21): `lin_same` read a
+missing trailing coefficient as 0 while the two evaluation terms it then
+equated by `Eq.trans` carry their exact lists, and K's conversion of
+`[1]` against `[1, 0]` is stuck at `0 * x` for a symbolic `x` — the
+elaborator built an ill-typed term and K refused it
+(`app_type_mismatch` on `n = 10 * (n / 10) + n % 10` and on
+`((b + 1) + y - 1) - y = b`, a bare variable against a sum whose atoms were
+collected after it), the boundary doing what law §3 says it does.
+`lin_eq` compares entry for entry; the differing case takes the
+two-inequality path, which was sound (pin `arith_eq_bare`, six shapes).
+**Found and recorded for `LEAN.md` (landing 4), not changed:** a bare
+`true`, `some`, `cons` resolves in a pattern only — in a term the
+constructor is written under its namespace (`Bool.true`, `Option.some`,
+`List.cons`), item 7's ruling that `use` opens no constructors meeting
+law §5.3's "lowercase constructors"; `==`, `&&`, `||` are not operator
+symbols of the elaborator — `and`, `or`, `not` at `Bool` operands are
+`Bool.and`, `Bool.or`, `Bool.not`. **Gates run:** the 231 loader pins 0 failed in 56 s, `std_test` 76 checks 0 failed in 117 s (the root loaded and stored in 69 s, K's replay 48 s; 158 s inside the suite), `tactic_test` 110 checks (calc's 100 claims) 0 failed in 43 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `define_test` 12 checks 0 failed, `derive_test` 14 checks, `unify_test` 0 failed, `k_clients_test` 7 tests in 70 s, parity byte-identical over 31 closures and 133,785 declarations in 292 s, the full suite's 39 entrypoints with 0 failed in 640 s (`store_test` 505 s, `parity_test` 364 s, `path_test` 316 s, `calc_test` 300 s, `define_test` 297 s). Route 1's kernel build, the full replay and the corpus are CI's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 

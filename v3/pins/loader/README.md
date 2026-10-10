@@ -289,3 +289,5 @@ loaded, cited bare under an opened namespace, above the module's
 horizon: `read-error above_horizon`, the refusal naming the qualified
 declaration, its ordinal and the import to write); `init_horizon_beyond`
 now expects `above_horizon` too.
+
+Slice 3.27 landing 2 (2026-10-10): `arith_eq_bare` — an equation whose two sides have the same linear combination with coefficient lists of different lengths (a bare variable against a sum whose atoms were collected after it) is proved as two inequalities; before the fix the elaborator's `Eq.trans` of the two evaluations was ill-typed and K refused it. `instance_table` gains `BEq.beq` at `Int` and `Nat`: the any-type row is reached after the type's own rows.
