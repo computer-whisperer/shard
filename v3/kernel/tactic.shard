@@ -20,7 +20,7 @@
 ;;; Slice 3.21: `arith` (a Farkas certificate over the goal's rows, arith.shard)
 ;;; and `simp_only` (a bounded rewriter over a rule list); every new goal's
 ;;; statement and every lemma's equation enter in the source's spelling of
-;;; Init's class methods (`ar_canon`), so a rewrite and an assumption match
+;;; Init's class methods (spelling.shard's `sp_canon`), so a rewrite and an assumption match
 ;;; across the two.
 ;;;
 ;;; Untrusted, as the elaborator is: K rechecks the closed term.
@@ -37,6 +37,7 @@
 (use kernel.prelude)
 (use kernel.scope)
 (use kernel.sexpr)
+(use kernel.spelling)
 (use kernel.unify)
 (use kernel.util)
 (use kernel.decl)
@@ -311,7 +312,7 @@
 (fn tac_goal ((e El) (ctx (List Expr)) (target Expr)) Made
   (match (el_pis e ctx target)
     ((Pair e1 stmt0)
-     (let ((stmt (ar_canon (el_zonk e1 stmt0))))
+     (let ((stmt (sp_canon (el_zonk e1 stmt0))))
      (match (el_fresh e1 (n1 (quote goal)) stmt (quote goal))
        ((Pair e2 (MVar _ i)) (Made e2 (Goal i stmt (len ctx)) (mk_app_n (mk_mvar i) ctx)))
        ((Pair e2 m) (Made e2 (Goal 0 stmt (len ctx)) m)))))))
@@ -430,7 +431,7 @@
         (append (match (eq_sides tw) ((Some _) (list (quote rfl) (quote rw))) (None Nil))
         (append (if (ctx_has_inductive e2 ctx) (list (quote cases) (quote induction) (quote wf)) Nil)
         (append (match (decision_of e2 (el_zonk e2 target)) ((Pair _ (Some _)) (list (quote decide))) (_ Nil))
-        (append (match (ar_rel (ar_canon (el_zonk e2 target))) ((ARNone) Nil) (_ (list (quote arith))))
+        (append (match (ar_rel (sp_canon (el_zonk e2 target))) ((ARNone) Nil) (_ (list (quote arith))))
                 (list (quote exact) (quote apply) (quote have) (quote show) (quote unfold) (quote reduce) (quote simp_only) (quote sorry))))))))))))
 (fn ctx_has_inductive ((e El) (ctx (List Expr))) Bool
   (measure (struct ctx))
@@ -632,7 +633,7 @@
 ;; assigned its occurrence; a datum is a witness (slice 3.22 rule 4) — closed over ctx as a goal
 ;; is, its occurrence the closed metavariable applied to ctx, so a block that opens the context
 ;; afresh assigns it by pattern unification and the assignment closes; an instance argument is
-;; the refusal `instance_needed` as everywhere
+;; the table's (slice 3.27 rule 3), else the refusal `instance_needed` as everywhere
 (type Premises (PrOk El (List Goal)) (PrErr Symbol (List Int)))
 (fn premise_goals ((e El) (ctx (List Expr)) (ms (List Expr)) (who Symbol) (acc (List Goal))) Premises
   (match (witness_close e ctx ms)
@@ -654,7 +655,10 @@
                ((Pair w1 (Some True)) (witness_close (el_set_w e w1) ctx r))
                ((Pair w1 _)
                 (if (sym_eq (md_kind d) (quote inst))
-                  (match (unsolved_msg (el_set_w e w1) i) ((FinErr x m) (PrErr x m)) ((FinOk _) (PrErr (quote bad_shape) "an instance")))
+                  (let ((ei (el_solve_one (el_set_w e w1) i)))   ; the table's instance (slice 3.27 rule 3), else the refusal
+                    (match (mc_assigned (el_mc ei) i)
+                      ((Some _) (witness_close ei ctx r))
+                      (None (match (unsolved_msg ei i) ((FinErr x m) (PrErr x m)) ((FinOk _) (PrErr (quote bad_shape) "an instance"))))))
                   (match (el_pis (el_set_w e w1) ctx ty)
                     ((Pair e1 tyc)
                      (match (el_fresh e1 (md_name d) tyc (quote witness))
@@ -1049,7 +1053,7 @@
        ((OpenedM e2 v1 concl ms)
         (match (if (is_app concl) (Pair e2 concl) (el_whnf e2 concl))
           ((Pair e3 cw0)
-           (let ((cw (ar_canon (el_zonk e3 cw0))))   ; the sides in the one spelling: the target's
+           (let ((cw (sp_canon (el_zonk e3 cw0))))   ; the sides in the one spelling: the target's
            (match (eq_sides cw)
              ((Some (Pair u (Pair a (Pair l r)))) (EqOk e3 v1 u a l r ms))
              (None (EqErr (quote rw_not_eq) (append "the lemma is not an equation: " (tc_show (el_zonk e3 cw) Nil)))))))))))))
@@ -1668,7 +1672,7 @@
         (match (mc_decl (el_mc e) i)
           (None None)
           ((Some d)
-           (let ((ty (ar_canon (el_zonk e (md_type d)))))
+           (let ((ty (sp_canon (el_zonk e (md_type d)))))
              (if (has_mvar ty) None
                (match (w_is_prop (el_w e) ty)
                  ((Pair w1 (Some True))

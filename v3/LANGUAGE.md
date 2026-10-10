@@ -1802,7 +1802,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
-| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5151,6 +5151,82 @@ mathematical declaration"); a V3 function spelling for `min`
 (`Nat.min` is Init's own second spelling, ordinal 10,228, not the
 instance's); porting `std/bits`' proofs (Init has the theorems); a
 materialize-and-retry at the horizon (slice 3.26's one mechanism).
+
+**Slice 3.27 as built, landing 1 (2026-10-10) — the seams.** Rules
+2–5, in the elaborator, the unifier and the loader, each with a pin.
+- **Rule 2 as built — the one spelling is a table, not a transparency.**
+  Slice 3.21 rule 3's reading of a class method under Init's closed
+  instance as its function (`ar_canon`, arith.shard) is the shared
+  module `kernel/spelling.shard` (`sp_canon`), with the rows the
+  library needs added: `HAnd`/`AndOp`, `HOr`/`OrOp`, `HXor`/`XorOp`,
+  `HShiftLeft`/`ShiftLeft`, `HShiftRight`/`ShiftRight` at `Nat` to
+  `Nat.land`, `lor`, `xor`, `shiftLeft`, `shiftRight`; `HAppend`/`Append`
+  at `List α` to `List.append`. The unifier reads both sides through it
+  at a structural mismatch under a metavariable, before K's whnf
+  (`unify_fallback`): K's whnf of `0 &&& ?n` against `Nat.land 0 b`
+  computes the closed side to `0` and the metavariable is never
+  assigned — the probe's `witness_open`; read as `Nat.land 0 ?n` the two
+  unify structurally. The rewriter needed nothing new: since slice 3.21
+  every goal's statement (`tac_goal`) and every lemma's equation
+  (`eq_of_lemma`) enter in the one spelling, so `rw` and `simp_only`
+  across the two spellings follow from the rows alone. The mechanism
+  the rule's text names — an instance constant and a class projection
+  unfolding, Lean's `instances` transparency — would need the
+  environment at every mismatch and would unfold Init's definitions
+  past the instance (K's whnf has no smart unfolding: `Nat.add a ?b`
+  becomes a stuck `Nat.rec`); the table is the same reading `arith`
+  has trusted since 3.21, closed over the pin's names, and K rechecks
+  every term it shapes. A class the table lacks is the door's wake
+  condition, as rule 3 has it for instances.
+- **Rule 3 as built.** `sp_instance`: the type of an instance-implicit
+  metavariable, closed, to the pin's instance — at `Nat`: `instAddNat`,
+  `instSubNat`, `instMulNat`, `Nat.instDiv`, `Nat.instMod`, `instLTNat`,
+  `instLENat`, `instMinNat`, `Nat.instMax`, `instDecidableEqNat`,
+  `Nat.instAndOp`/`instOrOp`/`instXorOp`/`instShiftLeft`/`instShiftRight`,
+  `Zero` as `Zero.ofOfNat0 Nat (instOfNatNat 0)`; at `Int`:
+  `Int.instAdd`, `instSub`, `instMul`, `instDiv`, `instMod`, `instNegInt`,
+  `instLTInt`, `instLEInt`, `instMin`, `instMax`, `instDecidableEq`,
+  `Zero` as `Zero.ofOfNat0 Int (instOfNat 0)`; at `Bool`:
+  `instDecidableEqBool`; at `List α`: `List.instAppend`,
+  `instDecidableEqList` over the element's; at any type `BEq` as
+  `instBEqOfDecidableEq` over its `DecidableEq`; the heterogeneous
+  `HAdd`…`HAppend` at one type as `instHAdd`…`instHAppendOfAppend` over
+  the homogeneous row; `OfNat Nat n`/`OfNat Int n` as `instOfNatNat n`/
+  `instOfNat n`. Asked (`el_solve_slots`) for an application's own
+  binders once the expected type has had its say, for every
+  metavariable when a declaration finishes (`el_finish`), and for a
+  tactic opening's premises (`witness_close`); anything left is
+  `instance_needed` with the pointer as before (`elab_instance`: `ite`'s
+  `Decidable True` is no row — `if` has its own decisions, slice 3.16).
+  `(min a b)`/`(max a b)` are operator rows to `Min.min`/`Max.max`, their
+  instance from the table; `min` and `max` join the operator symbols,
+  which take precedence over a declared constant of the same name as
+  `+` does (no V3 file declares either). The table's constants are no
+  token of the file that needs them: `sp_kit` lists every name the two
+  tables write and joins the loader's demand (`init_kit`), loaded where
+  the module's horizon admits it — 39 declarations on the probe file.
+- **Rule 4 as built.** `op_at`: `/` at `Int` is `Int.ediv`; `%` was
+  `Int.emod` already; at `Nat` the pair stays `Nat.div`/`Nat.mod`.
+- **Rule 5 as built.** `init_resolve` keeps the names the name table
+  places at or above the module's horizon (`Fx.above`, with their
+  ordinals; the walk already looked them up to skip them), and a
+  reading's `unknown_constant` on one of them is `above_horizon`:
+  `NAME is declaration N of the export, at or above the module's
+  horizon H (import Init X): write (import Init NAME)`. The name is
+  matched as a token of the refusal's message (the elaborator's
+  detail, or a tactic step's `step 1: NAME — the goal: …`), itself or
+  under a prefix an opened namespace supplies (`zero_and` under `(use
+  Init.Nat)` names `Nat.zero_and`). `init_horizon_beyond` now expects
+  `above_horizon`.
+- **Cleanup beside the landing:** `mk_app_n` moved from matcher.shard
+  to expr.shard, where its users are; arith's `ar_cast`, `ar_not`,
+  `ar_carrier` are the shared module's `sp_cast`, `sp_not`, `sp_carrier`.
+- **Pins:** `op_int_div`, `one_spelling` (`apply`, `rw`, `simp_only`
+  across the two spellings at the bitwise operators and `List.append`),
+  `instance_table` (`List.sum` at `Int` and `Nat`, `min`/`max`,
+  `List.length_take`), `init_above_horizon` (never loaded, cited bare),
+  `init_above_horizon_by` (inside a by block); `unify_test` gains the
+  one-spelling case in both orders. **Gates run:** the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 44 s, `define_test` 12 checks 0 failed in 241 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `derive_test` 14 checks, `wire_test` 15 checks, `k_clients_test` 7 tests in 72 s, parity byte-identical over 31 closures and 133,762 declarations in 350 s, the full suite's 38 entrypoints with 0 failed in 553 s (under contention with the targeted gates; `store_test` 400 s, `parity_test` 333 s, `define_test` 308 s, `calc_test` 298 s, `path_test` 289 s). Route 1's kernel build, the full replay and the corpus are CI's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 

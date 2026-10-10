@@ -1,0 +1,291 @@
+;;; v3/kernel/spelling.shard — the one spelling (v3/LANGUAGE.md §8.4 slice 3.21
+;;; rule 3, slice 3.27 rules 2 and 3; law §5.1). Init states its lemmas through
+;;; class methods under its instances — `HAdd.hAdd Nat Nat Nat (instHAdd Nat
+;;; instAddNat) a b` — and V3's operator rows spell the functions — `Nat.add a
+;;; b` (slice 3.13 rule 3). K's conversion proves the two one where a closed
+;;; term is used; where a metavariable stands between them (the unifier under
+;;; `apply`, the rewriter's matcher) and where a certificate reads a row
+;;; (`arith`), the method under Init's instance is read as its function first:
+;;; `sp_canon`. The instance table `sp_instance` is the other direction — an
+;;; instance-implicit binder at one of the library's types takes the pin's
+;;; instance constant, or a term composed of them; a class or a type the table
+;;; lacks is `instance_needed` (search is Stage 3's door). Both are fixed
+;;; tables over the pin's names: no environment is consulted, and K rechecks
+;;; every term they shape.
+
+(import "kw.shard")
+(use kernel.k)
+(use kernel.expr)
+(use kernel.kw)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.expr.Expr)
+(use kernel.expr.Literal)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+(fn sp_c ((n Name)) Expr (mk_const n Nil))
+(fn sp_cast ((n Expr)) Expr (mk_app (sp_c (nm_int_of_nat)) n))
+(fn sp_not ((p Expr)) Expr (mk_app (sp_c (n1 (quote Not))) p))
+(fn sp_lit ((k Int)) Expr (mk_lit (LitNat k)))
+
+;; ---- the method's function (rule 2) ----------------------------------------------------------
+;; a class method at Int or Nat under Init's instance is its function, throughout the term:
+;; HAdd.hAdd Int Int Int _ a b is Int.add a b, OfNat.ofNat Int 5 _ is Int.ofNat 5, Nat.cast n is
+;; Int.ofNat n, GE.ge a b is the ≤ reversed, Ne a b is Not (a = b), HAnd.hAnd Nat Nat Nat _ a b
+;; is Nat.land a b (the bitwise five likewise), HAppend.hAppend (List α) … _ a b is List.append
+;; a b. K's conversion proves the two one where the term is used (the instances unfold; Init's
+;; are the only instances until Stage 3's classes). A term with no class method in it comes
+;; back as it is
+(fn sp_canon ((t Expr)) Expr
+  (measure (struct t))
+  (match t
+    ((App _ _ _) (sp_canon_app (sp_canon (get_app_fn t)) (sp_canon_list (get_app_args t) Nil)))
+    ((Lam _ n bi d b) (mk_lam n bi (sp_canon d) (sp_canon b)))
+    ((Pi _ n bi d b) (mk_pi n bi (sp_canon d) (sp_canon b)))
+    ((Let _ n ty v b) (mk_let n (sp_canon ty) (sp_canon v) (sp_canon b)))
+    ((Proj _ sn i x) (mk_proj sn i (sp_canon x)))
+    (_ t)))
+(fn sp_canon_list ((ts (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct ts))
+  (match ts (Nil (rev acc)) ((Cons x r) (sp_canon_list r (Cons (sp_canon x) acc)))))
+(fn sp_carrier ((ty Expr)) (Option Symbol)
+  (match ty
+    ((Const _ n _) (if (name_eq n (nm_int_ty)) (Some (quote Int)) (if (name_eq n (nm_nat)) (Some (quote Nat)) None)))
+    (_ None)))
+;; `List α` with List's universe level
+(fn sp_list_of ((ty Expr)) (Option (Pair (List Level) Expr))
+  (match ty
+    ((App _ (Const _ n ls) a) (if (name_eq n (n1 (quote List))) (Some (Pair ls a)) None))
+    (_ None)))
+(fn sp_canon_app ((f Expr) (args (List Expr))) Expr
+  (match f
+    ((Const _ n ls)
+     (match (sp_class_op n)
+       (None (mk_app_n f args))
+       ((Some (Pair op k))
+        (match (if (sp_inst_closed op k args) (sp_canon_op op k ls args) None)
+          ((Some r) r)
+          (None (mk_app_n f args))))))
+    (_ (mk_app_n f args))))
+;; a class method: the function it names and the number of arguments before its operands
+(fn sp_class_op ((n Name)) (Option (Pair Symbol Int))
+  (match n
+    ((Str (Str Anon c) m)
+     (let ((cs (chars_of_sym c)) (ms (chars_of_sym m)))
+       (if (bool_and (int_list_eq cs "HAdd") (int_list_eq ms "hAdd")) (Some (Pair (quote add) 4))
+       (if (bool_and (int_list_eq cs "HSub") (int_list_eq ms "hSub")) (Some (Pair (quote sub) 4))
+       (if (bool_and (int_list_eq cs "HMul") (int_list_eq ms "hMul")) (Some (Pair (quote mul) 4))
+       (if (bool_and (int_list_eq cs "HDiv") (int_list_eq ms "hDiv")) (Some (Pair (quote div) 4))
+       (if (bool_and (int_list_eq cs "HMod") (int_list_eq ms "hMod")) (Some (Pair (quote mod) 4))
+       (if (bool_and (int_list_eq cs "HAnd") (int_list_eq ms "hAnd")) (Some (Pair (quote land) 4))
+       (if (bool_and (int_list_eq cs "HOr") (int_list_eq ms "hOr")) (Some (Pair (quote lor) 4))
+       (if (bool_and (int_list_eq cs "HXor") (int_list_eq ms "hXor")) (Some (Pair (quote xor) 4))
+       (if (bool_and (int_list_eq cs "HShiftLeft") (int_list_eq ms "hShiftLeft")) (Some (Pair (quote shiftLeft) 4))
+       (if (bool_and (int_list_eq cs "HShiftRight") (int_list_eq ms "hShiftRight")) (Some (Pair (quote shiftRight) 4))
+       (if (bool_and (int_list_eq cs "HAppend") (int_list_eq ms "hAppend")) (Some (Pair (quote append) 4))
+       (if (bool_and (int_list_eq cs "Add") (int_list_eq ms "add")) (Some (Pair (quote add) 2))
+       (if (bool_and (int_list_eq cs "Sub") (int_list_eq ms "sub")) (Some (Pair (quote sub) 2))
+       (if (bool_and (int_list_eq cs "Mul") (int_list_eq ms "mul")) (Some (Pair (quote mul) 2))
+       (if (bool_and (int_list_eq cs "Div") (int_list_eq ms "div")) (Some (Pair (quote div) 2))
+       (if (bool_and (int_list_eq cs "Mod") (int_list_eq ms "mod")) (Some (Pair (quote mod) 2))
+       (if (bool_and (int_list_eq cs "AndOp") (int_list_eq ms "and")) (Some (Pair (quote land) 2))
+       (if (bool_and (int_list_eq cs "OrOp") (int_list_eq ms "or")) (Some (Pair (quote lor) 2))
+       (if (bool_and (int_list_eq cs "XorOp") (int_list_eq ms "xor")) (Some (Pair (quote xor) 2))
+       (if (bool_and (int_list_eq cs "ShiftLeft") (int_list_eq ms "shiftLeft")) (Some (Pair (quote shiftLeft) 2))
+       (if (bool_and (int_list_eq cs "ShiftRight") (int_list_eq ms "shiftRight")) (Some (Pair (quote shiftRight) 2))
+       (if (bool_and (int_list_eq cs "Append") (int_list_eq ms "append")) (Some (Pair (quote append) 2))
+       (if (bool_and (int_list_eq cs "Neg") (int_list_eq ms "neg")) (Some (Pair (quote neg) 2))
+       (if (bool_and (int_list_eq cs "LE") (int_list_eq ms "le")) (Some (Pair (quote le) 2))
+       (if (bool_and (int_list_eq cs "LT") (int_list_eq ms "lt")) (Some (Pair (quote lt) 2))
+       (if (bool_and (int_list_eq cs "GE") (int_list_eq ms "ge")) (Some (Pair (quote ge) 2))
+       (if (bool_and (int_list_eq cs "GT") (int_list_eq ms "gt")) (Some (Pair (quote gt) 2))
+       (if (bool_and (int_list_eq cs "OfNat") (int_list_eq ms "ofNat")) (Some (Pair (quote lit) 1))
+       (if (bool_and (int_list_eq cs "Nat") (int_list_eq ms "cast")) (Some (Pair (quote cast) 2))
+       (if (bool_and (int_list_eq cs "NatCast") (int_list_eq ms "natCast")) (Some (Pair (quote cast) 2))
+         None))))))))))))))))))))))))))))))))
+    ((Str Anon c) (if (int_list_eq (chars_of_sym c) "Ne") (Some (Pair (quote ne) 1)) None))
+    (_ None)))
+;; the instance a class method is applied at is Init's: a closed term — a local instance (a
+;; theorem quantified over an `Add Nat`) is no arithmetic, and the method stays as written
+(fn sp_inst_closed ((op Symbol) (k Int) (args (List Expr))) Bool
+  (if (sym_eq op (quote ne)) True
+    (match (nth args (if (sym_eq op (quote lit)) 2 (- k 1)))
+      ((Some inst) (bool_not (has_fvar inst)))
+      (None False))))
+(fn sp_bitwise ((op Symbol)) Bool
+  (bool_or (sym_eq op (quote land)) (bool_or (sym_eq op (quote lor)) (bool_or (sym_eq op (quote xor))
+  (bool_or (sym_eq op (quote shiftLeft)) (sym_eq op (quote shiftRight)))))))
+;; `ls`: the method's own universe levels (Ne.{u} α a b is Not (Eq.{u} α a b), at any sort)
+(fn sp_canon_op ((op Symbol) (k Int) (ls (List Level)) (args (List Expr))) (Option Expr)
+  (match args
+    (Nil None)
+    ((Cons ty _)
+     (if (sym_eq op (quote ne))
+       (match args
+         ((Cons t1 (Cons a (Cons b Nil))) (Some (sp_not (mk_app_n (mk_const (nm_eq) ls) (list t1 a b)))))
+         (_ None))
+     (if (sym_eq op (quote append))
+       (match (sp_list_of ty)
+         (None None)
+         ((Some (Pair lls el))
+          (match (drop k args)
+            ((Cons a (Cons b Nil)) (Some (mk_app_n (mk_const (n2 (quote List) (quote append)) lls) (list el a b))))
+            (_ None))))
+       (match (sp_carrier ty)
+         (None None)
+         ((Some car)
+          (match (drop k args)
+            ((Cons a (Cons b Nil))
+             (if (sym_eq op (quote lit)) (if (is_lit a) (Some (if (sym_eq car (quote Int)) (sp_cast a) a)) None)
+             (if (sym_eq op (quote add)) (Some (sp_car2 car (quote add) a b))
+             (if (sym_eq op (quote sub)) (Some (sp_car2 car (quote sub) a b))
+             (if (sym_eq op (quote mul)) (Some (sp_car2 car (quote mul) a b))
+             (if (sym_eq op (quote div)) (Some (sp_car2 car (if (sym_eq car (quote Int)) (quote ediv) (quote div)) a b))
+             (if (sym_eq op (quote mod)) (Some (sp_car2 car (if (sym_eq car (quote Int)) (quote emod) (quote mod)) a b))
+             (if (sym_eq op (quote le)) (Some (sp_car2 car (quote le) a b))
+             (if (sym_eq op (quote lt)) (Some (sp_car2 car (quote lt) a b))
+             (if (sym_eq op (quote ge)) (Some (sp_car2 car (quote le) b a))
+             (if (sym_eq op (quote gt)) (Some (sp_car2 car (quote lt) b a))
+             (if (bool_and (sp_bitwise op) (sym_eq car (quote Nat))) (Some (sp_car2 car op a b))
+               None))))))))))))
+            ((Cons a Nil)
+             (if (bool_and (sym_eq op (quote neg)) (sym_eq car (quote Int))) (Some (mk_app (sp_c (n2 (quote Int) (quote neg))) a))
+             (if (bool_and (sym_eq op (quote cast)) (sym_eq car (quote Int))) (Some (sp_cast a))
+               None)))
+            (_ None)))))))))
+(fn sp_car2 ((car Symbol) (op Symbol) (a Expr) (b Expr)) Expr (mk_app_n (mk_const (n2 car op) Nil) (list a b)))
+
+;; ---- the instance table (rule 3) -------------------------------------------------------------
+;; the term for an instance-implicit binder's type, closed and at one of the library's types:
+;; the pin's instance constant (`Add Nat` is instAddNat), or a composition the table spells
+;; (`HAdd α α α` is instHAdd over the table's `Add α`, `BEq α` is instBEqOfDecidableEq over
+;; its `DecidableEq α`, `Zero Int` is Zero.ofOfNat0 over instOfNat 0, `Append (List α)` is
+;; List.instAppend); None where the table has no row — the refusal instance_needed, with the
+;; pointer to `@` and the instance written
+(fn sp_instance ((ty Expr)) (Option Expr) (sp_instance_go ty 8))
+(fn sp_instance_go ((ty Expr) (fuel Int)) (Option Expr)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match (get_app_fn ty)
+    ((Const _ cls ls)
+     (match cls
+       ((Str Anon c)
+        (match (get_app_args ty)
+          ((Cons car Nil) (sp_inst1 (chars_of_sym c) ls car fuel))
+          ((Cons car (Cons n Nil)) (if (int_list_eq (chars_of_sym c) "OfNat") (sp_inst_ofnat car n) None))
+          ((Cons a (Cons b (Cons d Nil))) (if (bool_and (expr_eq a b) (expr_eq b d)) (sp_inst_h (chars_of_sym c) ls a fuel) None))
+          (_ None)))
+       (_ None)))
+    (_ None))))
+(fn sp_inst1 ((cls (List Int)) (ls (List Level)) (car Expr) (fuel Int)) (Option Expr)
+  (match (sp_carrier car)
+    ((Some c) (if (sym_eq c (quote Nat)) (sp_inst_nat cls car) (sp_inst_int cls car)))
+    (None
+     (if (is_const_named car (n1 (quote Bool))) (sp_inst_bool cls)
+       (match (sp_list_of car)
+         ((Some (Pair lls a)) (sp_inst_list cls lls a fuel))
+         (None (sp_inst_any cls ls car fuel)))))))
+(fn sp_zero ((car Expr) (ofnat Expr)) Expr
+  (mk_app_n (mk_const (n2 (quote Zero) (quote ofOfNat0)) (list LZero)) (list car ofnat)))
+(fn sp_inst_nat ((cls (List Int)) (car Expr)) (Option Expr)
+  (if (int_list_eq cls "Add") (Some (sp_c (n1 (quote instAddNat))))
+  (if (int_list_eq cls "Sub") (Some (sp_c (n1 (quote instSubNat))))
+  (if (int_list_eq cls "Mul") (Some (sp_c (n1 (quote instMulNat))))
+  (if (int_list_eq cls "Div") (Some (sp_c (n2 (quote Nat) (quote instDiv))))
+  (if (int_list_eq cls "Mod") (Some (sp_c (n2 (quote Nat) (quote instMod))))
+  (if (int_list_eq cls "LT") (Some (sp_c (n1 (quote instLTNat))))
+  (if (int_list_eq cls "LE") (Some (sp_c (n1 (quote instLENat))))
+  (if (int_list_eq cls "Min") (Some (sp_c (n1 (quote instMinNat))))
+  (if (int_list_eq cls "Max") (Some (sp_c (n2 (quote Nat) (quote instMax))))
+  (if (int_list_eq cls "DecidableEq") (Some (sp_c (n1 (quote instDecidableEqNat))))
+  (if (int_list_eq cls "AndOp") (Some (sp_c (n2 (quote Nat) (quote instAndOp))))
+  (if (int_list_eq cls "OrOp") (Some (sp_c (n2 (quote Nat) (quote instOrOp))))
+  (if (int_list_eq cls "XorOp") (Some (sp_c (n2 (quote Nat) (quote instXorOp))))
+  (if (int_list_eq cls "ShiftLeft") (Some (sp_c (n2 (quote Nat) (quote instShiftLeft))))
+  (if (int_list_eq cls "ShiftRight") (Some (sp_c (n2 (quote Nat) (quote instShiftRight))))
+  (if (int_list_eq cls "Zero") (Some (sp_zero car (mk_app (sp_c (n1 (quote instOfNatNat))) (sp_lit 0))))
+    None)))))))))))))))))
+(fn sp_inst_int ((cls (List Int)) (car Expr)) (Option Expr)
+  (if (int_list_eq cls "Add") (Some (sp_c (n2 (quote Int) (quote instAdd))))
+  (if (int_list_eq cls "Sub") (Some (sp_c (n2 (quote Int) (quote instSub))))
+  (if (int_list_eq cls "Mul") (Some (sp_c (n2 (quote Int) (quote instMul))))
+  (if (int_list_eq cls "Div") (Some (sp_c (n2 (quote Int) (quote instDiv))))
+  (if (int_list_eq cls "Mod") (Some (sp_c (n2 (quote Int) (quote instMod))))
+  (if (int_list_eq cls "Neg") (Some (sp_c (n2 (quote Int) (quote instNegInt))))
+  (if (int_list_eq cls "LT") (Some (sp_c (n2 (quote Int) (quote instLTInt))))
+  (if (int_list_eq cls "LE") (Some (sp_c (n2 (quote Int) (quote instLEInt))))
+  (if (int_list_eq cls "Min") (Some (sp_c (n2 (quote Int) (quote instMin))))
+  (if (int_list_eq cls "Max") (Some (sp_c (n2 (quote Int) (quote instMax))))
+  (if (int_list_eq cls "DecidableEq") (Some (sp_c (n2 (quote Int) (quote instDecidableEq))))
+  (if (int_list_eq cls "Zero") (Some (sp_zero car (mk_app (sp_c (n1 (quote instOfNat))) (sp_lit 0))))
+    None)))))))))))))
+(fn sp_inst_bool ((cls (List Int))) (Option Expr)
+  (if (int_list_eq cls "DecidableEq") (Some (sp_c (n1 (quote instDecidableEqBool)))) None))
+;; `List α`: Append is List.instAppend; DecidableEq is instDecidableEqList over the element's
+(fn sp_inst_list ((cls (List Int)) (lls (List Level)) (a Expr) (fuel Int)) (Option Expr)
+  (if (int_list_eq cls "Append") (Some (mk_app (mk_const (n2 (quote List) (quote instAppend)) lls) a))
+  (if (int_list_eq cls "DecidableEq")
+    (match (sp_instance_go (mk_app (mk_const (n1 (quote DecidableEq)) (list (LSucc (sp_level1 lls)))) a) (- fuel 1))
+      ((Some d) (Some (mk_app_n (mk_const (n1 (quote instDecidableEqList)) lls) (list a d))))
+      (None None))
+  (sp_inst_any cls (list (LSucc (sp_level1 lls))) (mk_app (mk_const (n1 (quote List)) lls) a) fuel))))
+(fn sp_level1 ((ls (List Level))) Level (match ls ((Cons l _) l) (Nil LZero)))
+;; at any type: BEq from its decidable equality
+(fn sp_inst_any ((cls (List Int)) (ls (List Level)) (car Expr) (fuel Int)) (Option Expr)
+  (if (int_list_eq cls "BEq")
+    (match (sp_instance_go (mk_app (mk_const (n1 (quote DecidableEq)) ls) car) (- fuel 1))
+      ((Some d) (Some (mk_app_n (mk_const (n1 (quote instBEqOfDecidableEq)) ls) (list car d))))
+      (None None))
+    None))
+;; the heterogeneous classes at one type: the homogeneous instance lifted
+(fn sp_inst_h ((cls (List Int)) (ls (List Level)) (a Expr) (fuel Int)) (Option Expr)
+  (match (sp_h_row cls)
+    (None None)
+    ((Some (Pair lift base))
+     (let ((u (list (sp_level1 ls))))
+       (match (sp_instance_go (mk_app (mk_const (n1 base) u) a) (- fuel 1))
+         ((Some d) (Some (mk_app_n (mk_const (n1 lift) u) (list a d))))
+         (None None))))))
+(fn sp_h_row ((cls (List Int))) (Option (Pair Symbol Symbol))
+  (if (int_list_eq cls "HAdd") (Some (Pair (quote instHAdd) (quote Add)))
+  (if (int_list_eq cls "HSub") (Some (Pair (quote instHSub) (quote Sub)))
+  (if (int_list_eq cls "HMul") (Some (Pair (quote instHMul) (quote Mul)))
+  (if (int_list_eq cls "HDiv") (Some (Pair (quote instHDiv) (quote Div)))
+  (if (int_list_eq cls "HMod") (Some (Pair (quote instHMod) (quote Mod)))
+  (if (int_list_eq cls "HAnd") (Some (Pair (quote instHAndOfAndOp) (quote AndOp)))
+  (if (int_list_eq cls "HOr") (Some (Pair (quote instHOrOfOrOp) (quote OrOp)))
+  (if (int_list_eq cls "HXor") (Some (Pair (quote instHXorOfXorOp) (quote XorOp)))
+  (if (int_list_eq cls "HShiftLeft") (Some (Pair (quote instHShiftLeftOfShiftLeft) (quote ShiftLeft)))
+  (if (int_list_eq cls "HShiftRight") (Some (Pair (quote instHShiftRightOfShiftRight) (quote ShiftRight)))
+  (if (int_list_eq cls "HAppend") (Some (Pair (quote instHAppendOfAppend) (quote Append)))
+    None))))))))))))
+;; a numeral's instance: OfNat Nat n is instOfNatNat n, OfNat Int n is instOfNat n
+(fn sp_inst_ofnat ((car Expr) (n Expr)) (Option Expr)
+  (match (sp_carrier car)
+    ((Some c) (Some (mk_app (sp_c (n1 (if (sym_eq c (quote Nat)) (quote instOfNatNat) (quote instOfNat)))) n)))
+    (None None)))
+
+;; ---- the kit ---------------------------------------------------------------------------------
+;; every constant the two tables can write, for the loader's demand (loader.shard init_kit;
+;; slice 3.26 rule 3): an instance the table spells and the operator rows' Min.min, Max.max and
+;; Int.ediv are no token of the file that needs them. Each is loaded where the module's
+;; horizon admits it
+(fn sp_kit () (List Name)
+  (list (n1 (quote instAddNat)) (n1 (quote instSubNat)) (n1 (quote instMulNat)) (n2 (quote Nat) (quote instDiv)) (n2 (quote Nat) (quote instMod))
+        (n1 (quote instLTNat)) (n1 (quote instLENat)) (n1 (quote instMinNat)) (n2 (quote Nat) (quote instMax)) (n1 (quote instDecidableEqNat))
+        (n2 (quote Nat) (quote instAndOp)) (n2 (quote Nat) (quote instOrOp)) (n2 (quote Nat) (quote instXorOp)) (n2 (quote Nat) (quote instShiftLeft)) (n2 (quote Nat) (quote instShiftRight))
+        (n1 (quote instOfNatNat)) (n1 (quote instOfNat)) (n2 (quote Zero) (quote ofOfNat0))
+        (n2 (quote Int) (quote instAdd)) (n2 (quote Int) (quote instSub)) (n2 (quote Int) (quote instMul)) (n2 (quote Int) (quote instDiv)) (n2 (quote Int) (quote instMod))
+        (n2 (quote Int) (quote instNegInt)) (n2 (quote Int) (quote instLTInt)) (n2 (quote Int) (quote instLEInt)) (n2 (quote Int) (quote instMin)) (n2 (quote Int) (quote instMax))
+        (n2 (quote Int) (quote instDecidableEq)) (n1 (quote instDecidableEqBool)) (n2 (quote List) (quote instAppend)) (n1 (quote instDecidableEqList)) (n1 (quote instBEqOfDecidableEq))
+        (n1 (quote instHAdd)) (n1 (quote instHSub)) (n1 (quote instHMul)) (n1 (quote instHDiv)) (n1 (quote instHMod))
+        (n1 (quote instHAndOfAndOp)) (n1 (quote instHOrOfOrOp)) (n1 (quote instHXorOfXorOp)) (n1 (quote instHShiftLeftOfShiftLeft)) (n1 (quote instHShiftRightOfShiftRight)) (n1 (quote instHAppendOfAppend))
+        (n2 (quote Min) (quote min)) (n2 (quote Max) (quote max)) (n2 (quote Int) (quote ediv)) (n2 (quote Int) (quote emod))
+        (n2 (quote Nat) (quote land)) (n2 (quote Nat) (quote lor)) (n2 (quote Nat) (quote xor)) (n2 (quote Nat) (quote shiftLeft)) (n2 (quote Nat) (quote shiftRight)) (n2 (quote List) (quote append))))

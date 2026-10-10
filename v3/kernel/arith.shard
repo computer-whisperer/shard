@@ -21,9 +21,9 @@
 (use kernel.expr)
 (use kernel.kw)
 (use kernel.level)
-(use kernel.matcher)
 (use kernel.name)
 (use kernel.prelude)
+(use kernel.spelling)
 (use kernel.util)
 (use kernel.elab.El)
 (use kernel.expr.BinderInfo)
@@ -63,7 +63,6 @@
 (fn ar_xcon ((lo (Option Int)) (hi (Option Int))) Expr
   (mk_app_n (ar_c (ar_om2 (quote Constraint) (quote mk))) (list (ar_xopt lo) (ar_xopt hi))))
 (fn ar_bin ((op Symbol) (a Expr) (b Expr)) Expr (mk_app_n (ar_i2 op) (list a b)))
-(fn ar_cast ((n Expr)) Expr (mk_app (ar_c (nm_int_of_nat)) n))
 (fn ar_eq_at ((ty Expr) (a Expr) (b Expr)) Expr (mk_app_n (mk_const (nm_eq) (list (ar_one))) (list ty a b)))
 (fn ar_eq ((a Expr) (b Expr)) Expr (ar_eq_at (ar_int) a b))
 (fn ar_refl ((a Expr)) Expr (mk_app_n (mk_const (nm_eq_refl) (list (ar_one))) (list (ar_int) a)))
@@ -73,7 +72,6 @@
 ;; p : a = b, the result b = a
 (fn ar_symm ((a Expr) (b Expr) (p Expr)) Expr
   (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list (ar_one))) (list (ar_int) a b p)))
-(fn ar_not ((p Expr)) Expr (mk_app (ar_c (n1 (quote Not))) p))
 (fn ar_iff_mp ((p Expr) (q Expr) (iff Expr) (h Expr)) Expr
   (mk_app_n (ar_c (n2 (quote Iff) (quote mp))) (list p q iff h)))
 
@@ -113,101 +111,6 @@
 (fn ar_xeval ((l Lin) (v Expr)) Expr
   (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote eval))) (list (ar_xlin l) v)))
 
-;; ---- one spelling (rule 3) ----------------------------------------------------------------
-;; a class method at Int or Nat under Init's instance is its function, throughout the term:
-;; HAdd.hAdd Int Int Int _ a b is Int.add a b, OfNat.ofNat Int 5 _ is Int.ofNat 5, Nat.cast n is
-;; Int.ofNat n, GE.ge a b is the ≤ reversed, Ne a b is Not (a = b). K's conversion proves the two
-;; one where the term is used (the instances unfold; Init's are the only instances until Stage
-;; 3's classes). A term with no class method in it comes back as it is
-(fn ar_canon ((t Expr)) Expr
-  (measure (struct t))
-  (match t
-    ((App _ _ _) (ar_canon_app (ar_canon (get_app_fn t)) (ar_canon_list (get_app_args t) Nil)))
-    ((Lam _ n bi d b) (mk_lam n bi (ar_canon d) (ar_canon b)))
-    ((Pi _ n bi d b) (mk_pi n bi (ar_canon d) (ar_canon b)))
-    ((Let _ n ty v b) (mk_let n (ar_canon ty) (ar_canon v) (ar_canon b)))
-    ((Proj _ sn i x) (mk_proj sn i (ar_canon x)))
-    (_ t)))
-(fn ar_canon_list ((ts (List Expr)) (acc (List Expr))) (List Expr)
-  (measure (struct ts))
-  (match ts (Nil (rev acc)) ((Cons x r) (ar_canon_list r (Cons (ar_canon x) acc)))))
-(fn ar_carrier ((ty Expr)) (Option Symbol)
-  (match ty
-    ((Const _ n _) (if (name_eq n (nm_int_ty)) (Some (quote Int)) (if (name_eq n (nm_nat)) (Some (quote Nat)) None)))
-    (_ None)))
-(fn ar_canon_app ((f Expr) (args (List Expr))) Expr
-  (match f
-    ((Const _ n ls)
-     (match (ar_class_op n)
-       (None (mk_app_n f args))
-       ((Some (Pair op k))
-        (match (if (ar_inst_closed op k args) (ar_canon_op op k ls args) None)
-          ((Some r) r)
-          (None (mk_app_n f args))))))
-    (_ (mk_app_n f args))))
-;; a class method: the function it names and the number of arguments before its operands
-(fn ar_class_op ((n Name)) (Option (Pair Symbol Int))
-  (match n
-    ((Str (Str Anon c) m)
-     (let ((cs (chars_of_sym c)) (ms (chars_of_sym m)))
-       (if (bool_and (int_list_eq cs "HAdd") (int_list_eq ms "hAdd")) (Some (Pair (quote add) 4))
-       (if (bool_and (int_list_eq cs "HSub") (int_list_eq ms "hSub")) (Some (Pair (quote sub) 4))
-       (if (bool_and (int_list_eq cs "HMul") (int_list_eq ms "hMul")) (Some (Pair (quote mul) 4))
-       (if (bool_and (int_list_eq cs "HDiv") (int_list_eq ms "hDiv")) (Some (Pair (quote div) 4))
-       (if (bool_and (int_list_eq cs "HMod") (int_list_eq ms "hMod")) (Some (Pair (quote mod) 4))
-       (if (bool_and (int_list_eq cs "Add") (int_list_eq ms "add")) (Some (Pair (quote add) 2))
-       (if (bool_and (int_list_eq cs "Sub") (int_list_eq ms "sub")) (Some (Pair (quote sub) 2))
-       (if (bool_and (int_list_eq cs "Mul") (int_list_eq ms "mul")) (Some (Pair (quote mul) 2))
-       (if (bool_and (int_list_eq cs "Div") (int_list_eq ms "div")) (Some (Pair (quote div) 2))
-       (if (bool_and (int_list_eq cs "Mod") (int_list_eq ms "mod")) (Some (Pair (quote mod) 2))
-       (if (bool_and (int_list_eq cs "Neg") (int_list_eq ms "neg")) (Some (Pair (quote neg) 2))
-       (if (bool_and (int_list_eq cs "LE") (int_list_eq ms "le")) (Some (Pair (quote le) 2))
-       (if (bool_and (int_list_eq cs "LT") (int_list_eq ms "lt")) (Some (Pair (quote lt) 2))
-       (if (bool_and (int_list_eq cs "GE") (int_list_eq ms "ge")) (Some (Pair (quote ge) 2))
-       (if (bool_and (int_list_eq cs "GT") (int_list_eq ms "gt")) (Some (Pair (quote gt) 2))
-       (if (bool_and (int_list_eq cs "OfNat") (int_list_eq ms "ofNat")) (Some (Pair (quote lit) 1))
-       (if (bool_and (int_list_eq cs "Nat") (int_list_eq ms "cast")) (Some (Pair (quote cast) 2))
-       (if (bool_and (int_list_eq cs "NatCast") (int_list_eq ms "natCast")) (Some (Pair (quote cast) 2))
-         None))))))))))))))))))))
-    ((Str Anon c) (if (int_list_eq (chars_of_sym c) "Ne") (Some (Pair (quote ne) 1)) None))
-    (_ None)))
-;; the instance a class method is applied at is Init's: a closed term — a local instance (a
-;; theorem quantified over an `Add Nat`) is no arithmetic, and the method stays as written
-(fn ar_inst_closed ((op Symbol) (k Int) (args (List Expr))) Bool
-  (if (sym_eq op (quote ne)) True
-    (match (nth args (if (sym_eq op (quote lit)) 2 (- k 1)))
-      ((Some inst) (bool_not (has_fvar inst)))
-      (None False))))
-;; `ls`: the method's own universe levels (Ne.{u} α a b is Not (Eq.{u} α a b), at any sort)
-(fn ar_canon_op ((op Symbol) (k Int) (ls (List Level)) (args (List Expr))) (Option Expr)
-  (match args
-    (Nil None)
-    ((Cons ty _)
-     (if (sym_eq op (quote ne))
-       (match args
-         ((Cons t1 (Cons a (Cons b Nil))) (Some (ar_not (mk_app_n (mk_const (nm_eq) ls) (list t1 a b)))))
-         (_ None))
-       (match (ar_carrier ty)
-         (None None)
-         ((Some car)
-          (match (drop k args)
-            ((Cons a (Cons b Nil))
-             (if (sym_eq op (quote lit)) (if (is_lit a) (Some (if (sym_eq car (quote Int)) (ar_cast a) a)) None)
-             (if (sym_eq op (quote add)) (Some (ar_car2 car (quote add) a b))
-             (if (sym_eq op (quote sub)) (Some (ar_car2 car (quote sub) a b))
-             (if (sym_eq op (quote mul)) (Some (ar_car2 car (quote mul) a b))
-             (if (sym_eq op (quote div)) (Some (ar_car2 car (if (sym_eq car (quote Int)) (quote ediv) (quote div)) a b))
-             (if (sym_eq op (quote mod)) (Some (ar_car2 car (if (sym_eq car (quote Int)) (quote emod) (quote mod)) a b))
-             (if (sym_eq op (quote le)) (Some (ar_car2 car (quote le) a b))
-             (if (sym_eq op (quote lt)) (Some (ar_car2 car (quote lt) a b))
-             (if (sym_eq op (quote ge)) (Some (ar_car2 car (quote le) b a))
-             (if (sym_eq op (quote gt)) (Some (ar_car2 car (quote lt) b a))
-               None)))))))))))
-            ((Cons a Nil)
-             (if (bool_and (sym_eq op (quote neg)) (sym_eq car (quote Int))) (Some (mk_app (ar_i2 (quote neg)) a))
-             (if (bool_and (sym_eq op (quote cast)) (sym_eq car (quote Int))) (Some (ar_cast a))
-               None)))
-            (_ None))))))))
 (fn ar_car2 ((car Symbol) (op Symbol) (a Expr) (b Expr)) Expr (mk_app_n (mk_const (n2 car op) Nil) (list a b)))
 
 ;; ---- the shape of a term (rule 2) ----------------------------------------------------------
@@ -304,8 +207,8 @@
       ((AsMulR a b) (ar_collect a atoms (- fuel 1)))
       ((AsCast n)
        (match (ar_cast_shape n)
-         ((AcAdd x y) (ar_collect (ar_cast y) (ar_collect (ar_cast x) atoms (- fuel 1)) (- fuel 1)))
-         ((AcMul x y) (ar_collect (ar_cast y) (ar_collect (ar_cast x) atoms (- fuel 1)) (- fuel 1)))
+         ((AcAdd x y) (ar_collect (sp_cast y) (ar_collect (sp_cast x) atoms (- fuel 1)) (- fuel 1)))
+         ((AcMul x y) (ar_collect (sp_cast y) (ar_collect (sp_cast x) atoms (- fuel 1)) (- fuel 1)))
          ((AcAtom) (ar_atom_add t (quote nat) atoms))))
       ((AsMod x k) (ar_collect (ar_mod_form x k) atoms (- fuel 1)))
       ((AsDiv x k) (ar_collect x (ar_atom_add t (quote div) atoms) (- fuel 1)))
@@ -358,8 +261,8 @@
                   (ar_symm el mid (mk_app_n (ar_c (ar_om2 (quote LinearCombo) (quote neg_eval))) (list (ar_xlin la) v))))))))))
       ((AsCast n)
        (match (ar_cast_shape n)
-         ((AcAdd x y) (ar_lin_via e atoms v t (ar_bin (quote add) (ar_cast x) (ar_cast y)) (mk_app_n (ar_i2 (quote natCast_add)) (list x y)) (- fuel 1)))
-         ((AcMul x y) (ar_lin_via e atoms v t (ar_bin (quote mul) (ar_cast x) (ar_cast y)) (mk_app_n (ar_i2 (quote natCast_mul)) (list x y)) (- fuel 1)))
+         ((AcAdd x y) (ar_lin_via e atoms v t (ar_bin (quote add) (sp_cast x) (sp_cast y)) (mk_app_n (ar_i2 (quote natCast_add)) (list x y)) (- fuel 1)))
+         ((AcMul x y) (ar_lin_via e atoms v t (ar_bin (quote mul) (sp_cast x) (sp_cast y)) (mk_app_n (ar_i2 (quote natCast_mul)) (list x y)) (- fuel 1)))
          ((AcAtom) (ar_lin_atom atoms v t))))
       ((AsMod x k) (ar_lin_via e atoms v t (ar_mod_form x k) (mk_app_n (ar_i2 (quote emod_def)) (list x k)) (- fuel 1)))
       ((AsDiv _ _) (ar_lin_atom atoms v t))
@@ -423,7 +326,7 @@
           (ARNone))))))
        ((Cons ty (Cons a (Cons b Nil)))
         (if (name_eq n (nm_eq))
-          (match (ar_carrier ty) ((Some car) (ARel (quote eq) car False a b)) (None (ARNone)))
+          (match (sp_carrier ty) ((Some car) (ARel (quote eq) car False a b)) (None (ARNone)))
           (ARNone)))
        (_ (ARNone))))
     (_ (ARNone))))
@@ -445,23 +348,23 @@
        (if (sym_eq op (quote le))
          (if neg (Some (ar_lt_raw b a (mk_app_n (ar_i2 (quote lt_of_not_ge)) (list a b h))))
            (Some (ar_le_raw a b h)))
-         (if neg (Some (ar_le_raw b a (ar_iff_mp (ar_not (ar_bin (quote lt) a b)) (ar_bin (quote le) b a) (mk_app_n (ar_i2 (quote not_lt)) (list a b)) h)))
+         (if neg (Some (ar_le_raw b a (ar_iff_mp (sp_not (ar_bin (quote lt) a b)) (ar_bin (quote le) b a) (mk_app_n (ar_i2 (quote not_lt)) (list a b)) h)))
            (Some (ar_lt_raw a b h)))))
        ;; Nat: the comparison cast into Int
        (if (sym_eq op (quote eq))
          (if neg None
-           (Some (ArRaw True (ar_cast a) (ar_cast b)
+           (Some (ArRaw True (sp_cast a) (sp_cast b)
                    (mk_app_n (mk_const (n1 (quote congrArg)) (list (ar_one) (ar_one))) (list (ar_nat) (ar_int) a b (ar_c (nm_int_of_nat)) h)))))
        (if (sym_eq op (quote le))
-         (if neg (Some (ar_nat_lt b a (ar_iff_mp (ar_not (ar_car2 (quote Nat) (quote le) a b)) (ar_car2 (quote Nat) (quote lt) b a) (mk_app_n (ar_n2 (quote not_le)) (list a b)) h)))
+         (if neg (Some (ar_nat_lt b a (ar_iff_mp (sp_not (ar_car2 (quote Nat) (quote le) a b)) (ar_car2 (quote Nat) (quote lt) b a) (mk_app_n (ar_n2 (quote not_le)) (list a b)) h)))
            (Some (ar_nat_le a b h)))
-         (if neg (Some (ar_nat_le b a (ar_iff_mp (ar_not (ar_car2 (quote Nat) (quote lt) a b)) (ar_car2 (quote Nat) (quote le) b a) (mk_app_n (ar_n2 (quote not_lt)) (list a b)) h)))
+         (if neg (Some (ar_nat_le b a (ar_iff_mp (sp_not (ar_car2 (quote Nat) (quote lt) a b)) (ar_car2 (quote Nat) (quote le) b a) (mk_app_n (ar_n2 (quote not_lt)) (list a b)) h)))
            (Some (ar_nat_lt a b h)))))))
     (_ None)))
 (fn ar_nat_le ((a Expr) (b Expr) (h Expr)) ArRaw
-  (ar_le_raw (ar_cast a) (ar_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_le_of_le))) (list a b h))))
+  (ar_le_raw (sp_cast a) (sp_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_le_of_le))) (list a b h))))
 (fn ar_nat_lt ((a Expr) (b Expr) (h Expr)) ArRaw
-  (ar_lt_raw (ar_cast a) (ar_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_lt_of_lt))) (list a b h))))
+  (ar_lt_raw (sp_cast a) (sp_cast b) (mk_app_n (ar_c (ar_om2 (quote Int) (quote ofNat_lt_of_lt))) (list a b h))))
 ;; the rows of the hypotheses: a context hypothesis that is no comparison is skipped, a fact
 ;; that is none is the refusal
 (type ArRaws (ArRawsOk (List ArRaw)) (ArRawsErr Symbol (List Int)))
@@ -470,7 +373,7 @@
   (match hs
     (Nil (ArRawsOk (rev acc)))
     ((Cons (Pair h ty) r)
-     (match (ar_raw_of (ar_rel (ar_canon ty)) h)
+     (match (ar_raw_of (ar_rel (sp_canon ty)) h)
        ((Some raw) (ar_hyp_rows r strict (Cons raw acc)))
        (None
         (if strict (ArRawsErr (quote arith_fact) "a fact's statement is not a linear comparison over Int or Nat (≤, <, = and the negations of ≤ and <; a ≠ is no row)")
@@ -498,7 +401,7 @@
        (match (get_app_args a)
          ((Cons x (Cons k Nil))
           (let ((kq (ar_bin (quote mul) k a)) (zero (ar_xint 0)))
-            (let ((ne (ar_not (ar_eq k zero))) (pos (ar_bin (quote lt) zero k)))
+            (let ((ne (sp_not (ar_eq k zero))) (pos (ar_bin (quote lt) zero k)))
               (ar_auto_rows r
                 (Cons (ar_lt_raw x (ar_bin (quote add) kq k)
                         (mk_app_n (ar_i2 (quote lt_mul_ediv_self_add)) (list x k (ar_decided pos (mk_app_n (ar_i2 (quote decLt)) (list zero k))))))
@@ -814,7 +717,7 @@
                  ((Pair e3 lam)
                   ;; ¬ b < a ↔ a ≤ b (not_lt at b a), ¬ b ≤ a ↔ a < b (not_le at b a)
                   (AROk e3
-                    (ar_iff_mp (ar_not negp) (ar_car2 car op a b)
+                    (ar_iff_mp (sp_not negp) (ar_car2 car op a b)
                       (mk_app_n (mk_const (n2 car (if (sym_eq op (quote le)) (quote not_lt) (quote not_le))) Nil) (list b a))
                       lam)
                     cs))))))))))))
@@ -827,7 +730,7 @@
        ((ArRawsErr x m) (ar_err x m))
        ((ArRawsOk fraws)
         (let ((raws (append craws fraws)))
-          (match (ar_rel (ar_canon target0))
+          (match (ar_rel (sp_canon target0))
             ((ARFalse) (ar_refute e None raws (ar_cert certs 0)))
             ((ARNone) (ar_err (quote arith_goal) "the target is not a linear comparison over Int or Nat (≤, <, =, a negation of one, or False)"))
             ((ARel op car True a b)
@@ -847,7 +750,7 @@
                (ar_prove_cmp e op car a b raws (ar_cert certs 0)))))))))))
 ;; an equation: the two sides' evaluations where they have one normal form, else ≤ both ways
 (fn ar_prove_eq ((e El) (car Symbol) (a Expr) (b Expr) (raws (List ArRaw)) (certs (List (List Int)))) ARes
-  (let ((ai (if (sym_eq car (quote Int)) a (ar_cast a))) (bi (if (sym_eq car (quote Int)) b (ar_cast b))))
+  (let ((ai (if (sym_eq car (quote Int)) a (sp_cast a))) (bi (if (sym_eq car (quote Int)) b (sp_cast b))))
     (let ((atoms (ar_collect bi (ar_collect ai Nil 4000) 4000)))
       (let ((v (ar_xlist (ar_atom_terms atoms Nil))))
         (match (ar_lin e atoms v ai 4000)

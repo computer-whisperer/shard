@@ -274,3 +274,18 @@ the values. Every test reads the one export through its index; a
 case's horizon (through `UInt8.toNat` for the libraries, through
 `Int.lt_mul_ediv_self_add` for `arith`'s product and quotient) is its
 import's, and its demand is loaded on it.
+
+Slice 3.27 landing 1 (the library arc's seams, §8.4 slice 3.27 rules
+2–5): `op_int_div` (`/` at `Int` is `Int.ediv`, `%` is `Int.emod`, at
+`Nat` the pair is `Nat.div`/`Nat.mod`), `one_spelling` (a lemma Init
+states through a class method under its instance — `0 &&& b = 0` —
+applies to V3's `Nat.land 0 b` under `apply`, `rw` and `simp_only`;
+`List.length_append` and `List.append_nil` at `List.append`: the
+unifier reads the method as its function before K's whnf, which would
+compute the closed side), `instance_table` (`List.sum` at `Int` and
+`Nat`, `min`/`max` as `Min.min`/`Max.max` under the table's instance,
+`List.length_take`'s right side), `init_above_horizon` (a name never
+loaded, cited bare under an opened namespace, above the module's
+horizon: `read-error above_horizon`, the refusal naming the qualified
+declaration, its ordinal and the import to write); `init_horizon_beyond`
+now expects `above_horizon` too.

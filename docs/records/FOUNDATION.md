@@ -2660,6 +2660,25 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-10 — slice 3.27 landing 1 built: the seams (`LANGUAGE.md`
+  §8.4 "as built, landing 1").** Rule 2 as a table, not a transparency:
+  slice 3.21's reading of a class method under Init's instance moved
+  out of `arith.shard` into `kernel/spelling.shard` with the bitwise
+  and append rows, and the unifier reads both sides through it before
+  K's whnf — the probe's `witness_open` (`apply Nat.zero_and` on
+  `Nat.land 0 b = 0`) closes, K's whnf having computed the closed side
+  to `0`; `rw`/`simp_only` needed nothing, every goal and lemma having
+  entered in the one spelling since 3.21. Rule 3: `sp_instance`, the
+  table of the pin's instance constants at `Nat`, `Int`, `Bool`, `List`
+  and the compositions (`Zero.ofOfNat0` over `instOfNat 0`, the `instH*`
+  lifts, `instBEqOfDecidableEq`), asked for an application's binders,
+  at a declaration's finish and at a tactic opening's premises;
+  `min`/`max` as `Min.min`/`Max.max`; `sp_kit` in the loader's demand
+  (the table's constants are no token). Rule 4: `/` at `Int` is
+  `Int.ediv`. Rule 5: `Fx.above` from the walk, `above_horizon` with the
+  ordinal, the horizon and the import to write, the name matched as a
+  token of the message (a tactic step wraps it). Cleanup: `mk_app_n`
+  to expr.shard. Five pins, one unify case. Gates: the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 44 s, `define_test` 12 checks 0 failed in 241 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `derive_test` 14 checks, `wire_test` 15 checks, `k_clients_test` 7 tests in 72 s, parity byte-identical over 31 closures and 133,762 declarations in 350 s, the full suite's 38 entrypoints with 0 failed in 553 s (under contention with the targeted gates; `store_test` 400 s, `parity_test` 333 s, `define_test` 308 s, `calc_test` 298 s, `path_test` 289 s). Route 1's kernel build, the full replay and the corpus are CI's.
 - **2026-10-10 — item 61 ratified by the user, as designed.** "Your
   leans sound good for calc's list and moving the tool to tier-5. Let's
   ratify the design as proposed and proceed." Both leans stand: calc's

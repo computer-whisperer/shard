@@ -40,6 +40,7 @@
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.scope)
+(use kernel.spelling)
 (use kernel.sexpr)
 (use kernel.unify)
 (use kernel.decl)
@@ -153,11 +154,44 @@
 ;; ---- finishing a declaration ----------------------------------------------------------------
 (type FinRes (FinOk Expr) (FinErr Symbol (List Int)))
 ;; the term instantiated; an unsolved metavariable names its binder
-(fn el_finish ((e El) (x Expr)) FinRes
+(fn el_finish ((e0 El) (x Expr)) FinRes
+  (let ((e (el_solve_instances e0)))
   (let ((z (el_zonk e x)))
     (match (tentative_bad (el_w e) (el_mc e))
       ((Some i) (FinErr (quote tentative_assignment) (append "the value unification chose for " (append (match (mc_decl (el_mc e) i) ((Some d) (show_name (md_name d))) (None "a metavariable")) " does not have its type: write the application with @ (law §5.1)"))))
-      (None (el_finish_term e z)))))
+      (None (el_finish_term e z))))))
+;; ---- instances by table (slice 3.27 rule 3) -----------------------------------------------
+;; an instance-implicit metavariable whose type is closed takes the table's term
+;; (spelling.shard's sp_instance) when the table has a row; the rest stay for unsolved_msg's
+;; instance_needed. Asked for an application's own binders when its arguments are read
+;; (el_solve_slots), for every metavariable when a declaration finishes, and for a tactic
+;; opening's premises (tactic.shard's witness_close)
+(fn el_solve_instances ((e El)) El (el_solve_ids e (mc_ids (el_mc e))))
+(fn el_solve_ids ((e El) (is (List Int))) El
+  (measure (struct is))
+  (match is (Nil e) ((Cons i r) (el_solve_ids (el_solve_one e i) r))))
+(fn el_solve_slots ((e El) (slots (List Slot))) El
+  (measure (struct slots))
+  (match slots
+    (Nil e)
+    ((Cons (SImp (MVar _ i)) r) (el_solve_slots (el_solve_one e i) r))
+    ((Cons _ r) (el_solve_slots e r))))
+(fn el_solve_one ((e El) (i Int)) El
+  (match (mc_assigned (el_mc e) i)
+    ((Some _) e)
+    (None
+     (match (mc_decl (el_mc e) i)
+       (None e)
+       ((Some d)
+        (if (bool_not (sym_eq (md_kind d) (quote inst))) e
+          (let ((ty (el_zonk e (md_type d))))
+            (if (has_mvar ty) e
+              (match (sp_instance ty)
+                (None e)
+                ((Some v)
+                 (match (assign (el_w e) (el_mc e) i v 32)
+                   ((UYes w1 mc1) (el_set_mc (el_set_w e w1) mc1))
+                   (_ e))))))))))))
 (fn el_finish_term ((e El) (z Expr)) FinRes
   (match (first_mvar z)
     ((Some i) (unsolved_msg e i))
@@ -510,7 +544,10 @@
             ((EOk e3 _ _)
              (match (elab_slots e3 slots 2)
                ((EErr r m) (EErr r m))
-               ((EOk e4 _ _) (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)))))))))))
+               ((EOk e4 _ _)
+                (match (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)
+                  ((EOk e5 v ty) (EOk (el_solve_slots e5 slots) v ty))   ; the binders' instances by table, once the expected type has had its say
+                  (other other))))))))))))
 ;; the explicit slots of one pass: 0 the bound variables and the elaborated
 ;; values, 1 the rest, 2 the numerals
 (fn elab_slots ((e El) (slots (List Slot)) (pass Int)) ERes
@@ -749,7 +786,8 @@
   (bool_or (sym_eq x (quote mod)) (bool_or (sym_eq x (quote %)) (bool_or (sym_eq x (quote lt)) (bool_or (sym_eq x (quote <))
   (bool_or (sym_eq x (quote le)) (bool_or (sym_eq x (quote <=)) (bool_or (sym_eq x (quote >)) (bool_or (sym_eq x (quote >=))
   (bool_or (sym_eq x (quote int_eq)) (bool_or (sym_eq x (quote =)) (bool_or (sym_eq x (quote !=))
-  (bool_or (sym_eq x (quote and)) (bool_or (sym_eq x (quote or)) (bool_or (sym_eq x (quote not)) (sym_eq x (quote iff)))))))))))))))))))))
+  (bool_or (sym_eq x (quote and)) (bool_or (sym_eq x (quote or)) (bool_or (sym_eq x (quote not)) (bool_or (sym_eq x (quote iff))
+  (bool_or (sym_eq x (quote min)) (sym_eq x (quote max)))))))))))))))))))))))
 ;; an operator is a term: inside an E-type position — a fn's `(Decidable (= a b))` — its
 ;; constants take their levels by unification, not the position's level 0 (slice 3.19)
 (fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
@@ -845,15 +883,20 @@
   (if (is_sort ty) (op_prop x)
   (if (is_const_named ty (n1 (quote Bool))) (op_bool x)
     None)))))
+;; `/` and `%` at Int are the Euclidean pair Int.ediv and Int.emod (law §10.3's row; slice 3.27
+;; rule 4 — the pin has no Int.div); `min` and `max` are Init's Min.min and Max.max under the
+;; table's instance (rule 3), the one spelling of `List.length_take`'s right side
 (fn op_at ((t Symbol) (x Symbol)) (Option Name)
   (if (sym_eq x (quote +)) (Some (n2 t (quote add)))
   (if (sym_eq x (quote -)) (Some (n2 t (quote sub)))
   (if (sym_eq x (quote *)) (Some (n2 t (quote mul)))
-  (if (sym_eq x (quote /)) (Some (n2 t (quote div)))
+  (if (sym_eq x (quote /)) (Some (n2 t (if (sym_eq t (quote Int)) (quote ediv) (quote div))))
   (if (bool_or (sym_eq x (quote mod)) (sym_eq x (quote %))) (Some (n2 t (if (sym_eq t (quote Int)) (quote emod) (quote mod))))
   (if (bool_or (sym_eq x (quote lt)) (sym_eq x (quote <))) (Some (n2 t (quote lt)))
   (if (bool_or (sym_eq x (quote le)) (sym_eq x (quote <=))) (Some (n2 t (quote le)))
-    None))))))))
+  (if (sym_eq x (quote min)) (Some (n2 (quote Min) (quote min)))
+  (if (sym_eq x (quote max)) (Some (n2 (quote Max) (quote max)))
+    None))))))))))
 (fn op_prop ((x Symbol)) (Option Name)
   (if (sym_eq x (quote and)) (Some (n1 (quote And)))
   (if (sym_eq x (quote or)) (Some (n1 (quote Or)))

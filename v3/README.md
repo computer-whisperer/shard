@@ -1374,6 +1374,17 @@ match at `List.get`, the matcher, the ghost refinement) and
 calc's `list.shard` retired onto the library; `docs/LEAN.md` and the
 T9 gate run small. T2/T3 and T10 follow as slices 3.28 and 3.29.
 
+**Landing 1 built 2026-10-10 — the seams** (`LANGUAGE.md` §8.4 "as
+built, landing 1"): `kernel/spelling.shard` holds the one spelling
+(`sp_canon`, slice 3.21's table out of `arith.shard` with the bitwise
+and append rows; the unifier reads both sides through it before K's
+whnf, so `apply Nat.zero_and` closes `Nat.land 0 b = 0`) and the
+instance table (`sp_instance`: the pin's instances at `Nat`, `Int`,
+`Bool`, `List` and their compositions; `List.sum` at `Int`, `min`/`max`
+as `Min.min`/`Max.max`); `/` at `Int` is `Int.ediv`; a name above the
+horizon is `above_horizon` with its ordinal and the import to write.
+Five pins. Gates: the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 44 s, `define_test` 12 checks 0 failed in 241 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `derive_test` 14 checks, `wire_test` 15 checks, `k_clients_test` 7 tests in 72 s, parity byte-identical over 31 closures and 133,762 declarations in 350 s, the full suite's 38 entrypoints with 0 failed in 553 s (under contention with the targeted gates; `store_test` 400 s, `parity_test` 333 s, `define_test` 308 s, `calc_test` 298 s, `path_test` 289 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

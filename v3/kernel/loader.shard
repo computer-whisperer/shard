@@ -47,6 +47,7 @@
 (use kernel.prog)
 (use kernel.reader)
 (use kernel.scope)
+(use kernel.spelling)
 (use kernel.realize)
 (use kernel.erasure)
 (use kernel.erasure.PdErase)
@@ -343,7 +344,7 @@
 ;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto),
 ;; its own Init import's target (Anon: none), the names of Init under its identity, which
 ;; none of its declarations may take (slice 3.26 rule 5)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))))
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))) (above (List (Pair Name Int))))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
@@ -527,7 +528,7 @@
       ((RDErr e m)
        (if (bool_and (sym_eq h (quote sig)) (Fx.view f))
          (sig_e_only l f s e m)
-         (Pair (ld_rec l (RReadErr (fx_file f) e m)) f)))
+         (Pair (ld_rec l (horizon_refusal f e m)) f)))
       ((RDPending n r) (Pair (ld_rec (ld_add_pending l n) (RPending n r)) f))
       ((RDDirective _) (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) (chars_of_sym (form_head s)))) f))
       ((RDLater k) (Pair (ld_rec l (RLoadErr (fx_file f) (quote fulfills_outside_impl) (append (chars_of_sym k) ": a fulfills belongs to an implementation — give the loader the directory (§6.6)"))) f))
@@ -615,7 +616,7 @@
        (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (Fx.autos f) (Load.mode l)))
         ((Pair l rd)
        (match rd
-         ((RDErr e m) (ld_rec l (RReadErr (fx_file f) e m)))
+         ((RDErr e m) (ld_rec l (horizon_refusal f e m)))
          ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
          ((RDOk ds)
           (match (admit_decls (Load.env l) ds)
@@ -1057,6 +1058,49 @@
        ((Pair (OdOpenErr e m) w1) (Pair (Pair l (Some (Pair e m))) w1))
        ((Pair (OdOpened x) w1)
         (Pair (Pair (ld_with_init l (InitSt (empty_run False False) x (odd0))) None) w1))))))
+;; a reading error as the file's record; `unknown_constant` on a name the name table places at
+;; or above the module's horizon (one of the file's tokens, resolved at init_prepare: Fx.above)
+;; is `above_horizon` with the ordinal, the horizon and the import to write (slice 3.27 rule
+;; 5). The elaborator shows the name as written, alone or inside a tactic step's message
+;; (`step 1: NAME — the goal: …`): the entry matched is a token of the message, itself or
+;; under a prefix an opened namespace supplies
+(fn horizon_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
+  (if (bool_not (sym_eq e (quote unknown_constant))) (RReadErr (fx_file f) e m)
+    (match (above_entry (Fx.above f) m)
+      (None (RReadErr (fx_file f) e m))
+      ((Some (Pair n o))
+       (RReadErr (fx_file f) (quote above_horizon)
+         (append (show_name n) (append " is declaration " (append (show_nat o) (append " of the export, at or above the module's horizon "
+           (append (show_nat (Fx.init f)) (append (match (Fx.initname f) (Anon " (inherited)") (k (append " (import Init " (append (show_name k) ")"))))
+             (append ": write (import Init " (append (show_name n) ")")))))))))))))
+(fn above_entry ((xs (List (Pair Name Int))) (m (List Int))) (Option (Pair Name Int))
+  (above_entry_go xs (msg_tokens m Nil Nil)))
+(fn above_entry_go ((xs (List (Pair Name Int))) (toks (List (List Int)))) (Option (Pair Name Int))
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons (Pair n o) r)
+     (if (token_names (show_name n) toks) (Some (Pair n o)) (above_entry_go r toks)))))
+;; `sn` is one of the tokens, or ends in ".TOKEN"
+(fn token_names ((sn (List Int)) (toks (List (List Int)))) Bool
+  (measure (struct toks))
+  (match toks
+    (Nil False)
+    ((Cons t r) (if (bool_or (int_list_eq sn t) (ix_ends_dot sn t)) True (token_names sn r)))))
+;; the message's words: maximal runs without a space, a parenthesis or a colon
+(fn msg_tokens ((m (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct m))
+  (match m
+    (Nil (match cur (Nil (rev acc)) (_ (rev (Cons (rev cur) acc)))))
+    ((Cons c r)
+     (if (bool_or (int_eq c 32) (bool_or (int_eq c 40) (bool_or (int_eq c 41) (int_eq c 58))))
+       (msg_tokens r Nil (match cur (Nil acc) (_ (Cons (rev cur) acc))))
+       (msg_tokens r (Cons c cur) acc)))))
+;; `s` ends in ".m"
+(fn ix_ends_dot ((s (List Int)) (m (List Int))) Bool
+  (let ((k (- (len s) (len m))))
+    (if (lt k 1) False
+      (bool_and (int_eq (match (nth s (- k 1)) ((Some c) c) (None 0)) 46) (int_list_eq (drop k s) m)))))
 (fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) Load
   (ld_rec l (RLoadErr file reason detail)))
 ;; `(import Init NAME)`: NAME's ordinal from the name table, the module's horizon the ordinal
@@ -1100,12 +1144,12 @@
      (let ((horizon (Fx.init f)))
        (match (init_empty x (init_prefixes f) Nil w)
          ((Pair (Pair xe empty) we)
-       (match (init_resolve xe (append (init_candidates (fx_scope l f) (tok_names (form_tokens forms (Toks IMEmpty Nil))) empty Nil) (init_kit)) horizon Nil Nil we)
-         ((Pair (Pair x1 (Pair ords inds)) w1)
-          (match (init_resolve x1 (init_satellites inds Nil) horizon ords Nil w1)
-            ((Pair (Pair x2 (Pair ords2 _)) w2)
+       (match (init_resolve xe (append (init_candidates (fx_scope l f) (tok_names (form_tokens forms (Toks IMEmpty Nil))) empty Nil) (init_kit)) horizon Nil Nil Nil we)
+         ((Pair (Pair x1 (Pair (Pair ords inds) above)) w1)
+          (match (init_resolve x1 (init_satellites inds Nil) horizon ords Nil above w1)
+            ((Pair (Pair x2 (Pair (Pair ords2 _) above2)) w2)
              (match (init_load (ld_with_init l (InitSt run x2 done)) ords2 w2)
-               ((Pair (Pair l1 (Some n)) w3) (Pair (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n)) (Some f)) w3))
+               ((Pair (Pair l1 (Some n)) w3) (Pair (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n)) (Some (with Fx f (above above2)))) w3))
                ((Pair (Pair l1 None) w3) (Pair (Pair l1 None) w3)))))))))))
     (_ (Pair (Pair l (Some f)) w))))
 ;; every candidate of every token (its `@` sigil of an explicit application dropped), except
@@ -1138,20 +1182,21 @@
      (match (od_has_under x p w)
        ((Pair (Pair x1 True) w1) (init_empty x1 r acc w1))
        ((Pair (Pair x1 False) w1) (init_empty x1 r (Cons (append (show_name p) ".") acc) w1))))))
-;; the ordinals the table places below the horizon, and the names among them of inductive
-;; blocks (kind i)
-(fn init_resolve ((x OdIx) (ns (List Name)) (horizon Int) (acc (List Int)) (inds (List Name)) (w World)) (Pair (Pair OdIx (Pair (List Int) (List Name))) World)
+;; the ordinals the table places below the horizon, the names among them of inductive
+;; blocks (kind i), and the names it places at or above the horizon with their ordinals
+;; (slice 3.27 rule 5: a citation of one is refused above_horizon, the import to write named)
+(fn init_resolve ((x OdIx) (ns (List Name)) (horizon Int) (acc (List Int)) (inds (List Name)) (above (List (Pair Name Int))) (w World)) (Pair (Pair OdIx (Pair (Pair (List Int) (List Name)) (List (Pair Name Int)))) World)
   (measure (struct ns))
   (match ns
-    (Nil (Pair (Pair x (Pair acc inds)) w))
+    (Nil (Pair (Pair x (Pair (Pair acc inds) above)) w))
     ((Cons n r)
      (match (od_lookup x n w)
-       ((Pair (Pair x1 None) w1) (init_resolve x1 r horizon acc inds w1))
+       ((Pair (Pair x1 None) w1) (init_resolve x1 r horizon acc inds above w1))
        ((Pair (Pair x1 (Some o)) w1)
-        (if (le horizon o) (init_resolve x1 r horizon acc inds w1)
+        (if (le horizon o) (init_resolve x1 r horizon acc inds (Cons (Pair n o) above) w1)
           (match (od_kind_of x1 o w1)
             ((Pair (Pair x2 k) w2)
-             (init_resolve x2 r horizon (Cons o acc) (if (int_eq k 105) (Cons n inds) inds) w2)))))))))
+             (init_resolve x2 r horizon (Cons o acc) (if (int_eq k 105) (Cons n inds) inds) above w2)))))))))
 ;; what the elaborator, the tactics and the definer construct from an inductive name: its
 ;; case analysis, no-confusion, below, brecOn, a constructor's injectivity
 (fn init_satellites ((ns (List Name)) (acc (List Name))) (List Name)
@@ -1163,7 +1208,7 @@
 ;; the tactics', arith's, the derivations', the definer's — demanded wherever a module sees
 ;; Init, loaded where the table places them below its horizon
 (fn init_kit () (List Name)
-  (append (k_kit) (append (el_kit) (append (tc_kit) (append (ar_all_kit) (append (dv_kit) (df_kit)))))))
+  (append (k_kit) (append (el_kit) (append (tc_kit) (append (ar_all_kit) (append (dv_kit) (append (df_kit) (sp_kit))))))))
 (fn k_kit () (List Name)
   (append (pin_candidates)
     (list (nm_nat) (nm_nat_zero) (nm_nat_succ) (nm_string) (n2 (quote String) (quote ofList)) (n1 (quote Char)) (n2 (quote Char) (quote ofNat))
@@ -1245,7 +1290,7 @@
              ((Pair dirs rest)
               (match (read_sidecar l rel rest w1s)
                ((Pair (Pair l0a autos) w1s2)
-              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil)) rest)
+              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil) (above Nil)) rest)
                 ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s2)
@@ -1692,7 +1737,7 @@
     (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (Fx.autos (Im.fx im)) (Load.mode l)))
      ((Pair l rd)
     (match rd
-      ((RDErr e m) (Pair (ld_rec l (RReadErr (im_file im) e m)) im))
+      ((RDErr e m) (Pair (ld_rec l (horizon_refusal (Im.fx im) e m)) im))
       ((RDPending nn r) (Pair (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending))) (im_mark im (quote requirement) n)))
       ((RDOk ds)
        (match (admit_decls (Load.env l) ds)
