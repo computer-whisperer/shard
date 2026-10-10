@@ -1348,6 +1348,32 @@ Gates: the 225 loader pins 0 failed in 46 s (43 s inside the suite), `loader_tes
 
 Landing 3 holds on the full gate: **2026-10-09 — pipeline 565 green on `3254941`: engine 52 s; corpus 1,500 s at the baseline; v3 4,457 s of a 3 h limit, 36 s over pipeline 563's 4,421 (the export 133 s; the index driver built by route 1 in 11 s and the export's index built in 98 s on the runner; 38 entrypoints with 0 failed in 1,253 s against 1,255 — the suite's wall clock unchanged, as the drop predicts: at 563 the receipt already had no writer, so every load checked its closure there too; `store_test` 962 s against 967, parity byte-identical over 31 closures and 133,392 declarations in 743 s against 745, `path_test` 691 against 667, `define_test` 670 against 657, `calc_test` 603 against 600, `wire_test` 453 against 436, `engine_test` 409 against 392, `derive_test` 311 against 318, `k_clients_test` 196, the loader pins' entrypoint 106 against 109, `route2_test` 73; route 1's native build of the kernel 416 s — `t0.shard` changed, its receipt writer gone; the replay 2,479 s at 32.3 GB); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.26 is closed.**
 
+**Slice 3.27 (designed 2026-10-09) — the library arc, for
+ratification before it is built** (`LANGUAGE.md` §8.4 slice 3.27; §13
+item 61). Phase 3's remainder under one principle, the user's at the
+3.25 boundary: the library does not duplicate Init. A statement Init
+has is cited by Init's name; `v3/std` declares what Init lacks; an old
+module whose declarations are all Init's or `arith`'s (`std/order`,
+`nat`, `div`, `arith`) becomes a migration record in `std/README.md`
+and no file; the fifteen former axioms of `kernel/facts.shard` are
+theorems in `std/facts.shard`. Measured by probes: twelve of the
+fifteen are theorems by Init's names in twelve lines (47 s on the
+bootstrap, 1,395 declarations admitted); six of Init's list functions
+realized by supplied bodies and seven of its theorems cited (29 s);
+five of `std/bits`' statements by name (54 s). Three seams found and
+ruled closed at landing 1: `/` at `Int` goes to `Int.div`, which the
+pin lacks (`Int.ediv`); a lemma Init states through an instance cannot
+be `apply`d to V3's spelling until the unifier and the matcher unfold
+instances as `arith` does; a name above the horizon is refused without
+the ordinal the author needs. Instances come from a fixed table at the
+library's types (`List.sum` at `Int`, `min`), not from search. Four
+landings: the seams; the records, `std/migration.shard` and the 39th
+entrypoint `std_test.sh`; `std/list` (the realizations, the dependent
+match at `List.get`, the matcher, the ghost refinement) and
+`std/bits` (the three bitwise recurrences, the width material), with
+calc's `list.shard` retired onto the library; `docs/LEAN.md` and the
+T9 gate run small. T2/T3 and T10 follow as slices 3.28 and 3.29.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

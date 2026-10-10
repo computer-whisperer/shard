@@ -2660,6 +2660,43 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-09 — slice 3.27 designed: the library arc (`LANGUAGE.md`
+  §8.4 slice 3.27; §13 item 61 for ratification before it is built).**
+  The user's "continue with the next arc" after items 59 and 60. What
+  phase 3 still owes (law §12.4) gathered into one design under the
+  user's 3.25-boundary principle — no duplication of Init. Measured by
+  three probe files under the on-demand loader on the bootstrap:
+  twelve of the fifteen former axioms of `kernel/facts.shard` are
+  theorems by Init's names in twelve lines (47 s, 1,395 declarations
+  admitted; `Int.emod_nonneg`, `Int.emod_lt_of_pos`, `Int.emod_def`
+  under `arith`, `Int.ediv_emod_unique`'s two halves, `Int.mul_comm`,
+  `Int.mul_assoc`, `Int.mul_add`, `Nat.shiftLeft_zero`/`_succ`,
+  `Nat.shiftRight_zero`/`_succ_inside`); six of Init's list functions
+  realized by supplied bodies with their equations (`take`/`drop` by
+  `cases` on the count, which Init recurses on first) and seven of its
+  list theorems cited (29 s, 1,385 declarations); five of `std/bits`'
+  statements by Init's names (54 s, 1,887). Three seams found: `/` at
+  `Int` elaborates to `Int.div`, absent from the pin (`Int.ediv` is
+  the Euclidean one the law names); a lemma stated through Init's
+  instance (`0 &&& x`) cannot be `apply`d to V3's spelling
+  (`witness_open`: the argument under the instance is not determined)
+  while `exact` goes through K's conversion; a name above the horizon
+  is `unknown_constant`, so the author needs the ordinal
+  (`Nat.zero_and` 23,368, `List.take_cons` 54,202, `Nat.min` 10,228).
+  Beside them: `List.sum` at `Int` is `instance_needed`, and
+  `List.length_take` states `min`, which V3 cannot write. Eleven
+  rules: Init is the library; one spelling at the unifier and the
+  matcher; instances by table; `/` is `Int.ediv`; the horizon
+  refusal's pointer; supplied bodies with equations by `rfl` or
+  `cases`, the matcher through its definition; the dependent match at
+  `List.get`; the six modules as records (`std/order`, `nat`, `div`,
+  `arith` have no file); the fifteen in `std/facts.shard`; `LEAN.md`;
+  T9 small. Four landings: the seams; the records and `std_test.sh`;
+  `std/list` and `std/bits` with calc's `list.shard` retired onto the
+  library; `LEAN.md` and T9. T2/T3 and T10 deferred to slices 3.28 and
+  3.29 as language slices; the migration tool's tier 0 to phase 5 with
+  these records as its calibration, a stated departure from law §12.3.
+  The probe files were scratch and are not committed.
 - **2026-10-09 — items 59 and 60 ratified by the user, as amended at slice
   3.26 landing 3** (the shared Init load's four decisions on today's
   carrier, Init on demand's six), without reservation; `LANGUAGE.md`'s

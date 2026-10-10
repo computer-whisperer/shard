@@ -1802,6 +1802,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **for ratification before it is built**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4949,6 +4950,207 @@ over the export; pipeline 563 and a measurement retired it instead.
   driver, the index, the suite, the kernel build, the replay.
 - **Gates run:** the 225 loader pins 0 failed in 46 s (43 s inside the suite), `loader_test` 0 failed in 8 s, `t0_fixture_test` and `route2_test` byte-identical (route 2 in 26 s), the full suite's 38 entrypoints with 0 failed in 620 s against 455 s at landing 2 — every entrypoint about a third slower while the pins' entrypoint held at 43 s against 42 s, so contention on the machine, the per-load cost unchanged (parity byte-identical over 31 closures and 133,392 declarations in 354 s; `store_test` 484 s, the suite's wall clock; `path_test` 314 s; `define_test` 303 s). `t0.shard` is route 1's: the kernel build, the full replay and the corpus are CI's.
 
+**Slice 3.27 — the library arc: Init is the library, the old modules
+become records, the seams the probes found are closed** (designed
+2026-10-09 at the boundary after slice 3.26, on the user's "continue
+with the next arc"; §13 item 61 — **for ratification before it is
+built**). What law §12.4's phase 3 still owes after slices 3.9–3.26:
+`std/list`, `order`, `nat`, `div`, `bits`, `arith` under the naming
+law; the fifteen former axioms of `kernel/facts.shard` as theorems; the
+migration table validated; one arbitrary-`Prop` ghost refinement; one
+static law-bearing package; `docs/LEAN.md`; the gates T2, T3, T9
+(small) and T10. The user's hesitation at the 3.25 boundary stands as
+the arc's principle: the library must not duplicate work already in
+Lean's `Init`. Measured by probes before this design (three scratch
+files under the on-demand loader, the bootstrap, 2026-10-09): twelve of
+the fifteen former axioms are theorems by Init's names in one file of
+twelve lines (47 s; 1,395 declarations admitted through the horizon
+`Nat.shiftRight_zero`, ordinal 55,829); six of Init's list functions
+realized by supplied bodies and seven of its list theorems cited (29 s;
+1,385 declarations); five of `std/bits`' statements by Init's names
+(54 s; 1,887 declarations). Three seams found on the way, each a defect
+or a gap of the elaborator, not of the law: `/` at `Int` elaborates to
+`Int.div`, which this pin does not hold (`Int.ediv` is Euclidean
+division; `%` already goes to `Int.emod`); a lemma Init states through
+an instance (`0 &&& x = 0` is `HAnd.hAnd Nat Nat Nat _ 0 x = 0`) cannot
+be `apply`d to a goal in V3's spelling (`Nat.land 0 b = 0`) — the
+argument under the instance application is "not determined by the
+goal" (`witness_open`), while `(exact (Nat.zero_and b))` goes through
+K's conversion, which unfolds the instance; and a cited name above the
+module's horizon is `unknown_constant`, so the author must know the
+export's ordinals to write the import (`Nat.zero_and` is 23,368,
+`List.take_cons` 54,202, `Nat.min` 10,228). Found beside them: Init's
+instance-polymorphic functions (`List.sum` under `[Add α] [Zero α]`)
+are refused `instance_needed` at a concrete type, and `List.length_take`
+states `min`, for which V3 has no operator. Eleven rules:
+
+1. **Init is the library.** A statement Init has is cited by Init's
+   name; `v3/std` declares only what Init lacks, in Init's namespaces
+   under the naming law (law §5.3); an old module every declaration of
+   which is Init's or `arith`'s becomes a migration record and no file.
+   V3's own `List.sum` (slice 3.13's first library file) goes: it is
+   Init's `List.sum` under rule 3.
+2. **One spelling, everywhere.** Slice 3.21 rule 3 made `arith` read a
+   class method at `Int` or `Nat` under Init's instance as its
+   function; the elaborator's unifier and the rewriter's matcher
+   (`apply`, `rw`, `simp_only`, the engine's ladder) do the same: an
+   instance constant and a class projection applied to it unfold during
+   unification and matching, as Lean's `instances` transparency does,
+   so `HAdd.hAdd Nat Nat Nat (instHAdd Nat instAddNat) a b` meets
+   `Nat.add a b`, `HAnd.hAnd … Nat.instAndOp` meets `Nat.land`,
+   `HAppend.hAppend … List.instAppend` meets `List.append`, and a lemma
+   in either spelling applies to a term in the other. V3's operator rows
+   keep their function spellings (slice 3.13 rule 3); the probe's
+   `witness_open` is this rule's regression.
+3. **Instances by table, not search** (Stage 3's first step, law §5.1).
+   An instance-implicit binder `[C α]` at a concrete `α` of the
+   library's types (`Nat`, `Int`, `Bool`, `List`, `Option`, `Prod`,
+   `String`, `Char`, `Fin`, `UInt8`, `ByteArray`) resolves from a fixed
+   table keyed by class and type to the pin's instance constant
+   (`instAddNat`, `Int.instAdd`, `instMinNat`, `List.instAppend`,
+   `instDecidableEqNat`, `Int.instDecidableEq`, `instBEqOfDecidableEq`
+   over a decidable equality) or to a composed term the table spells
+   (`Zero Int` is `Zero.ofOfNat0` over `instOfNat`); `(min a b)` and
+   `(max a b)` at `Nat` and `Int` are `Min.min`/`Max.max` under the
+   table's instance — Init's one spelling, an atom to `arith` as slice
+   3.21 rule 4 has it. A class or type the table lacks is
+   `instance_needed` with today's pointer (write `@` and the instance).
+   General instance search stays Stage 3's door, wake condition = a
+   class the table cannot hold.
+4. **`/` at `Int` is `Int.ediv`.** The operator row (`op_at`) says
+   `Int.div`; the pin has no such constant and law §10.3's row says
+   Euclidean. Fixed with a pin; the row validated by `std/migration.shard`.
+5. **The horizon refusal points.** A cited name the name table holds
+   above the module's horizon is refused `above_horizon NAME: ordinal
+   N, the horizon H — (import Init NAME)`, the import to write, where
+   today it is `unknown_constant`. The horizon law (slice 3.21b rule 2,
+   3.26 rule 4) is unchanged: the author chooses the import; the
+   loader, which has the table, says which.
+6. **Init's functions realized by supplied bodies**, slice 3.24's
+   precedent, with their equations theorems K proves: by `rfl` where
+   the body follows Init's recursion (`List.length`, `List.append`,
+   `List.reverseAux`, `List.reverse`), by `cases` on the argument Init
+   recurses on first where the body recurses on another (`List.take`
+   and `List.drop` recurse on the count first: `take n [] = []` is by
+   cases on `n`) — until the derived view reads Lean's compiled
+   recursion (deferred below). The matcher of an Init definition
+   (`Option.getD.match_1`, slice 3.24's open item) is realized through
+   the matcher's own definition — a definition over `casesOn`, a view
+   of it derived as any definition's — measured at landing 3; the
+   fallback is a supplied body as today.
+7. **The dependent match**, slice 3.24's other open item, lands at
+   `List.get`: a `match` generalizes the locals whose types mention the
+   scrutinee (slice 3.19 rule 9 generalizes the expected type only), so
+   that under `match xs` with `i : Fin (List.length xs)` the nil row
+   refutes `i`'s bound; slice 3.13 rule 2's narrower guarantee gets its
+   consumer. `List.get`, `List.getD`, `List.get?Internal` and
+   `List.getElem?` are then realized as rule 6 has them.
+8. **The modules as records.** For each of the six, a per-interface
+   migration record (law §10.1's "per-interface record") in
+   `v3/std/README.md`: every old declaration, its V3 spelling or Init's
+   name, the connecting evidence (a theorem of `std/facts.shard` or
+   `std/migration.shard`, or "cited by name"), the class of law §10.2.
+   `std/order` (22 claims about `Int`'s order: `Int.le_refl`,
+   `Int.lt_irrefl`, `Int.le_trans`, …, the `succ`/`pred` shifts by
+   `arith`), `std/nat` (`add_nat`, `int_of_nat`, `half_nat` are
+   `Nat.add`, `Int.ofNat`, `Nat.div n 2`), `std/div` (seven
+   requirements over the literal divisor 10: `arith`'s quotient and
+   remainder rows, slice 3.21 rule 4; `div_nonneg` is
+   `Int.ediv_nonneg`) and `std/arith` (seven index identities: `arith`)
+   have no V3 file. `std/list.shard` holds the realizations of rules 6
+   and 7, `List.Pairwise`'s ghost refinement (the arbitrary-`Prop`
+   `Subtype` phase 3 owes: a sorted list as `Subtype (List.Pairwise
+   (· ≤ ·))` with an insertion keeping it) and what Init lacks;
+   `std/bits.shard` holds the three bitwise recurrences and the
+   width material Init lacks (`2^32`, `2^64` instances of
+   `Nat.or_lt_two_pow`, `Nat.xor_lt_two_pow`,
+   `Nat.and_two_pow_sub_one_eq_mod`), the old 2,135 lines gone: Init
+   has `Nat.zero_and`, `Nat.and_zero`, `Nat.zero_or`, `Nat.zero_xor`,
+   `Nat.xor_self`, `Nat.and_le_left`, `Nat.and_le_right`,
+   `Nat.shiftLeft_eq`, `Nat.shiftRight_eq_div_pow` and the masks.
+9. **The fifteen former axioms as theorems**, `v3/std/facts.shard`,
+   the successor of `kernel/facts.shard` and theorem-only — the old
+   statement on the new spelling, its proof the citation:
+
+   | former axiom | the theorem's evidence | status |
+   |---|---|---|
+   | `mod_lo` (`0 < d → 0 ≤ n mod d`) | `Int.emod_nonneg` (its premise `d ≠ 0` by `Int.ne_of_gt`) | proved by the probe |
+   | `mod_hi` | `Int.emod_lt_of_pos` | proved |
+   | `ediv_mod_id` | `Int.emod_def` under `arith` | proved |
+   | `div_unique`, `mod_unique` | `Int.ediv_emod_unique`, its two halves | proved |
+   | `mul_comm`, `mul_assoc`, `mul_dist` | `Int.mul_comm`, `Int.mul_assoc`, `Int.mul_add` | proved |
+   | `bshl_z`, `bshl_s`, `bshr_z`, `bshr_s` | `Nat.shiftLeft_zero`, `Nat.shiftLeft_succ`, `Nat.shiftRight_zero`, `Nat.shiftRight_succ_inside` — at `Nat`, the `0 ≤` premises gone (the typed class of law §10.2) | proved |
+   | `band_rec`, `bor_rec`, `bxor_rec` (the low bit arithmetically, `a = 2·(a/2) + a%2`) | by `Nat.eq_of_testBit_eq` with `Nat.testBit_and`/`or`/`xor`, `Nat.testBit_succ`, `Nat.testBit_zero` and `Nat.mod_two_eq_zero_or_one`; or one unfolding of `Nat.bitwise` by its `WellFounded` equation (`Nat.bitwise_rec_lemma`), then `cases` on the two low bits and `arith` — the shorter route is `LEAN.md`'s example of a well-founded definition's equation | landing 3 |
+
+10. **`docs/LEAN.md`** (law §5.4): the three lists — the same as Lean,
+    refused with the pointer and the phase, shard-only — in dozens of
+    rows, written from the probes' findings and the landings': Init's
+    binders are the pin's (`(exact (NAME a b))` over-applied is
+    `function_expected` with the type shown; `(apply NAME)` takes any
+    shape); the horizon import by the refusal's pointer; `@` with the
+    instance where rule 3's table has none; a `cases` arm `(zero ()
+    STEP…)` names its fields in a list even when there are none; `/`
+    and `%` Euclidean; `=` a proposition, `==` a `Bool`; numerals by
+    position; `fn` = `def` + `realize`; `measure`; `dif`; `use` =
+    `open`; `import Init NAME` = the horizon. The seam document's length
+    is a symptom (law §5.4).
+11. **T9 small** (law §5.4, §12.5), at landing 4: a fresh agent with
+    `LANGUAGE.md` and `LEAN.md` and nothing else — no transcript, no
+    kernel source — (i) proves a `sum_list_append`-class theorem (law
+    §5.3's schematic) over `std/list`; (ii) writes a `fn` that lowers
+    (route 1's `v3/build.sh` on its file); (iii) cites one Init theorem
+    by guess from the naming grammar; (iv) states a ghost invariant
+    (`Subtype` over `List.Pairwise`); (v) proves a branch under `dif`;
+    (vi) writes a refused Lean form (`notation`, `partial`, `get!`) and
+    receives the pointer. Scored by the refusals and interventions on
+    the record, the count agreed before the run (law §12.5's rule);
+    each finding a `LEAN.md` row. T9 runs again at phase 3's close.
+
+Four landings. (1) **The seams**: rules 2–5 in the elaborator, the
+unifier and the loader, each with a pin (`apply` of `Nat.zero_and`;
+`List.sum` at `Int`; `(min a b)`; `(/ n d)` at `Int`; a name above the
+horizon), under the loader pins, parity and the suite. (2) **The
+records**: `std/facts.shard` (the twelve), `std/migration.shard` (one
+theorem per row of law §10.3 — `Int.ediv_zero`, `Int.emod_zero`,
+`Nat.sub` saturating, `Int.tdiv`/`Int.tmod` named, the `Decidable`
+bridges, `Nat.land` on `Nat`), `std/README.md`'s six records,
+`kernel/test/std_test.sh` as the 39th entrypoint — the std root loaded
+in one process (the Init run shared, slice 3.25), every file stored and
+accepted by K alone (slice 3.22's gate), `define_test`'s `List.sum`
+expectation replaced. (3) **`std/list` and `std/bits`**: rules 6–9 —
+the realizations, `List.get` under the dependent match, the matcher,
+`List.sum` from Init under rule 3, the ghost refinement, the three
+recurrences; calc's `examples/calc/list.shard` (its own `append` and
+`len` "until `v3/std` exists") retires onto `std/list` as the library's
+first consumer — calc's claims re-spelled `List.length`/`List.append`,
+the `auto` sidecar regenerated by `prove.shard`, byte-identical
+thereafter. (4) **`LEAN.md` and T9 small**, rules 10–11; the findings
+folded in.
+
+Weighed and deferred, each with the consumer that reopens it: **T2 and
+T3** (law §4.3's lambda profile — closed lambdas as template arguments,
+named partial application, a captured value as a runtime parameter;
+`add_offset`; the static law-bearing package with no runtime
+dictionary; the type-growing recursion refused loudly) are a language
+slice, not a library one, and become **slice 3.28** with its design at
+this arc's close; **T10** (an ordinary E library contributing an
+I-producing tactic through law §7.3's API — `engine.shard` is that
+library today, inside the kernel) becomes **slice 3.29**; the derived
+view of Lean's compiled structural recursion (rule 6's lever; consumer:
+the count of supplied bodies, twelve at landing 3, growing with the
+bulk port); the loader native (item 60(f); the std entrypoint will be
+the next multi-load cost); general instance search (rule 3's door); the
+migration tool's tier 0 (law §12.3) — phase 5's opener, these records
+its calibration data: the law's "calibrated on `std` in phase 3" is
+read so, because the six modules mostly vanish under rule 1 and a tool
+that re-spells them would mostly delete, stated here as a departure.
+Rejected: a V3 declaration beside an Init one for an executable
+spelling (`List.sum`, calc's `len` and `append`; law §4.4's "no second
+mathematical declaration"); a V3 function spelling for `min`
+(`Nat.min` is Init's own second spelling, ordinal 10,228, not the
+instance's); porting `std/bits`' proofs (Init has the theorems); a
+materialize-and-retry at the horizon (slice 3.26's one mechanism).
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -5204,7 +5406,7 @@ never compared as verdicts.
 | match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`casesOn`, `noConfusion`, `c.inj` for a type without parameters; the parametric `HEq` shape later) |
 | deriving under a declared policy | §5.1 | 3 — **landed slice 3.19** (§8.4): a type without parameters and Init's `List`, `Option`, `Prod` at closed arguments; types with parameters, nested and mutual types, the ordering's laws and the instance constants later |
 | tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
-| typeclasses, instances, coercions | §5.1 Stage 3 | 3 |
+| typeclasses, instances, coercions | §5.1 Stage 3 | 3 — instance arguments at the library's types from a fixed table at slice 3.27 landing 1 (§8.4 rule 3, designed 2026-10-09); search stays the door |
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 |
 | lambda lifting, templates, specialization | §4.3 | 3–4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
@@ -6157,3 +6359,42 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     native is the lever that pays: the suite's entrypoints of many
     short loads doubled on the runner at landing 2 (`wire_test` 155 s
     to 436), each process walking its demand on the bootstrap. **Ratified 2026-10-09, as amended.**
+61. **Slice 3.27, the library arc (designed 2026-10-09 at the boundary
+    after slice 3.26; §8.4) — for ratification before it is built.**
+    (a) **Init is the library**: a statement Init has is cited by
+    Init's name; `v3/std` declares only what Init lacks; an old module
+    every declaration of which is Init's or `arith`'s becomes a
+    migration record and no file (`std/order`, `nat`, `div`, `arith`);
+    V3's own `List.sum` goes. (b) **One spelling, everywhere**: the
+    unifier and the rewriter's matcher unfold Init's instance constants
+    and class projections as `arith` already reads them (slice 3.21
+    rule 3), so a lemma in Init's spelling applies to a term in V3's —
+    the probe's `witness_open` on `apply Nat.zero_and` is the
+    regression. (c) **Instances by table, not search**: an
+    instance-implicit binder at the library's types resolves from a
+    fixed table of the pin's instance constants and composed terms;
+    `min`/`max` are `Min.min`/`Max.max` under it; anything else is
+    `instance_needed` with the `@` pointer; search stays Stage 3's door.
+    (d) **`/` at `Int` is `Int.ediv`** — the operator row says
+    `Int.div`, which the pin lacks; a defect, fixed with a pin, law
+    §10.3's row validated. (e) **The horizon refusal points**: a name
+    above the horizon is refused with its ordinal and the import to
+    write; the horizon law unchanged. (f) **Supplied bodies with
+    equations by `rfl` or `cases`** for Init's functions until the
+    derived view reads compiled recursion; the matcher of an Init
+    definition realized through its own definition, the supplied body
+    the fallback. (g) **The dependent match lands at `List.get`**
+    (slice 3.24's open item; slice 3.13 rule 2's narrower guarantee
+    gets its consumer). (h) **The fifteen as theorems** in
+    `std/facts.shard`, twelve by Init's names (proved by the probe),
+    the three bitwise recurrences from Init's `testBit` kit or one
+    unfolding of `Nat.bitwise`. (i) **The records** in `std/README.md`
+    and `std/migration.shard` (one theorem per row of law §10.3), the
+    39th entrypoint `std_test.sh` with the store's gate. (j) **Calc's
+    `list.shard` retires onto `std/list`** as the first consumer, its
+    claims re-spelled and its sidecar regenerated. (k) **`LEAN.md` and
+    T9 small at landing 4**; T9 again at phase 3's close. (l) **T2/T3
+    and T10 are slices 3.28 and 3.29**, language slices with their
+    designs at this arc's close; the migration tool's tier 0 is phase
+    5's opener with these records as its calibration data — a stated
+    departure from law §12.3's "calibrated on `std` in phase 3".
