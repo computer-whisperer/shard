@@ -1797,10 +1797,10 @@ parity, route 2's byte-tie and T0 green:
 | 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
 | 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
 | 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
-| 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554**): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
+| 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554; retired at slice 3.26 landing 3, 2026-10-09** — a load checking the closure it cites, the receipt saved a tenth to a fifth of it): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
-| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 open**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
+| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4407,6 +4407,22 @@ cost (R75) and the connected path (R76). The user ruled the cache
 first, shallow — "something I expect us to iterate as we optimize and
 rework things" — and the path after it.
 
+*Retired at slice 3.26 landing 3 (2026-10-09, the user's ruling).* The
+cache answered the cost of streaming the export's prefix through K,
+which slice 3.26 removed: a load reads and checks the closure it
+cites, seconds. Measured there with a hand-written receipt over the
+export, admission saved a tenth to a fifth of a demanded load (calc 9 s
+against 10 s, `std/bytes` 20 s against 25 s): the walk and K's
+ingestion are the cost, and a receipt skips neither. Its only writer
+would have been the full replay, which nobody runs locally and which
+CI runs after the suite. Rejected because: a cache whose measured
+value is seconds a load for a developer holding a 41-minute replay,
+kept at the price of an admit-unchecked switch in K's run with no
+consumer. What stays of the slice: `admit_decl_pinning` and the run's
+admit mode, repurposed at 3.26 landing 2 for the loader's second
+admission of records it checked a moment ago (`od_admit`). The rules
+below are the slice as it was built.
+
 *What the cost is.* Every load streams the pinned export through K up
 to the deepest name its modules cite (§3.1), and K checks every
 declaration on the way. Measured on the development machine over the
@@ -4722,9 +4738,10 @@ reads what it cites. Six rules:
    its record line, the nodes its type and value reach, their names
    and levels, the records of the constants they name — sorts the
    lines into export order and feeds K that sub-stream through the
-   path the prefix stream took (`process_record`): checked without a
-   receipt, admitted under one. Node ids stay the export's; K's tables
-   are sparse; the records are byte-identical to the stream's.
+   path the prefix stream took (`process_record`), checked (admitted
+   under a receipt, as ruled; the receipt was dropped at landing 3).
+   Node ids stay the export's; K's tables are sparse; the records are
+   byte-identical to the stream's.
 4. **The law unchanged.** Visibility is the ordinal below the horizon
    (`init_within`); a materialized record carries its true ordinal, so
    a far name one module pulled in stays invisible to a module with a
@@ -4742,8 +4759,9 @@ reads what it cites. Six rules:
    dependents go to the export, which `v3/export.sh` provides on every
    machine; a closure checked costs seconds (K's check about 7 ms a
    record: the fixture's 24 s over 3,523), so no test needs the
-   receipt, which stays a speed lever; `init_index.sh` keeps the index
-   current as `init_receipt.sh` keeps the receipt.
+   receipt (ruled a speed lever here; dropped at landing 3, measured at
+   a tenth to a fifth of a demanded load); `init_index.sh` keeps the
+   index current as `init_receipt.sh` kept the receipt.
 
 Three landings: (1) the index, the range read, a test that reads every
 record back by its offset and every name by its search; (2) the loader
@@ -4898,6 +4916,37 @@ as rules 3–6; the fixtures deleted.
   worth K's refusal carrying it, deferred; the block offset of landing
   1's record table was the newline before a block's first line (one
   byte early, the verify tolerating it), fixed with the format.
+
+**Slice 3.26 as built, landing 3** (2026-10-09): the receipt dropped,
+the slice closed. The landing as planned gave the receipt its writer
+over the export; pipeline 563 and a measurement retired it instead.
+
+- **The measurement.** With every load checking the closure it cites,
+  the entrypoints made of many short loads doubled on the runner at
+  landing 2 (`wire_test` 155 s to 436, `define_test` 337 to 657,
+  `engine_test` 267 to 392; `wire_test` 65 s to 150 locally), each
+  process checking its demand where the receipt had admitted the
+  fixture's prefix. A hand-written receipt over the export (`PATH
+  BYTES`) admitted a demand in nine tenths to four fifths of the
+  checked time: calc 9 s against 10 s, `std/bytes` 20 s against 25 s.
+  The walk on the bootstrap and K's ingestion are the cost; a receipt
+  skips neither. The user ruled the receipt dropped.
+- **Deleted.** `load.shard --init-receipt` and `prove.shard`'s, the
+  loader's receipt (`Load.receipt`, `receipt_mode`, `receipt_parse`,
+  `load_with_receipt`), `t0.shard --receipt` and its writer, the
+  loader pins test's flag, `v3/test.sh`'s `INIT_RECEIPT` and the
+  shell tests' pass-through. A driver starts from `ld_start` (the
+  export and its index named, or no Init). `init_receipt_stale` is no
+  refusal. K's admit mode (`admit_decl_pinning`, `run_admitting`)
+  stays for the loader's second admission of records it checked into
+  K's run of Init a moment ago (`od_admit`), its comments saying so;
+  slice 3.23's text stands as history, marked retired, and §13 item
+  57 with it.
+- **The lever that remains** is item 60(f)'s loader native: the walk
+  is the cost of a demanded load, and its files are not route 1's.
+- **CI's order** stands as landing 2 forced it: export, the index
+  driver, the index, the suite, the kernel build, the replay.
+- **Gates run:** the 225 loader pins 0 failed in 46 s (43 s inside the suite), `loader_test` 0 failed in 8 s, `t0_fixture_test` and `route2_test` byte-identical (route 2 in 26 s), the full suite's 38 entrypoints with 0 failed in 620 s against 455 s at landing 2 — every entrypoint about a third slower while the pins' entrypoint held at 43 s against 42 s, so contention on the machine, the per-load cost unchanged (parity byte-identical over 31 closures and 133,392 declarations in 354 s; `store_test` 484 s, the suite's wall clock; `path_test` 314 s; `define_test` 303 s). `t0.shard` is route 1's: the kernel build, the full replay and the corpus are CI's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -6012,7 +6061,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     *Left open, stated:* the loader pins' entrypoint re-streams Init
     once per case in one process; a load shared across cases (the
     persistent session, T9) is the next lever, not this one.
-    **Ratified 2026-10-09.**
+    **Ratified 2026-10-09. Retired at slice 3.26 landing 3
+    (2026-10-09, the user's ruling):** the receipt dropped and its
+    flags deleted — with a load checking the closure it cites (item
+    60), admission saved a tenth to a fifth of a demanded load, and the
+    receipt's only writer would have been the full replay; (b)'s admit
+    path stays as the loader's second admission of records it checked
+    (item 60(b) as amended); (a), (c), (d) have no mechanism now.
 58. **Slice 3.24, the connected path (ruled 2026-10-09 on GPT-6's R76;
     §8.4) — for ratification.** (a) **`(dif h C T F)`** is the source
     form of the dependent if, the hypothesis named first; `if` is not
@@ -6049,6 +6104,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     **The loader pins' entrypoint streams once** — 783 s to 33 s — and
     the three pins that leaned on the stream stopping short are
     restated, one of them (`registry_native`) now the refusal of (c).
+    *Amended at slice 3.26 landing 3 (2026-10-09):* (a)'s mechanism —
+    the export streamed to its end by `init_all` — went at 3.26 landing
+    2; what (a) ratifies is the principle, a process loading each
+    record of Init once, carried now by K's run of Init alone
+    persisting across the roots of a process (`ld_reroot` over the
+    loader's Init state). (d)'s number is 42 s by the walk, every
+    record checked (3.25's 33 s was the stream admitted under the
+    receipt, since dropped).
 60. **Slice 3.26, Init on demand (ruled 2026-10-09 at the boundary
     after slice 3.25; §8.4) — for ratification.** (a) **The export is
     indexed, never streamed, by a load**: a record table and a name
@@ -6084,3 +6147,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `noConfusion`, `below`, `brecOn`, a constructor's `inj`); (d) item
     59(c)'s `List.sum` evidence was a misreading (the declared name is
     `std.list.List.sum`): rule 5 stands on `registry_native`'s shape.
+    *Amended at landing 3 (2026-10-09, the user's ruling):* (b) every
+    demand is checked — the receipt is dropped, measured at a tenth to
+    a fifth of a demanded load (the walk and K's ingestion are the
+    cost); the admission that remains is the second one, of records
+    this process checked, into the loader's own environment; (e) the
+    fixtures and the receipt go, and item 57 is retired; (f) the loader
+    native is the lever that pays: the suite's entrypoints of many
+    short loads doubled on the runner at landing 2 (`wire_test` 155 s
+    to 436), each process walking its demand on the bootstrap.

@@ -243,17 +243,15 @@
   (forms (IntMap (List (Pair Name (Pair Scope SExpr)))))
   (discharged (List (Pair Name (List Name))))   ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
-  (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
-  (receipt (List (Pair (List Int) Int))))   ; the Init receipt (slice 3.23): the export a T0 run accepted, by path and byte count; empty = checked
+  (derived (List Derived)))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (receipt Nil)))
-(fn ld_with_receipt ((l Load) (r (List (Pair (List Int) Int)))) Load (with Load l (receipt r)))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil)))
 ;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
-;; environment of Init alone (the run's), the ordinals, the export and index handle, the
-;; receipt; everything of the old root reset to load0's, the old root's own declarations gone
+;; environment of Init alone (the run's), the ordinals, the export and index handle;
+;; everything of the old root reset to load0's, the old root's own declarations gone
 (fn ld_reroot ((l Load) (root (List (List Int)))) Load
-  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l)) (receipt (Load.receipt l))))
+  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l))))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -1174,71 +1172,25 @@
           (nm_eq) (nm_eq_refl) (n1 (quote Quot)) (nm_quot_mk) (nm_quot_lift) (nm_quot_ind) (n2 (quote Quot) (quote sound))
           (nm_int_ty) (nm_int_of_nat) (nm_int_neg_succ))))
 ;; the demanded records' closure through K (initload.shard od_load): into the Init run,
-;; checked, or admitted under a receipt listing the export at its byte count; then into the
-;; loader's environment, admitted (od_admit: the same records, checked a moment ago); every
-;; constant admitted entered in the ordinal table with its ordinal
+;; checked; then into the loader's environment, admitted (od_admit: the same records,
+;; checked a moment ago); every constant admitted entered in the ordinal table with its
+;; ordinal
 (fn init_load ((l Load) (ords (List Int)) (w World)) (Pair (Pair Load (Option Int)) World)
   (match (Load.init l)
     ((InitSt run x done)
-     (match (receipt_mode (Load.receipt l) (odx_export x) (ix_hdr_bytes (odx_hdr x)))
-       (None (Pair (Pair (init_err l "Init" (quote init_receipt_stale) (receipt_detail (ix_hdr_bytes (odx_hdr x)))) None) w))
-       ((Some ad)
-        (match (od_load x (run_admitting run ad) done ords w)
-          ((Pair (OdLoadErr x1 e m) w1) (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" e m) None) w1))
-          ((Pair (OdLoaded x1 run1 done1 cs n ls) w1)
-           (match (od_admit run1 (Load.env l) ls)
-             (None (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" (quote init_refused) "a record checked into Init's environment was not admitted into the loader's") None) w1))
-             ((Some env1)
-              (Pair (Pair (ld_add_inits (ld_with_init (ld_with_env l env1 (Load.memo l)) (InitSt run1 x1 done1)) cs) (Some n)) w1))))))))
+     (match (od_load x run done ords w)
+       ((Pair (OdLoadErr x1 e m) w1) (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" e m) None) w1))
+       ((Pair (OdLoaded x1 run1 done1 cs n ls) w1)
+        (match (od_admit run1 (Load.env l) ls)
+          (None (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" (quote init_refused) "a record checked into Init's environment was not admitted into the loader's") None) w1))
+          ((Some env1)
+           (Pair (Pair (ld_add_inits (ld_with_init (ld_with_env l env1 (Load.memo l)) (InitSt run1 x1 done1)) cs) (Some n)) w1))))))
     (_ (Pair (Pair l (Some 0)) w))))
 
-;; ---- the Init receipt (slice 3.23) ----------------------------------------------------------
-;; `t0.shard --receipt FILE` writes, after a run that accepted every record of
-;; its input, one line per file: `PATH BYTES`; a line starting with `#` is the
-;; writer's (the suite's K hash) and is not read here. The export listed with its
-;; byte count enters in ADMIT mode (k/add.shard admit_decl_pinning): its axioms,
-;; definitions, theorems and opaques inserted without the typing judgments, the
-;; inductive blocks and the quotient checked as always. With a receipt set, an
-;; export not listed, or listed with another byte count, is refused —
-;; `init_receipt_stale` — never checked silently. No receipt: every record checked.
-(fn receipt_mode ((rcpt (List (Pair (List Int) Int))) (path (List Int)) (bytes Int)) (Option Bool)
-  (match rcpt
-    (Nil (Some False))
-    (_ (if (receipt_lists rcpt path bytes) (Some True) None))))
-(fn receipt_lists ((rcpt (List (Pair (List Int) Int))) (f (List Int)) (n Int)) Bool
-  (measure (struct rcpt))
-  (match rcpt
-    (Nil False)
-    ((Cons (Pair path bytes) r) (if (int_list_eq path f) (if (int_eq bytes n) True (receipt_lists r f n)) (receipt_lists r f n)))))
-(fn receipt_detail ((bytes Int)) (List Int)
-  (append "the export is not in the receipt at its byte count (" (append (show_nat bytes) " bytes); regenerate it (t0.shard --receipt)")))
 ;; the load a driver starts from: the export and its index named (`--init EXPORT --init-index
-;; INDEX`; neither: no Init), with a receipt FILE named (`--init-receipt`) read and set; None =
-;; the receipt is unreadable
-(fn load_with_receipt ((rootp (List (List Int))) (export (List Int)) (index (List Int)) (rcpt (List Int)) (w World)) (Pair (Option Load) World)
-  (let ((l0 (if (int_eq (len export) 0) (load0 rootp) (ld_with_init (load0 rootp) (InitPaths export index)))))
-    (if (int_eq (len rcpt) 0) (Pair (Some l0) w)
-      (match (read_file rcpt w)
-        ((Pair None w1) (Pair None w1))
-        ((Pair (Some bs) w1) (Pair (Some (ld_with_receipt l0 (receipt_parse bs))) w1))))))
-;; the receipt's text: `PATH BYTES` per line, `#` lines skipped
-(fn receipt_parse ((bs (List Int))) (List (Pair (List Int) Int))
-  (measure (struct bs))
-  (match bs
-    (Nil Nil)
-    (_
-     (match (take_line bs Nil)
-       ((Pair line rest)
-        (match line
-          (Nil (receipt_parse rest))
-          ((Cons 35 _) (receipt_parse rest))
-          (_ (match (split_space line)
-               ((Pair path bytes) (Cons (Pair path (digits_val bytes 0)) (receipt_parse rest)))))))))))
-(fn split_space ((xs (List Int))) (Pair (List Int) (List Int))
-  (measure (struct xs))
-  (match xs
-    (Nil (Pair Nil Nil))
-    ((Cons c r) (if (int_eq c 32) (Pair Nil r) (match (split_space r) ((Pair a b) (Pair (Cons c a) b)))))))
+;; INDEX`), opened at the first import of Init (init_opened); neither named: no Init
+(fn ld_start ((rootp (List (List Int))) (export (List Int)) (index (List Int))) Load
+  (if (int_eq (len export) 0) (load0 rootp) (ld_with_init (load0 rootp) (InitPaths export index))))
 
 ;; ---- files and modules -----------------------------------------------------------------------
 (fn import_depth () Int 1000)

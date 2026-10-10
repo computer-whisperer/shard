@@ -19,9 +19,8 @@ cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "derive_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 fail=0; checks=0
-load() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT "$@" 2>&1; }
+load() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$@" 2>&1; }
 want() {   # NAME TEXT PATTERN
   checks=$((checks+1))
   if ! echo "$2" | grep -q -- "$3"; then echo "derive_test: $1 lacks '$3'"; echo "$2" | grep -E 'REFUSE|ERROR|DERIVE' | head -6; fail=$((fail+1)); fi

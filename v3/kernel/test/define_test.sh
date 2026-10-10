@@ -9,12 +9,11 @@ cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "define_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 fail=0
 check() {
   local f=$1; shift
   local out rc
-  out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT "$f" 2>&1); rc=$?
+  out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$f" 2>&1); rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "define_test: $f exit $rc"; echo "$out" | grep -E 'REFUSE|ERROR|POLICY' | head -5; fail=$((fail+1)); return
   fi
@@ -33,25 +32,25 @@ check v3/examples/calc/calc_spec.shard \
   'ACCEPT examples.calc.calc_spec.eval_add '
 # calc's spec file whole (slice 3.16's gate): every function defined; the measured one's two
 # descents discharged (slice 3.21: each stated under its matchers' equations), so nothing pending
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT v3/examples/calc/calc_spec.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_spec.shard 2>&1)
 if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 0  defined 25  errors 0' \
    || [ "$(echo "$out" | grep -c '^DISCHARGE examples.calc.calc_spec.parse_tail.dec_[12] proved')" -ne 2 ]; then
   echo "define_test: calc_spec is not 25 of 25 defined with parse_tail's descents discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
 fi
 # G8 (GPT-6 R70): a RUNNABLE callee added to a body changes the call and nothing else in the program
-dump=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT --dump v3/pins/loader/route_callee/main.shard 2>&1)
+dump=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT --dump v3/pins/loader/route_callee/main.shard 2>&1)
 a=$(echo "$dump" | sed -n 's/^fn a //p'); b=$(echo "$dump" | sed -n 's/^fn b //p' | sed 's/(down #1)/#1/')
 if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "define_test: route_callee: b's program is not a's with the call"; echo "$dump" | grep '^fn ' | head -4; fail=$((fail+1)); fi
 # G4 (GPT-6 R65, R69): the discharged measure's account — three DISCHARGE records, nothing PENDING,
 # and the theorem that rested on count.dec_1 rests on nothing after
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT v3/pins/loader/discharge_measure/main.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/loader/discharge_measure/main.shard 2>&1)
 if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | grep -q '^PENDING' || ! echo "$out" | grep -q '^ACCEPT .*main.count_self .* params=$'; then
   echo "define_test: discharge_measure: the account is not empty after the discharges"; echo "$out" | grep -E '^(DISCHARGE|PENDING|REFUSE|READ-ERROR)|count_self' | head -8; fail=$((fail+1))
 fi
 # calc's app file (slice 3.17 rule 7): show_nat defined by its Nat measure through Int.natAbs — the
 # registry's expression row erases the measure —, its descent discharged by arith over the
 # quotient's rows (slice 3.21) and its equation by WellFounded.fix_eq; nothing RUNNABLE, nothing pending
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT v3/examples/calc/calc_app.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_app.shard 2>&1)
 if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations=examples.calc.calc_app.show_nat.eq_1$' \
    || ! echo "$out" | grep -q '^DISCHARGE examples.calc.calc_app.show_nat.dec_1 proved' \
    || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 0  defined 17  errors 0'; then
@@ -65,7 +64,7 @@ check v3/std/fresh.shard \
 # bytes and text (slice 3.18 rule 6): Init's UInt8.toNat by its derived view, the S operations defined,
 # Byte.ofNat tied to Init's UInt8.ofNat and the two round trips, each Eq.refl with no axiom. The
 # import reaches line 263,515 of the export: the pins' prefix and its continuation
-out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT v3/std/bytes.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/std/bytes.shard 2>&1)
 for pat in '^REALIZE UInt8.toNat view' \
            '^DEFINE std.bytes.Byte.ofNat equations=std.bytes.Byte.ofNat.eq_1' \
            '^ACCEPT std.bytes.Byte.ofNat_eq .* axioms= ' \
@@ -85,15 +84,15 @@ check v3/std/host.shard \
 # (the program agrees with K's theorems on all three entries); the refusals of what has no
 # derivation, each with its reason
 R=v3/pins/loader/registry_native
-out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $RCPT $R/main.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
 echo "$out" | grep -q '^REFUSE Bool.or name_taken' || { echo "define_test: registry_native: the native Bool.or is not refused by name"; echo "$out" | grep -E '^(REFUSE|ACCEPT|RUNNABLE)' | head -3; fail=$((fail+1)); }
 R=v3/pins/loader/decidable_cells
 for e in main_bool:10 main_nat:10 main_nat_eq:11; do
-  "$EVAL" direct v3/kernel/load.shard --root $R $INIT $RCPT --run main.${e%%:*} $R/main.shard > /dev/null 2>&1; rc=$?
+  "$EVAL" direct v3/kernel/load.shard --root $R $INIT --run main.${e%%:*} $R/main.shard > /dev/null 2>&1; rc=$?
   [ "$rc" -eq "${e##*:}" ] || { echo "define_test: decidable_cells: ${e%%:*} exits $rc, K proves ${e##*:}"; fail=$((fail+1)); }
 done
 R=v3/pins/loader/derive_refusals
-out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $RCPT $R/main.shard 2>&1)
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
 for pat in 'derive_shape: main.Void' 'derive_type: True is a proposition' 'derive_type: Nat is the integer' 'derive_type: (Fin 3): an argument that is a value' 'derive_type: Nope is not a type here'; do
   echo "$out" | grep -q -- "$pat" || { echo "define_test: derive_refusals lacks '$pat'"; fail=$((fail+1)); }
 done

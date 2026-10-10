@@ -16,7 +16,6 @@ cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "engine_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 OUT=$(mktemp -d)
 SCRATCH=$(mktemp -d -p v3 engine_scratch_XXXXXX)
 trap 'rm -rf "$OUT" "$SCRATCH"' EXIT
@@ -25,7 +24,7 @@ bad() { echo "engine_test: $*"; fail=$((fail+1)); }
 check() { checks=$((checks+1)); "$@" || bad "check $checks: $*"; }
 
 # ---- (1) the example: replay, then regeneration
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT v3/examples/auto/auto.shard > "$OUT/load.txt" 2>&1
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/auto/auto.shard > "$OUT/load.txt" 2>&1
 checks=$((checks+1))
 grep -q 'accepted 23 .*pending 1 .*errors 0$' "$OUT/load.txt" || { bad "the example does not load as expected"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:' "$OUT/load.txt" | head -5 | cut -c1-300; }
 for t in two_three len_two lt_dec le_step le_chain nat_cast implication app_nil len_app len_rev_onto app_assoc; do
@@ -35,7 +34,7 @@ checks=$((checks+1)); grep -q "^PENDING examples.auto.auto.beyond auto_missing f
 checks=$((checks+1)); grep -q "^PROVED" "$OUT/load.txt" && bad "the build searched (a PROVED record under load.shard)"
 # the regeneration: the example copied without its sidecar, prove run on the copy
 cp v3/examples/auto/auto.shard "$SCRATCH/auto.shard"
-"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT $RCPT "$SCRATCH/auto.shard" > "$OUT/prove.txt" 2>&1
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/auto.shard" > "$OUT/prove.txt" 2>&1
 checks=$((checks+1)); grep -q 'proved 11  unsolved 1  sidecars written 1$' "$OUT/prove.txt" || { bad "prove did not solve 11 of 12"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/prove.txt" | head -5 | cut -c1-300; }
 # the fingerprints masked: a statement's fingerprint carries the module's name (the copy's is
 # another module), and the committed one's fingerprints are checked by the replay above
@@ -45,7 +44,7 @@ checks=$((checks+1)); cmp -s "$SCRATCH/auto.shard" v3/examples/auto/auto.shard |
 echo "engine_test: the example replays 11 theorems from its sidecar and prove regenerates it byte-identical"
 
 # ---- (2) the count over calc
-measure() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT $RCPT --measure "v3/examples/calc/$1.shard" > "$OUT/m_$1.txt" 2>&1; }
+measure() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT --measure "v3/examples/calc/$1.shard" > "$OUT/m_$1.txt" 2>&1; }
 measure calc_app_world & measure calc_show_run & measure calc_ndigit & measure calc_spec_tests & measure calc_reconcile_tests & wait
 for f in calc_app_world calc_show_run calc_ndigit calc_spec_tests calc_reconcile_tests; do
   checks=$((checks+1)); grep -q 'pending 0 .*errors 0$' "$OUT/m_$f.txt" || bad "$f does not load clean under --measure"

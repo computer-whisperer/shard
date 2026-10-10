@@ -15,12 +15,11 @@ cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "store_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
-RCPT=${INIT_RECEIPT:+--init-receipt $INIT_RECEIPT}   # the Init receipt (slice 3.23), set by v3/test.sh when one exists
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0
 bad() { echo "store_test: $*"; fail=$((fail+1)); }
-load_store() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT $RCPT --store "$1" "$2"; }
+load_store() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --store "$1" "$2"; }
 verify() { "$EVAL" direct v3/kernel/verify_release.shard "$1" "$EXPORT" "$INDEX"; }
 
 # ---- (1) the example

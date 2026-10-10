@@ -62,7 +62,7 @@ the client fixture `test/k_client_test.shard`; `ConstantVal`'s accessors
 | `verdict.shard` | `Resource Reason (Outcome E) Verdict Failure (KRes A)` | **slice 3.8 (the K seal):** the vocabulary of K's answers, public data beside the sealed checker — `Outcome` and `KRes` take the environment / value as a parameter, so a client matches on them without seeing `CheckedEnv`'s shape; the rules and the mapping of the pin's throws moved here from `env.shard` |
 | `k/env.shard` | `CheckedEnv` (`RawEnv` deleted at the seal; `Outcome`, `Reason`, `Resource` moved to `verdict.shard`) | §3.3's outcomes; raw versus checked (§3.5); the fixed-identity `Nat` accelerators |
 | `k/accel_pins.shard` | `pin_candidates accel_ref accel_ref_closure` | **GENERATED** by `gen_pins.sh` from the pinned export: FOUNDATION §3.2's fixed identities as reference declarations — each accelerated or literal-bearing candidate's identity closure (`add.shard` `ref_edges`), spelled with the anonymous constructors; `add.shard` `pin_if_matches` compares an admitted closure against them structurally (2026-09-12, replacing a 61-bit hash table — GPT-6 R42, records §4.7) |
-| `k/add.shard`, `k/import.shard` (slice 3.23) | `admit_decl_pinning`, `run_admitting` | **phase 3, slice 3.23 (2026-10-08), the Init cache:** `admit_decl_pinning` is the environment effect of `check_decl_pinning` with the typing judgments of an axiom, definition, theorem or opaque skipped — the constant inserted as stated, the watermark and the pins as on the checked path; an inductive block and the quotient take the checked path. The import's run carries the mode (`run_admitting`), set by the loader for a chunk its receipt lists (`load.shard --init-receipt`); `check`, the raw entry, is untouched; `verify_release` never admits. |
+| `k/add.shard`, `k/import.shard` (slice 3.23; repurposed at 3.26) | `admit_decl_pinning`, `run_admitting` | **phase 3, slice 3.23 (2026-10-08), the Init cache; since slice 3.26 landing 2 the loader's second admission:** `admit_decl_pinning` is the environment effect of `check_decl_pinning` with the typing judgments of an axiom, definition, theorem or opaque skipped — the constant inserted as stated, the watermark and the pins as on the checked path; an inductive block and the quotient take the checked path. The import's run carries the mode (`run_admitting`), set by the loader only for the records it checked into K's run of Init a moment ago, entering the loader's own environment beside the natives (`initload.shard` `od_admit`); slice 3.23's receipt, which admitted the export unchecked after a T0 run had accepted it, was dropped at slice 3.26 landing 3 (2026-10-09); `check`, the raw entry, is untouched; `verify_release` never admits. |
 | `k/refgen.shard` | — | the generator behind `t0.shard --pins`: prints the reference table as `REF` lines; generation-only, outside K's checking path |
 | `arith.shard` | `Lin ArShape ArCast ArLin ARel ArRaw ArRaws ArRow ArRows ArSum FmRow FmOut FmParts ArAcc ARes` | **phase 3, slice 3.21 (2026-10-06):** linear arithmetic over `Int` and `Nat` by a Farkas certificate (`v3/LANGUAGE.md` §8.4, §13 item 54; law §7): `ar_canon` (Init's class methods in the source's spelling), `ar_rel`/`ar_raw_of` (a statement as a row), `ar_collect`/`ar_lin` (the atoms; `t = l.eval v` from `Lean.Omega.LinearCombo`'s lemmas), `ar_auto_rows` (a `Nat` atom's `0 ≤ ↑a`, a literal quotient's bounds), `ar_refutes` (the certificate's check), `fm_find` (the default reconstruction: Fourier–Motzkin, bounded), `ar_false` (the fold of `combo_sat'` and `not_sat'_of_isImpossible`), `ar_prove` | `tactic.shard`'s `step_arith`, `tac_goal`, `eq_of_lemma`; the pins `arith_*` |
 | `tactic.shard` | `Goal Node NodeRes BlockRes Opened Made TStep OpenedM Premises IndOf Minors EqOf Rewritten Redex Found RdApp Loop FactsRes TacRes ProveRes` | **slice 3.21:** `arith` (`step_arith` over `arith.shard`), `simp_only` (`simp_loop`: the first rule with a match whose premises the context states), one spelling for every goal (`tac_goal`) and lemma (`eq_of_lemma`), `alt_step` (a decided case analysis in one step), the sorried goals in the pending record (`goals_bracketed`). **phase 3, slice 3.20 (2026-10-06):** I's opener (`v3/LANGUAGE.md` §8.4, §13 item 53; law §7): `read_block` reads `(by STEP…)` into `Node`, `tac_step` runs a node on a goal (a metavariable over the statement closed over its context: `tac_open`, `tac_goal`, `tac_close`), `tac_block` a block depth-first, `tac_prove` instantiates the root; the forms `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry`; the syntactic matcher `tac_match`, the rewriter `rewrite_by` (`Eq.mpr (congrArg motive h)`), the normalizer `find_redex`/`reduce_loop`/`unfold_loop` (equations and K's whnf with function applications masked); `goal_of`, `applicable` | the reader's `read_proof`; the pins `by_*`; `kernel/test/tactic_test.sh` |
@@ -129,16 +129,17 @@ over `examples/calc/calc_differential.shard` on the one input set
 `test/fixtures/calc_inputs.txt`, 34 cases per line and 13 folds, and
 compares the outputs byte for byte (727 lines a side).
 
-**The Init receipt** (slice 3.23, 2026-10-08; `v3/LANGUAGE.md` §8.4):
-`load.shard --init-receipt FILE` (and `prove.shard`, the loader pins
-test) admits the export's axioms, definitions, theorems and opaques
-without the typing judgments when FILE, what `t0.shard --receipt`
-writes after a run that accepted every record, lists the export at its
-byte count; the records are byte-identical to a checked load's. Since
-slice 3.26 landing 2 no test needs one (a load checks the closure it
-cites, seconds); `v3/test.sh` passes `INIT_RECEIPT` through when set,
-and landing 3 gives the receipt its writer over the export.
-`verify_release` and `t0_full.sh` take no receipt.
+**The Init receipt** (slice 3.23, 2026-10-08) was dropped at slice
+3.26 landing 3 (2026-10-09; `v3/LANGUAGE.md` §8.4): with a load
+checking the closure it cites, a hand-written receipt over the export
+admitted a demand in nine tenths to four fifths of the checked time
+(calc 9 s against 10 s, `std/bytes` 20 s against 25 s) — the walk and
+K's ingestion are the cost, which a receipt never skips — and its only
+writer would have been the full replay. `--init-receipt`, `t0.shard
+--receipt` and `INIT_RECEIPT` are gone; a driver starts from the
+loader's `ld_start` (the export and its index named, or no Init); K's
+admit mode remains for the loader's second admission of records it
+checked (`od_admit`, above).
 
 **The shared Init load** (slice 3.25, 2026-10-09; `v3/LANGUAGE.md`
 §8.4; recast at 3.26): `ld_reroot` starts a fresh root load from a
