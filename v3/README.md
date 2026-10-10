@@ -1348,8 +1348,8 @@ Gates: the 225 loader pins 0 failed in 46 s (43 s inside the suite), `loader_tes
 
 Landing 3 holds on the full gate: **2026-10-09 — pipeline 565 green on `3254941`: engine 52 s; corpus 1,500 s at the baseline; v3 4,457 s of a 3 h limit, 36 s over pipeline 563's 4,421 (the export 133 s; the index driver built by route 1 in 11 s and the export's index built in 98 s on the runner; 38 entrypoints with 0 failed in 1,253 s against 1,255 — the suite's wall clock unchanged, as the drop predicts: at 563 the receipt already had no writer, so every load checked its closure there too; `store_test` 962 s against 967, parity byte-identical over 31 closures and 133,392 declarations in 743 s against 745, `path_test` 691 against 667, `define_test` 670 against 657, `calc_test` 603 against 600, `wire_test` 453 against 436, `engine_test` 409 against 392, `derive_test` 311 against 318, `k_clients_test` 196, the loader pins' entrypoint 106 against 109, `route2_test` 73; route 1's native build of the kernel 416 s — `t0.shard` changed, its receipt writer gone; the replay 2,479 s at 32.3 GB); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.26 is closed.**
 
-**Slice 3.27 (designed 2026-10-09) — the library arc, for
-ratification before it is built** (`LANGUAGE.md` §8.4 slice 3.27; §13
+**Slice 3.27 (designed 2026-10-09, ratified 2026-10-10 as designed) —
+the library arc, in progress** (`LANGUAGE.md` §8.4 slice 3.27; §13
 item 61). Phase 3's remainder under one principle, the user's at the
 3.25 boundary: the library does not duplicate Init. A statement Init
 has is cited by Init's name; `v3/std` declares what Init lacks; an old

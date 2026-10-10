@@ -2660,8 +2660,16 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-10 — item 61 ratified by the user, as designed.** "Your
+  leans sound good for calc's list and moving the tool to tier-5. Let's
+  ratify the design as proposed and proceed." Both leans stand: calc's
+  `examples/calc/list.shard` retires onto `std/list` at landing 3, its
+  claims re-spelled and its sidecar regenerated; the migration tool's
+  tier 0 moves to phase 5 with the records as its calibration data, the
+  departure from law §12.3 recorded in item 61(l). Every item through
+  61 is ratified. Landing 1 (the seams) opens.
 - **2026-10-09 — slice 3.27 designed: the library arc (`LANGUAGE.md`
-  §8.4 slice 3.27; §13 item 61 for ratification before it is built).**
+  §8.4 slice 3.27; §13 item 61, ratified 2026-10-10).**
   The user's "continue with the next arc" after items 59 and 60. What
   phase 3 still owes (law §12.4) gathered into one design under the
   user's 3.25-boundary principle — no duplication of Init. Measured by

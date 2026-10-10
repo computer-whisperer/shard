@@ -1,10 +1,10 @@
 # The V3 language — S, L and E at Stage 0 (phase 2 draft)
 
-> **STATUS (2026-10-09): the design of S, L, E and I as phase 3 builds
+> **STATUS (2026-10-10): the design of S, L, E and I as phase 3 builds
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
 > 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
-> at slice 3.26 landing 3), each later item for ratification as its
-> slice lands.** Normative parent:
+> at slice 3.26 landing 3), item 61 ratified 2026-10-10, each later
+> item for ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1802,7 +1802,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
-| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **for ratification before it is built**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -4953,8 +4953,9 @@ over the export; pipeline 563 and a measurement retired it instead.
 **Slice 3.27 — the library arc: Init is the library, the old modules
 become records, the seams the probes found are closed** (designed
 2026-10-09 at the boundary after slice 3.26, on the user's "continue
-with the next arc"; §13 item 61 — **for ratification before it is
-built**). What law §12.4's phase 3 still owes after slices 3.9–3.26:
+with the next arc"; §13 item 61 — **ratified 2026-10-10 as designed,
+both leans taken: calc's `list.shard` retires onto `std/list` at
+landing 3; the migration tool's tier 0 is phase 5's opener**). What law §12.4's phase 3 still owes after slices 3.9–3.26:
 `std/list`, `order`, `nat`, `div`, `bits`, `arith` under the naming
 law; the fifteen former axioms of `kernel/facts.shard` as theorems; the
 migration table validated; one arbitrary-`Prop` ghost refinement; one
@@ -6360,7 +6361,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     short loads doubled on the runner at landing 2 (`wire_test` 155 s
     to 436), each process walking its demand on the bootstrap. **Ratified 2026-10-09, as amended.**
 61. **Slice 3.27, the library arc (designed 2026-10-09 at the boundary
-    after slice 3.26; §8.4) — for ratification before it is built.**
+    after slice 3.26; §8.4).**
     (a) **Init is the library**: a statement Init has is cited by
     Init's name; `v3/std` declares only what Init lacks; an old module
     every declaration of which is Init's or `arith`'s becomes a
@@ -6398,3 +6399,5 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     designs at this arc's close; the migration tool's tier 0 is phase
     5's opener with these records as its calibration data — a stated
     departure from law §12.3's "calibrated on `std` in phase 3".
+    **Ratified 2026-10-10 as designed: (j) and the tier-0 departure in
+    (l) taken as proposed.**
