@@ -2661,6 +2661,34 @@ is `docs/FOUNDATION.md` §5.3.
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
 - **2026-10-10 — pipeline 572 green on `bd30a48`: engine 55 s; corpus 1,511 s at the baseline; v3 4,429 s of a 3 h limit, 87 s under pipeline 570's 4,516 (the export 129 s; the index driver built by route 1 in 12 s and the export's index built in 93 s on the runner; 39 entrypoints with 0 failed in 1,281 s against 1,256 — `store_test` 960 s against 968, parity byte-identical over 31 closures and 133,785 declarations in 750 s against 751, `path_test` 676 against 681, `define_test` 648 against 656, `calc_test` 609 against 611, `wire_test` 440 against 436, `engine_test` 410 against 405, `derive_test` 323 against 317, `std_test` 309 s new — the std root loaded and stored in 174 s and K's replay of its 211 declarations 134 s, against 69 and 48 on the dev box —, `k_clients_test` 196 against 193, the loader pins' entrypoint 138 against 130 (one case more, `arith_eq_bare`, under `Int.lt_mul_ediv_self_add`'s demand), `tactic_test` 116 against 113, `route2_test` 74 against 76; route 1's native build of the kernel 424 s; the replay 2,378 s at 32.3 GB against 2,544 at 31.5); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 3.27 holds on the full gate; landing 3 — `std/list` and `std/bits`, calc's `list.shard` retired onto the library — is open.**
+- **2026-10-10 — slice 3.27 landing 4 built: `docs/LEAN.md` and T9 small
+  (`LANGUAGE.md` §8.4 "as built, landing 4", the slice table; §13 item
+  61's as-built note; law §10.5's `LEAN.md` row; the V3 README; the
+  kernel and pins READMEs; the top README's doc table).** `docs/LEAN.md`:
+  law §5.4's three lists as tables, 92 rows — the same as Lean, refused
+  with the reason, the ruling and the pointer, shard-only — with the
+  loader's command line, the records and which refusals end a file in
+  the header; every row stated from a run (five rows written from recall
+  were probed and corrected before the gate). The refusals the lists
+  name carry their pointer: `lean_form` for a Lean keyword with no form
+  here (`reader.shard`'s table), `inhabited_default` for a `NAME!`
+  (`loader.shard`'s `lean_pointer`, before the horizon's refusal),
+  `lean_symbol` for `==`/`&&`/`||`, a `!`-prefixed name, `by` in a term
+  and Lean's Unicode spellings, `infix_form` for an operator symbol
+  where an argument is expected (`elab.shard`'s `tele`). T9 small run
+  against the two documents (`docs/records/T9-small-2026-10-10.md`,
+  the count agreed before the run): **pass** — 0 interventions, 1
+  refusal before success, 7 loader runs, 11 minutes; (ii) measured on
+  route 2 since route 1 compiles the kernel's bring-up dialect only
+  (a stated departure). Ten gaps reported, each disposed of: seven as
+  `LEAN.md` rows; two kernel fixes — a bare zero-parameter `fn` is its
+  call on the E-first route as on the typed route (`classify.shard`'s
+  `read_esym`, pin `zero_arity_bare`; the `function_value` message
+  names the arity) and the `get!` pointer names the Option form this
+  pin declares (`List.get?` is no constant of it); one the author's
+  misreading of two ordinals. Pins `lean_form`, `lean_notation`,
+  `inhabited_default`, `inhabited_default_by`, `infix_form`,
+  `lean_symbol`, `lean_by_term`, `zero_arity_bare` (243 cases). Gates run: the 243 loader pins 0 failed in 53 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 51 s, parity byte-identical over 31 closures and 134,028 declarations in 293 s, the full suite's 39 entrypoints with 0 failed in 580 s (`store_test` 436 s, `parity_test` 329 s, `define_test` 298 s, `path_test` 283 s, `calc_test` 283 s). Route 1's kernel build, the full replay and the corpus are CI's.
 - **2026-10-10 — pipeline 574 green on `d910b9f`: engine 54 s; corpus 1,498 s at the baseline; v3 4,584 s of a 3 h limit, 155 s over pipeline 572's 4,429 (the export 129 s; the index driver built by route 1 in 12 s and the export's index built in 95 s on the runner; 39 entrypoints with 0 failed in 1,424 s against 1,281 — `store_test` 1,090 s against 960 (calc's five leaves stored in 559 s, their 447 declarations replayed in 89 s), parity byte-identical over 31 closures and 133,990 declarations in 777 s against 750, `define_test` 717 against 648, `path_test` 708 against 676, `calc_test` 652 against 609, `engine_test` 511 against 410, `std_test` 456 against 309 — the std root's 8 files and 336 declarations loaded and stored in 261 s and K's replay 193 s, against 174 and 134 for 6 files and 211 —, `wire_test` 449 against 440, `derive_test` 314 against 323, `calc_main_test` 299, `k_clients_test` 189 against 196, `tactic_test` 150 against 116, the loader pins' entrypoint 135 against 138 (235 cases), `route2_test` 72 against 74; route 1's native build of the kernel 409 s against 424; the replay 2,448 s at 32.3 GB against 2,378 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 3 of slice 3.27 holds on the full gate; landing 4 — `docs/LEAN.md` and T9 small — is open.**
 - **2026-10-10 — slice 3.27 landing 3 built: `std/list` and `std/bits`
   (`LANGUAGE.md` §8.4 "as built, landing 3").** Rules 6–9. `v3/std/list.shard`:

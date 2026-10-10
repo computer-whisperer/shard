@@ -296,6 +296,7 @@ authority for its area:
 | [OVERVIEW.md](docs/OVERVIEW.md) | design intent — the why, in full (§11: the foundation ruling) |
 | [LAYOUT.md](docs/LAYOUT.md) | repository layout: the placement rule + the move map |
 | [LANGUAGE.md](docs/LANGUAGE.md) | the narrow object language (syntax, semantics) |
+| [LEAN.md](docs/LEAN.md) | V3 for a reader who knows Lean 4: the same, the refused with its pointer, the shard-only (law §5.4) |
 | [TOTALITY.md](docs/TOTALITY.md) | measures, admission, mutual recursion |
 | [REFINEMENT.md](docs/REFINEMENT.md) | `(refine …)` — invariants as types |
 | [BOUNDARIES.md](docs/BOUNDARIES.md) | modeling external systems; extern + axiom |

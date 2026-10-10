@@ -790,8 +790,10 @@
 (fn load_e_after ((l1 Load) (f Fx) (s SExpr) (r Symbol) (m (List Int))) (Pair Load Fx)
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
     ((CErr e m2)
-     (Pair (ld_rec l1 (RClassify (form_name (fx_scope l1 f) s) e
-                        (append m2 (append " — read E-first after the typed route's " (append (chars_of_sym r) (append ": " m)))))) f))
+     (Pair (ld_rec l1 (match (if (sym_eq r (quote unknown_constant)) (lean_pointer m) None)
+                        ((Some (Pair r2 p)) (RClassify (form_name (fx_scope l1 f) s) r2 p))
+                        (None (RClassify (form_name (fx_scope l1 f) s) e
+                                (append m2 (append " — read E-first after the typed route's " (append (chars_of_sym r) (append ": " m)))))))) f))
     ((COk _) (load_e_sig l1 f s (quote no_l_identity)))))
 ;; a signature with no L reading: the classifier's program alone (rule 6). When the classifier
 ;; refuses the form too, its refusal carries what the signature's reading met — a result type
@@ -1066,13 +1068,56 @@
 ;; under a prefix an opened namespace supplies
 (fn horizon_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
   (if (bool_not (sym_eq e (quote unknown_constant))) (RReadErr (fx_file f) e m)
+   (match (lean_pointer m)
+    ((Some (Pair r p)) (RReadErr (fx_file f) r p))
+    (None
     (match (above_entry (Fx.above f) m)
       (None (RReadErr (fx_file f) e m))
       ((Some (Pair n o))
        (RReadErr (fx_file f) (quote above_horizon)
          (append (show_name n) (append " is declaration " (append (show_nat o) (append " of the export, at or above the module's horizon "
            (append (show_nat (Fx.init f)) (append (match (Fx.initname f) (Anon " (inherited)") (k (append " (import Init " (append (show_name k) ")"))))
-             (append ": write (import Init " (append (show_name n) ")")))))))))))))
+             (append ": write (import Init " (append (show_name n) ")")))))))))))))))
+;; Lean's spellings the elaborator does not know, each refused with its pointer whatever the
+;; horizon (slice 3.27 landing 4; docs/LEAN.md lists the rows). The name is the first token of
+;; the elaborator's `unknown_constant` message. A name ending in `!` reads a default from an
+;; Inhabited instance — get!-style sugar, refused by law §5.3 departure 4: inhabited_default
+;; with the Option form and the supplied-default form; `==`, `&&`, `||` are lexed as symbols
+;; and are no operators (law §5.3 (3)); `by` inside a term is no term (slice 3.20 rule 12):
+;; lean_symbol with the spelling
+(fn lean_pointer ((m (List Int))) (Option (Pair Symbol (List Int)))
+  (match (msg_tokens m Nil Nil)
+    (Nil None)
+    ((Cons t _)
+     (if (int_eq (match (nth t (- (len t) 1)) ((Some c) c) (None 0)) 33)
+       (let ((base (take (- (len t) 1) t)))
+         (Some (Pair (quote inhabited_default) (append t (append " reads a default from an Inhabited instance (law §5.3 departure 4): write the Option form "
+           (append base (append "? where the export declares it (List's is List.get?Internal), or " (append base "D with a supplied default"))))))))
+       (if (bool_and (lt 1 (len t)) (int_eq (match t ((Cons c _) c) (Nil 0)) 33))
+         (Some (Pair (quote lean_symbol) (append t " is Lean's spelling: write (not a) at a Bool operand — Bool.not (§5.1)")))
+       (match (lean_symbol_pointer t)
+         ((Some p) (Some (Pair (quote lean_symbol) (append t (append " is Lean's spelling: write " p)))))
+         (None None)))))))
+(fn lean_symbol_pointer ((t (List Int))) (Option (List Int))
+  (if (int_list_eq t "==") (Some "(BEq.beq a b) at Nat or Int, or the proposition (= a b) (§5.1)")
+  (if (int_list_eq t "&&") (Some "(and a b) at Bool operands — Bool.and (§5.1)")
+  (if (int_list_eq t "||") (Some "(or a b) at Bool operands — Bool.or (§5.1)")
+  (if (int_list_eq t "by") (Some "a named theorem and cite it — by is a theorem's proof, not a term (§8.4 slice 3.20)")
+  (if (int_list_eq t "∀") (Some "(forall ((x T)) P) (§5.1)")
+  (if (int_list_eq t "∃") (Some "(exists ((x T)) P) (§5.1)")
+  (if (int_list_eq t "λ") (Some "(fun ((x T)) e) (§5.1)")
+  (if (int_list_eq t "→") (Some "(-> A B) (§5.1)")
+  (if (int_list_eq t "↔") (Some "(iff P Q) (§5.1)")
+  (if (int_list_eq t "¬") (Some "(not P) (§5.1)")
+  (if (int_list_eq t "∧") (Some "(and P Q) (§5.1)")
+  (if (int_list_eq t "∨") (Some "(or P Q) (§5.1)")
+  (if (int_list_eq t "≤") (Some "(<= a b) (§5.1)")
+  (if (int_list_eq t "≥") (Some "(>= a b) (§5.1)")
+  (if (int_list_eq t "≠") (Some "(!= a b) (§5.1)")
+  (if (int_list_eq t "ℕ") (Some "Nat")
+  (if (int_list_eq t "ℤ") (Some "Int")
+  (if (int_list_eq t "×") (Some "(Prod A B)")
+  None)))))))))))))))))))
 (fn above_entry ((xs (List (Pair Name Int))) (m (List Int))) (Option (Pair Name Int))
   (above_entry_go xs (msg_tokens m Nil Nil)))
 (fn above_entry_go ((xs (List (Pair Name Int))) (toks (List (List Int)))) (Option (Pair Name Int))
