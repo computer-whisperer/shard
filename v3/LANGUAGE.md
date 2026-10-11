@@ -3,8 +3,9 @@
 > **STATUS (2026-10-10): the design of S, L, E and I as phase 3 builds
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
 > 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
-> at slice 3.26 landing 3), item 61 ratified 2026-10-10, each later
-> item for ratification as its slice lands.** Normative parent:
+> at slice 3.26 landing 3), item 61 ratified 2026-10-10, item 62
+> ratified 2026-10-11, each later item for ratification as its slice
+> lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1803,7 +1804,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **for ratification**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5439,7 +5440,9 @@ files load in 82 s alone (facts' demand 1,705 declarations at horizon
 **Slice 3.28 — the lambda profile: templates, lifted lambdas and
 static packages (T2, T3)** (designed 2026-10-10 at the boundary after
 slice 3.27, on the user's "continue to the next slice"; §13 item 62 —
-**for ratification before it is built**). Law §4.3 names the profile E
+**ratified 2026-10-11 as designed, the four leans taken: instances
+named by their flattened shapes, the budget 1,024, six list templates,
+packages as structures with no new form**). Law §4.3 names the profile E
 supports in v1, in order: closed lambdas as template arguments; named
 partial application to known E values; non-escaping value capture by
 lambda lifting, the captured value an ordinary runtime parameter and
@@ -6951,4 +6954,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     with the artifact check over `--dump`, nine pins, `LEAN.md`'s rows,
     T2 and T3 recorded against law §12.5's risk columns. (h) **Three
     landings.** (i) **The limit**: route 1 unchanged; the artifact check
-    is on the E programs. *For ratification.*
+    is on the E programs. **Ratified 2026-10-11 as designed** (the
+    user: "That looks reasonable -- ratify it and let's begin
+    implementing."), the four leans taken: instances named by their
+    flattened shapes under the taking module, not by an ordinal; the
+    budget 1,024; six list templates, not `map` alone; a package as a
+    structure with a function-typed field, no new form.

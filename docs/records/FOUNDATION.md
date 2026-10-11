@@ -2660,8 +2660,17 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-11 — item 62 ratified by the user as designed** ("That looks
+  reasonable -- ratify it and let's begin implementing."), the four
+  leans taken: instances named by their flattened shapes under the
+  taking module (`main.List_map.of.main_add_offset_lam_1_1`, the derive
+  precedent) rather than by an ordinal; the budget 1,024 instances per
+  template per load; six list templates in `std/list` rather than `map`
+  alone; a package as a structure with a function-typed field, no new
+  form. `LANGUAGE.md`'s item 62 carries it. Landing 1 — rules 1–3 — is
+  open.
 - **2026-10-10 — slice 3.28 designed: the lambda profile (`LANGUAGE.md`
-  §8.4 slice 3.28; §13 item 62, for ratification).** The user's "continue
+  §8.4 slice 3.28; §13 item 62, ratified 2026-10-11).** The user's "continue
   to the next slice" after item 61. Law §4.3's profile and §4.1's static
   package as one design under T2 and T3. Measured by four probe files
   under the on-demand loader on the bootstrap (16 s a run): the law's
