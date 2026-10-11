@@ -2660,6 +2660,14 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-10 — item 61's as-built notes ratified by the user: landing
+  3's four readings, landing 4's departure and the two kernel fixes,
+  without reservation** ("Looks good, call it ratified. Then let's
+  continue to the next slice."); `LANGUAGE.md`'s item 61 carries it.
+  Every §13 item through 61 is ratified. Slice 3.27 is closed on
+  pipeline 576. The boundary after it is open: slice 3.28 — T2 and T3,
+  law §4.3's lambda profile — is the next design, for ratification
+  before it is built; T10 is slice 3.29.
 - **2026-10-10 — pipeline 576 green on `2ece3aa`: engine 54 s; corpus 1,471 s at the baseline; v3 4,552 s of a 3 h limit, 32 s under pipeline 574's 4,584 (the export 132 s; the index driver built by route 1 in 11 s and the export's index built in 99 s on the runner; 39 entrypoints with 0 failed in 1,407 s against 1,424 — `store_test` 1,076 s against 1,090 (calc's five leaves stored in 552 s, their 447 declarations replayed in 86 s), parity byte-identical over 31 closures and 134,028 declarations in 758 s against 777 over 133,990, `define_test` 713 against 717, `path_test` 682 against 708, `calc_test` 644 against 652, `engine_test` 500 against 511, `std_test` 433 against 456 — the std root's 8 files and 336 declarations loaded and stored in 240 s and K's replay 191 s, against 261 and 193 —, `wire_test` 427 against 449, `derive_test` 309 against 314, `calc_main_test` 305 against 299, `k_clients_test` 192 against 189, `tactic_test` 139 against 150, the loader pins' entrypoint 134 against 135 (243 cases against 235), `route2_test` 71 against 72; route 1's native build of the kernel 419 s against 409; the replay 2,419 s at 32.3 GB against 2,448 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 4 of slice 3.27 holds on the full gate; the slice's close-out — item 61's as-built readings and the landing-4 departure for ratification — is open.**
 - **2026-10-10 — slice 3.27 landing 4 built: `docs/LEAN.md` and T9 small
   (`LANGUAGE.md` §8.4 "as built, landing 4", the slice table; §13 item
