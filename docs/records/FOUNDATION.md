@@ -2660,6 +2660,39 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-10 — slice 3.28 designed: the lambda profile (`LANGUAGE.md`
+  §8.4 slice 3.28; §13 item 62, for ratification).** The user's "continue
+  to the next slice" after item 61. Law §4.3's profile and §4.1's static
+  package as one design under T2 and T3. Measured by four probe files
+  under the on-demand loader on the bootstrap (16 s a run): the law's
+  `add_offset` is refused before its lambda is reached (`List.map` has
+  no realization and cannot be realized: its function binder is
+  `realize_signature`); a `fn` with a binder `(f (-> Int Int))` is
+  `no_l_identity` on the typed route and `unknown_type: ->` E-first; a
+  `def` with the same binder, a `def` whose value is a lambda and a
+  theorem over them are accepted; the type-growing recursion is refused
+  today as `realize_descent: a recursive call at other type arguments
+  (polymorphic recursion)` — T3's first half holds since slice 3.16; the
+  old tree has no higher-order list functions and no lambda, so §12
+  changes no row. The rules: a function-typed binder is a static
+  parameter and its declaration a template (no keyword); the escape rule
+  at the erasure's refusal sites with the pointer on both routes;
+  instances by shape — the identity and the captured count, never the
+  captured values —, a closed lambda lifted to `CALLER.lam_N` with the
+  captured locals leading, the instance owned by the taking module and
+  named by the derive precedent's flattening, one program per distinct
+  tuple per module, its L meaning a generated definition unfolding to
+  the template applied and its equations the template's instantiated;
+  the shape set closed (a static argument is passed on, never
+  transformed) with `realize_descent` extended to static shapes and an
+  `instance_budget` of 1,024; packages as structures with function-typed
+  fields, never E types, read by whnf to the constructor; six of Init's
+  list functions as templates in `std/list`; T2 and T3 as
+  `template_test.sh` with the artifact check over `--dump` and nine
+  pins; three landings; route 1 unchanged, stated as the limit. The
+  leans for the ratifier: the instance naming by flattened shapes over
+  an ordinal, the budget's size, six list templates over `map` alone,
+  packages with no new form.
 - **2026-10-10 — item 61's as-built notes ratified by the user: landing
   3's four readings, landing 4's departure and the two kernel fixes,
   without reservation** ("Looks good, call it ratified. Then let's

@@ -1803,6 +1803,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **for ratification**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5435,6 +5436,226 @@ files load in 82 s alone (facts' demand 1,705 declarations at horizon
 - **The refusals the lists name carry their pointer** (four kernel edits, eight pins). A Lean keyword with no form here — `partial`, `unsafe`, the notation and macro layer, `open`, `lemma`/`example`, `mutual`, `termination_by`/`decreasing_by`, `noncomputable`/`private`/`protected`, `universe`, `deriving`, `implemented_by`, `attribute`/`set_option` — is `lean_form` with the V3 spelling or the law's reason (`reader.shard`'s `lean_form` table; `unknown_form` stays for a head that is neither Lean's nor V3's; `instance`/`class` point to the instance table). A name ending in `!` is `inhabited_default` with the Option form and the supplied-default form, on both routes and before the horizon's refusal (`loader.shard`'s `lean_pointer`: `List.get!` above the horizon must not be answered "import it"; the Option form is named where the export declares it — `List.get?` is no constant of this pin, T9's finding 3). `==`, `&&`, `||`, a `!`-prefixed name, `by` inside a term and Lean's `∀ ∃ λ → ↔ ¬ ∧ ∨ ≤ ≥ ≠ ℕ ℤ ×` are `lean_symbol` with the spelling (`lean_symbol_pointer`; they lex as symbols and reach the elaborator as `unknown_constant`). An operator symbol where an argument is expected — `(n + 1)` — is `infix_form` with the prefix spelling (`elab.shard`'s `tele`, where it was `function_expected: applied to 2 more arguments than its type has: Nat`). Before this landing `partial` and `notation` were a bare `unknown_form: partial`, `List.get!` the E-first route's `unknown_head`, `==` likewise — law §12.5's T9 row asks for the `fn`/`def` pointer on a refused `notation`.
 - **Rule 11, T9 small** (`docs/records/T9-small-2026-10-10.md`, the report verbatim with the count agreed before the run). DEPARTURE from the design's (ii): "a `fn` that lowers" is measured on route 2 — route 1's `v3/build.sh` compiles the kernel's bring-up dialect and refuses a V3 user file at its first form (`malformed declaration (realize List.length ...)`, measured on `examples/path/path.shard`); a user `fn` lowers when the typed route defines it (`DEFINE` with its equations) and `ev` runs it under `--run`. The count: 0 interventions; at most 2 refusals before success on (i)–(v); (vi) succeeds when its three forms receive their pointers; pass = all six accepted with no workaround from a forbidden source. The agent: fresh, with `LANGUAGE.md`, `LEAN.md`, the library it imports (`v3/std/`) and the loader's command line; forbidden `v3/kernel/`, `v3/pins/`, `v3/examples/`, the other docs, the records, memory, the transcript. **Result: pass** — 0 interventions, 1 refusal before success (task ii), 7 loader runs, 11 minutes; `sum_list_append` at `Int` by induction with the conversion idiom and `arith`, four Init theorems cited by guess and every one resolved (`Int.zero_add`, `Int.add_assoc`, `Nat.lt_succ_self`, `List.length_map` by `apply`), `SortedInt` as `@Subtype (List Int) (List.Pairwise Int.le)` named by a `def` with its empty value and two theorems, `safe_index` under `dif` with both branches proved by `dif_pos`/`dif_neg`, a `main` entry printing the count below its argument, the three refused forms with their pointers; verified by a second load of the four files (196 accepted, 0 refused) and the entry's output. **Ten gaps reported, each disposed of**: seven are `LEAN.md` rows or header sentences (which refusals end a file; the list literal; the inherited horizon and `INIT -:`; the output idiom through `Nat.renderOnto` and `Bytes.ofNats`; a successful `--run` prints no records; an arm's fields then its hypotheses; the conversion idiom for a `fn`'s step); two are kernel fixes — a zero-parameter `fn` written bare in argument position is its call on the E-first route as on the typed route (`classify.shard`'s `read_esym`; before, `function_value` where the typed route read the constant as the value it is — the one refusal the author met; pin `zero_arity_bare`; the `function_value` message names the arity) and the `inhabited_default` pointer's name; one is the author's misreading of two ordinals (noted in the header: the loader's horizon is the ordinal past the name). T9 runs again at phase 3's close, with the then-current `LEAN.md`. Gates run: the 243 loader pins 0 failed in 53 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 51 s, parity byte-identical over 31 closures and 134,028 declarations in 293 s, the full suite's 39 entrypoints with 0 failed in 580 s (`store_test` 436 s, `parity_test` 329 s, `define_test` 298 s, `path_test` 283 s, `calc_test` 283 s). Route 1's kernel build, the full replay and the corpus are CI's..
 
+**Slice 3.28 — the lambda profile: templates, lifted lambdas and
+static packages (T2, T3)** (designed 2026-10-10 at the boundary after
+slice 3.27, on the user's "continue to the next slice"; §13 item 62 —
+**for ratification before it is built**). Law §4.3 names the profile E
+supports in v1, in order: closed lambdas as template arguments; named
+partial application to known E values; non-escaping value capture by
+lambda lifting, the captured value an ordinary runtime parameter and
+never a specialization key; templates — a `fn` with function-typed
+parameters, specialized per distinct static argument tuple, its
+theorem proven once in L over arbitrary `f`, each instance
+definitionally the specialized body or bridged by a generated equation
+where the arity changed; the escape rule; enforcement by the classifier
+at declaration and by the lowering on the post-specialization closure;
+finite specialization, a budget a refusal; the dynamic tier a named
+door. Law §4.1 adds the static law-bearing package — operations plus
+laws, selected statically, its operation projections specialized and
+its laws erased, no runtime dictionary. The gates are T2 (a closed
+lambda, a named partial application, the captured-value `add_offset`
+of law §5.3's example, a static law-bearing package with no runtime
+dictionary, the generic theorem reused; the risk column: a source
+restriction mistaken for an artifact restriction) and T3 (the
+type-growing recursion refuses loudly; a large finite workload within
+limits; the risk column: totality mistaken for compiler termination).
+
+**Measured before this design** (four probe files under the on-demand
+loader on the bootstrap, 2026-10-10, 16 s a run): (i) the law's
+`add_offset` is refused before its lambda is reached —
+`no_realization: List.map: no realization attached — realize it first`
+on the typed route, `unknown_head` E-first — and `List.map` cannot be
+realized: its function binder is `realize_signature: f: a binder that
+is neither a type parameter, a proposition nor an E type`; (ii) a `fn`
+with a binder `(f (-> Int Int))` is `no_l_identity: a binder whose type
+is not an E type` on the typed route and `unknown_type: ->` E-first;
+(iii) a `def` with the same binder, a `def` whose value is a lambda and
+a theorem over them are accepted — L has function values, only E lacks
+them, which is the law's split; (iv) the type-growing recursion (`grow`
+over `(List a)` calling itself over `(List (List a))`) is refused
+today, `realize_descent: a recursive call at other type arguments
+(polymorphic recursion)` — `define.shard`'s self-call check since slice
+3.16 — so T3's first half holds and this slice pins it; (v) the old
+tree's `std/list` has no `map`, `filter` or `fold` and no file of the
+old tree writes a lambda: v2 had no function values either, so §12
+changes no row (this slice adds and drops nothing).
+
+**The rules.**
+
+1. **The static role.** A binder of a `fn` or of a supplied `realize`
+   whose type is a function type — a Pi whose domain is runtime data,
+   after the erased-Pi rule has dropped the proposition domains — is a
+   **static parameter**, a fourth role beside the type parameter, the
+   erased evidence and the runtime datum (`erase.shard`'s `BRole` gains
+   it); so is a binder of a package type (rule 5). A declaration with a
+   static parameter is a **template**. Its L half is what it is today:
+   the definition with its equations, elaborated once (`List.map f xs`
+   is an ordinary L term, and a theorem over it is proven once, over
+   arbitrary `f`); its E half is no program of its own but one per
+   instance (rule 3). A template is not `RUNNABLE` and has no `REALIZE`
+   record; its record is `TEMPLATE NAME static=f,…`. No keyword: the law
+   says "a `fn` with function-typed parameters", and the binder's type
+   is the whole signal.
+2. **The escape rule, at the positions the erasure already refuses.**
+   In a template's body a static parameter `f` occurs as a call head
+   applied to its full arity, `(f x …)`, or as a static argument of a
+   template call (rule 3(d)); a package parameter's projections stand
+   as call heads or as the closed values rule 5 names. Anywhere else —
+   an argument of a non-template, a constructor field, a `let` value, a
+   `match` scrutinee, a return position, an application to fewer
+   arguments than its arity — the refusal is `function_value` with law
+   §4.3's pointer, as `erasure.shard` says today for a lambda in a
+   runtime position and for a variable applied to a runtime value; the
+   E-first route's `unknown_type: ->` becomes the same refusal with the
+   pointer.
+3. **Instances, by shape.** A call of a template from an E body — a
+   `fn`'s, a supplied `realize`'s, an instance's — supplies for each
+   static parameter a **static argument**, one of: (a) the name of a
+   `fn`, a realized constant or an instance, of the parameter's arity;
+   (b) a **named partial application** `(g a …)` of such a name to
+   runtime terms of the caller, the remaining arity the parameter's;
+   (c) a **closed lambda** `(fun ((x T) …) BODY)` — closed up to the
+   caller's runtime parameters and locals, which it captures: it is
+   **lifted** to a generated `fn` under the caller's name,
+   `CALLER.lam_N` (N in order of occurrence in the body), the captured
+   locals its leading parameters in order of first occurrence and the
+   lambda's binders after them, its body the lambda's; the argument is
+   then case (b), `(CALLER.lam_N captured …)`, or case (a) when nothing
+   is captured; (d) a static parameter of the enclosing template,
+   passed on unchanged — the call is instantiated when the enclosing
+   template is (instantiation is transitive and happens at the
+   outermost E body); (e) a package constant (rule 5). The **shape** of
+   a static argument is the identity it names and its captured count;
+   the captured values are runtime data and never part of the key (law
+   §4.3). An **instance** is the template at a tuple of shapes, one E
+   program per distinct tuple per module — the taking module owns it,
+   as a module owns the derivations it takes (slice 3.19) — named by
+   the derive precedent's flattening, `MODULE.TEMPLATE_flat.of.SHAPE…`
+   (`main.List_map.of.main_add_offset_lam_1_1`: the lifted lambda's
+   identity, then its captured count), a second taking of the same
+   tuple reusing it. The instance's E program: its parameters are the
+   captured values of each static argument, group by group in parameter
+   order, then the template's runtime parameters; its body the
+   template's L body erased with each static parameter bound to an
+   entry carrying its shape — slice 3.16 rule 6's callee-local entry
+   (`EKCall id flags`) extended by the captured slots — so `(f x)`
+   erases to `(ECall g (c … x))`, and the template's recursion at its
+   own static parameters is a call of the same instance. Its L meaning:
+   a generated definition of the same name, `… := fun c … r … =>
+   List.map (g c …) r …`, admitted to K — the instance is
+   **definitionally** the specialized body (delta and beta), which is
+   how a caller's L body, written with the lambda, and its E program,
+   calling the instance, correspond; its equations `….eq_N` are the
+   template's equations instantiated at the static arguments, each a
+   theorem K checks (the template's `eq_N` applied, under the unfolding
+   — the generated equation the law names where the arity changed),
+   registered as a realization's equations are, so the reducer and the
+   rewriter read them (slice 3.27's lever) and a theorem proven over
+   arbitrary `f` applies to the instance's uses by unification through
+   the unfolding — T2's "generic theorem reused". Record: `INSTANCE
+   NAME of=TEMPLATE shapes=g/1,… equations=…`. On the E-first route (a
+   body with no L reading, `main` over a World) the instance is taken
+   with no generated definition, the route having no L half.
+4. **Finite specialization (T3).** The shapes a load can write are
+   finite: a static argument is a name, a partial application of a
+   name, a lifted lambda or a parameter passed on, never a term built
+   from a static parameter — `(f a)` or `(fun ((y U)) (f y))` as a
+   static argument inside a template is refused (`function_value`: a
+   static parameter is passed on, not transformed), which closes the
+   shape set. The type-growing recursion stays `realize_descent` (probe
+   (iv)), and a template calling itself at another shape is refused by
+   the same check extended from type arguments to static arguments (`a
+   recursive call at other static arguments`). Beside the closure, law
+   §4.3's budget: `instance_budget`, 1,024 instances of one template
+   per load, past which `specialization_budget` refuses, naming the
+   template — a refusal, never a proof of anything. A workload example
+   takes many instances in one file and runs under `ev` (rule 7).
+5. **Static law-bearing packages.** A `structure` with a
+   function-typed field — `(structure Monoid ((a Type)) ((op (-> a a
+   a)) (unit a) (op_assoc (forall ((x y z a)) (= (op (op x y) z) (op x
+   (op y z))))) (unit_left (forall ((x a)) (= (op unit x) x)))))` — is
+   a **package type**: never an E type (`ind_eligible` says no, as
+   today), so no runtime value of it exists — the law's "no runtime
+   dictionary". A **package constant** is a `def` of a package type
+   whose value K's whnf reads as the constructor applied: its function
+   fields static arguments in rule 3's senses (a name, a partial
+   application, a lambda lifted under the constant's name), its
+   proposition fields erased, its value fields closed E terms. A binder
+   of a package type is a static parameter (rule 1); its shape is the
+   constant's identity. In a template `(Monoid.op m x y)` erases at the
+   instance as the field's shape applied — a call head —, `(Monoid.unit
+   m)` as the closed value's E term, and a law field is never in a
+   runtime position. The generic theorem over `m` is proven once and
+   applies at the constant by unification (T2's package half). Outside
+   a template a package constant's projection erases the same way
+   (`(Monoid.op IntAdd 1 2)` is `(Int.add 1 2)`) — by the reduction,
+   not by a table.
+6. **Init's higher-order list functions as templates in `std/list`.**
+   Slice 3.27's rule 6 extended: `List.map`, `List.filter`,
+   `List.foldl`, `List.foldr`, `List.any`, `List.all` realized by
+   supplied bodies whose function binder is a static parameter, their
+   equations per case-tree leaf proven by K as today's are, held by
+   `std_test.sh`; their definitions are Init's (ordinals 98 to 2,907).
+   Law §5.3's `add_offset` is then written as the law writes it.
+7. **The gates: T2 and T3 as a test, and the pins.**
+   `kernel/test/template_test.sh`, the 40th entrypoint, over
+   `v3/examples/template/`: `add_offset` (a lifted lambda with a
+   captured value), a named `fn` and a named partial application as
+   arguments, a package at `Int` with a generic theorem proven once over
+   `m` and applied at the constant, a workload file taking 64 instances;
+   each loaded, the entries run under `--run` with their outputs
+   compared, and the programs dumped (`--dump`) for the **artifact**
+   check — no program line holds a lambda, a partial application or a
+   function-typed parameter while the source files hold the lambdas —
+   T2's risk column checked on the artifact, not read off the source.
+   Pins: `template_lift`, `template_named`, `template_partial`,
+   `template_passed`, `template_escape` (a lambda in a constructor
+   field), `template_transform` (`(f a)` as a static argument),
+   `template_package`, `template_growth` (`f[A]` recursing at `f[List
+   A]`, T3's canonical refusal, by name), `template_budget`.
+   `docs/LEAN.md`'s function-value row becomes rows of what is now the
+   same as Lean (`List.map (fun x => …) xs`, `f ∘ g` as a lambda, a
+   package as a structure) and of what stays refused (a lambda in data,
+   currying, a function-valued field at runtime, a static argument
+   built from a parameter); the kernel README's rows; records §9. Gates
+   run per landing: the pins, `std_test`, `define_test`, parity, the
+   full suite; CI's pipeline per landing.
+8. **Route 1 unchanged.** The law's authority on the post-specialization
+   closure is the lowering; route 1 compiles the kernel's bring-up
+   dialect only (the departure recorded at slice 3.27 landing 4), so
+   this slice's artifact check is on the E programs `ev` runs and
+   `--dump` prints — first-order by construction, the programs route 1
+   will consume when it compiles user files (phase 4). Stated as the
+   slice's limit, not solved here.
+
+**Landings.** (1) Rules 1–3: the static role, the escape rule with its
+pointers on both routes, instances by shape with lifted lambdas and
+named partial applications, the generated definitions and the
+instantiated equations, the records; pins `template_lift`,
+`template_named`, `template_partial`, `template_passed`,
+`template_escape`, `template_transform`. (2) Rules 5–6 and the example:
+packages, the six list templates in `std/list`, `v3/examples/template/`
+with `add_offset` and the package, `template_test.sh`; pin
+`template_package`. (3) Rule 4's budget and the workload,
+`template_growth` and `template_budget`, `LEAN.md`'s rows, the §12.5
+gate records for T2 and T3, the close-out.
+
+**Weighed and deferred,** each with the consumer that reopens it: the
+dynamic tier (escaping closures, function values in data, dispatch on
+functions) — law §4.3's named door, sealed variants the alternative,
+wake = a named workload with a demonstrated cost; instances shared
+across modules (each module takes its own, as with derivations, and the
+store holds them per file; a consumer measuring the duplication reopens
+it); an extern as a static argument (it takes a World; §4.7's effect-use
+contract is phase 4's); a lambda returning a lambda and a function-typed
+field of an E type (the escape rule; a consumer names the workload);
+route 1 over user files (phase 4). **Rejected:** a runtime closure or
+dictionary representation (law §4.1, §4.3); the captured values in the
+specialization key (law §4.3: never); an instance per call site (the
+shape tuple dedupes); a `template` keyword (the binder's type is the
+signal, one grammar); untyped lambda binders (`(fun ((x T)) …)` is L's
+form, §5.1).
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -6704,3 +6925,30 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     declares. **As built, ratified 2026-10-10: landing 3's four
     readings, landing 4's departure and the two kernel fixes, without
     reservation; slice 3.27 closed on pipeline 576.**
+62. **Slice 3.28, the lambda profile (designed 2026-10-10 at the boundary
+    after slice 3.27; §8.4).** (a) **The static role**: a function-typed
+    binder of a `fn` or of a supplied `realize` is a static parameter
+    and the declaration a template, with no keyword; its L half as
+    today, its E half one program per instance. (b) **The escape rule**
+    at today's refusal sites, `function_value` with the pointer on both
+    routes. (c) **Instances by shape**: a static argument's identity and
+    captured count, never the captured values; a closed lambda lifted to
+    `CALLER.lam_N` with the captured locals leading; the instance owned
+    by the taking module and named by the derive precedent's
+    flattening (`main.List_map.of.main_add_offset_lam_1_1`), one
+    program per distinct tuple per module; its L meaning a generated
+    definition unfolding to the template applied, its equations the
+    template's instantiated and checked by K. (d) **Finite
+    specialization**: a static argument is never built from a static
+    parameter (passed on, not transformed), so the shape set is closed;
+    `realize_descent` extended to static shapes; `instance_budget`,
+    1,024 per template per load, as law §4.3's budget. (e) **Packages**:
+    a structure with a function-typed field is a package type and never
+    an E type; a package constant read by whnf to its constructor; its
+    projections erase to the fields' shapes; the generic theorem proven
+    once. (f) **Six list templates** in `std/list`: `map`, `filter`,
+    `foldl`, `foldr`, `any`, `all`. (g) **The gates**: `template_test.sh`
+    with the artifact check over `--dump`, nine pins, `LEAN.md`'s rows,
+    T2 and T3 recorded against law §12.5's risk columns. (h) **Three
+    landings.** (i) **The limit**: route 1 unchanged; the artifact check
+    is on the E programs. *For ratification.*

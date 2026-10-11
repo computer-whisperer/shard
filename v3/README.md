@@ -1441,6 +1441,26 @@ pin declares), one the author's misreading. Eight pins. Gates run: the 243 loade
 
 Landing 4 holds on the full gate: **2026-10-10 — pipeline 576 green on `2ece3aa`: engine 54 s; corpus 1,471 s at the baseline; v3 4,552 s of a 3 h limit, 32 s under pipeline 574's 4,584 (the export 132 s; the index driver built by route 1 in 11 s and the export's index built in 99 s on the runner; 39 entrypoints with 0 failed in 1,407 s against 1,424 — `store_test` 1,076 s against 1,090 (calc's five leaves stored in 552 s, their 447 declarations replayed in 86 s), parity byte-identical over 31 closures and 134,028 declarations in 758 s against 777 over 133,990, `define_test` 713 against 717, `path_test` 682 against 708, `calc_test` 644 against 652, `engine_test` 500 against 511, `std_test` 433 against 456 — the std root's 8 files and 336 declarations loaded and stored in 240 s and K's replay 191 s, against 261 and 193 —, `wire_test` 427 against 449, `derive_test` 309 against 314, `calc_main_test` 305 against 299, `k_clients_test` 192 against 189, `tactic_test` 139 against 150, the loader pins' entrypoint 134 against 135 (243 cases against 235), `route2_test` 71 against 72; route 1's native build of the kernel 419 s against 409; the replay 2,419 s at 32.3 GB against 2,448 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Slice 3.27 is closed: the as-built notes ratified 2026-10-10.**
 
+**Slice 3.28 (designed 2026-10-10, for ratification) — the lambda
+profile: templates, lifted lambdas and static packages (T2, T3)**
+(`LANGUAGE.md` §8.4 slice 3.28; §13 item 62). Law §4.3's profile in
+one slice: a function-typed binder of a `fn` or a supplied `realize`
+is a static parameter and the declaration a template, no keyword; a
+call supplies a static argument — a known name, a named partial
+application, a closed lambda lifted to `CALLER.lam_N` with its
+captured locals leading, a parameter passed on, a package constant —
+and takes an instance keyed by the shapes (identity and captured
+count, never the captured values), one first-order program per
+distinct tuple per module, its L meaning a generated definition
+unfolding to the template applied and its equations the template's
+instantiated; the shape set is closed and a budget refuses past 1,024;
+a structure with a function-typed field is a static package type,
+never an E type; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all`
+become templates in `std/list`; T2 and T3 run as `template_test.sh`
+with the artifact check over `--dump`. Measured first: the law's
+`add_offset` fails today before its lambda is reached, and the
+type-growing recursion is already `realize_descent`. Three landings.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
