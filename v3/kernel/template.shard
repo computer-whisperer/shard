@@ -1,0 +1,424 @@
+;;; v3/kernel/template.shard — instances of templates (v3/LANGUAGE.md §8.4 slice 3.28 rules
+;;; 1 and 3; law §4.3). A template is a `fn` with a static parameter — a function-typed binder
+;;; (erase.shard's BStatic) — defined in K as any fn is (define.shard) and holding no program of
+;;; its own. A body that calls it demands an **instance**: the template at a tuple of shapes
+;;; (erasure.shard's Shape — an identity and a captured count, never the captured values) and
+;;; closed type arguments. This file builds one: its E program — the template's body erased
+;;; with each static parameter bound to its shape (EKShape), the captured values its leading
+;;; parameters group by group, then the template's runtime parameters —, its L definition —
+;;; the template applied to the type arguments, the shapes' L terms over the captured binders
+;;; and the runtime binders, so the instance is definitionally the specialized body —, and
+;;; its equations — the template's `eq_N`, each instantiated and restated over the instance,
+;;; proven by the template's own theorem applied, which K accepts through the unfolding.
+;;; The loader admits what this file returns (loader.shard's build_demands) and records
+;;; INSTANCE; a lambda the body lifts and an instance it demands in turn come back with it.
+(import "erasure.shard")
+(import "realize.shard")
+(use kernel.k)
+(use kernel.classify)
+(use kernel.decl)
+(use kernel.erase)
+(use kernel.erasure)
+(use kernel.kw)
+(use kernel.elab el_w el_cx)
+(use kernel.etable)
+(use kernel.expr)
+(use kernel.matcher)
+(use kernel.name)
+(use kernel.predef)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.realize)
+(use kernel.scope)
+(use kernel.util)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Declaration)
+(use kernel.decl.DefinitionSafety)
+(use kernel.decl.ReducibilityHints)
+(use kernel.erase.BRole)
+(use kernel.erase.TBind)
+(use kernel.erasure.Demand)
+(use kernel.erasure.EKind)
+(use kernel.erasure.ErEnt)
+(use kernel.erasure.ErRes)
+(use kernel.erasure.Either5r)
+(use kernel.erasure.Lifted)
+(use kernel.erasure.Shape)
+(use kernel.erasure.Tr)
+(use kernel.etable.ESt)
+(use kernel.expr.Expr)
+(use kernel.predef.PdRec)
+(use kernel.predef.PreDef)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog.EDecl)
+(use kernel.prog.ERec)
+(use kernel.prog.EType)
+(use kernel.realize.Either3)
+(use kernel.scope.Scope)
+
+;; a template as the loader keeps it: its pre-definition (the body and the walk that
+;; elaborated it), its binders' roles, its result's E type
+(type Template (Template PreDef (List TBind) EType))
+(fn template_pd ((tm Template)) PreDef (match tm ((Template pd _ _) pd)))
+;; the static binders' names, as the form wrote them (the TEMPLATE record)
+(fn template_statics ((tm Template)) (List Name)
+  (match tm ((Template pd binds _) (static_names (cx_bound (el_cx (pd_state pd))) binds))))
+(fn static_names ((bs (List (Pair Name Expr))) (binds (List TBind))) (List Name)
+  (measure (struct binds))
+  (match binds
+    (Nil Nil)
+    ((Cons (TBind _ (BStatic _) fv) r) (Cons (tm_bound_name bs (fvar_id_of fv)) (static_names bs r)))
+    ((Cons _ r) (static_names bs r))))
+(fn tm_bound_name ((bs (List (Pair Name Expr))) (id Int)) Name
+  (measure (struct bs))
+  (match bs
+    (Nil (n1 (quote x)))
+    ((Cons (Pair n (FVar _ j)) r) (if (int_eq id j) n (tm_bound_name r id)))
+    ((Cons _ r) (tm_bound_name r id))))
+;; two demands of one name agree on their arguments: the type arguments and each shape's
+;; identity, arity, leading arguments and captured types — a second taking at other arguments
+;; under the same name is refused by the loader (instance_clash), never silently reused
+(fn demand_same ((a Demand) (b Demand)) Bool
+  (match a
+    ((Demand _ ca tla _ sa)
+     (match b
+       ((Demand _ cb tlb _ sb) (bool_and (name_eq ca cb) (bool_and (exprs_same tla tlb) (shapes_same sa sb))))))))
+(fn exprs_same ((as (List Expr)) (bs (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil (match bs (Nil True) (_ False)))
+    ((Cons a ar) (match bs ((Cons b br) (bool_and (expr_eq a b) (exprs_same ar br))) (Nil False)))))
+(fn opt_exprs_same ((as (List (Option Expr))) (bs (List (Option Expr)))) Bool
+  (measure (struct as))
+  (match as
+    (Nil (match bs (Nil True) (_ False)))
+    ((Cons a ar)
+     (match bs
+       (Nil False)
+       ((Cons b br)
+        (bool_and (match a ((Some x) (match b ((Some y) (expr_eq x y)) (None False))) (None (match b (None True) (_ False))))
+                  (opt_exprs_same ar br)))))))
+(fn shapes_same ((as (List Shape)) (bs (List Shape))) Bool
+  (measure (struct as))
+  (match as
+    (Nil (match bs (Nil True) (_ False)))
+    ((Cons a ar)
+     (match bs
+       (Nil False)
+       ((Cons b br)
+        (bool_and (expr_eq (shape_head a) (shape_head b))
+        (bool_and (int_eq (shape_arity a) (shape_arity b))
+        (bool_and (opt_exprs_same (shape_leading a) (shape_leading b))
+        (bool_and (exprs_same (shape_captured a) (shape_captured b))
+                  (shapes_same ar br))))))))))
+
+;; ---- the template's declaration checked (rules 2 and 4) --------------------------------------------
+;; the body erased once with each static parameter at a placeholder shape — the parameter's own
+;; name, nothing captured —: a static parameter in a runtime position, applied as a static
+;; argument, or under a lambda is refused here, at the declaration, as the law has the
+;; classifier enforce the escape rule; and a self-call at other shapes is the type-growing
+;; recursion. The program, the lambdas and the demands of this erasure are discarded
+(fn check_template ((es ESt) (sc Scope) (tm Template)) (Option (Pair Symbol (List Int)))
+  (match tm
+    ((Template pd binds _)
+     (let ((c (pd_name pd)) (shapes (placeholder_shapes (cx_bound (el_cx (pd_state pd))) binds)))
+       (let ((name (instance_name sc c (placeholder_types (count_types binds) 0) shapes)))
+         (match (inst_env binds shapes (- 0 1) Nil Nil 0)
+           ((Pair ents (Pair ncap _))
+            (let ((env0 (append (rev ents) (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKTemplate c)) (callee_ents (pd_callees pd)))))
+                  (t0 (tr_own (tr_new (el_w (pd_state pd)) es sc c name) c name binds)))
+              (match (inst_rec t0 env0 (pd_rec pd) binds (tbind_types binds) ncap)
+                ((Pair _ (Left5r e m)) (Some (Pair e m)))
+                ((Pair t1 (Right5r _))
+                 (match (erase t1 env0 (pd_body pd) (budget_depth))
+                   ((ErErr e m) (Some (Pair e m)))
+                   ((ErOk _ _) None))))))))))))
+(fn placeholder_shapes ((bs (List (Pair Name Expr))) (binds (List TBind))) (List Shape)
+  (measure (struct binds))
+  (match binds
+    (Nil Nil)
+    ((Cons (TBind _ (BStatic k) fv) r) (Cons (Shape (mk_const (n1 (sym_of_chars (show_name (tm_bound_name bs (fvar_id_of fv))))) Nil) None k Nil Nil) (placeholder_shapes bs r)))
+    ((Cons _ r) (placeholder_shapes bs r))))
+(fn placeholder_types ((n Int) (i Int)) (List EType)
+  (measure (- n i))
+  (if (le n i) Nil (Cons (ETVar i) (placeholder_types n (+ i 1)))))
+
+;; ---- the instance -----------------------------------------------------------------------------
+(type InstRes (InstOk ESt EDecl Declaration (List Declaration) (List Lifted) (List Demand)) (InstErr Symbol (List Int)))
+(fn build_instance ((es ESt) (sc Scope) (env CheckedEnv) (tm Template) (d Demand)) InstRes
+  (match tm
+    ((Template pd binds rt)
+     (match d
+       ((Demand name c tyl tye shapes)
+        (if (bool_not (int_eq (len tye) (count_types binds))) (InstErr (quote function_value) (append (show_name c) ": the instance's type arguments do not match the template's type parameters"))
+        (if (bool_not (int_eq (len shapes) (count_static binds))) (InstErr (quote function_value) (append (show_name c) ": the instance's shapes do not match the template's static parameters"))
+        (let ((t0 (tr_own (tr_new (el_w (pd_state pd)) es sc name Nil) c name binds)))
+          (match (subst_types t0 (pd_body pd) binds tyl)
+            ((Pair t1 body1)
+             (match (inst_env binds shapes (- 0 1) Nil Nil 0)
+               ((Pair ents (Pair ncap _))
+                (let ((env0 (append (rev ents) (Cons (ErEnt (fvar_id_of (pd_self pd)) (EKTemplate c)) (callee_ents (pd_callees pd))))))
+                  (match (inst_rec t1 env0 (pd_rec pd) binds tyl ncap)
+                    ((Pair _ (Left5r e m)) (InstErr e m))
+                    ((Pair t2 (Right5r rec))
+                     (match (erase t2 env0 body1 (budget_depth))
+                       ((ErErr e m) (InstErr e m))
+                       ((ErOk t3 ebody)
+                        (match (captured_etypes t3 shapes Nil)
+                          ((Pair t4 None) (InstErr (quote function_value) (append (show_name c) ": a captured value's type is no E type")))
+                          ((Pair t4 (Some cetys))
+                           (let ((prog (EFn name 0 (append cetys (subst_tys tye (bind_ptypes binds))) (subst_ty tye rt) rec ebody)))
+                             (match (inst_definition t4 env pd binds tyl shapes name c)
+                               ((Pair t5 (Left3 e m)) (InstErr e m))
+                               ((Pair t5 (Right3 (Cons dd Nil)))
+                                (match (inst_equations t5 env binds tyl shapes name c 1 Nil)
+                                  ((Pair t6 (Left3 e m)) (InstErr e m))
+                                  ((Pair t6 (Right3 eqs)) (InstOk (Tr.es t6) prog dd eqs (Tr.lifted t6) (Tr.demands t6)))))
+                               ((Pair t5 (Right3 _)) (InstErr (quote function_value) "the instance's definition")))))))))))))))))))))))
+;; the body at the type arguments: each type binder's local replaced
+(fn subst_types ((t Tr) (e Expr) (binds (List TBind)) (tyl (List Expr))) (Pair Tr Expr)
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair t e))
+    ((Cons (TBind _ BType fv) br)
+     (match tyl
+       (Nil (Pair t e))
+       ((Cons ty tr) (match (tr_subst t e (fvar_id_of fv) ty) ((Pair t1 e1) (subst_types t1 e1 br tr))))))
+    ((Cons _ br) (subst_types t e br tyl))))
+;; the body's entries, outermost first: the captured slots of every static argument in order
+;; (EKVar each, under ids below zero — no local's), then the template's binders — a type
+;; binder static, an erased one erased, a data binder a variable, a static one its shape at
+;; its slots. Returns the entries forward, the captured count and the next free slot id
+(fn inst_env ((binds (List TBind)) (shapes (List Shape)) (next Int) (caps (List ErEnt)) (bents (List ErEnt)) (ncap Int)) (Pair (List ErEnt) (Pair Int Int))
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair (append (rev caps) (rev bents)) (Pair ncap next)))
+    ((Cons (TBind _ role fv) br)
+     (match role
+       (BType (inst_env br shapes next caps (Cons (ErEnt (fvar_id_of fv) EKStatic) bents) ncap))
+       (BErased (inst_env br shapes next caps (Cons (ErEnt (fvar_id_of fv) EKErased) bents) ncap))
+       ((BData _) (inst_env br shapes next caps (Cons (ErEnt (fvar_id_of fv) EKVar) bents) ncap))
+       ((BStatic _)
+        (match shapes
+          (Nil (inst_env br Nil next caps bents ncap))
+          ((Cons sh sr)
+           (let ((k (len (shape_captured sh))))
+             (let ((ids (slot_ids next k)))
+               (inst_env br sr (- next k) (append (rev (slot_ents ids)) caps) (Cons (ErEnt (fvar_id_of fv) (EKShape sh ids)) bents) (+ ncap k)))))))))))
+(fn slot_ids ((next Int) (k Int)) (List Int) (measure k) (if (lt k 1) Nil (Cons next (slot_ids (- next 1) (- k 1)))))
+(fn slot_ents ((ids (List Int))) (List ErEnt)
+  (measure (struct ids))
+  (match ids (Nil Nil) ((Cons sid r) (Cons (ErEnt sid EKVar) (slot_ents r)))))
+;; the recursion clause at the instance: the structural position shifted past the captured
+;; parameters; a measure at the type arguments, erased over the body's entries
+(fn inst_rec ((t Tr) (env (List ErEnt)) (prec PdRec) (binds (List TBind)) (tyl (List Expr)) (ncap Int)) (Pair Tr Either5r)
+  (match prec
+    (PdNone (Pair t (Right5r RecNone)))
+    ((PdStruct x)
+     (match (fvar_index (fvar_id_of x) (data_fvars binds) 0)
+       ((Some i) (Pair t (Right5r (RecStruct (+ i ncap)))))
+       (None (Pair t (Left5r (quote bad_measure) "the structural parameter is not a data parameter")))))
+    ((PdMeasure m)
+     (match (subst_types t m binds tyl)
+       ((Pair t1 m1)
+        (match (erase t1 env m1 (budget_depth))
+          ((ErErr e msg) (Pair t1 (Left5r e msg)))
+          ((ErOk t2 em) (Pair t2 (Right5r (RecMeasure em))))))))))
+;; the captured values' E types, shape by shape, from their closed L types
+(fn captured_etypes ((t Tr) (shapes (List Shape)) (acc (List EType))) (Pair Tr (Option (List EType)))
+  (measure (struct shapes))
+  (match shapes
+    (Nil (Pair t (Some (rev acc))))
+    ((Cons sh r)
+     (match (etypes_of t (shape_captured sh) acc)
+       ((Pair t1 None) (Pair t1 None))
+       ((Pair t1 (Some acc1)) (captured_etypes t1 r acc1))))))
+(fn etypes_of ((t Tr) (tys (List Expr)) (acc (List EType))) (Pair Tr (Option (List EType)))
+  (measure (struct tys))
+  (match tys
+    (Nil (Pair t (Some acc)))
+    ((Cons ty r)
+     (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) ty Nil Nil)
+       ((Pair (Pair w1 es1) None) (Pair (tr_set_es (tr_set_w t w1) es1) None))
+       ((Pair (Pair w1 es1) (Some ety)) (etypes_of (tr_set_es (tr_set_w t w1) es1) r (Cons ety acc)))))))
+
+;; ---- the L definition: λ captured… binders…, TEMPLATE types… shapes… binders… ------------------
+;; the captured binders fresh locals of the shapes' captured types, group by group; a shape's L
+;; term its identity applied to its leading arguments with the group at the captured
+;; positions; the template's data and erased binders re-opened at the substitution (a type
+;; local its type argument, a static local its shape's term, an earlier binder its new local)
+(fn inst_definition ((t Tr) (env CheckedEnv) (pd PreDef) (binds (List TBind)) (tyl (List Expr)) (shapes (List Shape)) (name Name) (c Name)) (Pair Tr Either3)
+  (match (open_captured t shapes Nil)
+    ((Pair t1 groups)
+     (let ((terms (shape_terms shapes groups)) (bs (cx_bound (el_cx (pd_state pd)))))
+       (match (rebuild_binders t1 bs binds tyl terms Nil Nil Nil)
+         ((Pair t2 (Pair subs (Pair args locals)))
+          (match (mt_inst_args (Tr.w t2) (pd_type pd) (pd_binders pd))
+            ((Pair w3 None) (Pair (tr_set_w t2 w3) (Left3 (quote define_matrix) "the declared type does not take the binders")))
+            ((Pair w3 (Some rl))
+             (match (subst_pairs (tr_set_w t2 w3) rl subs)
+               ((Pair t4 rl1)
+                (let ((all (append (flatten_exprs groups) locals)))
+                  (match (tr_apps t4 (mk_const c Nil) args)
+                    ((Pair t5 app)
+                     (match (tr_lams t5 all app)
+                       ((Pair t6 val)
+                        (match (tr_pis t6 all rl1)
+                          ((Pair t7 ty) (Pair t7 (Right3 (list (DefnDecl (ConstantVal name Nil ty) val (HRegular (def_height env val)) Safe (list name))))))))))))))))))))))
+(fn open_captured ((t Tr) (shapes (List Shape)) (acc (List (List Expr)))) (Pair Tr (List (List Expr)))
+  (measure (struct shapes))
+  (match shapes
+    (Nil (Pair t (rev acc)))
+    ((Cons sh r)
+     (match (open_group t (shape_captured sh) Nil)
+       ((Pair t1 g) (open_captured t1 r (Cons g acc)))))))
+(fn open_group ((t Tr) (tys (List Expr)) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct tys))
+  (match tys
+    (Nil (Pair t (rev acc)))
+    ((Cons ty r) (match (tr_local t (n1 (quote c)) ty) ((Pair t1 fv) (open_group t1 r (Cons fv acc)))))))
+(fn shape_terms ((shapes (List Shape)) (groups (List (List Expr)))) (List Expr)
+  (measure (struct shapes))
+  (match shapes
+    (Nil Nil)
+    ((Cons sh r)
+     (match groups
+       (Nil Nil)
+       ((Cons g gr) (Cons (mk_app_n (shape_head sh) (fill_leading (shape_leading sh) g)) (shape_terms r gr)))))))
+(fn fill_leading ((ls (List (Option Expr))) (g (List Expr))) (List Expr)
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons (Some a) r) (Cons a (fill_leading r g)))
+    ((Cons None r) (match g ((Cons x gr) (Cons x (fill_leading r gr))) (Nil (fill_leading r Nil))))))
+(fn flatten_exprs ((gs (List (List Expr)))) (List Expr)
+  (measure (struct gs))
+  (match gs (Nil Nil) ((Cons g r) (append g (flatten_exprs r)))))
+;; the substitution (old id → replacement), the template's arguments in binder order and the
+;; new runtime and erased locals in order
+(fn rebuild_binders ((t Tr) (bs (List (Pair Name Expr))) (binds (List TBind)) (tyl (List Expr)) (terms (List Expr)) (subs (List (Pair Int Expr))) (args (List Expr)) (locals (List Expr))) (Pair Tr (Pair (List (Pair Int Expr)) (Pair (List Expr) (List Expr))))
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair t (Pair subs (Pair (rev args) (rev locals)))))
+    ((Cons (TBind _ role fv) br)
+     (match role
+       (BType
+        (match tyl
+          ((Cons ty tr) (rebuild_binders t bs br tr terms (Cons (Pair (fvar_id_of fv) ty) subs) (Cons ty args) locals))
+          (Nil (rebuild_binders t bs br Nil terms subs args locals))))
+       ((BStatic _)
+        (match terms
+          ((Cons tm tr) (rebuild_binders t bs br tyl tr (Cons (Pair (fvar_id_of fv) tm) subs) (Cons tm args) locals))
+          (Nil (rebuild_binders t bs br tyl Nil subs args locals))))
+       (_
+        (match (tr_type_of_local t fv)
+          (None (rebuild_binders t bs br tyl terms subs args locals))
+          ((Some ty)
+           (match (subst_pairs t ty subs)
+             ((Pair t1 ty1)
+              (match (tr_local t1 (tm_bound_name bs (fvar_id_of fv)) ty1)
+                ((Pair t2 fv1) (rebuild_binders t2 bs br tyl terms (Cons (Pair (fvar_id_of fv) fv1) subs) (Cons fv1 args) (Cons fv1 locals)))))))))))))
+
+;; ---- the equations: TEMPLATE.eq_N instantiated, proven by itself through the unfolding ---------
+;; `∀ kept, TEMPLATE a… f… lhs… = rhs` becomes `∀ captured… kept', NAME captured… lhs…' = rhs'`
+;; — the type and static locals of `kept` replaced by the type arguments and the shapes' terms
+;; (they stand unsplit at the template's positions in the left-hand side), the rest re-opened
+;; at the substitution —, proven by `TEMPLATE.eq_N` at the same arguments: K converts the
+;; template applied to the instance applied by delta and beta (its definition)
+(fn inst_equations ((t Tr) (env CheckedEnv) (binds (List TBind)) (tyl (List Expr)) (shapes (List Shape)) (name Name) (c Name) (i Int) (acc (List Declaration))) (Pair Tr Either3)
+  (measure (- 64 i))
+  (if (lt 64 i) (Pair t (Right3 (rev acc)))
+  (let ((eqn (name_append c (nm_eq_n i))))
+    (match (env_find env eqn)
+      (None (Pair t (Right3 (rev acc))))
+      ((Some info)
+       (match (tm_open_pis t (ci_type info) Nil (budget_depth))
+         ((Pair t1 (Pair elocals ebody))
+          (match (get_app_args ebody)
+            ((Cons ety (Cons lhs (Cons rhs Nil)))
+             (let ((largs (get_app_args lhs)))
+               (if (bool_not (int_eq (len largs) (len binds))) (Pair t1 (Left3 (quote equation_form) (append (show_name eqn) ": its left-hand side does not apply the template to its binders")))
+                 (match (open_captured t1 shapes Nil)
+                   ((Pair t2 groups)
+                    (match (eq_subs binds largs tyl (shape_terms shapes groups) Nil)
+                      (None (Pair t2 (Left3 (quote equation_form) (append (show_name eqn) ": a type or static binder is not a variable of its left-hand side"))))
+                      ((Some subs0)
+                       (match (reopen_locals t2 elocals subs0 subs0 Nil)
+                         ((Pair t3 (Pair subs newlocals))
+                          (match (subst_pairs t3 ety subs)
+                            ((Pair t4 ety1)
+                             (match (subst_pairs t4 rhs subs)
+                               ((Pair t5 rhs1)
+                                (match (subst_exprs t5 (runtime_args binds largs) subs Nil)
+                                  ((Pair t6 dargs)
+                                   (let ((all (append (flatten_exprs groups) newlocals)))
+                                     (match (tr_apps t6 (mk_const name Nil) (append (flatten_exprs groups) dargs))
+                                       ((Pair t7 lhs1)
+                                        (match (tr_apps t7 (get_app_fn ebody) (list ety1 lhs1 rhs1))
+                                          ((Pair t8 stmt)
+                                           (match (subst_exprs t8 elocals subs Nil)
+                                             ((Pair t9 eargs)
+                                              (match (tr_apps t9 (mk_const eqn Nil) eargs)
+                                                ((Pair t10 proof)
+                                                 (match (tr_pis t10 all stmt)
+                                                   ((Pair t11 ty)
+                                                    (match (tr_lams t11 all proof)
+                                                      ((Pair t12 val)
+                                                       (let ((en (name_append name (nm_eq_n i))))
+                                                         (inst_equations t12 env binds tyl shapes name c (+ i 1) (Cons (ThmDecl (ConstantVal en Nil ty) val (list en)) acc)))))))))))))))))))))))))))))))
+            (_ (Pair t1 (Left3 (quote equation_form) (append (show_name eqn) ": not an equation"))))))))))))
+;; a Pi chain opened at fresh locals
+(fn tm_open_pis ((t Tr) (ty Expr) (acc (List Expr)) (fuel Int)) (Pair Tr (Pair (List Expr) Expr))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t (Pair (rev acc) ty))
+    (match ty
+      ((Pi _ n _ dom body)
+       (match (tr_local t n dom)
+         ((Pair t1 fv) (match (tr_inst1 t1 body fv) ((Pair t2 b1) (tm_open_pis t2 b1 (Cons fv acc) (- fuel 1)))))))
+      (_ (Pair t (Pair (rev acc) ty))))))
+;; the type and static positions' locals of the left-hand side, each to its replacement
+(fn eq_subs ((binds (List TBind)) (largs (List Expr)) (tyl (List Expr)) (terms (List Expr)) (acc (List (Pair Int Expr)))) (Option (List (Pair Int Expr)))
+  (measure (struct binds))
+  (match binds
+    (Nil (Some acc))
+    ((Cons (TBind _ role _) br)
+     (match largs
+       (Nil (Some acc))
+       ((Cons a ar)
+        (match role
+          (BType (match tyl ((Cons ty tr) (match a ((FVar _ fid) (eq_subs br ar tr terms (Cons (Pair fid ty) acc))) (_ None))) (Nil None)))
+          ((BStatic _) (match terms ((Cons tm tr) (match a ((FVar _ fid) (eq_subs br ar tyl tr (Cons (Pair fid tm) acc))) (_ None))) (Nil None)))
+          (_ (eq_subs br ar tyl terms acc))))))))
+;; the left-hand side's arguments at the runtime and erased positions
+(fn runtime_args ((binds (List TBind)) (largs (List Expr))) (List Expr)
+  (measure (struct binds))
+  (match binds
+    (Nil Nil)
+    ((Cons (TBind _ role _) br)
+     (match largs
+       (Nil Nil)
+       ((Cons a ar) (match role (BType (runtime_args br ar)) ((BStatic _) (runtime_args br ar)) (_ (Cons a (runtime_args br ar)))))))))
+;; the equation's locals re-opened past the substituted ones, each at its substituted type
+(fn reopen_locals ((t Tr) (ls (List Expr)) (subs0 (List (Pair Int Expr))) (subs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (Pair (List (Pair Int Expr)) (List Expr)))
+  (measure (struct ls))
+  (match ls
+    (Nil (Pair t (Pair subs (rev acc))))
+    ((Cons fv r)
+     (match (assoc_int_expr (fvar_id_of fv) subs0)
+       ((Some _) (reopen_locals t r subs0 subs acc))
+       (None
+        (match (tr_type_of_local t fv)
+          (None (reopen_locals t r subs0 subs acc))
+          ((Some ty)
+           (match (subst_pairs t ty subs)
+             ((Pair t1 ty1)
+              (match (tr_local t1 (n1 (quote x)) ty1)
+                ((Pair t2 fv1) (reopen_locals t2 r subs0 (Cons (Pair (fvar_id_of fv) fv1) subs) (Cons fv1 acc)))))))))))))
+(fn subst_exprs ((t Tr) (es (List Expr)) (subs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Pair t (rev acc)))
+    ((Cons e r) (match (subst_pairs t e subs) ((Pair t1 e1) (subst_exprs t1 r subs (Cons e1 acc)))))))

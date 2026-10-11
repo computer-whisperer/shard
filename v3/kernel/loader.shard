@@ -23,6 +23,7 @@
 (import "k")
 (import "realize.shard")
 (import "define.shard")
+(import "template.shard")
 (import "record.shard")
 (import "derive.shard")
 (import "initload.shard")
@@ -51,6 +52,11 @@
 (use kernel.realize)
 (use kernel.erasure)
 (use kernel.erasure.PdErase)
+(use kernel.erasure.Demand)
+(use kernel.erasure.Lifted)
+(use kernel.template)
+(use kernel.template.Template)
+(use kernel.template.InstRes)
 (use kernel.predef)
 (use kernel.predef.Callee)
 (use kernel.predef.PdRes)
@@ -218,7 +224,9 @@
   (RUnused Name (List Name))                  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
   (RProved Name Int (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the statement's fingerprint — what the sidecar's entry holds
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
-  (RDerive Name Expr Symbol Symbol (List Name)))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
+  (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
+  (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
+  (RInstance Name Name (List (List Int)) (List Name)))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
 
 ;; root, environment, closure memo, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
@@ -244,10 +252,12 @@
   (forms (IntMap (List (Pair Name (Pair Scope SExpr)))))
   (discharged (List (Pair Name (List Name))))   ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
-  (derived (List Derived)))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
+  (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
+  (templates (List (Pair Name Template)))   ; the templates defined (slice 3.28 rule 1), for the instances a body demands
+  (instances (List Demand)))   ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil)))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil)))
 ;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
 ;; environment of Init alone (the run's), the ordinals, the export and index handle;
 ;; everything of the old root reset to load0's, the old root's own declarations gone
@@ -319,6 +329,8 @@
 (fn ld_add_param ((l Load) (n Name)) Load (with Load l (params (Cons n (Load.params l)))))
 (fn ld_with_e ((l Load) (es ESt)) Load (with Load l (etab es)))
 (fn ld_add_typed ((l Load) (n Name) (sc Scope) (s SExpr)) Load (with Load l (typed (Cons (Pair n (Pair sc s)) (Load.typed l)))))
+(fn ld_add_template ((l Load) (n Name) (tm Template)) Load (with Load l (templates (Cons (Pair n tm) (Load.templates l)))))
+(fn ld_add_instance ((l Load) (d Demand)) Load (with Load l (instances (Cons d (Load.instances l)))))
 (fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
 ;; a fn whose definition waits on a callee not yet defined (slice 3.15: a forward reference, or a
 ;; callee itself parked): the fn, its form, its E declaration, the obstacle and the callee named
@@ -840,18 +852,117 @@
          ((PdEraseErr r m)
           (if (no_l_reading r) (load_e_after l1 f s r m)
             (Pair (ld_rec l1 (RClassify k r m)) f)))
-         ((PdEraseOk es1 d)
-          (match (define_pd es1 sc pd)
-            ((DfSkip why _) (Pair (ld_rec (ld_add_typed (ld_with_e l1 (es_add_decl es1 d)) k sc s) (RRun (quote fn) k why (quote typed))) f))
-            ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
+         ((PdEraseTemplate es1 binds rt) (load_template l1 f s pd es1 binds rt fuel callees cfuel))
+         ((PdEraseOk es1 d lifted demands)
+          ;; the lambdas the body lifted and the instances it demands first (§8.4 slice 3.28 rule 3):
+          ;; their definitions in K, their programs in the table — the body's program calls them
+          (match (admit_lifted (ld_with_e l1 es1) f lifted)
+            ((Pair l1a None) (Pair l1a f))
+            ((Pair l1a (Some f1a))
+             (match (build_demands l1a f1a k demands 64)
+               ((Pair l1b None) (Pair l1b f))
+               ((Pair l1b (Some f1b))
+          (match (define_pd (Load.etab l1b) sc pd)
+            ((DfSkip why _) (Pair (ld_rec (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s) (RRun (quote fn) k why (quote typed))) f1b))
+            ((DfErr e m) (Pair (ld_rec l1b (RClassify k e m)) f1b))
             ((DfAux es2 auxs)
-             (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
-               (match (admit_forms (ld_with_e l1 es2) f s auxs)
+             (if (lt fuel 1) (Pair (ld_rec l1b (RClassify k (quote define_loop) "the auxiliaries did not settle")) f1b)
+               (match (admit_forms (ld_with_e l1b es2) f1b s auxs)
                  ((Pair l2 f2) (if (ld_last_accepted l2) (load_fn_with l2 f2 s (- fuel 1) callees cfuel) (Pair l2 f2))))))
             ((DfOk es2 obls dd eqs wf)
-             (match (admit_matchers (ld_with_e l1 (es_add_decl es2 d)) f s (pd_aux pd))
+             (match (admit_matchers (ld_with_e l1b (es_add_decl es2 d)) f1b s (pd_aux pd))
                ((Pair l2 (Some f2)) (load_defined l2 f2 d obls dd eqs wf))
-               ((Pair l2 None) (Pair l2 f)))))))))))
+               ((Pair l2 None) (Pair l2 f1b)))))))))))))))
+;; a template (§8.4 slice 3.28 rule 1): defined in K as any fn — the definition, its equations
+;; — and kept with its binders' roles for the instances later bodies demand; no program of its
+;; own, so no RUNNABLE and no DEFINE: TEMPLATE. One that K cannot define has no L half to
+;; instantiate from and is refused with the obstacle
+(fn load_template ((l1 Load) (f Fx) (s SExpr) (pd PreDef) (es1 ESt) (binds (List TBind)) (rt EType) (fuel Int) (callees (List Callee)) (cfuel Int)) (Pair Load Fx)
+  (let ((sc (fx_scope l1 f)) (k (pd_name pd)))
+    (match (check_template es1 sc (Template pd binds rt))
+      ((Some (Pair e m)) (Pair (ld_rec l1 (RClassify k e m)) f))
+      (None
+    (match (define_pd es1 sc pd)
+      ((DfSkip why m) (Pair (ld_rec l1 (RClassify k why (append m " — a template (a fn with a function-typed binder) needs its definition in K, which its instances unfold to (§8.4 slice 3.28 rule 1)"))) f))
+      ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
+      ((DfAux es2 auxs)
+       (if (lt fuel 1) (Pair (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle")) f)
+         (match (admit_forms (ld_with_e l1 es2) f s auxs)
+           ((Pair l2 f2) (if (ld_last_accepted l2) (load_fn_with l2 f2 s (- fuel 1) callees cfuel) (Pair l2 f2))))))
+      ((DfOk es2 obls dd eqs wf)
+       (match (admit_matchers (ld_with_e l1 es2) f s (pd_aux pd))
+         ((Pair l2 None) (Pair l2 f))
+         ((Pair l2 (Some f2))
+          (match (admit_obligations l2 f2 obls)
+            ((Pair l3 f3)
+             (match (admit_core l3 f3 (list dd))
+               ((Pair l4 None) (Pair l4 f3))
+               ((Pair l4 (Some recs))
+                (match (admit_core l4 (mix_recs f3 recs) eqs)
+                  ((Pair l5 None) (Pair l5 f3))
+                  ((Pair l5 (Some recs2))
+                   (let ((tm (Template pd binds rt)))
+                     (let ((l6 (ld_rec (ld_add_template (ld_with_e l5 (es_register (Load.etab l5) k (Fx.module f3) (EITemplate (count_static binds)))) k tm)
+                                       (RTemplate k (template_statics tm) (decls_declare (Load.env l5) eqs)))))
+                       (Pair (if wf (ld_rec l6 (RPending k (quote measure))) l6) (mix_recs (mix_recs f3 recs) recs2))))))))))))))))))
+;; the lambdas a body lifted (rule 3(c)): each generated fn's definition admitted — once; a
+;; body read again regenerates the same — and its program added, DEFINE with no equation
+(fn admit_lifted ((l Load) (f Fx) (ls (List Lifted))) (Pair Load (Option Fx))
+  (measure (struct ls))
+  (match ls
+    (Nil (Pair l (Some f)))
+    ((Cons (Lifted n prog dd) r)
+     (if (env_has (Load.env l) n) (admit_lifted l f r)
+       (match (admit_core l f (list dd))
+         ((Pair l1 None) (Pair l1 None))
+         ((Pair l1 (Some recs))
+          (admit_lifted (ld_rec (ld_with_e l1 (es_add_decl (es_register_all (Load.etab l1) (Fx.module f) (decl_infos prog)) prog)) (RDefine n Nil Nil)) (mix_recs f recs) r)))))))
+;; the instances a body demands (rule 3): each built from its template (template.shard) — its
+;; definition and its equations admitted, its program added, INSTANCE recorded —, then the
+;; lambdas and instances its own body lifted and demanded, to a fixpoint. One already built
+;; is reused when the demand's arguments are the same, refused when they differ — under the
+;; taker's name, the body that demanded it
+(fn build_demands ((l Load) (f Fx) (taker Name) (ds (List Demand)) (fuel Int)) (Pair Load (Option Fx))
+  (measure fuel)
+  (if (lt fuel 1) (Pair (ld_rec l (RClassify taker (quote define_loop) "the instances did not settle")) None)
+    (match ds
+      (Nil (Pair l (Some f)))
+      ((Cons d r)
+       (let ((name (demand_name d)))
+         (match (assoc_demand name (Load.instances l))
+           ((Some d0)
+            (if (demand_same d d0) (build_demands l f taker r fuel)
+              (Pair (ld_rec l (RClassify taker (quote instance_clash) (append (show_name name) " is built at other arguments — a static argument's type arguments or captured types differ under the same shapes (§8.4 slice 3.28 rule 3)"))) None)))
+           (None
+            (match (assoc_template (demand_template d) (Load.templates l))
+              (None (Pair (ld_rec l (RClassify taker (quote unknown_template) (show_name (demand_template d)))) None))
+              ((Some tm)
+               (match (build_instance (Load.etab l) (fx_scope l f) (Load.env l) tm d)
+                 ((InstErr e m) (Pair (ld_rec l (RClassify name e m)) None))
+                 ((InstOk es1 prog dd eqs lifted demands)
+                  (match (admit_lifted (ld_with_e l es1) f lifted)
+                    ((Pair l1 None) (Pair l1 None))
+                    ((Pair l1 (Some f1))
+                     (match (admit_core l1 f1 (list dd))
+                       ((Pair l2 None) (Pair l2 None))
+                       ((Pair l2 (Some recs))
+                        (match (admit_core l2 (mix_recs f1 recs) eqs)
+                          ((Pair l3 None) (Pair l3 None))
+                          ((Pair l3 (Some recs2))
+                           (let ((l4 (ld_rec (ld_add_instance (ld_with_e l3 (es_add_decl (es_register_all (Load.etab l3) (Fx.module f1) (decl_infos prog)) prog)) d)
+                                             (RInstance name (demand_template d) (shape_records (demand_shapes d)) (decls_declare (Load.env l3) eqs)))))
+                             (match (build_demands l4 (mix_recs (mix_recs f1 recs) recs2) name demands (- fuel 1))
+                               ((Pair l5 None) (Pair l5 None))
+                               ((Pair l5 (Some f5)) (build_demands l5 f5 taker r (- fuel 1))))))))))))))))))))))
+(fn assoc_demand ((n Name) (ds (List Demand))) (Option Demand)
+  (measure (struct ds))
+  (match ds (Nil None) ((Cons d r) (if (name_eq (demand_name d) n) (Some d) (assoc_demand n r)))))
+(fn assoc_template ((n Name) (ts (List (Pair Name Template)))) (Option Template)
+  (measure (struct ts))
+  (match ts (Nil None) ((Cons (Pair k tm) r) (if (name_eq k n) (Some tm) (assoc_template n r)))))
+(fn shape_records ((ss (List Shape))) (List (List Int))
+  (measure (struct ss))
+  (match ss (Nil Nil) ((Cons s r) (Cons (shape_record s) (shape_records r)))))
 ;; the body's heads that have no L reading — a symbol (slice 3.18 rule 5), a string in the
 ;; toolchain's own sources (rule 3), a literal
 ;; under a constructor pattern, a toolchain spelling: the function falls to the E-first route
@@ -1934,7 +2045,12 @@
     ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
     ((RDerive p ty cap policy procs)
      (append "DERIVE " (append (show_name p) (append " type=" (append (dv_show_ty ty) (append " cap=" (append (chars_of_sym cap)
-       (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))))
+       (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))
+    ((RTemplate n statics eqs) (append "TEMPLATE " (append (show_name n) (append " static=" (append (show_names_c statics) (append " equations=" (show_names_c eqs)))))))
+    ((RInstance n c shapes eqs) (append "INSTANCE " (append (show_name n) (append " of=" (append (show_name c) (append " shapes=" (append (join_commas shapes) (append " equations=" (show_names_c eqs)))))))))))
+(fn join_commas ((ss (List (List Int)))) (List Int)
+  (measure (struct ss))
+  (match ss (Nil Nil) ((Cons s Nil) s) ((Cons s r) (append s (Cons 44 (join_commas r))))))
 
 ;; counts: modules accepted runnable refused pending realized defined errors
 (fn rec_counts ((rs (List Rec)) (acc (List Int))) (List Int)
@@ -1967,7 +2083,9 @@
        ((RUnused _ _) acc)
        ((RProved _ _ _) acc)
        ((REngine _ _) acc)
-       ((RDerive _ _ _ _ _) acc)))
+       ((RDerive _ _ _ _ _) acc)
+       ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
+       ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))
     (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)
   (match cs

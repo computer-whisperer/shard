@@ -319,7 +319,9 @@
           (etype_args w es sc rr ar tps pending acc)))))))
 
 ;; ---- the roles of a constant's binders (law §4.1) ------------------------------------------
-(type BRole (BType) (BErased) (BData EType))
+;; BStatic (§8.4 slice 3.28 rule 1): a function-typed binder — a static parameter, the declaration
+;; a template; its arity the count of its runtime arguments
+(type BRole (BType) (BErased) (BData EType) (BStatic Int))
 (type TBind (TBind Name BRole Expr))                     ; the binder's name, role, local
 (type Tele (Tele (List Level) (List TBind) EType Expr))  ; levels, binders in order, the result's E type and L type
 (type TeleRes (TeleOk W ESt Tele) (TeleErr Symbol (List Int)))
@@ -375,7 +377,8 @@
     ((Cons (TBind _ BType fv) r) (Cons fv (tparams_rev r)))
     ((Cons _ r) (tparams_rev r))))
 ;; a binder's role from its type: a Sort at Type is a type parameter, a Sort at Prop or a
-;; proposition is erased, a Pi over propositions erases to its codomain, an E type is data
+;; proposition is erased, a Pi over propositions erases to its codomain, an E type is data, a
+;; function type is a static parameter (fn_arity)
 (fn binder_role ((w W) (es ESt) (sc Scope) (dom Expr) (tps (List Expr))) (Pair (Pair W ESt) (Option BRole))
   (match (w_whnf w dom)
     ((Pair w1 None) (Pair (Pair w1 es) None))
@@ -392,7 +395,29 @@
           ((Pair w3 d1)
            (match (l_to_etype w3 es sc d1 tps Nil)
              ((Pair (Pair w4 es4) (Some t)) (Pair (Pair w4 es4) (Some (BData t))))
-             ((Pair (Pair w4 es4) None) (Pair (Pair w4 es4) None))))))))))
+             ((Pair (Pair w4 es4) None)
+              (match (fn_arity w4 es4 sc d1 tps 0 (budget_depth))
+                ((Pair (Pair w5 es5) (Some k)) (Pair (Pair w5 es5) (Some (BStatic k))))
+                ((Pair (Pair w5 es5) None) (Pair (Pair w5 es5) None))))))))))))
+;; a function type's arity (§8.4 slice 3.28 rule 1): a Pi chain of E-typed domains over an E
+;; result, the count of the domains; None for anything else — a Sort domain (no polymorphic
+;; static parameter), a proposition domain, a domain or a result that is no E type
+(fn fn_arity ((w W) (es ESt) (sc Scope) (d Expr) (tps (List Expr)) (k Int) (fuel Int)) (Pair (Pair W ESt) (Option Int))
+  (measure fuel)
+  (if (lt fuel 0) (Pair (Pair w es) None)
+  (match (w_whnf w d)
+    ((Pair w1 None) (Pair (Pair w1 es) None))
+    ((Pair w1 (Some (Pi _ n _ dom body)))
+     (match (l_to_etype w1 es sc dom tps Nil)
+       ((Pair (Pair w2 es2) None) (Pair (Pair w2 es2) None))
+       ((Pair (Pair w2 es2) (Some _))
+        (match (w_local w2 n dom)
+          ((Pair w3 fv) (match (w_inst1 w3 body fv) ((Pair w4 body1) (fn_arity w4 es2 sc body1 tps (+ k 1) (- fuel 1)))))))))
+    ((Pair w1 (Some r))
+     (if (lt k 1) (Pair (Pair w1 es) None)
+       (match (l_to_etype w1 es sc r tps Nil)
+         ((Pair (Pair w2 es2) (Some _)) (Pair (Pair w2 es2) (Some k)))
+         ((Pair (Pair w2 es2) None) (Pair (Pair w2 es2) None))))))))
 ;; a Pi whose domain is a proposition, repeatedly: its codomain (the proof argument vanishes in E)
 (fn erased_pi ((w W) (d Expr) (fuel Int)) (Pair W Expr)
   (measure fuel)

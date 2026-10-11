@@ -1804,7 +1804,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5643,6 +5643,88 @@ with `add_offset` and the package, `template_test.sh`; pin
 `template_growth` and `template_budget`, `LEAN.md`'s rows, the §12.5
 gate records for T2 and T3, the close-out.
 
+**As built, landing 1 (2026-10-11): the static role, the escape rule,
+instances by shape.** Rules 1–3 on the typed route. `erase.shard`'s
+`BRole` gains `BStatic k` (`fn_arity`: a Pi chain of E-typed domains
+over an E result, `k` its length; a proposition or a Sort domain is no
+static parameter); `erase_predef` answers `PdEraseTemplate` for a `fn`
+with one — no program — and the loader (`load_template`) checks the
+template's body once at its declaration (`template.shard`'s
+`check_template`: the body erased with each static parameter at a
+placeholder shape, so a static parameter in a runtime position, applied
+as a static argument or under a lambda, and a self-call at other shapes
+are refused where the law has the classifier enforce the escape rule),
+defines it in K as any `fn` (the definition, its equations), registers
+it as `EITemplate` and keeps its pre-definition with its roles
+(`Load.templates`); the record `TEMPLATE NAME static=f,…
+equations=…`. A template's call in a body (`erasure.shard`'s
+`erase_template_call`, by `is_template` at the constant, by
+`EKTemplate` at a template's own self-local) erases to the instance's
+call at the captured values group by group then the data: a type
+argument must be closed (`l_to_etype` with no type local — a
+polymorphic taker is this landing's limit, refused `function_value`),
+a static argument's shape is read by `static_shape` — (a) a name with
+a program (`shape_kind`: an `EFn` of the table, or a constant of the
+realization registry, whose instance calls the primitive — a decision
+through `erase_dec_value`), (b) `(g a …)` with `g`'s type and erased
+arguments kept closed and its runtime arguments captured with their
+closed types (`shape_args`; the trailing binders exactly the parameter's
+arity), (c) a lambda lifted (`lift_lambda`: the caller's runtime locals
+it mentions in order of first occurrence, then its binders opened at
+the arity — eta past the lambdas written —; the program `EFn` over
+their closed E types, the L definition the same lambda over the
+captured locals, `DefnDecl` under `CALLER.lam_N`; a lambda over a type
+parameter, a proof, a function with no K constant, the enclosing
+function, a static parameter or the template it stands in is refused
+by name), (d) a static parameter passed on (`passed_shape`, by its
+`EKShape` entry at the enclosing instance). The instance is demanded of
+the loader (`Tr.demands`, deduplicated by name) with the type
+arguments and the shapes; its name `MODULE.T_flat[_TYPE…].of.SHAPE…`
+— the template flattened **with its type arguments** (derive's
+precedent; a template without type parameters as the design wrote it:
+`main.main_twice.of.main_add_off_lam_1_1`), then each shape as its
+identity flattened and its captured count. `template.shard` builds it
+(`build_instance`): the program — the template's body at the type
+arguments (`subst_types`), erased over entries where each static
+binder is `EKShape shape slots` and the slots are `EKVar` entries
+under ids below zero (the instance's leading parameters), the
+self-local `EKTemplate` with the template's own binders carried by
+`Tr` (`tr_own`: its constant is not in the pre-definition's walk), a
+structural measure shifted past the captured parameters —; the L
+definition `λ captured… binders…, T types… (g leading… captured…)…
+binders…` with the template's data and erased binders re-opened at
+the substitution (`rebuild_binders`), admitted as a `DefnDecl`; the
+equations `NAME.eq_N` from `T.eq_N` — its binders opened, the type and
+static positions' locals replaced by the type arguments and the
+shapes' terms, the rest re-opened at the substitution
+(`reopen_locals`), the statement over the instance applied, the proof
+`T.eq_N` at the same arguments, which K accepts through the instance's
+unfolding. The loader (`build_demands`) admits the lifted lambdas'
+definitions first (`admit_lifted`: once — a body read again after an
+auxiliary regenerates the same —, `DEFINE CALLER.lam_N equations=`),
+then each instance's definition and equations, adds the program, records
+`INSTANCE NAME of=T shapes=g/1,… equations=…`, then the instances the
+instance's own body demanded, to a fixpoint; a name already built is
+reused when the demand's arguments agree (`demand_same`) and refused
+`instance_clash` when they differ — never silently reused. The escape
+rule's pointers (rule 2) at `erasure.shard`'s sites and on the E-first
+route: a `(-> …)` type in an E signature and a `fun` in an E-first body
+are `function_value` naming the template route, where they were
+`unknown_type: ->` and `unknown_head: fun`; a template cited from an
+E-first body is refused the same way, since this landing takes
+instances on the typed route only (rule 3's E-first instance, with no
+generated definition, is deferred to landing 2 with the examples; a
+`realize` body lifting a lambda or taking an instance, and a `realize`
+with a function-typed binder, are refused until landing 2's realize
+templates). Measured: a theorem over the instance by `Eq.refl` through
+the unfolding (`inc2 x = twice inc x`), a generic theorem over the
+template applied at the instance under `apply`, an entry run under
+`--run` through a typed `fn` calling an instance and a lifted lambda
+(`01`). The six pins; the loader pins' entrypoint 250 cases 0 failed;
+parity byte-identical over 31 closures and 135,063 declarations; the full suite's 39 entrypoints with 0
+failed in 568 s (`store_test` 437 s, `parity_test` 315 s, `define_test` 273 s, `path_test` 259 s, `calc_test` 251 s). Route 1's kernel build, the full replay and the
+corpus are CI's.
+
 **Weighed and deferred,** each with the consumer that reopens it: the
 dynamic tier (escaping closures, function values in data, dispatch on
 functions) — law §4.3's named door, sealed variants the alternative,
@@ -6959,4 +7041,15 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     implementing."), the four leans taken: instances named by their
     flattened shapes under the taking module, not by an ordinal; the
     budget 1,024; six list templates, not `map` alone; a package as a
-    structure with a function-typed field, no new form.
+    structure with a function-typed field, no new form. *As built,
+    landing 1 (2026-10-11), for ratification at the close-out:* the
+    instance's name flattens the template **with its type arguments**
+    (`main.main_twice.of.main_add_off_lam_1_1` for a template without
+    type parameters, as designed); a second taking under one name at
+    other type arguments or captured types is refused `instance_clash`
+    rather than reused; the escape rule and the self-call at other
+    shapes are checked at the template's declaration by one erasure at
+    placeholder shapes; a polymorphic taker — an instance at an open
+    type, a lambda over a type parameter — is refused by name as this
+    landing's limit; the E-first instance and the realize template are
+    landing 2's.

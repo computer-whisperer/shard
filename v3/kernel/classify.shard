@@ -198,6 +198,8 @@
              ((TyOk t _) (TyOk t tps))
              ((TyErr e m) (TyErr e m))))))))
     ((SList (Cons (SSym x) args))
+     (if (sym_eq x (quote ->))   ; a function type: a function-typed binder makes a template, on the typed route (§8.4 slice 3.28 rules 1–2)
+       (TyErr (quote function_value) "(-> …): a function is no value of E (law §4.3) — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading (§8.4 slice 3.28 rule 1)")
      (match (name_of_sym x)
        (None (TyErr (quote bad_type) (chars_of_sym x)))
        ((Some n)
@@ -211,7 +213,7 @@
            (match (read_etys es sc env tps args Nil)
              ((Pair (TyErr e m) _) (TyErr e m))
              ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))
-          ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments"))))))
+          ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments")))))))
     (_ (TyErr (quote bad_type) "a type is NAME or (NAME TYPE…)"))))
 ;; the argument types in order; the TyRes carries the threaded parameters (its type is a placeholder)
 (fn read_etys ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (ss (List SExpr)) (acc (List EType))) (Pair TyRes (List EType))
@@ -280,12 +282,18 @@
        (match args ((Cons (SSym q) Nil) (TOk (ELit (LSym q)))) (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
      (if (sym_eq h (quote list))
        (read_elist r args)
-     (read_eapp r h args)))))))))
+     (if (sym_eq h (quote fun))
+       (TErr (quote function_value) "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E (§8.4 slice 3.28 rules 2–3; law §4.3); this body has no L reading")
+     (read_eapp r h args))))))))))
     ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
 
 ;; a bare name: bound, else a constructor without fields, else a fn of no parameters as its
 ;; call — the typed route reads the constant as the value it is, and the two routes agree
 ;; (slice 3.27 landing 4, T9's finding) —, else the refusal it earns, naming the arity
+;; a template cited in an E-first body: its instance is taken where the caller has an L reading
+;; (§8.4 slice 3.28 rule 3; landing 1 takes instances on the typed route)
+(fn template_e_first_msg ((id Name)) (List Int)
+  (append (show_name id) " is a template (a fn with a function-typed binder, §8.4 slice 3.28): an instance is taken on the typed route, and this body has no L reading — give it one"))
 (fn fn_value_msg ((id Name) (k Int)) (List Int)
   (append (show_name id) (append " in argument position (law §4.3): a function is no value — call it with its " (append (show_nat k) " arguments"))))
 (fn read_esym ((r Rd) (x Symbol)) TRes
@@ -301,6 +309,7 @@
           ((Cons (EHit id _ (EIFn k)) Nil) (if (int_eq k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
           ((Cons (EHit id _ (EISig k)) Nil) (if (int_eq k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
           ((Cons (EHit id _ (EIExt k)) Nil) (TErr (quote function_value) (fn_value_msg id k)))
+          ((Cons (EHit id _ (EITemplate _)) Nil) (TErr (quote function_value) (template_e_first_msg id)))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
           (Nil
            (match (prim_of (scope_candidates (rd_sc r) n))
@@ -327,6 +336,7 @@
           ((Cons (EHit id _ (EIFn k)) Nil) (read_head_args r id k args (quote call)))
           ((Cons (EHit id _ (EISig k)) Nil) (read_head_args r id k args (quote call)))
           ((Cons (EHit id _ (EIExt k)) Nil) (read_head_args r id k args (quote ext)))
+          ((Cons (EHit id _ (EITemplate _)) Nil) (TErr (quote function_value) (template_e_first_msg id)))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
           (Nil
            (match (prim_head (rd_sc r) h n)

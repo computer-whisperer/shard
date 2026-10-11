@@ -2660,6 +2660,36 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-11 — slice 3.28 landing 1 built: the static role, the escape
+  rule, instances by shape (`LANGUAGE.md` §8.4 "as built, landing 1",
+  the slice table; §13 item 62's as-built note).** Rules 1–3 on the
+  typed route: `erase.shard`'s `BStatic k`; a `fn` with one is a
+  template — checked once at its declaration by an erasure at
+  placeholder shapes (the escape rule and the self-call at other shapes
+  refused there), defined in K as any `fn`, kept with its roles,
+  `TEMPLATE NAME static=f,… equations=…`; a call takes the instance at
+  the static arguments' shapes — a name with a program or a registry
+  constant, a named partial application with its runtime arguments
+  captured, a lambda lifted to `CALLER.lam_N` with the captured locals
+  leading (its program and its L definition), a static parameter
+  passed on — at closed type arguments, named
+  `MODULE.T_flat[_TYPE…].of.SHAPE…`; `kernel/template.shard` builds the
+  instance: the program (the template's body at the shapes, the
+  captured values its leading parameters), the L definition unfolding
+  to the template applied, the equations the template's instantiated and
+  proven by them; the loader admits the lifted lambdas, the definitions
+  and the equations, adds the programs, records `INSTANCE NAME of=T
+  shapes=g/1,… equations=…`, builds nested demands to a fixpoint,
+  reuses a name only at the same arguments (`instance_clash`
+  otherwise). The escape rule's pointers on both routes. Measured: a
+  theorem over an instance by `Eq.refl`, a generic theorem applied at an
+  instance, an entry run through instances. Limits stated: a polymorphic
+  taker, the E-first instance, the realize template (landing 2). Pins
+  `template_lift`, `template_named`, `template_partial`,
+  `template_passed`, `template_escape`, `template_transform`. Gates run:
+  the loader pins' entrypoint 250 cases 0 failed, parity byte-identical
+  over 31 closures and 135,063 declarations in 315 s, the full suite's 39 entrypoints with 0 failed in 568 s
+  (`store_test` 437 s, `parity_test` 315 s, `define_test` 273 s, `path_test` 259 s, `calc_test` 251 s). Route 1's kernel build, the full replay and the corpus are CI's.
 - **2026-10-11 — item 62 ratified by the user as designed** ("That looks
   reasonable -- ratify it and let's begin implementing."), the four
   leans taken: instances named by their flattened shapes under the

@@ -1460,6 +1460,14 @@ become templates in `std/list`; T2 and T3 run as `template_test.sh`
 with the artifact check over `--dump`. Measured first: the law's
 `add_offset` fails today before its lambda is reached, and the
 type-growing recursion is already `realize_descent`. Three landings.
+**Landing 1 built 2026-10-11** (`LANGUAGE.md` §8.4 "as built, landing
+1"): the static role (`BStatic`), templates defined in K and checked at
+their declaration, instances by shape with lifted lambdas and named
+partial applications (`kernel/template.shard`), the generated
+definitions and the instantiated equations, `TEMPLATE` and `INSTANCE`
+records, the escape rule's pointers on both routes; six pins; the
+loader pins' entrypoint 250 cases, parity, the full suite's 39
+entrypoints with 0 failed in 568 s.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
