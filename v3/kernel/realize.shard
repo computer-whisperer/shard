@@ -21,6 +21,7 @@
 (use kernel.elab.ERes)
 (use kernel.elab.FinRes)
 (use kernel.predef.Either5)
+(use kernel.predef.PdRec)
 (use kernel.etable)
 (use kernel.expr)
 (use kernel.level)
@@ -215,7 +216,13 @@
 ;; ---- the supplied form (§7.2, §7.5; slice 3.16 rule 7) ---------------------------------------
 ;; the result: the E table (Init inductives the walk registered), the EFn to attach once the
 ;; equations are admitted, the equations as theorem declarations in order, a pending measure
-(type RzRes (RzOk ESt EDecl (List Declaration) (List Declaration) Bool) (RzErr Symbol (List Int)))
+;; a realization: the table, the program, the matchers to admit, the equations, pending?, the
+;; lambdas it lifted and the instances it demands (§8.4 slice 3.28); or a realize template
+;; (rule 6): the constant, the elaboration state, the body, the recursion clause, the binders,
+;; the result's E and L types, the levels, the matchers, the equations, pending?
+(type RzRes (RzOk ESt EDecl (List Declaration) (List Declaration) Bool (List Lifted) (List Demand))
+            (RzTemplate Name El Expr PdRec (List TBind) EType Expr (List Level) (List Declaration) (List Declaration) Bool)
+            (RzErr Symbol (List Int)))
 ;; NAME's identity resolved through the scope: a definition of the environment
 (type RtRes (RtOk Name ConstantInfo) (RtErr Symbol (List Int)))
 (fn realize_target ((sc Scope) (env CheckedEnv) (n Name)) RtRes
@@ -302,12 +309,79 @@
               (match (tele_of (w0 env) es sc info)
                 ((TeleErr e m) (RzErr e m))
                 ((TeleOk w1 es1 (Tele ls binds rt rl))
-                 (if (has_static binds) (RzErr (quote realize_signature) (append (show_name k) ": a function-typed binder — a realize template is landing 2 of §8.4 slice 3.28"))
-                 (match (signature_matches es1 sc env binds rt bs ret)
+                 (match (signature_matches es1 sc env binds rt (static_free binds bs) ret)
                    ((Some m) (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
                    (None
-                    (realize_body (ensure_head es1 sc k (count_data binds)) sc env k w1 ls binds rt rl bs rest thms)))))))))))))
+                    (match (static_signature w1 es1 sc env binds bs)
+                      ((Pair (Pair w2 es2) (Some m)) (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
+                      ((Pair (Pair w2 es2) None)
+                       (if (has_static binds)
+                         (realize_template es2 sc env k w2 ls binds rt rl bs rest thms)
+                         (realize_body (ensure_head es2 sc k (count_data binds)) sc env k w2 ls binds rt rl bs rest thms)))))))))))))))
     (_ (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?) or (realize NAME (view))"))))
+;; the written binders without the static ones (rule 6): the data binders' E types are compared
+;; with the L type's erasure; a static binder's written type is checked by static_signature
+(fn static_free ((binds (List TBind)) (bs (List SExpr))) (List SExpr)
+  (measure (struct binds))
+  (match binds
+    (Nil bs)
+    ((Cons (TBind _ BErased _) r) (static_free r bs))
+    ((Cons (TBind _ (BStatic _) _) r) (match bs ((Cons _ br) (static_free r br)) (Nil Nil)))
+    ((Cons _ r) (match bs ((Cons b br) (Cons b (static_free r br))) (Nil Nil)))))
+;; each static binder's written type `(-> D… R)` against the L type's domains and result as E types
+(fn static_signature ((w W) (es ESt) (sc Scope) (env CheckedEnv) (binds (List TBind)) (bs (List SExpr))) (Pair (Pair W ESt) (Option (List Int)))
+  (match (read_params es sc env Nil (static_free binds bs) Nil Nil)
+    ((PmErr _ _) (Pair (Pair w es) None))   ; signature_matches reported it
+    ((PmOk _ _ tps) (static_signature_go w es sc env tps (tbind_types binds) binds bs))))
+(fn static_signature_go ((w W) (es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (tpl (List Expr)) (binds (List TBind)) (bs (List SExpr))) (Pair (Pair W ESt) (Option (List Int)))
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair (Pair w es) None))
+    ((Cons (TBind _ BErased _) r) (static_signature_go w es sc env tps tpl r bs))
+    ((Cons (TBind n (BStatic _) fv) r)
+     (match bs
+       ((Cons (SList (Cons _ (Cons (SList (Cons (SSym arrow) wtys)) Nil))) br)
+        (if (bool_not (sym_eq arrow (quote ->))) (Pair (Pair w es) (Some (append "the binder " (append (show_name n) " is a function in the L type: write (-> D… R)"))))
+        (match (read_etys es sc env tps wtys Nil)
+          ((Pair (TyErr e m) _) (Pair (Pair w es) (Some (append (chars_of_sym e) (append ": " m)))))
+          ((Pair (TyOk _ _) written)
+           (match (w_local_type w (fvar_id_of fv))
+             (None (Pair (Pair w es) (Some "a bound variable without a local")))
+             ((Some lty)
+              (match (static_etypes w es sc lty tpl Nil (budget_depth))
+                ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) (Some (append "the binder " (append (show_name n) " has no function type over E types in the L type")))))
+                ((Pair (Pair w1 es1) (Some ltys))
+                 (if (etypes_same written ltys) (static_signature_go w1 es1 sc env tps tpl r br)
+                   (Pair (Pair w1 es1) (Some (append "the binder " (append (show_name n) " has another type than the L type's erasure")))))))))))))
+       (_ (Pair (Pair w es) (Some (append "the binder " (append (show_name n) " is a function in the L type: write (-> D… R)")))))))
+    ((Cons _ r) (match bs ((Cons _ br) (static_signature_go w es sc env tps tpl r br)) (Nil (Pair (Pair w es) None))))))
+(fn etypes_same ((as (List EType)) (bs (List EType))) Bool
+  (measure (struct as))
+  (match as
+    (Nil (match bs (Nil True) (_ False)))
+    ((Cons a ar) (match bs ((Cons b br) (bool_and (etype_eq a b) (etypes_same ar br))) (Nil False)))))
+;; a realize template (rule 6): the body elaborated as any supplied body's and its equations
+;; proven over the arbitrary static binder — the L half, once —; no program: the loader checks
+;; the body at placeholder shapes (template.shard's check_template) and builds the instances
+;; later bodies demand
+(fn realize_template ((es ESt) (sc Scope) (env CheckedEnv) (k Name) (w W) (ls (List Level)) (binds (List TBind)) (rt EType) (rl Expr) (bs (List SExpr)) (rest (List SExpr)) (thms (List Name))) RzRes
+  (match (fn_body rest)
+    (None (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
+    ((Some body)
+     (let ((e0 (bind_tele (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w) binds bs)))
+       (match (fn_rec e0 (fn_measure rest) (tbind_fvars binds))
+         ((Pair _ (Left5 r m)) (RzErr r m))
+         ((Pair e1 (Right5 prec))
+          (match (elab e1 body (Some rl))
+            ((EErr r m) (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
+            ((EOk e2 v _)
+             (match (el_finish e2 v)
+               ((FinErr r m) (RzErr r m))
+               ((FinOk b)
+                (match (pj_equations (tr_new (el_w e2) es sc k (tbind_types binds)) (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False None)
+                  ((Pair _ (Left3 r m)) (RzErr r m))
+                  ((Pair _ (Right3 decls))
+                   (RzTemplate k e2 b prec binds rt rl ls (el_aux e2) decls (match prec ((PdMeasure _) True) (_ False)))))))))))))))
 ;; the body, elaborated once against the constant's own telescope (slice 3.16 rule 7): the
 ;; signature's names bound to the telescope's locals — a type or data binder each, an erased
 ;; binder none —, the body at the result's L type; its program the erasure, its equations the
@@ -333,15 +407,14 @@
                      (match (erase t0 ents b (budget_depth))
                        ((ErErr r m) (RzErr r m))
                        ((ErOk t1 ebody)
-                        (if (takes_instances t1) (RzErr (quote function_value) (append (show_name k) ": a realize body lifting a lambda or taking an instance — a template's instance is taken from a fn (§8.4 slice 3.28 landing 1)"))
                         (match (pending_as_runnable (check_calls (Tr.es t1) env k rec (param_flags (count_data binds) rec) ebody))
                           ((Some (Pair r m)) (RzErr r m))
                           (None
                            (match (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False None)
                              ((Pair _ (Left3 r m)) (RzErr r m))
                              ((Pair t2 (Right3 decls))
-                              (RzOk (Tr.es t2) (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody) (el_aux e2) decls (match rec ((RecMeasure _) True) (_ False)))))))))))))))))))))))
-;; a body that lifted a lambda or demanded an instance (§8.4 slice 3.28): a fn's does, a realize's does not yet
+                              (RzOk (Tr.es t2) (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody) (el_aux e2) decls (match rec ((RecMeasure _) True) (_ False)) (Tr.lifted t2) (Tr.demands t2)))))))))))))))))))))
+;; a body that lifted a lambda or demanded an instance (§8.4 slice 3.28): a fn's and a supplied realize's do; a derived view's cannot
 (fn takes_instances ((t Tr)) Bool (bool_or (lt 0 (len (Tr.lifted t))) (lt 0 (len (Tr.demands t)))))
 ;; a name the environment lacks, in a realization's body: a RUNNABLE function has no L meaning
 ;; (a realization cannot wait for it, §7.5); an E primitive has no L identity (§6.4)
@@ -578,7 +651,7 @@
            (match (tele_of (w0 env) es sc info)
              ((TeleErr e m) (RzErr e m))
              ((TeleOk w1 es1 (Tele ls binds rt _))
-              (if (has_static binds) (RzErr (quote realize_signature) (append (show_name k) ": a function-typed binder — a realize template is landing 2 of §8.4 slice 3.28"))
+              (if (has_static binds) (RzErr (quote realize_signature) (append (show_name k) ": a function-typed binder — a realize template is supplied, never a view (§8.4 slice 3.28 rule 6)"))
               (match (ci_value info)
                 (None (RzErr (quote realize_kind) (append (show_name k) " has no value")))
                 ((Some v0)
@@ -590,11 +663,11 @@
                          (match (erase t1 (binder_ents binds) body (budget_depth))
                            ((ErErr e m) (RzErr e m))
                            ((ErOk t2 ebody)
-                            (if (takes_instances t2) (RzErr (quote function_value) (append (show_name k) ": a derived view lifting a lambda or taking an instance (§8.4 slice 3.28 landing 1)"))
+                            (if (takes_instances t2) (RzErr (quote function_value) (append (show_name k) ": a derived view lifting a lambda or taking an instance — supply the body (§8.4 slice 3.28 rule 6)"))
                             (let ((ptypes (bind_ptypes binds)))
                               (match (classify_both (Tr.es t2) k (some_all (rev ptypes)) ebody RecNone)
                                 ((Some (Pair e m)) (RzErr e m))
-                                (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil Nil False))))))))))))))))))))))
+                                (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil Nil False Nil Nil))))))))))))))))))))))
     (_ (RzErr (quote bad_shape) "(realize NAME (view))"))))
 ;; the value's leading lambdas instantiated with the binders' locals; fewer lambdas than binders: applied to the rest
 (fn peel_binders ((t Tr) (v Expr) (binds (List TBind))) (Pair Tr Expr)

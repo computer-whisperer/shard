@@ -343,7 +343,7 @@ common case).
 | `(inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…)` | Lean's `inductive`: level parameters on the name, parameter binders, the type after the parameters (`(Sort …)` or a `forall` over indices), each constructor's full type after the parameters | K: `InductDecl` |
 | `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
 | `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | named-field products (v2's form, docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `NAME.FIELD` and an updater `NAME.with_FIELD` (value first) per field in the record's namespace, which the file opens as any type's (item 7): `(FIELD r)` bare where no other opened record has the field, `(NAME.FIELD r)` always; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost — both against the current file's records, rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family is generated: since Stage 1 the accessors and updaters are definitions and v2's laws are `Eq.refl` over a local (pin `record_laws`). `make` and `with` also reach a parameterless `(structure NAME () (FIELD TYPE)…)` of the file — `NAME.mk` on the values in field order, on each field's entry or its projection of `E` for `with`; a field kept whose type mentions an updated one is the refusal `dependent_update` (§8.4 slice 3.17 rule 4). Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
-| `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields | K |
+| `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields — an earlier field applied in a later one's type too (a package's law over its operation); the parameters implicit in the constructor and the projections and explicit in the type, as Lean declares them (slice 3.28 landing 2) | K |
 | `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
 | `(abbrev …)` | as `def` with hint `abbrev` | K |
 | `(opaque NAME.{u…} BINDERS TYPE VALUE)` | checked, never unfolded | K: `OpaqueDecl` |
@@ -1804,7 +1804,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5725,6 +5725,82 @@ parity byte-identical over 31 closures and 135,063 declarations; the full suite'
 failed in 568 s (`store_test` 437 s, `parity_test` 315 s, `define_test` 273 s, `path_test` 259 s, `calc_test` 251 s). Route 1's kernel build, the full replay and the
 corpus are CI's.
 
+**As built, landing 2 (2026-10-11): realize templates, packages, the six
+list templates, the examples and the entrypoint.** Rules 5–6 and rule 1's
+realize half. A supplied `realize` with a function-typed binder is a
+template (`realize.shard`'s `realize_template`): its body elaborated once
+against the constant's telescope and its equations proven over the
+arbitrary function as any realization's — the L half —, its written static
+type `(-> D… R)` checked against the L type's domains and result as E
+types (`static_signature`; `erase.shard`'s `static_etypes`, of which
+`fn_arity` is the count), no program; the loader
+(`load_realize_template`) checks the body at placeholder shapes
+(`check_template`), admits the equations, registers `EITemplate` and
+records `TEMPLATE NAME static=f equations=NAME.realize_1,…`.
+`template.shard`'s `Template` carries either kind — `TmFn` with the
+pre-definition, `TmRealize` with the result's L type, the levels and the
+equations' identities as the realizing module declared them —; an instance
+of a realize template is built as a fn's, its equations `NAME.eq_N` from
+`T.realize_N`, and a realize template's self-call names its constant
+(`erase_const_at` routes the walk's owner to `erase_template_call`). A
+realize body that lifts a lambda or demands an instance now takes them
+(`RzOk` carries them; `load_realized` builds them before the program is
+added; `admit_theorems` shared with the template's path). `std/list`
+realizes `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` (rule 6):
+five by `Eq.refl` per leaf, `filter`'s rows through the `equations` clause
+— Init's cons row is a match on the test and the body's an `if`, equal by
+`List.filter_cons`, not by reduction. Packages (rule 5): `erase.shard`'s
+`package_of` — a structure of one constructor and no indices that is no E
+type, its fields read by `binder_role` over the parameters' locals: a
+function field static, a proposition a law, an E-typed field a value, a
+type field no package —; `binder_role` answers `BStatic 0` for a binder of
+a package type (a function type has arity at least 1), so a package
+parameter is a static parameter of arity 0 and passed on as any. A package
+constant as a static argument (`erasure.shard`'s `package_shape`): a closed
+term whose whnf is the constructor applied, the shape its identity with
+its arguments and nothing captured (`IntAdd/0`). A projection of a package
+(`erase_package_proj`: from the projection function applied past its
+lambdas — `proj_fn_app` now returns the arguments past the subject — and
+from `Proj`): the subject a package parameter at its shape or a closed
+package term, its fields the constructor's arguments after whnf
+(`package_subject`); the field's term applied to the arguments and erased
+— a name a call, a lambda beta-reduced, a value field its closed term, a
+law field `erased_in_runtime` —; at the declaration's check the
+placeholder's field by its role. A package's function field as a static
+argument of another template (`package_field_shape`: `(List.map (Monoid.op
+m (Monoid.unit m)) xs)` in a template over `m`) is the field's term at the
+constant, the parameter replaced by the constant in the arguments, read as
+any static argument — a lambda field applied is beta-reduced and lifted
+under the taking body's name, not the constant's (departure for the
+close-out). The structure reader makes a structure's parameters implicit
+in its constructor and projections and explicit in its type, as Lean
+declares them (`implicit_prefix`) — so `(Monoid.op m x y)` and `(Monoid.mk
+Int.add 0 …)` read as the design wrote them —, and an earlier field applied
+in a later field's type resolves as the projection alias it is
+(`elab_app_sym`; it was `unknown_constant`). Two landing-1 defects found
+and fixed: a polymorphic recursive template was refused at its declaration
+(`template_args` refused the self-call's type arguments — the template's
+own type parameters — as an open type; now a template inside a template's
+body is taken at the enclosing template's type parameters, the template
+itself only at them exactly, rule 4's `realize_descent` at a type built
+from them), and `check_template` passed the instance's name where the
+walk's type parameters go, a type error the bootstrap never saw. The
+E-first instance (rule 3's last sentence) is deferred to landing 3: the
+E-first reader carries no types, and an instance needs the type arguments
+from the arguments' E types; an E-first body calls a typed fn that took
+the instance (the entry's idiom). `v3/examples/template/`: `add_offset`
+(law §5.3's, as the law writes it), `named` (a fn, a partial application,
+the registry's `Int.add` under `foldl` and `foldr`, a predicate under
+`filter`, `any` and `all`), `package` (`Monoid` at `Int` by a name and by a
+lambda, `fold_m` over `m` with its generic theorems applied at the
+constants by `apply`, `scale_all` passing the operation on),
+`template_main` (the entry, `9662014`). `kernel/test/template_test.sh`,
+the 40th entrypoint: the load, the records, the run, the artifact check
+over `--dump` — no `fun` and no `->` in any program line while the sources
+hold them, a partial application unwritable in the dump's grammar; the
+instances and the lifted lambda programs of the artifact, the templates
+none. Pin `template_package`. Gates: the loader pins' entrypoint 251 cases 0 failed in 56 s; `std_test` 201 checks 0 failed in 151 s (the std root's 8 files and 356 declarations, 20 more than at landing 1 — the six templates' twelve equations and `filter`'s two —, stored in 86 s and replayed by K alone in 65 s); `template_test` 40 checks 0 failed in 102 s (15 instances in the artifact, 17 lambdas and function types in the sources, none in the programs; load 35 s, run 33 s, dump 34 s); parity byte-identical over 31 closures and 135,443 declarations in 297 s; the seven touched kernel files clean under the V3 loader (no refusal, no unused open); the full suite's 40 entrypoints in 552 s with one failure, `define_test`'s two stale counts (28 and 20 defined became 34 and 26, the six templates), corrected and rerun green (12 checks 0 failed in 259 s).
+
 **Weighed and deferred,** each with the consumer that reopens it: the
 dynamic tier (escaping closures, function values in data, dispatch on
 functions) — law §4.3's named door, sealed variants the alternative,
@@ -7052,4 +7128,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     placeholder shapes; a polymorphic taker — an instance at an open
     type, a lambda over a type parameter — is refused by name as this
     landing's limit; the E-first instance and the realize template are
-    landing 2's.
+    landing 2's. *Landing 2 (2026-10-11), for the same ratification:* a lambda
+    field of a package applied as a static argument is lifted under the
+    taking body's name, not the constant's; a realize template's written
+    static type is checked by its E reading against the L type's; the
+    structure reader follows Lean's binder infos (parameters implicit in
+    the constructor and the projections); the E-first instance moves to
+    landing 3.

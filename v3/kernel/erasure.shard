@@ -112,6 +112,12 @@
   (match (Tr.owner t)
     ((Some (Pair oc _)) (if (name_eq oc c) (Some (Tr.obinds t)) None))
     (None None)))
+(fn owner_is ((t Tr) (c Name)) Bool (match (Tr.owner t) ((Some (Pair oc _)) (name_eq oc c)) (None False)))
+(fn in_template ((t Tr)) Bool (match (Tr.owner t) ((Some _) True) (None False)))
+;; the owner's self-call at one of its own type parameters (rule 4: a template calls itself at its
+;; own types; at a type built from them — f at (List a) — the shape set would grow)
+(fn own_tparam ((t Tr) (a Expr)) Bool
+  (match a ((FVar _ id) (match (fvar_index id (Tr.tps t) 0) ((Some _) True) (None False))) (_ False)))
 (fn tr_lift ((t Tr) (x Lifted)) Tr (with Tr t (lifted (append (Tr.lifted t) (list x)))))
 (fn tr_demand ((t Tr) (d Demand)) Tr
   (if (has_demand (Tr.demands t) (demand_name d)) t (with Tr t (demands (append (Tr.demands t) (list d))))))
@@ -278,7 +284,7 @@
   (measure (struct binds))
   (match binds
     (Nil Nil)
-    ((Cons (TBind _ role fv) r) (Cons (ErEnt (fvar_id_of fv) (match role (BType EKStatic) (BErased EKErased) ((BData _) EKVar) ((BStatic _) EKErased))) (binder_ents_fwd r)))))   ; a static binder is bound by template.shard, never here (a realize with one is refused): erased, so a use is loud
+    ((Cons (TBind _ role fv) r) (Cons (ErEnt (fvar_id_of fv) (match role (BType EKStatic) (BErased EKErased) ((BData _) EKVar) ((BStatic _) EKErased))) (binder_ents_fwd r)))))   ; a static binder is bound by template.shard (a fn's or a realize's template), never here: erased, so a use is loud
 ;; the erasure of an L term in a runtime position (§7.5)
 (fn erase ((t Tr) (env (List ErEnt)) (e Expr) (fuel Int)) ErRes
   (measure fuel)
@@ -337,6 +343,10 @@
 ;; a projection: a match on the structure's constructor, the field's variable; of a row of the
 ;; registry's types, the subject itself
 (fn erase_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
+  (match (tr_package t sn)
+    ((Pair t0 (Some _)) (erase_package_proj t0 env sn i x Nil fuel))
+    ((Pair t0 None) (erase_struct_proj t0 env sn i x fuel))))
+(fn erase_struct_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
   (match (erase t env x (- fuel 1))
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 x1)
@@ -369,22 +379,85 @@
        ((Pair t1 (Some roles)) (if (int_eq (count_true roles) 1) (Pair t1 (Some (Pair c roles))) (Pair t1 None)))
        ((Pair t1 None) (Pair t1 None))))
     (_ (Pair t None))))
-;; a projection function — a constant whose value is λ params self. self.i —, fully applied:
-;; the structure, the field and the subject (rule 2)
-(fn proj_fn_app ((info ConstantInfo) (args (List Expr))) (Option (Pair (Pair Name Int) Expr))
+;; a projection function — a constant whose value is λ params self. self.i —, applied at least
+;; to its lambdas: the structure, the field, the subject and the arguments past it (rule 2; a
+;; package's function field takes them, §8.4 slice 3.28 rule 5)
+(fn proj_fn_app ((info ConstantInfo) (args (List Expr))) (Option (Pair (Pair Name Int) (Pair Expr (List Expr))))
   (match info
     ((DefnInfo _ v _ _ _)
-     (match (under_lams v (len args))
-       ((Some (Proj _ sn i (BVar _ 0))) (match (last_of args) ((Some x) (Some (Pair (Pair sn i) x))) (None None)))
-       (_ None)))
+     (let ((k (lam_depth v 0)))
+       (if (lt (len args) k) None
+       (match (under_lams v k)
+         ((Some (Proj _ sn i (BVar _ 0))) (match (nth args (- k 1)) ((Some x) (Some (Pair (Pair sn i) (Pair x (drop k args))))) (None None)))
+         (_ None)))))
     (_ None)))
+(fn lam_depth ((e Expr) (k Int)) Int
+  (measure (struct e))
+  (match e ((Lam _ _ _ _ b) (lam_depth b (+ k 1))) (_ k)))
 (fn under_lams ((e Expr) (k Int)) (Option Expr)
   (measure k)
   (if (lt k 1) (match e ((Lam _ _ _ _ _) None) (_ (Some e)))
     (match e ((Lam _ _ _ _ b) (under_lams b (- k 1))) (_ None))))
-(fn last_of ((xs (List Expr))) (Option Expr)
-  (measure (struct xs))
-  (match xs (Nil None) ((Cons x Nil) (Some x)) ((Cons _ r) (last_of r))))
+;; ---- a package (§8.4 slice 3.28 rule 5) ---------------------------------------------------------
+;; a package type by erase.shard's reading, over the walk
+(fn tr_package ((t Tr) (sn Name)) (Pair Tr (Option (Pair Name (List BRole))))
+  (match (package_of (Tr.w t) (Tr.es t) (Tr.sc t) sn)
+    ((Pair (Pair w1 es1) r) (Pair (tr_set_es (tr_set_w t w1) es1) r))))
+;; the subject of a package's projection: a package parameter at its shape — the constant's
+;; fields (its value read by whnf to the constructor applied), or a placeholder at the template's
+;; declaration (the check erases it once with no constant behind it) — or a closed package term
+(type PkRes (PkFields Expr (List Expr)) (PkPlaceholder Name) (PkErr Symbol (List Int)))   ; the package term and its fields
+(fn package_subject ((t Tr) (env (List ErEnt)) (x Expr)) (Pair Tr PkRes)
+  (match x
+    ((FVar _ id)
+     (match (er_index env id 0)
+       ((Some (Pair (EKShape sh _) _))
+        (if (bool_not (int_eq (shape_arity sh) 0)) (Pair t (PkErr (quote function_value) "a static parameter projected as a package"))
+          (match (env_find (tr_env t) (shape_id sh))
+            (None (Pair t (PkPlaceholder (shape_id sh))))
+            ((Some _) (package_fields_of t (mk_app_n (shape_head sh) (fill_somes (shape_leading sh))))))))
+       (_ (Pair t (PkErr (quote function_value) "a package in a runtime position: a package is a static parameter, its fields read at the instance (§8.4 slice 3.28 rule 5; law §4.1)")))))
+    (_ (if (has_fvar x) (Pair t (PkErr (quote function_value) "a package built from locals of the caller: a package constant is closed (§8.4 slice 3.28 rule 5)"))
+         (package_fields_of t x)))))
+(fn fill_somes ((ls (List (Option Expr)))) (List Expr)
+  (measure (struct ls))
+  (match ls (Nil Nil) ((Cons (Some a) r) (Cons a (fill_somes r))) ((Cons None r) (fill_somes r))))
+(fn package_fields_of ((t Tr) (x Expr)) (Pair Tr PkRes)
+  (match (tr_whnf t x)
+    ((Pair t1 None) (Pair t1 (PkErr (quote no_realization) "a package constant K could not reduce to its constructor")))
+    ((Pair t1 (Some v))
+     (match (get_app_fn v)
+       ((Const _ mk _)
+        (match (env_find (tr_env t1) mk)
+          ((Some (CtorInfo _ _ _ nparams _ _)) (Pair t1 (PkFields x (drop nparams (get_app_args v)))))
+          (_ (Pair t1 (PkErr (quote no_realization) "a package constant whose value is not its constructor applied (§8.4 slice 3.28 rule 5)")))))
+       (_ (Pair t1 (PkErr (quote no_realization) "a package constant whose value is not its constructor applied (§8.4 slice 3.28 rule 5)")))))))
+;; a package's field i applied to `args`: the field's term applied and erased — a function field
+;; a call head (a name, a partial application, a lambda the erasure beta-reduces or lifts), a value
+;; field its closed E term, a law field never in a runtime position. At the declaration's check
+;; the placeholder's field by its role
+(fn erase_package_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (args (List Expr)) (fuel Int)) ErRes
+  (match (package_subject t env x)
+    ((Pair t1 (PkErr e m)) (ErErr e m))
+    ((Pair t1 (PkFields _ fields))
+     (match (nth fields i)
+       ((Some fi) (erase t1 env (mk_app_n fi args) (- fuel 1)))
+       (None (ErErr (quote no_realization) (append (show_name sn) ": a projection past the constructor's fields")))))
+    ((Pair t1 (PkPlaceholder pn))
+     (match (tr_package t1 sn)
+       ((Pair t2 None) (ErErr (quote no_realization) (append (show_name sn) " is not a package type")))
+       ((Pair t2 (Some (Pair _ roles)))
+        (match (nth roles i)
+          ((Some BErased) (ErErr (quote erased_in_runtime) (append (show_name sn) ": a package's law in a runtime position (§8.4 slice 3.28 rule 5; law §4.2)")))
+          ((Some (BStatic k))
+           (if (bool_not (int_eq (len args) k)) (ErErr (quote function_value) (append (show_name sn) (append ": a package's function field applied to " (append (show_nat (len args)) (append " arguments, its arity " (append (show_nat k) " (§8.4 slice 3.28 rule 2; law §4.3)"))))))
+             (match (erase_all t2 env args fuel Nil)
+               ((Pair (Some (Pair e m)) _) (ErErr e m))
+               ((Pair None (Pair t3 as)) (ErOk t3 (ECall (package_field_name pn i) as))))))
+          ((Some (BData _))
+           (match args (Nil (ErOk t2 (ECall (package_field_name pn i) Nil))) (_ (ErErr (quote function_value) (append (show_name sn) ": a package's value field applied (law §4.3)")))))
+          (_ (ErErr (quote no_realization) (append (show_name sn) ": a projection past the constructor's fields")))))))))
+(fn package_field_name ((pn Name) (i Int)) Name (name_append pn (n1 (sym_of_chars (append "field_" (show_nat i))))))
 ;; the field roles of a constructor: True for a runtime field, False for an erased one
 (fn field_roles ((t Tr) (c Name)) (Pair Tr (Option (List Bool)))
   (match (env_find (tr_env t) c)
@@ -430,6 +503,10 @@
     ((Lam _ _ _ _ _)
      (match (beta_head (w_st (Tr.w t)) head args)
        ((Pair st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1)))))
+    ((Proj _ sn i x)   ; a package's function field applied (rule 5)
+     (match (tr_package t sn)
+       ((Pair t1 (Some _)) (erase_package_proj t1 env sn i x args fuel))
+       ((Pair t1 None) (ErErr (quote function_value) "an application whose head is a projection: a function is no value (law §4.3)"))))
     (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
 (fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
@@ -505,7 +582,7 @@
          (_
           (if (sym_eq lc (quote casesOn))
             (erase_cases t env c args fuel)
-          (if (is_template (Tr.es t) c)   ; a template's call is a call of its instance (§8.4 slice 3.28 rule 3)
+          (if (bool_or (is_template (Tr.es t) c) (owner_is t c))   ; a template's call is a call of its instance (§8.4 slice 3.28 rule 3); a realize template's self-call names its constant
             (erase_template_call t env c args fuel)
             (match (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0))) (es_find_decl (Tr.es t) c))   ; the realized constant calling itself: a call
               ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
@@ -531,7 +608,11 @@
                        ((Some desc) (erase_matcher t env c desc args fuel))
                        (None
                         (match (proj_fn_app info args)
-                          ((Some (Pair (Pair sn i) x)) (erase_proj t env sn i x fuel))
+                          ((Some (Pair (Pair sn i) (Pair x Nil))) (erase_proj t env sn i x fuel))
+                          ((Some (Pair (Pair sn i) (Pair x rest)))
+                           (match (tr_package t sn)
+                             ((Pair t1 (Some _)) (erase_package_proj t1 env sn i x rest fuel))
+                             ((Pair t1 None) (ErErr (quote function_value) (append (show_name c) ": a projection applied past its structure — a function is no value (law §4.3)")))))
                           (None (erase_unfold_matcher t env c info args fuel)))))))))))))))))))))))))))))))))
 ;; a definition without a realization: Lean's own matcher (`NAME.match_N`, no descriptor of this
 ;; run) is a definition over `casesOn` — unfolded at its arguments and erased as any definition's
@@ -1092,9 +1173,15 @@
        ((Cons a ar)
         (match role
           (BType
-           (if (has_fvar a)
-             (Pair t (TaErr (quote function_value) (append (show_name c) ": a template taken at an open type — a type parameter of the caller; an instance is at closed types (§8.4 slice 3.28 rule 3, landing 1)")))
-             (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a Nil Nil)
+           ;; an open type argument: inside a template (the declaration's check, at placeholders) a
+           ;; template is taken at the enclosing template's own type parameters — the instance is at
+           ;; closed types —, but the template itself only at its parameters exactly (rule 4: at a type
+           ;; built from them the shape set grows); outside a template, a polymorphic taker is landing 1's limit
+           (if (bool_and (has_fvar a) (bool_or (bool_not (in_template t)) (bool_and (owner_is t c) (bool_not (own_tparam t a)))))
+             (Pair t (if (in_template t)
+                       (TaErr (quote realize_descent) (append (show_name c) ": a recursive call at a type built from a type parameter — a template calls itself at its own types, or the shape set grows (§8.4 slice 3.28 rule 4)"))
+                       (TaErr (quote function_value) (append (show_name c) ": a template taken at an open type — a type parameter of the caller; an instance is at closed types (§8.4 slice 3.28 rule 3, landing 1)"))))
+             (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a (Tr.tps t) Nil)
                ((Pair (Pair w1 es1) None) (Pair (tr_set_es (tr_set_w t w1) es1) (TaErr (quote no_realization) (append (show_name c) ": a type argument that is no E type"))))
                ((Pair (Pair w1 es1) (Some ety)) (template_args (tr_set_es (tr_set_w t w1) es1) env c br ar fuel (Cons a tyl) (Cons ety tye) shapes caps data)))))
           (BErased (template_args t env c br ar fuel tyl tye shapes caps data))
@@ -1124,7 +1211,7 @@
     ((Cons id r) (Cons (match (er_index env id 0) ((Some (Pair _ i)) (EBVar i)) (None (EBVar 0))) (captured_bvars env r)))))
 ;; the shape of a static argument (rule 3): (a) a name with a program; (b) such a name applied —
 ;; type and erased arguments kept, runtime arguments captured; (c) a closed lambda, lifted; (d)
-;; a static parameter passed on; (e) a package constant (landing 2). Anything else — a static
+;; a static parameter passed on; (e) a package constant (rule 5). Anything else — a static
 ;; parameter applied (rule 4), a runtime variable, a let-bound function — is refused
 (type SsRes (SsOk Shape (List ETerm)) (SsErr Symbol (List Int)))
 (fn static_pointer () (List Int) "a static argument is the name of a fn with a program, a realized constant or an instance, such a name applied to runtime values of the caller, a closed lambda, or a static parameter passed on (§8.4 slice 3.28 rule 3; law §4.3)")
@@ -1134,12 +1221,49 @@
     ((FVar _ id) (passed_shape t env id k))
     (_
      (match (get_app_fn a)
-       ((Const d g ls) (named_shape t env (Const d g ls) g (get_app_args a) k fuel))
+       ((Const d g ls)
+        (if (int_eq k 0) (package_shape t env (Const d g ls) g (get_app_args a))
+          (match (env_find (tr_env t) g)
+            ((Some info)
+             (match (proj_fn_app info (get_app_args a))   ; a package's function field passed on (rule 5): the field's term at the constant, a placeholder at the check
+               ((Some (Pair (Pair sn i) (Pair x rest))) (package_field_shape t env sn i x rest k fuel))
+               (None (named_shape t env (Const d g ls) g (get_app_args a) k fuel))))
+            (None (named_shape t env (Const d g ls) g (get_app_args a) k fuel)))))
        ((FVar _ id)
         (match (er_index env id 0)
           ((Some (Pair (EKShape sh _) _)) (Pair t (SsErr (quote function_value) (append "a static parameter (at " (append (show_name (shape_id sh)) ") applied as a static argument: a static parameter is passed on, never transformed (§8.4 slice 3.28 rule 4; law §4.3)")))))
           (_ (Pair t (SsErr (quote function_value) (static_pointer))))))
+       ((Proj _ sn i x) (package_field_shape t env sn i x (get_app_args a) k fuel))
+       ((Lam _ _ _ _ _)   ; a lambda applied (a package's lambda field at its captured values): reduced, then read as any static argument
+        (match (beta_head (w_st (Tr.w t)) (get_app_fn a) (get_app_args a))
+          ((Pair st r) (static_shape (tr_set_w t (w_set_st (Tr.w t) st)) env r k (- fuel 1)))))
        (_ (Pair t (SsErr (quote function_value) (static_pointer))))))))
+;; (e) a package constant (rule 5): a closed term whose value whnf reads as a package type's
+;; constructor applied — the shape its identity with its arguments, nothing captured
+(fn package_shape ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr))) (Pair Tr SsRes)
+  (if (has_fvar (mk_app_n head gargs)) (Pair t (SsErr (quote function_value) (append (show_name g) ": a package constant applied to a local of the caller — a package is closed (§8.4 slice 3.28 rule 5)")))
+  (match (package_fields_of t (mk_app_n head gargs))
+    ((Pair t1 (PkFields _ _)) (Pair t1 (SsOk (Shape head None 0 (somes_of gargs) Nil) Nil)))
+    ((Pair t1 (PkPlaceholder _)) (Pair t1 (SsErr (quote no_realization) (show_name g))))
+    ((Pair t1 (PkErr _ _)) (Pair t1 (SsErr (quote no_realization) (append (show_name g) ": a static argument of a package type names a package constant — a def whose value is the structure's constructor applied (§8.4 slice 3.28 rule 5)")))))))
+(fn somes_of ((es (List Expr))) (List (Option Expr))
+  (measure (struct es))
+  (match es (Nil Nil) ((Cons a r) (Cons (Some a) (somes_of r)))))
+;; a package's function field as a static argument: at the constant, the field's term (a name, a
+;; partial application or a lambda — lifted under the taking body's name) read as any static
+;; argument; at the declaration's check, a placeholder of the field's arity
+(fn package_field_shape ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (rest (List Expr)) (k Int) (fuel Int)) (Pair Tr SsRes)
+  (match (package_subject t env x)
+    ((Pair t1 (PkErr e m)) (Pair t1 (SsErr e m)))
+    ((Pair t1 (PkFields pk fields))
+     (match (nth fields i)
+       ((Some fi)
+        ;; the arguments may mention the package parameter (its unit, say): the parameter replaced
+        ;; by the constant, so a lambda lifted here is closed
+        (match (match x ((FVar _ id) (tr_subst t1 (mk_app_n fi rest) id pk)) (_ (Pair t1 (mk_app_n fi rest))))
+          ((Pair t2 term) (static_shape t2 env term k fuel))))
+       (None (Pair t1 (SsErr (quote no_realization) (append (show_name sn) ": a projection past the constructor's fields"))))))
+    ((Pair t1 (PkPlaceholder pn)) (Pair t1 (SsOk (Shape (mk_const (package_field_name pn i) Nil) None k Nil Nil) Nil)))))
 (fn passed_shape ((t Tr) (env (List ErEnt)) (id Int) (k Int)) (Pair Tr SsRes)
   (match (er_index env id 0)
     ((Some (Pair (EKShape sh ids) _))

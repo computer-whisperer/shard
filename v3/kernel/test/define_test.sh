@@ -35,9 +35,9 @@ check v3/examples/calc/calc_spec.shard \
 # Since slice 3.27 landing 3 calc runs Init's List.append and List.length through std/list:
 # its ten realizations and three definitions load beside calc's (realized 10, defined +3)
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_spec.shard 2>&1)
-if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 10  defined 28  errors 0' \
+if ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 10  defined 34  errors 0' \
    || [ "$(echo "$out" | grep -c '^DISCHARGE examples.calc.calc_spec.parse_tail.dec_[12] proved')" -ne 2 ]; then
-  echo "define_test: calc_spec is not 28 of 28 defined (calc's 25, std/list's 3) with parse_tail's descents discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
+  echo "define_test: calc_spec is not 34 of 34 defined (calc's 25, std/list's 9 — three fns and six templates) with parse_tail's descents discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -8; fail=$((fail+1))
 fi
 # G8 (GPT-6 R70): a RUNNABLE callee added to a body changes the call and nothing else in the program
 dump=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT --dump v3/pins/loader/route_callee/main.shard 2>&1)
@@ -55,8 +55,8 @@ fi
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_app.shard 2>&1)
 if ! echo "$out" | grep -q '^DEFINE examples.calc.calc_app.show_nat equations=examples.calc.calc_app.show_nat.eq_1$' \
    || ! echo "$out" | grep -q '^DISCHARGE examples.calc.calc_app.show_nat.dec_1 proved' \
-   || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 10  defined 20  errors 0'; then
-  echo "define_test: calc_app is not 20 of 20 defined (calc's 17, std/list's 3) with show_nat's descent discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|DEFINE .*show_nat|LOAD:)' | head -8; fail=$((fail+1))
+   || ! echo "$out" | grep -q 'runnable 0  refused 0  pending 0  realized 10  defined 26  errors 0'; then
+  echo "define_test: calc_app is not 26 of 26 defined (calc's 17, std/list's 9 — three fns and six templates) with show_nat's descent discharged"; echo "$out" | grep -E '^(RUNNABLE|REFUSE|PENDING|READ-ERROR|DEFINE .*show_nat|LOAD:)' | head -8; fail=$((fail+1))
 fi
 # the fresh-name supply (slice 3.17 rule 6): every function defined, two successive names differ
 check v3/std/fresh.shard \

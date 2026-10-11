@@ -42,7 +42,6 @@
 (use kernel.expr)
 (use kernel.host)
 (use kernel.intmap)
-(use kernel.json)
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.prog)
@@ -56,6 +55,7 @@
 (use kernel.erasure.Lifted)
 (use kernel.template)
 (use kernel.template.Template)
+(use kernel.template.TmKind)
 (use kernel.template.InstRes)
 (use kernel.predef)
 (use kernel.predef.Callee)
@@ -723,23 +723,58 @@
   (let ((l (scan_form l0 f s)) (sc (fx_scope l0 f)))
     (match (realize_dispatch (Load.etab l) sc (Load.env l) s)
       ((RzErr e m) (ld_rec l (RClassify (realize_subject sc (Load.env l) s) e m)))
-      ((RzOk es1 d aux thms pending)
+      ((RzOk es1 d aux thms pending lifted demands)
        (match (admit_matchers l f s aux)
          ((Pair l9 None) l9)
-         ((Pair l9 (Some f9)) (load_realized l9 f9 s es1 d thms pending)))))))
-(fn load_realized ((l Load) (f Fx) (s SExpr) (es1 ESt) (d EDecl) (thms (List Declaration)) (pending Bool)) Load
-       (let ((k (edecl_name d)))
-         (match (admit_decls (Load.env l) thms)
-           ((AdRefused subj reason) (ld_rec l (RRefuse subj reason)))
-           ((AdOk env1)
-            (match (policy_pass l f env1 (Load.memo l) thms Nil)
-              ((PolBound n) (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n))))
-              ((PolOut n out) (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)))
-              ((PolOk memo1 recs)
-               (let ((l1 (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 thms) (Fx.module f))) recs)))
-                 (let ((roots (realize_roots l1 k d pending)))
-                   (let ((l2 (ld_rec (ld_with_e (ld_add_pm l1 k roots) (es_add_decl (es_register_all es1 (Fx.module f) (decl_infos d)) d)) (RRealize k (realize_kind s) (decls_declare env1 thms) roots))))
-                     (if pending (ld_rec l2 (RPending k (quote measure))) l2))))))))))
+         ((Pair l9 (Some f9)) (load_realized l9 f9 s es1 d thms pending lifted demands))))
+      ((RzTemplate k e body prec binds rt rl ls aux thms pending)
+       (match (admit_matchers l f s aux)
+         ((Pair l9 None) l9)
+         ((Pair l9 (Some f9)) (load_realize_template l9 f9 (Template k e body prec binds rt (TmRealize rl ls (decl_names thms))) thms pending)))))))
+(fn decl_names ((ds (List Declaration))) (List Name)
+  (measure (struct ds))
+  (match ds (Nil Nil) ((Cons d r) (Cons (decl_name d) (decl_names r)))))
+;; the realization's theorems admitted and checked against the policy: the loader after them
+;; with the environment, or the loader with the refusal recorded
+(type AtRes (AtOk Load CheckedEnv) (AtDone Load))
+(fn admit_theorems ((l Load) (f Fx) (thms (List Declaration))) AtRes
+  (match (admit_decls (Load.env l) thms)
+    ((AdRefused subj reason) (AtDone (ld_rec l (RRefuse subj reason))))
+    ((AdOk env1)
+     (match (policy_pass l f env1 (Load.memo l) thms Nil)
+       ((PolBound n) (AtDone (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RLoadErr (fx_file f) (quote closure_bound) (show_name n)))))
+       ((PolOut n out) (AtDone (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out))))
+       ((PolOk memo1 recs)
+        (AtOk (recs_add (ld_with_tbl (ld_with_env l env1 memo1) (tbl_add_all (Load.tbl l) (decls_declare env1 thms) (Fx.module f))) recs) env1))))))
+;; the lambdas a realize body lifted and the instances it demands are built before its program
+;; is added (as a fn's, §8.4 slice 3.28 rule 3); a demand refused leaves the realization unrecorded
+(fn load_realized ((l Load) (f Fx) (s SExpr) (es1 ESt) (d EDecl) (thms (List Declaration)) (pending Bool) (lifted (List Lifted)) (demands (List Demand))) Load
+  (let ((k (edecl_name d)))
+    (match (admit_theorems l f thms)
+      ((AtDone l1) l1)
+      ((AtOk l1 env1)
+       (match (admit_lifted (ld_with_e l1 es1) f lifted)
+         ((Pair l1a None) l1a)
+         ((Pair l1a (Some f1a))
+          (match (build_demands l1a f1a k demands 64)
+            ((Pair l1b None) l1b)
+            ((Pair l1b (Some _))
+             (let ((roots (realize_roots l1b k d pending)))
+               (let ((l2 (ld_rec (ld_with_e (ld_add_pm l1b k roots) (es_add_decl (es_register_all (Load.etab l1b) (Fx.module f) (decl_infos d)) d)) (RRealize k (realize_kind s) (decls_declare env1 thms) roots))))
+                 (if pending (ld_rec l2 (RPending k (quote measure))) l2)))))))))))
+;; a realize template (rule 6): the body checked once at placeholder shapes, its equations
+;; admitted, the template registered with its binders' roles; no program, no REALIZE: TEMPLATE
+(fn load_realize_template ((l Load) (f Fx) (tm Template) (thms (List Declaration)) (pending Bool)) Load
+  (let ((k (tm_name tm)))
+    (match (check_template (Load.etab l) (fx_scope l f) tm)
+      ((Some (Pair e m)) (ld_rec l (RClassify k e m)))
+      (None
+       (match (admit_theorems l f thms)
+         ((AtDone l1) l1)
+         ((AtOk l1 env1)
+          (let ((l2 (ld_rec (ld_add_template (ld_with_e l1 (es_register (Load.etab l1) k (Fx.module f) (EITemplate (count_static (tm_binds tm))))) k tm)
+                            (RTemplate k (template_statics tm) (decls_declare env1 thms)))))
+            (if pending (ld_rec l2 (RPending k (quote measure))) l2))))))))
 ;; the pending obligations a realization carries (§7.5; GPT-6 R58, slice 10): its own measure when
 ;; it is not structural, and every root a callee's realization already carries — an obligation is
 ;; recorded once, at its constant (PENDING), and every realization that reaches it names it
@@ -879,7 +914,7 @@
 ;; instantiate from and is refused with the obstacle
 (fn load_template ((l1 Load) (f Fx) (s SExpr) (pd PreDef) (es1 ESt) (binds (List TBind)) (rt EType) (fuel Int) (callees (List Callee)) (cfuel Int)) (Pair Load Fx)
   (let ((sc (fx_scope l1 f)) (k (pd_name pd)))
-    (match (check_template es1 sc (Template pd binds rt))
+    (match (check_template es1 sc (tm_of_fn pd binds rt))
       ((Some (Pair e m)) (Pair (ld_rec l1 (RClassify k e m)) f))
       (None
     (match (define_pd es1 sc pd)
@@ -901,7 +936,7 @@
                 (match (admit_core l4 (mix_recs f3 recs) eqs)
                   ((Pair l5 None) (Pair l5 f3))
                   ((Pair l5 (Some recs2))
-                   (let ((tm (Template pd binds rt)))
+                   (let ((tm (tm_of_fn pd binds rt)))
                      (let ((l6 (ld_rec (ld_add_template (ld_with_e l5 (es_register (Load.etab l5) k (Fx.module f3) (EITemplate (count_static binds)))) k tm)
                                        (RTemplate k (template_statics tm) (decls_declare (Load.env l5) eqs)))))
                        (Pair (if wf (ld_rec l6 (RPending k (quote measure))) l6) (mix_recs (mix_recs f3 recs) recs2))))))))))))))))))

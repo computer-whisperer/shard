@@ -59,6 +59,15 @@ for t in List.length.realize_1 List.length.realize_2 List.append.realize_1 List.
          take_nil_eq take_cons_eq drop_nil_eq drop_cons_eq get_opt_nil get_opt_cons get_bound get_nil_eq get_cons_eq list_append_nil_left list_append_cons list_rev_nil list_rev_cons list_len_nil list_len_cons list_take_nil list_drop_nil list_take_zero list_take_succ_cons list_drop_zero list_drop_succ_cons list_len_nonneg list_append_nil_right list_append_assoc list_len_append list_len_rev list_rev_append list_rev_rev list_drop_len list_drop_le list_drop_shortens list_take_le list_take_len sum_append insert mem_insert insert_sorted Sorted sorted_insert sorted_insert_val sorted_nil sorted_demo one_lt_two get_demo; do
   checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
 done
+# std/list.shard: Init's six higher-order list functions as templates (§8.4 slice 3.28 rule 6, landing 2):
+# TEMPLATE records — no program of their own — and their equations proven once over the arbitrary function
+for t in List.map List.filter List.foldl List.foldr List.any List.all; do
+  checks=$((checks+1)); grep -q "^TEMPLATE $t static=" "$OUT/load.txt" || bad "std/list.shard: $t is not a template (no TEMPLATE record)"
+done
+for t in List.map.realize_1 List.map.realize_2 List.filter.realize_1 List.filter.realize_2 List.foldl.realize_1 List.foldl.realize_2 \
+         List.foldr.realize_1 List.foldr.realize_2 List.any.realize_1 List.any.realize_2 List.all.realize_1 List.all.realize_2 filter_nil_eq filter_cons_eq; do
+  checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
+done
 checks=$((checks+1)); grep -q '^REALIZE Option.getD view ' "$OUT/load.txt" || bad "Option.getD is not realized through its matcher's definition (the view)"
 decls=$(wc -l < "$OUT/std/order" 2>/dev/null || echo 0)
 checks=$((checks+1)); grep -q "^STORE: .* new=$decls shared=0$" "$OUT/load.txt" || { bad "the store's count is not the order's $decls"; grep '^STORE:' "$OUT/load.txt"; }

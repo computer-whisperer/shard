@@ -1471,6 +1471,20 @@ entrypoints with 0 failed in 568 s.
 
 Landing 1 holds on the full gate: **2026-10-11 — pipeline 581 green on `e98e504`: engine 56 s; corpus 1,491 s at the baseline; v3 4,540 s of a 3 h limit, 12 s under pipeline 576's 4,552 (the export 132 s; the index driver built by route 1 in 12 s and the export's index built in 96 s on the runner; 39 entrypoints with 0 failed in 1,424 s against 1,407 — `store_test` 1,084 s against 1,076 (calc's five leaves stored in 550 s, their 447 declarations replayed in 90 s), parity byte-identical over 31 closures and 135,063 declarations in 791 s against 758 over 134,028 — the 1,035 declarations more are the landing's kernel growth —, `define_test` 721 against 713, `path_test` 693 against 682, `calc_test` 650 against 644, `engine_test` 501 against 500, `std_test` 441 against 433 — the std root's 8 files and 336 declarations loaded and stored in 242 s and K's replay 197 s, against 240 and 191 —, `wire_test` 428 against 427, `derive_test` 318 against 309, `calc_main_test` 304 against 305, `k_clients_test` 194 against 192, `tactic_test` 142 against 139, the loader pins' entrypoint 145 against 134 (250 cases against 243), `route2_test` 67 against 71; route 1's native build of the kernel 399 s against 419; the replay 2,414 s at 32.3 GB against 2,419 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 — packages, the six list templates, the examples and the entrypoint — is open.**
 
+**Landing 2 built 2026-10-11** (`LANGUAGE.md` §8.4 "as built, landing
+2"): realize templates (`realize_template`; `std/list`'s `List.map`,
+`filter`, `foldl`, `foldr`, `any`, `all` as templates, `filter`'s rows by
+`List.filter_cons`), packages (`package_of`, a package constant's shape,
+its projections erased by the reduction, a field passed on), the
+structure reader with Lean's binder infos, two landing-1 defects fixed (a
+polymorphic recursive template was refused at its declaration; the check's
+type parameters), the E-first instance deferred to landing 3;
+`v3/examples/template/` (law §5.3's `add_offset`, a named fn and a partial
+application, `Monoid` at `Int` with its generic theorems, the entry
+printing `9662014`) and `kernel/test/template_test.sh`, the 40th
+entrypoint, with the artifact check over `--dump`; pin `template_package`.
+Gates: the loader pins' entrypoint 251 cases 0 failed in 56 s; `std_test` 201 checks 0 failed in 151 s (the std root's 8 files and 356 declarations, 20 more than at landing 1 — the six templates' twelve equations and `filter`'s two —, stored in 86 s and replayed by K alone in 65 s); `template_test` 40 checks 0 failed in 102 s (15 instances in the artifact, 17 lambdas and function types in the sources, none in the programs; load 35 s, run 33 s, dump 34 s); parity byte-identical over 31 closures and 135,443 declarations in 297 s; the seven touched kernel files clean under the V3 loader (no refusal, no unused open); the full suite's 40 entrypoints in 552 s with one failure, `define_test`'s two stale counts (28 and 20 defined became 34 and 26, the six templates), corrected and rerun green (12 checks 0 failed in 259 s).
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
@@ -1584,6 +1598,6 @@ v3/CANON.md       the canonical form of S — layout, the term tier over E, the 
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
 v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
 v3/std/           phase 3: the library under the naming law — Init is the library; std/README.md holds the records of the old modules (slice 3.27)
-v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use)
+v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use); template/ (slice 3.28: templates, lifted lambdas and a package in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```
