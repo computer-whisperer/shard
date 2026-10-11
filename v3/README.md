@@ -1469,6 +1469,8 @@ records, the escape rule's pointers on both routes; six pins; the
 loader pins' entrypoint 250 cases, parity, the full suite's 39
 entrypoints with 0 failed in 568 s.
 
+Landing 1 holds on the full gate: **2026-10-11 — pipeline 581 green on `e98e504`: engine 56 s; corpus 1,491 s at the baseline; v3 4,540 s of a 3 h limit, 12 s under pipeline 576's 4,552 (the export 132 s; the index driver built by route 1 in 12 s and the export's index built in 96 s on the runner; 39 entrypoints with 0 failed in 1,424 s against 1,407 — `store_test` 1,084 s against 1,076 (calc's five leaves stored in 550 s, their 447 declarations replayed in 90 s), parity byte-identical over 31 closures and 135,063 declarations in 791 s against 758 over 134,028 — the 1,035 declarations more are the landing's kernel growth —, `define_test` 721 against 713, `path_test` 693 against 682, `calc_test` 650 against 644, `engine_test` 501 against 500, `std_test` 441 against 433 — the std root's 8 files and 336 declarations loaded and stored in 242 s and K's replay 197 s, against 240 and 191 —, `wire_test` 428 against 427, `derive_test` 318 against 309, `calc_main_test` 304 against 305, `k_clients_test` 194 against 192, `tactic_test` 142 against 139, the loader pins' entrypoint 145 against 134 (250 cases against 243), `route2_test` 67 against 71; route 1's native build of the kernel 399 s against 419; the replay 2,414 s at 32.3 GB against 2,419 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 — packages, the six list templates, the examples and the entrypoint — is open.**
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
