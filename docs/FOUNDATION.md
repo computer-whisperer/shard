@@ -1055,7 +1055,7 @@ here keeps its unresolved capability attached to the replacement gate.
 | `OVERVIEW.md` | amended (dated §11: the foundation ruling); rewritten at the flip | phase 0; phase 6 | §1 "deliberately not the dependent-types path … two languages" and §6 (narrow/full, disposable bootstrap) bannered as contradicted; §10's one-goal ruling deferred behind this arc |
 | `LAYOUT.md` | carried | phase 0 | the `v3/` placement rule; the logical package root |
 | `LANGUAGE.md` | superseded by a new specification of S, L, E and I; the old one archived | phase 2–3 (written); phase 6 (archived) | §10 → the surface and I; §11's narrow/full distinction and §13's lifted constraints (lambdas, partial application, load-time typing) do not survive; amending in place would describe neither tree |
-| `LEAN.md` | new (§5.4); **written 2026-10-10** (slice 3.27 landing 4) | phase 3 | the three lists in 88 rows; T9 small run against it |
+| `LEAN.md` | new (§5.4); **written 2026-10-10** (slice 3.27 landing 4); the lambda profile's rows 2026-10-11 (slice 3.28 landing 3) | phase 3 | the three lists in 100 rows; T9 small run against it; T2 and T3 recorded against it |
 | `TCB.md` | amended at phase 0 (the roster governs the old tree; §9 governs V3); roster rewritten | phase 0; phase 1; phase 6 | roster = K, the Rust host, the oracle evidence, retained P, the fixed-identity primitives; the temporary-chain Lifetime story replaced by the four routes |
 | `TOTALITY.md` | superseded by §4.5 | phase 3 | the measure regime becomes elaboration and tactics; the kit's theorems port |
 | `REFINEMENT.md` | superseded by §4.1 | phase 3 | subtypes over arbitrary `Prop`; #17 dissolves |

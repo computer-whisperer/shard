@@ -22,6 +22,9 @@
 (use kernel.kw)
 (use kernel.elab El el_w el_cx)
 (use kernel.etable)
+(use kernel.etable.EBind)
+(use kernel.classify.EDemand)
+(use kernel.classify.EShape)
 (use kernel.expr)
 (use kernel.matcher)
 (use kernel.name)
@@ -96,6 +99,34 @@
   (match (tm_kind tm)
     ((TmFn _) (let ((eqn (name_append (tm_name tm) (nm_eq_n i)))) (match (env_find env eqn) ((Some _) (Some eqn)) (None None))))
     ((TmRealize _ _ eqs) (nth eqs (- i 1)))))
+;; the template's written binders as the E-first reader takes them (landing 3): a static binder's
+;; domains and result as E types over the type parameters' locals (static_etypes over the local's
+;; type in the elaborator's context), a data binder's E type, a package binder; a type or an
+;; erased binder is not written. None when a static binder's type reads as no function type —
+;; binder_role read the same type, so this is never reached by a template that checked
+(fn tm_ebinds ((es ESt) (sc Scope) (tm Template)) (Pair ESt (Option (List EBind)))
+  (match (tm_ebinds_go (el_w (tm_state tm)) es sc (tm_binds tm) (tbind_types (tm_binds tm)) Nil)
+    ((Pair (Pair _ es1) r) (Pair es1 r))))
+(fn tm_ebinds_go ((w W) (es ESt) (sc Scope) (binds (List TBind)) (tps (List Expr)) (acc (List EBind))) (Pair (Pair W ESt) (Option (List EBind)))
+  (measure (struct binds))
+  (match binds
+    (Nil (Pair (Pair w es) (Some (rev acc))))
+    ((Cons (TBind _ role fv) r)
+     (match role
+       (BType (tm_ebinds_go w es sc r tps acc))
+       (BErased (tm_ebinds_go w es sc r tps acc))
+       ((BData t) (tm_ebinds_go w es sc r tps (Cons (EBData t) acc)))
+       ((BStatic k)
+        (if (int_eq k 0) (tm_ebinds_go w es sc r tps (Cons EBPackage acc))
+          (match (w_local_type w (fvar_id_of fv))
+            (None (Pair (Pair w es) None))
+            ((Some ty)
+             (match (static_etypes w es sc ty tps Nil (budget_depth))
+               ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) None))
+               ((Pair (Pair w1 es1) (Some ts)) (tm_ebinds_go w1 es1 sc r tps (Cons (EBStatic (take (- (len ts) 1) ts) (last_etype ts)) acc))))))))))))
+(fn last_etype ((ts (List EType))) EType
+  (measure (struct ts))
+  (match ts (Nil (ETVar 0)) ((Cons t Nil) t) ((Cons _ r) (last_etype r))))
 ;; the static binders' names, as the form wrote them (the TEMPLATE record)
 (fn template_statics ((tm Template)) (List Name)
   (static_names (cx_bound (el_cx (tm_state tm))) (tm_binds tm)))
@@ -180,12 +211,16 @@
 
 ;; ---- the instance -----------------------------------------------------------------------------
 (type InstRes (InstOk ESt EDecl Declaration (List Declaration) (List Lifted) (List Demand)) (InstErr Symbol (List Int)))
-(fn build_instance ((es ESt) (sc Scope) (env CheckedEnv) (tm Template) (d Demand)) InstRes
+;; the instance's program — the half both routes share (landing 3: an E-first taker has no L
+;; half): the body at the type arguments, the entries, the recursion, the erasure, the captured
+;; values' types as the program's leading parameter types
+(type PgRes (PgOk Tr EDecl) (PgErr Symbol (List Int)))
+(fn build_program ((es ESt) (sc Scope) (tm Template) (d Demand)) PgRes
   (let ((binds (tm_binds tm)))
     (match d
       ((Demand name c tyl tye shapes)
-       (if (bool_not (int_eq (len tye) (count_types binds))) (InstErr (quote function_value) (append (show_name c) ": the instance's type arguments do not match the template's type parameters"))
-       (if (bool_not (int_eq (len shapes) (count_static binds))) (InstErr (quote function_value) (append (show_name c) ": the instance's shapes do not match the template's static parameters"))
+       (if (bool_not (int_eq (len tye) (count_types binds))) (PgErr (quote function_value) (append (show_name c) ": the instance's type arguments do not match the template's type parameters"))
+       (if (bool_not (int_eq (len shapes) (count_static binds))) (PgErr (quote function_value) (append (show_name c) ": the instance's shapes do not match the template's static parameters"))
        (let ((t0 (tr_own (tr_new (el_w (tm_state tm)) es sc name Nil) c name binds)))
          (match (subst_types t0 (tm_body tm) binds tyl)
            ((Pair t1 body1)
@@ -193,22 +228,79 @@
               ((Pair ents (Pair ncap _))
                (let ((env0 (append (rev ents) (tm_self_ents tm))))
                  (match (inst_rec t1 env0 (tm_rec tm) binds tyl ncap)
-                   ((Pair _ (Left5r e m)) (InstErr e m))
+                   ((Pair _ (Left5r e m)) (PgErr e m))
                    ((Pair t2 (Right5r rec))
                     (match (erase t2 env0 body1 (budget_depth))
-                      ((ErErr e m) (InstErr e m))
+                      ((ErErr e m) (PgErr e m))
                       ((ErOk t3 ebody)
                        (match (captured_etypes t3 shapes Nil)
-                         ((Pair t4 None) (InstErr (quote function_value) (append (show_name c) ": a captured value's type is no E type")))
+                         ((Pair t4 None) (PgErr (quote function_value) (append (show_name c) ": a captured value's type is no E type")))
                          ((Pair t4 (Some cetys))
-                          (let ((prog (EFn name 0 (append cetys (subst_tys tye (bind_ptypes binds))) (subst_ty tye (tm_rt tm)) rec ebody)))
-                            (match (inst_definition t4 env tm tyl shapes name)
-                              ((Pair t5 (Left3 e m)) (InstErr e m))
-                              ((Pair t5 (Right3 (Cons dd Nil)))
-                               (match (inst_equations t5 env tm tyl shapes name 1 Nil)
-                                 ((Pair t6 (Left3 e m)) (InstErr e m))
-                                 ((Pair t6 (Right3 eqs)) (InstOk (Tr.es t6) prog dd eqs (Tr.lifted t6) (Tr.demands t6)))))
-                              ((Pair t5 (Right3 _)) (InstErr (quote function_value) "the instance's definition"))))))))))))))))))))))
+                          (PgOk t4 (EFn name 0 (append cetys (subst_tys tye (bind_ptypes binds))) (subst_ty tye (tm_rt tm)) rec ebody))))))))))))))))))))
+(fn build_instance ((es ESt) (sc Scope) (env CheckedEnv) (tm Template) (d Demand)) InstRes
+  (match (build_program es sc tm d)
+    ((PgErr e m) (InstErr e m))
+    ((PgOk t4 prog)
+     (match d
+       ((Demand name _ tyl _ shapes)
+        (match (inst_definition t4 env tm tyl shapes name)
+          ((Pair t5 (Left3 e m)) (InstErr e m))
+          ((Pair t5 (Right3 (Cons dd Nil)))
+           (match (inst_equations t5 env tm tyl shapes name 1 Nil)
+             ((Pair t6 (Left3 e m)) (InstErr e m))
+             ((Pair t6 (Right3 eqs)) (InstOk (Tr.es t6) prog dd eqs (Tr.lifted t6) (Tr.demands t6)))))
+          ((Pair t5 (Right3 _)) (InstErr (quote function_value) "the instance's definition"))))))))
+;; an E-first taker's instance (rule 3's last sentence, landing 3): the program alone — no
+;; definition and no equations, the body that takes it having no L reading. The demand's E types
+;; become the L types the template's body is erased at (etype_to_l) and its shapes the named fns
+;; at their captured values' declared types; what the body lifts or demands is typed as any
+(type InstERes (IEOk ESt EDecl Demand (List Lifted) (List Demand)) (IEErr Symbol (List Int)))
+(fn build_instance_e ((es ESt) (sc Scope) (env CheckedEnv) (tm Template) (ed EDemand)) InstERes
+  (match (edemand_to_demand env ed)
+    (None (IEErr (quote function_value) (append (show_name (edemand_template ed)) ": a type argument of an E-first instance has no L reading — an E-only type (§8.1 rule 1)")))
+    ((Some d)
+     (match (build_program es sc tm d)
+       ((PgErr e m) (IEErr e m))
+       ((PgOk t prog) (IEOk (Tr.es t) prog d (Tr.lifted t) (Tr.demands t)))))))
+(fn edemand_to_demand ((env CheckedEnv) (ed EDemand)) (Option Demand)
+  (match ed
+    ((EDemand name c tye shapes)
+     (match (etypes_to_l env tye Nil)
+       (None None)
+       ((Some tyl)
+        (match (eshapes_to_shapes env shapes Nil)
+          (None None)
+          ((Some ss) (Some (Demand name c tyl tye ss)))))))))
+(fn eshapes_to_shapes ((env CheckedEnv) (ss (List EShape)) (acc (List Shape))) (Option (List Shape))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some (rev acc)))
+    ((Cons (EShape g k ctys) r)
+     (match (etypes_to_l env ctys Nil)
+       (None None)
+       ((Some ltys) (eshapes_to_shapes env r (Cons (Shape (mk_const g Nil) None k (nones_of (len ctys)) ltys) acc)))))))
+;; an E type as the L type it names: every E type lives in Type, so a constant's level parameters
+;; are the ones that put its Sort binders at Type (erase.shard's solve_levels); a type parameter
+;; has no L reading here
+(fn etype_to_l ((env CheckedEnv) (t EType)) (Option Expr)
+  (measure (struct t))
+  (match t
+    ((ETVar _) None)
+    ((ETCon n args)
+     (match (env_find env n)
+       (None None)
+       ((Some info)
+        (match (solve_levels info)
+          (None None)
+          ((Some ls)
+           (match (etypes_to_l env args Nil)
+             (None None)
+             ((Some largs) (Some (mk_app_n (mk_const n ls) largs)))))))))))
+(fn etypes_to_l ((env CheckedEnv) (ts (List EType)) (acc (List Expr))) (Option (List Expr))
+  (measure (struct ts))
+  (match ts
+    (Nil (Some (rev acc)))
+    ((Cons t r) (match (etype_to_l env t) (None None) ((Some e) (etypes_to_l env r (Cons e acc)))))))
 ;; the body at the type arguments: each type binder's local replaced
 (fn subst_types ((t Tr) (e Expr) (binds (List TBind)) (tyl (List Expr))) (Pair Tr Expr)
   (measure (struct binds))

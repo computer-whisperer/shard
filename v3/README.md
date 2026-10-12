@@ -1487,6 +1487,22 @@ Gates: the loader pins' entrypoint 251 cases 0 failed in 56 s; `std_test` 201 ch
 
 Landing 2 holds on the full gate: **2026-10-11 — pipeline 583 green on `8bbaf58`: engine 55 s; corpus 1,471 s at the baseline; v3 4,623 s of a 3 h limit, 83 s over pipeline 581's 4,540 (the export 131 s; the index driver built by route 1 in 11 s and the export's index built in 95 s on the runner; 40 entrypoints with 0 failed in 1,440 s against 1,424 — `store_test` 1,111 s against 1,084 (calc's five leaves stored in 574 s against 550: 467 declarations against 447, the 20 more being `std/list`'s growth, which the leaves import; replayed in 89 s against 90), parity byte-identical over 31 closures and 135,443 declarations in 799 s against 791 over 135,063 — the 380 declarations more are the landing's kernel growth —, `define_test` 722 against 721, `path_test` 675 against 693, `calc_test` 636 against 650, `engine_test` 494 against 501, `std_test` 442 against 441 — the std root's 8 files and 356 declarations loaded and stored in 249 s and K's replay 190 s, against 242 and 197 over 336 —, `wire_test` 432 against 428, `template_test` 309 s, the new entrypoint (load 103 s, run 105 s, dump 101 s; 15 instances in the artifact, 17 lambdas and function types in the sources, none in the programs), `derive_test` 307 against 318, `calc_main_test` 302 against 304, `k_clients_test` 189 against 194, `tactic_test` 140 against 142, the loader pins' entrypoint 141 against 145 (251 cases against 250), `route2_test` 68 against 67; route 1's native build of the kernel 422 s against 399; the replay 2,459 s at 31.3 GB against 2,414 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 3 — rule 4's budget and the workload, the growth and budget pins, the E-first instance, `LEAN.md`'s rows, the T2 and T3 records and the close-out — is open.**
 
+**Landing 3 built 2026-10-11** (`LANGUAGE.md` §8.4 "as built, landing
+3"): rule 4's budget (`Load.budget`, 1,024 instances per template per load,
+`--instance-budget N`, `specialization_budget`), T3's workload
+(`examples/template/workload.shard`: 64 instances at 64 lifted lambdas in one
+load, the entry's last three digits), pins `template_growth`,
+`template_budget` (the harness at a budget of 2) and `template_e_first`; the
+E-first instance — a template called in a body with no L reading takes an
+instance with a program and no definition: the E table carries the
+templates' E signatures, the classifier's `take_instances` post-pass solves
+the type arguments and names the instance by the one formula, the loader
+builds the program half; a lambda, a registry constant or a polymorphic fn
+there is refused with its pointer; `LEAN.md`'s function-value row became four
+same-as-Lean rows, five refused rows and three shard-only rows;
+`docs/records/T2-T3-2026-10-11.md`. The slice's close-out: its as-built
+departures stand for ratification (`LANGUAGE.md` §13 item 62). Gates: the loader pins' entrypoint 254 cases 0 failed in 53 s (55 s inside the suite); `template_test` 46 checks 0 failed in 101 s (80 instances in the artifact — landing 2's 15, the workload's 64, the entry's E-first one —, 81 lambdas and function types in the sources, none in the programs; load 35 s, run 34 s, dump 33 s); `std_test` 201 checks 0 failed in 152 s (356 declarations stored in 88 s, replayed by K alone in 63 s); `define_test` 12 checks 0 failed in 252 s; parity byte-identical over 31 closures and 135,867 declarations in 311 s (424 more than at landing 2, the kernel's growth); the five touched kernel files clean under the V3 loader; the full suite's 40 entrypoints with 0 failed in 519 s (`store_test` 399 s, `parity_test` 311 s, `define_test` 252 s, `path_test` 234 s, `calc_test` 227 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

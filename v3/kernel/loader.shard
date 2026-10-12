@@ -57,6 +57,7 @@
 (use kernel.template.Template)
 (use kernel.template.TmKind)
 (use kernel.template.InstRes)
+(use kernel.template.InstERes)
 (use kernel.predef)
 (use kernel.predef.Callee)
 (use kernel.predef.PdRes)
@@ -254,15 +255,16 @@
   (typed (List (Pair Name (Pair Scope SExpr))))   ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
   (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
   (templates (List (Pair Name Template)))   ; the templates defined (slice 3.28 rule 1), for the instances a body demands
-  (instances (List Demand)))   ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
+  (instances (List Demand))   ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
+  (budget Int))   ; the instances of one template this load may build (rule 4): instance_budget, or the driver's --instance-budget
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil)))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget))))
 ;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
 ;; environment of Init alone (the run's), the ordinals, the export and index handle;
 ;; everything of the old root reset to load0's, the old root's own declarations gone
 (fn ld_reroot ((l Load) (root (List (List Int)))) Load
-  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l))))
+  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l)) (budget (Load.budget l))))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -331,6 +333,14 @@
 (fn ld_add_typed ((l Load) (n Name) (sc Scope) (s SExpr)) Load (with Load l (typed (Cons (Pair n (Pair sc s)) (Load.typed l)))))
 (fn ld_add_template ((l Load) (n Name) (tm Template)) Load (with Load l (templates (Cons (Pair n tm) (Load.templates l)))))
 (fn ld_add_instance ((l Load) (d Demand)) Load (with Load l (instances (Cons d (Load.instances l)))))
+;; rule 4's budget (law §4.3): the instances of one template a load may build, past which a
+;; demand is refused naming the template — a refusal, never a proof; the driver's
+;; --instance-budget N sets another for a load (the pins harness runs one case at 2)
+(fn instance_budget () Int 1024)
+(fn ld_with_budget ((l Load) (n Int)) Load (with Load l (budget n)))
+(fn instances_of ((c Name) (ds (List Demand))) Int
+  (measure (struct ds))
+  (match ds (Nil 0) ((Cons d r) (+ (if (name_eq (demand_template d) c) 1 0) (instances_of c r)))))
 (fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
 ;; a fn whose definition waits on a callee not yet defined (slice 3.15: a forward reference, or a
 ;; callee itself parked): the fn, its form, its E declaration, the obstacle and the callee named
@@ -772,9 +782,8 @@
        (match (admit_theorems l f thms)
          ((AtDone l1) l1)
          ((AtOk l1 env1)
-          (let ((l2 (ld_rec (ld_add_template (ld_with_e l1 (es_register (Load.etab l1) k (Fx.module f) (EITemplate (count_static (tm_binds tm))))) k tm)
-                            (RTemplate k (template_statics tm) (decls_declare env1 thms)))))
-            (if pending (ld_rec l2 (RPending k (quote measure))) l2))))))))
+          (match (register_template l1 (Fx.module f) (fx_scope l f) tm (decls_declare env1 thms))
+            ((Pair l2 ok) (if (bool_and ok pending) (ld_rec l2 (RPending k (quote measure))) l2)))))))))
 ;; the pending obligations a realization carries (§7.5; GPT-6 R58, slice 10): its own measure when
 ;; it is not structural, and every root a callee's realization already carries — an obligation is
 ;; recorded once, at its constant (PENDING), and every realization that reaches it names it
@@ -824,7 +833,11 @@
 (fn load_e_first ((l1 Load) (f Fx) (s SExpr) (why Symbol) (route Symbol)) (Pair Load Fx)
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
     ((CErr e m) (Pair (ld_rec l1 (RClassify (form_name (fx_scope l1 f) s) e m)) f))
-    ((COk d) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) why route)) f))))
+    ((COk d) (Pair (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d)) (RRun (form_head s) (edecl_name d) why route)) f))
+    ((COkT d eds)   ; the instances the body takes (rule 3, landing 3) built first — programs, no L half
+     (match (build_e_demands l1 f (edecl_name d) eds)
+       ((Pair l2 None) (Pair l2 f))
+       ((Pair l2 (Some f2)) (Pair (ld_rec (ld_with_e l2 (es_add_decl (Load.etab l2) d)) (RRun (form_head s) (edecl_name d) why route)) f2))))))
 ;; the classifier's program for a fn whose signature did elaborate: a later body may still bind
 ;; it as a callee-local and stay on the typed route (rule 6)
 (fn load_e_sig ((l1 Load) (f Fx) (s SExpr) (why Symbol)) (Pair Load Fx)
@@ -841,7 +854,8 @@
                         ((Some (Pair r2 p)) (RClassify (form_name (fx_scope l1 f) s) r2 p))
                         (None (RClassify (form_name (fx_scope l1 f) s) e
                                 (append m2 (append " — read E-first after the typed route's " (append (chars_of_sym r) (append ": " m)))))))) f))
-    ((COk _) (load_e_sig l1 f s (quote no_l_identity)))))
+    ((COk _) (load_e_sig l1 f s (quote no_l_identity)))
+    ((COkT _ _) (load_e_sig l1 f s (quote no_l_identity)))))
 ;; a signature with no L reading: the classifier's program alone (rule 6). When the classifier
 ;; refuses the form too, its refusal carries what the signature's reading met — a result type
 ;; the elaborator could not read is `unknown_type` to the classifier, which names the symbol
@@ -853,7 +867,8 @@
                         (if (init_seen (fx_scope l1 f))   ; a file without Init has no L reading by construction: nothing to add
                           (append m2 (append " — its signature has no L reading: " (append (chars_of_sym r) (append ": " m))))
                           m2))) f))
-    ((COk _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))))
+    ((COk _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))
+    ((COkT _ _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))))
 (fn ld_last_runnable ((l Load)) Bool
   (match (ld_recs_head l) ((Some (RRun _ _ _ _)) True) (_ False)))
 ;; one attempt at a fn. A callee that is not loaded yet or is itself parked (the elaborator's
@@ -937,9 +952,19 @@
                   ((Pair l5 None) (Pair l5 f3))
                   ((Pair l5 (Some recs2))
                    (let ((tm (tm_of_fn pd binds rt)))
-                     (let ((l6 (ld_rec (ld_add_template (ld_with_e l5 (es_register (Load.etab l5) k (Fx.module f3) (EITemplate (count_static binds)))) k tm)
-                                       (RTemplate k (template_statics tm) (decls_declare (Load.env l5) eqs)))))
-                       (Pair (if wf (ld_rec l6 (RPending k (quote measure))) l6) (mix_recs (mix_recs f3 recs) recs2))))))))))))))))))
+                     (match (register_template l5 (Fx.module f3) sc tm (decls_declare (Load.env l5) eqs))
+                       ((Pair l6 ok) (Pair (if (bool_and ok wf) (ld_rec l6 (RPending k (quote measure))) l6) (mix_recs (mix_recs f3 recs) recs2)))))))))))))))))))
+;; a template registered in the E table with its written binders' E signatures (template.shard's
+;; tm_ebinds) — for the instances an E-first body takes (landing 3) — and recorded TEMPLATE; one
+;; whose static parameter's E signature cannot be read is refused (binder_role read the same type)
+(fn register_template ((l Load) (m Name) (sc Scope) (tm Template) (eqs (List Name))) (Pair Load Bool)
+  (let ((k (tm_name tm)) (binds (tm_binds tm)))
+    (match (tm_ebinds (Load.etab l) sc tm)
+      ((Pair es1 None) (Pair (ld_rec (ld_with_e l es1) (RClassify k (quote function_value) "a static parameter whose E signature could not be read")) False))
+      ((Pair es1 (Some ebs))
+       (Pair (ld_rec (ld_add_template (ld_with_e l (es_register es1 k m (EITemplate (count_static binds) ebs (tm_rt tm) (count_types binds)))) k tm)
+                     (RTemplate k (template_statics tm) eqs))
+             True)))))
 ;; the lambdas a body lifted (rule 3(c)): each generated fn's definition admitted — once; a
 ;; body read again regenerates the same — and its program added, DEFINE with no equation
 (fn admit_lifted ((l Load) (f Fx) (ls (List Lifted))) (Pair Load (Option Fx))
@@ -956,7 +981,7 @@
 ;; definition and its equations admitted, its program added, INSTANCE recorded —, then the
 ;; lambdas and instances its own body lifted and demanded, to a fixpoint. One already built
 ;; is reused when the demand's arguments are the same, refused when they differ — under the
-;; taker's name, the body that demanded it
+;; taker's name, the body that demanded it; a template at its budget refuses the next (rule 4)
 (fn build_demands ((l Load) (f Fx) (taker Name) (ds (List Demand)) (fuel Int)) (Pair Load (Option Fx))
   (measure fuel)
   (if (lt fuel 1) (Pair (ld_rec l (RClassify taker (quote define_loop) "the instances did not settle")) None)
@@ -967,8 +992,11 @@
          (match (assoc_demand name (Load.instances l))
            ((Some d0)
             (if (demand_same d d0) (build_demands l f taker r fuel)
-              (Pair (ld_rec l (RClassify taker (quote instance_clash) (append (show_name name) " is built at other arguments — a static argument's type arguments or captured types differ under the same shapes (§8.4 slice 3.28 rule 3)"))) None)))
+              (Pair (ld_rec l (instance_clash taker name)) None)))
            (None
+            (match (over_budget l taker (demand_template d))
+              ((Some l1) (Pair l1 None))
+              (None
             (match (assoc_template (demand_template d) (Load.templates l))
               (None (Pair (ld_rec l (RClassify taker (quote unknown_template) (show_name (demand_template d)))) None))
               ((Some tm)
@@ -988,7 +1016,47 @@
                                              (RInstance name (demand_template d) (shape_records (demand_shapes d)) (decls_declare (Load.env l3) eqs)))))
                              (match (build_demands l4 (mix_recs (mix_recs f1 recs) recs2) name demands (- fuel 1))
                                ((Pair l5 None) (Pair l5 None))
-                               ((Pair l5 (Some f5)) (build_demands l5 f5 taker r (- fuel 1))))))))))))))))))))))
+                               ((Pair l5 (Some f5)) (build_demands l5 f5 taker r (- fuel 1))))))))))))))))))))))))
+(fn instance_clash ((taker Name) (name Name)) Rec
+  (RClassify taker (quote instance_clash) (append (show_name name) " is built at other arguments — a static argument's type arguments or captured types differ under the same shapes (§8.4 slice 3.28 rule 3)")))
+;; rule 4's budget at a demand: the load with the refusal recorded when the template is at it
+(fn over_budget ((l Load) (taker Name) (c Name)) (Option Load)
+  (if (le (Load.budget l) (instances_of c (Load.instances l)))
+    (Some (ld_rec l (RClassify taker (quote specialization_budget) (append (show_name c) (append ": " (append (show_nat (Load.budget l)) " instances in this load already — the budget is a refusal, never a proof of anything (§8.4 slice 3.28 rule 4; law §4.3); take fewer shapes, or raise it with --instance-budget"))))))
+    None))
+;; the instances an E-first body takes (rule 3's last sentence, landing 3): each a program alone —
+;; no definition, no equations — built from its template at the demand's E types; one already
+;; built under the name is reused when the arguments agree (as the typed route's), the budget
+;; holds, and what the template's body lifts or demands is built as any
+(fn build_e_demands ((l Load) (f Fx) (taker Name) (eds (List EDemand))) (Pair Load (Option Fx))
+  (measure (struct eds))
+  (match eds
+    (Nil (Pair l (Some f)))
+    ((Cons ed r)
+     (let ((name (edemand_name ed)) (c (edemand_template ed)))
+       (match (assoc_demand name (Load.instances l))
+         ((Some d0)
+          (match (edemand_to_demand (Load.env l) ed)
+            (None (Pair (ld_rec l (RClassify taker (quote function_value) (append (show_name name) ": a type argument with no L reading"))) None))
+            ((Some d) (if (demand_same d d0) (build_e_demands l f taker r) (Pair (ld_rec l (instance_clash taker name)) None)))))
+         (None
+          (match (over_budget l taker c)
+            ((Some l1) (Pair l1 None))
+            (None
+             (match (assoc_template c (Load.templates l))
+               (None (Pair (ld_rec l (RClassify taker (quote unknown_template) (show_name c))) None))
+               ((Some tm)
+                (match (build_instance_e (Load.etab l) (fx_scope l f) (Load.env l) tm ed)
+                  ((IEErr e m) (Pair (ld_rec l (RClassify name e m)) None))
+                  ((IEOk es1 prog d lifted demands)
+                   (match (admit_lifted (ld_with_e l es1) f lifted)
+                     ((Pair l1 None) (Pair l1 None))
+                     ((Pair l1 (Some f1))
+                      (let ((l2 (ld_rec (ld_add_instance (ld_with_e l1 (es_add_decl (es_register_all (Load.etab l1) (Fx.module f1) (decl_infos prog)) prog)) d)
+                                        (RInstance name c (shape_records (demand_shapes d)) Nil))))
+                        (match (build_demands l2 f1 name demands 64)
+                          ((Pair l3 None) (Pair l3 None))
+                          ((Pair l3 (Some f3)) (build_e_demands l3 f3 taker r))))))))))))))))))
 (fn assoc_demand ((n Name) (ds (List Demand))) (Option Demand)
   (measure (struct ds))
   (match ds (Nil None) ((Cons d r) (if (name_eq (demand_name d) n) (Some d) (assoc_demand n r)))))
@@ -1169,7 +1237,8 @@
   (let ((l (scan_form l0 f s)))
     (match (classify_form (Load.etab l) (fx_scope l f) (Load.env l) s)
       ((CErr e m) (ld_rec l (RLoadErr (fx_file f) e m)))
-      ((COk d) (ld_with_e l (es_add_decl (Load.etab l) d))))))
+      ((COk d) (ld_with_e l (es_add_decl (Load.etab l) d)))
+      ((COkT _ _) (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) "a twin takes no instance"))))))
 ;; a view's `sig fn` whose signature names an E-only type (§8.1 rule 1: K holds no constant
 ;; for it) is an E parameter only — the head `run` links to the implementation's fn, no
 ;; axiom in K (a fn has no L meaning at Stage 0, §0); the K seal's view is such a view
@@ -1180,6 +1249,7 @@
       ((COk (ESig n nt ps rt))
        (Pair (ld_rec (ld_with_e l (es_add_decl (Load.etab l) (ESig n nt ps rt))) (RParam n (quote fn) 0)) (fx_mix f (hash_name n))))
       ((COk _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
+      ((COkT _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((CErr _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f)))))
 ;; a view parameter: an axiom-kind constant to K, the third class to the policy
 (fn admit_param ((l Load) (f Fx) (d Declaration) (kind Symbol) (arity Int)) (Pair Load Fx)
@@ -1923,7 +1993,8 @@
               (_ (Pair (ld_rec l (RDischarge n (quote fn))) (im_mark im (quote fn) n))))
             (Pair (ld_rec l (RImplErr n (quote impl_signature) "the implementation's E signature differs from the view's")) (im_mark im (quote fn) n))))
          (_ (Pair (ld_rec l (RImplErr n (quote impl_signature) "the implementation declares no fn of that name")) (im_mark im (quote fn) n)))))
-      ((COk _) (Pair l im)))))
+      ((COk _) (Pair l im))
+      ((COkT _ _) (Pair l im)))))
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))

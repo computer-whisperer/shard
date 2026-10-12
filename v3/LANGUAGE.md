@@ -1804,7 +1804,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11 — the close-out, the as-built departures for ratification**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5801,6 +5801,69 @@ hold them, a partial application unwritable in the dump's grammar; the
 instances and the lifted lambda programs of the artifact, the templates
 none. Pin `template_package`. Gates: the loader pins' entrypoint 251 cases 0 failed in 56 s; `std_test` 201 checks 0 failed in 151 s (the std root's 8 files and 356 declarations, 20 more than at landing 1 — the six templates' twelve equations and `filter`'s two —, stored in 86 s and replayed by K alone in 65 s); `template_test` 40 checks 0 failed in 102 s (15 instances in the artifact, 17 lambdas and function types in the sources, none in the programs; load 35 s, run 33 s, dump 34 s); parity byte-identical over 31 closures and 135,443 declarations in 297 s; the seven touched kernel files clean under the V3 loader (no refusal, no unused open); the full suite's 40 entrypoints in 552 s with one failure, `define_test`'s two stale counts (28 and 20 defined became 34 and 26, the six templates), corrected and rerun green (12 checks 0 failed in 259 s).
 
+**As built, landing 3 (2026-10-11): the budget and the workload, the growth,
+budget and E-first pins, the E-first instance, `LEAN.md`'s rows, the T2 and
+T3 record — the slice's close-out.** Rule 4's budget: `Load.budget`
+(`loader.shard`'s `instance_budget`, 1,024; carried across re-roots; set for a
+load by the driver's `--instance-budget N`); at a demand the template's
+instances in `Load.instances` are counted (`instances_of`) and the next past
+the budget is refused `specialization_budget` under the taker's name
+(`over_budget`, shared by both routes) — a refusal, never a proof. T3's
+workload: `v3/examples/template/workload.shard` takes 64 instances in one
+file — `List.map`, `filter`, `any` and `all` at 16 lifted lambdas each: 64
+lifted fns and 64 instances with their 128 equations built and checked by K in
+one load (33 s on the bootstrap with `std/list`); `workload` combines every
+instance's result (509 over `(1 2 3)`), the entry's last three digits by `/`
+and `mod` at `Int`. Pins `template_growth` (`f[A]` recursing at `f[List A]`:
+`realize_descent` at the declaration — landing 2's check, the pin T3's
+canonical refusal) and `template_budget` (the harness loads that case at a
+budget of 2, `case_budget`, so the third shape of `twice` is refused under its
+taker). The E-first instance (rule 3's last sentence): a template called in a
+body with no L reading takes an instance with a program and no generated
+definition. The E table's `EITemplate` carries the template's written binders'
+E signatures (`etable.shard`'s `EBind` — a static binder's domains and result
+over the type parameters, a data binder's type, a package binder;
+`template.shard`'s `tm_ebinds` over `static_etypes`, at registration by
+`loader.shard`'s `register_template`, one path for a fn's and a realize's
+template), so the classifier reads a template call (`read_template_app`): a
+data position as any term, a static position as a shape (`read_static_arg`) —
+a name of the E table with a program and no type parameters, bare or applied
+to runtime terms short of its arity, transiently the name applied to its
+captured terms. Once the body is read, `take_instances` walks it with its
+types (a match's variables from the scrutinee, a let's from its value, as
+`c_type` reads them), solves the type arguments by unification of the binders'
+E types against the arguments' (a static binder's domains and result against
+the name's trailing parameter types and result, a data binder's type against
+its argument's static type), refuses a type argument left open
+(`function_value`: a polymorphic taker is the typed route's), names the
+instance by the one formula (`etable.shard`'s `instance_name_of`, which
+`erasure.shard`'s `instance_name` now calls) and rewrites the call to the
+instance at the captured values then the data; the classifier answers `COkT`
+with the demands (`EDemand`), and the loader (`load_e_first` →
+`build_e_demands`) builds each from the template's program half alone
+(`template.shard`'s `build_program`, split out of `build_instance`;
+`build_instance_e`; the E types to L by `etype_to_l` — every E type in Type,
+a constant's levels by `solve_levels`), reuses a name already built at the
+same arguments, holds the budget, admits what the template's body lifts and
+builds what it demands as typed, and records `INSTANCE NAME of=T shapes=…
+equations=` with no equation. Refused E-first with pointers: a lambda (nothing
+lifts it in a body with no L reading — name it as a fn and pass the name, or
+give the body an L reading), a bound variable, a constant of the realization
+registry (`Int.add`: name a fn over it), a polymorphic fn (its type arguments
+are not written E-first), a template, a constructor, an extern, a package
+parameter. The entry `template_main.main` takes `List.map` at `digit` over
+the results itself (`List_map_Int_UInt8.of.…digit_0`, no equations); pin
+`template_e_first` takes `twice` at a name and at a named partial application
+and the polymorphic `mapi` at `Int` — ten pins, the design's nine and this.
+`LEAN.md`: the function-value row became four rows of what is now the same as
+Lean (a lambda under the six, `f ∘ g` as a lambda, a fn over a function, a
+package as a structure), five of what stays refused (a function in a value
+position, a static argument built from a parameter, the type-growing
+recursion, the budget, the E-first forms) and three shard-only rows
+(templates and instances, the package, `--instance-budget`).
+`docs/records/T2-T3-2026-10-11.md` records T2 and T3 against law §12.5's risk
+columns, the count fixed by the design before the build. Gates: the loader pins' entrypoint 254 cases 0 failed in 53 s (55 s inside the suite); `template_test` 46 checks 0 failed in 101 s (80 instances in the artifact — landing 2's 15, the workload's 64, the entry's E-first one —, 81 lambdas and function types in the sources, none in the programs; load 35 s, run 34 s, dump 33 s); `std_test` 201 checks 0 failed in 152 s (356 declarations stored in 88 s, replayed by K alone in 63 s); `define_test` 12 checks 0 failed in 252 s; parity byte-identical over 31 closures and 135,867 declarations in 311 s (424 more than at landing 2, the kernel's growth); the five touched kernel files clean under the V3 loader; the full suite's 40 entrypoints with 0 failed in 519 s (`store_test` 399 s, `parity_test` 311 s, `define_test` 252 s, `path_test` 234 s, `calc_test` 227 s). Route 1's kernel build, the full replay and the corpus are CI's.
+
 **Weighed and deferred,** each with the consumer that reopens it: the
 dynamic tier (escaping closures, function values in data, dispatch on
 functions) — law §4.3's named door, sealed variants the alternative,
@@ -7134,4 +7197,17 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     static type is checked by its E reading against the L type's; the
     structure reader follows Lean's binder infos (parameters implicit in
     the constructor and the projections); the E-first instance moves to
-    landing 3.
+    landing 3. *Landing 3 (2026-10-11), for the same ratification:* the
+    E-first instance takes static arguments by name and by named partial
+    application only — a lambda, a registry constant, a polymorphic fn and
+    a package are refused with pointers (the E-first reader has no L half:
+    nothing lifts, no type arguments are written) — and has no equations;
+    the budget is a parameter of the load (`--instance-budget`), the pin
+    exercising it at 2; a tenth pin, `template_e_first`. **The close-out
+    (2026-10-11): the three landings are built; the as-built departures
+    above — landing 1's instance names with the type arguments and
+    `instance_clash`, the declaration-time check at placeholder shapes;
+    landing 2's lifted package field under the taker's name, the written
+    static type checked by its E reading, Lean's binder infos in the
+    structure reader; landing 3's E-first limits and the budget's parameter
+    — stand for ratification.**
