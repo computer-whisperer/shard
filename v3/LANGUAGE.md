@@ -4,8 +4,8 @@
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
 > 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
 > at slice 3.26 landing 3), item 61 ratified 2026-10-10, item 62
-> ratified 2026-10-11, each later item for ratification as its slice
-> lands.** Normative parent:
+> ratified 2026-10-11 and as built 2026-10-12, each later item for
+> ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1804,7 +1804,8 @@ parity, route 2's byte-tie and T0 green:
 | 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585 — the close-out, the as-built departures for ratification**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **for ratification**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5880,6 +5881,212 @@ shape tuple dedupes); a `template` keyword (the binder's type is the
 signal, one grammar); untyped lambda binders (`(fun ((x T)) …)` is L's
 form, §5.1).
 
+**Slice 3.29 — the tactic library: T10, the proof IR's gate**
+(designed 2026-10-12 at the boundary after slice 3.28, on the user's
+"proceed with the next slice"; §13 item 63 — **for ratification**). Law
+§12.5's T10 row names the gate: an ordinary E library contributing an
+I-producing tactic through the fixed interface, its evidence checked
+through the same path as built-in tooling, while a proposed grammar
+extension receives the documented refusal; replay unchanged under
+changed ambient simp and instance settings; a dependent motive; reused
+local names in sibling branches; a guarded occurrence whose source
+changed; an external P accepted through `exact`; an I schema upgrade
+separate from a foundation change; one engine's solution checked
+identically by another — the risk column: an IR only its producer can
+read. Law §7.3 (the goal graph API as E functions over E data; a search
+engine any E program composing them), §7.2 (the replay contract; the
+four versions), §7.5 (sources carry tactic blocks or an `auto`
+delegation naming the policy; no tool writes into a source file; a
+stale pin is a pending obligation) and §5.3 departure 6 (the syntax ban
+scoped: E libraries producing I through the published APIs are the
+extension model; R40) fix the shape.
+
+*Where the slice starts.* Slices 3.20–3.22 built I's core, the two
+engine-carrying forms and the producers: `kernel/tactic.shard` holds
+the API's four functions over one derivation (`goal_of`, `applicable`,
+`tac_step`, `tac_prove`), `kernel/engine.shard` the ladder — a producer
+of I composing them in-process — and `kernel/prove.shard` the driver
+(the engine on each `auto` without a valid entry, the sidecar rewritten
+whole). The engine is the one producer, and it is wired into the reader
+(`reader.shard` imports `engine.shard`; `read_auto` calls
+`engine_prove`): a library has no door. The sidecar's header names the
+engine's version in a comment the loader never reads. **Measured before
+this design** (three probe files under the on-demand loader, the
+bootstrap, 2026-10-12, 25 s a run): (i) `cases` on a local with a
+hypothesis over it leaves the hypothesis speaking of the old local —
+the zero arm of `(n : Nat) (h : (< 0 n)) ⊢ (<= 1 n)` faces `(h : (< 0
+n)) ⊢ (<= 1 Nat.zero)`, which no step closes (slice 3.20's as-built:
+"a dependent would be left speaking of the old local, so then it
+stays"); T10's dependent motive is this gap; (ii) an unknown step is
+refused by name with I's roster and no pointer to a producer; (iii)
+`ev` already carries text in through the entry's codec and a value out
+(`run_prog`'s `arg_in`; `ev` the pure call), so a library's function
+runs on route 2 with nothing new in `ev`.
+
+*The ruling asked for* (four leans; the rest decided in the rules).
+(1) **The fixed interface is data at the boundary, one shot**: a
+tactic is a `fn` taking the goal as S text and answering a block as S
+text; the kernel elaborates and K checks what comes back, as it does a
+hand-written block. Rejected: the elaborator's state crossing into the
+library (the environment is sealed — a `CheckedEnv` is built by K
+alone, §13 item 26 — and a value conversion of Init's 58,000
+declarations per call); a host callback (law §7.3: never); a
+round-trip protocol (law §6's `attempt`/`commit` has no concurrent
+caller, as at 3.20). In-process composition of `step` is the kernel's
+engine's until route 1 compiles user files (phase 4); the law's "any
+E program composing these" reads at this phase as: the engine is such a
+program, a library composes at I's level. (2) **The producer is named
+in the source's delegation**: `(auto (tactic M.FN) HINT…)`. Rejected: a
+`--tactic` flag on `prove` (law §7.5: the source carries the delegation
+naming the policy); `(by (tactic M.FN))` run at build (the build never
+searches). (3) **The sidecar carries I's schema**: `(sidecar N)` as its
+first form, N = 2 from this slice; a sidecar without it is schema 1,
+replayed and reported, never refused; one above the current is refused.
+Rejected: the engine's version as the schema (law §7.2 keeps four
+versions apart; the implementation's stays in the comment); a version
+per entry. (4) **The guarded occurrence carries its expected subterm**:
+`(occ K EXPECT)`. Rejected: a positional path (law §7.2: "not a
+pretty-printed index").
+
+*The rules.*
+
+1. **The tactic signature.** A tactic is a `fn` of an ordinary module,
+   `(fn NAME ((goal TEXT) (hints TEXT)) TEXT)`, TEXT any byte type the
+   entry codec carries (§9: the prelude's `(List Int)`, Init's `(List
+   Nat)` or `(List Int)`, `ByteArray`), no World. The goal arrives as
+   one S form, `(goal ((NAME TYPE)…) TARGET (applicable SYM…))`: the
+   named context in order, the target, and the forms whose
+   precondition the goal meets as `applicable` answers them (a hint,
+   not a completeness claim); every term as the elaborator renders a
+   goal — bound names, `=` and the comparisons under their operators,
+   `Int` literals as source writes them — with the binder spelling made
+   S's (`(forall ((x T)) …)`, `(fun ((x T)) …)`, `(let ((x V)) …)`;
+   `goal_of`'s display keeps `(x : T) … ⊢` at the top only). The hints
+   arrive as the S text of the forms after `(tactic M.FN)` in the
+   delegation, `()` when none. The answer is a block `(STEP…)` in I's
+   concrete syntax, or the empty text for no answer. The library sees
+   no `El`, no `Expr`, no environment: it plans over data, and what it
+   plans is checked.
+2. **The delegation names it.** `(auto (tactic M.FN) HINT…)` in a
+   `theorem`, a `fulfills` or a discharge: M.FN the module-qualified
+   name of a `fn` in the load — the file imports the library as any
+   module. Under `prove` (mode `solve`) a theorem so delegated without
+   a valid entry runs the tactic under `ev` on the loaded programs
+   (route 2; the goal text through the entry's codec; the driver's
+   fuel), reads the answer as a block and replays it through
+   `tac_prove` before the theorem is accepted — the engine's path and
+   a hand-written block's; the sidecar entry it writes is `(proof-for
+   NAME FP (by STEP…))`, indistinguishable at the pin (law §7.5). A
+   name not in the load or not of rule 1's signature is `PENDING NAME
+   auto_unsolved fp=N tactic=M.FN: REASON` with the signature in the
+   message; a refused answer `… tactic=M.FN step K: REASON — the goal:
+   …` (the library author's feedback); the empty answer `… no answer`;
+   a run out of fuel or stuck `… ev: REASON`. Under `load.shard` the
+   delegation is the producer's and unread, as the hints are: the
+   build replays the sidecar only. Under `--measure` the engine runs
+   as today, and the tactic when named: `ENGINE NAME solved|unsolved`
+   and `TACTIC NAME M.FN solved|unsolved`.
+3. **The refusals (the row's "documented refusal").** An unknown step
+   in a block is `unknown_step` with I's roster and the pointer: a new
+   tactic is an E library producing these forms, named by `(auto
+   (tactic M.FN))` (§8.4 slice 3.29); `notation` and its kin keep
+   `lean_form`'s pointer, naming the library route. A `(tactic …)`
+   inside a hand-written `by` is `unknown_step` too: a producer is
+   named in a delegation, never inside I.
+4. **The schema.** A sidecar's first form is `(sidecar N)`: I's schema
+   version — the roster of forms, their arguments and the
+   reconstruction defaults — 2 from this slice (rule 5's guard and
+   rule 2's delegation are the change). A sidecar without the form is
+   schema 1 (every sidecar written before this slice), replayed as
+   before and reported once per file, `SIDECAR FILE schema=1
+   current=2` (the counts unchanged: a report, not a refusal); one at
+   a schema above the current is `sidecar_schema`, the file's load
+   error and its theorems pending — the future is unreadable. `prove`
+   writes the current. Law §7.2's four versions in V3: K's logical
+   rules (the kernel's sources, pinned by T0 against the export); I's
+   schema (this form); P's encoding (the store's format 3.1.0); the
+   producer's implementation (the engine's version in the sidecar's
+   comment, a library's in its own module). A foundation change — a
+   new export, a new K — moves none of these; the gate shows a
+   schema-1 sidecar replaying under schema 2 with the records equal but
+   for the report.
+5. **The guard.** `(rw LEMMA (occ K EXPECT) STEP-BLOCK…)`: EXPECT a term
+   elaborated at the matched instance's type; the instance the first
+   match found must be EXPECT after zonk (syntactically, as `rw`
+   matches), else `rw_occ_changed` showing both — the target's source
+   changed since the block was written and the K-th occurrence is
+   another instance. `(occ K)` alone stays as built (the K-th
+   occurrence of the first instance, Lean's). The engine writes no
+   `occ`; a library may; the pin writes one by hand.
+6. **The dependent motive.** Under `cases` and `induction`, every local
+   of the context whose type mentions the eliminated local
+   (transitively), and the equation hypothesis when named, is reverted
+   into the motive — `λ x. (h : T[x]) → … → target[x]` — and each arm
+   re-introduces them under their names after the constructor's
+   fields, so the arm sees `h : T[CTOR fields…]` (Lean's `cases`
+   reverts dependents). The eliminated local leaves the arm's context
+   (today it stays when a dependent exists). `wf` is unchanged: its
+   hypothesis quantifies.
+7. **Sibling names, external P, settings: pinned, nothing built.** Two
+   arms naming the same fields and the same `have`, each filling
+   closing over its own locals — a goal is scope-safe by construction
+   (an arm opens fresh locals; display names are the binders', slice
+   3.20 rule 2). A theorem closed by `(exact TERM)` with TERM a proof
+   term from outside the elaborator's producers: one of Init's theorems
+   applied (Lean's P through the export) and one the example library
+   builds as text (`(exact (Nat.le_refl n))`), accepted through the one
+   check. A sidecar replaying unchanged when the source's hints changed
+   and when an unrelated lemma module is imported: an entry carries its
+   rules (`simp_only RULE…`, `arith only FACT…`), hints are the
+   producer's and unread at replay, there is no ambient simp set, and
+   Init's instances are closed by the export (slice 3.27 rule 3's
+   table).
+8. **One solution checked identically.** The example's theorems are
+   solved twice, by the engine and by the library, and the test replays
+   each sidecar under `load.shard` to the same `ACCEPT` records (the
+   fingerprints the statements'), stores each with `--store` and
+   verifies each by K alone (`verify_release`): the proof terms differ,
+   the acceptance does not, and no producer is consulted at replay.
+9. **The example and the gate.** `v3/examples/tactic/`: `bool_split.shard`,
+   an ordinary E library importing `kernel/sexpr.shard` for the S
+   reader and printer — a decision procedure for goals over `Bool`
+   locals: it reads the goal, collects the context's `Bool` locals and
+   answers nested `(cases b ((false () …) (true () …)))` with every
+   leaf `(decide)`, complete for its fragment; a target `(<= x x)` or
+   `(= x x)` by an `exact` term (rule 7's external P); about 80 lines.
+   `use_split.shard`: theorems delegated `(auto (tactic
+   examples.tactic.bool_split.solve))` — commutativity of `&&`, De
+   Morgan, `(|| a (! a)) = true`, `(<= n n)` — with its committed
+   sidecar. `kernel/test/tactic_lib_test.sh`, the suite's 41st
+   entrypoint: the replay (no `PROVED`; every theorem `ACCEPT`); the
+   regeneration byte-identical to the committed sidecar but for the
+   fingerprints (as `engine_test.sh`); the engine's sidecar for the
+   same statements regenerated under `(auto)` in a scratch copy, both
+   replayed, stored and verified (rule 8); the schema-1 copy reported
+   (rule 4); the hints-changed copy replayed (rule 7). Pins:
+   `by_cases_dependent`, `by_sibling_names`, `by_exact_external` (ok);
+   `by_rw_occ_guard` (`rw_occ_changed`); `auto_tactic` (an entry a
+   tactic wrote replays with the library imported and never run);
+   `auto_schema_old` (ok, reported); `auto_schema_future`
+   (`sidecar_schema`); `auto_hints_changed` (ok); `by_unknown_step` and
+   `lean_notation` with their pointers (expectations unchanged). The
+   record `docs/records/T10-DATE.md` against law §12.5's row, each
+   clause with its pin or test; `docs/LEAN.md` gains the row for a
+   tactic extension (Lean's `macro`/`elab` tactic → an E library named
+   by the delegation) and the syntax row's pointer.
+10. **Not in 3.29**, named: a library composing `step` in-process
+    (route 1 over user files, phase 4; the engine stays the kernel's);
+    `attempt`/`commit`, owners and snapshots (law §6; a concurrent
+    caller first); incremental goal states (T6, phase 4); `rw` at a
+    hypothesis; a tactic with World access (a tactic is pure); several
+    tactics in one delegation (name one; a library composes its own).
+
+*Landings.* 1: rules 3–7's kernel half — the pointers, the schema, the
+guard, the dependent revert, the pins; gate: the pins, `tactic_test`
+and `engine_test` unchanged. 2: rules 1, 2, 8 and 9 — the interface,
+the delegation under `prove`, the example library, the entrypoint, the
+T10 record, `LEAN.md`'s rows.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -7210,4 +7417,28 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     landing 2's lifted package field under the taker's name, the written
     static type checked by its E reading, Lean's binder infos in the
     structure reader; landing 3's E-first limits and the budget's parameter
-    — stand for ratification.**
+    — ratified 2026-10-12 without reservation (the user: "Those departures
+    are fine"); slice 3.28 closed on pipeline 585.**
+
+63. **Slice 3.29, the tactic library — T10 (designed 2026-10-12 at the
+    boundary after slice 3.28; §8.4) — for ratification.** (a) **The
+    fixed interface is data at the boundary, one shot**: a tactic is a
+    `fn` over text — the goal in as `(goal CTX TARGET (applicable …))`,
+    a block of I out — and the kernel replays what comes back as a
+    hand-written block; rejected: the elaborator's state crossing into
+    the library, a host callback, a round-trip protocol; in-process
+    composition of `step` stays the kernel engine's until route 1
+    compiles user files. (b) **The producer is named in the source's
+    delegation**, `(auto (tactic M.FN) HINT…)`, run by `prove` and never
+    by the build; rejected: a driver flag, a `by` form run at build.
+    (c) **The sidecar carries I's schema**, `(sidecar N)`, 2 from this
+    slice; an older sidecar is reported, a newer refused; rejected: the
+    engine's version as the schema, a version per entry. (d) **The
+    guarded occurrence carries its expected subterm**, `(occ K EXPECT)`,
+    `rw_occ_changed` when the source moved; rejected: a positional path.
+    *Decided in the rules beyond the leans:* dependents reverted into
+    the motive under `cases` and `induction` (the probe's gap); the
+    refusal pointers naming the library route; sibling names, external
+    P and the settings clause pinned, nothing built; both producers'
+    solutions replayed, stored and verified by K alone; the example a
+    `Bool` decision procedure; two landings.

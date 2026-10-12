@@ -1505,6 +1505,25 @@ departures stand for ratification (`LANGUAGE.md` §13 item 62). Gates: the loade
 
 Landing 3 holds on the full gate: **2026-10-11 — pipeline 585 green on `09cf6e7`: engine 55 s; corpus 1,463 s at the baseline; v3 4,585 s of a 3 h limit, 38 s under pipeline 583's 4,623 (the export 131 s; the index driver built by route 1 in 11 s and the export's index built in 95 s on the runner; 40 entrypoints with 0 failed in 1,450 s against 1,440 — `store_test` 1,114 s against 1,111 (calc's five leaves stored in 564 s against 574: 467 declarations, as at landing 2; replayed in 90 s against 89), parity byte-identical over 31 closures and 135,867 declarations in 843 s against 799 over 135,443 — the 424 declarations more are the landing's kernel growth —, `define_test` 715 against 722, `path_test` 690 against 675, `calc_test` 639 against 636, `engine_test` 498 against 494, `std_test` 435 against 442 — the std root's 8 files and 356 declarations loaded and stored in 249 s and K's replay 184 s, against 249 and 190 —, `wire_test` 423 against 432, `derive_test` 316 against 307, `calc_main_test` 312 against 302, `template_test` 310 against 309 (load 111 s, run 104 s, dump 94 s; 80 instances in the artifact against 15, 81 lambdas and function types in the sources against 17, none in the programs), `k_clients_test` 204 against 189, `tactic_test` 151 against 140, the loader pins' entrypoint 143 against 141 (254 cases against 251), `route2_test` 70 against 68; route 1's native build of the kernel 419 s against 422; the replay 2,414 s at 32.3 GB against 2,459 at 31.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 3 of slice 3.28 holds on the full gate; the slice is closed, its as-built departures (§13 item 62's note) for ratification.**
 
+**Slice 3.29 (designed 2026-10-12, for ratification) — the tactic
+library: T10, the proof IR's gate** (`LANGUAGE.md` §8.4 slice 3.29; §13
+item 63). Law §12.5's T10 row in one slice: a tactic is a `fn` of an
+ordinary module over text — the goal in as one S form (the named
+context, the target, the applicable forms), a block of I out — named by
+the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove`
+under `ev` and its answer replayed through `tac_prove` before the
+theorem is accepted, the sidecar entry it writes indistinguishable from
+the engine's; the sidecar's schema form `(sidecar N)`, an older sidecar
+reported and a newer refused; the guarded occurrence `(occ K EXPECT)`;
+dependents reverted into the motive under `cases` and `induction`; the
+refusals pointing at the library route; sibling names, an external P
+through `exact` and the settings clause pinned; both producers'
+solutions replayed, stored and verified by K alone. Measured first: a
+dependent hypothesis under `cases` keeps speaking of the old local, so
+the arm cannot close. The example `v3/examples/tactic/` — `bool_split`,
+a `Bool` decision procedure as an E library — and `tactic_lib_test.sh`,
+the 41st entrypoint. Two landings.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
