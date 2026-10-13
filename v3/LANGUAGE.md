@@ -1806,6 +1806,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 | 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
+| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **for ratification**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -6196,6 +6197,115 @@ binder spelling, `Producers`, the E-first library and the six theorems,
 the fingerprint's independence from the module — ratified
 2026-10-13 (§13 item 63's note).**
 
+**Slice 3.30 — the phase-3 close-out: the gate ledger, the carried
+rows, T9 again, the consolidation** (designed 2026-10-13 at the
+boundary after 3.29, on the user's "Let's proceed to the next slice";
+§13 item 64; law §12.4 item 3, §12.5's T9 row, §10.5). Law §12.4 names
+phase 3's content and its gates (T2, T3, T9 small, T10); §5.4 asks for
+T9 "again at the end"; the user ruled a LANGUAGE.md consolidation at
+the phase-3 close (2026-09-17, records §9); phase 2 closed with a
+ledger of its gate items (records §9, 2026-09-13). Where phase 3
+stands, measured 2026-10-13 against the law's list:
+
+| item of law §12.4 item 3 | evidence | status |
+|---|---|---|
+| the loader to the whole of E, the profile retired | slices 3.1–3.5; pipeline 487 | covered |
+| Stage 1 | slices 3.13–3.19 | covered |
+| Stage 2: the I elaborator, the goal graph (law §7.3), core tactics | slices 3.20–3.22: `goal_of`, `applicable`, `step`, `elaborate` as E functions over one derivation, I's data in the graph's shape; `intro apply exact rfl rw simp_only cases induction have show decide unfold reduce wf arith` — the law's `change` is `show` (the target restated, up to conversion); incremental goal states and holes shared across goals are T6's and T4's, phase 4 | covered |
+| certified arithmetic | slice 3.21 (`arith`, a Farkas certificate over Lean.Omega's kit) | covered |
+| the `Init` import with E realizations attached | slices 5b, 3.18, 3.26 | covered |
+| `std/list`, `order`, `nat`, `div`, `bits`, `arith` under the naming law | slice 3.27: `list` and `bits` as files; `order`, `nat`, `div`, `arith` as migration records and no file (ruled 2026-10-10, item 61) | covered as ruled |
+| the fifteen former axioms as theorems | `std/facts.shard` (3.27 landings 2–3) | covered |
+| the migration table validated | `std/migration.shard`, `std_test` | covered |
+| one arbitrary-`Prop` ghost refinement | `std/list`'s `Pairwise` subtype (3.27 landing 3); T9 small (iv) | covered |
+| one static law-bearing package | slice 3.28 (T2) | covered |
+| `LEAN.md` | 3.27 landing 4; 108 rows today | covered |
+| the first release bundle with retained P | 3.22 landing 3 (`v3/release/`, `verify_release`) | covered |
+| the pipeline measured | every pipeline's record, records §9 | covered |
+| gates T2, T3 | `records/T2-T3-2026-10-11.md` | met |
+| gate T9 small | `records/T9-small-2026-10-10.md` | met; **T9 again owed at the close** |
+| gate T10 | `records/T10-2026-10-12.md` | met |
+| Stage 3 (typeclasses, coercions) | the fixed instance table (3.27 rule 3), the `Nat → Int` coercion (3.15); search stays the door (item 61) | as ruled; the row stays |
+| §11's T1 row, the branch-local proof | slice 3.24 (`dif`, `Fin.mk`; pins `dif_ok`…, `examples/path`) | covered; the row stale |
+| §11's T5 row, the imported-theorem form | **measured today**: `List.append_nil` cited before a supplied realization of `List.append`, the realization attached with its equations, the theorem cited after and a theorem citing the earlier one — every record `ACCEPT`, 39 s | closes by a pin |
+| §11's T5 row, two instances of one interface; R57's checked instance | not built; no consumer in the tree needs two implementations of one view | **ruling asked** (rule 3) |
+| §11's `Symbol` row, the `String` flip | open since 3.18, "with route 1's chain" | **ruling asked** (rule 3) |
+| §11's R60 row; the lambda-lifting row | slices 3.17–3.18; slice 3.28 | covered; the rows stale |
+| law §10.5's phase-3 doc rows | `LEAN.md` written; `TOTALITY.md`, `REFINEMENT.md`, `STORAGE.md`, `CERT.md` carry no banner (measured: none names FOUNDATION) | owed |
+| §13's ratification | items 39–42, 44–46, 48 carry no ruling marker; 43, 47, 49–53 ruled by the user at their slices; 54–63 ratified | owed: eight items |
+| the consolidation | 7,579 lines, §8.4 4,437 of them in twenty "as built" sections; the title "at Stage 0 (phase 2 draft)"; §11's rows stale | owed (rule 6) |
+
+**The rules of slice 3.30:**
+
+1. **The gate ledger.** The table above, each item with its evidence,
+   becomes records §9's "Phase 3 close-out ledger" as phase 2's was;
+   §11's phase-3 rows are rewritten to their state — landed at which
+   slice, or carried with the reason and the phase.
+2. **The carried fixture built.** Pin `realize_imported`, T5's
+   imported-theorem form in the probe's shape (the theorem cited
+   before and after the realization, a theorem citing the earlier
+   one); the §11 row closes. No kernel change is expected.
+3. **The two rows that stay open, for ruling.** (a) T5's two
+   validated instances of one interface and R57's checked instance:
+   the mechanism for one implementation is built (the fork from the
+   view's fork point, `PARAM`/`DISCHARGE`, the substitution as the
+   link); a second needs a loader rule naming which file implements
+   and the checked-instance record by substitution. The lean: carried
+   to phase 5, whose bulk port is the first consumer with two
+   implementations of one view — built as a landing when that
+   consumer appears. The alternative: built now, one landing with a
+   pin of two implementations and one consumer proof under both.
+   (b) `Symbol`'s L identity `String` and the flip of `"…"` to a
+   `String` value for every file at once: the lean, carried to phase 4
+   with route 1's chain, as 3.18 stated it.
+4. **The doc rows.** `TOTALITY.md`, `REFINEMENT.md`, `STORAGE.md` and
+   `CERT.md` gain the banner `TCB.md` has: the document governs the
+   old tree until the flip, the V3 answer named by section (§4.5,
+   §4.1, §7.5 and §8.4, §7.5 and §8.3).
+5. **T9 again** (landing 2), the protocol of T9 small: a fresh agent
+   with `LANGUAGE.md` and `LEAN.md` and nothing else, the loader's and
+   `prove`'s command lines, `std/` importable. Nine tasks: (i)–(vi) of
+   slice 3.27 rule 11 again over today's tree; (vii) a static
+   law-bearing package — a `structure` with a `fn` field and a law —
+   used generically (T2's facility, 3.28); (viii) a tactic library of
+   one constant tactic, delegated to from a theorem through `(auto
+   (tactic M.FN))` under `prove` and replayed from the sidecar by the
+   build (T10's facility, 3.29); (ix) the T9 row's diagnostics: a
+   lemma cited at two occurrences, the second wrong, the refusal
+   naming the occurrence by its goal; a measured `fn` with two
+   recursive calls, one not descending, the obligation naming the
+   call. **The count, agreed before the run:** 0 interventions; at
+   most 2 refusals before success on each task; (vi)'s three pointers
+   received; every gap a `LEAN.md` row; a refusal with no pointer or
+   a wrong pointer a finding against the kernel; pass = all nine
+   accepted with no workaround from a forbidden source. The record
+   `docs/records/T9-2026-10-DD.md`, the report verbatim.
+6. **The consolidation** (landing 3), its shape for ruling. The lean:
+   each slice's design and "as built" sections of §8.4 move verbatim
+   to records §9, the build history's home by the status block's own
+   words, and §8.4 keeps, per facility, the current statement of each
+   rule with its as-built note beside it (R62's principle, slice 10):
+   definitions (3.13–3.16), the porting facilities and bytes
+   (3.17–3.18), deriving (3.19), I (3.20–3.21b), the producers and the
+   store (3.22), `Init` (3.23–3.26), the library (3.27), templates
+   (3.28), the tactic library (3.29); the title and the status block
+   rewritten for the phase's close ("S, L, E and I as phase 3 built
+   them"); the slice table stays as the index, each row pointing at
+   its record. Text moved, never rewritten, so the diff reviews as
+   moves. The alternative: an index over the chronological §8.4 and
+   nothing moved — cheaper, and the document stays a ledger. No
+   kernel change; GPT-6's memo over the SHA is the review.
+7. **The close** (landing 4): the ratification pass over §13 items
+   39–42, 44–46, 48 and 64; the close-out ledger of rule 1 complete;
+   the SHA for GPT-6's checkpoint memo, as phase 2's (R49–R54); phase
+   4 opens, its first slice designed at the next boundary from law
+   §12.4 item 4 (a `tb_len`-class compiler proof; T4 and T7; T6; T8;
+   the World-use fixture).
+
+*Not in this slice, stated:* phase 4's items; the two-instance gate
+and the `String` flip if ruled carried; the migration tool's tier 0
+(phase 5's opener, item 61).
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -7577,3 +7687,24 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     (2026-10-12): both landings built; these readings ratified
     2026-10-13 without reservation (the user: "Those look reasonable;
     ratify them"); slice 3.29 closed on pipelines 588 and 589.**
+
+64. **Slice 3.30, the phase-3 close-out (designed 2026-10-13 at the
+    boundary after 3.29; §8.4 "Slice 3.30"; law §12.4 item 3, §12.5
+    T9, §10.5; for ratification before landing 1):** the leans taken
+    in the design. (a) The gate ledger's readings: Stage 2 covered by
+    slices 3.20–3.22 with the law's `change` read as `show` and the
+    shared holes and incremental goal states phase 4's (T4, T6); Stage
+    3 as ruled at item 61 (the fixed instance table, search the door);
+    `order`, `nat`, `div`, `arith` covered as migration records by the
+    same ruling. (b) T5's two instances and R57's checked instance
+    carried to phase 5, built when the port's first consumer needs two
+    implementations of one view; the alternative, built now as a
+    landing, stated. (c) `Symbol`'s `String` flip carried to phase 4
+    with route 1's chain. (d) T9 again as nine tasks — rule 11's six,
+    a static package, a one-tactic library, the T9 row's two
+    diagnostics — with the count written before the run (rule 5).
+    (e) The consolidation by moving each slice's design and as-built
+    text verbatim to records §9 and keeping per-facility current
+    statements in §8.4, the title and status block rewritten; the
+    alternative, an index over the chronology, stated. (f) The doc
+    banners in `TCB.md`'s shape on the four phase-3 documents.
