@@ -1583,6 +1583,24 @@ Gates: the pins 261/0 in 134 s under load; the full suite's 41 entrypoints, 0 fa
 
 Landing 1 holds on the full gate: **2026-10-13 — pipeline 593 green on `9543ab3`: engine 51 s; corpus 1,474 s against 1,534, the job green and the old tree's sources untouched; v3 4,552 s of a 3 h limit, 118 s under pipeline 589's 4,670 (the export 130 s; the index driver built by route 1 in 12 s and the export's index built in 97 s on the runner; 41 entrypoints with 0 failed in 1,425 s against 1,478 — `store_test` 1,097 s against 1,139 (calc's five leaves stored in 569 s against 571: 467 declarations; replayed in 90 s against 97), parity byte-identical over 31 closures and 136,735 declarations in 860 s against 901 — the same count, the kernel untouched by the landing —, `tactic_lib_test` 774 against 805 (30 checks), `define_test` 725 against 760, `path_test` 679 against 729 (load 75 s, run 80 s, store 81 s, verify 14 s), `calc_test` 630 against 672, `engine_test` 510 against 531 (54 of 100 claims), `std_test` 444 against 467 — the std root's 8 files and 356 declarations loaded and stored in 248 s and K's replay 194 s, against 252 and 213 —, `wire_test` 399 against 417, `derive_test` 309 against 317, `calc_main_test` 308 against 315, `template_test` 296 against 304 (load 105 s, run 102 s, dump 89 s; 80 instances), `k_clients_test` 201 against 203, `tactic_test` 153 against 168, the loader pins' entrypoint 150 against 143 (261 cases against 260 — the one more is `realize_imported`, which loads Init's `List.append_nil` on demand), `rows_test` 133 against 141, `matcher_test` 70 against 70, `route2_test` 71 against 75 — every entrypoint but the pins' a few percent faster, the runner's variance; route 1's native build of the kernel 424 s against 423; the replay 2,398 s at 32.3 GB against 2,453 at 32.3 — K's sealed module untouched); T0 accepted 57,977, 20 pinned, closures identical. Landing 1 of slice 3.30 holds on the full gate.**
 
+**Landing 2 built 2026-10-13 — T9 again** (`LANGUAGE.md` §8.4 "as
+built, landing 2"; `docs/records/T9-2026-10-13.md`, the report
+verbatim): a fresh agent with `LANGUAGE.md` and `LEAN.md` only wrote
+rule 5's nine tasks — pass on the count as written: 9 of 9 accepted,
+0 interventions, at most 2 refusals before success, (vi)'s three
+pointers, (ix)'s two refusals naming the occurrence by its goal and
+the call by its obligation; 10 runs, 232 s; verified by a second load
+(245 accepted, 0 refused). Two findings against the kernel fixed with
+pins: a `fulfills` naming no obligation is refused by its cause
+(`fulfills_refused`, `fulfills_not_obligation`, `fulfills_outside_impl`
+— the old message sent an author whose `fn` was refused to §6.6's
+directory), and a measured `fn`'s obligation now discharges inside an
+implementation directory (`view_fulfills_obligation`; before,
+`fulfills_unknown` and pending); the pins harness's `load-error-after`
+kind; 264 cases. `LEAN.md` 109 rows (ten from the run's gaps, unary
+negation new). Gates: the pins 264/0 in 54 s; the full suite's 41
+entrypoints, 0 failed, in 536 s (parity byte-identical over 31 closures and 136,763 declarations in 326 s — the 28 declarations more the landing's kernel growth; `store_test` 415 s, `tactic_lib_test` 279 s, the loader pins' entrypoint 56 s for 264 cases; a quiet machine).
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

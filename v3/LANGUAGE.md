@@ -807,7 +807,9 @@ preference; K sees one `std.list.List` in either environment.
   re-checked (it was checked once, against the parameters; what binds
   it is its closure). Missing forms are `impl_missing_type`,
   `impl_missing_fn`, `impl_missing_fulfills`; a `fulfills` of no
-  requirement is `fulfills_unknown`. After the view's forms, the
+  requirement is `fulfills_unknown` — unless it names an obligation of a
+  measured `fn` of the implementation, which it discharges as in a plain
+  file (slice 3.30 landing 2). After the view's forms, the
   implementation's remaining forms in file order (private types,
   theorems, `fn`s deferred to slice 5). The fork's records print under
   `IMPL`, one `DISCHARGE` line per parameter.
@@ -1349,7 +1351,9 @@ NAME.realize_N reason`; the classifier's refusals of the form are
 `REFUSE NAME reason: message` as a `fn`'s. The `LATER` record is
 gone: `realize` is built, and a `fulfills` outside an implementation
 check is the load error `fulfills_outside_impl` (give the loader the
-directory). R45's third test is the pair: the same body as a `fn` is
+directory) — since slice 3.30 landing 2 by cause: `fulfills_not_obligation`
+for a declaration, `fulfills_refused` for an obligation of a `fn` refused
+above, `fulfills_outside_impl` for a name of nothing in the load. R45's third test is the pair: the same body as a `fn` is
 `RUNNABLE` with no L meaning, as a `realize` it is `REALIZE` with
 accepted equations a theorem can cite and a body `ev` runs under the
 L identity.
@@ -1806,7 +1810,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 | 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
-| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
+| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593; landing 2 built 2026-10-13 — T9 again passed on the count, two kernel findings fixed**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5579,9 +5583,11 @@ changes no row (this slice adds and drops nothing).
    template — a refusal, never a proof of anything. A workload example
    takes many instances in one file and runs under `ev` (rule 7).
 5. **Static law-bearing packages.** A `structure` with a
-   function-typed field — `(structure Monoid ((a Type)) ((op (-> a a
+   function-typed field — `(structure Monoid ((a Type)) (op (-> a a
    a)) (unit a) (op_assoc (forall ((x y z a)) (= (op (op x y) z) (op x
-   (op y z))))) (unit_left (forall ((x a)) (= (op unit x) x)))))` — is
+   (op y z))))) (unit_left (forall ((x a)) (= (op unit x) x))))` — the
+   fields directly after the binders, as §4 (a spelling corrected at
+   slice 3.30 landing 2) — is
    a **package type**: never an E type (`ind_eligible` says no, as
    today), so no runtime value of it exists — the law's "no runtime
    dictionary". A **package constant** is a `def` of a package type
@@ -6338,6 +6344,62 @@ the pin, the banners.** Rules 1–4, with what the build found.
   134 s (under a load of 31 from other sessions' jobs); the full suite's 41 entrypoints, 0 failed, in 816 s under the same load (parity byte-identical over 31 closures and 136,735 declarations in 383 s; the suite's 548 s of landing 2 on a quiet machine).
   Route 1's kernel build, the full replay and the corpus are CI's.
 
+**Slice 3.30 as built, landing 2 (2026-10-13) — T9 again.** Rule 5,
+with what the run found (`docs/records/T9-2026-10-13.md`, the report
+verbatim).
+
+- **The run.** A fresh general-purpose agent with `LANGUAGE.md` and
+  `LEAN.md` and nothing else (its reading set checked against its
+  transcript afterwards: the two documents, `std/`'s README and files,
+  the loader's and `prove`'s command lines) wrote the nine tasks in a
+  scratch root. **Pass on the count as written:** 9 of 9 accepted; 0
+  interventions; refusals before success (iii) 2 — both the author's,
+  a guessed lemma applied past its implicit binders and `(- 0 a)` for
+  `Neg.neg` — and (ix b) 1 unintended before the intended; (vi)'s
+  three pointers received; (ix a)'s refusal names the step, both
+  instances and the goal after the first rewrite, (ix b)'s obligation
+  names the call by its index and statement with the descending
+  call's discharge beside it; every guessed Init name of (iii)
+  resolved (eight); 9 loader runs and 1 `prove` run, 232 s, about 50
+  minutes end to end. Verified by a second load of the nine accepted
+  files in one process: 245 declarations accepted, 0 refused, 0 errors.
+- **Two findings against the kernel, fixed with pins.** (1) The
+  author's: a `fulfills` of an obligation of a `fn` refused above was
+  `fulfills_outside_impl: give the loader the directory (§6.6)` — the
+  wrong cause. `loader.shard`'s `fulfills_misnamed` names the cause:
+  `fulfills_refused` (a prefix of the name refused above, its
+  obligations never stated), `fulfills_not_obligation` (a declaration),
+  `fulfills_outside_impl` (nothing of the load); the reader's `RDLater`
+  fallback is gone. Pins `fulfills_refused` (under the harness's new
+  kind `load-error-after CODE`, the refusal standing first),
+  `fulfills_not_obligation`; `fulfills_outside` keeps its code. (2)
+  Found while scoping the fix: inside an implementation directory a
+  measured `fn`'s obligation could not be discharged — the
+  implementation path matched a `fulfills` against the view's
+  requirements only (`fulfills_unknown`), the obligation pending. It
+  now discharges as in a plain file (pin `view_fulfills_obligation`:
+  `DISCHARGE … proved`, the definition's account recomputed). 264
+  cases.
+- **The gaps.** Fourteen reported: ten `LEAN.md` rows or additions
+  (the unary negation row new — `(- a)` is `bad_shape`, measured; the
+  `decreasing_by` row's discharge with the goal's shape; `PARAM`,
+  `DISCHARGE` and `UNUSED` in the records list; the horizon row's wide
+  horizon; a guessed lemma's binders; a theorem's explicit binders
+  against a `fn`'s implicit type parameters; `(unfold f)` before
+  `(rw (dif_pos h))`; `Subtype.mk` bare or under `@`, both measured
+  through a `def`-named carrier; the `(occ K EXPECT)` row's two causes,
+  `tactic.shard`'s `rw_occ_changed` message amended to say both; the
+  self-call at the parameters themselves); one a spelling in slice
+  3.28's rule 5 corrected above (the structure's fields directly after
+  the binders); one half the author's reading of §3.2, half the
+  records list; one the brief's own wording (a `PROOF` record the tree
+  does not have); one finding (1). `LEAN.md` 109 rows.
+- **Gates run:** the loader pins' entrypoint 264 cases, 0 failed, 54 s;
+  the full suite's 41 entrypoints, 0 failed, in 536 s (parity byte-identical over 31 closures and 136,763 declarations in 326 s — the 28 declarations more the landing's kernel growth; `store_test` 415 s, `tactic_lib_test` 279 s, the loader pins' entrypoint 56 s for 264 cases; a quiet machine). The two
+  edited kernel files clean under the V3 loader; `names.py` at its
+  baseline. Route 1's kernel build, the full replay and the corpus are
+  CI's.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -6897,7 +6959,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     candidate is never a completed realization (§7.2, §7.5).
 24. **The `LATER` record is gone** with `realize` built; a `fulfills`
     outside an implementation check is the load error
-    `fulfills_outside_impl`.
+    `fulfills_outside_impl` (by cause since slice 3.30 landing 2:
+    `fulfills_not_obligation`, `fulfills_refused`, `fulfills_outside_impl`).
 25. **The canonical dump text** (§10 item 1, slice 6): the measure
     clause is outside the text; names print as their last component,
     primitives in full. **Amended (slice 3.2, 2026-09-14):** both
@@ -7741,4 +7804,15 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     alternative, an index over the chronology, stated. (f) The doc
     banners in `TCB.md`'s shape on the four phase-3 documents.
     **Ratified 2026-10-13 as designed (the user: "Those leans sound
-    reasonable: ratify them. We can proceed to Landing 1").**
+    reasonable: ratify them. We can proceed to Landing 1").** **As
+    built, landing 2 (2026-10-13), for ratification at the close:** T9
+    again passed on the count as written — 9 of 9 accepted, 0
+    interventions, at most 2 refusals before success on any task (both
+    of (iii)'s the author's), (vi)'s three pointers, both of (ix)'s
+    refusals naming what rule 5 asks; two findings against the kernel
+    fixed with pins (a `fulfills` naming no obligation refused by its
+    cause; a measured `fn`'s obligation discharged inside an
+    implementation directory, which the implementation path had not
+    allowed); ten of the fourteen reported gaps `LEAN.md` rows, one a
+    spelling in slice 3.28's rule 5 corrected, the rest the author's
+    reading or the brief's wording (`docs/records/T9-2026-10-13.md`).

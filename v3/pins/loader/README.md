@@ -34,7 +34,9 @@ record that is not a module, an Init load or an acceptance:
 ;; expect: load-error REASON           the loader refused: import_cycle, missing_file, missing_interface,
 ;;                                     import_outside_root, init_name_not_found, export_pin_mismatch,
 ;;                                     req_scope, view_form, sig_outside_view, duplicate_name,
-;;                                     module_collision, fulfills_outside_impl, …
+;;                                     module_collision, fulfills_outside_impl, fulfills_not_obligation, …
+;; expect: load-error-after REASON     some record is the load error REASON, not necessarily the first bad one
+;;                                     (slice 3.30 landing 2: fulfills_refused after the refusal it names)
 ;; roots: FILE…                        what the loader is given, in order (default main.shard);
 ;;                                     a directory (lib) is its view and then its implementation checked
 ```
@@ -309,3 +311,5 @@ Slice 3.29 landing 1 (2026-10-12; §8.4 slice 3.29 rules 3–7, law §12.5's T10
 Slice 3.29 landing 2 (2026-10-12; §8.4 slice 3.29 rule 2): `auto_tactic` (a theorem delegated `(auto (tactic split.solve))`, the tactic a `fn` of the pin's root answering the constant block `(rfl)`; `main.auto.shard` was written by `prove.shard` running it under `ev`; the build replays the entry and never runs the library — the delegation unread as the hints are). 260 cases.
 
 Slice 3.30 landing 1 (2026-10-13; §8.4 slice 3.30 rule 2, law §12.5's T5 row): `realize_imported` (T5's imported-theorem form, `LANGUAGE.md` §11's row closed: Init's `List.append_nil` is cited before a supplied realization of `List.append` is attached, and the same theorem and a theorem that cited it before are cited after it — every record `ACCEPT`, the three statements one fingerprint; `(realize List.append (view))` is refused `recursion_structure`, a recursive Init body being supplied as `examples/path` supplies `List.length`'s).
+
+Slice 3.30 landing 2 (2026-10-13; §8.4 slice 3.30 rule 5 — T9 again's finding): `fulfills_refused` (a `fulfills` of an obligation of a `fn` refused above: the refusal named as the cause, under `load-error-after` since the refusal stands first), `fulfills_not_obligation` (a declaration under `fulfills`, with where obligations come from), `view_fulfills_obligation` (a measured `fn` inside an implementation directory discharges its own obligation; before the landing the implementation path matched a `fulfills` against the view's requirements only — `fulfills_unknown`, the obligation pending); `fulfills_outside` keeps its code, its message naming the cause.
