@@ -1557,7 +1557,7 @@ pin `auto_tactic` (260 cases). Gates: the pins 260/0 in 58 s, `tactic_test` 110/
 
 Landing 2 holds on the full gate: **2026-10-13 — pipeline 589 green on `6d18c33`: engine 51 s; corpus 1,534 s against 1,463, the job green and the old tree untouched; v3 4,670 s of a 3 h limit, 13 s under pipeline 588's 4,683 (the export 130 s; the index driver built by route 1 in 12 s and the export's index built in 98 s on the runner; 41 entrypoints with 0 failed in 1,478 s against 1,428 — `store_test` 1,139 s against 1,094 (calc's five leaves stored in 571 s against 565: 467 declarations; replayed in 97 s against 90), `tactic_lib_test`, the 41st, 805 s on the runner against 280 standalone on the dev box (30 checks: the build replays the six theorems with the library loaded and never run, `prove` regenerates the sidecar through the library byte-identical, the engine's and the library's sidecars differ and replay to the same `ACCEPT` records with both stores verified by K alone, the older schema reported and replayed, the changed hints replayed), parity byte-identical over 31 closures and 136,735 declarations in 901 s against 852 over 135,940 — the 795 declarations more are the landing's kernel growth —, `define_test` 760 against 713, `path_test` 729 against 675 (load 74 s, run 93 s, store 83 s, verify 16 s), `calc_test` 672 against 638, `engine_test` 531 against 504, `std_test` 467 against 428 — the std root's 8 files and 356 declarations loaded and stored in 252 s and K's replay 213 s, against 242 and 183 —, `wire_test` 417 against 423, `derive_test` 317 against 312, `calc_main_test` 315 against 291, `template_test` 304 against 316 (load 113 s, run 99 s, dump 92 s; 80 instances), `k_clients_test` 203 against 201, `tactic_test` 168 against 143, the loader pins' entrypoint 143 against 141 (260 cases against 259), `rows_test` 141 against 126, `matcher_test` 70 against 66, `route2_test` 75 against 69 — the entrypoints beside the 41st a few percent slower, the suite's wall time still `store_test`'s; route 1's native build of the kernel 423 s against 424; the replay 2,453 s at 32.3 GB against 2,524 at 32.3); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 3.29 holds on the full gate; the slice is closed, its as-built readings (§13 item 63's note) for ratification.**
 
-**Slice 3.30 (designed 2026-10-13) — the phase-3 close-out**
+**Slice 3.30 (designed 2026-10-13, ratified 2026-10-13 as designed) — the phase-3 close-out**
 (`LANGUAGE.md` §8.4 slice 3.30; §13 item 64, for ratification). Law
 §12.4 item 3's list audited against the tree: every item covered, the
 gates T2, T3, T9 small and T10 met. What the close owes, in four
@@ -1570,6 +1570,16 @@ and two rulings on the rows still open (the two-instance gate, the
 run; the LANGUAGE.md consolidation ruled 2026-09-17, its shape for
 ruling; the ratification pass over items 39–42, 44–46, 48 and 64,
 GPT-6's checkpoint SHA, phase 4 opened.
+
+**Landing 1 built 2026-10-13** (`LANGUAGE.md` §8.4 "as built, landing
+1"): the phase-3 close-out ledger in records §9 beside phase 2's;
+§11's ten phase-3 rows rewritten to their state — landed at their
+slices, or carried by the rulings of item 64 (the two instances and
+R57's checked instance to phase 5, the `String` flip to phase 4);
+pin `realize_imported`, T5's imported-theorem form under the
+on-demand load (261 cases); banners on `TOTALITY.md`, `REFINEMENT.md`,
+`STORAGE.md` and `CERT.md` in `TCB.md`'s shape. No kernel change.
+Gates: the pins 261/0 in 134 s under load; the full suite's 41 entrypoints, 0 failed, in 816 s under the same load (parity byte-identical over 31 closures and 136,735 declarations in 383 s; the suite's 548 s of landing 2 on a quiet machine).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

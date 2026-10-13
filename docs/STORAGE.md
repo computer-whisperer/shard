@@ -2,6 +2,8 @@
 
 > **STATUS (reset 2026-08-22): LAW.** S1 (the cert cache) + S2 (parse-once; image door default OFF) LANDED 2026-08-02; S3 is parked as #33, the Module-layer image as #34. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
+> **FOUNDATION (2026-10-13): SUPERSEDED for `v3/` by law §7.5 and §8.4 — this document governs the OLD tree until the flip.** In V3 the cert cache and the images give way to the content store and the acceptance records — `v3/kernel/store.shard`, `load.shard --store`, `verify_release.shard` (`v3/LANGUAGE.md` §8.4 slice 3.22 landing 3) — and the Init index with the on-demand load (slice 3.26); law §10.5's row closes #33 and #34 with it (slice 3.30 landing 1).
+
 Status: RATIFIED 2026-08-02 (user; all three §6 forks ruled at
 their leans same-day: F1 = the S1→S2→S3 ladder, F2 = uncommitted
 local cache, F3 = module-hash + mod.req-interface v1). This is

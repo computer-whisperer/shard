@@ -2,6 +2,8 @@
 
 > **STATUS (reset 2026-08-22): LAW.** the measure-descent admissibility system, built and corpus-pinned. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
+> **FOUNDATION (2026-10-13): SUPERSEDED for `v3/` by law §4.5 — this document governs the OLD tree until the flip.** In V3 the measure regime is elaboration and tactics: a `fn`'s structural recursion to recursors and its `measure` to `WellFounded.fix` (`v3/LANGUAGE.md` §8.4 slices 3.13–3.14), the descent obligations as I under `wf` and `arith` (slices 3.20–3.21); the kit's theorems port with the std library (law §10.5's row; slice 3.30 landing 1).
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 > Status legend: **[BUILT]** in the kernel and exercised by the corpus ·

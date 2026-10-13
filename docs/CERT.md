@@ -2,6 +2,8 @@
 
 > **STATUS (reset 2026-08-22): LAW.** certificate representation — conversion forms, validators, storage; Arc A CLOSED 2026-07-26. §10's post-Arc-A ORDERING is RETIRED by the reset; its two standing laws (no new replay-cert families; generators born speaking the ratified dialect) STAND. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
+> **FOUNDATION (2026-10-13): AMENDED for `v3/` — this document governs the OLD tree until the flip.** In V3 its §3 and §7 are superseded by law §7.5 and §8.3 — conversion is K's definitional equality, sharing is the content store (`v3/LANGUAGE.md` §8.4 slices 3.20–3.22) —, its §4's validators are carried as I producers (law §10.5's row, phase 3–5) and its §10's two standing laws are carried (slice 3.30 landing 1).
+
 STATUS: direction RATIFIED 2026-07-18 at the three-way design review
 (Christian + Fable + codex; the full correspondence is archived at
 docs/archive/DESIGN-REVIEW-2026-07-18.md — this ledger is its

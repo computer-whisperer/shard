@@ -5,7 +5,7 @@
 > 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
 > at slice 3.26 landing 3), item 61 ratified 2026-10-10, item 62
 > ratified 2026-10-11 and as built 2026-10-12, item 63 ratified
-> 2026-10-12 and as built 2026-10-13, each later item for ratification as its slice lands.** Normative parent:
+> 2026-10-12 and as built 2026-10-13, item 64 ratified 2026-10-13, each later item for ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1806,7 +1806,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 | 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
-| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **for ratification**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
+| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -6200,7 +6200,9 @@ the fingerprint's independence from the module — ratified
 **Slice 3.30 — the phase-3 close-out: the gate ledger, the carried
 rows, T9 again, the consolidation** (designed 2026-10-13 at the
 boundary after 3.29, on the user's "Let's proceed to the next slice";
-§13 item 64; law §12.4 item 3, §12.5's T9 row, §10.5). Law §12.4 names
+§13 item 64 — **ratified 2026-10-13 as designed, the leans (a)–(f)
+taken (the user: "Those leans sound reasonable: ratify them")**; law
+§12.4 item 3, §12.5's T9 row, §10.5). Law §12.4 names
 phase 3's content and its gates (T2, T3, T9 small, T10); §5.4 asks for
 T9 "again at the end"; the user ruled a LANGUAGE.md consolidation at
 the phase-3 close (2026-09-17, records §9); phase 2 closed with a
@@ -6305,6 +6307,36 @@ stands, measured 2026-10-13 against the law's list:
 *Not in this slice, stated:* phase 4's items; the two-instance gate
 and the `String` flip if ruled carried; the migration tool's tier 0
 (phase 5's opener, item 61).
+
+**Slice 3.30 as built, landing 1 (2026-10-13) — the ledger, the rows,
+the pin, the banners.** Rules 1–4, with what the build found.
+
+- **Rule 1.** The phase-3 close-out ledger is in records §9 beside
+  phase 2's, the table above with each row's state at the landing.
+  §11's ten phase-3 rows are rewritten to their state: landed at
+  their slices — Stage 2 at 3.20–3.22 (the law's `change` read as
+  `show`, the target restated up to conversion; shared holes and
+  incremental goal states phase 4's), the `Init` import at 5b, 3.18
+  and 3.26, lambda lifting at 3.28, T1's branch-local proof at 3.24,
+  R60's facilities at 3.15–3.18 — or carried by rule 3's rulings (the
+  two instances and R57's checked instance to phase 5, the `String`
+  flip to phase 4), Stage 3 as item 61 ruled it.
+- **Rule 2.** Pin `realize_imported` (261 cases): Init's
+  `List.append_nil` cited before a supplied realization of
+  `List.append` is attached, the same theorem and a theorem that cited
+  it before cited after it — every record `ACCEPT`, the three
+  statements one fingerprint. The `(view)` form is refused
+  `recursion_structure`: a recursive Init body is supplied, as
+  `examples/path` supplies `List.length`'s. No kernel change.
+- **Rule 4.** A banner after each document's STATUS line, in
+  `TCB.md`'s shape: `TOTALITY.md` superseded by law §4.5,
+  `REFINEMENT.md` by §4.1, `STORAGE.md` by §7.5 and §8.4, `CERT.md`
+  amended (§3 and §7 superseded, §4's validators and §10's laws
+  carried), each naming the V3 answer by slice and the old tree as
+  the document's until the flip.
+- **Gates run:** the loader pins' entrypoint 261 cases, 0 failed,
+  134 s (under a load of 31 from other sessions' jobs); the full suite's 41 entrypoints, 0 failed, in 816 s under the same load (parity byte-identical over 31 closures and 136,735 declarations in 383 s; the suite's 548 s of landing 2 on a quiet machine).
+  Route 1's kernel build, the full replay and the corpus are CI's.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -6560,23 +6592,23 @@ never compared as verdicts.
 | implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 — **landed slice 3.15** (§5.1, §8.4) |
 | match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`casesOn`, `noConfusion`, `c.inj` for a type without parameters; the parametric `HEq` shape later) |
 | deriving under a declared policy | §5.1 | 3 — **landed slice 3.19** (§8.4): a type without parameters and Init's `List`, `Option`, `Prod` at closed arguments; types with parameters, nested and mutual types, the ordering's laws and the instance constants later |
-| tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 |
-| typeclasses, instances, coercions | §5.1 Stage 3 | 3 — instance arguments at the library's types from a fixed table at slice 3.27 landing 1 (§8.4 rule 3, designed 2026-10-09); search stays the door |
-| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 |
-| lambda lifting, templates, specialization | §4.3 | 3–4 |
+| tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 — **landed slices 3.20–3.22** (§8.4): `(by STEP…)` as I, `goal_of`, `applicable`, `step` and `elaborate` as E functions over one derivation, `sorry` the pending hole (3.20 rule 9), the producers (3.22); the law's `change` is `show`; holes shared across goals and incremental goal states are phase 4's (T4, T6) — slice 3.30's ledger |
+| typeclasses, instances, coercions | §5.1 Stage 3 | 3 — instance arguments at the library's types from a fixed table at slice 3.27 landing 1 (§8.4 rule 3, designed 2026-10-09), the `Nat → Int` coercion at 3.15; search stays the door — the phase-3 form by item 61's ruling (slice 3.30's ledger) |
+| the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
+| lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
-| T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3, with the `Init` realizations (ruled 2026-09-13: carried as a gate item, not built early without Stage 1's typing) |
-| T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | 3, with item 14's `mod.req/` siblings, when a consumer needs two |
-| T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3, when the prefix grows for the `Init` realizations |
+| T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3 — **landed slice 3.24** (`(dif h C T F)`, the `Fin.mk` field under its hypothesis; pins `dif_ok`, `dif_type`, `dif_needs_init`, `dif_scope`; `examples/path`, `path_test.sh`) |
+| T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | **carried to phase 5** (ruled 2026-10-13, slice 3.30 rule 3a): built as a landing when the port's first consumer needs two implementations of one view — a loader rule naming the implementing file and R57's checked-instance record by substitution; the mechanism for one implementation is built (§6.6) |
+| T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3 — **landed slice 3.30 landing 1**: pin `realize_imported` (Init's `List.append_nil` cited before and after a supplied realization of `List.append`, under the on-demand load) |
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
-| the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3, before the broad migration |
-| the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | 3, the two-instance gate |
+| the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3 — **landed**: list literals and the negative numeral (3.15–3.16), `make`/`with` and the fresh-name supply (3.17), the byte and text adapters, `Name` literals and symbols (3.18) |
+| the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | **carried to phase 5** with the two-instance gate (ruled 2026-10-13, slice 3.30 rule 3a) |
 | programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 |
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
-| `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | 3, with `String`'s E realization |
+| `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -7708,3 +7740,5 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     statements in §8.4, the title and status block rewritten; the
     alternative, an index over the chronology, stated. (f) The doc
     banners in `TCB.md`'s shape on the four phase-3 documents.
+    **Ratified 2026-10-13 as designed (the user: "Those leans sound
+    reasonable: ratify them. We can proceed to Landing 1").**
