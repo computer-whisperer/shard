@@ -1805,7 +1805,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
-| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
+| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12; landing 2 built 2026-10-12 — the as-built readings for ratification at the close-out**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -6136,6 +6136,65 @@ regenerated sidecar byte-identical but for the fingerprints, 54 of
 100 claims); parity byte-identical over 31 closures and 135,940
 declarations in 308 s; the full suite's 40 entrypoints, 0 failed, in 530 s.
 
+*As built, landing 2 (2026-10-12).* Rules 1, 2, 8 and 9 as designed,
+with the readings recorded for ratification at the close-out. (i) The
+goal's terms are rendered by the one renderer the refusals use
+(`tc_show`), whose binders now read as source writes them —
+`(forall ((x T)) P)`, `(fun ((x T)) e)` — in every message as well,
+one spelling; `goal_sx` frames them as `(goal ((NAME TYPE)…) TARGET
+(applicable SYM…))`. (ii) The producers' inputs travel together:
+`reader.shard`'s `Producers` carries a file's sidecar entries, the
+programs loaded so far (`Load.etab`) and the fuel (`Load.fuel`:
+`default_fuel`, now the loader's, or `prove.shard --fuel N`), built by
+the loader at the three proof sites (a theorem, a `fulfills`, a
+discharge); `run_tactic` finds M.FN in the programs (`prog_find`),
+requires two parameters and a result of byte types (`ev.shard`'s
+`text_type`, `list_ctors`' judgment) and no type parameter, makes the
+goal as `engine_prove` does, carries the texts through `val_of_text`
+and `text_of_val` (the entry codec's cells) and runs `ev` on the
+loaded programs; the answer is one form, the block's steps, read by
+`read_all`. (iii) The refusals as designed, each measured: an unknown
+name, a wrong signature (the signature shown), a refused answer
+(`tactic=M.FN: decide_failed: step 1: … — the goal: …`), the empty
+answer (`no answer`), an answer that does not read (`the answer does
+not read: unterminated_list at byte 1 of (`), two forms (`the answer
+is not one block (STEP…): ()()`), a stuck or exhausted run (`ev: …`),
+two tactics in one delegation (rule 10's refusal), `(tactic)` without
+a name; `(by (tactic …))` is `unknown_step`. (iv) `--measure` runs the
+engine as today and the tactic when named, `RDMeasured` carrying the
+tactic's name and result, the loader recording `TACTIC NAME M.FN
+solved|unsolved` beside `ENGINE`. (v) The example library is E-first
+(`RUNNABLE … route=e_first`, as the kernel's own S reader it imports
+is), six theorems rather than four — `and_assoc` (three locals) and
+`eq_self` (the `(= x x)` term) added —, and a statement over Init's
+names alone has the same fingerprint in every module, so the
+entrypoint's regenerated sidecar is byte-identical to the committed
+one with nothing masked (`engine_test`'s mask is for a statement that
+names the module's own constants); the engine closes the same six
+(`and_comm` by nested inductions, `de_morgan`, `excluded` and
+`and_assoc` by one induction and `rfl`, `le_self` by `arith`, `eq_self`
+by `rfl`), and the two sidecars replay to the same six `ACCEPT`
+records but for the axiom closure, which is the proof's and not the
+statement's — the engine's `le_self` by `arith` rests on `propext` and
+`Quot.sound` (Omega's kit), the library's `(exact (Nat.le_refl n))` on
+nothing; rule 8's "the same `ACCEPT` records" holds in the name, the
+module, the fingerprint (the `hash` field), the horizon and the
+parameters, and the gate compares those and reports the two closures.
+(vi) Pin
+`auto_tactic`'s library is a constant tactic of the pin's root (a
+pin imports nothing outside it), typed over Init's `(List Int)`;
+`bool_split` imports `kernel/sexpr.shard` by relative path, so the
+entrypoint's scratch copy one level under `v3` rewrites that path.
+Gates: the loader pins' entrypoint 260 cases, 0 failed, 58 s; `tactic_test` 110 checks, 0 failed, 52 s; `engine_test` 24 checks, 0 failed, 182 s; parity byte-identical over 31 closures and 136,735 declarations in 313 s; `tactic_lib_test` 30 checks, 0 failed, 280 s; the six touched kernel files clean under the V3 loader; the full suite's 41 entrypoints, 0 failed, in 548 s.
+
+**The close-out (2026-10-12): the two landings are built; the as-built
+readings above — landing 1's guard by structure then unification, the
+equation hypothesis before the reverted dependents, the sidecars
+regenerated from nothing; landing 2's one renderer with the source's
+binder spelling, `Producers`, the E-first library and the six theorems,
+the fingerprint's independence from the module — stand for
+ratification (§13 item 63's note).**
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -7499,4 +7558,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     dependents in the motive and in the arm; the committed sidecars
     regenerated from nothing by `prove` (an entry still valid is never
     rewritten), the engine closing `auto_core`'s `u` by `rfl` now; the
-    pins list's duplicated entry removed (259 cases).
+    pins list's duplicated entry removed (259 cases). *Landing 2
+    (2026-10-12), for the same ratification:* one renderer for the goal
+    a tactic reads and the goal a refusal shows, its binders spelled as
+    source writes them in every message; the producers' inputs as one
+    value (`Producers`: the entries, the programs, the fuel), the
+    driver's `--fuel N`; the example library E-first over the kernel's
+    S reader, six theorems (two beyond the design's four), the engine
+    closing the same six; a statement over Init's names alone
+    fingerprints the same in every module, so the gate compares the
+    regenerated sidecar byte for byte; the two producers' `ACCEPT`
+    records agree but for the axiom closure, the proof's (the engine's
+    `arith` rests on `propext` and `Quot.sound`, the library's `exact`
+    on nothing) — rule 8 read as the name, module, fingerprint, horizon
+    and parameters; a tenth pin, `auto_tactic`, over a constant tactic
+    of its root (260 cases). **The close-out
+    (2026-10-12): both landings built; these readings stand for
+    ratification.**

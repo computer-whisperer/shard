@@ -1,10 +1,12 @@
 ;;; v3/kernel/prove.shard — the producer's driver (v3/LANGUAGE.md §8.4 slice 3.22 rule 6;
 ;;; law §7.5):
-;;;   eval direct v3/kernel/prove.shard --root DIR [--init EXPORT --init-index INDEX] FILE…
+;;;   eval direct v3/kernel/prove.shard --root DIR [--init EXPORT --init-index INDEX] [--fuel N] FILE…
 ;;;   eval direct v3/kernel/prove.shard --root DIR [--init EXPORT --init-index INDEX] --measure FILE…
-;;; `--init` and `--init-index` as load.shard's (slice 3.26).
+;;; `--init` and `--init-index` as load.shard's (slice 3.26); `--fuel N` the fuel of a tactic's run.
 ;;; loads each FILE as load.shard does, under the mode `solve`: an `auto` theorem (a
-;;; fulfills, a discharge) without a valid sidecar entry is the engine's (engine.shard),
+;;; fulfills, a discharge) without a valid sidecar entry is the engine's (engine.shard) —
+;;; or, delegated `(auto (tactic M.FN) HINT…)`, the named library fn's, run under ev on the
+;;; loaded programs with the goal and the hints as text (slice 3.29 rules 1–2) —
 ;;; and the block it finds is replayed before it is accepted. Then the sidecar of every
 ;;; file that gained a block is rewritten whole — FILE.auto.shard, machine-owned: the
 ;;; entries it held that were not superseded, then the new ones in the file's order, one
@@ -38,19 +40,21 @@
 (use kernel.sexpr.RAll)
 (use kernel.reader.Auto)
 
-(type PArgs (PArgs (List Int) (List Int) (List Int) (List (List Int)) Bool))   ; root, the export, its index, files, measure
+(type PArgs (PArgs (List Int) (List Int) (List Int) (List (List Int)) Bool Int))   ; root, the export, its index, files, measure, the fuel for a tactic's run (slice 3.29 rule 2)
 (fn parse_pargs ((args (List (List Int))) (a PArgs)) PArgs
   (measure (struct args))
   (match a
-    ((PArgs root export index files measure)
+    ((PArgs root export index files measure fuel)
      (match args
-       (Nil (PArgs root export index (rev files) measure))
+       (Nil (PArgs root export index (rev files) measure fuel))
        ((Cons x r)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_pargs r2 (PArgs v export index files measure))) (Nil (parse_pargs Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_pargs r2 (PArgs root v index files measure))) (Nil (parse_pargs Nil a)))
-        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_pargs r2 (PArgs root export v files measure))) (Nil (parse_pargs Nil a)))
-        (if (int_list_eq x "--measure") (parse_pargs r (PArgs root export index files True))
-          (parse_pargs r (PArgs root export index (Cons x files) measure)))))))))))
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_pargs r2 (PArgs v export index files measure fuel))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_pargs r2 (PArgs root v index files measure fuel))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_pargs r2 (PArgs root export v files measure fuel))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_pargs r2 (PArgs root export index files measure (match (read_nat v) ((Some k) k) (None fuel))))) (Nil (parse_pargs Nil a)))
+        (if (int_list_eq x "--measure") (parse_pargs r (PArgs root export index files True fuel))
+          (parse_pargs r (PArgs root export index (Cons x files) measure fuel))))))))))))
+(fn read_nat ((s (List Int))) (Option Int) (if (bool_and (lt 0 (len s)) (all_digits s)) (Some (digits_val s 0)) None))
 
 (fn prove_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
@@ -64,14 +68,14 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_pargs args (PArgs Nil Nil Nil Nil False))
-       ((PArgs root export index files measure)
+     (match (parse_pargs args (PArgs Nil Nil Nil Nil False (default_fuel)))
+       ((PArgs root export index files measure fuel)
         (match (parts_of root)
           (None (exit 2 (write_line "prove: --root DIR is required" w1)))
           ((Some rootp)
            (if (int_eq (len rootp) 0)
              (exit 2 (write_line "prove: --root DIR is required" w1))
-             (let ((l0 (ld_start rootp export index)))
+             (let ((l0 (ld_with_fuel (ld_start rootp export index) fuel)))
                (if measure (main_measure l0 files w1) (main_solve l0 files w1)))))))))))
 
 ;; ---- solve -------------------------------------------------------------------------------------

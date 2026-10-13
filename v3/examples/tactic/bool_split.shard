@@ -1,0 +1,60 @@
+;;; v3/examples/tactic/bool_split.shard — a tactic as an ordinary E library (v3/LANGUAGE.md §8.4
+;;; slice 3.29 rules 1 and 9; law §12.5's T10 row). A decision procedure for goals over Bool
+;;; locals: `solve` reads the goal `(goal ((NAME TYPE)…) TARGET (applicable SYM…))` as text,
+;;; collects the context's Bool locals and answers a block of I — nested `cases` over each
+;;; local with `(decide)` at every leaf, complete for that fragment; a reflexive target,
+;;; `(<= x x)` or `(= x x)`, is answered by an `exact` term instead (an external P, rule 7).
+;;; The library sees no elaborator state: it plans over data, and the kernel replays what it
+;;; plans before any theorem is accepted. A theorem names it: (auto (tactic
+;;; examples.tactic.bool_split.solve)), run by prove.shard under ev — never by the build.
+(import "../../kernel/sexpr.shard")
+(use kernel.prelude)
+(use kernel.sexpr)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.sexpr.RAll)
+(use kernel.sexpr.SExpr)
+
+;; the tactic: the goal and the hints as text, the block as text (empty: no answer)
+(fn solve ((goal (List Int)) (hints (List Int))) (List Int)
+  (match (read_all goal)
+    ((RAErr _ _) Nil)
+    ((RAOk forms)
+     (match forms
+       ((Cons (SList (Cons _ (Cons (SList binders) (Cons target _)))) Nil)
+        (match (plan (bool_locals binders) target)
+          (None Nil)
+          ((Some steps) (show_sexpr (SList steps)))))
+       (_ Nil)))))
+;; the context's locals of type Bool, in order
+(fn bool_locals ((bs (List SExpr))) (List Symbol)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (SList (Cons (SSym x) (Cons (SSym ty) Nil))) r)
+     (if (sym_eq ty (quote Bool)) (Cons x (bool_locals r)) (bool_locals r)))
+    ((Cons _ r) (bool_locals r))))
+;; the plan: a reflexive target by its term; else the split over the Bool locals, when any
+(fn plan ((xs (List Symbol)) (target SExpr)) (Option (List SExpr))
+  (match (reflexive target)
+    ((Some t) (Some (list (SList (list (SSym (quote exact)) t)))))
+    (None (match xs (Nil None) (_ (Some (list (split xs))))))))
+;; (<= x x) is Nat.le_refl x; (= x x) is Eq.refl x
+(fn reflexive ((t SExpr)) (Option SExpr)
+  (match t
+    ((SList (Cons (SSym op) (Cons (SSym a) (Cons (SSym b) Nil))))
+     (if (sym_eq a b)
+       (if (sym_eq op (quote <=)) (Some (SList (list (SSym (quote Nat.le_refl)) (SSym a))))
+       (if (sym_eq op (quote =)) (Some (SList (list (SSym (quote Eq.refl)) (SSym a))))
+         None))
+       None))
+    (_ None)))
+;; (cases x ((false () STEP) (true () STEP))), each arm splitting the rest; the leaf (decide)
+(fn split ((xs (List Symbol))) SExpr
+  (measure (struct xs))
+  (match xs
+    (Nil (SList (list (SSym (quote decide)))))
+    ((Cons x r)
+     (SList (list (SSym (quote cases)) (SSym x)
+       (SList (list (SList (list (SSym (quote false)) (SList Nil) (split r)))
+                    (SList (list (SSym (quote true)) (SList Nil) (split r))))))))))

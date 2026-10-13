@@ -96,6 +96,7 @@
 (use kernel.scope.Open)
 (use kernel.reader.RDecl)
 (use kernel.reader.Auto)
+(use kernel.reader.Producers)
 (use kernel.scope.Resolved)
 (use kernel.scope.Scope)
 (use kernel.scope.Vis)
@@ -226,6 +227,7 @@
   (RProved Name Int (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the statement's fingerprint — what the sidecar's entry holds
   (RSidecar (List Int) Int Int)               ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
+  (RTactic Name Name Bool)                    ; mode measure (slice 3.29 rule 2): the tactic the delegation names closes the statement, or not
   (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
   (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
   (RInstance Name Name (List (List Int)) (List Name)))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
@@ -257,10 +259,11 @@
   (derived (List Derived))   ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
   (templates (List (Pair Name Template)))   ; the templates defined (slice 3.28 rule 1), for the instances a body demands
   (instances (List Demand))   ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
-  (budget Int))   ; the instances of one template this load may build (rule 4): instance_budget, or the driver's --instance-budget
+  (budget Int)   ; the instances of one template this load may build (rule 4): instance_budget, or the driver's --instance-budget
+  (fuel Int))   ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove (slice 3.29 rule 2); default_fuel, or the driver's --fuel
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget))))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget)) (fuel (default_fuel))))
 ;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
 ;; environment of Init alone (the run's), the ordinals, the export and index handle;
 ;; everything of the old root reset to load0's, the old root's own declarations gone
@@ -271,13 +274,19 @@
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
 (fn ld_with_init ((l Load) (i InitSt)) Load (with Load l (init i)))
 (fn ld_with_tbl ((l Load) (t (IntMap (List (Pair Name Name))))) Load (with Load l (tbl t)))
+;; the fuel for a run the load performs itself (a tactic under prove)
+(fn default_fuel () Int 1000000000000)
+(fn ld_with_fuel ((l Load) (n Int)) Load (with Load l (fuel n)))
 (fn ld_with_mode ((l Load) (m Symbol)) Load (with Load l (mode m)))
 ;; an RDSolved or RDMeasured read: its record, and the plain RDOk
 (fn rd_plain ((l Load) (rd RDecl)) (Pair Load RDecl)
   (match rd
     ((RDSolved n fp steps ds) (Pair (ld_rec l (RProved n fp steps)) (RDOk ds)))
-    ((RDMeasured n ok ds) (Pair (ld_rec l (REngine n ok)) (RDOk ds)))
+    ((RDMeasured n ok tac ds) (Pair (match tac ((Some (Pair tfn tok)) (ld_rec (ld_rec l (REngine n ok)) (RTactic n tfn tok))) (None (ld_rec l (REngine n ok)))) (RDOk ds)))
     (_ (Pair l rd))))
+;; the producers' inputs for a file's proofs (slice 3.29 rule 2): its sidecar's entries, the
+;; programs loaded so far (a named tactic runs on them under prove), the fuel
+(fn producers_of ((l Load) (autos (List Auto))) Producers (Producers autos (Load.etab l) (Load.fuel l)))
 (fn ld_add_inits ((l Load) (cs (List (Pair Name Int)))) Load
   (measure (struct cs))
   (match cs (Nil l) ((Cons (Pair n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
@@ -564,7 +573,7 @@
     (match (if (sym_eq h (quote fulfills)) (obligation_named l sc s) None)
       ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
       (None
-    (match (rd_plain l (read_decl_autos sc (Load.env l) s (Fx.autos f) (Load.mode l)))
+    (match (rd_plain l (read_decl_autos sc (Load.env l) s (producers_of l (Fx.autos f)) (Load.mode l)))
      ((Pair l rd)
     (match rd
       ((RDErr e m)
@@ -655,7 +664,7 @@
     (None l)
     ((Some info)
      (let ((thm (name_append k (n1 (quote proof)))))
-       (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (Fx.autos f) (Load.mode l)))
+       (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (producers_of l (Fx.autos f)) (Load.mode l)))
         ((Pair l rd)
        (match rd
          ((RDErr e m) (ld_rec l (horizon_refusal f e m)))
@@ -2018,7 +2027,7 @@
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))
-    (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (Fx.autos (Im.fx im)) (Load.mode l)))
+    (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (producers_of l (Fx.autos (Im.fx im))) (Load.mode l)))
      ((Pair l rd)
     (match rd
       ((RDErr e m) (Pair (ld_rec l (horizon_refusal (Im.fx im) e m)) im))
@@ -2170,6 +2179,7 @@
     ((RProved n fp steps) (append "PROVED " (append (show_name n) (append " fp=" (append (show_int fp) (append " (by " (append (show_sexprs steps) ")")))))))
     ((RSidecar file schema cur) (append "SIDECAR " (append file (append " schema=" (append (show_nat schema) (append " current=" (show_nat cur)))))))
     ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
+    ((RTactic n tfn ok) (append "TACTIC " (append (show_name n) (append " " (append (show_name tfn) (if ok " solved" " unsolved"))))))
     ((RDerive p ty cap policy procs)
      (append "DERIVE " (append (show_name p) (append " type=" (append (dv_show_ty ty) (append " cap=" (append (chars_of_sym cap)
        (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))
@@ -2211,6 +2221,7 @@
        ((RProved _ _ _) acc)
        ((RSidecar _ _ _) acc)
        ((REngine _ _) acc)
+       ((RTactic _ _ _) acc)
        ((RDerive _ _ _ _ _) acc)
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))

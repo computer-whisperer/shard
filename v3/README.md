@@ -1538,6 +1538,21 @@ seven pins (259 cases). Gates: the pins 0 failed in 58 s, `tactic_test`
 110/0 in 52 s, `engine_test` 24/0 in 179 s (the regenerated sidecar
 byte-identical), parity over 135,940 declarations in 308 s; the full suite 40 entrypoints, 0 failed, in 530 s.
 
+**Landing 2 built 2026-10-12 — the slice's close-out** (`LANGUAGE.md`
+§8.4 "as built, landing 2"; `docs/records/T10-2026-10-12.md`): a tactic
+is `(fn NAME ((goal TEXT) (hints TEXT)) TEXT)`, the goal in as `(goal
+((NAME TYPE)…) TARGET (applicable SYM…))`, a block of I out; a theorem
+names it `(auto (tactic M.FN) HINT…)` and `prove` runs it under `ev` on
+the loaded programs, replaying its block before the theorem is
+accepted — the entry it writes is any entry, and the build never runs
+it; the refusals name the library, the signature, the step and its
+goal; `--measure` reports `TACTIC` beside `ENGINE`. `examples/tactic/`:
+`bool_split`, a `Bool` decision procedure as an E library over the
+kernel's S reader, `use_split`'s six theorems solved by it and by the
+engine, both sidecars replaying to the same `ACCEPT` records and both
+stores verified by K alone (`tactic_lib_test.sh`, the 41st entrypoint);
+pin `auto_tactic` (260 cases). Gates: the pins 260/0 in 58 s, `tactic_test` 110/0 in 52 s, `engine_test` 24/0 in 182 s, parity over 136,735 declarations in 313 s, `tactic_lib_test` 30/0 in 280 s; the full suite 41 entrypoints, 0 failed, in 548 s.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

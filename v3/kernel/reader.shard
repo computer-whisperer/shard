@@ -10,6 +10,8 @@
 
 (import "elab.shard")
 (import "engine.shard")
+(import "ev.shard")
+(import "etable.shard")
 (use kernel.k)
 (use kernel.decl)
 (use kernel.elab)
@@ -32,7 +34,15 @@
 (use kernel.tactic)
 (use kernel.engine)
 (use kernel.engine.Produced)
+(use kernel.ev)
+(use kernel.etable)
+(use kernel.etable.ESt)
+(use kernel.prog)
+(use kernel.prog.EDecl)
+(use kernel.prog.EvRes)
+(use kernel.sexpr.RAll)
 (use kernel.tactic.ProveRes)
+(use kernel.tactic.Goal)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.level.Level)
@@ -52,7 +62,7 @@
   (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
   (RDLater Symbol)              ; an E form the loader owns (fn, extern, realize: classify.shard, realize.shard; fulfills: §6.6) — the loader intercepts them before read_decl
   (RDSolved Name Int (List SExpr) (List Declaration))   ; an `auto` proof the engine produced under mode `solve` (slice 3.22 rule 6): the theorem, the fingerprint, the block, what it declares
-  (RDMeasured Name Bool (List Declaration))   ; mode `measure`: a hand-written proof read as usual, and whether the engine closes the statement unaided
+  (RDMeasured Name Bool (Option (Pair Name Bool)) (List Declaration))   ; mode `measure`: a hand-written proof read as usual, and whether the engine closes the statement unaided
   (RDErr Symbol (List Int)))    ; reason, message
 
 ;; ---- the declared name and its universe parameters ------------------------------------
@@ -85,11 +95,17 @@
 ;; a sidecar entry (slice 3.22 rule 1): the theorem's name as its source writes it, the
 ;; fingerprint of the statement the entry was made for, the block's steps
 (type Auto (Auto Name Int (List SExpr)))
+;; the producers' inputs for a file (slice 3.29 rule 2): the sidecar's entries, the loaded
+;; programs (a tactic named by `(auto (tactic M.FN))` runs under `ev` on them, mode `solve`),
+;; and the driver's fuel for such a run
+(type Producers (Producers (List Auto) ESt Int))
+(fn pr_autos ((pr Producers)) (List Auto) (match pr ((Producers as _ _) as)))
+(fn no_producers () Producers (Producers Nil (es0) 0))
 ;; the load's mode for proofs (slice 3.22 rule 6): `off` — the build, nothing searches; `solve` — an
 ;; `auto` without a valid entry is the engine's, RDSolved; `measure` — every hand-written proof is
 ;; read as usual and the engine is also run on the statement, RDMeasured (the count over calc)
-(fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl (read_decl_autos sc env s Nil (quote off)))
-(fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos (List Auto)) (mode Symbol)) RDecl
+(fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl (read_decl_autos sc env s (no_producers) (quote off)))
+(fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos Producers) (mode Symbol)) RDecl
   (match s
     ((SList (Cons (SSym h) args))
      (if (sym_eq h (quote def)) (read_def sc env args (quote def) Nil mode)
@@ -140,7 +156,7 @@
   None)))))))))))))))
 
 ;; (def NAME.{u…} BINDERS TYPE VALUE); abbrev, opaque; (theorem … PROP PROOF)
-(fn read_def ((sc Scope) (env CheckedEnv) (args (List SExpr)) (kind Symbol) (autos (List Auto)) (mode Symbol)) RDecl
+(fn read_def ((sc Scope) (env CheckedEnv) (args (List SExpr)) (kind Symbol) (autos Producers) (mode Symbol)) RDecl
   (match args
     ((Cons hd (Cons (SList bs) (Cons ty (Cons val Nil))))
      (match (read_head sc hd)
@@ -153,7 +169,7 @@
              ((EErr r m) (RDErr r m))
              ((EOk e2 t _)
               (if (sym_eq kind (quote theorem))
-                (read_proof e2 n lps fvars t val (auto_entry sc autos n) mode)
+                (read_proof e2 n lps fvars t val (auto_entry sc (pr_autos autos) n) mode autos)
                 (match (elab e2 val (Some t))
                   ((EErr r m) (RDErr r m))
                   ((EOk e3 v _)
@@ -182,17 +198,17 @@
 ;; (auto HINT…) — the sidecar's block for the theorem, replayed as (by …) when the entry's
 ;; fingerprint is the statement's (slice 3.22 rules 1–2): no entry is pending auto_missing,
 ;; another statement's entry pending auto_stale; the hints are the producer's, unread here
-(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol)) RDecl
-  (if (sym_eq mode (quote measure)) (read_measured e n lps fvars t p entry) (read_proof_go e n lps fvars t p entry mode)))
-(fn read_proof_go ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol)) RDecl
+(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
+  (if (sym_eq mode (quote measure)) (read_measured e n lps fvars t p entry pr) (read_proof_go e n lps fvars t p entry mode pr)))
+(fn read_proof_go ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
   (match p
     ((SSym s)
      (if (sym_eq s (quote sorry)) (RDPending n (quote sorry))
-     (if (sym_eq s (quote auto)) (read_auto e n lps fvars t entry Nil mode)
+     (if (sym_eq s (quote auto)) (read_auto e n lps fvars t entry Nil mode pr)
        (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
-    ((SList (Cons (SSym x) Nil)) (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry Nil mode) (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))
+    ((SList (Cons (SSym x) Nil)) (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry Nil mode pr) (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))
     ((SList (Cons (SSym x) (Cons pt rest)))
-     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry (Cons pt rest) mode)
+     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry (Cons pt rest) mode pr)
      (if (bool_and (sym_eq x (quote exact)) (int_eq (len rest) 0))
        (match (elab e pt (Some t))
          ((EErr r m) (RDErr r m))
@@ -213,7 +229,7 @@
             ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))
        (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))))
     (_ (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
-(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Int (List SExpr)))) (hints (List SExpr)) (mode Symbol)) RDecl
+(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Int (List SExpr)))) (hints (List SExpr)) (mode Symbol) (pr Producers)) RDecl
   (match (close_pis e fvars t)
     ((Pair _ (FinErr r m)) (RDErr r m))
     ((Pair e1 (FinOk T))
@@ -221,15 +237,86 @@
        ((Some steps) (read_block_proof e1 n lps fvars T steps))
        (None
         (if (sym_eq mode (quote solve))
-          ;; the engine's block, replayed as an entry's would be before it is one
-          (match (engine_prove e1 T (len fvars) hints)
-            ((NotProduced m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
-            ((Produced nodes)
-             (let ((steps (nodes_sx nodes)))
-               (match (read_block_proof e1 n lps fvars T steps)
-                 ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
-                 (other other)))))
+          (match (tactic_named hints)
+            ((TacticErr m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
+            ((TacticNamed tfn rest)
+             ;; the library's block (slice 3.29 rule 2), replayed as an entry's would be before it is one
+             (match (run_tactic e1 T (len fvars) tfn rest pr)
+               ((TacNo m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " m))))))))
+               ((TacSteps steps)
+                (match (read_block_proof e1 n lps fvars T steps)
+                  ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
+                  ((RDErr r m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " (append (chars_of_sym r) (append ": " m))))))))))
+                  ((RDPending _ why) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " (chars_of_sym why)))))))))
+                  (other other)))))
+            (TacticNone
+             ;; the engine's block, replayed as an entry's would be before it is one
+             (match (engine_prove e1 T (len fvars) hints)
+               ((NotProduced m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
+               ((Produced nodes)
+                (let ((steps (nodes_sx nodes)))
+                  (match (read_block_proof e1 n lps fvars T steps)
+                    ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
+                    (other other)))))))
           (RDPending n (sym_of_chars (append (match entry (None "auto_missing fp=") (_ "auto_stale fp=")) (show_int (hash_expr T)))))))))))
+;; the producer a delegation names (slice 3.29 rule 2): `(tactic M.FN)` among the hints, once;
+;; the hints after it are the library's
+(type TacticHint (TacticNamed Name (List SExpr)) (TacticNone) (TacticErr (List Int)))
+(fn tactic_named ((hints (List SExpr))) TacticHint (tactic_named_go hints None Nil))
+(fn tactic_named_go ((hints (List SExpr)) (found (Option Name)) (acc (List SExpr))) TacticHint
+  (measure (struct hints))
+  (match hints
+    (Nil (match found ((Some f) (TacticNamed f (rev acc))) (None TacticNone)))
+    ((Cons (SList (Cons (SSym h) args)) r)
+     (if (sym_eq h (quote tactic))
+       (match found
+         ((Some _) (TacticErr "tactic: several tactics in one delegation — name one; a library composes its own (§8.4 slice 3.29 rule 10)"))
+         (None
+          (match args
+            ((Cons (SSym f) Nil)
+             (match (name_of_sym f)
+               ((Some fn) (tactic_named_go r (Some fn) acc))
+               (None (TacticErr (append "tactic: not a name: " (chars_of_sym f))))))
+            (_ (TacticErr "tactic: (tactic M.FN) names one fn of the load, module-qualified (§8.4 slice 3.29 rule 2)")))))
+       (tactic_named_go r found (Cons (SList (Cons (SSym h) args)) acc))))
+    ((Cons o r) (tactic_named_go r found (Cons o acc)))))
+;; the tactic run (slice 3.29 rules 1–2): M.FN a fn of the loaded programs taking the goal
+;; and the hints as text and answering text; the goal as goal_sx renders it, the hints as
+;; the S text of the forms after (tactic M.FN); the answer one block (STEP…), or empty
+(type TacRun (TacSteps (List SExpr)) (TacNo (List Int)))
+(fn run_tactic ((e El) (T Expr) (nctx Int) (tfn Name) (hints (List SExpr)) (pr Producers)) TacRun
+  (match pr
+    ((Producers _ est fuel)
+     (let ((prog (es_prog est)))
+     (match (prog_find prog tfn)
+       ((Some (EFn _ ntp (Cons gt (Cons ht Nil)) rt _ _))
+        (if (bool_not (bool_and (int_eq ntp 0) (bool_and (text_type gt) (bool_and (text_type ht) (text_type rt)))))
+          (TacNo (append (show_name tfn) " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec (§9: the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)"))
+          (match (el_fresh e (n1 (quote goal)) T (quote goal))
+            ((Pair e1 (MVar _ i))
+             (let ((g (Goal i T nctx)))
+             (match (val_of_text gt (goal_sx e1 g))
+               (None (TacNo "the goal's text has no value of the parameter's type"))
+               ((Some gv)
+                (match (val_of_text ht (append "(" (append (show_sexprs hints) ")")))
+                  (None (TacNo "the hints' text has no value of the parameter's type"))
+                  ((Some hv)
+                   (match (ev prog tfn (list gv hv) fuel)
+                     ((EvOk v)
+                      (match (text_of_val v)
+                        (None (TacNo "the answer is not text"))
+                        ((Some Nil) (TacNo "no answer"))
+                        ((Some bs)
+                         (match (read_all bs)
+                           ((RAErr r off) (TacNo (append "the answer does not read: " (append (chars_of_sym r) (append " at byte " (append (show_nat off) (append " of " bs)))))))
+                           ((RAOk (Cons (SList steps) Nil)) (TacSteps steps))
+                           ((RAOk _) (TacNo (append "the answer is not one block (STEP…): " bs)))))))
+                     ((EvStuck r f) (TacNo (append "ev: stuck " (append (chars_of_sym r) (append " in " (show_name f))))))
+                     ((EvExhausted r f) (TacNo (append "ev: exhausted " (append (chars_of_sym r) (append " in " (show_name f))))))
+                     (EvOut (TacNo "ev: the tactic performed an effect")))))))))
+            ((Pair _ _) (TacNo "no metavariable")))))
+       ((Some _) (TacNo (append (show_name tfn) " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT): a fn of two parameters, no type parameter")))
+       (None (TacNo (append (show_name tfn) " is not a fn of the load (the library is imported as any module; the name is module-qualified)"))))))))
 ;; the entry's block when its fingerprint is the statement's
 (fn auto_valid ((entry (Option (Pair Int (List SExpr)))) (fp Int)) (Option (List SExpr))
   (match entry
@@ -243,14 +330,29 @@
     ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n)))))))
 ;; mode `measure`: the proof as written, and whether the engine closes the statement unaided —
 ;; the engine's count (slice 3.22's third ruling); an `auto` here is read as the build reads it
-(fn read_measured ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr))))) RDecl
-  (match (read_proof_go e n lps fvars t p entry (quote off))
+(fn read_measured ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (pr Producers)) RDecl
+  (match (read_proof_go e n lps fvars t p entry (quote off) pr)
     ((RDOk ds)
      (match (close_pis e fvars t)
        ((Pair _ (FinErr r m)) (RDOk ds))
        ((Pair e1 (FinOk T))
-        (RDMeasured n (match (engine_prove e1 T (len fvars) Nil) ((Produced _) True) ((NotProduced _) False)) ds))))
+        (RDMeasured n (match (engine_prove e1 T (len fvars) Nil) ((Produced _) True) ((NotProduced _) False)) (measure_tactic e1 n lps fvars T p pr) ds))))
     (other other)))
+;; under `measure`, the tactic a delegation names is run too (slice 3.29 rule 2): its name
+;; and whether its answer closes the statement; None when none is named
+(fn measure_tactic ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (T Expr) (p SExpr) (pr Producers)) (Option (Pair Name Bool))
+  (match p
+    ((SList (Cons (SSym x) hints))
+     (if (sym_eq x (quote auto))
+       (match (tactic_named hints)
+         ((TacticNamed tfn rest)
+          (Some (Pair tfn
+            (match (run_tactic e T (len fvars) tfn rest pr)
+              ((TacNo _) False)
+              ((TacSteps steps) (match (read_block_proof e n lps fvars T steps) ((RDOk _) True) (_ False)))))))
+         (_ None))
+       None))
+    (_ None)))
 
 ;; ---- views (§6.5, §6.6) ---------------------------------------------------------------
 ;; (sig type NAME) / (sig type (NAME T…)): the parameter NAME : Type → … → Type
@@ -323,15 +425,15 @@
     (_ (RSErr "(requirement NAME ((x TYPE)…) PROP)"))))
 ;; (fulfills NAME PROOF) against the view's (requirement NAME BINDERS PROP), the
 ;; statement re-read in this environment: a theorem, or pending
-(fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr) (autos (List Auto)) (mode Symbol)) RDecl
+(fn read_fulfills ((sc Scope) (env CheckedEnv) (req_args (List SExpr)) (proof SExpr) (autos Producers) (mode Symbol)) RDecl
   (match (read_statement sc env req_args)
     ((RSErr m) (RDErr (quote bad_shape) m))
-    ((RSOk e n lps fvars t _) (read_proof e n lps fvars t proof (auto_entry sc autos n) mode))))
+    ((RSOk e n lps fvars t _) (read_proof e n lps fvars t proof (auto_entry sc (pr_autos autos) n) mode autos))))
 
 ;; (fulfills f.dec_N PROOF) outside a view (§8.4 slice 3.16 rule 8): PROOF against the
 ;; obligation's own statement, a theorem under `thm`
-(fn read_discharge ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos (List Auto)) (mode Symbol)) RDecl
-  (read_proof (el0 sc env Nil Nil thm) thm Nil Nil stmt proof (auto_entry_as sc autos thm (n1 (quote proof))) mode))
+(fn read_discharge ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos Producers) (mode Symbol)) RDecl
+  (read_proof (el0 sc env Nil Nil thm) thm Nil Nil stmt proof (auto_entry_as sc (pr_autos autos) thm (n1 (quote proof))) mode autos))
 
 ;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME) (§9)
 (fn read_axiom ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
