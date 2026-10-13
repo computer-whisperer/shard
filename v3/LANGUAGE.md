@@ -4,8 +4,8 @@
 > them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
 > 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
 > at slice 3.26 landing 3), item 61 ratified 2026-10-10, item 62
-> ratified 2026-10-11 and as built 2026-10-12, each later item for
-> ratification as its slice lands.** Normative parent:
+> ratified 2026-10-11 and as built 2026-10-12, item 63 ratified
+> 2026-10-12, each later item for ratification as its slice lands.** Normative parent:
 > `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
 > and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
 > (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
@@ -1805,7 +1805,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
-| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **for ratification**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
+| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 in progress**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
 
 **The rules of slice 3.13**, decided here (the user's ruling of
 2026-09-17 on the five leans; §13 item 43):
@@ -5883,7 +5883,10 @@ form, §5.1).
 
 **Slice 3.29 — the tactic library: T10, the proof IR's gate**
 (designed 2026-10-12 at the boundary after slice 3.28, on the user's
-"proceed with the next slice"; §13 item 63 — **for ratification**). Law
+"proceed with the next slice"; §13 item 63 — **ratified 2026-10-12 as
+designed, the four leans taken and rule 10's limit accepted: a library
+composes at I's level until route 1 compiles user files (the user: "the
+limit is okay for now")**). Law
 §12.5's T10 row names the gate: an ordinary E library contributing an
 I-producing tactic through the fixed interface, its evidence checked
 through the same path as built-in tooling, while a proposed grammar
@@ -7421,7 +7424,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     are fine"); slice 3.28 closed on pipeline 585.**
 
 63. **Slice 3.29, the tactic library — T10 (designed 2026-10-12 at the
-    boundary after slice 3.28; §8.4) — for ratification.** (a) **The
+    boundary after slice 3.28; §8.4) — ratified 2026-10-12 as designed
+    (the user: "This looks good, and the limit is okay for now"), the
+    four leans taken and rule 10's limit accepted.** (a) **The
     fixed interface is data at the boundary, one shot**: a tactic is a
     `fn` over text — the goal in as `(goal CTX TARGET (applicable …))`,
     a block of I out — and the kernel replays what comes back as a
