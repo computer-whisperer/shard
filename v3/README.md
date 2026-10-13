@@ -1603,6 +1603,19 @@ entrypoints, 0 failed, in 536 s (parity byte-identical over 31 closures and 136,
 
 Landing 2 holds on the full gate: **2026-10-13 — pipeline 595 green on `556b896`: engine 53 s; corpus 1,472 s against 1,474, the old tree's sources untouched; v3 4,650 s of a 3 h limit, 98 s over pipeline 593's 4,552 (the export 130 s; the index driver built by route 1 in 11 s and the export's index built in 96 s on the runner; 41 entrypoints with 0 failed in 1,439 s against 1,425 — `store_test` 1,108 s against 1,097 (calc's five leaves stored in 563 s against 569: 467 declarations; replayed in 89 s against 90), parity byte-identical over 31 closures and 136,763 declarations in 869 s against 860 over 136,735 — the 28 declarations more the landing's kernel growth, `fulfills_misnamed` and its two helpers —, `tactic_lib_test` 775 against 774, `define_test` 702 against 725, `path_test` 695 against 679 (load 74 s, run 81 s, store 82 s, verify 14 s), `calc_test` 646 against 630, `engine_test` 522 against 510, `std_test` 439 against 444 — the std root's 8 files and 356 declarations loaded and stored in 238 s and K's replay 198 s, against 248 and 194 —, `wire_test` 398 against 399, `derive_test` 310 against 309, `calc_main_test` 292 against 308, `template_test` 287 against 296 (load 100 s, run 98 s, dump 89 s; 80 instances), `k_clients_test` 200 against 201, `tactic_test` 149 against 153, the loader pins' entrypoint 140 against 150 (264 cases against 261 — the three of the landing, one of them an implementation directory), `rows_test` 138 against 133, `matcher_test` 73 against 70, `route2_test` 71 against 71 — the runner's variance both ways; route 1's native build of the kernel 420 s against 424; the replay 2,489 s at 32.3 GB against 2,398 at 32.3 — K's sealed module untouched by the landing, the 91 s the runner's); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 3.30 holds on the full gate.**
 
+**Landing 3 built 2026-10-13 — the consolidation** (`LANGUAGE.md`
+§8.4 "as built, landing 3"; records §9.1): the design and as-built
+texts of slices 3.13–3.29, 4,391 lines, moved verbatim from
+`LANGUAGE.md` §8.4 to records §9.1 under one heading per slice (the
+moved text's digest equal before and after); §8.4 keeps 1,115 lines
+of per-facility current statements — each rule numbered as its slice
+numbered it, its as-built note beside it, so `§8.4 slice N rule K`
+still resolves from the kernel's messages and `LEAN.md` — with the
+slice table as the index; the title "S, L, E and I as phase 3 built
+them" and the status block rewritten. `LANGUAGE.md` 7,818 lines to
+4,544. The current statements are new prose, the record the
+authority; GPT-6's memo over the SHA is the review. No kernel change.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

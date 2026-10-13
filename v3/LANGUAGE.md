@@ -1,32 +1,34 @@
-# The V3 language — S, L and E at Stage 0 (phase 2 draft)
+# The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-10-10): the design of S, L, E and I as phase 3 builds
-> them — §13 items 1–38 ratified 2026-09-15, items 54–56 ratified
-> 2026-10-08, items 57–60 ratified 2026-10-09 (59 and 60 as amended
-> at slice 3.26 landing 3), item 61 ratified 2026-10-10, item 62
-> ratified 2026-10-11 and as built 2026-10-12, item 63 ratified
-> 2026-10-12 and as built 2026-10-13, item 64 ratified 2026-10-13, each later item for ratification as its slice lands.** Normative parent:
-> `docs/FOUNDATION.md`. Scope: the surface S, the executable fragment E
-> and `ev` as phase 2 built them — the reader (§2, §4–5), the loader
-> (§3), views (§6.5–6.6), the classifier and `ev` (§6.2–6.4, §6.7),
-> `realize` (§7), the one E (§8, ruled and built 2026-09-14), entries
-> (§9), conformance (§10). Each semantic rule has one current statement here with its
-> Stage-0 limit beside it; a later "as built" section fixes what the
-> rule left to the implementation and never overrides it (GPT-6 R62,
-> slice 10). The build history — which slice built what, the
-> measurements, the findings — is `docs/records/FOUNDATION.md` §9; the
-> review correspondence is its §4. The proof IR **I** is §8.4's since
-> slice 3.20 (law §7). What Stages 1–3 add is §11 with its phase;
-> §12 is the ledger of changes from v2, the AT RISK rows the ones to
-> watch. Decisions this draft makes beyond the law's text are §13;
-> until ratified they are the implementation's working assumptions,
-> not law. This document supersedes `docs/LANGUAGE.md` for the `v3/`
-> tree (FOUNDATION §10.5); the old document keeps describing the old
-> tree until the flip.
+> **STATUS (2026-10-13): S, L, E and I as phase 3 built them — §13
+> items 1–38 ratified 2026-09-15; items 54–64 ratified 2026-10-08 to
+> 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and 60 as amended
+> there, 61–63 as built); items 39–42, 44–46 and 48, and item 64's
+> as-built notes, for the ratification pass at phase 3's close (slice
+> 3.30 landing 4).** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> surface S, the executable fragment E and `ev` — the reader (§2,
+> §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
+> `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
+> the facilities of phase 3 by their current rules (§8, §8.4: the
+> definitions, the porting facilities and bytes, deriving, the proof
+> IR **I** with its producers and the tactic library, `Init`, the
+> library, templates), entries (§9), conformance (§10). Each semantic
+> rule has one current statement here with its as-built note beside
+> it (GPT-6 R62, slice 10; slice 3.30 rule 6, 2026-10-13); the build
+> history — which slice built what, the design texts, the
+> measurements, the findings — is `docs/records/FOUNDATION.md` §9,
+> the slice texts of phase 3 its §9.1 verbatim; the review
+> correspondence is its §4. What Stages 2–3 add is §11 with its
+> phase; §12 is the ledger of changes from v2, the AT RISK rows the
+> ones to watch. Decisions this document makes beyond the law's text
+> are §13; until ratified they are the implementation's working
+> assumptions, not law. This document supersedes `docs/LANGUAGE.md`
+> for the `v3/` tree (FOUNDATION §10.5); the old document keeps
+> describing the old tree until the flip.
 
 The normative contract is `docs/FOUNDATION.md`; this document
-specifies the surface and the executable fragment as phase 2 builds
-them and does not restate the law's reasons. K's data — names, levels,
+specifies the surface, the executable fragment and the proof IR as
+phases 2 and 3 built them and does not restate the law's reasons. K's data — names, levels,
 terms, declarations, environments — is defined once, by
 `v3/kernel/{name,level,expr,decl,env}.shard`; this document cites
 those files and never redraws their constructors.
@@ -1792,4416 +1794,1139 @@ parity, route 2's byte-tie and T0 green:
 | slice | content | first consumer |
 |---|---|---|
 | 3.12 | this section, the guards, §8.5, §13 items 43–46 | the ratifier |
-| 3.13 | `fn` = `def` + `realize` for non-recursive bodies and immediate-field structural recursion; the operator identities by operand type; a `def` in the E forms | `examples/calc`'s first claim; `v3/std/list.shard` under the naming law (R55's small library: an operation and a theorem) |
-| 3.14 | deeper structural recursion by course-of-values (`below`/`brecOn` generated per inductive, as Lean's elaborator does); `(measure E)` to `WellFounded.fix`, the measure a reported obligation; mutual recursion | every ported `fn` with a measure — a quarter of the old tree's 13,229 |
-| 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` | `def` and `theorem` authors |
-| 3.16 | one front end (reordered 2026-09-18; the design below): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
-| 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) | the broad port |
-| 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built below): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
-| 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built below): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
-| 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built below; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
-| 3.21 | the two forms that carry an engine (the design and the as-built below, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
-| 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built below; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
-| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built below; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
-| 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built below; **landed 2026-10-08; closed on pipeline 554; retired at slice 3.26 landing 3, 2026-10-09** — a load checking the closure it cites, the receipt saved a tenth to a fifth of it): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched | a load's Init cost and the loader pins' wall clock |
-| 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built below; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured | the one phase-3 joint still missing; the composition cost before the broad port |
-| 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built below; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s | the suite's wall clock before the library arc multiplies the pins |
-| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design below; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
-| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design below; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 | the bulk port cites this library; calc's `list.shard`; T9's author |
-| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design below; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
-| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design below; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
-| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593; landing 2 built 2026-10-13 — T9 again passed on the count, two kernel findings fixed, green on pipeline 595**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
+| 3.13 | `fn` = `def` + `realize` for non-recursive bodies and immediate-field structural recursion; the operator identities by operand type; a `def` in the E forms — records §9.1 "Slice 3.13" | `examples/calc`'s first claim; `v3/std/list.shard` under the naming law (R55's small library: an operation and a theorem) |
+| 3.14 | deeper structural recursion by course-of-values (`below`/`brecOn` generated per inductive, as Lean's elaborator does); `(measure E)` to `WellFounded.fix`, the measure a reported obligation; mutual recursion — records §9.1 "Slice 3.14" | every ported `fn` with a measure — a quarter of the old tree's 13,229 |
+| 3.15 | the L-side ergonomics of law §5.1–5.2: implicit arguments, universe inference, the numeral rule with the one `Nat → Int` coercion, `noConfusion`/`injection` — records §9.1 "Slice 3.15" | `def` and `theorem` authors |
+| 3.16 | one front end (reordered 2026-09-18; the design in the record): a `fn` body through the elaborator into a pre-definition, its E program by erasure and its K value by the 3.13–3.14 compilation; matchers, so a `match` in a statement; `Bool` against `Decidable`; constructors by expected type; list literals — records §9.1 "Slice 3.16" | calc's spec file wholly defined (13 of its 25 functions are `RUNNABLE` at the slice's opening) |
+| 3.17 | the porting facilities of §11's R60 row (narrowed by ruling 2026-10-01, item 50): the record laws and `make`/`with` over a `structure` with the dependent-update refusal, numeral rows on the typed route, the fresh-name supply, E's rename of `lt le int_eq` to `< <= =` staged by the tool (the files no v2 tool reads now, `v3/kernel/**` with route 1's chain) — records §9.1 "Slice 3.17" | the broad port |
+| 3.18 | bytes and text (narrowed by ruling 2026-10-01, item 51; the design and the as-built in the record): the registry's type rows — `String`, `ByteArray`, `UInt8` and the structures under them, each represented by its one runtime field —, a projection function as its projection, item 37's flip staged (every file but the toolchain's own), the wire read by declared type and the externs over `ByteArray`; symbols and `Name` literals deferred to the toolchain's port — records §9.1 "Slice 3.18" | the first host-facing S library (`v3/std/host.shard`, `v3/std/bytes.shard`); calc's loop against the host |
+| 3.19 | deriving under a declared policy (law §5.1; split from 3.18 by the same ruling; ruled 2026-10-02, item 52; the design and the as-built in the record): `(derive TYPE CAPABILITY…)` — equality, an ordering under the one policy `structural`, a rendering in canonical S — generated as `fn` source and found through a derivation table; a hand-written procedure registered with `(CAPABILITY by NAME)` — records §9.1 "Slice 3.19" | a new type usable in an `if`, as a key and in a message (`v3/examples/derive/`); `v3/std/derive.shard` |
+| 3.20 | I's opener (ruled 2026-10-05, item 53; the design and the as-built in the record; **landed 2026-10-06**): I's data and `(by STEP…)` in a `theorem`, `elaborate(I)` to P, the forms with no engine behind them — `intro exact rfl have show apply cases induction wf decide unfold reduce rw sorry` — and `goal_of`/`applicable`/`step` as E functions over one derivation — records §9.1 "Slice 3.20" | calc's claims whose lemma closure needs no arithmetic (52 of 100; 44 landed as blocks in five files, `kernel/test/tactic_test.sh`) |
+| 3.21 | the two forms that carry an engine (the design and the as-built in the record, item 54; **landed 2026-10-06**): `simp_only` (a bounded rewriter over a lemma list) and `arith` (the Farkas certificate elaborated through `Lean.Omega`'s lemmas, in the export at line 76,223; reconstructed by elimination where the node gives none) — records §9.1 "Slice 3.21" | calc's 100 claims as theorems, the capstone `run_eq_spec` among them (`kernel/test/tactic_test.sh`) |
+| 3.21b | GPT-6's trajectory review, findings 1–3 (ruled 2026-10-06, item 55; the design and the as-built in the record; **landed 2026-10-06**): the expected type decides an arithmetic operator; Init's visibility is the module's horizon; `reduce` succeeds unchanged where nothing reduces — records §9.1 "Slice 3.21b" | three pins; `op_expected` proves `(- 1 2) = -1` at `Int` |
+| 3.22 | the producers (ruled 2026-10-07, item 56; the design and the as-built in the record; **landed in three landings, 2026-10-07/08; closed on pipeline 552**): `auto` with sidecar replay at build and search only in `prove`; `(arith only …)` and the witness goal; the engine as an E library over the fixed API; the pin store in K's export format with `verify_release` — records §9.1 "Slice 3.22" | the engine's count over calc's 100 claims; `v3/examples/auto/` with a machine-owned sidecar; calc's release bundle verified on CI |
+| 3.23 | the Init cache (ruled 2026-10-08 on GPT-6's R75, the feedback cost; item 57; the design and the as-built in the record; **landed 2026-10-08; closed on pipeline 554; retired at slice 3.26 landing 3, 2026-10-09** — a load checking the closure it cites, the receipt saved a tenth to a fifth of it): the loader admits the pinned export under a T0 run's receipt, the typing judgments skipped — K's verdict cached, no second format, the release gate untouched — records §9.1 "Slice 3.23" | a load's Init cost and the loader pins' wall clock |
+| 3.24 | the connected path (ruled 2026-10-09 on GPT-6's R76; item 58; the design and the as-built in the record; **landed 2026-10-09; closed on pipeline 556**): `(dif h C T F)`, the dependent if with its hypothesis named — the branch-local proof joint; `examples/path`, law §12.4's first connected path assembled as one test and broken at each joint; its cost measured — records §9.1 "Slice 3.24" | the one phase-3 joint still missing; the composition cost before the broad port |
+| 3.25 | the shared Init load (ruled 2026-10-09 at the boundary after R75/R76, item 57's stated lever; item 59; the design and the as-built in the record; **landed 2026-10-09; closed on pipeline 559**): the Init stream replayable — streamed once to its end, every root of a process loaded fresh on it; the module's horizon the only measure of what Init it sees, Init's names Init's; the loader pins' entrypoint from 783 s to 33 s — records §9.1 "Slice 3.25" | the suite's wall clock before the library arc multiplies the pins |
+| 3.26 | Init on demand (ruled 2026-10-09 at the boundary after 3.25, on the library arc's first question; item 60; the design in the record; **landings 1–2 landed 2026-10-09, green on pipelines 561 and 563; landing 3 landed 2026-10-09 — the receipt dropped, the user's ruling; closed on pipeline 565**): the export indexed once per environment — a record table and a name table, read by range, never loaded —, a module's closure of what it cites read and fed to K in export order, the horizon law unchanged, Init's names Init's from the index, no fixture — records §9.1 "Slice 3.26" | every citation of Init costs its closure, under one percent of the export; the library arc cites Init wherever Init has the statement |
+| 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design in the record; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 — records §9.1 "Slice 3.27" | the bulk port cites this library; calc's `list.shard`; T9's author |
+| 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design in the record; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check — records §9.1 "Slice 3.28" | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
+| 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design in the record; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record — records §9.1 "Slice 3.29" | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
+| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593; landing 2 built 2026-10-13 — T9 again passed on the count, two kernel findings fixed, green on pipeline 595; landing 3 built 2026-10-13 — the consolidation**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
 
-**The rules of slice 3.13**, decided here (the user's ruling of
-2026-09-17 on the five leans; §13 item 43):
+**The facilities, their rules' current statements (slice 3.30 landing
+3, 2026-10-13).** The design and as-built texts of slices 3.13–3.29
+moved verbatim to records §9.1 ("Slice 3.N" there, one heading per
+slice); what stays here is, per facility, the current statement of
+each rule with its as-built note beside it, numbered as its slice
+numbered it, so that `§8.4 slice N rule K` — the kernel's comments
+and messages, `LEAN.md`'s rows, the pins' READMEs — names a rule here
+and its full text in the record. A rule another slice superseded says
+so and points on. Slice 3.30, the close-out in progress, keeps its
+text below until the close.
 
-1. **Eligibility is automatic and transitive, as a `type`'s is** (§8.1
-   rule 1). A `fn` gets its L half when every binder and return type
-   has an L identity and every head of its body does — a constructor
-   of an E-eligible inductive, a `fn` with a definition, a realized
-   constant, a `sig fn` with an L parameter (not an E parameter, item
-   40), a table entry with an identity under rule 3. Otherwise it stays
-   `RUNNABLE` as today and the record names the first obstacle. Once
-   eligible, a body that fails translation or K is a **refusal**,
-   never a silent fall-back to `RUNNABLE`: a typo must not quietly
-   degrade a definition to a body no theorem can cite. K's own sources
-   import no `Init`, so nothing inside the seal changes at this slice
-   (their `fn`s enter L at the flip, rule 1). **As built:** the
-   obstacles are `e_only_type` (a binder or result type with no L
-   identity here), `no_l_meaning` (a callee that is `RUNNABLE`, an
-   extern), `no_l_identity` (an operator with no identity at its
-   operand types, a string or symbol literal), `unknown_constant` (a
-   constructor of an E-only type; a primitive's identity past the
-   Init prefix), `measure_pending` (rule 4), `numeral_pattern` (slice
-   3.15's) and `recursion_depth` (slice 3.14's; rule 2) — `RUNNABLE fn
-   NAME why=OBSTACLE`; every other failure is `REFUSE NAME reason`
-   through the classifier's record. The equations are stated only where
-   `Eq` and `Eq.refl` are in scope (an Init prefix that ends before
-   them gives `DEFINE NAME equations=` empty: the definition alone).
-   The fn enters the E table before its definition is attempted, so a
-   self-call types statically.
-2. **The definition's value uses the recursor directly.** The binders
-   are lambdas; the leading case tree (§7.5's `compile`) is nested
-   `T.rec` with a constant motive, the reverse of the derived view's
-   erasure of a recursor; a self-call on an **immediate** constructor
-   field of the matched parameter is the induction hypothesis of the
-   same recursor. A self-call on a deeper field (`List.concat` on `t`
-   under `(cons x (cons z t))`) is `recursion_depth` at this slice —
-   an **obstacle** (`RUNNABLE … why=recursion_depth`), since it is
-   slice 3.14's shape and not an author's error (calc's `parse_rest`
-   is one); a self-call not on a field of a matched parameter is
-   `realize_descent` as today, a refusal. Nested and non-leading
-   matches split by the recursor with a constant motive and open their
-   hypotheses unused; a match on a variable whose constructor an
-   enclosing split fixed is resolved statically (the matrix knows it),
-   never a second recursor. The
-   equations are `NAME.eq_N`, one per leaf as §7.5 states them, proven
-   by `Eq.refl` — K unfolds the definition and iota-reduces the
-   recursor on the constructor-headed left-hand side — and the body is
-   attached through the realize path, so `ev` runs it under the L
-   identity and the `REALIZE`/`PENDING` machinery (R58) is the same
-   for every function. The record is `DEFINE NAME equations=NAME.eq_1,…`
-   beside the `ACCEPT` of the definition and of each equation.
+**Definitions — slices 3.13–3.16: `fn` = `def` + `realize`, the one
+front end** (records §9.1 "Slice 3.13" to "Slice 3.16"; §13 items
+43, 47, 48 and the single-frontend memo R63–R71).
+
+*Slice 3.13 (ruled 2026-09-17, item 43):*
+
+1. **Eligibility is automatic and transitive**, as a `type`'s is. A
+   `fn` gets its L half when every binder and return type has an L
+   identity and every head of its body does; otherwise it stays
+   `RUNNABLE` and the record names the first obstacle; once eligible,
+   a body that fails translation or K is a refusal, never a fall-back
+   to `RUNNABLE`. As built: the obstacles are `e_only_type`,
+   `no_l_meaning`, `no_l_identity`, `unknown_constant`,
+   `measure_pending`, `numeral_pattern`, `recursion_depth` — `RUNNABLE
+   fn NAME why=OBSTACLE` — and every other failure is `REFUSE NAME
+   reason`; the equations are stated only where `Eq` and `Eq.refl`
+   are in scope; the `fn` enters the E table before its definition is
+   attempted, so a self-call types statically.
+2. **The definition's value** — the direct-recursor path is superseded
+   by 3.14 rule 1; what stands: the equations `NAME.eq_N`, one per
+   case-tree leaf (§7.5), proven by `Eq.refl`; the body attached
+   through the realize path, so `ev` runs it under the L identity and
+   `REALIZE`/`PENDING` are the same for every function; the record
+   `DEFINE NAME equations=…` beside the `ACCEPT`s; a self-call not on
+   a field of a matched parameter is `realize_descent`.
 3. **Operator spellings get L identities by operand type, only where
-   `ev` already agrees with K** (settles item 38): `+` and `*` at
-   `Nat` are `Nat.add` and `Nat.mul`; `+`, `-` and `*` at `Int` are
-   `Int.add`, `Int.sub` and `Int.mul`; `int_eq`, `lt` and `le`
-   (`=`, `<`, `<=` since slice 3.17) are
-   `Nat.decEq`/`Nat.decLt`/`Nat.decLe` at `Nat` and `Int.decEq`/
-   `Int.decLt`/`Int.decLe` at `Int`. `-` at `Nat` is refused
-   (`nat_operator`, pointer `Nat.sub`): `ev` computes the integer
-   difference and `Nat.sub` truncates, and no dump could tie the two.
-   `/` and `mod` at `Nat` are refused likewise (`ev`'s `/` is stuck at
-   zero, `Nat.div` is total); at `Int` they have no identity (rule 5,
-   unchanged). Bitwise and symbol entries have none. **As built:** the
-   operand types are the classifier's static types, and `+ - *` on two
-   `Nat` operands type as `Nat` statically (`prim_static`), so a nested
-   `(+ n (+ n n))` resolves; the comparisons' static result type stays
-   the prelude's `Bool` — the translation of an `if` reads the
-   decision's inductive off K's type of `Nat.decLt a b`, so no flip
-   was needed (`ev`'s cells unchanged, item 17). **Numerals** (law
-   §5.2's one coercion): a non-negative numeral at an expected `Int`
-   is `Int.ofNat n` and a negative one `Int.negSucc (-n-1)`, where
-   `Init`'s `Int.ofNat` is in scope; at `Nat`, or with no expected
-   type, K's `Nat` literal as before — so `(match xs (nil 0) …)` at
-   `Int` states `Int.ofNat 0`; since slice 3.15 a theorem about it
-   writes `0` too (§5.3).
-4. **A `fn` with a non-structural measure stays `RUNNABLE`** at this
-   slice, reason `measure_pending`; slice 3.14 gives it
-   `WellFounded.fix`.
-5. **A `def` in the E forms** is elaborated by the same `tr` with the
-   declared type as the expected type; the explicit-L path is
-   unchanged. **As built:** the reader's explicit-L path is tried
-   first; when it fails on a `def`, the form is read as a `fn`'s
-   signature and body by the classifier and defined the same way (the
-   definition only — no E body, no equations); when that fails too the
-   reader's own error stands. A body mixing explicit-L forms inside
-   the E forms is not 3.15's either (its §5.1 `if` and operators are
-   the L side's; a `match` in a statement stays refused). The pin
-   `def_match` shows a `def` with a `match`. **Superseded at slice
-   3.16 landing 1 (2026-09-19):** the elaborator reads `match`, `if`
-   and a body's untyped `let` itself, so the fall-back through the
-   classifier is **deleted** (`def_e_forms`; it had begun to hide the
-   reader's own error behind a second reading) and `def_match` goes
-   through a matcher.
+   `ev` already agrees with K**: `+ *` at `Nat` are `Nat.add`,
+   `Nat.mul`; `+ - *` at `Int` are `Int.add`, `Int.sub`, `Int.mul`;
+   `= < <=` are `Nat.decEq`/`Nat.decLt`/`Nat.decLe` and the `Int`
+   three; `-`, `/` and `mod` at `Nat` are refused `nat_operator` with
+   the pointer (`Nat.sub`, `Nat.div`, `Nat.mod`); bitwise and symbol
+   entries have none. As built: the operand types are the classifier's
+   static types (`prim_static`); a numeral at an expected `Int` is
+   `Int.ofNat n` or `Int.negSucc`, at `Nat` or with no expected type
+   K's literal; since 3.21b rule 1 the expected type decides the
+   operator where the operands do not.
+4. **A non-structural measure** — `measure_pending` at this slice;
+   3.14 rule 2 gives it `WellFounded.fix`.
+5. **A `def` in the E forms** is elaborated by the same elaborator
+   with the declared type expected. As built at 3.16 landing 1: the
+   elaborator reads `match`, `if` and a body's untyped `let` itself;
+   the fall-back through the classifier is deleted.
 
-**Not in 3.13:** nested and numeral patterns beyond the leading case
-tree (`equation_form`, as for a `realize`), mutual recursion,
-lambda lifting, any change to the reader.
-
-**The rules of slice 3.14** (the user's ruling of 2026-09-17 on the
-three leans; §13 item 47):
+*Slice 3.14 (ruled 2026-09-17, item 47):*
 
 1. **One scheme for all structural recursion, Lean's own.** A
-   structurally recursive `fn` is `T.brecOn` applied to a functional
-   `λ x below . body` whose table `below : T.below motive x` holds the
-   results at every sub-structure; every runtime split of a variable
-   that owns a table generalizes the table in the split's motive (`λ
-   x' . T.below motive x' → R`), so inside a branch the table's type
-   reduces to the pair nest and each recursive field's entry — its
-   value and its own sub-table — is a typed projection; a self-call on
-   any such field, at any depth, is the entry's value applied to the
-   call's other arguments. 3.13's direct-recursor path is deleted, not
-   kept beside it. `Init`'s inductives use `Init`'s `below` and
-   `brecOn` at solved levels; a native inductive gets `T.below` and
-   `T.brecOn` generated as monomorphic definitions on first need,
-   under Lean's names, admitted before the function (Lean generates
-   them at declaration time and only for recursive types, which is why
-   the export holds no `Option.below`). The equations stay `Eq.refl`:
-   `brecOn` unfolds to the recursor and reduces on a constructor-headed
-   argument. `recursion_depth` survives only for a self-call on a
-   variable bound outside the leading case tree. **As built:** the
-   table's shape is Lean's, read off the export's `List.below` and
-   `Nat.below` — the pairs `PProd (motive r_k) (below r_k)` over a
-   constructor's recursive fields, right-nested by `PProd` with no
-   unit, one field's pair the table itself, no field `PUnit`; a
-   field's entry is derived positionally (K's instantiation
-   beta-reduces the motive applications in the reduced table type, so
-   the field cannot be read off it), and K's check of the definition
-   is what holds the shape to Lean's. `Init`'s `brecOn` goes through a
-   `brecOn.go` helper the definition never sees. A generated pair
-   (`T.below`, `T.brecOn`) is two `ACCEPT` records before the first
-   function that needs it; a file without `Init`'s `PProd` in scope
-   cannot have a table, so its structural recursions stay `RUNNABLE`
-   (`below_unreached`) — K's own sources included, whose types are
-   E-only first anyway.
-2. **A measure becomes `WellFounded.fix`, the decreasing facts
-   admitted obligations.** `(fn f PARAMS RET (measure M) BODY)` with
-   `M` a `Nat`-valued E term over the parameters is `WellFounded.fix
-   (InvImage.wf m (WellFoundedRelation.wf Nat.lt_wfRel)) F p` over
-   the data parameters packed as a `PProd` nest `p` (a single
-   parameter is itself), `m` the measure over the tuple and `F : ∀ p,
-   (∀ q, InvImage … q p → RET) → RET` the body with each self-call
-   `rec (tuple of the arguments) f.dec_N …`. Each `f.dec_N` is an
-   **obligation**: an axiom-kind constant `∀ (the locals in scope at
-   the call), InvImage Nat.lt_wfRel.rel m (tuple) p`, admitted before
-   the definition as the **fourth policy class** beside view
-   parameters (§9) — `PARAM f.dec_N obligation`; the function's
-   record is `DEFINE f equations= pending=f` with `PENDING f measure`
-   naming the obligations, every dependent's `params=` reaches them
-   (R57/R58: nothing is claimed that is not visible), and a later
-   `(fulfills f.dec_N PROOF)` discharges one as an implementation
-   discharges a requirement (the form is I's, phase 3). No equations:
-   `WellFounded.fix` reduces through `Acc.rec` on a proof, which K
-   does not compute, so `f.eq_N` for a measured function is I's
-   (`WellFounded.fix_eq`). An `Int`-valued measure is the obstacle
-   `measure_type` with the pointer to a `Nat` measure — the law never
-   inserts `Int.toNat` (§5.2). **As built:** the obligation is
-   quantified over every local in scope at the call, in binding order
-   — the type parameters, the tuple, the fields of the enclosing
-   splits (each split's equation `scrutinee = pattern` after its
-   fields, since slice 3.21: a matcher under a measure carries it),
-   the `let`-bound values as `let`s — and the proof term
-   applies the constant to the lambda-bound ones; the obligations a
-   branch collects survive the branch's context being restored; the
-   Int fixture runs through `InvImage.wf` so the pins reach it; a
-   prefix that does not is the obstacle `wf_unreached`.
-3. **Mutual recursion is an obstacle** (`mutual_recursion`: a callee
-   pre-registered in the file and not yet defined), taken with slice
-   3.15. A forward reference to a later-defined function is the same
-   obstacle.
+   structurally recursive `fn` is `T.brecOn` over a functional whose
+   `below` table holds the results at every sub-structure; a self-call
+   on any recursive field at any depth is the table entry's value;
+   `T.below` and `T.brecOn` are generated for a native inductive on
+   first need under Lean's names (two `ACCEPT`s before the function);
+   the equations stay `Eq.refl`; `recursion_depth` survives only for
+   a self-call on a variable bound outside the leading case tree. As
+   built: the table's shape is read off the export's `List.below` and
+   `Nat.below` (`PProd` pairs, right-nested, no unit), a field's entry
+   derived positionally and K's check holding the shape to Lean's; a
+   file without `Init`'s `PProd` in scope cannot have a table —
+   `below_unreached`.
+2. **A measure becomes `WellFounded.fix`, the decreasing facts admitted
+   obligations.** `(measure M)` with `M` a `Nat`-valued E term is
+   `WellFounded.fix (InvImage.wf m …)` over the data parameters packed
+   as a `PProd` nest; each self-call's `f.dec_N` is an obligation of
+   the fourth policy class — `PARAM f.dec_N obligation`, `DEFINE f
+   equations= pending=f`, `PENDING f measure`, every dependent's
+   `params=` reaching it — discharged by `(fulfills f.dec_N PROOF)`;
+   no equations from K (`f.eq_N` is I's, by `WellFounded.fix_eq` since
+   3.20 as built); an `Int` measure is `measure_type`. As built: the
+   obligation is quantified over every local in scope at the call in
+   binding order (the type parameters, the tuple, the enclosing
+   splits' fields and — since 3.21 — their equations, the `let`s);
+   `wf_unreached` where `InvImage.wf` is out of reach. Since 3.30
+   landing 2: a `fulfills` naming no obligation is refused by its
+   cause (`fulfills_refused`, `fulfills_not_obligation`,
+   `fulfills_outside_impl`), and the obligation discharges inside an
+   implementation directory too.
+3. **Mutual recursion** — revised by 3.15 rule 6: parked, then
+   `mutual_recursion` at the file's end.
 
-**The rules of slice 3.15** (the L-side ergonomics of law §5.1–5.2;
-the user's ruling of 2026-09-17 on the leans, §13 item 48; built
-2026-09-18):
+*Slice 3.15 (item 48; built 2026-09-18):*
 
-1. **Metavariables are nodes** — `MVar` in `Expr`, `LMVar` in `Level`
-   (law §6: native metavariables that K refuses). K gained refusing
-   arms only: `infer` on the node is `Malformed metavariable`
-   (type_checker.cpp l. 342), the raw entry refuses a declaration
-   carrying one (`mvar_in_type`, `mvar_in_value`, beside the fvar
-   checks), the node data carries `has_mvar` (levels included), and
-   the exporter never emits one, so the import is unchanged. The
-   first K edit since the seal (§13 item 26); hostile pins 17a–d.
+1. **Metavariables are nodes** (`MVar`, `LMVar`) that K refuses —
+   `mvar_in_type`, `mvar_in_value`, `infer` malformed — and the
+   exporter never emits; the first K edit since the seal.
 2. **The elaborator is a Meta layer above K** (`kernel/elab.shard`
-   over `unify.shard`, `scope.shard`, `kw.shard`): bidirectional, over
-   K's locals, first-order unification with typed assignments, K's
-   `whnf` and `is_def_eq` through the view for the closed residues —
-   §5.1 states the rules. The reader (`reader.shard`) reads the forms
-   over it; nothing of it crosses into K.
-3. **The spelling changes it makes** (the phase-2 pins rewritten, 45
-   files): an implicit binder's argument is inserted, never written —
-   `(Eq.{1} Nat a b)` is `(Eq a b)`, `(Eq.refl.{1} Nat a)` is
-   `(Eq.refl a)`, `(List.cons.{0} a x t)` is `(List.cons x t)`;
-   `@NAME` where the old spelling is wanted. A `type`'s parameters are
-   implicit in its constructors and a `fn`'s type parameters in its L
-   signature, equations and obligations, so a theorem cites
-   `(len xs)` and `(Pair2.mk a b)` as a body does (guard 1). A
-   universe not written is inferred. A statement's `0` at `Int` is
-   `Int.ofNat 0`, its `(+ a b)` at `Int` is `Int.add a b`, its `(= a
-   b)` is `Eq` with the type inferred (`std/list.shard`, calc's
-   `eval_add`). Two refusals moved from K to the elaborator: a false
-   theorem's proof and a universe collapse are `type_mismatch` before
-   K sees them (K's own refusals stay pinned in the hostile battery),
-   as is a consumer's `Eq.refl` through a view parameter (§8.5's
-   `view_rfl`: the unifier asks K's `is_def_eq` over the consumer's
-   environment, where the parameter is opaque). `universe_args_required`
-   is gone; `unsolved_universe` is its Stage-1 counterpart.
+   over `unify.shard`, `scope.shard`, `kw.shard`): bidirectional,
+   first-order unification with typed assignments, K's `whnf` and
+   `is_def_eq` through the view for the closed residues; nothing of
+   it crosses into K.
+3. **The spelling**: an implicit binder's argument is inserted, never
+   written (`@NAME` for the explicit spelling); a `type`'s parameters
+   are implicit in its constructors and a `fn`'s type parameters in
+   its L signature, equations and obligations; a universe not written
+   is inferred; a statement's `0` and `(+ a b)` at `Int` are
+   `Int.ofNat 0` and `Int.add a b`; a false theorem's proof, a
+   universe collapse and a consumer's `Eq.refl` through a view
+   parameter are `type_mismatch` before K; `unsolved_universe`.
 4. **`if` and the operators in a statement** are §5.1's: `ite` with
-   the decision of the proposition's head, the identities by the
-   first operand's type, `-` `/` `mod` at `Nat` included in L.
-   **Not in 3.15:** a `match` inside a statement (the pointer is
-   `T.casesOn` or a helper `def`), `Bool` against `Decidable` bridging
-   (`decide`; calc's `is_digit` stays `RUNNABLE` for it, slice 3.16),
-   E's rename of `lt le int_eq` to `< <= =` (3.17 with the tool
-   migration), `UInt*`/`Fin` numerals (with their E realizations),
-   explicit holes `_`.
-5. **The constructor-structure bundle is generated after a native
-   inductive's admission**, in Lean 4.33's shapes read off the export
-   (`define.shard`'s `confusion_bundle`; `loader.shard`'s
-   `bundle_after`): `T.casesOn` (the recursor with the hypotheses
-   unused, universe polymorphic) for every native inductive whose
-   recursor eliminates into every universe; and, for a type without
-   parameters, indices, universe parameters or dependent fields, where
-   `Init`'s `Eq`, `Eq.refl`, `Eq.ndrec`, `And` and `And.intro` are in
-   scope, `T.noConfusionType` (two nested `casesOn`s: the same
-   constructor gives `(∀ f_eqs, P) → P` with `Eq` on each field pair,
-   different ones `P`), `T.noConfusion` (`Eq.ndrec` over a `casesOn`
-   whose minors apply the continuation to `Eq.refl`s) and `T.c.inj`
-   per constructor with fields (`Eq (c fs) (c fs') → And …`, a term
-   proof through `noConfusion`, the fields implicit as Lean's). Each is
-   an `ACCEPT` record K checked; where the conditions fail nothing is
-   generated and the type stands (K's own sources: no `Eq`, as Lean's
-   Prelude before it). A parametric type's shape — the parameters
-   generalized twice, `HEq` on the fields, `eq_of_heq` — is a later
-   slice's; `injection` is I's tactic over these. A theorem cites
-   `(Color.noConfusion h)` at `False`, `(Tree.Node.inj h)`, or
-   `(Tree.casesOn t …)` with the motive found from the expected type
-   (a Miller pattern `?motive t` in the unifier, the bound-variable
-   arguments elaborated before the propagation as Lean's
-   `elabAsElim` orders them). Pin `elab_confusion`.
-6. **A forward reference is parked, never an obstacle** (3.14 rule 3
-   revised): a `fn` whose callee is not yet loaded (`mutual_recursion`
-   from the translation) or whose callee is itself parked
-   (`callee_pending`, the callee named) enters the E table and waits
-   with no record; after every definition the parked ones are tried
-   again to a fixpoint; at the file's end the ones still parked are
-   `RUNNABLE` with the obstacle they waited on — a true mutual pair
-   stays `mutual_recursion` (pin `define_mutual`), a fn behind a
-   `RUNNABLE` callee `no_l_meaning`. A `realize` never waits (it is
-   its own declaration's): a pending callee is `no_l_meaning` there.
-   Pin `define_forward`. Mutual structural recursion proper (Lean's
-   packed `brecOn`) has no consumer yet and stays out.
+   the decision of the proposition's head; the identities by the
+   operands' type (by the expected type since 3.21b); `- / mod` at
+   `Nat` included in L.
+5. **The constructor-structure bundle** is generated after a native
+   inductive's admission in Lean 4.33's shapes (`define.shard`'s
+   `confusion_bundle`): `T.casesOn` always; `T.noConfusionType`,
+   `T.noConfusion` and `T.c.inj` for a type without parameters,
+   indices, universe parameters or dependent fields where `Eq`,
+   `Eq.ndrec` and `And` are in scope; the motive of `T.casesOn` found
+   from the expected type as a Miller pattern. Pin `elab_confusion`.
+6. **A forward reference is parked, never an obstacle**: a `fn` whose
+   callee is not yet loaded waits with no record and is retried after
+   every definition to a fixpoint; at the file's end the ones still
+   parked are `RUNNABLE` with the obstacle they waited on
+   (`mutual_recursion`, `no_l_meaning`); a `realize` never waits.
+   Pins `define_mutual`, `define_forward`.
 
-**As built (2026-09-18, the elaborator):** `unify.shard` — `MCtx`
-(declarations with name, type, telescope and kind; assignments;
-`inst_mvars`/`inst_level` the instantiation; `unify` with `assign`
-typed through K's `infer` on a closed value and `infer_light` — a
-constant, local or metavariable head's telescope walked — on an open
-one; `mc_drop_fvars` at every binder close, so a metavariable that
-survives a `fun` cannot later capture its variable). `elab.shard` —
-`El` (K's world, the metavariable context, the scope context with the
-bound names and their fvars), `elab` returning term and type, `tele`
-(the telescope into slots: an inserted metavariable or a written
-argument's placeholder), `elab_args` (propagate, elaborate, numerals
-last, instantiate), `check_expected` (unify, else the coercion, else
-`type_mismatch`), `elab_op`/`op_identity`, `elab_if`/`decision_of`,
-`el_finish` (the closed term; the first unsolved metavariable named).
-The pins `elab_implicit`, `elab_numeral`, `elab_unsolved`,
-`elab_instance`, `elab_no_decision`, `elab_mismatch`; the reader pin
+As built (2026-09-18): `unify.shard` — `MCtx`, `unify` typed through
+`infer` or `infer_light`, `mc_drop_fvars` at every binder close;
+`elab.shard` — `El`, `elab`, `tele`, `elab_args`, `check_expected`,
+`elab_op`/`op_identity`, `elab_if`/`decision_of`, `el_finish`; the
+pins `elab_implicit`, `elab_numeral`, `elab_unsolved`,
+`elab_instance`, `elab_no_decision`, `elab_mismatch`,
 `refuse_unsolved_universe`.
 
-**Slice 3.16 — one front end: the pre-definition and its two
-projections** (DESIGN, 2026-09-18, revision 2 the same day after
-GPT-6's single-frontend memo R63–R71, records §4.10; the user's
-rulings of that day on the reorder, the shape and the memo's leans;
-§13 item 49; built in landings, each with its as-built below).
-
-*Why.* Slice 3.15 built the elaborator law §5.1 describes, and left a
-`fn`'s body on the older route: the classifier types it with E's own
-first-order typing (`c_type`), and `realize.shard`'s `tr` translates
-the E term **up** into L. The law's direction is the other one (§2,
-§4: E is a fragment of L; the classifier is the *fragment*
-classifier, a Stage-1 item after elaboration). The upward route
-exists because the Stage-0 ruling of 2026-09-07 made `fn` E-only, so
-E needed a reader and a typing before any L existed for it. Guard 1
-above was written against `tr` and was met in wording only. The
-symptoms are two type systems and two resolvers: at the slice's
-opening calc's spec file has 12 functions defined and 13 `RUNNABLE`,
-from three roots — `is_digit` and `is_ws` (a comparison is a `Bool`
-in E and a proposition in L), `digit_val` (`(- c 48)`: a literal has
-no type in `c_type`, so the operator finds no identity) — and `Add`
-names calc's constructor in a `fn` body and is `ambiguous_name` with
-Init's class in a `def`.
-
-*The probe* (2026-09-18; a scratch file through the loader with
-`--dump`, each function once as a `fn` and once as a `def` with the
-derived view of §7.1). A non-recursive `match` (`flush`): the two E
-programs byte-identical, the two L values one hash. Structural
-recursion: K's value is `brecOn` and §7.1 refuses it, as §7.3 said it
-must (Lean compiles its pre-definition, never the kernel term); the
-hand-written pre-definition — `casesOn`, the self-call a constant —
-erases to the classifier's program up to the primitive's spelling
-(`Nat.add` for `+`). At `Int` the erasure refuses `Int.add`: the
-operator table has no inverse. Nested patterns (`parse_rest`): the
-erased `casesOn` tree means the same by reading (not run) and is not
-the program — four arms become a tree with the fall-through eight
-times. So neither extreme: E cannot be read off K's finished term,
-and L should not be translated up from E.
-
-*The invariant* (R63's wording, adopted): resolve and type the
-intended computation **once**; preserve the structure needed to
-justify it and to execute it; derive the mathematical and the
-executable representation from that common construction. Neither
-output is reconstructed from the other after information has been
-discarded. The common input is not itself a proof that the two
-projections correspond: the erasure rule's implementation stays a
-stated bring-up trust dependency (§7.1, R58) until a checked
-translation or route 1's proof covers it.
-
-*The shape.* S is elaborated once, by `elab.shard`, into a
-**pre-definition** — a named record (`PreDef`), not a bare body
-(R63): the declared identity and type; the binder telescope (K's
-locals); the body, an ordinary `Expr` over them; the **self-local**
-when the function is recursive (its name bound to a local of the
-declared Pi type); the **matcher descriptions** the body's matchers
-were generated from (rule 1); the **callee-locals** standing for
-`RUNNABLE` callees (rule 6); the obligations owed; the resolved
-environment it was elaborated against. A pre-definition is never an
-admitted declaration: a body well typed *assuming* a local for its
-own name is provisional until the K projection admits it, and no
-operation takes a `PreDef` where a `ConstantInfo` is wanted. Two
-projections consume the record — neither re-resolves a name or
-re-reads S:
-
-- **toward E** — erasure (§7.1's rule, generalized): types, proofs
-  and erased binders dropped, a matcher application back to the
-  `EMatch` of its description, `ite`/`dite` to `EIf`, the self-local
-  and a callee-local to the `ECall`, a resolved operation to its
-  realization (rule 4). This **is** the function's program: for a
-  function on this route the classifier's typing and `tr` do not
-  run.
-- **toward K** — the matchers expanded to their `casesOn` trees and
-  the recursion compiled as slices 3.13–3.14 ruled (`T.rec` with a
-  constant motive, `T.brecOn` with the table generalized at each
-  split, `WellFounded.fix` with the `f.dec_N` obligations),
-  `define.shard`'s machinery re-pointed from E terms and E types to
-  the pre-definition and K's types. Unavailable while a callee-local
-  is open (rule 6).
-
-The classifier becomes what the law calls it: a check on the
-elaborated term that it lies in the fragment (§6.3's refusals — a
-function value in a runtime position, a noncomputable head, a callee
-without a realization — raised by the erasure), not a second type
-system. There is no new term language: the body is `Expr`.
-
-**The rules of slice 3.16:**
+*Slice 3.16 (designed 2026-09-18 on GPT-6's single-frontend memo
+R63–R71, item 49; built in three landings 2026-09-19):* S is
+elaborated once into a **pre-definition** (`predef.shard`'s `PreDef`:
+the identity and type, the binders' locals, the self-local, the body
+as an `Expr`, the matchers, the callee-locals, the obligations) and
+two projections consume it — toward E by erasure
+(`kernel/erasure.shard`), toward K by Lean's own structural
+compilation (`define.shard`); the classifier is the fragment check on
+the elaborated term, not a second type system; `tr` and the tie are
+deleted.
 
 1. **Matchers, their descriptions bound by regeneration** (R64). A
    `match` elaborates to `OWNER.match_N` applied to a motive, the
-   scrutinees and one alternative per row (Lean's shape: `(motive :
-   D… → Sort v) → (d : D)… → (alt_i : ∀ pattern variables, motive
-   pattern_i)… → motive d…`; an alternative without variables is
-   `motive pattern_i`). The matcher is a definition K checks,
-   admitted before its owner with an `ACCEPT` record as the bundle's
-   constants are: a `casesOn` tree by first-match column splitting
-   (the compilation `df_matrix` does today, stated over K's types), a
-   fall-through row's alternative applied at every leaf it reaches.
-   The **description** — the scrutinee types, the rows' patterns in
-   order, each alternative's telescope — **is the matcher's type**
-   (as built, landing 1; the design's side table dropped): each
-   alternative's type spells its row's patterns as a term over its
-   variables, so the rows are read back off the admitted declaration
-   (`mt_describe`) and nothing beside it can go stale, be lost in a
-   view's fork (§6.6) or be trusted by a name's spelling. A projection
-   that meets a matcher application **regenerates** the definition
-   from the rows read back and compares it with the admitted value
-   (`mt_is_matcher`); a constant that fails the comparison is not a
-   matcher — `matcher_description` to a projection, never a
-   name-based guess and never an eager call. The generator is
-   deterministic, so the binding is a check, not a trust.
-   **Forcing:** the E program evaluates the scrutinees once, left to
-   right, then the first matching row's arm only — `EMatch`'s rule
-   (§6.2); an alternative is control flow in E and an argument only in
-   L, where nothing runs. The elaborator cites a matcher with the
-   motive from the expected type (slice 3.15 rule 5's Miller pattern
-   gives the constant motive); a dependent motive is a later slice —
-   slice 3.19 (rule 9) for a scrutinee that is a local the expected
-   type mentions.
-   **A `match` in a statement or a `def` is the same form** — slice
-   3.15's open item closes here. Literal patterns are the obstacle
-   `literal_pattern` until a consumer under the naming law has one.
+   scrutinees and one alternative per row, a definition K checks
+   admitted before its owner (`ACCEPT NAME.match_N`); the description
+   is the matcher's type, read back by `mt_describe` and regenerated
+   and compared by `mt_is_matcher` (`matcher_description` otherwise).
+   The E program evaluates the scrutinees once and the first matching
+   arm only. A `match` in a statement or a `def` is the same form; a
+   dependent motive is 3.19 rule 9's. As built: `kernel/matcher.shard`
+   (`mt_generate`, `mt_compile` by first-match column splitting with
+   refinement at the leaves; `match_not_exhaustive`, `match_indexed`,
+   `match_eliminator`), `elab_match` (the motive from the expected
+   type, else `match_motive`), `el_pat` (`literal_pattern` until 3.17,
+   `pattern_constructor`, `pattern_arity`), the matcher checked into
+   the walk's environment as it is made (`kw.shard`'s `w_admit`);
+   `match_in_requirement`.
 2. **The self-local, and branch facts in every position** (R65). A
-   `fn` with a `(measure …)` is elaborated with its name bound to a
-   local of its Pi type. The K projection keeps today's guarantee and
-   extends it: inside a recursive function an `ite c inst a b` is
-   compiled as the **dependent** form (`dite`; today's `Decidable.rec`
-   with its proof field in scope — Lean's well-founded preprocessing
-   does the same), so `h : c` or `h : ¬c` is a local of the branch
-   wherever the `if` stands — under a `let`, in an argument, under a
-   matcher's alternative — and a matcher's alternative has its
-   pattern variables in scope the same way. Each `f.dec_N` is closed
-   over **every** local in scope at its call (slice 3.14 rule 2's
-   as-built, now position-independent); sibling branches share
-   nothing. **Narrower guarantee, stated:** for a `match` on a
-   computed scrutinee the equation `scrutinee = pattern` is not yet a
-   local (a variable scrutinee is substituted, as today); an
-   obligation that needs it is reported with the pointer to bind the
-   scrutinee in a `let` — built when a consumer has one. Outside a
-   recursive function `ite` stays `ite`.
-3. **`Bool` and propositions meet in the elaborator, Lean's way, and
-   the conversion is explicit in E** (R66). A proposition where a
-   `Bool` is expected is `Decidable.decide p` with the decision
-   `decision_of` finds (else `no_decision`); a `Bool` where a
-   proposition is expected — an `if`'s condition — is `c = true` with
-   `Bool`'s `decEq`. This **changes slice 3.15 rule 4**: `if` on a
-   `Bool` is `ite (c = true) …`, not `cond` (Lean's own elaboration;
-   `cond` sits at export line 151,585, past every fixture). Erasure:
-   `Bool` and `Decidable` have **different cells** in `ev`
-   (`init_bool_cell`, `dec_cell`), and only the second-constructor
-   rule of `EIf` lets either drive an `if`. So `decide p inst` erases
-   to the conversion `(if ⟦inst⟧ true false)` over Init's `Bool`
-   constructors — no new primitive — and is the identity only where
-   the realization of `inst` already returns a `Bool` cell (the table
-   says which: rule 4); the decision of `c = true` in a condition
-   position erases to `c`. A shared two-valued representation is a
-   later optimization, never assumed.
-4. **Realization selection, not an inverse of spellings** (R66). The
-   operator table is the first form of a small static realization
-   registry: a resolved L operation at its instantiated types → the
-   executable entry, its result cell (an integer, a `Bool` cell, a
-   `Decidable` cell) and its stated trust. (Since slice 3.19 a
-   decision's entry is its *test*, read where the decision is an
-   `if`'s condition; as a value the decision is `(if TEST isTrue
-   isFalse)`, `Decidable`'s own cells — a match by constructor on the
-   bare test took the wrong row.) `Int.add`, `Int.sub`,
-   `Int.mul`, `Int`'s and `Nat`'s decisions map to the entries §8.4
-   rule 3 maps from; the `Nat` identities to the entries under their
-   own names. **Once `-` `/` `mod` at `Nat` have resolved to
-   `Nat.sub`, `Nat.div`, `Nat.mod`, the erasure selects those
-   entries** (saturating; total at a zero divisor) — this **reverses
-   revision 1's refusal**, which protected the E-first reading of the
-   spelling and has no reason to survive the direction change. The
-   E-first route keeps its own semantics and its `nat_operator`
-   refusal for the sources that stay on it (rule 6). An operator
-   means the same in a `fn`, a `def` and a theorem once its operand
-   type is fixed.
-5. **One resolver.** A `fn` body's names resolve as a `def`'s do
-   (`scope.shard`). Where a bare name is ambiguous and exactly one
-   candidate is a constructor of the expected type's head inductive,
-   that constructor is meant (§3.1's "Stage 1 resolves constructors
-   by expected type", now built) — `Add` in calc's bodies and in its
-   theorem alike.
+   recursive `fn` is elaborated with its name bound to a local of its
+   Pi type; inside it an `ite` under a self-call is compiled as the
+   dependent form (`Decidable.rec` with the proof a local of the
+   branch) wherever it stands; each `f.dec_N` is closed over every
+   local in scope at its call. The narrower guarantee stated: a
+   `match` on a computed scrutinee gives no `scrutinee = pattern`
+   local — since 3.21 as built a matcher under a measure carries its
+   equation (the open item closed there).
+3. **`Bool` and propositions meet in the elaborator, Lean's way.** A
+   proposition where a `Bool` is expected is `Decidable.decide p` with
+   `decision_of`'s decision (else `no_decision`); a `Bool` where a
+   proposition is expected is `c = true`; `if` on a `Bool` is `ite (c
+   = true)`. Erasure: `decide p inst` is `(if ⟦inst⟧ true false)` over
+   Init's `Bool`, the decision of `c = true` in a condition is `c`;
+   `Bool` and `Decidable` keep different cells in `ev`.
+4. **Realization selection, not an inverse of spellings.** The operator
+   table is the static realization registry: a resolved L operation
+   at its types → the executable entry, its result cell, its stated
+   trust (the registry grew type rows at 3.18 and expression rows at
+   3.17). As built: `Nat.add`, `Nat.mul`, `Nat.decEq`/`decLt`/`decLe`
+   select the integer entries `+ * int_eq lt le`; `Nat.sub`,
+   `Nat.div`, `Nat.mod` their own saturating, total entries;
+   `Int.add`/`sub`/`mul` and `Int`'s decisions theirs; since 3.19 a
+   decision's entry is its test.
+5. **One resolver.** A `fn` body's names resolve as a `def`'s
+   (`scope.shard`); an ambiguous bare name with exactly one candidate
+   a constructor of the expected type's head inductive is that
+   constructor (`resolve_ctor`).
 6. **Which route; a fallback weakens the guarantee and never
-   reinterprets** (R70). A function takes this route when its
-   signature elaborates (every binder and return type has an L
-   identity), decided **before** its body is read. On the route:
-   - a callee that is `RUNNABLE` (no K constant) is bound as a
-     **callee-local** of its elaborated signature type — the body
-     still elaborates once, with every other choice resolved as it
-     would be, and erases; the K projection is unavailable, the
-     record is `RUNNABLE … why=callee_runnable route=typed` with the
-     callee named, and nothing is re-read by the classifier. A callee
-     whose own signature has no L reading is the head obstacle below;
-   - a **head without an L identity before slice 3.17** — a symbol or
-     a `"…"` literal in the body, a toolchain-prelude spelling — is
-     the one case that still falls to the E-first route whole, because
-     no L term exists to project: `RUNNABLE … why=no_l_identity
-     route=e_first`, machine-readable, the set of such functions in
-     the tree named in the as-built and **emptied by 3.17** (then this
-     bullet is deleted with its code);
-   - anything else that fails is a **refusal** (`type_mismatch` and
-     the rest of §5.1's): a typed-route error never becomes an
-     E-first success, and a `fn` body is typed against its signature
-     from this slice on (§12.1's "return types unchecked" row).
-   A function whose signature has no L reading — every function of
-   the toolchain's own sources, which name the prelude's types —
-   never enters the route: `route=e_first` is theirs until they port
-   under the naming law, and the route is deleted then (guard 2; the
-   named consumers are `v3/kernel/**` and the old tree's ports, no
-   per-feature switch). Frontend parity and route 2's byte-tie are
-   over those sources and do not move. A request for an admitted
-   definition (a theorem citing the function, `realize`'s callee
-   check) refuses a `RUNNABLE` result as today (`no_l_meaning`).
-7. **`realize` with a supplied body** takes the same route: the body
-   elaborated against the realized constant's type, its program the
-   erasure, its equations per leaf as §7.5 has them. With rules 1–6
-   `tr` has no caller and is **deleted**, with `c_type`'s use as a
-   typing for L (`arg_types`, `prim_typed_identity`, `ctor_etargs`).
-   The derived view is the E projection applied to a constant's
-   value, unchanged in what it accepts.
+   reinterprets** (R70). A function takes the typed route when its
+   signature elaborates, decided before its body is read; a
+   `RUNNABLE` callee is bound as a callee-local (`why=callee_runnable
+   route=typed`); a typed-route error is a refusal, never an E-first
+   success; a signature with no L reading — the toolchain's own
+   sources — is `route=e_first`, the classifier's program, until the
+   flip. As built: the `RUNNABLE` record carries the route; after the
+   signature elaborates a `(quote S)` or `"…"` in the body (until
+   3.18), a literal pattern (until 3.17), a name the environment lacks
+   are `why=no_l_identity`; an extern or E-first callee
+   `why=no_l_meaning`; parked functions at a file's end are each
+   other's callee-locals (`define_mutual`).
+7. **`realize` with a supplied body takes the same route**: the body
+   elaborated against the realized constant's telescope, the erasure
+   its program, the descent checked on it, the equations per leading
+   leaf; its matchers owned by `MODULE.NAME.realize`. `tr` deleted
+   with `arg_types`, `ctor_etargs`, `apply_const_e`, the E-term case
+   tree, `DefRec`/`BelowInfo`/`WfInfo` and the tie;
+   `prim_typed_identity` and `c_type` remain the classifier's own.
 8. **One descent obligation discharged end to end** (R65, R69).
-   `(fulfills f.dec_N PROOF)` after the function, outside a view:
-   PROOF elaborated as a term against the obligation's statement and
-   checked by K in the environment **without** `f.dec_N` and without
-   anything whose `params=` reaches it — the closure instrument
-   (`axioms.shard`) over the proof's constants is the acyclicity
-   check, so a proof resting on its own obligation, directly or
-   through a second obligation or a theorem, is `fulfills_cycle` and
-   closes nothing. On success the obligation's record is
-   `DISCHARGE f.dec_N`, the function's `pending=` and every
-   dependent's `params=` lose exactly that name (the closure
-   recomputed, never a suppressed warning), and any assumption the
-   proof itself used stays in the account. The fixture is
-   `define_measure`'s `count`: its `dec_1` printed with `h : ¬(n =
-   0)` in the statement, discharged by a handwritten term over Init's
-   library (no `omega`, no I), the pending sets empty after. An
-   obligation stays an axiom-kind constant of the fourth class for
-   provisional checking and is never an ambient axiom (slice 3.14
-   rule 2). Dependency-directed wake-up of parked work is **deferred**
-   (the retry fixpoint of slice 3.15 rule 6 stands while loads are
-   small); what a parked function waits for — a declaration, a proof
-   — is already distinct in its record.
+   `(fulfills f.dec_N PROOF)` outside a view: PROOF read against the
+   obligation's statement as the theorem `f.dec_N.proof`, checked by K
+   in the environment without the obligation; the closure instrument
+   is the acyclicity check (`fulfills_cycle` closes nothing); on
+   success `DISCHARGE f.dec_N proved` and every account recomputed —
+   each `ACCEPT` that named the obligation names the proof's account,
+   a function with no open obligation leaves `PENDING`. Fixture
+   `discharge_measure` (`count.dec_1`), `discharge_self_cycle`,
+   `discharge_two_cycle`. Dependency-directed wake-up deferred.
 9. **Partial outcomes at the shared boundary** (R67). `kw.shard`'s
-   wrappers return K's outcome — the value, or K's refusal with its
-   reason, or exhaustion — not `None`. `unify` gains two results
-   beside `UYes`/`UNo`: `UStuck` (blocked on a named metavariable;
-   retry after assignment) and `UExhausted` (the depth or K's
-   budget); neither is ever read as inequality, and `check_expected`
-   reports them as `unify_stuck`/`unify_exhausted`, not
-   `type_mismatch`. An assignment is recorded **typed** or
-   **tentative**: a value with a metavariable inside whose type
-   `infer_light` cannot give is tentative, its typing constraint kept
-   and checked when the value closes; a **closed** value K refuses to
-   type is `UNo` with K's reason (today it is installed — corrected
-   here). `el_finish` refuses an outstanding tentative assignment as
-   it refuses an unsolved metavariable. Failure leaves the context as
-   it was (the transaction of slice 3.15 stands). The vocabulary is
-   for I and search to share; private `Option` helpers below the
-   boundary stay.
-10. **Holes across a binder: the narrower guarantee, stated** (R68,
-    **deferred to I's opener**, slice 3.20 — 3.19 when written; deriving took that number at item 51). Today `mc_drop_fvars`
-    removes a closing binder's local from every unsolved
-    metavariable's telescope, so a hole cannot be filled with that
-    variable after its binder closes. That is **incomplete, never
-    unsound** (the assignment is refused; K checks the closed term),
-    and the elaborator of this slice does not need more. The
-    contextual-hole contract — a stable creation telescope, each
-    occurrence an instantiation of it, delayed assignment — is built
-    once, in the shared `MCtx`, as the first item of I; until then no
-    API outside `elab.shard` may take an `MCtx` across a binder
-    close, which is what keeps callers off the deferred capability.
-11. **The facilities that are small once there is one place for
-    them:** `(list a b c)` by the expected type's `List` (no expected
-    type: `unsolved_implicit`, never a default element type); a
-    negative numeral is already §5.3's. Record update, the fresh-name
-    convention and E's rename of `lt le int_eq` are slice 3.17; the
-    byte and text adapters, deriving and — moved there by item 50's
-    ruling — `"…"` in a `fn` body, symbols and `Name` literals are
-    slice 3.18, the wire's type ruled first.
-    The three consumers after it — a branch-local refinement, a
-    dependent-safe record update, a contextual proof step — use the
-    `PreDef` record, the branch scopes of rule 2 and the outcomes of
-    rule 9; none gets a representation of its own (R71).
+   wrappers return K's outcome (`WVal`/`WFail`), never `None`;
+   `unify` answers `UYes`/`UNo`/`UStuck`/`UExhausted`, reported as
+   `unify_stuck`/`unify_exhausted` apart from `type_mismatch`; an
+   assignment is typed or tentative (`tentative_assignment` at
+   `el_finish`); a closed value K refuses is `UNo` — except one citing
+   a constant the form is still declaring (`cites_undeclared`).
+   Test `unify_test.shard` (G6).
+10. **Holes across a binder** — `mc_drop_fvars` makes the elaborator
+    incomplete, never unsound; the contextual-hole contract was
+    deferred to I's opener (3.20) and remains unbuilt: no API outside
+    `elab.shard` takes an `MCtx` across a binder close.
+11. **The small facilities**: `(list a b c)` by the expected type's
+    list constructor pair (no expected type: `unsolved_implicit`); a
+    negative numeral §5.3's; record update, the fresh-name supply and
+    E's rename at 3.17; bytes, text, deriving, `"…"` and symbols in a
+    `fn` body at 3.18–3.19.
 
-**Landings and gates** (R71: exact agreement is the first migration
-alarm where the representation is meant to be unchanged; every
-mismatch is investigated; an intended change is accepted with its
-stated comparison and the migrated references, never by editing the
-expected output until the test passes). (1) The `PreDef` record;
-matchers with descriptions and the regeneration check; `match` in L
-terms; constructors by expected type; rule 9's wrappers and outcomes.
-(2) The E projection generalized (matcher, self-local, callee-local,
-the `decide` conversion, realization selection, `Bool`'s `if`) with a
-**tie test**: for every function defined today in calc's files and
-`v3/std/list.shard`, the erasure of the pre-definition against the
-classifier's program, byte for byte up to rule 4's entries. (3) The
-flip: `fn` and supplied `realize` on the route, `define.shard`
-re-pointed, `tr` deleted, rule 8's discharge; then `(list …)`. Every
-landing keeps the loader pins, parity, route 2, K's clients and T0
-green. **The slice's gate:** calc's spec file with all 25 functions
-defined; `calc_test` byte-identical against the old tree with the
-programs now the erasures; the equations' names unchanged; a value
-hash that moves is listed with its cause (a function whose body has
-an `if` is expected to keep `Decidable.rec`'s shape and its hash —
-rule 2 — where it is recursive, and to move to `ite` where it is
-not); and the boundary fixtures:
+As built, the K projection (landing 3): a body that never cites the
+self-local is the value under its binders; structural recursion is
+`T.brecOn` over `λ x below … body` with the matcher kept as a
+constant whose motive carries the table (Lean's `MatcherApp.addArg`),
+a self-call found by type in the table's normal form, so the shape of
+`below` is never assumed and a self-call under a match in an argument
+or a `let` finds its entry; measured recursion `WellFounded.fix` over
+the data tuple with `rec (tuple) (f.dec_N locals…)`; `ite` under a
+self-call `Decidable.rec`; a function with a measure clause that
+never calls itself is a plain definition. The equations
+(`pj_equations`): the leading matchers' rows against the scrutinee —
+bind, clash or split — with no reduction by K; a leaf K cannot decide
+by conversion is I's and the function is defined without it
+(`define_arg_match`). `if` on a two-constructor inductive is
+`T.casesOn`, read back as `EIf` by the erasure (`if_type`,
+`private_if` the elaborator's). The gate: calc's 25 of 25 functions
+defined, `calc_test` byte-identical with the erasures as the programs,
+parity over 27 closures; fixtures G1 `one_meaning`, G4
+`discharge_measure`, G7, G8 `route_callee`, G9 `match_in_impl`.
 
-| fixture | pins | asks |
-|---|---|---|
-| G1 one source meaning | the same scoped expression in a `fn`, a `def` and a theorem: numerals, `Add`, a nested `match`, `-` at `Nat` and at `Int` | R63, R66, R70 |
-| G2 matcher identity and forcing | a swapped description refused (`matcher_description`); a missing one refused; an unselected arm that would exhaust is not run; a computed scrutinee evaluated once | R64 |
-| G3 `Bool` beyond `if` | both values of a `decide` returned, stored in a field, matched against `true`/`false`, passed to `and`, used as a condition | R66 |
-| G4 a completed measured definition | `count.dec_1` with its hypothesis; discharged; pending sets empty; the same call moved under a `let` and into an argument | R65, R69 |
-| G6 outcomes | a low depth gives `unify_exhausted` and a higher one succeeds; a blocked unification names its metavariable; a refused closed assignment leaves the context unchanged | R67 |
-| G7 acyclic closure | a proof citing its own obligation, and a two-obligation cycle, close nothing | R69 |
-| G8 no reinterpretation | a `RUNNABLE` callee added to a body changes the record and no resolved operator, literal or constructor in the dump; a typed-route error stays a refusal | R70 |
-| G9 descriptions through a view | a function with a `match` defined inside an implementation check: projected in the fork, the description present | R63, R64 |
+**The porting facilities and bytes — slices 3.17–3.18** (records §9.1
+"Slice 3.17", "Slice 3.18"; §13 items 50 and 51, R60's row of §11).
 
-G5 (contextual delayed filling) is rule 10's and opens slice 3.20 (I's opener).
+*Slice 3.17 (ruled and built 2026-10-01, item 50):*
 
-**Risks named before code.** The table generalization of slice 3.14
-was written over E patterns and E types; re-pointing it is the
-largest piece and the landing where a full context window may go.
-A matcher's universe (`Sort v`) is one more level for the elaborator
-to infer at each `match`. Rule 8 needs a lemma of Init's library that
-the fixture prefix may not reach (`Nat.sub_one_lt` or its kin): the
-fixture is extended or the proof goes through what the prefix has.
-The slice is larger than revision 1 by rules 8 and 9 and the
-fixtures; landing 3 may split in two. If the tie test of landing 2
-fails on a shape the probe did not cover, the design returns here
-before landing 3.
+1. **`"…"` in a `fn` body** is an L position's `LitStr : String` since
+   3.16; it kept `no_l_identity route=e_first` until 3.18's flip gave
+   it the one meaning everywhere (rejected: list-literal sugar by the
+   expected type).
+2. **Symbols** and `Name` literals go with 3.18 (item 36 rules
+   `Symbol`'s L identity `String`; the flip carried to phase 4 at
+   3.30 rule 3).
+3. **Numeral rows on the typed route** are Lean's value patterns: the
+   scrutinee once, then `(if (= x K) BODY …)` per row in order, the
+   last row `_` or a name; no matcher, the erasure the `if` chain.
+   As built: `elab_match_lit`; `match_not_exhaustive` (no last row),
+   `literal_rows` (a row after the catch-all, a constructor row
+   beside numerals), `pattern_type` (a numeral row at a type other
+   than `Nat`/`Int`); `literal_pattern` stays the E-first fallback for
+   a numeral under a constructor and a symbol pattern. Rejected: the
+   numeral as a `succ` chain through the matcher.
+4. **Records**: `make` and `with` reach a `structure` of the file
+   (`record.shard`, at the s-expression level: `make` is `NAME.mk` in
+   field order, `with` is `NAME.mk` on each field's entry or its
+   projection); a kept field whose type's source names an updated
+   field is `dependent_update`, naming the fields to supply, never an
+   inserted cast; a structure with parameters is out of the sugar's
+   reach (`record_make`/`record_with` with the pointer). Pin
+   `record_laws` (five theorems by `Eq.refl`).
+5. **The rename, staged by who reads the file.** E's table names the
+   primitives `= < <=`; the old spellings `lt le int_eq` are read as
+   those entries only in a module whose identity begins with `kernel`
+   (`scope.shard`'s `toolchain_scope`) and refused elsewhere as
+   `renamed_primitive` with the new spelling; the Rust bootstrap reads
+   both and dumps the V3 spelling; `v3/tools/rename_cmp.py` migrates
+   and checks. `v3/kernel/**` migrates when route 1's chain is V3's
+   own (665 sites in 52 files by the tool's count).
+6. **The fresh-name convention is a library**: `v3/std/fresh.shard` —
+   `FreshName`, `Fresh`, `Minted`, `Fresh.start`, `Fresh.next`,
+   `Fresh.next_ne` (two successive names differ, no axiom); the prefix
+   type a parameter `P`.
+7. **The E-first-by-body set**: the registry gained expression rows
+   (`erasure.shard`'s `realization_expr`; `Int.natAbs a` erases to
+   `(let (a) (if (< #0 0) (- 0 #0) #0))`), so calc's `show_nat` takes
+   the measure `(Int.natAbs n)` and is defined; a callee that is a
+   view's `sig fn` the environment lacks is `no_l_meaning`
+   (`callee_hits`, pin `route_sig_callee`).
 
-**As built, landing 1 (2026-09-19): matchers, `match` in L terms, the
-constructor by expected type, the outcomes.** `kernel/matcher.shard` —
-`MtPat` (a variable with its slot, a constructor on its fields),
-`mt_generate` (the motive, the scrutinees and the alternatives as K
-locals; `mt_compile`, the `casesOn` tree by first-match column
-splitting — a row with a variable at the split column kept under every
-constructor with the variable bound to the constructor term, and at a
-leaf every variable bound before a later split **refined** by it, so
-the alternative's argument is the term the motive's argument has
-there; `match_not_exhaustive`, `match_indexed`, `match_eliminator`),
-the definition an `abbrev` over the owner's universe parameters and
-one more for the motive; `mt_describe`/`mt_is_matcher` (rule 1's
-read-back and regeneration check). `elab.shard` — `elab_match` (the
-constant motive from the expected type, which must be determined:
-`match_motive` otherwise, with the pointer), `el_pat` (a pattern at its
-type: `_`, a name — the type's field-less constructor of that name,
-else a variable —, a constructor on its sub-patterns;
-`literal_pattern`, `pattern_constructor`, `pattern_arity`), the
-matcher's parameters the binders in scope its scrutinee's type
-mentions, the matcher **checked into the walk's environment as it is
-made** (`kw.shard`'s `w_admit`: K's `check` seeded above the walk's
-node ids, the walk's then raised above the new environment's) and
-handed to the reader with the declaration (`El`'s `Gen`, `el_aux`,
-`reader.shard`'s `rd_ok`), so the loader admits `OWNER.match_N` before
-its owner with an `ACCEPT` record of its own. A `match` in a
-requirement's statement is `match_in_requirement` (a view parameter is
-one declaration); in an inductive's or a structure's types K's
-`unknown_constant` answers (no consumer). Rule 5: `scope.shard`'s
-`resolve_ctor` (the name under the inductive's own prefix first, then
-the scope's candidates) — every pattern head, and a term's head where
-the plain resolution is ambiguous and the expected type's head is an
-inductive. A body's untyped `let` binding `(x TERM)` is read. Rule 9:
-`kw.shard`'s `w_infer_r`, `w_whnf_r`, `w_is_def_eq_r` answer `WVal` or
-`WFail` with K's `Failure`; `unify.shard`'s `URes` has `UStuck` (a
-failure under an unassigned metavariable applied to what is no
-pattern) and `UExhausted` (the depth, or a spent resource of K's);
-an assignment is typed or **tentative** (`mc_tentative`,
-`tentative_bad` asked by `el_finish`: `tentative_assignment`); a
-closed value K refuses is no longer installed — except one citing a
-constant the form is still declaring (`cites_undeclared`: an
-inductive's name in its constructors, a structure's in its
-projections), which K cannot type before the admission and the
-admission checks; `check_expected` and `elab_slot` report
-`unify_stuck` / `unify_exhausted` apart from `type_mismatch`. **Not
-in landing 1:** the `PreDef` record (its first consumer is landing
-2's erasure). Tests: `kernel/test/unify_test.shard` (G6),
-`kernel/test/matcher_test.shard` (G2's identity half: the pins'
-matchers recognized with their rows, a hand-written equal one
-recognized, an imposter of the same type and name not); pins
-`match_def`, `match_statement`, `match_poly`, `match_imposter`,
-`match_not_exhaustive`, `match_literal`, `match_motive`,
-`ctor_expected` (G1's constructor half).
-
-**As built, landing 2 (2026-09-19): the pre-definition, the E
-projection, the tie.** `kernel/predef.shard` — `PreDef` (identity,
-declared type, the binders' locals, the **self-local**, the finished
-body, the elaboration state with the matchers already in its
-environment) and `read_predef` (a `fn` form read once: a `(T Type)`
-binder implicit, the function's short name bound to a local of the
-declared type, the body at the result type; `PdSkip` a signature with
-no L reading, `PdErr` a refusal on the route); never a `Declaration`
-for the owner. The erasure (still in `realize.shard` beside `tr`,
-which it shares its state with; its own file when `tr` goes, landing
-3) gained: a **matcher application** → the `EMatch` of the rows
-`mt_is_matcher` read back and checked, each alternative's lambdas the
-row's variables, an erased field's variable dropped (`erase_matcher`,
-`mt_epat`); the **self-local** → `ECall` with the binders' runtime
-flags (`EKCall`); `Decidable.decide p inst` → `(if ⟦inst⟧ true false)`
-over Init's `Bool` — always, no identity case yet (rule 3's "where the
-entry returns a `Bool` cell" waits for a consumer: `ev` has three
-two-valued cells, the scope's `Bool`, Init's and `Decidable`'s);
-`instDecidableEqBool c true` → `⟦c⟧`; `Int.ofNat n` → `⟦n⟧` and
-`Int.negSucc` of a literal → the negative literal (one integer at run
-time); rule 4's `Int` rows (`realization_of`: `Int.add`/`sub`/`mul`,
-`Int.decEq`/`decLt`/`decLe` → `+ - * int_eq lt le`). `erase_predef` —
-the binders' roles from their locals' types, the body erased, the
-function's `EFn`. In the elaborator: a proposition where a `Bool` is
-expected is `decide` with `decision_of`'s decision, a `Bool` where a
-proposition is expected is `c = true` (both in `check_expected`,
-beside the `Nat → Int` coercion); `if` on a `Bool` is `ite (c = true)`
-with `instDecidableEqBool`; **`if` on a value of a two-constructor
-inductive of the program's is the `match` it abbreviates** (§6.2's tag
-rule in L: the second constructor takes the then-branch — found by
-the tie, on `kernel.util.bool_and` over the prelude's `Bool`); an
-operator whose first operand is a numeral takes its identity from the
-other operand's type (`(le 48 c)` at `c`'s `Int` — slice 3.15 rule 3's
-"first operand" amended: the first that is not a numeral); `(list a
-b …)` is the constructor chain of the expected type's list (an
-inductive with a field-less and a two-field constructor; no expected
-type: `unsolved_implicit`); a bound head inserts its implicit binders
-as a constant does (a polymorphic self-call). **The tie** (the
-loader's `define_try`, `realize.shard`'s `tie_check`; gone at landing
-3): every function the old route defines is also read as a
-pre-definition and erased, and the erasure compared with the
-classifier's program term for term — a primitive by the operation it
-performs (`+` and `Nat.add` one addition), an `if` on a two-constructor
-type equal to the match it abbreviates; a difference, or a stage of
-the new route failing, is the refusal `tie_differs`. **It holds for
-every function defined in calc's files, `v3/std/list.shard` and all
-125 loader pins**, nested patterns, course-of-values and measured
-functions included. Tests: `kernel/test/project_test.shard` (G3: both
-values of a `decide` returned, matched, stored, used as a condition
-and as a branch; G2's forcing: the chosen arm only); pins
-`project_bool`, `elab_bridge` (`is_digit 53 = true` by `Eq.refl`
-through `decide` and `ite (c = true)`). G1 and G8 wait for the flip:
-today a `fn` with `(le 48 c)` has no L half to compare.
-
-**As built, landing 3 (2026-09-19): the flip.** A `fn` is read once and
-its program is the erasure; the classifier types no function that has
-an L reading. *Decided before the old route was deleted:* the design's
-"`define.shard`'s machinery re-pointed" is Lean's own structural
-compilation rather than a port of slice 3.14's table bookkeeping, which
-was written over E patterns and a matrix the pre-definition no longer
-has.
-
-- **The loader** (`load_fn`): `read_predef`, then `erase_predef`'s
-  `EFn` — the program — then `define_pd`. `DEFINE` with the
-  equations; or `RUNNABLE … why=… route=typed` when K's half cannot be
-  reached (`below_unreached`, `wf_unreached`, `measure_type`,
-  `callee_runnable`) — the program is still the erasure; or a refusal
-  (`type_mismatch`, `match_not_exhaustive`, `ambiguous_name`,
-  `pattern_constructor`, `if_type`, `private_if`, `realize_descent`,
-  `realize_recursion` …: the classifier's `unsaturated`,
-  `function_value`, `nonexhaustive`, `ambiguous_head`, `pattern_type`
-  are its own, for the sources still on its route). The `RUNNABLE`
-  record carries the route (`route=typed`, `route=e_first`, none for
-  an extern or an E-only type). The matchers a body generated are
-  admitted before their owner (`ACCEPT NAME.match_N`), the auxiliaries
-  of a native inductive before the function is read again.
-- **Rule 6 as built.** `route=e_first`, the classifier's program: a
-  signature with no L reading (`why=e_only_type` — every function of
-  `v3/kernel/**` but a handful); after the signature elaborates, a
-  `(quote S)` or a `"…"` anywhere in the body (checked on the form,
-  before the body is read), a literal pattern, a name the environment
-  lacks that is no function — an operator's identity past the Init
-  prefix (`Nat.add` under `(import Init Nat)`, `ite` under a prefix
-  that stops before it, a `casesOn` not yet generated), a toolchain
-  spelling — all `why=no_l_identity`; a callee that is an extern or
-  was itself E-first by signature, `why=no_l_meaning`. A name that is
-  nothing at all is still a refusal, the classifier's
-  (`unknown_head`). **The set in the tree today:** calc's `show_nat`
-  (`Int.ediv` and `Int.emod` lie past its file's Init prefix — the
-  first cut of this sentence said a `"…"`, which the function does not
-  contain; corrected 2026-09-19 at slice 3.17's scoping),
-  `kernel.define.has_eq` and `confusion_reachable` (K's view's
-  `env_find` answers an E-only type); slice 3.17 below says
-  what empties it and what does not (as built there: `show_nat` is
-  defined; `has_eq` reads `no_l_meaning`; `confusion_reachable`
-  quotes symbols and stays `no_l_identity` until slice 3.18). A
-  **callee-local**: a callee with a program and no K constant whose
-  signature elaborates — `RUNNABLE` on the typed route, or E-first
-  for its body alone — is bound, under the name the body writes, to a
-  local of its signature's type, the signature elaborated in the
-  callee's own scope inside the caller's walk; the body is read again
-  with it, erased with the call in it, and recorded `why=callee_runnable
-  route=typed`. calc's `show_ascii`, `step` and the trace functions
-  are such (their root `show_nat`). A callee later in the file parks
-  the function (slice 3.15's retry); at the file's end the parked
-  functions are each other's callee-locals — mutual recursion is two
-  programs by erasure and no definition (`define_mutual`).
-- **The K projection** (`define.shard`, rebuilt; the E-term matrix,
-  `Known`, the table splits and `df_*` deleted). A body that never
-  cites the self-local is the value under its binders, matchers and
-  `ite` as elaborated. **Structural:** `T.brecOn` applied to `λ x
-  below others . body'` over the binders' own locals. **The matcher
-  stays a constant and its motive carries the table** (Lean's
-  `MatcherApp.addArg`): a matcher application whose scrutinee is a
-  local that a table's type mentions is re-instantiated at `λ s .
-  B[s] → motive s` — its universe K's sort of that arrow — each
-  alternative takes the refined table `B[pattern_i]` as a last
-  binder, and the application is applied to the table; nothing is
-  unfolded. **A self-call is found by type:** each table is kept with
-  its type over an *abstract* motive `C` (the real motive is constant
-  in its argument, so `motive r` cannot tell one entry from another);
-  the search reads K's normal form — `C y'` with `y'` the argument
-  (syntactically, else by K's conversion) is the entry, a `PProd` is
-  searched through both projections, a `T.below C t` unfolds exactly
-  when `t` is a constructor application — so the shape of `below` is
-  never assumed, and a self-call under a match in an argument or a
-  `let`'s value finds its entry as one in tail position does (slice
-  3.14's `recursion_depth` obstacle is gone). No entry:
-  `realize_descent`. **Measured:**
-  `WellFounded.fix` over the data binders' tuple, the body with each
-  binder the tuple's component; a self-call `rec (tuple args)
-  (f.dec_N locals…)` over every local in scope — pattern variables,
-  `let`s (as `let`s in the statement), branch proofs; the measure's
-  type is checked (`measure_type`) before `WellFounded`'s
-  reachability (`wf_unreached`). **`ite` inside a recursive function**
-  is `Decidable.rec` with a constant motive and the proof a local of
-  each branch, wherever it stands — but only where a self-call sits
-  under it: a subterm that does not cite the self-local is left as
-  elaborated. A function with a measure clause that never calls
-  itself is a plain definition, not `PENDING`.
-- **The equations** (`realize.shard`'s `pj_equations`, shared with
-  `realize`): the leading matchers' rows against the scrutinee term —
-  bind, clash (anywhere in the row: the row is gone from the
-  specialized matrix), or stuck on a universally quantified local,
-  which is split over its constructors in order — no reduction by K.
-  The leaves and the names `f.eq_N` are slice 3.13's; the statements
-  now cite the matcher constants, so their hashes moved with the
-  definitions'. **A `fn`'s leaf is stated where K decides it by
-  conversion** (the definition is checked into the walk's environment
-  first): a structural recursion whose leaf leaves the structural
-  argument a local, or keeps a self-call under a matcher still stuck,
-  unfolds only by a case analysis — that equation is I's, the leaf
-  keeps its number, and the function is defined without it
-  (`define_arg_match`; slice 3.14 left such a function `RUNNABLE`).
-  A realization's equations are all stated (`realize_wrong` is K's
-  refusal).
-- **`if` on a two-constructor inductive is `T.casesOn`**, not a
-  matcher (landing 2's as-built reversed): the erasure reads a
-  two-constructor case analysis whose alternatives ignore their
-  fields back as `EIf`, so the toolchain's `bool_and`/`bool_or` keep
-  the old front end's program byte for byte, and the equations do not
-  split on an `if`. The elaborator refuses `if_type` and `private_if`
-  itself and checks that the `Bool` bridge's constants (`Eq`,
-  `Decidable`, `instDecidableEqBool`, `Decidable.decide`) exist
-  before it cites them (a short Init prefix is `no_l_identity`, not
-  K's refusal at admission).
-- **Rule 4 as built:** `Nat.add`, `Nat.mul`, `Nat.decEq`, `Nat.decLt`,
-  `Nat.decLe` select the integer entries `+ * int_eq lt le` — one
-  operation on naturals, and the classifier's spelling, so frontend
-  parity is byte for byte; `Nat.sub`, `Nat.div`, `Nat.mod` keep their
-  own (truncating, total) entries. `define_nat_operator` is `ok`.
-- **Rule 7:** a supplied `realize` binds its signature's names to the
-  realized constant's own telescope (an erased binder has none),
-  elaborates the body at the result's L type, takes the erasure as
-  the program, checks descent on it, and states the equations of its
-  leading matchers (`Eq.refl`, or the clause's theorem); its matchers
-  are owned by `MODULE.NAME.realize` and admitted first. A `RUNNABLE`
-  callee is `no_l_meaning`, an E primitive without an L identity
-  `no_l_identity`, a callee without a realization the erasure's
-  `no_realization` (was `realize_order`). **`tr` is deleted** with
-  what only it used — the typed application through `c_type`
-  (`arg_types`, `ctor_etargs`, `apply_const_e`, the first-order
-  matching of binder types), the E-term case tree, the old equations,
-  `DefRec`/`BelowInfo`/`WfInfo` — and the tie. The erasure is
-  `kernel/erasure.shard` (with the walk's state `Tr`);
-  `realize.shard` is the supplied form, the descent check and the
-  equations; `prim_typed_identity` and `c_type` remain the
-  classifier's own.
-- **Rule 8 as built.** `(fulfills f.dec_N PROOF)` in a file outside a
-  view: PROOF read against the obligation's statement as the theorem
-  `f.dec_N.proof`, checked by K. Every closure the loader computes
-  replaces a discharged obligation by what its proof rests on (to a
-  fixpoint), and the theorem's closure is the acyclicity check: it
-  reaches `f.dec_N` — directly, through `f` (whose value cites it),
-  through a theorem, or through an obligation discharged earlier by a
-  proof that rests on this one — `fulfills_cycle`, nothing admitted.
-  On success `DISCHARGE f.dec_N proved`, and the account is
-  recomputed in the records: every `ACCEPT` that named the obligation
-  names the proof's own account instead, and a function with no open
-  obligation is no longer `PENDING` nor in any `pending=`. The
-  fixture: `count.dec_1 : ∀ p (h : ¬ p.1 = 0), InvImage … ⟨p.1 - 1,
-  p.2 + 1⟩ p`, by `Nat.sub_lt (Nat.pos_of_ne_zero h)
-  (Nat.zero_lt_succ 0)` — both in the prefix through `InvImage.wf`.
-- **The gate.** calc's spec file: 25 of 25 functions defined
-  (`parse_tail` by its measure, two obligations `PENDING`; the file's
-  Init import now reaches `InvImage.wf`); `calc_test` byte-identical
-  over 21 inputs with the erasures as the programs; frontend parity
-  byte-identical over 27 closures; the equations' names unchanged.
-  **Hashes:** every `fn`'s definition and equations moved — the value
-  cites `NAME.match_N` where it held a `T.rec` tree (the cause, for
-  all of them); K's own constants and Init's are untouched (T0).
-  Fixtures: G1 `one_meaning`, G4 `discharge_measure` (+ the account
-  read in `define_test.sh`), G7 `discharge_self_cycle` and
-  `discharge_two_cycle`, G8 `route_callee` (+ the dumps compared in
-  `define_test.sh`), G9 `match_in_impl`; G2, G3, G6 are landings 1–2's;
-  G5 opens slice 3.20 (I's opener). Eleven pins moved to the elaborator's reason or
-  the new outcome, each with its cause in its header.
-- **Open:** a `match` on a computed scrutinee inside a measured
-  function states its obligation without `scrutinee = pattern` (rule
-  2's narrower guarantee, unchanged); mutual recursion is not
-  compiled; dependency-directed wake-up is deferred (rule 8).
-
-**Slice 3.17 — the porting facilities** (design 2026-09-19, scoped by
-probes through the loader before any code; RULED 2026-10-01 — the
-user agreed with the three leans, rules 1, 2 and 5; built the same
-day, the as-built below; §13 item 50). The slices table gives this slice R60's row (§11): record
-update and order-free construction, `Name` literals, symbols and `"…"`
-in a body, the fresh-name convention, E's rename of `lt le int_eq`.
-Measured against the tree after slice 3.16, the row splits into what
-already works, what is small, and two entries that do not belong here.
-
-*What the probes found* (scratch files, the pins' Init prefix):
-
-- **Records work on the typed route today.** `(record Pt (x Nat) (y
-  Nat))` with `make` out of order and `with`: six functions `DEFINE`d,
-  a `def` using `make` accepted, and v2's law family needs no
-  generator — `(= (Pt.x (Pt.with_x v p)) v)` and `(= (Pt.y (bump p))
-  (Pt.y p))` over a *local* `p` are `Eq.refl` (K unfolds a structure's
-  recursor on a local through its projections, Lean's rule). What is
-  left of R60's entry is its caveat — a changed dependent field an
-  explicit obligation — which no `record` can state (its fields are
-  positional, non-dependent types); it becomes real when `make`/`with`
-  reach a `structure`.
-- **`lt le int_eq` and `< <= =` already elaborate to one term**
-  (`lt3` and `lt3b`: one hash). The classifier knows only the old
-  spellings (`unknown_head: =` in an E-first function).
-- **A literal pattern** (`(match n (0 1) (_ 2))`, at `Nat` and at
-  `Int`) is `no_l_identity route=e_first`. 0 rows in `v3/`, 53 in the
-  old tree.
-- **`Symbol` has no L reading** (`e_only_type`); 2,905 `(quote …)`
-  sites in `v3/`, every one in a function that is E-first by its
-  signature anyway (K's sources see no `Init`, so `Int` has no L
-  constant there). Outside the toolchain the old tree names `Symbol`
-  in 4 files. `String` is in the pins' prefix and `"zero"` is a
-  `String` in a `def`; `String.decEq` is past the prefix.
-- **The E-first-by-body set is not what landing 3's as-built said.**
-  calc's `show_nat` has no `"…"`: `Int.ediv`/`Int.emod` lie past
-  `(import Init Int.decEq)`; with `(import Init Int.emod)` it is on the
-  typed route (`measure_type`: its measure is an `Int`). `has_eq` and
-  `confusion_reachable` call `env_find`, whose signature has no L
-  reading until K's sources port — no facility of this slice changes
-  that, and their record should read `no_l_meaning`, as the as-built
-  describes that case, not `no_l_identity`.
-- **The rename reaches the v2 chain.** `v3/kernel/**` is hosted by the
-  Rust bootstrap (one evaluator for both trees) and compiled on route
-  1 by `tools/lower` and `tools/codegen`, which read it with the old
-  tree's kernel: 73 sites in 10 files of `kernel/` and 3 in
-  `codegen.shard` name the three primitives, and `=` there is the
-  claim language's equality. 943 sites in 60 files of `v3/` would
-  move.
-
-*The rules* (the design's leans, ruled 2026-10-01; rule 3 was built
-differently from this text and is rewritten in place, the first
-reading kept as rejected):
-
-1. **`"…"` in a `fn` body moves to slice 3.18, with the flip.** Since
-   slice 3.16 a `fn` body is an L position, and in an L position
-   `"…"` is already `LitStr : String` (§5.3). Reading it as the byte
-   list in a `fn` and a `String` in a `def` is two meanings for one
-   text under one elaborator — guard 1. It keeps `no_l_identity
-   route=e_first` until item 37's flip gives it the one meaning
-   everywhere. Rejected: list-literal sugar over the bytes by the
-   expected type (twenty lines, and wrong for exactly one slice).
-2. **Symbols move to slice 3.18 too.** Item 36 rules `Symbol`'s L
-   identity `String`. Assigned now, a `String` binder erases to the
-   atom cell; at 3.18 `"…"` is a `String` as well, so the atom would
-   have to *be* `String`'s E representation — the wire's ruling made
-   by a side effect. No function in the tree would change route by
-   it. `Name` literals go with them (K's `Name` holds the atoms; a
-   literal over an E-only type helps no typed function), stated there
-   as loader-level sugar over the `Name` in scope — plain data, no
-   node, declaration or environment identity to forge (`name.shard`
-   carries none). Rejected: a native `structure Symbol` (reverses
-   item 36 for no consumer).
-3. **Numeral rows on the typed route** are Lean's value patterns, one
-   mechanism at `Nat` and at `Int`: the scrutinee once, then `(if (= x
-   K) BODY …)` per row in order — the `ite` on the type's decision, as
-   any `if` is read — and the last row `_` or a name for the
-   scrutinee. No matcher is generated, and the erasure is the `if`
-   chain (`(if (= #0 0) 10 (if (= #0 5) 20 30))`), the scrutinee
-   bound by a `let` when it is not a local. A match of numeral rows
-   with no last row is `match_not_exhaustive`. *Rejected, the design's
-   first reading:* a numeral at `Nat` as the constructor pattern
-   through the matcher, both types read back as E's literal row —
-   because a numeral is then a `succ` chain as deep as its value (48
-   nested `casesOn` for an ASCII code, against the pattern reader's
-   depth), E has no successor pattern so the constructor reading buys
-   a program nothing, and reading an `ite` chain back as a literal
-   row is recognition of a shape a user also writes by hand. The
-   classifier's literal rows stay what an E-first function runs.
-4. **Records: the first example is the deliverable.** A pin
-   (`record_laws`) with the three probes above as theorems; `make` and
-   `with` over a `structure` whose later field's type mentions an
-   earlier one: updating the earlier field without the later is the
-   refusal `dependent_update`, naming the fields to supply — never an
-   inserted cast.
-5. **The rename, staged by who reads the file.** E's table takes `<
-   <= =` as the primitives' names and the classifier accepts them; the
-   Rust bootstrap accepts both spellings (it hosts the old tree); the
-   files no v2 tool reads — `v3/std`, `v3/examples`, `v3/pins` —
-   migrate by tool now, and the old spellings are refused there.
-   `v3/kernel/**` migrates when route 1's chain is V3's own, since
-   until then the old tree's kernel reads it: teaching the v2 kernel
-   an alias whose `=` collides with the claim language is a change to
-   the old trusted base for a spelling. Rejected: a rewriting shim in
-   `build.sh` (a derived source between the text and the compiler);
-   the full migration now (route 1 is testable only on CI).
-6. **The fresh-name convention** is a library, not a form:
-   `v3/std/fresh.shard` — a `Fresh` record (a prefix and a counter),
-   `Fresh.next` returning the name and the advanced supply — with a
-   theorem that two successive names differ, and the convention
-   (§12.1's `gen_fresh` row) that a function needing names takes and
-   returns the supply.
-7. **The E-first-by-body set.** calc's app file imports through
-   `Int.emod`, which puts `show_nat` on the typed route as
-   `measure_type`. Its definition needs a `Nat` measure, and the
-   probe found the gap: the measure is erased with the body, the
-   prefix holds `Int.natAbs` (not `Int.toNat`), and `Int.natAbs` has
-   no program — `(realize Int.natAbs (view))` is `no_realization`,
-   its value matching on `Int`'s constructors, which E's `Int` does
-   not have. The lean: a realization-registry row for `Int.natAbs`
-   (and `Int.toNat` where the prefix holds it) as an E expression over
-   the existing primitives — no new primitive — so `show_nat` is
-   defined with its obligations `PENDING`. A callee whose signature
-   has no L reading is recorded `no_l_meaning` and is the port's, not
-   this slice's; rule 6's bullet stays for `"…"` and symbols until
-   3.18 and is deleted there.
-
-*Gates:* the loader pins with the new ones (`literal_pattern`,
-`record_laws`, `dependent_update`, `rename_refused`), `define_test`
-with calc's app file added, calc's differential and frontend parity
-byte-identical, the full suite, CI for route 1.
-
-**Slice 3.17 as built** (2026-10-01):
-
-- **Rule 3.** `elab.shard`'s `elab_match_lit`: a `match` with a
-  numeral row is rewritten to the `if` chain over the scrutinee's name
-  — a local is its own name, anything else is bound once under a name
-  no source symbol can spell — and elaborated as any term, in a `fn`
-  and in a `def` alike. Refusals on the route: `match_not_exhaustive`
-  (no last row), `literal_rows` (a row after the catch-all, a
-  constructor row beside the numerals), `pattern_type` (a numeral row
-  at a type other than `Nat` or `Int` — the classifier never checked a
-  literal against the scrutinee's type, so `(match b (0 1) (_ 2))` at
-  a `Bool` was `RUNNABLE` before this slice and is refused now where
-  the signature has an L reading). `literal_pattern` stays the
-  E-first fallback for a numeral *under a constructor* and for a
-  symbol pattern (the old tree has 53 numeral rows and one nested
-  numeral). A `fn` whose body is a literal match has one equation,
-  as a body `if` does; the rows compute in K (`Eq.refl`).
-- **Rule 4.** Pin `record_laws`: get after set, get of another field,
-  set after set, a field through a `with` in a function, a field of a
-  `make` — five theorems, each `Eq.refl`. `make` and `with` reach a
-  `structure` of the file (`record.shard`, at the s-expression level
-  as for a record): `make` is `NAME.mk` on the values in field order;
-  `with` is `NAME.mk` on each field's entry or its projection of the
-  subject, the subject bound once when it is not a name.
-  `dependent_update` is syntactic and conservative: a field kept whose
-  type's *source* names an updated field (a binder inside the type
-  that reuses the field's name is refused too). It is a read error,
-  like `record_make`: the expansion precedes the reading. **Limit:**
-  a structure with parameters is out of the sugar's reach — its
-  constructor takes them — and `make`/`with` on it are
-  `record_make`/`record_with` with that pointer. The bootstrap reads
-  no `structure` (an L form), so parity is untouched.
-- **Rule 5.** E's table names the three entries `= < <=`
-  (`prog.shard`); the erasure's registry rows emit them. The
-  spellings before the rename are read as those entries in a module
-  whose identity begins with `kernel` (`scope.shard`'s
-  `toolchain_scope` — the toolchain's sources, the one tree route 1's
-  v2 chain compiles) and are refused everywhere else as
-  `renamed_primitive` with the new spelling, by the elaborator on the
-  typed route and by the classifier on the E-first one; they stay
-  reserved there, not free names, until the toolchain migrates. The
-  Rust bootstrap reads both (`prim.rs`, `eval.rs`) and `eval dump`
-  prints the V3 spelling whichever the source wrote, so frontend
-  parity compares one name. **Found while building:** the bootstrap's
-  native table and `kernel/reduce.shard`'s object table are tied by a
-  conformance sweep (`lib.rs`); `= < <=` are native-only names, which
-  the old kernel's table does not carry — no old-tree `fn` body
-  writes them, and `=` there is a claim's head, which neither table
-  sees. Stated in `prim.rs`; the sweep's lists are unchanged. The
-  tool is `v3/tools/rename_cmp.py` (a list head only, never inside a
-  string, a comment or a `quote`; `--check` for a migrated tree): 27
-  sites in 16 files of `v3/std`, `v3/examples` and `v3/pins`. By its
-  count `v3/kernel` has 665 sites in 52 files still to move (the
-  scoping's 943 in 60 was a grep that also counted comments, strings
-  and quoted symbols).
-- **Rule 6.** `v3/std/fresh.shard`: the records `FreshName`, `Fresh`
-  and `Minted`, `Fresh.start`, `Fresh.next`, and `Fresh.next_ne` —
-  the names of two successive steps differ, through
-  `Nat.succ_ne_self` and `congrArg` on the index (no axiom). The
-  prefix's type is a parameter `P`, not the design's unstated one:
-  text has no L reading before slice 3.18, and the toolchain's port
-  will instantiate it with K's `Name`. 14 functions defined.
-- **Rule 7.** The registry has expression rows (`erasure.shard`'s
-  `realization_expr`): `Int.natAbs a` erases to `(let (a) (if (< #0 0)
-  (- 0 #0) #0))`. calc's app file imports through `InvImage.wf` and
-  `show_nat` takes the measure `(Int.natAbs n)`: 17 of 17 functions
-  defined, `show_nat.dec_1` the one pending obligation, nothing
-  `RUNNABLE`. `Int.toNat` has no row: it lies at line 552,397 of the export,
-  far past the test prefix (corrected at slice 3.18 — this said it was
-  not in the export).
-  A callee that is a view's `sig fn` the environment lacks is
-  `no_l_meaning` (`loader.shard`'s `callee_hits`; pin
-  `route_sig_callee`): `has_eq` reads so now. `confusion_reachable`
-  stays `no_l_identity`, correctly — its body quotes symbols; the
-  scoping note above named it beside `has_eq` for the callee alone.
-- **Gates run:** 146 loader pins (14 new: `literal_pattern`,
-  `literal_open`, `literal_type`, `literal_rows`, `literal_nested`,
-  `rename_refused`, `rename_refused_e`, `rename_ok`, `record_laws`,
-  `struct_make`, `dependent_update`, `struct_params`,
-  `measure_natabs`, `route_sig_callee`; `match_literal` narrowed to
-  the nested numeral), `define_test` (7 checks: calc's app file and
-  the fresh-name library added), calc's differential byte-identical
-  over 21 inputs, the full suite and the bootstrap's unit tests
-  (records §9 for the figures). Route 1 is CI's.
-
-**Slice 3.18 — bytes and text: the wire's type, `String`'s
-realization, the flip** (the user's ruling of 2026-10-01 on five
-leans, the design the same day; §13 item 51). The slices table gave
-this slice the byte and text adapters, item 37's flip, the literals
-moved from 3.17 and deriving, "the wire's type ruled first".
-
-*The ruling.* (1) **The representation is the byte list**: `UInt8`
-runs as an integer, a `ByteArray` as the list of them, a `String` as
-its `ByteArray` with the validity proof erased — no executor gains a
-kind of value. Rejected: a packed buffer now (a fourth value in the
-bootstrap and in `ev`, and a table of primitives each *trusted* to
-match Lean's function; its benefit is the lowering's, behind the same
-types); the interned atom (item 36's reading taken literally: every
-string ever built interned, a file's contents included). (2) **The
-externs carry `ByteArray`**, all six; text leaves by its bytes and
-enters by a checked decoder. Rejected: `List UInt8` (list cells in the
-host contract for good), `String` for paths and arguments (UTF-8
-validation inside the boundary). (3) **Symbols are deferred** — they
-and `Name` literals stay out of a `fn` body; item 36 is amended.
-(4) **The flip is staged like the rename** — every file outside the
-toolchain's own sources now, `v3/kernel/**` with route 1's chain; item
-37's "at once" is amended. (5) **Deriving is its own slice**, 3.19; I
-moves to 3.20.
-
-*What the probes found* (scratch files; the pins' prefix and a longer
-one cut from the export):
-
-- **In a `def`, `"…"` is already a `String`**; a `fn` whose signature
-  names `String`, `ByteArray` or `UInt8` is `no_l_identity
-  route=e_first`. The obstacle is one binder: `UInt8` is a structure
-  over `BitVec 8`, `BitVec w` over `Fin (2 ^ w)`, and a *value*
-  parameter is neither a type nor a proposition, so §7.5's eligibility
-  refuses `BitVec` and everything built on it.
-- **A structure's projection in a `fn` body is refused today**:
-  `(fn lo2 ((s Span)) Nat (Span.lo s))` is `REFUSE unknown_head:
-  Span.lo` — the erasure has no realization for the projection
-  function, the function falls to the classifier, and the classifier
-  knows no L constant. Slice 3.17's structures were reachable from a
-  `fn` by constructor and by pattern only.
-- **An import costs its position in the export.** `(import Init
-  NAME)` admits the prefix through NAME: `String` is line 9,848 (277
-  declarations), `String.toByteArray` 78,604 — both inside the pins'
-  prefix (100,851 lines, 5 s). `ByteArray.data` is 169,395,
-  `UInt8.toBitVec` 250,325, `String.casesOn` 250,602, `String.append`
-  253,597, `UInt8.casesOn` 263,243, `UInt8.toNat` 263,515: a load
-  through there admits 3,400 declarations in 40 s on the bootstrap.
-  `ByteArray.validateUTF8` is line 2,619,670 of 6,490,422.
-- **Init's operations on these types have no derived view**: they are
-  stated through instance projections (`HMod.hMod`, `++`) and loops
-  the erasure refuses (`recursion_structure`). `UInt8.ofNat n` is
-  `⟨BitVec.ofNat 8 n⟩`, which unfolds to `⟨⟨⟨n % 2 ^ 8, _⟩⟩⟩`.
-- **The driver performs an extern by its short name alone**
-  (`ev.shard`'s `perform`): prelude cells whatever the program
-  declared.
-- **Outside the toolchain's sources one function holds a string
-  literal** (the pin `ev_string`); `v3/std` and `v3/examples` hold
-  none.
-
-*The rules:*
+*Slice 3.18 (ruled 2026-10-01 on five leans, item 51; built
+2026-10-02):* the representation is the byte list — `UInt8` an
+integer, `ByteArray` the list of them, `String` its `ByteArray` with
+the validity proof erased, no executor gaining a kind of value; the
+externs carry `ByteArray`; symbols deferred; the flip staged like the
+rename; deriving its own slice.
 
 1. **Type realizations: six rows of the registry.** `Fin`, `BitVec`,
-   `UInt8`, `Array`, `ByteArray` and `String` are **represented by
-   their one runtime field** (law §4.4, "a runtime representation
-   different from the constructors"; the simulation is the identity on
-   that field, the erased fields its invariant). In E: the type keeps
-   its name (`ByteArray`, not `(List UInt8)` — the lowering may give
-   it another layout behind the same signatures), its type arguments
-   kept and its value arguments dropped (`Fin n` is `Fin`); the
-   constructor is its runtime argument, the field's projection its
-   subject, a case analysis or a constructor pattern binds the field
-   to the scrutinee. So a `UInt8` is an integer below 256, a
-   `ByteArray` and an `Array α` are `Init`'s `List` cells, a `String`
-   is its UTF-8 bytes. A row's type is **never an E inductive**: the
-   classifier cannot cite its constructor (`unknown_head`), so the
-   typed route and the E-first route cannot disagree on the cells.
-   The erasure checks the shape at each use — one constructor, exactly
-   one runtime field — and is `no_realization` otherwise; a row cannot
-   misdescribe its type. No row for an **operation**: an operation is
-   an S function over the constructors and projections, tied to
-   Init's by a theorem where one is wanted. Rejected: the rule for
-   every one-field structure (a native `structure` or `type` would
-   change cells under the E-first functions that build it); rows by
-   operation (`UInt8.ofNat` ↦ `mod`, each a trusted line).
+   `UInt8`, `Array`, `ByteArray`, `String` are represented by their
+   one runtime field: the type keeps its name in E with its value
+   arguments dropped, the constructor is its runtime argument, the
+   field's projection its subject, a case analysis binds the field to
+   the scrutinee; a row's type is never an E inductive, so the typed
+   and E-first routes cannot disagree on the cells; the erasure checks
+   the shape at each use (one constructor, one runtime field —
+   `no_realization` otherwise); no row for an operation. As built:
+   `erase.shard`'s `rep_row`, `l_to_etype`, `row_param_roles`,
+   `ind_eligible` no for a row; `erasure.shard`'s `erase_row_cases`,
+   `row_field`; the classifier treats a row's type as known with no
+   constructor (`pattern_type`, `if_type`); pins `row_types`,
+   `row_e_first`, `row_e_match`, `realize_view`.
 2. **A projection function is its projection**, for every structure:
-   a constant whose value is `λ params self. self.i`, fully applied,
-   erases as that projection of its last argument — the match on the
-   constructor for an E inductive, the subject for a row of rule 1.
+   a constant whose value under its arguments' lambdas is `self.i`
+   erases as that projection of its last argument (`proj_fn_app`; pin
+   `struct_proj`) — what lets a body call `String.toByteArray`,
+   `Array.toList`, `Fin.val`, `ByteArray.data` with no `realize`.
 3. **The literal.** Outside the toolchain's sources `"…"` is a
-   `String` in every position. On the typed route it is K's literal,
-   erased to its bytes as `Init`'s `List` cells — one literal, built
-   once at link; in an E-first body the same literal, its static type
-   `String`; `no_string` where the environment has no `String`. A
-   literal whose bytes are not UTF-8 is `bad_string`: K reads a
-   literal by decoding it, and only on valid bytes is the encoding of
-   the decoded text the bytes written. In a module whose identity
-   begins with `kernel` the rule before the flip holds (the byte list
-   of the `List` in scope; a body holding one stays E-first), until
-   route 1's chain is V3's own and the tool migrates the toolchain.
+   `String` in every position — K's literal on the typed route,
+   erased to the one literal over `List.nil`/`List.cons`, the same in
+   an E-first body (`no_string` without `String` in the environment);
+   bytes that are not UTF-8 are `bad_string` at the elaborator
+   (`utf8_ok`); in a module whose identity begins with `kernel` the
+   byte list of the `List` in scope until route 1's chain is V3's own.
 4. **The wire by declared type.** The driver builds and reads each
    value of an extern by the E type the program declared — a codec by
-   identity, as §9's entry is: bytes at the prelude's `(List Int)` or
-   at `ByteArray`, a list at the prelude's `List` or `Init`'s, an
-   option, a pair (`Pair` or `Prod`), a flag (either `Bool`). The
-   toolchain's signatures are `kernel/host.shard`'s, unchanged; a
-   program under the naming law declares
-   `get_args : World → Prod (List ByteArray) World`,
-   `read_file : ByteArray → World → Prod (Option ByteArray) World`,
-   `write`, `write_line : ByteArray → World → World`,
-   `write_file : ByteArray → ByteArray → World → Prod Bool World`,
-   `exit : Int → World → World`. A declared type the host's value
-   does not fit is stuck (`extern`), as a value that was no byte list
-   is today. The checked entry takes a `ByteArray` parameter.
+   identity (bytes at `(List Int)` or `ByteArray`, a list, an option,
+   a pair, a flag), the result's type decided before the host is
+   asked; a declared type the host's value does not fit is stuck
+   (`RUN: stuck extern`); the checked entry takes a `ByteArray`; the
+   six externs under the naming law are `v3/std/host.shard`'s
+   (`get_args`, `read_file`, `write`, `write_line`, `write_file`,
+   `exit`). Not built: a check at link. Pins `wire_s`, `wire_bad`,
+   `wire_bad_result`; `wire_test`.
 5. **Symbols.** `(quote x)` in a function whose signature has an L
-   reading keeps `no_l_identity route=e_first`. The direction, for
-   the ruling that the toolchain's port will need: `Symbol` its own
-   type over `String`, represented by the atom — a seventh row whose
-   simulation is interning — rather than `String` itself, which rule
-   1 makes a byte list.
-6. **The libraries and the consumer.** `v3/std/bytes.shard` (bytes
-   and numbers, a byte array and its list), `v3/std/text.shard` (a
-   text's bytes; built into `bytes.shard`, the as-built below),
-   `v3/std/host.shard` (the `World` and the six
-   externs of rule 4), and calc's loop closed against the host:
-   `v3/examples/calc/calc_main.shard`, an S program that reads its
-   arguments and prints each line's result — the consumer §12.6 names
-   ("calc's app step"). Its gate: its output on the differential's
-   inputs is the model world's (`run_world`, which the differential
-   already ties to the old tree), byte for byte.
+   reading keeps `no_l_identity route=e_first`; the direction for the
+   port: `Symbol` its own type over `String` represented by the atom,
+   a seventh row whose simulation is interning (carried to phase 4 at
+   3.30 rule 3).
+6. **The libraries and the consumer**, built as two libraries:
+   `v3/std/bytes.shard` (Init's `BitVec.toNat` and `UInt8.toNat` by
+   their views; `Byte.ofNat` with `Byte.ofNat_eq` and `Byte.toNat_ofNat`
+   by `Eq.refl`; `Bytes.ofList`/`toList` with both round trips;
+   `Bytes.ofNats`/`toNats`; `Bytes.ofString`), `v3/std/host.shard`;
+   `v3/examples/calc/calc_main.shard` closes calc's loop against the
+   host, byte-identical to the model world (`calc_main_test`).
 
-*Not in this slice:* the checked decoder (`String.fromUTF8?` needs a
-validator with its proof; no consumer turns input bytes into a
-`String`, and the proof is I's); rows for `Char` and the wider
-`UInt`s; `String`'s own operations (append, length, the decision);
-a packed buffer; deriving (slice 3.19).
+As built, found and fixed: an E-first body could take a row apart
+(closed); `write`/`write_line` ignored the declared result (closed);
+a classifier refusal after a typed-route obstacle carries it
+(`load_e_after`: "read E-first after the typed route's …"). Open,
+stated: the checked decoder (`String.fromUTF8?`), rows for `Char`,
+the wider `UInt`s and `USize`, `String`'s own operations, a `realize`
+by a proven-equal S function; the six rows and the literal's bytes
+are lines of the erasure, trusted with it (§7.1). The second Init
+fixture chunk of this slice is gone since 3.26 (Init on demand).
 
-**Slice 3.18 as built** (2026-10-02):
+**Deriving — slice 3.19** (records §9.1 "Slice 3.19"; §13 item 52,
+ruled 2026-10-02 on five leans and built the same day). A use site
+finds a derived operation through a derivation table, no search; one
+named policy `structural`; the ordering is `compare` into Init's
+`Ordering` with no laws; the rendering is bytes in canonical S;
+supported: a type without parameters and Init's `List`, `Option`,
+`Prod` at closed arguments.
 
-- **Rule 1.** `erase.shard`'s `rep_row` names the six types.
-  `l_to_etype` gives a row its own name over its type arguments
-  (`row_param_roles`: a value or a proposition parameter dropped) and
-  `ind_eligible` answers no for it, so the E table never holds its
-  constructor. `erasure.shard`: the constructor is its runtime
-  argument, a `Proj` its subject, `T.casesOn` and `T.rec` a `let` of
-  the scrutinee (`erase_row_cases`), a constructor pattern in a
-  matcher's row its field's pattern — `row_field` checking at each use
-  that the structure has one constructor and one runtime field. The
-  classifier's pass treats a row's type as a known type with no
-  constructor of its own: a constructor pattern on it is
-  `pattern_type`, an `if` on it `if_type` (pin `row_e_match`) — an
-  E-first body may pass a row's value on, never read its cells. As
-  dumped: `(UInt8.ofBitVec (BitVec.ofFin (Fin.mk (Nat.mod n 256)
-  PROOF)))` is `(Nat.mod #0 256)`; `ByteArray.mk (Array.mk l)`, its
-  pattern and `String.toByteArray s` are `#0`. `Array` was an E
-  inductive with a `mk` cell since slice 5b and is a row now (pin
-  `realize_view`: `Array.toList` and `Array.push` by their views, as
-  before).
-- **Rule 2.** `proj_fn_app`: a definition whose value under exactly
-  as many lambdas as it has arguments is `self.i`. `(Span.lo s)` in a
-  `fn` is `(match #0 ((mk _ _) #1))` and the function is defined (pin
-  `struct_proj`). The rule is also what lets a body call Init's
-  `String.toByteArray`, `Array.toList`, `Fin.val` and
-  `ByteArray.data` with no `realize`.
-- **Rule 3.** A `LitStr` erases to the one literal over `List.nil` and
-  `List.cons`. A literal whose bytes are not UTF-8 is `bad_string` at
-  the **elaborator**, in a `def` as in a `fn` (one text, one meaning;
-  `utf8_ok`, moved from `ev.shard` to `util.shard`), and the erasure
-  keeps the check for the bytes it emits; the classifier reads `"…"`
-  the same way outside the toolchain's sources, `no_string` without a
-  `String` in the environment; the linker interns Init's
-  cells whether or not the program declares them. The pre-definition
-  keeps a string-holding body E-first in the toolchain's sources only.
-  No file of the toolchain changed meaning and the bootstrap is
-  untouched: parity compares what it compared. Migrated: the pin
-  `ev_string`, the one function outside the toolchain that held a
-  literal (it was `(fn g () (List Nat) "abc")`, `type_mismatch` now).
-- **Rule 4.** `ev.shard`: a linked extern carries its declared types
-  and `perform` builds and reads each value by them (`wb_tags` for
-  bytes, `wl_tags`, `wo_tags`, `wp_first`, `wf_tags`); the result's
-  type is decided **before the host is asked** — its codec, and the
-  World's token returned at the type it was passed at (the extern's
-  last parameter's): a `write_file` whose declared result has no
-  codec writes nothing, a `write_line` declared to return a pair
-  prints nothing. An extern whose declared type does not fit is
-  stuck, `RUN: stuck extern in main.write_line` (pins `wire_bad`,
-  `wire_bad_result`). The checked entry takes a `ByteArray` (pin
-  `wire_s`'s `copy`). **Not built: a check at link.** An extern's
-  signature is checked where it is performed, because `ev` is pure and
-  stops at any extern — a program may declare one the host does not
-  have (`define_runnable`'s `read_byte`, `ev_test`'s `shout`).
-- **Rule 5.** As designed; the elaborator's and the pre-definition's
-  messages name the deferral.
-- **Rule 6, built as two libraries, not three.** `v3/std/bytes.shard`
-  holds text's one adapter too (`Bytes.ofString`): a `text.shard` of
-  one function was a file for its name. In it: Init's `BitVec.toNat`
-  and `UInt8.toNat` by their derived views (`(fn UInt8.toNat 0 (UInt8)
-  Nat (BitVec.toNat 8 #0))` — the width is an argument of Init's
-  function and stays one); `Byte.ofNat`, with `Byte.ofNat_eq :
-  Byte.ofNat n = UInt8.ofNat n` and `Byte.toNat_ofNat`, both
-  `Eq.refl` (K unfolds Init's instance projections, which the erasure
-  cannot follow); `Bytes.ofList` and `Bytes.toList` with both round
-  trips (`ofList_toList` is K's structure eta); `Bytes.ofNats`,
-  `Bytes.toNats`. Two realized, eight defined, four theorems, no
-  axiom. `v3/std/host.shard`: the `World` and the six externs.
-  `v3/examples/calc/calc_main.shard`: `codes_of` and `bytes_of`
-  defined, `drive_host` typed with a callee-local, `perform` and
-  `main` `no_l_meaning`. Run with the differential's 21 lines as its
-  arguments it prints the model world's lines, byte for byte
-  (`kernel/test/calc_main_test.sh` decodes `run_world`'s value from the
-  harness).
-- **Found by review** (a second reader over the kernel's diff, its
-  probes re-run before the fixes). *An E-first body could take a row
-  apart*: `(match b (List.nil 0) ((List.cons h t) h))` on a
-  `ByteArray` was `RUNNABLE`, the classifier's pass skipping a type
-  it had no entry for — the cells agreed, so nothing ran wrong, but
-  the layout was no longer the registry's to change. *`write` and
-  `write_line` ignored the declared result*: declared to return a
-  pair, the line was printed and the program stuck at the next
-  `match`; and a pair's second component was never compared with the
-  World's type. Both closed as above. Left as it was, and older than
-  this slice: an E-first body is not checked against its declared
-  result (§12.1's "return types unchecked" row), so one can return a
-  `(List Nat)` as a `ByteArray` and `write` emits each number's low
-  byte.
-- **Found while building.**
-  *The fallback hid the obstacle.* `(fn cat … (ByteArray.mk (Array.mk
-  (List.append a b))))` was `REFUSE unknown_head: ByteArray.mk`: the
-  typed route's obstacle was `List.append` with no realization, the
-  function fell to the classifier, and the classifier's refusal — a
-  row's constructor — was true and beside the point. A classifier
-  refusal after a typed-route obstacle now carries it (`loader.shard`'s
-  `load_e_after`): `… — read E-first after the typed route's
-  no_realization: List.append: no realization attached`.
-  *An import costs its position.* The libraries import through
-  `UInt8.toNat` (40 s a load on the bootstrap, against 5 s): the test
-  prefix has a second chunk, `fixtures/init_prefix_str_tail.ndjson`
-  (lines 100,852 to 263,515 of the export, 8.6 MB; to line 274,616
-  since slice 3.21, for `arith`'s product and quotient), given after the
-  first by the three tests that load them; the pins stay on the first.
-- **Open, stated.** The checked decoder (`String.fromUTF8?`: a
-  validator and its proof against `ByteArray.IsValidUTF8`, with I).
-  Rows for `Char`, the wider `UInt`s and `USize`. `String`'s own
-  operations. A `realize` by a proven-equal S function, so that a body
-  calls Init's name (`UInt8.ofNat`) rather than a sibling
-  (`Byte.ofNat`) — the supplied form's body is E and cannot build a
-  row's value. The toolchain's flip and symbols, with route 1's chain.
-  The six rows and the literal's bytes are lines of the erasure and
-  trusted with it (§7.1).
-- **Gates run:** 156 loader pins (10 new: `row_types`, `row_e_first`, `row_e_match`, `struct_proj`, `str_e_first`, `str_no_string`, `str_bad_utf8`, `wire_s`, `wire_bad`, `wire_bad_result`; `ev_string` rewritten), `rows_test` (10 values under `ev`), `wire_test` (15 checks against the host), `calc_main_test` (byte-identical to the model world over 21 inputs), `define_test` (9 checks: the two libraries added), calc's differential byte-identical over 21 inputs, parity byte-identical over 28 closures and 111,681 declarations, route 2, K's clients, the full suite's 32 entrypoints with 0 failed. `v3/build.sh` built these sources into a scratch binary that byte-ties the interpreter on the 3,000-line fixture.
-
-**Slice 3.19 — deriving under a declared policy** (the user's ruling
-of 2026-10-02 on five leans, the design the same day; §13 item 52).
-Law §5.1 gives a new type decidable equality, an ordering and a
-diagnostic rendering without a hand-written instance, as *generation
-under a declared policy*. Before this slice `(if (= a b) …)` at a
-type of the program's was `no_decision`: the elaborator's lookup knew
-`Nat`, `Int` and `Bool`.
-
-*The ruling.* (1) **A use site finds a derived operation through a
-derivation table**: one entry per type and capability, no search, a
-second visible entry a refusal; `=` in an `if` or where a `Bool` is
-expected consults it. Rejected: named functions only (the type is
-not "usable in an `if`", and every site is rewritten at Stage 3);
-instance resolution pulled forward (Stage 3 is a slice of its own).
-(2) **One named policy, `structural`, written at the derivation** —
-constructors in declaration order, fields left to right,
-lexicographic: Lean's own `deriving Ord`. Rejected: a package default
-(V3 has no package-level form, and one policy needs no default).
-(3) **The ordering is `compare`, returning Init's `Ordering`, with no
-laws.** Rejected: the laws now — each is a proof term over the squared
-or cubed constructor cases without I, an ordinary tactic proof with
-it; they come with the first verified keyed map. (4) **The rendering
-is bytes in canonical S** — `(TPair (TNum 3) TPlus)`. Rejected:
-Lean's `Repr` (a pretty-printer document type and its layout engine);
-a `String` (a computed `String` needs `String.append`, whose equation
-is I's); deferring it. (5) **Supported now: a type without
-parameters, directly recursive or not, and Init's `List`, `Option`
-and `Prod` at closed arguments.** Rejected: user types with
-parameters and types nested through `List` now (the constructor-
-structure bundle of a parametric type and recursion through a nested
-recursor first — the toolchain's `SExpr` and `Expr` wait for them).
-
-*The rules.*
-
-1. **The form.** `(derive TYPE CAPABILITY…)`, a declaration of the
-   file it stands in. TYPE is a closed type: a name, or an inductive
-   applied to closed types — `Tok`, `(List Tok)`, `(Prod Nat Tok)`.
-   A capability is `eq`, `(ord structural)` or `render`, each
-   generated; or `(eq by NAME)`, `(ord by NAME)`, `(render by NAME)`,
-   each registering a procedure written by hand, after its type is
-   checked (`derive_by`) — at any closed type, since it needs no
-   constructor. The generated functions live in the
-   deriving module under the type's mangled name — its head's last
-   component, then its arguments' — so `Tok.decEq`, `List_Tok.compare`.
-2. **Generation is source.** A derivation writes `fn` forms and the
-   loader reads them as if the file held them at that point: the one
-   front end elaborates them, K checks the definitions and their
-   equations, the programs are their erasures, and each has its
-   ordinary `DEFINE` record. Nothing is trusted and no second route
-   to a program exists (guard 1). What the generator reads of the
-   type it reads from K's environment — the constructors and their
-   fields' types at the type's arguments.
+1. **The form.** `(derive TYPE CAPABILITY…)`, a declaration of its
+   file; TYPE a closed type (a name or an inductive applied to closed
+   types); a capability `eq`, `(ord structural)`, `render`, or `(eq
+   by NAME)`/`(ord by NAME)`/`(render by NAME)` registering a
+   hand-written procedure after its type is checked; the generated
+   functions live in the deriving module under the type's mangled
+   name (`Tok.decEq`, `List_Tok.compare`).
+2. **Generation is source.** A derivation writes `fn` forms the
+   loader reads as the file's own — the one front end, K, the
+   erasures, ordinary `DEFINE` records; nothing trusted, no second
+   route (`kernel/derive.shard`; `load_derive`; the generated source
+   cites every constant by its identity).
 3. **`eq`** is `NS.decEq ((a T) (b T)) (Decidable (= a b))`: a match
-   on `a`, then on `b`, a row for every pair of constructors. The
-   same constructor decides its fields left to right by their
-   procedures — `Nat.decEq`, `Int.decEq`, `instDecidableEqBool`, the
-   table's entry, or the function itself on a recursive field —
-   through `dite`, the result `isTrue` by congruence from the fields'
-   equations and `isFalse` by the constructor's injectivity (its
-   `C.inj`, or the projections of a one-constructor type); two
-   different constructors are `isFalse` through `NS.ctorIdx`, the
-   constructor's index, generated beside it (Lean 4.33 gives every
-   inductive one) as a derivation of its own, `cap=idx`, which later
-   derivations at the type share through the table. The rows are
-   quadratic in the constructors, as Lean's handler was before its
-   index rewrite. A generated variable is no symbol a source can
-   write (`x 1`), so no constructor of a field's type captures it.
-4. **`(ord structural)`** is `NS.compare ((a T) (b T)) Ordering`:
-   the same constructor compares its fields left to right, the first
-   that is not `eq` decides; different constructors compare by
-   `NS.ctorIdx`. A `Nat` or `Int` field is
-   `(if (< x y) lt (if (= x y) eq gt))`, which is Init's `compare`
-   there unfolded; any other field its table entry. The declaration
-   order *is* the convention: it is in the value (the indices), so
-   reordering the constructors changes the function, its hash and
-   every theorem that rests on it.
-5. **`render`** is `NS.renderOnto ((a T) (rest (List Nat))) (List Nat)`
-   — the value's text before `rest`, linear in its size — and
-   `NS.render ((a T)) ByteArray`, which is `Bytes.ofNats` of it on
-   the empty rest (`v3/std/bytes.shard`; without the library in scope
-   the derivation is `derive_needs`). A constructor with fields is
-   `(NAME F…)`, one without is `NAME`, the name its last component. A
-   field renders by its table entry; `Nat`, `Int`, `UInt8` and
-   `String` have theirs in the library. A field that is erased — a
-   proof, a type — or whose type is a view's opaque type prints `_`
-   (law §5.1: "an opaque placeholder rather than claim to inspect
-   every value").
+   on both, a row per constructor pair; fields decided left to right
+   by their procedures through `dite`, `isTrue` by congruence,
+   `isFalse` by the constructor's injectivity (`C.inj`, or a
+   one-constructor type's projections) and, for different
+   constructors, by `NS.ctorIdx` (a derivation of its own, `cap=idx`,
+   shared through the table) with `Nat.ne_of_beq_eq_false`. As built,
+   wider: a one-constructor type with parameters derives through its
+   projections (`derive_params`); Init's parameterless types derive as
+   the program's.
+4. **`(ord structural)`** is `NS.compare ((a T) (b T)) Ordering`: the
+   same constructor's fields left to right, the first not `eq`
+   decides; different constructors by `NS.ctorIdx`; a `Nat`/`Int`
+   field `(if (< x y) lt (if (= x y) eq gt))`; the declaration order
+   is in the value, so reordering changes the function and its hash.
+5. **`render`** is `NS.renderOnto ((a T) (rest (List Nat))) (List
+   Nat)` and `NS.render ((a T)) ByteArray` over `Bytes.ofNats`
+   (`derive_needs` without the library): `(NAME F…)` or `NAME`, a
+   field by its entry; an erased or opaque field prints `_`. As
+   built, narrower: a function-valued field is `derive_field`, not
+   `_`; a list renders by its constructors.
 6. **The table.** An entry is (type, capability, procedure, deriving
-   module); its policy is in its record. The type is keyed in normal
-   form — a definition that stands for a type is the type. An entry
-   is visible in a file exactly when its deriving module and its
-   procedure are — both in the file's import closure, whatever was
-   loaded before the file — so it resolves as a name does and
-   crosses no view (§8.5). A view exports a
-   capability as what it is, a `sig fn` of the capability's type, and
-   a consumer registers it: `(derive lib.Handle (eq by
-   lib.Handle.same))`. `eq` at `Nat`, `Int` and `Bool` are the
-   elaborator's own rows, as before; `ord` at `Nat` and `Int` is
-   rule 4's expression. Everything else is an entry a `derive` made:
-   the library derives `Bool`, registers `UInt8`, `ByteArray` and
-   `String`'s hand-written procedures and the renderers of `Nat` and
-   `Int` (`v3/std/derive.shard`); a program derives its own types and
-   the instantiations it uses — `(derive (List Tok) eq)` — because E
-   has no function values: `List`'s equality cannot take its
-   element's as an argument, so each instantiation is its own
-   first-order function. Each derivation is recorded: `DERIVE PROC
-   type=T cap=C policy=P fields=PROC,…` — the field procedures it
-   selected, which the definition also cites, so they are in its
-   dependencies and its hash (law §5.2: a selection is recorded,
-   never rediscovered).
-7. **The use site.** `(if (= a b) …)` and `(= a b)` where a `Bool`
-   is expected, at a type with a visible `eq` entry, take the entry's
-   procedure as the decision; two visible entries are
-   `ambiguous_decision`; none is `no_decision`, now with the pointer
-   to `(derive T eq)`. `compare` and `render` have no operator
-   spelling: a program calls `Tok.compare` and `Tok.render` by name
-   until Stage 3 resolves them.
-8. **Refusals**, the type untouched in every case (law §5.1):
-   `derive_type` — TYPE is not a closed inductive type visible here
-   (a view's sig type has nothing to generate from: the module derives
-   and exports, the consumer registers, §8.5), or it is a
-   proposition, `Nat` or `Int` (the integer), or an inductive applied
-   to a value, `(Fin 3)`;
-   `derive_shape` — an indexed or mutual type, a type without
-   constructors, a type nested through another (a field `(List T)`
-   of `T`), a field whose type depends on
-   an earlier one, an erased field under `eq` or `ord`; `derive_field`
-   — a field's type has no entry for the capability, naming the
-   constructor, the type and the form to write; a function-valued
-   field (no decidable equality; and the type has no program to
-   render); `derive_needs` — a constant the generated source cites is
-   not in the environment (`Decidable`, `Ordering`, `congrArg`, a
-   constructor's `inj` for a type with parameters, the library);
-   `derive_duplicate` — an entry for the type and capability is
-   already visible; `derive_by` — the named procedure's type is not
-   the capability's; `name_taken` with `derive_failed` — a constant
-   already bears a name the derivation generates: it is never taken
-   for the derivation's, and nothing is registered.
-9. **What the elaborator gains for it**, each a general rule. A
-   `match` on a local the expected type mentions generalizes it —
-   the motive `λ d. RET[d]`, each row read at RET with its pattern
-   (Lean's rule for the expected type; the motive was constant
-   before, so a result typed by its scrutinee could not be written) —
-   which is how `decEq`'s `Decidable (= a b)` is refined row by row.
-   A hypothesis about the scrutinee is not generalized (Lean reverts
-   those too): a match whose rows cannot be read at the generalized
-   type is read with the constant motive, as before. An operator inside an
-   E-type position — a `fn`'s `(Decidable (= a b))` — takes its
-   levels by unification, not the position's level 0.
+   module), the type keyed in normal form, visible exactly when its
+   deriving module and procedure are (`Load.derived`, `derived_for`);
+   a view exports a capability as a `sig fn` and the consumer
+   registers it (`(derive lib.Handle (eq by lib.Handle.same))`, pin
+   `derive_sig`); `eq` at `Nat`, `Int`, `Bool` the elaborator's own
+   rows; `v3/std/derive.shard` derives `Bool`, registers `UInt8`,
+   `ByteArray` and `String`'s procedures and the renderers of `Nat`,
+   `Int`, `UInt8`, `String`; a program derives its own types and the
+   instantiations it uses (E has no function values); the record
+   `DERIVE PROC type=T cap=C policy=P fields=…`.
+7. **The use site.** `(if (= a b) …)` and `(= a b)` where a `Bool` is
+   expected consult the table (`ambiguous_decision`, `no_decision`
+   with the pointer to `(derive T eq)`); `compare` and `render` are
+   called by name until Stage 3. As built: on the E-first route `=`
+   at an inductive is `prim_type` with the pointer (`derive_e_first`).
+8. **Refusals**, the type untouched: `derive_type`, `derive_shape`,
+   `derive_field`, `derive_needs`, `derive_duplicate`, `derive_by`,
+   `name_taken` with `derive_failed`.
+9. **The elaborator's general gains**: a `match` on a local the
+   expected type mentions generalizes it (the motive `λ d. RET[d]`,
+   each row at RET with its pattern; the constant motive the
+   fallback) — a proof by cases is a `match` in S (`match_dependent`);
+   an operator in an E-type position takes its levels by unification.
 
-**Slice 3.19 as built** (2026-10-02):
+As built, found and fixed: an `if` on a self-call under a measure
+(`if_rec_call`); an obligation named once per statement
+(`measure_if_call`); `Bool.and`/`or`/`not` cited by their real names
+with registry rows (`bool_ops`); a decision erases to its test only
+where an `if` reads it, `(if TEST isTrue isFalse)` as a value
+(`decidable_cells`); the name-keyed rows hold for native declarations
+only (`registry_native`); `load_e_skipped` carries a skipped
+signature's cause; the second reader's findings a–h. Not built:
+Lean's instance constants (Stage 3), the ordering's laws, types with
+parameters and two or more constructors, nested and mutual types,
+operator spellings for `compare`/`render`; the toolchain's sources
+cannot derive until route 1's chain is V3's own.
 
-- **Rules 1, 2 and 6.** `kernel/derive.shard` is the generator: it
-  reads the form, elaborates TYPE, opens each constructor at the
-  type's arguments through K, selects a procedure per capability and
-  field, and writes the `fn` forms as s-expressions.
-  `loader.shard`'s `load_derive` hands each to `load_decl` — the path
-  of a form of the file — after registering its head as the file's
-  own heads were (an E-first body finds the function too), and
-  registers the entry once K has the definition: the table is
-  `Load.derived`, carried to the elaborator in the scope's visible set
-  (`scope.shard` `Derived`, `derived_for`), the record `DERIVE`. A
-  generated function that was not defined registers nothing
-  (`derive_failed`, beside its own record). The generated source cites
-  every constant by its identity — an imported one under `Init.` —
-  and the type the same way, so it reads the same whatever the file
-  opened: a type whose constructor bears its name
-  (`(type Card (Card …))`) is ambiguous written bare in a term. A
-  `derive` stands before its first use; all its capabilities are
-  analysed before anything is generated, so one refused field refuses
-  the form.
-- **Rule 3.** As designed; `(derive Tok eq)` at
-  `(type Tok (TNum Nat) (TPlus) (TPair Tok Tok))` erases to the match
-  on both arguments an author would write, `(if (Tok.decEq #3 #1) (if
-  (Tok.decEq #2 #0) (isTrue) (isFalse)) (isFalse))` under the pair's
-  row. Distinct constructors: `Nat.ne_of_beq_eq_false` at the two
-  index terms, `congrArg NS.ctorIdx h` its premise — no `noConfusion`,
-  so Init's parametric types need none of the bundle. Injectivity:
-  `C.inj` where the environment has it (the bundle's, Init's
-  `List.cons.inj` and `Option.some.inj`), else the projections of a
-  one-constructor type (`Prod`, whose `Prod.mk.inj` lies at line
-  1,985,485 of the export). **Wider than the ruling's fifth lean:** a
-  one-constructor type with parameters derives through its
-  projections (pin `derive_params`'s `Wrap`); with two constructors it
-  is `derive_needs`, naming the missing `inj`. Init's own
-  parameterless types derive as the program's do (`Bool`, `Ordering`).
-- **Rule 4.** As designed; the wildcard row of a constructor that is
-  neither first nor last compares `(NS.ctorIdx b)` with its own index.
-  `Ordering.casesOn` is among the constants the generated source needs
-  (line 172,785 of the export).
-- **Rule 5.** As designed. A list renders by its constructors,
-  `(cons a (cons b nil))`, not as `(list a b)`. **Narrower than the
-  ruling's fourth lean:** a function-valued field is refused
-  (`derive_field`), not printed `_` — a type that holds a function is
-  not an E type, so it has no program and no value to render.
-- **Rule 7.** As designed, and one refusal the design did not have:
-  on the E-first route — a body that calls an extern, until phase 4's
-  World — `=` is the classifier's integer primitive, and at an
-  inductive it was accepted and stuck at run. It is `prim_type` now,
-  with the pointer to call the decision by name (pin
-  `derive_e_first`).
-- **The library** (`v3/std/derive.shard`, importing through
-  `UInt8.toNat`): `Bool`'s ordering and rendering derived; `UInt8`'s
-  equality by its bit vector's number (`BitVec.eq_of_toNat_eq` and K's
-  structure eta), `ByteArray`'s by its list's — `(derive (List UInt8)
-  eq (ord structural))` — and `String`'s by its bytes'
-  (`String.toByteArray_inj`), each with its ordering, registered by
-  `(CAPABILITY by NAME)`; the renderers of `Nat` (decimal, its measure
-  discharged by a term over `Nat.div_lt_self`), `Int`, `UInt8` and
-  `String` (quoted, the reader's escapes). Fourteen procedures and
-  one constructor index, 26 functions defined, no pending obligation
-  and no axiom of the library's — `propext` reaches the decimal
-  renderer and its two callers through Init's `Nat` lemmas in the
-  descent's proof. **Wider than the
-  lean**, which gave these three types equality only. `ByteArray` has
-  no renderer.
-- **Not built.** Lean's instance constants: `T.decEq` has `DecidableEq
-  T`'s type unfolded and is the constant Stage 3 registers; `instOrdT
-  : Ord T` would hold a function, has no program and no reader before
-  Stage 3, which writes it in one line over `T.compare` — the lean
-  said the generated constants would have Lean's instance types, and
-  for the ordering that waits. The ordering's laws (the ruling). An
-  entry crossing a view by itself: the view states the procedure and
-  the consumer registers it (below). Types with parameters and two
-  constructors or more, nested and mutual types (the ruling). A
-  package default for the policy. Operator spellings for `compare`
-  and `render`. **The toolchain's own sources cannot derive yet**:
-  the bootstrap reads their E half and generates nothing (`derive` is
-  its `UnknownForm`), so `v3/kernel/**` keeps its hand-written
-  `*_eq` and `show_*` until route 1's chain is V3's own — as the flip
-  and the rename wait (items 37, 50).
-- **Found while building.** (a) *An `if` whose condition is a
-  self-call was refused*: `(if (f x) …)` is `ite (f x = true) inst …`,
-  and `define.shard`'s `pj_ite` rewrote the decision and left the
-  proposition holding the self-local — `K refused the definition
-  (fvar_in_value)`. Both go through the walk now (pin `if_rec_call`).
-  (b) *Under a measure that call asked for two proofs of one fact* —
-  it stands in the proposition and in the decision: an obligation is
-  named once per statement (`obl_stating`), so `f.dec_2` no longer
-  duplicates `f.dec_1`, nor do two identical calls in one scope (pin
-  `measure_if_call`). (c) *`and`, `or`, `not` on `Bool`s cited
-  constants the export does not have*: Lean 4.33's are `Bool.and`,
-  `Bool.or`, `Bool.not`; a `def` was `unknown_constant: and`, a `fn`
-  `unknown_head: and`. The elaborator cites the real names and the
-  registry has their rows — `(if a b false)`, `(if a true b)`, `(if a
-  false true)`, the `if` each definition is — and `a = b` at `Bool`
-  in general position, the test `(if a b (if b false true))`, which a
-  derived equality's `Bool` field needs (it was `no_realization` off
-  `= true`). Evidence as the registry's other
-  rows have it: every row by `Eq.refl` on K's side (pin `bool_ops`),
-  the programs run by `derive_test.sh`. (d) *A `fn`'s result
-  `(Decidable (= a b))` could not be read*: an operator inside an
-  E-type position took the position's level 0 for `Eq` (rule 9). (e)
-  *The refusal for (d) named the wrong thing*: a signature with no L
-  reading falls to the classifier, whose `unknown_type: =` hid the
-  cause; a classifier refusal after a skipped signature now carries
-  what the signature's reading met (`load_e_skipped`), as slice 3.18
-  did for a body; so does one after an unknown constant that is no
-  function — `(or a b)` under a prefix that stops before `Bool.or`
-  was `unknown_head: and` and now names `unknown_constant: Bool.or`. (f) *An explicit numeral argument is still
-  unassigned when a later argument is checked* (§5.1's "numerals
-  last"): `(@Nat.ne_of_beq_eq_false 0 1 (Eq.refl false) h)` is
-  `type_mismatch` at the third argument. **Left as it is**; the
-  generator writes the index terms, which are closed.
-- **Across a view** (rule 6; §8.5's "the module derives and
-  exports", pin `derive_sig`): the implementation derives its type
-  and defines `Handle.same` as the derived decision; the view states
-  `(sig fn Handle.same ((a Handle) (b Handle)) (Decidable (= a b)))`;
-  the consumer registers it with `(eq by lib.Handle.same)` — a
-  parameter there, accepted as any constant of the capability's type —
-  and its own `Job` over a `Handle` derives through the entry, its
-  decision calling the parameter. For the view to hold that signature
-  the classifier's type reader takes `(Decidable P)` as the type's two
-  cells, its proposition unread (the erasure's reading; it was
-  `unknown_type: =`).
-- **Rule 9** is general: a proof by cases is a `match` in S now (pin
-  `match_dependent`: `not (not b) = b`, one row per constructor).
-- **Found by a second reader over the diff**, each reproduced, fixed
-  and pinned. (a) *A registry row spoke for any constant bearing its
-  name*: a module `Bool` declaring `or` under a prefix that stops
-  before Init's ran as the row's `(if a true b)` while K proved the
-  module's function — a clean load, a program that disagreed with
-  its definition. The name-keyed rows now hold for a constant that is
-  not a native declaration (`erase_const`'s `k`; pin
-  `registry_native`). (b) *A `Decidable` had two runtime
-  representations, since before the slice*: the registry's decisions
-  erased to the bare test in every position, so a match by
-  constructor on `(Nat.decEq a b)` took the catch-all row while K
-  proved the other; the slice made such values ordinary (a `fn` may
-  return one). A decision is now its test only where an `if` reads it
-  — `ite`, `dite`, `decide`, a `casesOn` read back as an `if`
-  (`erase_cond`) — and `(if TEST isTrue isFalse)` as a value; the
-  programs of every existing `if` are unchanged (pin
-  `decidable_cells`, run on the host against K's theorems). (c) *A
-  derivation took a constant that bore its name for its own*: a
-  hand-written `T.ctorIdx` or `T.compare` was reused or registered
-  under `policy=structural`. A generated name that is taken is
-  `name_taken`, the index is shared through the table only, and a
-  failed form registers nothing (pin `derive_name_taken`). (d) *An
-  entry registered by `(CAPABILITY by NAME)` was visible wherever the
-  procedure was*, so a file's reading depended on what the loader had
-  been given before it; an entry carries its deriving module (pin
-  `derive_visible`). (e) *Rule 9 broke rows it should read and proofs
-  that loaded before*: a `_` sub-pattern's local was outside the
-  scope a metavariable's value may mention (it is bound now, under a
-  name no source spells); a row that used a hypothesis about the
-  scrutinee no longer typed (the constant motive is the fallback).
-  (f) *`eq` at a container of a `Prod` was refused by its own
-  source*: `(@List.nil (Prod Nat Nat))` asks `Type ?u` of `Sort (max
-  1 1)`, and level unification compared a closed level unnormalized —
-  older than the slice, fixed in `unify_level`. (g) *A self-call in a
-  branch under a self-call condition, under a measure*: its
-  obligation quantified the branch's hypothesis, which states the
-  function's own value (`dec_2 fvar_in_type`); the obligation is
-  stated without such locals. (h) What had no derivation was refused
-  late or obscurely: a type without constructors, a proposition, an
-  argument that is a value, `Nat` — each refused up front with its
-  reason (pin `derive_refusals`); a generated variable could be read
-  as a constructor of the field's type; the table's key was not
-  normalized. **Left, and known:** a let bound to a self-call under
-  a measure still leaves a later call's obligation open-termed
-  (`fvar_in_type`, as before the slice); a measured function whose
-  result type depends on its arguments is `app_type_mismatch` with no
-  pointer; `erase_bool_eq` writes its second operand's code twice
-  (one path runs).
-- **Cleanup.** `realize.shard` opened `kernel.prog.EType` and used
-  none of its constructors since slice 3.18 moved `etype_eq` (the
-  loader's `UNUSED` record said so on every load); removed.
-- **Gates run.** 176 loader pins (20 new: `derive_eq`,
-  `derive_containers`, `derive_field`, `derive_nested`,
-  `derive_params`, `derive_policy`, `derive_duplicate`, `derive_by`,
-  `derive_needs`, `derive_e_first`, `derive_sig`, `derive_name_taken`,
-  `derive_refusals`, `derive_visible`, `registry_native`,
-  `decidable_cells`, `match_dependent`, `if_rec_call`,
-  `measure_if_call`, `bool_ops`); `define_test.sh` (12 checks);
-  `derive_test.sh` (14 checks: the library's 14 procedures, the
-  example program's ten lines on the host — every row of Init's Bool
-  connectives and of `Bool`'s equality among them, the same list K
-  decides; `v3/examples/derive/derive_main.shard` — and
-  `convention.shard`: two types with the same constructors in
-  opposite order compare oppositely, and a type over a hand-written
-  ordering records the procedure it selected, T1's fixture); the
-  gates of every slice (records §9 for the figures).
+**I, the proof IR — slices 3.20, 3.21 and 3.21b** (records §9.1
+"Slice 3.20" to "Slice 3.21b"; §13 items 53, 54, 55; law §7). I is a
+certificate language: replay elaborates it to P without search, K
+checks P; the block in source is I; no subterm order (`induction`
+carries its recursor, `wf` is `WellFounded.fix`); computation is
+conversion; the API is sequential (`goal_of`, `applicable`, `step`,
+`elaborate` over one derivation).
 
-**Slice 3.20 — I's opener: the certificate core** (the user's ruling
-of 2026-10-05 on six leans, the design 2026-10-06; §13 item 53). Law
-§7 fixes the shape: I is a certificate language, replay elaborates it
-to P without search and K checks P; §7.2 names the vocabulary and the
-replay contract; §7.3 wants the elaborator exposed as E functions.
-Before this slice a `theorem`'s proof was `(exact TERM)` or `sorry`
-(131 theorems in V3, every one an explicit term) and `by` was
-`reserved_form`.
+*Slice 3.20 (ruled 2026-10-05 on six leans, item 53; built
+2026-10-06):*
 
-*The ruling.* (1) **Three slices**, a gate between each: 3.20 I's
-data, `(by …)` in a `theorem`, `elaborate(I)` to P, the forms with no
-engine behind them, and `goal_of`/`step` as E functions over one
-derivation; 3.21 the two forms that carry an engine — `simp_only` (a
-bounded rewriter over a lemma list) and `arith` (the Farkas
-certificate through `Lean.Omega`'s lemmas) — and calc's 100 claims
-closed; 3.22 the producers — `tools/prove` re-pointed at I, the
-sidecar and the pin store (law §7.5), the engine. Rejected: one slice
-(no gate for a full window or more); the forms before the API (the
-API is cheap when I's data is shaped for it from the start). (2) **The
-tactic block in source is I.** What an author writes inside `(by …)`
-is I's concrete syntax; a node that omits a consequential choice
-names the versioned default reconstruction (`(rw LEMMA)` with no
-occurrence: the first match in the traversal of rule 7, every
-occurrence of it), and the pin records what was written. Rejected: a
-tactic surface distinct from I, translated down (two languages, two
-versions). The user's condition — "if it doesn't invite too many
-compromises" — is rule 2's test: a form is in I only if its elaboration
-is a function of the node and the goal. (3) **No subterm order.**
-`induction` carries its recursor; `wf` is `WellFounded.fix` over
-`(measure f)` through `InvImage.wf`, the strong hypothesis stated as
-`∀ y, f y < f x → P y`, every descent fact a goal. Rejected: v2's
-`subterm-induct` and `(below)` (a V3-only logical rule in a
-Lean-rule-exact target; `(below)` discharged `⊰` syntactically, which K
-cannot check). Porting cost accepted by the user: 52 `(below)` and 8
-`subterm-induct` sites re-spell at port time. (4) **Computation is
-conversion.** `reduce` is a `show` of the normal form the elaborator
-computes, checked by K's conversion — no `Eq.refl` chain, no
-reflection until phase 4; `unfold f` is `rw` by `f`'s equations;
-`decide` is `of_decide_eq_true (Eq.refl true)` with the decision the
-derivation table or the elaborator's lookup gives. Rejected: a `simp`
-with implicit lemma sets (search at replay). Porting cost accepted:
-v2's `reduce`/`simp`/`compute` (38,000 sites) are one node here.
-(5) **Calc's claims by hand**, re-spelled in V3's idiom — Prop
-hypotheses `(<= 0 x)` where v2 wrote `(= (le 0 x) True)` — as the
-worked-examples set; §12.3's migration tool waits for the 4,900-claim
-port and is calibrated on `std`. (6) **The API is sequential at the
-opener**: I's data has the law's graph shape (explicit child goals,
-scope-safe locals, display names aside), the API is `goal_of`,
-`applicable`, `step`, `elaborate` over one derivation; the
-transactional `attempt`/`commit`, snapshots, owners and parallel
-regions of law §6 wait for the engine's slice, where they have a
-caller; nothing is stored — K checks P at every build, the content
-store comes with the producers.
-
-*The rules.*
-
-1. **The form.** A `theorem`'s proof is `(exact TERM)`, `sorry`, or
-   `(by STEP…)`; a `fulfills` takes the same three. A block is a
-   sequence of steps on **one goal**: each step but the last turns the
-   goal into one goal; the last closes it. A step that opens several
-   goals carries each one's block inline, so a derivation is a tree
-   whose children are explicit (law §7.3): `(cases x ((zero STEP…)
-   (succ (n) STEP…)))`. A block that ends with the goal open is
-   `goal_open`; a step after a closing one is `goal_closed`. Every
-   refusal names the step by its index in its block and shows the goal
-   it faced, as `goal_of` renders it (rule 10).
-2. **A goal is a closed proposition.** `Goal` is a metavariable whose
-   type is the goal's statement closed over its named context — `∀
-   (x : Nat) (h : x = 1), P x` — and an occurrence of a goal in a term
-   is the metavariable applied to the context's locals (R68, rule 10
-   of slice 3.16: the stable creation telescope, each occurrence an
-   instantiation). Closing a binder over a goal then abstracts the
-   occurrence's arguments, never the hole, so a goal is filled after
-   its binders closed with no delayed assignment: the filling is a
-   lambda over the telescope, beta-reduced at instantiation. The
-   named context is the Pi's binders; display names are the binders'
-   names and identity is the fvar a step opens them as. The theorem's
-   own binders are in the first goal's context, as Lean's are.
-3. **A step is a function of the node and the goal.** `step(goal,
-   node)` opens the goal's context as locals, acts on the target, and
-   answers `StepDone(term)` — the goal's filling, a closed term over
-   the subgoals' metavariables applied to their telescopes (the
-   construction record of law §7.3, as data) — with the subgoals in
-   order, or a refusal. `elaborate(I)` runs `step` on each node of
-   the tree depth-first and instantiates; the result is P, one closed
-   proof term K checks as the theorem's value. No node consults a
-   changing table or runs a search: `rw`'s match, `apply`'s
-   unification and `reduce`'s normal form are deterministic in the
-   node, the goal and the environment.
-4. **The vocabulary of 3.20.** `(intro NAME…)` — the target is a Pi
-   after whnf, each name takes one binder (`intro_no_pi`). `(exact
-   TERM)` — the term at the target; `rfl` — `Eq.refl` at `a = b` by
-   K's conversion (`rfl_failed` shows both sides after whnf); `(have
-   NAME PROP STEP…)` — the cut: PROP a proposition, its block a child
-   goal under the current context, the rest of the block continues
-   with `NAME : PROP` in the context; `(show PROP)` — the target
-   replaced by PROP where K's conversion agrees (`show_mismatch`);
-   `(apply TERM STEP-BLOCK…)` — TERM elaborated without an expected
-   type, its type's Pi-telescope opened with a metavariable per
-   binder for exactly arity(TERM) − arity(target) binders after whnf,
-   the conclusion unified with the target; each metavariable still
-   unassigned whose type is a proposition is a child goal in binder
-   order, its block the next in the list (`apply_goals` names the
-   count and the premises when the list is short or long); a
-   non-proposition left unassigned is `apply_unsolved` (a witness
-   goal is the graph's, after 3.20); `(cases TERM ((CTOR (NAME…)
-   STEP…)…))` — TERM a local of an inductive type without indices
-   (`cases_indexed` otherwise: `injection`/`subst` are later forms),
-   the motive the target generalized over it (slice 3.19's rule 9),
-   `T.casesOn` applied, each minor premise's telescope opened under
-   the names given (`cases_fields` on a count mismatch), one block
-   per constructor in declaration order, each constructor named once
-   (`cases_rows`); `(induction TERM ((CTOR (NAME… IH…) STEP…)…))` —
-   the same over `T.rec`, the recursive fields' hypotheses named
-   after the fields; `(wf MEASURE TERM IH STEP…)` — TERM a local, the
-   measure a term over it into `Nat`, `WellFounded.fix (InvImage.wf
-   MEASURE Nat.lt_wfRel.wf)` with the target as motive, the block
-   under `IH : ∀ y, MEASURE[y] < MEASURE[TERM] → target[y]`;
-   `(decide)` — the target's decision through the table of slice 3.19
-   or the elaborator's lookup at `Nat`, `Int`, `Bool`, the term
-   `of_decide_eq_true (Eq.refl true)`, K's conversion the work
-   (`decide_failed`, `no_decision`); `(unfold NAME…)`, `(reduce
-   SIDE?)` and `(rw …)` — rules 6 and 7; `sorry` — rule 9.
-5. **Rewriting is `Eq.mpr`.** A rewrite of the target by `h : a = b`
-   abstracts every chosen occurrence of `a` into a motive `λ x.
-   target[x]` and fills the goal with `Eq.mpr (congrArg motive h)
-   ?g'` where `?g' : target[b]`; the occurrence path is the motive —
-   the law's guarded path is a position in a term view with its
-   expected subterm, and the motive carries both. `congrArg` and
-   `Eq.mpr` are Init's (lines 3,464 and 14,083 of the export, inside
-   the test prefix). A rewrite at a hypothesis (`(rw LEMMA (at H))`)
-   is Eq.mp on the hypothesis under a `have` of the same name (later
-   in 3.20 if calc needs it; otherwise 3.21).
-6. **`unfold` and `reduce`.** `(unfold f)` rewrites each occurrence of
-   `f` at full arity by the first of `f`'s equations (`f.eq_N`, slice
-   3.13) whose left side matches it first-order, to a fixpoint under a
-   budget; an equation proven by `Eq.refl` is applied by conversion
-   and contributes no term, an equation that is propositional (a
-   measured `fn`'s, slice 3.14) is a rewrite by rule 5; a `def` with
-   no equations is delta-reduced by conversion. No match anywhere is
-   `unfold_stuck`, with the pointer "no equation of f matches; cases
-   on its argument first". `(reduce)`, `(reduce lhs)`, `(reduce rhs)`
-   — the whole target or one side of an equation replaced by its
-   normal form: K's whnf at every position (beta, iota, projections,
-   `Nat` literals through K's accelerators), every `fn` by its
-   equations as `unfold` applies them (never by delta: a `fn`'s value
-   is the recursor form, the equations are its meaning), every `def`
-   and `abbrev` by delta, to a fixpoint under a budget
-   (`reduce_budget`). The normal form is `show`n; a propositional
-   equation on the way makes the step a rewrite of rule 5 and the
-   `show` follows. This is one node for v2's `reduce`, `simp` and
-   `compute`, whose distinction was the old evaluator's.
-7. **`rw`.** `(rw LEMMA)`, `(rw (<- LEMMA))`: LEMMA a term — a name,
-   or a name applied to arguments — elaborated without an expected
-   type; its type after whnf opened as `apply` opens, to an equation
-   `a = b` (or `b = a` under `<-`; `rw_not_eq` otherwise). `a`, with
-   its metavariables, is matched first-order against the target's
-   subterms in **pre-order, left to right, the function before its
-   arguments**, the first match instantiating the metavariables, and
-   every occurrence of the instantiated `a` is rewritten (Lean's
-   `rw`), by rule 5. `(rw LEMMA (occ K))` rewrites the K-th matching
-   occurrence only, and `(rw LEMMA (occ K EXPECT))` guards it with the
-   instance expected there (slice 3.29 rule 5, `rw_occ_changed`). The
-   lemma's premises left unassigned are child goals, positional blocks
-   as `apply`'s: `(rw LEMMA (occ K EXPECT?)? STEP-BLOCK…)`.
-   `rw_no_match` shows the pattern and the target. A rewrite whose
-   result is `a = a` is not closed by `rw` (Lean's `rw` tries `rfl`;
-   here the author writes it — one node, one meaning).
-8. **Universes and levels.** A goal's statement is a `Prop`; a
-   motive over a Pi into `Prop`; `congrArg`'s levels come from the
-   types of `a` and the target by unification, as any constant's do
-   (slice 3.15).
+1. **The form.** A `theorem`'s proof is `(exact TERM)`, `sorry` or
+   `(by STEP…)`; a `fulfills` the same three. A block is a sequence
+   of steps on one goal, each but the last turning the goal into one
+   goal, the last closing it; a step that opens several goals carries
+   each one's block inline (`(cases x ((zero STEP…) (succ (n)
+   STEP…)))`); `goal_open`, `goal_closed`; every refusal names the
+   step by its index and shows the goal as `goal_of` renders it. As
+   built: a premise's one-step block may be written as the step
+   (`(apply Eq.symm (exact h))`); `cases`/`induction` arms in one
+   list, each arm's names in a list; `(cases TERM H (ARM…))` names
+   the equation (`induction` so is `induction_eq`).
+2. **A goal is a closed proposition** — a metavariable whose type is
+   the statement closed over its named context; a step opens the
+   binders as K locals and closes its filling over them, so every
+   assignment is closed and R68's delayed filling never arises.
+3. **A step is a function of the node and the goal**: `step(goal,
+   node)` answers `StepDone(term)` with the subgoals in order, or a
+   refusal; `elaborate(I)` runs `step` depth-first and instantiates;
+   no node consults a changing table or runs a search.
+4. **The vocabulary**: `(intro NAME…)`, `(exact TERM)`, `rfl`,
+   `(have NAME PROP STEP…)`, `(show PROP)`, `(apply TERM
+   STEP-BLOCK…)` (exactly arity(TERM) − arity(target) binders opened;
+   unassigned propositions are child goals in binder order;
+   `apply_goals`, `apply_unsolved` with the pointer), `(cases TERM
+   ((CTOR (NAME…) STEP…)…))` (a local of an inductive without
+   indices; `cases_indexed`, `cases_fields`, `cases_rows`; a term
+   that is not a local is generalized), `(induction TERM (…))` over
+   `T.rec` (dependents reverted since 3.29 rule 6), `(wf X MEASURE IH
+   STEP…)` (`WellFounded.fix` at `InvImage.wf MEASURE
+   Nat.lt_wfRel.wf`, `IH : ∀ y, MEASURE[y] < MEASURE[X] → target[y]`),
+   `(decide)` (`of_decide_eq_true (Eq.refl true)` at the decision the
+   table or the lookup gives), `(unfold NAME…)`, `(reduce SIDE?)`,
+   `(rw …)`, `sorry`.
+5. **Rewriting is `Eq.mpr`** over the motive that abstracts the
+   chosen occurrences: `Eq.mpr (congrArg motive h) ?g'`. `rw` at a
+   hypothesis was not built.
+6. **`unfold` and `reduce`.** `(unfold f)` rewrites each occurrence
+   of `f` at full arity by the first matching equation, once per
+   occurrence present at the step's start (`unfold_stuck` with the
+   pointer); `(reduce)`, `(reduce lhs)`, `(reduce rhs)` replace the
+   target or a side by its normal form — the first redex in
+   pre-order by an equation or K's whnf where it progresses, never a
+   stuck eliminator, a lambda, an inductive's, a constructor's or a
+   proposition's application; a computation rule (a constructor or
+   literal in its left side) applies anywhere, an unfolding only to a
+   ground occurrence under a budget of 64; a definitional equation
+   contributes no term, a propositional one is a rewrite of rule 5
+   with a continuation goal; a `def` with no equations by one delta
+   step (`delta_once`). A measured function has its equations, each
+   leaf's proven by `WellFounded.fix_eq` at the instance (the
+   obligations admitted into the walk first); since 3.27 landing 3
+   the reducer reads a realization's equations too.
+7. **`rw`.** `(rw LEMMA)`, `(rw (<- LEMMA))`, LEMMA elaborated
+   without an expected type and opened to an equation
+   (`rw_not_eq`); the left side matched syntactically
+   (`tac_match`: structural descent, whole spines, never by K's
+   conversion) against the target's subterms in pre-order, the
+   function before its arguments; every occurrence of the first
+   instance rewritten; `(occ K)` the K-th occurrence of the first
+   instance, `(occ K EXPECT)` guarded (3.29 rule 5,
+   `rw_occ_changed`); unassigned premises are positional child
+   blocks; `rw_no_match` shows the pattern and the target; `a = a`
+   is not closed by `rw`. Init's lemmas speak `HAdd.hAdd` where V3
+   writes `Nat.add` — one spelling since 3.21 rule 3.
+8. **Universes and levels** by unification, as any constant's.
 9. **`sorry` in a block** closes its goal and makes the theorem
-   pending (`PENDING NAME sorry`), as a top-level `sorry` does:
-   nothing is declared, every citation is a pending obligation. The
-   block is elaborated whole, so every other step is checked, and the
-   record shows each sorried goal as `goal_of` renders it.
-10. **The E functions** (`kernel/tactic.shard`, exported through the
-    loader's module): `goal_of : Goal → the context (name, type)
-    list and the target`, rendered in S by the dumper; `applicable :
-    Goal → the node heads whose precondition holds` (a Pi target
-    admits `intro`, an equation admits `rfl` and `rw`, an inductive
-    local admits `cases`…; not a completeness claim); `step : Goal →
-    Node → StepRes`; `elaborate : Goal → I → P or refusal`. All are
-    `fn`s, so an engine in E can compose them (3.22). `Node` is I's
-    data type: one constructor per form of rule 4 with its arguments
-    as data (names, S terms, child blocks), read from the S form by
-    `read_node` — the concrete syntax of rule 1 and nothing else.
-11. **Records.** `PROOF NAME nodes=N` on an accepted theorem proven by
-    a block (the ACCEPT record stands); `PENDING NAME sorry goals=K`
-    with the goals under it. The DEFINE/REALIZE records are unchanged.
-12. **Not in 3.20**, each named: `simp_only`, `arith` (3.21);
-    `injection`, `subst`, `cases` on an indexed family or on `Eq`;
-    `exists`/`constructor`/`left`/`right` (an `exact` with the
-    constructor serves); `intro` through a `let`; `wf` over a measure
-    into `Int` or over a lexicographic pair; a witness goal (data
-    hole); `rw` under binders where the motive would capture
-    (`rw_motive`: Lean's "motive is not type correct"); `by` inside a
-    term (`(by …)` as an L term); the Rust bootstrap reads `by` as
-    `UnknownForm`, so a theorem under `v3/kernel/**` stays on
-    `exact` until route 1's chain is V3's own.
+   pending (`PENDING NAME sorry goals=K`, the goals rendered); the
+   block is elaborated whole.
+10. **The E functions** (`kernel/tactic.shard`): `goal_of`,
+    `applicable`, `step`, `elaborate`; `Node` is I's data, one
+    constructor per form, read by `read_block`; `tac_step`,
+    `tac_block`, `tac_prove`; `reader.shard`'s `read_proof` hands a
+    `by` to it for a `theorem` and a `fulfills` alike.
+11. **Records.** The design's `PROOF NAME nodes=N` was not added:
+    `ACCEPT` stands for a theorem proven by a block; the pending
+    record carries the count.
+12. **Not in 3.20**: `injection`, `subst`, `cases` on an indexed
+    family or on `Eq`; `exists`/`constructor`/`left`/`right`; `intro`
+    through a `let`; `wf` over an `Int` measure or a lexicographic
+    pair; a witness goal (3.22 rule 4 built it); `rw` under binders
+    where the motive would capture (`rw_motive`); `by` inside a
+    term; the bootstrap reads `by` as `UnknownForm`, so a theorem
+    under `v3/kernel/**` stays on `exact` until route 1's chain is
+    V3's own.
 
-**Slice 3.20 as built** (2026-10-06):
+As built, the consumer: 44 of calc's 100 claims as blocks in five
+files (`tactic_test.sh`), the rest 3.21's. Found by the probes: the
+recursor takes its major after the minors and `casesOn` before them;
+every name in `tactic.shard` checked against the closure (the
+bootstrap's flat resolution). Found by a second reader: a named
+equation keeps its local; `(occ K)` over whole spines; an unfolding
+only on a ground occurrence under the budget.
 
-- **Rules 1 and 10.** `kernel/tactic.shard` is the opener: `Node` is
-  I's data (one constructor per form, the arms and the premise blocks
-  nodes of their own kinds), `read_block` reads `(by STEP…)`,
-  `tac_step` runs one node on one goal, `tac_block` runs a block's
-  nodes depth-first — the children of a branching node from the
-  blocks the step pairs with them, in the goals' order — and
-  `tac_prove` instantiates the root; `reader.shard`'s `read_proof`
-  hands a `by` to it, for a `theorem` and for a `fulfills` alike.
-  `goal_of` renders a goal (`(x : Nat) (h : (= x 1)) ⊢ (= x 1)` —
-  bound names from the binders, `Eq` and the comparisons under their
-  operator spellings); `applicable` lists the forms whose
-  precondition the goal meets. A refusal names the step's index in
-  its block and shows the goal it faced. **A premise's one-step block
-  may be written as the step:** `(apply Eq.symm (exact h))` — a list
-  headed by a form's name is one step, so the common case needs no
-  second parenthesis. The arms of `cases` and `induction` come in one
-  list, `(cases x ((zero STEP…) (succ (n) STEP…)))`, and may name the
-  equation: `(cases (is_digit c) hd (ARM…))` gives each arm `hd :
-  (= (is_digit c) false)` and so on — the motive is `λ d. x = d →
-  target[d]` and the eliminator's result is applied to `Eq.refl x`
-  (Lean's `cases h : x`); calc's lexer lemmas need it where the split
-  term reappears under the unfolding of a function. The record of
-  rule 11 was not added: `ACCEPT` stands for a theorem proven by a
-  block as for one proven by a term, and the pending record carries
-  the count (`PENDING NAME sorry goals=2`).
-- **Rule 2.** As designed. The goal's metavariable has the closed
-  statement as its type and no telescope; a step opens the first
-  `nctx` binders as K locals under the binders' names, acts on the
-  target and closes the filling over them, so every assignment is a
-  closed term and R68's delayed filling never arises. A split or an
-  induction on a local drops it from the children's context when no
-  other local's type mentions it.
-- **Rules 3 and 4.** As designed, with these shapes: `(wf X MEASURE IH
-  STEP…)` — X the local first, the measure a `Nat` term over it, the
-  hypothesis `IH : ∀ y, (< MEASURE[y] MEASURE[X']) → target[y]` stated
-  with `Nat.lt` so it reads as the arithmetic a descent fact proves;
-  `WellFounded.fix.{u,0}` at `InvImage.wf MEASURE Nat.lt_wfRel.wf`
-  as `define.shard` builds it for a function. `apply` opens exactly
-  arity(TERM) − arity(target) binders and refuses a premise whose
-  statement mentions an argument the target leaves open
-  (`apply_unsolved`, with the pointer: give it through the first
-  premise — `(apply (Eq.trans h1) (exact h2))`); `decide` builds
-  `of_decide_eq_true` at the decision the elaborator's lookup or the
-  derivation table gives and checks `Decidable.decide` against
-  `true` by K's conversion before K sees the theorem.
-- **Rule 5.** As designed. `rw` matches the lemma's side
-  **syntactically** (`tac_match`: structural descent, a metavariable
-  assigned through unify.shard's typed `assign`, levels structurally)
-  — never by K's conversion, which would make `app nil ?ys` an
-  instance of `app (cons x r) nil` by computing both sides, a match
-  and a useless one. An application is matched with its whole spine;
-  a prefix of a spine is no subterm. A rewrite at a hypothesis (`(rw
-  LEMMA (at H))`) was not built: calc's one need (`skipws_head_nonws`)
-  is met by `show` of the convertible target and a reversed rewrite.
-- **Rule 6, and the equations of a measured function.** `reduce`
-  finds the first redex of the target in pre-order: an application of
-  a constant with equations by the first equation that matches; any
-  other application, a projection or a redex by K's whnf where it
-  progresses — the result differs, its head is neither a stuck
-  eliminator (a recursor, a case analysis, `brecOn` and its helpers,
-  a matcher, a fixpoint, a projection of one) nor a lambda (a
-  function constant's value is no reduction of it) — and never an
-  inductive's or a constructor's application, a theorem's, or a
-  proposition's. K's whnf reduces a head as far as it goes, past the
-  one step wanted — an `ite` on a decided condition to its branch,
-  then the branch's function unfolded to its recursor form — so every
-  application of a constant with equations inside the subterm is
-  masked by a local during the whnf and restored after. **Two kinds
-  of equation:** a computation rule has a constructor or a literal in
-  its left side (`app (cons x r) ys = …`) and `reduce` applies it
-  anywhere; an unfolding (`count_down n = ite …`, a measured
-  function's one leaf) `reduce` applies only to a closed occurrence —
-  a ground computation ends, the budget bounding it — and `unfold`
-  applies once to each occurrence present when the step starts, never
-  to one a rewrite introduces. A definitional equation (by `Eq.refl`)
-  is applied by conversion and contributes no term; a propositional
-  one is a rewrite of rule 5 with a continuation goal, the previous
-  goal assigned. **A measured function now has its equations:**
-  `define.shard` states each leaf's as before and proves it by
-  `WellFounded.fix_eq` at the instance — the definition's value at the
-  leaf's arguments is `WellFounded.fix α C r hwf F t`, and `fix_eq`
-  there has the type `fix … t = F t (λ y _. fix … y)`, whose sides K
-  converts to the leaf's (the left by delta, the right by beta, the
-  tuple's projections and the matcher at a constructor, each self-call
-  by delta); the descent obligations are admitted into the walk before
-  the definition. `WellFounded.fix_eq` lies at line 107,407 of the
-  export, past the pins' prefix, so the pins test and the files that
-  need it stream the second fixture; `calc_spec.shard` imports through
-  it, and `parse_tail` has `eq_1`.
-- **Rule 7.** As designed: `(rw LEMMA)`, `(rw (<- LEMMA))`, `(occ K)`
-  with the count in the refusal, the premises as positional blocks
-  (`(rw if_pos (exact h))`; `if_pos`'s instance argument is assigned
-  by the match). The traversal is pre-order with the function before
-  its arguments over whole applications.
-- **Rules 8 and 9.** As designed.
-- **Rule 12.** As listed; `cases` on a term that is not a local
-  generalizes its occurrences in the target (an `if`'s condition,
-  after `reduce` has exposed it).
-- **Not built, found on the way:** a witness goal (`apply Eq.trans`
-  without the middle term); `rw` at a hypothesis; `induction …
-  generalizing` (the statement quantifies what the hypothesis must
-  vary over, and `intro` follows the split — `lex_num`); `show`'s
-  display of a stuck `Decidable.rec` is long where a `Bool` decision
-  is unfolded by hand; the elaborator's refusal of an unsolved
-  universe inside a block carries no step index.
-- **Found by the probes:** the recursor takes its major after the
-  minors and `casesOn` before them; a name shared with another kernel
-  file's (`form_head`, `open_fields`, `sort_level`, `StepRes`, `RwOk`,
-  `mem_expr`, `RdOk`) shadows it under the bootstrap's flat resolution
-  and fails far from the collision — every name in `tactic.shard` is
-  checked against the closure.
-- **Found by a second reader over the diff, each reproduced and
-  fixed:** `(cases X H …)` on a local dropped `X` from the arm's
-  context while `H` still named it (K: `fvar_in_value`, no step index)
-  — the local stays when an equation is named; `(induction X H …)`
-  would guard every hypothesis by the equation, so it is
-  `induction_eq`; `unfold` and `reduce` of a `def` with no equations
-  were refused where rule 6 promised delta — K's whnf takes `double
-  x` past `x + x` to a stuck recursor, so one delta step is made by
-  hand (`delta_once`) where whnf makes no progress; `(occ K)` counted
-  prefixes of application spines the traversal never offers — an
-  occurrence is a whole spine now; `reduce` on a closed occurrence
-  whose condition no reduction decides (`count_down (g 5)` with `g`
-  opaque) ran for minutes — an unfolding applies only to a **ground**
-  occurrence (no local, every constant a definition, a constructor, a
-  recursor, an inductive or a quotient), under a budget of 64
-  unfoldings; a refusal rendered its goal twice and a term as a
-  sequent. Two pin comments were wrong. *Noted, not changed:* `(occ
-  K)` counts the occurrences of the **first** instance, as Lean's `rw`
-  does; Init's arithmetic lemmas speak `HAdd.hAdd` where V3 writes
-  `Nat.add`, so a rewrite by them needs a `show` first — syntactic
-  matching by design; `(by)` with no step is `bad_proof`.
-- **The consumer.** 44 of calc's 100 claims are theorems by blocks in
-  five files (`tactic_test.sh`): the nine ground spec tests and the
-  eleven reconciliation tests by `(reduce) rfl` (parse_tail, measured,
-  by its `fix_eq` equation at closed arguments — 20 s for the nine
-  under the bootstrap, against K's own conversion through `Acc.rec`
-  before the equation existed); the lexer's structural lemmas
-  (`lex_num` by induction with the accumulator quantified and the
-  split's equation named, `lex_digit_head`, the three head lemmas by
-  `if_pos`/`if_neg`, `skip_ws_idem`, `head_skipws_false`,
-  `skipws_head_nonws`, `parse_tail_nil_test`); the digit type's
-  (`is_digit_code` a ten-way split closed by `decide`); `codes_append`
-  by induction. Of the 52 whose lemma closure needs no arithmetic the
-  rest wait on `show`'s `Int` measure, Init's inequality lemmas or
-  3.21; the 48 others need `arith`. The worked-examples file of the
-  ruling's fifth lean is these five, one claim of each shape among
-  them.
-
-**Slice 3.21 — the two forms that carry an engine: `arith` and
-`simp_only`** (under the ruling of 2026-10-05, item 53's first lean;
-the design 2026-10-06; §13 item 54). Slice 3.20 left calc's claims
-that need arithmetic (48 of 100) and every chain of rewrites written
-one step at a time. Law §7.1 draws the line this slice works on:
-whatever searches is a producer of I and what it emits is the result;
-replay computes and matches, and K checks P.
-
-*The rules.*
+*Slice 3.21 (item 54, designed and built 2026-10-06):*
 
 1. **`arith` is a Farkas certificate over stated rows.** `(arith
    FACT…)` closes a goal that follows from linear arithmetic over
-   `Int` and `Nat`. Its **rows**, in order: the goal negated; each
-   hypothesis of the goal's context whose statement is linear (rule
-   2), in context order; each FACT — a term, a hypothesis' name or a
-   lemma applied — whose type is linear (`arith_fact` otherwise); and
-   the rows the atoms bring (rule 4). A certificate is one integer per
-   row — non-negative on an inequality, any sign on an equation —
-   under which the rows sum to a constant inequality that is false
-   (`0 ≤ -1`). `(arith FACT… (farkas K…))` carries the certificate (a
-   row past the list's end has multiplier 0): replay checks the sum
-   and builds P, no elimination runs (`arith_certificate` shows the
-   sum that is left). Without the clause the node names the
-   **default reconstruction** (item 53's second lean): Fourier–Motzkin
-   elimination over the rows in atom order under a budget of 512
-   derived rows (`arith_budget`), the equations eliminated first by
-   substitution; what it finds is the certificate, and the two forms
-   elaborate through the same builder. `arith_failed` shows the rows
-   in normal form. The elimination is exact over the rationals and
-   integer-tight only in the strict comparisons (`a < b` is `a + 1 ≤
-   b`): no cut, no case split — `2x = 1` is not refuted, a `≠`
-   hypothesis is no row. Those are a producer's (`omega`, 3.22),
-   which emits this node.
-2. **Linear statements.** `a ≤ b`, `a < b`, `a = b` and their
-   negations at `Int` or `Nat`, under V3's spellings (`Int.le`,
-   `Nat.lt`, `Eq`) and Init's (`LE.le`, `LT.lt`, `GE.ge`, `GT.gt`,
-   `Ne`, `Not`), where the sides are built from `+`, `-` (at `Int`),
-   unary `-`, `*` with a literal on one side, literals, and **atoms**
-   — any other term, two atoms the same when they are the same term
-   after the spellings of rule 3 are made one. `False` as a goal has
-   no negation row. A goal `a = b` is two certificates (`a ≤ b` and `b
-   ≤ a`, `Int.le_antisymm`) unless the sides have one normal form,
-   when it is their two evaluations composed and no certificate; a
-   goal `¬ P` is P's row and the certificate.
-3. **One spelling.** Init's lemmas speak `HAdd.hAdd Int Int Int _ a
-   b`, `OfNat.ofNat Int 5 _`, `Nat.cast n`; V3 writes `Int.add a b`,
-   `Int.ofNat 5`. `arith` reads both: a class method at `Int` or `Nat`
-   under Init's instance is its function, throughout a row — inside
-   an atom too — and K's conversion is the proof that the two are one
-   (the instances unfold). So `(arith (Int.emod_nonneg n h))` and a
-   row from the context meet on the same atoms.
-4. **What an atom brings.** A `Nat` term enters the integers under
-   `Int.ofNat` (`Int.natCast_add`, `Int.natCast_mul` push the cast to
-   the atoms), and each `Nat` atom `a` brings the row `0 ≤ ↑a`. `x /
-   k` at `Int` with `k` a positive literal is an atom that brings `k *
-   (x / k) ≤ x` and `x < k * (x / k) + k` (`Int.mul_ediv_self_le`,
-   `Int.lt_mul_ediv_self_add`), and `x % k` is `x - k * (x / k)`
-   (`Int.emod_def`): the quotient and the remainder by a literal are
-   linear arithmetic, as in `omega` and as v2's `div-facts` gave
-   them. `Nat` subtraction, division at `Nat`, `min`, `max`, `natAbs`
-   and `toNat` are atoms. These rows come after the facts, in the
-   order the atoms first occur.
-5. **P is `Lean.Omega`'s.** The atoms are a list `v`; each side `t`
-   gets a linear combination `l` (a constant and a coefficient list,
-   closed data) and a proof `t = l.eval v` built on the term's
-   structure from `LinearCombo.coordinate_eval`, `add_eval`,
-   `sub_eval`, `neg_eval`, `mul_eval_of_const_left/right` and the
-   congruences of `Lean.Omega.Int`; a row `0 ≤ l.eval v` or `l.eval v
-   = 0` is `Constraint.addInequality_sat` or `addEquality_sat`; the
-   certificate is a fold of `combo_sat'`; the false constant is
-   `normalize_sat` and `Constraint.not_sat'_of_isImpossible (Eq.refl
-   true)`. K's conversion does the arithmetic on the closed data
-   (each intermediate combination is stated as a literal, so one step
-   is one bounded computation) and nothing else: no ring normalizer,
-   no reflection of the terms. The kit lies in the export through
-   line 91,131 but for the product (`mul_eval_of_const_left`, line
-   271,373) and the quotient's bounds (line 274,616): a file whose
-   rows have neither imports as before; one that has them imports
-   through `Int.lt_mul_ediv_self_add` (`arith_unreached` names the
-   constant and the line). The second fixture grows to that line.
-6. **`simp_only` is a bounded rewriter over a lemma list.**
-   `(simp_only RULE…)`, a RULE a LEMMA or `(<- LEMMA)` as `rw` takes
-   them: until no rule applies, the first rule in list order with a
-   match in the target is applied as `rw` applies it — the first
-   match in the traversal, every occurrence of that instance — under
-   a budget of 256 rewrites (`simp_budget`: a rule that rewrites its
-   own result). A rule's premises are discharged by **assumption** —
-   a hypothesis of the context with the premise's statement — and a
-   rule with a premise no hypothesis states does not apply there
-   (law §7.2's side-condition policy: stated, not searched). No rule
-   applies at the start is `simp_no_progress`. Nothing is implicit:
-   no lemma set, no arithmetic, no computation — `(reduce)` before or
-   after is its own node. A function's name is no rule (`unfold`, or
-   name its equation `f.eq_N`).
+   `Int` and `Nat`: the rows are the goal negated, the context's
+   linear hypotheses in order, each FACT (`arith_fact` otherwise) and
+   the rows the atoms bring; `(arith FACT… (farkas K…))` carries the
+   certificate (one integer per row; replay checks the sum,
+   `arith_certificate`); without it the node names the default
+   reconstruction — Fourier–Motzkin over the rows in atom order under
+   512 derived rows (`arith_budget`), exact over the rationals,
+   integer-tight only in strict comparisons, no cut, no case split, a
+   `≠` no row (`arith_failed` shows the rows in normal form).
+   `kernel/arith.shard`; the node `NArith` in `tactic.shard`; an
+   equation goal takes a clause per direction.
+2. **Linear statements**: `≤ < =` and their negations at `Int` or
+   `Nat` under V3's and Init's spellings, the sides from `+`, `-`,
+   unary `-`, `*` with a literal, literals and atoms; `False` as a
+   goal has no negation row; an equation goal is two certificates
+   (`Int.le_antisymm`) unless the sides have one normal form.
+3. **One spelling — the proof layer's** (wider than designed): a class
+   method at `Int` or `Nat` under Init's instance is its function
+   throughout a row, and every new goal's statement enters in the
+   source's spelling (`tac_goal`), as do a lemma's two sides in `rw`,
+   `simp_only`, `reduce` (`eq_of_lemma`) and a premise `simp_only`
+   looks up; K's conversion is the proof. Since 3.27 rule 2 the
+   spelling is a table (`sp_canon`), not a transparency.
+4. **What an atom brings**: a `Nat` term enters under `Int.ofNat`
+   with the row `0 ≤ ↑a`; `x / k` at `Int` with a positive literal
+   brings `k * (x / k) ≤ x` and `x < k * (x / k) + k`, `x % k` is
+   `x - k * (x / k)`; `Nat` subtraction, division at `Nat`, `min`,
+   `max`, `natAbs`, `toNat` are atoms; `Nat.succ x` under the cast is
+   `x + 1`.
+5. **P is `Lean.Omega`'s**: each side a `LinearCombo` with its
+   `eval` proof, rows by `Constraint.addInequality_sat`/
+   `addEquality_sat`, the certificate a fold of `combo_sat'`, the
+   false constant by `normalize_sat` and
+   `Constraint.not_sat'_of_isImpossible`; K's conversion does the
+   arithmetic on closed data, no reflection; `arith_unreached` names
+   a kit lemma past the horizon.
+6. **`simp_only` is a bounded rewriter over a lemma list**: `(simp_only
+   RULE…)`, the first rule in list order with a match applied as `rw`
+   applies it, to a fixpoint under 256 rewrites (`simp_budget`);
+   premises discharged by assumption only; `simp_no_progress`; a
+   function's name is no rule; a rule whose right side holds its left
+   is `simp_self`.
 7. **`applicable`** lists `arith` where the target is linear and
-   `simp_only` always; a premise's one-step block may be either.
-8. **Not in 3.21**, each named: an `only` restriction of `arith`'s
-   context rows (a budget refusal is the signal); cuts and case
-   splits; `Nat` subtraction; non-literal products; `simp_only` at a
-   hypothesis, with side selectors or with a discharger other than
-   assumption; the producers (3.22).
+   `simp_only` always.
+8. **Not in 3.21**: an `only` restriction (3.22 rule 3 built it); cuts
+   and case splits; `Nat` subtraction; non-literal products;
+   `simp_only` at a hypothesis or with another discharger.
 
-**Slice 3.21 as built** (2026-10-06):
+As built beside the rules: **a matcher under a measure carries its
+equation** (`pj_match_eq`: in a measured function a matcher's motive
+is `λ s'. s = s' → motive s'`, each row's last binder `h : s =
+pattern`, the application at `Eq.refl s`, so an obligation is stated
+under it as `measure[args] < measure[params]` at `Nat`); `reduce`'s
+two repairs (a case analysis at a decided scrutinee takes one step by
+masking the alternatives — `alt_step`; a comparison is left as it
+is); a type and its constructor under one name resolve to the type
+where a type is expected; the pending record shows its goals; the
+consumer: calc's 100 claims are theorems with the capstone
+`run_eq_spec` under no parameter (`tactic_test.sh`, 110 checks), 45
+`arith` steps and 18 `simp_only`. Found by a second reader:
+`simp_self`, `by_ne_level`, `define_match_eq`, generated binder names.
 
-- **Rules 1, 2 and 5.** As designed. `kernel/arith.shard` is the
-  arithmetic — the spelling (rule 3), the rows, the certificate's
-  check, the elimination, and P from `Lean.Omega`'s lemmas —, and
-  `tactic.shard` holds the node (`NArith`: the facts as S terms, the
-  certificates) and the step, which elaborates the facts, hands the
-  context's locals over (a local whose statement is no comparison is
-  passed by) and has K type the term before it is the goal's filling
-  (`arith_internal` would name the step; none has been seen). The
-  kit's last lemma in the plain case is `Lean.Omega.Int.ofNat_lt_of_lt`
-  (line 91,131 of the export), inside the pins' first fixture. An
-  equation goal takes a `(farkas …)` clause per direction, the `≤`
-  first (a direction without one is reconstructed); a weight of zero
-  leaves its row out. A refusal shows the rows in normal form over the atoms: `[0 <= -1 +
-  -1*x + 1*y] [0 <= 0 + -1*x + 1*y]`.
-- **Rule 3, wider than designed: one spelling is the proof layer's.**
-  The first `(rw (if_neg hn))` after `(cases (Int.decLt n 10) …)`
-  found no match: the hypothesis the split brings is Init's `¬ (LT.lt
-  Int Int.instLTInt n 10)` and the target's condition is `Int.lt n
-  10`. So every **new goal's statement** enters in the source's
-  spelling (`tac_goal`: the context and the target, K converting the
-  occurrence), and so do the two sides of **a lemma's equation** in
-  `rw`, `simp_only` and `reduce` (`eq_of_lemma`) and a premise
-  `simp_only` looks up. The 3.20 note that a rewrite by one of Init's
-  arithmetic lemmas "needs a `show` first" no longer holds.
-- **Rule 4.** As designed, and `Nat.succ x` under the cast is `x + 1`
-  (K converts the two; `Nat.lt a b` unfolds to it).
-- **Rule 6.** As designed: `NSimp`, `simp_loop`; a match whose
-  premise no hypothesis states is passed by and the next subterm is
-  tried; a rule whose match leaves an argument unassigned, changes
-  nothing or has a motive K does not type is passed by for the next
-  rule.
-- **Rule 7.** As designed.
-- **A matcher under a measure carries its equation** (`define.shard`,
-  `realize.shard`; not in the design — calc's `parse_tail` could not
-  be made total without it). Slice 3.14 stated a self-call's descent
-  obligation over every local in scope; in a row of `(match (skip_ws
-  cs) …)` the locals are the pattern's variables and nothing ties them
-  to the scrutinee, so `parse_tail.dec_1` read `∀ p c rest, … → ∀ n
-  rest2, len rest2 < len p.2` — false, and `parse_tail` could never
-  leave `PENDING measure` (v2 gave each site the premise `skip_ws cs =
-  Cons c rest`). Now, in a measured function, a matcher's motive is `λ
-  s' . s = s' → motive s'`, each row's last binder `h : s = pattern`,
-  and the application is applied to `Eq.refl s` — Lean's `match h : s
-  with`, by `addArg` on the matcher K checked (`pj_match_eq`) — so `h`
-  is a local in scope and the obligation is stated under it — and as
-  the comparison it is, `measure[arguments] < measure[parameters]` at
-  `Nat`, where slice 3.14 stated the relation's instance `InvImage …
-  (tuple) p`; the rows' variables carry the source's names and a
-  function of one binder its binder's: `∀ xs x r, xs = cons x r → ∀ y
-  s, r = cons y s → len3 s < len3 xs`. The
-  function's equations are stated over the same shape (`PkEqn`: the
-  body walked once more with self-calls left as calls, so K converts
-  `F t (λ y _. fix y)` to the leaf's body as before); the leaf walker
-  reads the extra argument, so a leading matcher on a binder still
-  gives one equation per constructor. The program is untouched (it is
-  the erasure of the body as written). `parse_tail`, `show` (now under
-  `(measure (Int.natAbs n))`) and `show_nat` are `DISCHARGE … proved`:
-  **nothing a claim of calc's cites is pending.** Slice 3.20's
-  theorems over `parse_tail` had been accepted under those two
-  parameters.
-- **`reduce`, two repairs** the capstone's proofs needed. (1) A case
-  analysis at a decided scrutinee takes one step: a matcher at `cons c
-  rst` whose row is an `if` on an open condition was no progress (K's
-  whnf goes on into the row and ends at a stuck `Decidable.rec`); the
-  alternatives — an `ite`'s branches, a matcher's rows — are masked by
-  locals while K picks one (`alt_step`). (2) A proposition is no
-  computation: `reduce` unfolded `Nat.lt a b` to `Nat.le (Nat.succ a)
-  b`; it leaves a comparison as it is now (`unfold` by name still
-  unfolds one). Three of 3.20's proofs lost a last `(reduce lhs)` that
-  had nothing left to do — `reduce_stuck` on an already normal target
-  makes a proof depend on how far the step before went (*noted*).
-- **A type and its constructor under one name** (`(type CalcState
-  (CalcState …))`, §13 item 28) were `ambiguous_name` in a theorem's
-  binder; where a type is expected — a binder's type, an argument at a
-  sort — the name is the type's (`elab.shard`).
-- **The pending record shows its goals** (slice 3.20's rule 9, which
-  that slice left at the count): `PENDING main.t sorry goals=2 [(n :
-  Nat) ⊢ (= n n)] [(n : Nat) ⊢ (= 1 1)]`. It is how a block is
-  written: a `sorry`, a load, the goal. Goals print `Int` literals and
-  `+ - *` as the source writes them.
-- **The fixture.** `init_prefix_str_tail.ndjson` grows by 11,101
-  lines, to line 274,616 of the export (`Int.lt_mul_ediv_self_add`).
-- **The consumer: calc's 100 claims are theorems**, file for file
-  (`kernel/test/tactic_test.sh`: five loads cover the fourteen files,
-  110 checks), with the capstone `run_eq_spec : run cs = spec_run cs`
-  under no parameter. Re-spelled in V3's idiom: a hypothesis is a
-  proposition (`(<= c 32)`, `(Not (= c 43))`); an induction's
-  statement quantifies what its hypothesis must vary over and `intro`
-  follows the split; an `if` on a comparison is split on its decision
-  (`(cases (Int.decEq c 43) ((isFalse (h) …) (isTrue (h) …)))`); a
-  hypothesis about a split term is an implication introduced after
-  the split. `loop_eq` is restructured around `parse_num`'s result
-  (`arm_plus`, `arm_minus` take the lexer through one operator and one
-  number), so its hypothesis is cited under `ptd`, the fact that
-  discharges `parse_tail`'s own descent. Twelve lemmas the old proofs
-  inlined or took from `std` are stated: `append_nil_right`,
-  `append_assoc` (`list.shard`), `natAbs_of_nonneg`, `natAbs_lt`
-  (`natabs.shard`: Init's are at line 672,885, past the fixtures),
-  `is_ws_true`, `is_ws_false`, three `pr_*_none`, `nonnum_none`, the
-  two arms. 45 steps are `arith`, none with a certificate written,
-  and 18 are `simp_only`.
-- **Found on the way, not changed.** Init's names are visible as far
-  as *any* loaded module imported: `calc_proof.shard`'s
-  `decide_eq_true` became `ambiguous_name` (with
-  `Bool.decide_eq_true`) once another file in the load imported
-  further; it cites `Init.decide_eq_true` now. A measured function of
-  several binders has its obligations stated over the arguments'
-  tuple `p` (`len rest2 < len (proj PProd 1 p)`; `PProd.snd` is at
-  line 2,429,884). There is no `by_cases`: the
-  split on a decision instance serves.
-- **Found by a second reader over the diff, each reproduced and
-  fixed, the first three pinned.** `simp_only` with a rule whose right
-  side holds its left (`r = mk (fst r) (snd r)` given without its
-  argument) put the term back twice at every step: the target doubled,
-  no budget of rewrites was reached and the load did not end — it is
-  refused at once (`simp_self`). `Ne a b` was rewritten to `Not
-  (Eq.{1} …)` whatever Ne's universe, and `intro` then built a term K
-  refused (a statement over `Ne Nat Int`; `by_ne_level`). A descent
-  obligation printed every pattern variable as `x` and its fact as the
-  relation's instance, where `reduce` stepped into the relation and
-  `arith` read no comparison (the bullet above; `define_match_eq`). A
-  generated binder's name printed as a bare number (`(fun (20 : Nat)
-  …)`: `x20` now). A class method at a local instance was rewritten
-  as Init's (it stays as written). `v3/test.sh`'s fallback for a
-  missing result printed the shell's error. *Noted, not changed:* a
-  type and its constructor of one name are still ambiguous where
-  nothing is expected (the first operand of `=`); a compound literal
-  as a first operand elaborates at `Nat` (`(<= (- 0 5) x)` — the
-  elaborator's, older than the slice).
-- **Not built**, as rule 8 lists; and no pin for 3.20's fifth finding
-  (a ground occurrence under an opaque constant): a pin has no way to
-  declare one.
+*Slice 3.21b (GPT-6's trajectory review R72–R77, records §4.11; item
+55; built 2026-10-06):*
 
-**Slice 3.21b — the trajectory review's findings 1–3** (GPT-6's
-review of 2026-10-06 over the tree at `7e99261`, records §4.11; the
-user's ruling 2026-10-06 on the leans; §13 item 55). Three of the
-review's six findings are the three items slice 3.21's as-built left
-open, with what the review added: a specification and its
-implementation inherit one unintended numeric reading while both
-proofs check; a module's meaning depends on the load's order; a proof
-is tied to how far the step before it went.
+1. **The expected type decides an arithmetic operator**: where
+   `+ - * / mod %` is read at an expected type whose normal form is
+   `Nat` or `Int`, both operands are read at it (a `Nat` local under
+   `Int` cast at the leaf); where it decides nothing, the identity is
+   the first operand's that is not numeric-closed, all numeric-closed
+   is `Nat` (`op_expected`, `is_num_closed`; pin `op_expected`; the pin
+   `one_meaning` restated).
+2. **Init's visibility is the module's horizon**: each imported
+   declaration carries its ordinal; a module's horizon is the farthest
+   of its own `(import Init NAME)` and its imports'; resolution sees
+   an imported declaration below the horizon only, whatever the load
+   admitted and in whatever order (`VisOnly`'s horizon and ordinal
+   table, `init_within`, `Load.inits`, `init_horizon`; pins
+   `init_horizon`, `init_horizon_beyond`). Restated at 3.25 rule 2 and
+   3.26 rule 4 under the shared and on-demand loads.
+3. **`reduce` is a normalization**: it succeeds unchanged where
+   nothing reduces; `reduce_stuck` retired, `reduce_budget` stays.
 
-*The rules.*
-
-1. **The expected type decides an arithmetic operator.** Where `+ - *
-   / mod %` is read at an expected type whose normal form is `Nat` or
-   `Int`, the operator's identity is that type's and both operands are
-   read at it — a `Nat` local under `Int` is cast at the leaf
-   (`Int.add (Int.ofNat n) 1`), as Lean's `binop%` reads `(n + 1 :
-   Int)`. Where the expected type decides nothing — none, a
-   metavariable, not numeric, a comparison's operands — the identity
-   is the first operand's that is not **numeric-closed** (a numeral, or
-   an arithmetic operator over numeric-closed operands), the other
-   operand read at it; all numeric-closed is law §5.2's default,
-   `Nat`. A boundary the author writes holds: `(Int.ofNat (- 1 2))` is
-   `Nat`'s subtraction, 0. Before, the operation was chosen from the
-   first operand that was not a numeral and the result coerced:
-   `(- 1 2)` at `Int` was `Int.ofNat (Nat.sub 1 2)`, 0, and `(<= (- 0
-   5) x)` read at `Nat` against x's `Int`. The rule is an elaborator
-   fix under law §5.2's order (constraints before defaulting), not a
-   design change.
-2. **Init's visibility is the module's horizon.** Each imported
-   declaration carries its ordinal at admission (the loader's
-   declaration → ordinal table, keyed as the environment is). A
-   module's horizon is the count admitted at the farthest of its own
-   `(import Init NAME)` and its imports' horizons; a module that imports
-   no Init has none. Resolution sees an imported declaration below the
-   horizon only — whatever else the load admitted, in whatever order —
-   and a constant with no ordinal (K's own, admitted with the
-   environment) wherever Init is. The checked environment stays one and
-   shared; what changes is what a scope sees of it. The slice-3.21
-   workaround (`Init.decide_eq_true` in calc_proof) stays as written.
-3. **`reduce` is a normalization: it succeeds unchanged where nothing
-   reduces.** The refusal `reduce_stuck` is retired; `reduce_budget`
-   stays. No step requires progress today, so none is given a
-   progress-requiring variant (the review's "separate operation" waits
-   for a procedure that needs the contract).
-
-**Slice 3.21b as built** (2026-10-06):
-
-- **Rule 1.** `elab.shard`: `op_expected` (the identity from the
-  expected type, for an arithmetic operator), `is_arith_op`,
-  `is_num_closed`/`all_num_closed` (in `is_numeral`'s place in the
-  operand rule). The pin `op_expected`: `(- 1 2)` at `Int` is `Int.sub
-  1 2` and equals `-1`; `(+ n 1)` at `Int` with `n : Nat` is `Int.add
-  (Int.ofNat n) 1`; `(<= (- 0 5) x)` is `Int.le (Int.sub 0 5) x`;
-  `(Int.ofNat (- 1 2))` is `Int.ofNat (Nat.sub 1 2)` and equals 0;
-  `(- n 1)` at `Nat` is `Nat.sub n 1`. One file of the closure changed
-  meaning under the rule, and the full suite found it: the pin
-  `one_meaning` (slice 3.16's G1) stated `(+ a (- n 1))` at `Int` with
-  `n : Nat` as a truncating `Nat` difference cast after (2 at `n = 0`);
-  it is `a + (↑n - 1)` now (1), as Lean reads it, and the pin says so.
-  Parity byte-identical, calc's 100 claims and 21 inputs as before.
-- **Rule 2.** `scope.shard`: `VisOnly`'s second field is the horizon
-  (an `Int`; `-1` none) and a sixth field the ordinal table;
-  `init_within`, `ords_find`, `ords_add`. `loader.shard`: `Load.inits`
-  filled at each accepted record of the stream (`ld_add_inits`, the
-  record's constants at the record's ordinal), `init_horizon` (the
-  ordinal past the import's target, or the count admitted where the
-  target has none), `Fx.init` and `Mod.init` the horizon, `fx_see`
-  taking the farther. A tail-fixture load measured at 16.1 s with the
-  table against 16.4 s without: no cost. The pins `init_horizon` (two
-  roots, the wider loaded first — the review's failing order) and
-  `init_horizon_beyond` (a declaration past the module's horizon,
-  admitted by another module, is `unknown_constant`).
-- **Rule 3.** `tactic.shard`'s `reduce_loop` ends at a target with no
-  redex; its `made` count is gone. The pin `by_reduce` expects `ok`
-  now (reduce at a variable leaves the target; the proof closes by
-  `rfl`).
-- **Not built**: a per-module Init prefix held as the review's
-  "indexed declaration dependencies"; a progress-requiring `reduce`.
-
-**Slice 3.22 — the producers: `auto`, the sidecar, the engine and the
-store** (the user's ruling of 2026-10-07 on three leans; §13 item 56;
-law §7.3, §7.5, §6). The third of the slices ruled on 2026-10-05. Law
-§7.5 fixes the shape: sources carry tactic blocks or an `auto`
-delegation; the build elaborates I to P and K checks P; engine-written
-I lives in the sidecar and the pin store, keyed by the resolved
-requirement; no tool writes into a source file; a stale pin is a
-pending obligation, never re-searched at verification (T8). Two items
-carried from GPT-6's trajectory review (item 55): a stored certificate
-keyed by its rows' statements, and the dependent witness goal.
-
-*The ruling.* (1) **The engine's output is `(arith only FACT… (farkas
-K…))`, the certificate written**: the rows are the goal and the named
-facts in list order, nothing from the context, so an unrelated `have`
-added later shifts no weight. Rejected: emitting `(arith)` and
-reconstructing at every replay — cheaper to write, but it moves a
-consequential choice into the reconstruction (law §7.2 carries such
-choices). (2) **The store is a CI artifact, not committed**: the build
-writes it when asked, CI verifies the bundle, the repository holds
-sidecars only. Rejected: committing P (megabytes that change at every
-kernel edit). (3) **The engine's reach is measured over calc's 100
-claim statements**, the hand proofs staying as the worked examples;
-this replaces the slice table's B-1c consumer, the old tree's
-generator.
-
-*The rules.*
+**The producers and the store — slice 3.22** (records §9.1 "Slice
+3.22"; §13 item 56, ruled 2026-10-07 on three leans; three landings
+2026-10-07/08; law §7.3, §7.5). The engine's output is `(arith only
+FACT… (farkas K…))` with the certificate written; the store is a CI
+artifact, never committed; the engine's reach is measured over calc's
+100 claims.
 
 1. **`auto` is a delegation; the build never searches.** A `theorem`'s
-   proof may be `auto` or `(auto HINT…)`. The loader reads the sidecar
-   `FILE.auto.shard` beside the source — `(proof-for NAME FINGERPRINT
-   (by STEP…))` forms after the schema form `(sidecar N)` (slice 3.29
-   rule 4), the file machine-owned and rewritten whole by
-   `prove` — and replays the entry's block as it would a hand-written
-   one, under the same reader and the same checks. No entry is
-   `PENDING NAME auto_missing`; an entry whose fingerprint is not the
-   theorem's is `PENDING NAME auto_stale`; a block that fails is the
-   refusal it would be inline. Nothing in the loader searches, and no
-   tool writes into a source file (law §7.5).
-2. **The key is the resolved requirement.** The entry's FINGERPRINT is
-   the theorem's content fingerprint — the elaborated statement closed
-   over its binders, as the ACCEPT record carries it — so a changed
-   numeric reading, coercion or parameter is a different requirement
-   and a changed proof strategy is not.
-3. **`(arith only FACT… (farkas K…))`.** The rows are the goal negated,
-   then each FACT in list order, then the rows the atoms bring (slice
-   3.21 rule 4); the context's hypotheses enter only as facts named. A
-   certificate indexes those rows. Everything else is slice 3.21's
-   `arith`.
-4. **The witness goal.** In `(apply TERM (STEP…)…)`, a premise whose
-   statement holds an unassigned metavariable is a witness goal: the
-   premises' blocks run in the order given, `exact` and `rfl` assign
-   through unification, and a metavariable still open when the step's
-   blocks have run is `witness_open`. `apply Eq.trans` without its
-   middle term has it assigned by the first premise's `exact`.
-5. **The engine is an E library over the fixed API.**
-   `kernel/engine.shard` composes `goal_of`, `applicable` and `step`
-   (law §7.3) into a ladder, cheapest first: `intro`; `rfl`; `(reduce)
-   rfl`; `decide`; `(arith only …)` over the context's comparisons;
-   `(simp_only EQN…)` over the equations of the functions in the goal,
-   then `rfl` or `arith`; `induction` on each inductive parameter in
-   turn, the arms closed by the same ladder with the hypothesis among
-   the rules. Hints accelerate and add no language: `(induct X)`,
-   `(lemmas NAME…)`, `(budget N)`. A failed attempt leaves nothing: the
-   elaborator's state is a value, so the transactional invariant of
-   law §6 holds without an `attempt`/`commit` API, which waits for a
-   concurrent caller.
-6. **`prove` is a driver.** `kernel/prove.shard` loads the module as
-   `load.shard` does, runs the engine on each `auto` theorem without a
-   valid entry, rewrites the sidecar whole (entries it did not solve
-   kept, unsolved theorems left pending), and prints a record per
-   theorem: `PROVED NAME` with the block, or `UNSOLVED NAME` with the
-   last goal. The entry carries the engine's version; a version other
-   than the current is reported, not refused (law §7.2).
-7. **The store is K's export format.** `load.shard --store DIR` writes
-   each accepted declaration as records in the format K ingests
-   (`kernel/k/import.shard`), one file per declaration named by its
-   content fingerprint, deduplicated; `verify_release DIR` is K
-   replaying the store's records after the pinned Init export with no
-   elaborator loaded — the T0 machinery over a second stream.
+   proof (a `fulfills`' and a discharge's too) may be `auto` or
+   `(auto HINT…)`; the loader reads `FILE.auto.shard` once per file
+   (`read_sidecar`, `Fx.autos`) — `(proof-for NAME FINGERPRINT (by
+   STEP…))` forms after `(sidecar N)` (3.29 rule 4), the file
+   machine-owned and rewritten whole by `prove` — and replays the
+   entry's block as a hand-written one; `PENDING NAME auto_missing
+   fp=N`, `auto_stale fp=N`, `sidecar_malformed`.
+2. **The key is the resolved requirement**: the fingerprint is
+   `hash_expr` of the closed statement, what the `ACCEPT` record
+   carries, so a changed reading is a different requirement and a
+   changed strategy is not.
+3. **`(arith only FACT… (farkas K…))`**: the rows are the goal
+   negated, the FACTs in order, the atoms' rows — no context row
+   (`NArith` carries `only`; pin `arith_only`).
+4. **The witness goal**: in `(apply TERM (STEP…)…)` a premise whose
+   statement holds an unassigned metavariable is a witness goal; the
+   blocks run in order, `exact` and `rfl` assign through unification
+   (`premise_goals`, `witness_close`, `tac_open` zonking), a
+   metavariable still open after the blocks is `witness_open`; an
+   open instance argument `instance_needed`.
+5. **The engine is an E library over the fixed API**
+   (`kernel/engine.shard`): `engine_prove` composes `goal_of`,
+   `applicable` and `step` into a ladder, cheapest first — `intro`,
+   `rfl`, `(reduce) rfl`, `decide`, `(arith only …)` over the
+   context's comparisons with the certificate found by `ar_prove`,
+   `(simp_only EQN… HYP… LEMMA…)` then `rfl` or `arith`, `induction`
+   on the hinted local then each inductive local, three levels deep;
+   hints `(induct X)`, `(lemmas NAME…)`, `(budget N)`; the induction
+   tried before the introductions too (the hypothesis quantifying the
+   binders); an unfolding equation whose right side mentions the
+   function is no rule; every node confirmed by `tac_step`; a failed
+   attempt leaves nothing (the state is a value).
+6. **`prove` is a driver** (`kernel/prove.shard`): the loader's mode
+   `off`/`solve`/`measure` (`Load.mode`); under `solve` an `auto`
+   without a valid entry is the engine's (since 3.29 rule 2, a named
+   tactic's), replayed through `tac_prove` before acceptance (`PROVED
+   NAME fp=N (by …)`, `PENDING NAME auto_unsolved fp=N GOAL`), the
+   sidecars rewritten whole with the engine's version; under
+   `measure` every hand-written proof is read as the build reads it
+   and the engine (and a named tactic, 3.29) run beside (`ENGINE NAME
+   solved|unsolved`). The engine closes 54 of calc's 100 claims
+   unaided (`engine_calc.txt`, held exact by `engine_test.sh`);
+   `v3/examples/auto/` with its committed sidecar.
+7. **The store is K's export format** (`kernel/store.shard`): `load.shard
+   --store DIR` writes each accepted declaration and each `PARAM` as
+   lean4export's NDJSON records (format 3.1.0, tables numbered from 1
+   in first-use order, strict structural sharing, an inductive as its
+   block), `DIR/ID.ndjson` per declaration with ID the content
+   fingerprint (`FP-K` on a collision of texts), `DIR/order`
+   appended, never rewritten; a failed load writes nothing.
+   `kernel/verify_release.shard DIR CHUNK…` is K, the host and the
+   JSON reader alone: the Init chunks (since 3.26 the export) as one
+   stream, then each store file in `order`'s order as its own stream
+   over the environment so far, each held to its order line by name
+   and fingerprint (`MISTIED`, `MALFORMED`, `MISSING`, `REJECTED`);
+   `RELEASE: declarations N accepted A …`. `store_test.sh` (the 36th
+   entrypoint); `v3/release/` the v3 job's artifact. Not built: a
+   store over implementation forks; a release across roots.
 
-*Landings.* 1: rules 1–4 (`only`, the witness goal, `auto` with
-sidecar replay, the pending reasons); gate: the pins and the
-hand-written calc claims unchanged. 2: rules 5–6 (the engine, `prove`,
-`v3/examples/auto/` with its machine-owned sidecar, the count over
-calc). 3: rule 7 (the store and `verify_release` on calc, in CI).
+**`Init` — slices 3.23–3.26: the cache (retired), the connected path,
+the shared load, Init on demand** (records §9.1 "Slice 3.23" to
+"Slice 3.26"; §13 items 57 (retired), 58, 59, 60; GPT-6's R75, R76).
 
-**Slice 3.22 as built, landing 1** (2026-10-07):
+*Slice 3.23 (ruled 2026-10-08 on R75, item 57; built 2026-10-08;
+RETIRED at 3.26 landing 3, 2026-10-09, by the user's ruling):* the
+receipt (`t0.shard --receipt`, `load.shard --init-receipt`,
+`init_receipt.sh`) and K's admit mode skipped the typing judgments of
+the export's prefix under a receipt of a full replay. Measured under
+Init on demand, admission saved a tenth to a fifth of a demanded load
+and its only writer was the full replay, so the receipt, the flag and
+the currency script were deleted. What stays: `k/add.shard`'s
+`admit_decl_pinning` and the run's admit mode (`run_admitting`),
+repurposed for the loader's second admission of records it checked a
+moment ago (3.26's `od_admit`); `verify_release` never took a receipt.
 
-- **Rule 1.** `reader.shard`: a proof is `(exact TERM)`, `(by STEP…)`,
-  `auto`, `(auto HINT…)` or `sorry` (`read_auto`); `read_decl_autos`
-  takes the file's entries, `read_fulfills` and `read_discharge` too —
-  a `fulfills` and a descent's discharge may be `auto` (the entry for
-  a discharge names the obligation, `f.dec_1`). `loader.shard` reads
-  `FILE.auto.shard` once per file whose forms hold an `auto` proof
-  (`read_sidecar`; `Fx.autos`); a sidecar that does not read or holds
-  a form of another shape is the file's `sidecar_malformed`, the
-  theorem pending. The pending reasons carry the fingerprint an entry
-  needs: `auto_missing fp=N`, `auto_stale fp=N`.
-- **Rule 2.** The fingerprint is `hash_expr` of the closed statement —
-  what `identity_hash` gives a theorem, so the ACCEPT record and the
-  sidecar agree.
-- **Rule 3.** `NArith` carries `only`; under it `step_arith` hands no
-  context row to `ar_prove`. The pin `arith_only` is the review's
-  probe D with the certificate kept across the unrelated `have`.
-- **Rule 4.** `premise_goals` closes each unassigned datum
-  metavariable over the context as a goal is closed (`witness_close`:
-  the closed metavariable of kind `witness`, the original assigned its
-  application to the context), then makes the proposition premises
-  goals — their statements may hold the witness's application now;
-  the implicit arguments the elaborator inserted (`Eq.trans`'s `{b}`)
-  are not among the opened binders and are closed from the applied
-  term; `tac_open` zonks a goal's statement, so a block after the
-  assigning one reads the witness's value; `tac_block` refuses
-  `witness_open` after a step's child blocks have run. A pattern
-  (`?B x1 … xn` against a term over the opened locals) is what the
-  unifier assigns, and the assignment closes. An instance argument
-  left open is `instance_needed`, as before.
-- **Found on the way:** `(apply Eq.trans sorry sorry)` reads `sorry`
-  where a premise's block must be a list: `(sorry)`.
-
-**Slice 3.22 as built, landing 2** (2026-10-07):
-
-- **Rule 5.** `kernel/engine.shard`: `engine_prove` takes the closed
-  statement and the hints and answers a block or a refusal's text;
-  `eng_solve` is the ladder — `eng_intro` over every leading binder
-  (named after the binder, `hK` where it has none), `eng_close` (`rfl`;
-  `(reduce)` then `rfl`; `decide`; `eng_arith`: `(arith only FACT…)`
-  with the context's comparisons as the facts and the certificate
-  `ar_prove` found written — `ARes` carries the certificates now),
-  `eng_simp_close` (`(simp_only EQN… HYP… LEMMA…)` then `rfl` or
-  `arith`), `eng_induct` on the hinted local then on each local of an
-  inductive type the target mentions, the arms named after the
-  constructors' fields with `ih_FIELD` for a recursive one, each arm
-  by the ladder one level down (three levels). Two decisions beyond
-  the design, each from a case: *the induction is tried before the
-  introductions as well* — `len (rev_onto xs acc) = len xs + len acc`
-  quantifies the accumulator, and introducing it first left a
-  hypothesis too weak, so the binders are kept in the target and the
-  hypothesis quantifies them (Lean's `generalizing`); *the rule set
-  excludes an unfolding equation whose right side mentions the
-  function* — `show n = … show (n / 10) …`, every argument a variable,
-  matched its own result without end and calc_show's measurement did
-  not finish (an equation with a constructor pattern, `len (cons x r)
-  = 1 + len r`, stays: it stops at a variable). A quantified
-  hypothesis is a rule too. Every node is confirmed by `tac_step` as
-  it is chosen; `node_sx` renders the block.
-- **Rule 6.** `kernel/prove.shard`: the loader's mode (`Load.mode`:
-  `off`, `solve`, `measure`; `read_decl_autos` and the reader's proof
-  path take it). Under `solve` an `auto` without a valid entry is the
-  engine's and its block is replayed through `tac_prove` before the
-  theorem is accepted (`RDSolved` → the record `PROVED NAME fp=N (by
-  …)`); unsolved is `PENDING NAME auto_unsolved fp=N GOAL`. The
-  sidecars are rewritten whole (`write_sidecars`: the file's existing
-  entries not superseded, then the new ones in the file's order, under
-  a header with the engine's version), the exit code refused + errors
-  + unsolved. Under `measure` every hand-written proof is read as the
-  build reads it and the engine is also run on the statement (`ENGINE
-  NAME solved|unsolved`, `ENGINE: solved S of N`).
-- **The example.** `v3/examples/auto/auto.shard`: twelve theorems,
-  every proof `auto`, one with the hint `(induct xs)`; eleven closed
-  (`rfl`, `decide`, `arith only` with the certificate, three
-  inductions with `simp_only` over the equations and the hypothesis,
-  the generalized accumulator), `beyond` (`x ≤ x * x`) pending
-  `auto_missing` at build with the fingerprint an entry needs. The
-  sidecar `auto.auto.shard` is committed; `kernel/test/engine_test.sh`
-  replays it under `load.shard` (no `PROVED` record: the build does
-  not search), regenerates it into a scratch copy and requires the
-  blocks byte-identical (the fingerprints masked: a statement's
-  fingerprint carries its module's name, and the copy is another
-  module — found by the test).
-- **The count over calc** (the third ruling): the engine closes
-  **54 of calc's 100 claims** unaided (`engine_calc.txt` lists them;
-  `engine_test.sh` requires that exact set, so a change in the
-  engine's reach is a report, not a drift). What it does not close:
-  the lemmas over `show`'s well-founded recursion, the case analyses
-  that need an equation name, the chains of rewrites with lemmas the
-  statement does not mention, the descent obligations. The claim list
-  `calc_claims.txt` is shared with `tactic_test.sh`.
-- **Not built:** `(lemmas …)` beyond the facts and rules it adds
-  (no instantiation); a `cases` form in the ladder; an engine-written
-  `fulfills` in the example.
-
-**Slice 3.22 as built, landing 3** (2026-10-08):
-
-- **Rule 7, the store.** `kernel/store.shard` renders an admitted
-  constant of K's environment as the records K ingests — lean4export's
-  NDJSON, format 3.1.0, field for field what `k/import.shard` reads:
-  the name, level and expression tables the declaration cites,
-  numbered from 1 in first-use order (0 is `anonymous` and `zero`, as
-  the exporter's), then the declaration record. Table nodes are shared
-  by *strict* structural identity (binder names and infos compared,
-  which `expr_eq` ignores), so a record carries the term as elaborated
-  and two runs over one elaboration write one text. An inductive type
-  is written as its block — every type, constructor and recursor K
-  generated for it (`T.rec`, then `MAIN.rec_1…` for the nested
-  auxiliaries), with the fields the import validates against K's own
-  regeneration, T0's validation a second time. `load.shard --store
-  DIR`: after a clean load, each ACCEPT's constant and each PARAM K
-  holds (a view's parameter, the axiom K admitted for it) is written
-  in admission order — `DIR/ID.ndjson` per declaration, `DIR/order`
-  listing `ID NAME`. ID is the content fingerprint (`identity_hash`,
-  a report's fingerprint, never an authority), or `FP-K` for the
-  first free K when a file of that name holds another text; a file
-  already holding the text is shared and listed once; `order` is
-  appended, never rewritten, so several loads fill one store in
-  sequence and a shared module's declarations come from the first
-  load that admitted them. A failed load writes nothing; nothing in
-  the loader changed, the writer reads the records and the
-  environment after the load.
-- **Rule 7, `verify_release`.** `kernel/verify_release.shard [-v] DIR
-  CHUNK…` imports K, the host and the JSON reader and nothing else:
-  the Init chunks replay as one stream (the T0 machinery), then each
-  store file in `order`'s order as *its own stream over the
-  environment so far* — fresh tables, as the file was written, so a
-  record a file lacks is MALFORMED there and never read from an
-  earlier file's table (found by the test: with the tables persisting
-  across files a dropped expression record resolved to the previous
-  file's node). Each accepted declaration is held to its order line:
-  the name and the content fingerprint must be the line's, else
-  MISTIED — a dropped name record lands a theorem under a shorter
-  name, the import reading a missing table index as anonymous. The
-  gate's guarantee is K's acceptance; the tie says the bundle is the
-  build's. `RELEASE: declarations N  accepted A  rejected … malformed
-  X  mistied Y  missing Z`; the exit code is the declarations not
-  accepted + malformed + mistied + missing + the chunks' failures.
-- **The gate.** `kernel/test/store_test.sh` (the suite's 36th
-  entrypoint): the example's 23 declarations stored once, a second
-  load sharing all 23, K alone accepting them after the Init fixture;
-  a theorem whose value is replaced by its statement REJECTED, an
-  expression record removed MALFORMED, a file removed MISSING, a name
-  record removed MISTIED, each with a non-zero exit; then calc's five
-  leaves stored in sequence into `v3/release/calc` and replayed —
-  **376 declarations, every one accepted by K alone**, 3.5 MB. The
-  store is the v3 job's artifact (`.gitlab-ci.yml`), ignored by git,
-  never committed (the ruling's second lean).
-- **Found on the way:** three matchers of the example share a
-  fingerprint (`len.match_1`, `app.match_1`, `rev_onto.match_1` are
-  one term under three names — the hash covers the type and the value,
-  not the name), so the collision suffix is exercised on the first
-  store written.
-- **Not built:** the implementation forks of views (§6.6) are checked
-  and recorded under IMPL but not stored — their constants live in
-  the fork, not the load's environment, and a linear stream cannot
-  redeclare a parameter's name as its implementation; a store over
-  forks is a branch per view, open until a consumer needs it. The
-  store is per root; a release across roots is not a case yet.
-
-**Slice 3.23 — the Init cache: K's verdict on the pinned export,
-admitted under a receipt** (ruled 2026-10-08 on GPT-6's R75; §13 item
-57; records §4.11). The boundary after 3.22 held two items accepted
-from the trajectory review with their work deferred: the feedback
-cost (R75) and the connected path (R76). The user ruled the cache
-first, shallow — "something I expect us to iterate as we optimize and
-rework things" — and the path after it.
-
-*Retired at slice 3.26 landing 3 (2026-10-09, the user's ruling).* The
-cache answered the cost of streaming the export's prefix through K,
-which slice 3.26 removed: a load reads and checks the closure it
-cites, seconds. Measured there with a hand-written receipt over the
-export, admission saved a tenth to a fifth of a demanded load (calc 9 s
-against 10 s, `std/bytes` 20 s against 25 s): the walk and K's
-ingestion are the cost, and a receipt skips neither. Its only writer
-would have been the full replay, which nobody runs locally and which
-CI runs after the suite. Rejected because: a cache whose measured
-value is seconds a load for a developer holding a 41-minute replay,
-kept at the price of an admit-unchecked switch in K's run with no
-consumer. What stays of the slice: `admit_decl_pinning` and the run's
-admit mode, repurposed at 3.26 landing 2 for the loader's second
-admission of records it checked a moment ago (`od_admit`). The rules
-below are the slice as it was built.
-
-*What the cost is.* Every load streams the pinned export through K up
-to the deepest name its modules cite (§3.1), and K checks every
-declaration on the way. Measured on the development machine over the
-two fixture chunks (3,523 declarations, 14 MB):
-
-| step | wall |
-|---|---|
-| reading and JSON-parsing every record | 9.2 s |
-| and building the name, level and expression tables | 13.1 s |
-| and K's check of every declaration (the T0 driver) | 47.2 s |
-| the same with the typing judgments skipped (admit mode, below) | 17.2 s |
-
-The check is 72 percent of a load's Init cost; the parse and the
-tables are the rest, and any on-disk form must build the same tables.
-A serialized environment therefore had a ceiling of a few seconds per
-load against a second format behind K's seal; the lever taken skips
-the check and keeps the export as the only form.
-
-**The rules of slice 3.23:**
-
-1. **The receipt.** `t0.shard --receipt FILE`, after a run that
-   accepted every record of its chunks (nothing rejected, exhausted,
-   mismatched or unsupported), writes one line per chunk: `PATH
-   BYTES`. A run with anything not accepted writes nothing. A line
-   starting with `#` is the writer's and is not read by the loader.
-2. **Admission.** `k/add.shard`'s `admit_decl_pinning` is the
-   environment effect of `check_decl_pinning` with the typing
-   judgments of an axiom, definition, theorem or opaque skipped: the
-   constant is inserted as the declaration states it, the node
-   watermark and the accelerator pins exactly as on the checked path.
-   An inductive block and the quotient take the checked path. The
-   import's run state carries the mode (`run_admitting`); nothing else
-   in K changes, and `check` — the raw entry of §3.5 — is untouched.
-3. **The loader.** `load.shard --init-receipt FILE` (and
-   `prove.shard`'s, the loader pins test's) sets the receipt on the
-   load; a chunk listed with its byte count streams in admit mode, a
-   chunk not listed or listed with another byte count is refused
-   (`init_receipt_stale`) before any record of it is read. Without a
-   receipt every chunk is checked, as before. The records and the
-   counts print exactly as without the flag — the loader pins' 212
-   expected outputs are the equivalence gate.
-4. **Currency.** `kernel/test/init_receipt.sh` keeps
-   `v3/.cache/init.receipt` current and prints its path: K's identity
-   for the receipt is a hash of the sealed module's sources, the
-   kernel files it imports and the fixture, written as the receipt's
-   `# k=` header; a mismatch regenerates (one T0 run over the
-   fixture). `v3/test.sh` runs it once and exports `INIT_RECEIPT`;
-   the shell tests add `--init-receipt` when it is set. The cache
-   directory is ignored by git; the receipt is never committed and
-   never an artifact.
-5. **The gate is untouched.** `verify_release` takes no receipt: the
-   release bundle is replayed by K alone over the export, as rule 7 of
-   slice 3.22 states. The T0 full replay on CI checks the whole export
-   as before; the receipt is a cache of that verdict for the
-   development loop and the suite.
-
-**Slice 3.23 as built** (2026-10-08): as the rules. The auto example
-(`--root v3`, Init streamed 1,509 declarations into the second chunk)
-loads in 8.3 s under the receipt against 13.7 s without, the records
-byte-identical; a receipt with a wrong byte count refuses the load
-(`LOAD-ERROR … init_receipt_stale`, modules 0, exit 1); an unreadable
-receipt exits 2 before any load. The 221 loader pins pass byte-identical under the receipt in 809 s on the development machine (beside parity and the define test; 1,361 s without the receipt beside the full suite — the clean comparison is pipeline 553's against 552's 3,327 s on the runner); parity byte-identical over 30 closures and 130,445 declarations; route 1's native driver, rebuilt locally, ties the interpreter on the first chunk and writes the receipt; the full suite's 36 entrypoints 0 failed in 927 s, the pins entrypoint its wall clock still.
-
-**Slice 3.24 — the connected path: law §12.4's path assembled, the
-branch-local proof joint built, each joint broken** (ruled 2026-10-09 on
-GPT-6's R76; §13 item 58; law §12.4, §12.5 T1, T5). The second boundary
-item after 3.22. Law §12.4 names the first connected path — *one
-imported logical declaration → one checked E realization → one caller
-using a branch-local proof → a claim constructed through I → its
-retained P verified without the elaborator → repeated execution through
-a prepared handle* — assembled incrementally as each capability lands,
-then broken deliberately at each joint, "to learn whether the
-interfaces compose at tolerable cost before a large library, the full
-engine or a certified host exists". Where the joints stand: an
-imported declaration enters by citation and a `(realize NAME (view))`
-attaches Init's own body (slices 5b, 3.18); a claim through I is
-slices 3.20–3.21; retained P verified by K alone is slice 3.22's rule
-7 with its tamper cases; the prepared handle is phase 4's (T6). The
-one phase-3 joint still missing is the **caller with a branch-local
-proof** — T1's "a `dite` whose `h` is used only in a `Fin.mk` field",
-carried since slice 7 because `Fin n` needed a value parameter at E.
-Slice 3.18 removed that obstacle (`Fin n` is `Fin`, `Fin.mk i h` erases
-to `i`); what is still missing is the source form — an `if` elaborates
-to `ite`, so its branches have no hypothesis a program can cite, and
-the dependent form is elaborated only inside a recursive function for
-the descent obligations (slice 3.13 rule 2), its hypothesis never
-named in source. The erasure already reads `dite` back as an `if`
-with the branches applied to their erased proof.
-
-**The rules of slice 3.24:**
+*Slice 3.24 (ruled 2026-10-09 on R76, item 58; built 2026-10-09):*
+law §12.4's first connected path assembled and broken at each joint.
 
 1. **`(dif h C T F)` — the dependent if, its hypothesis named.** `C`
-   is elaborated as an `if`'s condition is (a proposition with a
-   decision the elaborator knows, or a `Bool` as `C = true` with
-   `Bool`'s decidable equality); `T` is elaborated under a local
-   `h : C` and `F` under `h : ¬C`, each at the form's expected type
-   (the then-branch's own type when the position leaves it open, as
-   an `if`'s); the term is `dite C dec (λ h. T) (λ h. F)`, Lean's
-   elaboration of `if h : c then t else e`. The name comes first, as
-   `fn` and `let` put a binder's name first; `if` is not overloaded
-   with a fourth argument, which a reader would have to count. A
-   value of a two-constructor inductive is not a condition here
-   (`dif_type`): there is no proposition to name. On the E-first
-   route (a file without Init) the form is refused by name
-   (`dif_needs_init`): `Decidable` and `dite` are Init's. The
-   erasure is the existing one; the equations of a measured
-   function see the branch as they see an `if`'s.
-2. **The example, `v3/examples/path/`.** The path on one program: an
-   imported Init function with its realization attached; a
-   bounds-checked access `at xs i` that returns the element under
-   `(dif h (< i (List.length xs)) …)` through `Fin.mk i h` and
-   `none` otherwise; a theorem about it constructed through I; an
-   entry that runs it on raw arguments; the store written from the
-   load and replayed by K alone.
-3. **The test, `kernel/test/path_test.sh`, one entrypoint.** The path
-   in order — load, run on a valid argument, store, verify by K alone
-   — then the law's five breaks, each required to fail by name: a
-   wrong executable body in a `realize` (refused at the equation
-   check), missing bound evidence (the `Fin.mk` outside its branch,
-   or with the hypothesis dropped, refused by the elaborator), a
-   mismatched revision (the sidecar's entry stale, the store's order
-   line mistied), a tampered result (a stored proof replaced, rejected
-   by K), an invalid raw argument (refused at the entry, exit 6). The
-   breaks slice 3.22 already tests are re-exercised on this example,
-   not re-implemented.
-4. **The measurement.** The cost of the whole path on the example,
-   load through verify, is R76's number; the as-built reports it.
+   elaborated as an `if`'s condition; `T` under `h : C`, `F` under
+   `h : ¬C`, each at the form's expected type; the term `dite C dec
+   (λ h. T) (λ h. F)`; a two-constructor value is no condition
+   (`dif_type`); on the E-first route `dif_needs_init`
+   (`elab_dif`; pins `dif_ok`, `dif_type`, `dif_needs_init`,
+   `dif_scope`).
+2. **The example, `v3/examples/path/`**: an imported Init function
+   with its realization attached (`List.length`, `List.get?Internal`
+   by supplied bodies with their equations proved), a bounds-checked
+   access `at xs i` under `(dif h (< i (List.length xs)) …)` through
+   `Fin.mk i h`, the claims `at_some`/`at_none` by `(unfold at) (rw
+   (dif_pos h)) rfl`, an entry on raw arguments, the store written and
+   replayed by K alone.
+3. **The test, `kernel/test/path_test.sh`** (the 37th entrypoint): the
+   path in order, then the law's five breaks each failing by name — a
+   wrong realized body (`conversion` at the equation), the hypothesis
+   outside its branch (`unknown_constant: h`), the `Fin.mk` without
+   its proof (`type_mismatch`), a mistied order line (MISTIED), a
+   tampered stored proof (REJECT), an invalid raw argument (exit 6).
+4. **The measurement**: the path composes; its cost was the Init
+   stream four times over (3.25 and 3.26 removed it). Found, open at
+   the slice and built at 3.27 landing 3: the dependent match
+   (`List.get`'s realization) and the matcher of an Init definition
+   realized through its view (`Option.getD`).
 
-*Not in this slice, stated:* the prepared handle (T6) and the
-World-alias fixture are phase 4's; the example stays pure.
+*Slice 3.25 (ruled 2026-10-09, item 59; built 2026-10-09):*
 
-**Slice 3.24 as built** (2026-10-09): as the rules, with what the
-path found.
+1. **The Init stream is a prefix of a load and replayable**: `init_all`
+   streams to the end (`INIT (all): N declarations admitted`),
+   `ld_reroot` starts a fresh root load from a load's Init state (the
+   environment, the stream's state, the ordinals carried; everything
+   of the old root reset). Under 3.26 the "stream" is the on-demand
+   walk and `ld_reroot` carries K's run of Init alone.
+2. **The horizon is the module's, never the stream's**: `(import Init
+   NAME)` answered from the ordinal table; every gate that asks
+   whether an Init constant is available asks the scope — `el_sees`
+   (in the environment and `visible` below the module's horizon) is
+   the one availability test, through `first_missing`,
+   `int_of_nat_visible`, `arith`'s kit, the measure's kit, a literal's
+   `String`, `derive`'s `dv_has`. **Init's names are Init's**: a
+   declaration bearing an Init constant's name is `name_taken`
+   wherever the environment holds it (from the name index since 3.26
+   rule 5). The claim that `std/list`'s `List.sum` collided was wrong
+   (declared names carry the module path).
+3. **The loader pins' entrypoint streams once**: one load, each case
+   on `ld_reroot` of it; 225 cases in 33 s against 783 s at the slice.
 
-- **Rule 1.** `elab_dif` in `kernel/elab.shard`: the condition as
-  `elab_if` reads it; each branch elaborated under its hypothesis as
-  an `el_local`, closed by `el_lams`, the result type held to be free
-  of the hypothesis (`dif_type` otherwise); `dite` applied by
-  `op_apply_explicit` at the expected type. The classifier refuses
-  the form by name on the E-first route (`dif_needs_init`). Pins:
-  `dif_ok` (a `Fin.mk` field, a `Bool` condition, both branches'
-  hypotheses in theorems by `dif_pos`/`dif_neg`), `dif_type`,
-  `dif_needs_init`, `dif_scope` (the hypothesis outside its branch:
-  the typed route's `unknown_constant: h`, carried by the E-first
-  refusal that follows).
-- **Rule 2, the example.** `at` returns `Option (Fin (List.length
-  xs))`; `pick` takes the index, its parameter type dependent, and
-  reads through `List.get?Internal`; `read` composes them; the entry
-  prints the digit at a raw index of a fixed list. `List.length` and
-  `List.get?Internal` are realized by supplied bodies with their
-  equations proved: `get?Internal`'s structural recursion on the
-  index is an `if` (`Nat`'s constructors are not E patterns), its
-  second equation by cases on the index, named in the `equations`
-  clause. The claims `at_some`, `at_none` are `(by (unfold at) (rw
-  (dif_pos h)) rfl)` and its `dif_neg` twin. Fifty-six declarations
-  stored, every one accepted by K alone.
-- **Rule 3, the test.** `kernel/test/path_test.sh`, the suite's 37th
-  entrypoint, 18 checks: the path in order, then the five breaks — a
-  wrong body refused at `List.length.realize_2` (`conversion`), the
-  hypothesis cited outside its branch (`unknown_constant: h`), the
-  `Fin.mk` without its proof (a `type_mismatch`: a function of the
-  bound where a `Fin` is expected), the order line naming another
-  declaration (MISTIED), the stored proof replaced by its statement
-  (REJECT), a non-number at the entry (exit 6).
-- **Rule 4, the cost.** On the development machine under the Init
-  receipt: load 18 s, load and run 23 s, load and store 18 s, verify
-  by K alone 47 s (45 s of it the Init fixture's replay, the 56
-  declarations the rest); the test 279 s. The path composes; its cost
-  is the Init stream four times over, which slice 3.23 halved and a
-  load shared across a process's roots (slice 3.25) removes for the
-  pins; a driver pays it once per load.
-- **Found on the way, open:** `List.get`'s own realization — the
-  access with the `Fin` as its argument — needs a match that
-  generalizes a local whose type mentions the scrutinee (`i : Fin
-  (List.length xs)` under `match xs`), so that the nil row can refute
-  its bound; today only the expected type is generalized (slice 3.19
-  rule 9), and slice 3.13 rule 2's narrower guarantee states the
-  gap. The path reads through `List.get?Internal` on the index's
-  value instead, the proof carried by the type. The dependent match
-  has its consumer now; it is not built here. Also: a `(realize NAME
-  (view))` of an Init definition whose body is a matcher
-  (`Option.getD`) is refused for want of the matcher's realization —
-  Lean's `Option.getD.match_1` is not what K regenerates from its
-  type — so the example writes its own `or_zero`.
+*Slice 3.26 (ruled 2026-10-09, item 60; three landings 2026-10-09):*
+the unit of an Init load is the line — a demanded declaration's
+closure under one percent of the export — so a load reads what it
+cites; no fixture, no receipt.
 
-**Slice 3.25 — the shared Init load: the stream replayable, the
-horizon the module's, Init's names Init's** (ruled 2026-10-09 at the
-boundary after R75 and R76, the lever item 57 stated; §13 item 59). The
-loader pins' entrypoint re-streamed Init once per case in one process:
-2,227 s of the v3 job's 5,501 s on the runner, 783 s locally, the
-suite's wall clock since slice 3.20 and the first cost the library arc
-would multiply. The export is one fixed library; a process that loads
-many roots has no reason to read it more than once. Three rules:
+1. **The index** (`kernel/index.shard`; `initindex.shard EXPORT
+   INDEX`): one pass over the export writes the record table (one
+   fixed-width row per record in export order: kind, byte offset and
+   length of its block, the first name, level and expression id it
+   holds), the name table (one row per declaration name as
+   `show_name` renders it, sorted bytewise with its ordinal) and the
+   declaration table (name id → ordinal); the header carries the
+   export's byte count, an index over another export refused;
+   `ix_verify` reads every record and name back; `init_index.sh`
+   keeps `v3/.cache/init.index` current, preferring the route-1
+   binary (`v3/bin/initindex`; the export indexed in 36 s, verified
+   in 36 s); `index_test.sh` the 38th entrypoint.
+2. **The range read**: `host.shard`'s `read_range path off n`, in the
+   bootstrap's handler and the chain's runtime; the loader reads the
+   export itself.
+3. **The load** (`kernel/initload.shard`): `(import Init NAME)` takes
+   NAME's ordinal from the name table as the horizon (`init_through`;
+   `init_name_not_found`); a module's demand is every token of its
+   forms under resolution's candidates plus the gates' kits (`k_kit`,
+   `el_kit`, `tc_kit`, `ar_all_kit`, `dv_kit`, `df_kit`) filtered
+   below the horizon (`init_prepare`); the walk (`od_open`,
+   `od_lookup`, `od_load`) reads each demanded closure by range —
+   blocks scheduled highest first, a constant resolved by its name id
+   through the declaration table — and feeds K's run of Init alone
+   the lines ascending through `process_record`, checked; then
+   `od_admit` admits them into the loader's environment without the
+   typing judgments (K's admit mode); what K has been fed persists in
+   the process (`OdDone`); `ld_reroot` starts a root on that run.
+   `INIT NAME: horizon H, N declarations admitted`.
+4. **The law unchanged**: visibility is the ordinal below the horizon
+   (`init_within` on the true ordinals; `ACCEPT … init=H`); a name no
+   kit lists is `unknown_constant` and a defect of the list, found by
+   parity; no materialize-and-retry.
+5. **Init's names are Init's, from the index**: a file's `Fx.taken` is
+   every name the export declares under the file's identity
+   (`od_names_under`); a declaration bearing one is `name_taken`; the
+   release gate refuses a stored one as `TAKEN`.
+6. **No fixture, no receipt**: the prefix fixtures and
+   `init_receipt.sh` deleted; every consumer reads the export and its
+   index (`--init EXPORT --init-index INDEX`; `verify_release.shard DIR
+   EXPORT INDEX` demands every constant the store cites, checked,
+   never admitted); the receipt dropped at landing 3 on the
+   measurement (a tenth to a fifth of a demanded load; the walk and
+   K's ingestion are the cost); the lever that remains is the loader
+   native; CI's order export → index driver → index → suite → build →
+   replay.
 
-1. **The Init stream is a prefix of a load and replayable.** `init_all`
-   streams every chunk to its end (the record `INIT (all): N
-   declarations admitted`); `ld_reroot` starts a fresh root load from a
-   load's Init state — the checked environment, the stream's state, the
-   ordinal table, the chunks and the receipt carried, everything of the
-   old root reset to `load0`'s. A driver's lazy stream is unchanged: a
-   program pays the prefix its imports reach, once.
-2. **The horizon is the module's, never the stream's.** `(import Init
-   NAME)` is answered from the ordinal table — NAME admitted = NAME in
-   the table — and a module's horizon is its imports' ordinals and its
-   imported modules' horizons (slice 3.21b rule 2), with no fall-back
-   to how far the process happened to stream. Every gate that asks
-   whether an Init constant is available to a module asks the scope
-   (`visible`: below the module's horizon), not the environment: the
-   elaborator's `first_missing` (an `if`'s `Decidable`, `dite`, `Not`,
-   `Int.ofNat`), `arith`'s kit, the measure's `WellFounded` kit, a
-   `"…"` literal's `String`. **Init's names are Init's:** a declaration
-   bearing the name of an Init constant is refused (`name_taken`)
-   wherever the environment holds that constant, as K admits no second
-   constant under a name (`already_declared`) and the release gate
-   holds the whole export; a driver whose lazy stream stopped short
-   accepts what the gate refuses — the one place the lazy stream and the
-   gate disagree, stated, closed at the gate. (The claim made the same
-   day that `v3/std/list.shard`'s `List.sum` was such a case was wrong:
-   that file declares `std.list.List.sum`, as §3.1 says every declared
-   name carries the module path, and K holds it beside Init's
-   `List.sum`; the live shape is a module named as an Init namespace —
-   the pin `registry_native`'s `Bool` — which slice 3.26 rule 5 refuses
-   from the name table wherever it loads.)
-3. **The loader pins' entrypoint streams once.** The two fixtures are
-   streamed to their end under the receipt, each case loaded fresh on
-   that state by `ld_reroot`; a case's records are its own module's,
-   by rule 2. The three cases that leaned on the stream stopping short
-   are restated: `str_no_string` and `arith_unreached` hold by the
-   horizon, `registry_native` is the refusal of rule 2 (the finding it
-   pinned stands for a lazy driver, `define_test.sh` reads that dump).
+As built, found: K's `unknown_constant` names the declaration, not
+the constant it lacks (deferred); the multi-load entrypoints rose on
+the runner since each process checks its demand (`wire_test` 155 s →
+436 s), the price of no receipt, stated.
 
-**Slice 3.25 as built** (2026-10-09): as the rules.
-
-- **Rule 1.** `kernel/loader.shard`: `init_all` is `init_through` with
-  the target `Anon`, which the stream's end answers; `ld_reroot l root`
-  is `load0` with the environment, the Init state, the ordinals and the
-  receipt of `l`. Nothing of a driver changed (`load.shard`,
-  `prove.shard` stream lazily as before).
-- **Rule 2.** `init_through` consults `ords_find` on the ordinal table,
-  not `env_find`; `init_horizon` has no fall-back (a name not in the
-  table leaves the module's horizon). `elab.shard` `el_sees` (in the
-  environment and `visible` from the module's scope) is the one
-  availability test: `first_missing` and `int_of_nat_visible` through
-  it, `tactic.shard`'s `has_env_const` replaced by it, `arith.shard`'s
-  `ar_has` and the linearization's environment parameter replaced by
-  the elaborator state, `classify.shard`'s `read_estr` asking
-  `visible` before the environment. `derive.shard`'s `dv_has` already
-  asked both. The loader's `name_taken` stays the environment's: K's
-  rule.
-- **Rule 3.** `kernel/test/loader_pins_test.shard` builds one load of
-  the two fixtures under the receipt, streams it by `init_all` (its
-  records printed first, `INIT (all): 3523 declarations admitted`),
-  and runs each case on `ld_reroot` of it through the kit's
-  `load_all`; the three pins restated as rule 3 says. The entrypoint:
-  225 cases in 33 s under the receipt against 783 s (the Init stream
-  18 s of it; the cases 15 s), and 57 s without a receipt, the
-  checked stream once.
-- **Not changed, stated:** the shell tests are one load each and stay
-  lazy; `path_test`'s four loads of the Init stream (slice 3.24 rule
-  4) are four processes, which a shared load in one process does not
-  reach — the persistent session of law §9.3's prepared handle is
-  phase 4's.
-
-**Slice 3.26 — Init on demand: the export indexed, a module's closure
-read by range, no fixture** (ruled 2026-10-09 at the boundary after
-slice 3.25, on the library arc's first question; §13 item 60). The
-library arc cites Init wherever Init has the statement, and an import
-costs its position in the export (slice 3.17's measurement above): a
-far lemma such as `Int.ediv_emod_unique` at line 3,409,839 would admit
-half the export. The loader parses the export in shard under the
-bootstrap at 0.8 MB/s (the two fixtures, 14.3 MB, in 18 s under the
-receipt); the export is 333 MB; the whole of it checked under the
-interpreter is 76 minutes and 8 GB resident; and the receipt caches
-K's verdict, not the environment. Measured on the export: the closure
-of `Int.ediv_emod_unique` — every line its type and value reach,
-through the hash-consed nodes — is 690 records and 35,076 lines, under
-one percent of the export; `Nat.and_comm` 746 and 42,468; `List.sum`
-25 and 686. A closure cut at the granularity of a record's block (the
-lines a record emits before its own) is 15,482 blocks and 2,240,409
-lines for the same lemma, a third of the export: a shared node lives in
-whichever block first needed it. So the unit is the line, and a load
-reads what it cites. Six rules:
-
-1. **The index.** One pass over the export (`kernel/index.shard`;
-   `initindex.shard EXPORT INDEX NAMES`) writes two tables beside the
-   receipt, never loaded whole: the record table — one fixed-width row
-   per record in export order: its kind, the byte offset and length of
-   its block, and the first name, level and expression id the block
-   holds (or, holding none, the next id the export assigns), so the
-   block holding an id is the last row whose first id is at most it —
-   and the name table, one fixed-width row per declaration name as
-   `show_name` renders it, sorted bytewise with its ordinal, so a name
-   is a binary search of range reads. Node ids are the export's,
-   assigned in emission order (checked over the export), which is what
-   makes a row per record enough. The header rows carry the export's
-   byte count; an index over another export is refused. The pass
-   refuses an ambiguous rendering (two names rendering alike) and a
-   name past the row's width.
-2. **The range read.** `host.shard` gains `read_range path off n`: at
-   most n bytes from off, fewer at the file's end, `None` where the
-   file cannot be read — beside `read_file`, in the bootstrap's handler
-   and the chain's runtime. The loader reads the export itself
-   (`init.ndjson`); the 20,000-line chunks stay the replay's.
-3. **The load.** `(import Init NAME)` takes NAME's ordinal from the
-   name table as the module's horizon (slice 3.21b rule 2 unchanged).
-   A module's demand is every identifier of its forms under the
-   candidates resolution tries (`scope_candidates`: the module's
-   prefix, the opened prefixes, `Init.NAME`, the bare name) and the kit
-   lists the gates hold (the elaborator's `first_missing` lists, the
-   `WellFounded` kit, `arith`'s kit, the derivations', `String`),
-   filtered to the names the table places below the horizon. The
-   loader walks each demanded declaration's closure by range reads —
-   its record line, the nodes its type and value reach, their names
-   and levels, the records of the constants they name — sorts the
-   lines into export order and feeds K that sub-stream through the
-   path the prefix stream took (`process_record`), checked (admitted
-   under a receipt, as ruled; the receipt was dropped at landing 3).
-   Node ids stay the export's; K's tables are sparse; the records are
-   byte-identical to the stream's.
-4. **The law unchanged.** Visibility is the ordinal below the horizon
-   (`init_within`); a materialized record carries its true ordinal, so
-   a far name one module pulled in stays invisible to a module with a
-   nearer horizon. Resolution asks the environment first
-   (`const_arity`), so a name not materialized is simply absent; a
-   name the elaborator constructs that no kit list names is a refusal
-   by that name (`unknown_constant`) and a defect of the list, which
-   frontend parity finds. No materialize-and-retry: one mechanism.
-5. **Init's names are Init's, from the index.** A native declaration
-   bearing a name the name table holds is refused (`name_taken`)
-   wherever it loads — the driver and the release gate agree; §13 item
-   59(c)'s index, as reopened on `List.sum`.
-6. **No fixture.** The prefix fixtures (`init_prefix_int.ndjson`,
-   `init_prefix_str_tail.ndjson`, `init_prefix_3000.ndjson`) and their
-   dependents go to the export, which `v3/export.sh` provides on every
-   machine; a closure checked costs seconds (K's check about 7 ms a
-   record: the fixture's 24 s over 3,523), so no test needs the
-   receipt (ruled a speed lever here; dropped at landing 3, measured at
-   a tenth to a fifth of a demanded load); `init_index.sh` keeps the
-   index current as `init_receipt.sh` kept the receipt.
-
-Three landings: (1) the index, the range read, a test that reads every
-record back by its offset and every name by its search; (2) the loader
-on demand — the prefix stream, the stream state and the chunk list
-deleted, the demand set, the walk and the sub-stream, `name_taken` from
-the table, the fixtures deleted — under the loader pins, parity and the
-suite; (3) the receipt over the export, CI in the order export, build,
-index, suite, replay. Weighed and deferred, each with the consumer that
-would reopen it: a theorem admitted by its statement alone (its closure
-five to ten times smaller — 143 records and 3,098 lines for
-`Int.ediv_emod_unique` — but a change to K's admit path, which builds
-the declaration from the node tables); the loader native (its files are
-not route 1's); a serialized environment (Lean's `.olean`), whose only
-consumer, the replay, checks. Rejected: a native parse primitive (a
-second JSON reader for a second per load), a materialize-and-retry loop
-(a second mechanism), the exporter emitting the index (upstream at a
-pinned commit; offsets are a property of the text held here).
-
-**Slice 3.26 as built, landing 1** (2026-10-09): the index and the
-range read, as rules 1 and 2.
-
-- **Rule 1.** `kernel/index.shard` is the library — the two formats,
-  the pass (`ix_build`: windows of the export by range, every line
-  placed, the name lines entered, the record rows rendered, the name
-  rows sorted), the readers the loader will use (`ix_read_header`,
-  `ix_read_row`, `ix_lookup`: the binary search of the name table;
-  `ix_block_of_id`: the last row whose first id is at most the id) and
-  the check (`ix_verify`: a second pass over the export comparing every
-  record's row and looking every name of it up, the export's byte count
-  against the header's, the name table's order). `kernel/initindex.shard`
-  is the driver, `test/init_index.sh` keeps `v3/.cache/init.index` and
-  `init.names` current over the export (stamped by the export's pin and
-  size and the index's sources: a kernel edit does not stale it).
-  Measured: the two fixtures (3,523 records, 3,985 names, 14.3 MB)
-  build in 46 s and verify in 63 s; the export (347,714,179 bytes, 57,977
-  records, 59,433 names) builds in 952 s and verifies in 866 s on the
-  bootstrap — once per environment. Compiled by route 1 (`v3/build.sh v3/kernel/initindex.shard
-  v3/bin/initindex`, 4 s with `bin/shard_eval` booting the chain; the
-  pass's state is a plain type with accessors, as K's `Run`, since the
-  chain compiles no record sugar) the driver indexes the export in 68 s
-  and verifies it in 71 s, the tables byte-identical to the bootstrap's;
-  `init_index.sh` prefers the binary when it is newer than the sources. The index is 62 bytes a record and
-  218 a name: 3.6 MB and 13 MB over the export.
-- **Rule 2.** `read_range` in `host.shard`, the bootstrap's handler
-  (`eval.rs`) and the chain's runtime (`tools/codegen/rt.h`,
-  `rt_read_range`); the export's single file is read, never a chunk.
-- **The test.** `test/index_test.sh` (the suite's 38th entrypoint) builds
-  the fixtures' index, verifies it, requires the record count K's stream
-  admits and the name rows of a definition, an inductive block's type
-  and its recursor, and refuses three tampered inputs by name: a name
-  row's ordinal changed, a record row's length changed, the export a
-  byte longer than the header says. The driver is in parity's closures.
-- **Found on the way:** export lines carry their keys in alphabetical
-  order, so an expression line reads `{"app":…,"ie":N}` and the id is
-  found by its key, not its position; the fixtures' records are 3,523
-  as K counts them, and the quotient's four records each name their own
-  constant.
-
-**Slice 3.26 as built, landing 2** (2026-10-09): the loader on demand,
-as rules 3–6; the fixtures deleted.
-
-- **Rule 3, the walk** (`kernel/initload.shard`): the export and its
-  index opened at a process's first need (`od_open`: the meta line
-  against the pin, the index's header, the export's size the header's);
-  a name's ordinal by binary search, memoized, the search's top ten
-  levels of rows cached (`od_lookup`); the closure of a set of
-  demanded records walked by range reads (`od_load`): the blocks
-  scheduled highest first, a block read once and scanned from its
-  record line backwards, every pending line parsed and its name, level
-  and expression ids pushed — a child precedes its parent, so in the
-  same block it comes later in the scan and in an earlier block it
-  schedules that block — and a constant an expression cites resolved by
-  its name id through the **declaration table** (the third table, 9
-  bytes a name id, added here: without it a constant's record is found
-  only by rendering its name, which needs the name's ancestors, which
-  come later in the walk) to the record declaring it, which is pushed.
-  The lines come out ascending (sorted only when a push went upward)
-  and go through K's `process_record`: node lines into K's tables,
-  sparse, the ids the export's; records checked, or admitted under a
-  receipt. What K has been fed persists (`OdDone`), so a line is fed
-  once in a process. **The demand** (`loader.shard` `init_prepare`,
-  after a file's directives): every token of its forms under
-  resolution's candidates (`scope_candidates`, the token's `@` sigil
-  dropped, the candidates under a prefix the export declares nothing
-  under skipped — the file's own identity, an opened native module),
-  the gates' kits — K's and the pins' (`k_kit`), the elaborator's
-  (`el_kit`), the tactics' (`tc_kit`), arith's (`ar_all_kit`), the
-  derivations' (`dv_kit`), the definer's (`df_kit`) — and, for an
-  inductive block's names among them, their satellites; the names the
-  table places below the horizon, their closure through K. `(import
-  Init NAME)` takes NAME's ordinal from the name table (`init_through`;
-  a name the export does not declare is `init_name_not_found`) and the
-  record reads `INIT NAME: horizon H, N declarations admitted`.
-- **K's run of Init alone.** The loader's Init state holds K's run fed
-  Init's records and nothing else; each demand is checked into it
-  (`od_load`) and then admitted into the loader's own environment,
-  which holds the natives beside Init (`od_admit`: the same lines over
-  the run's tables, without the typing judgments, as under a receipt).
-  `ld_reroot` starts a fresh root on that run's environment, so a
-  process loading many roots loads each record once: the loader pins'
-  entrypoint runs its 225 cases in 42 s, every record checked, against
-  33 s admitted under the receipt and 57 s checked at slice 3.25; the
-  first form of this landing, re-rooting from the state before any
-  demand, took 1,761 s.
-- **Rule 4.** Unchanged in code: `init_within` on the true ordinals
-  (`ld_add_inits` enters each admitted constant with its ordinal);
-  `ACCEPT … init=H` carries the module's horizon. Three constructed
-  names the kits lacked were found as the law says, by a refusal:
-  `Lean.Omega.Int.mul_congr` (arith composes it from the operator;
-  `calc_app`'s descent proof and the `arith_div` pin), the `@` sigil
-  on a token (`std/derive.shard`'s `@String.toByteArray_inj`), and the
-  `init_not_found` pin, which asked for `Int.tdiv` past the fixture's
-  end and now asks for a name the export lacks.
-- **Rule 5** (`name_taken`): a file's `Fx.taken` is every name the
-  export declares under the file's identity (`od_names_under`, one
-  search and a forward read), and a declaration — the file's own, a
-  derivation's — bearing one is refused `name_taken`; the release gate
-  looks each stored name up in the table and refuses it as `TAKEN`.
-  Found running it: the `List.sum` case item 59(c) was reopened on is
-  no case — `v3/std/list.shard` declares `std.list.List.sum` (§3.1), K
-  holds both — and the live shape is `registry_native`'s module `Bool`;
-  `define_test` now requires that refusal where it used to read the
-  lazy driver's acceptance.
-- **Rule 6.** The three prefix fixtures and `init_receipt.sh` are
-  deleted; every consumer reads the export and its index (`test/
-  init_index.sh` prints both paths; `v3/test.sh` keeps the index
-  current where it kept the receipt): the shell tests through
-  `--init EXPORT --init-index INDEX`, the loader kit's tests through
-  `kit_load0`, `calc_harness.shard EXPORT INDEX INPUTS`,
-  `verify_release.shard [-v] DIR EXPORT INDEX` (its demand: every
-  constant the store's records cite, resolved through the index and
-  checked, never admitted), `route2_test` and `t0_fixture_test` on the
-  export's first 3,000 lines against the full oracle, `index_test` on
-  its first 20,000 (519 records, 691 names, 3,153 name ids; 9 s
-  against 125 s). The receipt stays a flag (`--init-receipt`, the
-  export listed at its byte count), with no writer until landing 3.
-- **Measured** (bootstrap, checked, no receipt; the loads in parallel):
-  `examples/calc/calc.shard` 12 s (its demand through `Int.decEq`: 667
-  records), `calc_spec` 29 s, `calc_app` 28 s, `natabs` 26 s,
-  `calc_proof` 34 s (through `Lean.Omega.Int.ofNat_lt_of_lt`: 1,274
-  records), `examples/auto` 24 s, `std/bytes` 24 s (through
-  `UInt8.toNat`: 1,305), `std/list` 10 s, `std/derive` 26 s,
-  `examples/path` 22 s (through `List.get?Internal`: 1,155); the
-  nested-import pin 1 s. The index is one file of 19,208,769 bytes,
-  built by the route-1 driver in 36 s and verified in 36 s (the two
-  tables of landing 1: 68 s and 71 s).
-- **Gates run:** the 225 loader pins 0 failed in 42 s, `loader_test`
-  0 failed, the full suite's 38 entrypoints with 0 failed in 455 s against 613 s at landing 1 (parity byte-identical over 31 closures and 133,465 declarations in 267 s; `store_test` 350 s, the suite's wall clock; `path_test` 228 s; `define_test` 230 s; `calc_test` 215 s; `k_clients_test` 69 s; the loader pins' entrypoint 42 s). None of the files route 1 compiles changed; the full replay and the corpus are CI's.
-- **Found on the way:** K's `unknown_constant` refusal names the
-  declaration, not the constant it lacks (a kit's defect was found by
-  instrumenting a scratch copy of K to carry the name) — a diagnostic
-  worth K's refusal carrying it, deferred; the block offset of landing
-  1's record table was the newline before a block's first line (one
-  byte early, the verify tolerating it), fixed with the format.
-
-**Slice 3.26 as built, landing 3** (2026-10-09): the receipt dropped,
-the slice closed. The landing as planned gave the receipt its writer
-over the export; pipeline 563 and a measurement retired it instead.
-
-- **The measurement.** With every load checking the closure it cites,
-  the entrypoints made of many short loads doubled on the runner at
-  landing 2 (`wire_test` 155 s to 436, `define_test` 337 to 657,
-  `engine_test` 267 to 392; `wire_test` 65 s to 150 locally), each
-  process checking its demand where the receipt had admitted the
-  fixture's prefix. A hand-written receipt over the export (`PATH
-  BYTES`) admitted a demand in nine tenths to four fifths of the
-  checked time: calc 9 s against 10 s, `std/bytes` 20 s against 25 s.
-  The walk on the bootstrap and K's ingestion are the cost; a receipt
-  skips neither. The user ruled the receipt dropped.
-- **Deleted.** `load.shard --init-receipt` and `prove.shard`'s, the
-  loader's receipt (`Load.receipt`, `receipt_mode`, `receipt_parse`,
-  `load_with_receipt`), `t0.shard --receipt` and its writer, the
-  loader pins test's flag, `v3/test.sh`'s `INIT_RECEIPT` and the
-  shell tests' pass-through. A driver starts from `ld_start` (the
-  export and its index named, or no Init). `init_receipt_stale` is no
-  refusal. K's admit mode (`admit_decl_pinning`, `run_admitting`)
-  stays for the loader's second admission of records it checked into
-  K's run of Init a moment ago (`od_admit`), its comments saying so;
-  slice 3.23's text stands as history, marked retired, and §13 item
-  57 with it.
-- **The lever that remains** is item 60(f)'s loader native: the walk
-  is the cost of a demanded load, and its files are not route 1's.
-- **CI's order** stands as landing 2 forced it: export, the index
-  driver, the index, the suite, the kernel build, the replay.
-- **Gates run:** the 225 loader pins 0 failed in 46 s (43 s inside the suite), `loader_test` 0 failed in 8 s, `t0_fixture_test` and `route2_test` byte-identical (route 2 in 26 s), the full suite's 38 entrypoints with 0 failed in 620 s against 455 s at landing 2 — every entrypoint about a third slower while the pins' entrypoint held at 43 s against 42 s, so contention on the machine, the per-load cost unchanged (parity byte-identical over 31 closures and 133,392 declarations in 354 s; `store_test` 484 s, the suite's wall clock; `path_test` 314 s; `define_test` 303 s). `t0.shard` is route 1's: the kernel build, the full replay and the corpus are CI's.
-
-**Slice 3.27 — the library arc: Init is the library, the old modules
-become records, the seams the probes found are closed** (designed
-2026-10-09 at the boundary after slice 3.26, on the user's "continue
-with the next arc"; §13 item 61 — **ratified 2026-10-10 as designed,
-both leans taken: calc's `list.shard` retires onto `std/list` at
-landing 3; the migration tool's tier 0 is phase 5's opener**). What law §12.4's phase 3 still owes after slices 3.9–3.26:
-`std/list`, `order`, `nat`, `div`, `bits`, `arith` under the naming
-law; the fifteen former axioms of `kernel/facts.shard` as theorems; the
-migration table validated; one arbitrary-`Prop` ghost refinement; one
-static law-bearing package; `docs/LEAN.md`; the gates T2, T3, T9
-(small) and T10. The user's hesitation at the 3.25 boundary stands as
-the arc's principle: the library must not duplicate work already in
-Lean's `Init`. Measured by probes before this design (three scratch
-files under the on-demand loader, the bootstrap, 2026-10-09): twelve of
-the fifteen former axioms are theorems by Init's names in one file of
-twelve lines (47 s; 1,395 declarations admitted through the horizon
-`Nat.shiftRight_zero`, ordinal 55,829); six of Init's list functions
-realized by supplied bodies and seven of its list theorems cited (29 s;
-1,385 declarations); five of `std/bits`' statements by Init's names
-(54 s; 1,887 declarations). Three seams found on the way, each a defect
-or a gap of the elaborator, not of the law: `/` at `Int` elaborates to
-`Int.div`, which this pin does not hold (`Int.ediv` is Euclidean
-division; `%` already goes to `Int.emod`); a lemma Init states through
-an instance (`0 &&& x = 0` is `HAnd.hAnd Nat Nat Nat _ 0 x = 0`) cannot
-be `apply`d to a goal in V3's spelling (`Nat.land 0 b = 0`) — the
-argument under the instance application is "not determined by the
-goal" (`witness_open`), while `(exact (Nat.zero_and b))` goes through
-K's conversion, which unfolds the instance; and a cited name above the
-module's horizon is `unknown_constant`, so the author must know the
-export's ordinals to write the import (`Nat.zero_and` is 23,368,
-`List.take_cons` 54,202, `Nat.min` 10,228). Found beside them: Init's
-instance-polymorphic functions (`List.sum` under `[Add α] [Zero α]`)
-are refused `instance_needed` at a concrete type, and `List.length_take`
-states `min`, for which V3 has no operator. Eleven rules:
+**The library — slice 3.27** (records §9.1 "Slice 3.27"; §13 item 61,
+ratified 2026-10-10 as designed and as built; four landings
+2026-10-10). The arc's principle: the library must not duplicate work
+already in Lean's `Init`.
 
 1. **Init is the library.** A statement Init has is cited by Init's
    name; `v3/std` declares only what Init lacks, in Init's namespaces
-   under the naming law (law §5.3); an old module every declaration of
-   which is Init's or `arith`'s becomes a migration record and no file.
-   V3's own `List.sum` (slice 3.13's first library file) goes: it is
-   Init's `List.sum` under rule 3.
-2. **One spelling, everywhere.** Slice 3.21 rule 3 made `arith` read a
-   class method at `Int` or `Nat` under Init's instance as its
-   function; the elaborator's unifier and the rewriter's matcher
-   (`apply`, `rw`, `simp_only`, the engine's ladder) do the same: an
-   instance constant and a class projection applied to it unfold during
-   unification and matching, as Lean's `instances` transparency does,
-   so `HAdd.hAdd Nat Nat Nat (instHAdd Nat instAddNat) a b` meets
-   `Nat.add a b`, `HAnd.hAnd … Nat.instAndOp` meets `Nat.land`,
-   `HAppend.hAppend … List.instAppend` meets `List.append`, and a lemma
-   in either spelling applies to a term in the other. V3's operator rows
-   keep their function spellings (slice 3.13 rule 3); the probe's
-   `witness_open` is this rule's regression.
-3. **Instances by table, not search** (Stage 3's first step, law §5.1).
-   An instance-implicit binder `[C α]` at a concrete `α` of the
-   library's types (`Nat`, `Int`, `Bool`, `List`, `Option`, `Prod`,
-   `String`, `Char`, `Fin`, `UInt8`, `ByteArray`) resolves from a fixed
-   table keyed by class and type to the pin's instance constant
-   (`instAddNat`, `Int.instAdd`, `instMinNat`, `List.instAppend`,
-   `instDecidableEqNat`, `Int.instDecidableEq`, `instBEqOfDecidableEq`
-   over a decidable equality) or to a composed term the table spells
-   (`Zero Int` is `Zero.ofOfNat0` over `instOfNat`); `(min a b)` and
-   `(max a b)` at `Nat` and `Int` are `Min.min`/`Max.max` under the
-   table's instance — Init's one spelling, an atom to `arith` as slice
-   3.21 rule 4 has it. A class or type the table lacks is
-   `instance_needed` with today's pointer (write `@` and the instance).
-   General instance search stays Stage 3's door, wake condition = a
-   class the table cannot hold.
-4. **`/` at `Int` is `Int.ediv`.** The operator row (`op_at`) says
-   `Int.div`; the pin has no such constant and law §10.3's row says
-   Euclidean. Fixed with a pin; the row validated by `std/migration.shard`.
-5. **The horizon refusal points.** A cited name the name table holds
-   above the module's horizon is refused `above_horizon NAME: ordinal
-   N, the horizon H — (import Init NAME)`, the import to write, where
-   today it is `unknown_constant`. The horizon law (slice 3.21b rule 2,
-   3.26 rule 4) is unchanged: the author chooses the import; the
-   loader, which has the table, says which.
-6. **Init's functions realized by supplied bodies**, slice 3.24's
-   precedent, with their equations theorems K proves: by `rfl` where
-   the body follows Init's recursion (`List.length`, `List.append`,
-   `List.reverseAux`, `List.reverse`), by `cases` on the argument Init
-   recurses on first where the body recurses on another (`List.take`
-   and `List.drop` recurse on the count first: `take n [] = []` is by
-   cases on `n`) — until the derived view reads Lean's compiled
-   recursion (deferred below). The matcher of an Init definition
-   (`Option.getD.match_1`, slice 3.24's open item) is realized through
-   the matcher's own definition — a definition over `casesOn`, a view
-   of it derived as any definition's — measured at landing 3; the
-   fallback is a supplied body as today.
-7. **The dependent match**, slice 3.24's other open item, lands at
-   `List.get`: a `match` generalizes the locals whose types mention the
-   scrutinee (slice 3.19 rule 9 generalizes the expected type only), so
-   that under `match xs` with `i : Fin (List.length xs)` the nil row
-   refutes `i`'s bound; slice 3.13 rule 2's narrower guarantee gets its
-   consumer. `List.get`, `List.getD`, `List.get?Internal` and
-   `List.getElem?` are then realized as rule 6 has them.
-8. **The modules as records.** For each of the six, a per-interface
-   migration record (law §10.1's "per-interface record") in
-   `v3/std/README.md`: every old declaration, its V3 spelling or Init's
-   name, the connecting evidence (a theorem of `std/facts.shard` or
-   `std/migration.shard`, or "cited by name"), the class of law §10.2.
-   `std/order` (22 claims about `Int`'s order: `Int.le_refl`,
-   `Int.lt_irrefl`, `Int.le_trans`, …, the `succ`/`pred` shifts by
-   `arith`), `std/nat` (`add_nat`, `int_of_nat`, `half_nat` are
-   `Nat.add`, `Int.ofNat`, `Nat.div n 2`), `std/div` (seven
-   requirements over the literal divisor 10: `arith`'s quotient and
-   remainder rows, slice 3.21 rule 4; `div_nonneg` is
-   `Int.ediv_nonneg`) and `std/arith` (seven index identities: `arith`)
-   have no V3 file. `std/list.shard` holds the realizations of rules 6
-   and 7, `List.Pairwise`'s ghost refinement (the arbitrary-`Prop`
-   `Subtype` phase 3 owes: a sorted list as `Subtype (List.Pairwise
-   (· ≤ ·))` with an insertion keeping it) and what Init lacks;
-   `std/bits.shard` holds the three bitwise recurrences and the
-   width material Init lacks (`2^32`, `2^64` instances of
-   `Nat.or_lt_two_pow`, `Nat.xor_lt_two_pow`,
-   `Nat.and_two_pow_sub_one_eq_mod`), the old 2,135 lines gone: Init
-   has `Nat.zero_and`, `Nat.and_zero`, `Nat.zero_or`, `Nat.zero_xor`,
-   `Nat.xor_self`, `Nat.and_le_left`, `Nat.and_le_right`,
-   `Nat.shiftLeft_eq`, `Nat.shiftRight_eq_div_pow` and the masks.
-9. **The fifteen former axioms as theorems**, `v3/std/facts.shard`,
-   the successor of `kernel/facts.shard` and theorem-only — the old
-   statement on the new spelling, its proof the citation:
+   under the naming law; an old module every declaration of which is
+   Init's or `arith`'s is a migration record and no file (V3's own
+   `List.sum` deleted).
+2. **One spelling, everywhere — a table, not a transparency.**
+   `kernel/spelling.shard`'s `sp_canon` reads a class method at `Nat`,
+   `Int`, `Bool`, `List α` under Init's closed instance as its
+   function (`HAdd`…`HAppend`, the bitwise classes, `HPow`/`Pow` at
+   `Nat` to `Nat.pow` since landing 3); the unifier reads both sides
+   through it at a structural mismatch under a metavariable before
+   K's whnf (`unify_fallback`); every goal statement and lemma
+   equation already enters in the one spelling (3.21), so `rw` and
+   `simp_only` follow from the rows. A class the table lacks is the
+   door's wake condition. Pin `one_spelling`.
+3. **Instances by table, not search** (Stage 3's first step):
+   `sp_instance` maps the closed type of an instance-implicit
+   metavariable to the pin's instance constant at `Nat`, `Int`,
+   `Bool`, `List α`, any type's `BEq` over its `DecidableEq`, the
+   heterogeneous classes over the homogeneous row, `OfNat`; asked at
+   an application's binders (`el_solve_slots`), at `el_finish` and at
+   a tactic opening's premises; anything left `instance_needed` with
+   the pointer; `(min a b)`/`(max a b)` operator rows to
+   `Min.min`/`Max.max`; `sp_kit` joins the loader's demand. General
+   instance search stays Stage 3's door. Pin `instance_table`.
+4. **`/` at `Int` is `Int.ediv`** (`op_at`; `%` was `Int.emod`). Pin
+   `op_int_div`.
+5. **The horizon refusal points**: a cited name the name table holds
+   at or above the module's horizon is `above_horizon NAME: ordinal N,
+   the horizon H — write (import Init NAME)` (`init_resolve`,
+   `Fx.above`); pins `init_above_horizon`, `init_above_horizon_by`.
+6. **Init's functions realized by supplied bodies** with their
+   equations theorems K proves — by `rfl` where the body follows
+   Init's recursion (`List.length`, `append`, `reverseAux`,
+   `reverse`), by `cases` on the argument Init recurses on first
+   (`take`, `drop`), by cases on the index (`get?Internal`); the
+   matcher of an Init definition realized through its own definition
+   (`Option.getD (view)`: `beta_head` unfolds `NAME.match_N` with no
+   descriptor of this run). A realize's binders are E types (`(i
+   Fin)`). Deferred: the derived view of Lean's compiled structural
+   recursion.
+7. **The dependent match** (`elab.shard`): a `match` on a local
+   generalizes, beside the expected type, every local whose type
+   mentions the scrutinee, outermost first (Lean's revert), the arms
+   re-binding them at the pattern's type; tried first, then the
+   expected type's reading, then the constant motive. The refuted row
+   is Init's `absurd`/`False.elim`, erased to `EAbsurd` → `LAbsurd`
+   (stuck `unreachable` if ever reached; `absurd_needs_init` on the
+   E-first route); `alt_with_extra`, `leaf_binders`. `List.get` is
+   realized so. Pins `dependent_match`, `absurd_e_first`.
+8. **The modules as records** (`v3/std/README.md`, law §10.1): `order`
+   (22), `nat` (7), `div` (7), `arith` (7) with no file — their claims
+   theorems in `std/migration.shard` (one theorem per row of law
+   §10.3, twenty; rows 8 and 14 corrected on the pin: `List.get?` is
+   `List.get?Internal`/`List.getD`, `String` a structure over its
+   bytes); `std/list.shard` (the realizations, `sum_append`, the
+   ghost refinement `Sorted` = `(@Subtype (List Nat) (List.Pairwise
+   Nat.le))` with `sorted_insert`, the old 24 requirements as `list_*`
+   theorems citing Init); `std/bits.shard` (the old 37 requirements
+   citing Init at `Nat`, the width instances at 32 and 64 bits, the
+   masks and literal shifts); `Subtype` a row of the registry
+   (`Subtype.mk v h` runs as `v`; `tele_of_fields` opens a row
+   constructor's parameters unclassified); the carrier named by a
+   `def` (a `fn` signature cannot name `@Subtype T P` — a finding, the
+   idiom). Calc's `examples/calc/list.shard` retired onto `std/list`;
+   the reducer reads a realization's equations (`equations_of`:
+   `M.f.realize_k`); the loader marks a `use` needed when a token hits
+   an identity the module realized (`mark_hits`). `std_test.sh` the
+   39th entrypoint (the std root loaded in one process, stored and
+   replayed by K alone).
+9. **The fifteen former axioms as theorems** (`v3/std/facts.shard`,
+   theorem-only): twelve by Init's names (`Int.emod_nonneg`,
+   `Int.emod_lt_of_pos`, `Int.emod_def` under `arith`,
+   `Int.ediv_emod_unique`'s halves, the ring laws, the four shift
+   lemmas at `Nat`); the three bitwise recurrences by the Euclidean
+   split by 2 (`and_div_two`/`or_div_two`/`xor_div_two` and the low
+   bit by `and_mod_two_eq_one` and its kin over the four cases, joined
+   by `arith` over `Nat.div_add_mod`), stated subtraction-free since
+   `arith` reads `Nat.sub` as an atom.
+10. **`docs/LEAN.md`** (law §5.4): the three lists as tables — the
+    same as Lean, refused with the reason, the ruling and the pointer,
+    shard-only — with the loader's command line, the records and
+    which refusals end a file in the header; 92 rows at the landing,
+    109 since 3.30 landing 2; the refusals the lists name carry their
+    pointer (`lean_form`, `inhabited_default`, `lean_symbol`,
+    `infix_form`).
+11. **T9 small** (`docs/records/T9-small-2026-10-10.md`): pass on the
+    count agreed before the run — 0 interventions, 1 refusal before
+    success, 7 runs; (ii) measured on route 2 (route 1 compiles the
+    kernel's bring-up dialect only — a stated departure); ten gaps,
+    seven rows, two kernel fixes (`zero_arity_bare`, the
+    `inhabited_default` pointer). T9 ran again at 3.30 landing 2.
 
-   | former axiom | the theorem's evidence | status |
-   |---|---|---|
-   | `mod_lo` (`0 < d → 0 ≤ n mod d`) | `Int.emod_nonneg` (its premise `d ≠ 0` by `Int.ne_of_gt`) | proved by the probe |
-   | `mod_hi` | `Int.emod_lt_of_pos` | proved |
-   | `ediv_mod_id` | `Int.emod_def` under `arith` | proved |
-   | `div_unique`, `mod_unique` | `Int.ediv_emod_unique`, its two halves | proved |
-   | `mul_comm`, `mul_assoc`, `mul_dist` | `Int.mul_comm`, `Int.mul_assoc`, `Int.mul_add` | proved |
-   | `bshl_z`, `bshl_s`, `bshr_z`, `bshr_s` | `Nat.shiftLeft_zero`, `Nat.shiftLeft_succ`, `Nat.shiftRight_zero`, `Nat.shiftRight_succ_inside` — at `Nat`, the `0 ≤` premises gone (the typed class of law §10.2) | proved |
-   | `band_rec`, `bor_rec`, `bxor_rec` (the low bit arithmetically, `a = 2·(a/2) + a%2`) | by `Nat.eq_of_testBit_eq` with `Nat.testBit_and`/`or`/`xor`, `Nat.testBit_succ`, `Nat.testBit_zero` and `Nat.mod_two_eq_zero_or_one`; or one unfolding of `Nat.bitwise` by its `WellFounded` equation (`Nat.bitwise_rec_lemma`), then `cases` on the two low bits and `arith` — the shorter route is `LEAN.md`'s example of a well-founded definition's equation | landing 3 |
+As built, found and fixed: the instance table's any-type row
+(`sp_inst_typed` → `sp_inst_any`); `arith`'s `lin_same` → `lin_eq` (K
+caught an ill-typed `Eq.trans`; pin `arith_eq_bare`). Deferred with
+their consumers: the derived view of compiled structural recursion;
+the loader native; general instance search; the migration tool's
+tier 0 (phase 5's opener, these records its calibration data).
 
-10. **`docs/LEAN.md`** (law §5.4): the three lists — the same as Lean,
-    refused with the pointer and the phase, shard-only — in dozens of
-    rows, written from the probes' findings and the landings': Init's
-    binders are the pin's (`(exact (NAME a b))` over-applied is
-    `function_expected` with the type shown; `(apply NAME)` takes any
-    shape); the horizon import by the refusal's pointer; `@` with the
-    instance where rule 3's table has none; a `cases` arm `(zero ()
-    STEP…)` names its fields in a list even when there are none; `/`
-    and `%` Euclidean; `=` a proposition, `==` a `Bool`; numerals by
-    position; `fn` = `def` + `realize`; `measure`; `dif`; `use` =
-    `open`; `import Init NAME` = the horizon. The seam document's length
-    is a symptom (law §5.4).
-11. **T9 small** (law §5.4, §12.5), at landing 4: a fresh agent with
-    `LANGUAGE.md` and `LEAN.md` and nothing else — no transcript, no
-    kernel source — (i) proves a `sum_list_append`-class theorem (law
-    §5.3's schematic) over `std/list`; (ii) writes a `fn` that lowers
-    (route 1's `v3/build.sh` on its file); (iii) cites one Init theorem
-    by guess from the naming grammar; (iv) states a ghost invariant
-    (`Subtype` over `List.Pairwise`); (v) proves a branch under `dif`;
-    (vi) writes a refused Lean form (`notation`, `partial`, `get!`) and
-    receives the pointer. Scored by the refusals and interventions on
-    the record, the count agreed before the run (law §12.5's rule);
-    each finding a `LEAN.md` row. T9 runs again at phase 3's close.
+**Templates, lifted lambdas and static packages — slice 3.28 (T2,
+T3)** (records §9.1 "Slice 3.28"; §13 item 62, ratified 2026-10-11 as
+designed and 2026-10-12 as built; three landings 2026-10-11; law §4.3,
+§4.1). The leans: instances named by their flattened shapes, the
+budget 1,024, six list templates, packages as structures with no new
+form.
 
-Four landings. (1) **The seams**: rules 2–5 in the elaborator, the
-unifier and the loader, each with a pin (`apply` of `Nat.zero_and`;
-`List.sum` at `Int`; `(min a b)`; `(/ n d)` at `Int`; a name above the
-horizon), under the loader pins, parity and the suite. (2) **The
-records**: `std/facts.shard` (the twelve), `std/migration.shard` (one
-theorem per row of law §10.3 — `Int.ediv_zero`, `Int.emod_zero`,
-`Nat.sub` saturating, `Int.tdiv`/`Int.tmod` named, the `Decidable`
-bridges, `Nat.land` on `Nat`), `std/README.md`'s six records,
-`kernel/test/std_test.sh` as the 39th entrypoint — the std root loaded
-in one process (the Init run shared, slice 3.25), every file stored and
-accepted by K alone (slice 3.22's gate), `define_test`'s `List.sum`
-expectation replaced. (3) **`std/list` and `std/bits`**: rules 6–9 —
-the realizations, `List.get` under the dependent match, the matcher,
-`List.sum` from Init under rule 3, the ghost refinement, the three
-recurrences; calc's `examples/calc/list.shard` (its own `append` and
-`len` "until `v3/std` exists") retires onto `std/list` as the library's
-first consumer — calc's claims re-spelled `List.length`/`List.append`,
-the `auto` sidecar regenerated by `prove.shard`, byte-identical
-thereafter. (4) **`LEAN.md` and T9 small**, rules 10–11; the findings
-folded in.
+1. **The static role.** A binder of a `fn` or a supplied `realize`
+   whose type is a function type over runtime data (`erase.shard`'s
+   `BStatic k`, `fn_arity`), or of a package type, is a static
+   parameter; a declaration with one is a **template**: its L half the
+   definition with its equations elaborated once, its E half one
+   program per instance; not `RUNNABLE`, no `REALIZE`; checked once at
+   its declaration at placeholder shapes (`template.shard`'s
+   `check_template`); the record `TEMPLATE NAME static=f,…
+   equations=…`. No keyword.
+2. **The escape rule**: in a template's body a static parameter
+   occurs as a call head at full arity or as a static argument passed
+   on; anywhere else — an argument of a non-template, a constructor
+   field, a `let` value, a scrutinee, a return position, a partial
+   application — `function_value` with law §4.3's pointer, on both
+   routes (`unknown_type: ->` and `unknown_head: fun` became it).
+3. **Instances, by shape.** A static argument is (a) the name of a
+   `fn`, a realized constant or an instance of the parameter's arity,
+   (b) a named partial application `(g a …)` to runtime terms, (c) a
+   closed lambda lifted to `CALLER.lam_N` with the captured locals its
+   leading parameters (`lift_lambda`), (d) a static parameter of the
+   enclosing template passed on, (e) a package constant; the shape is
+   the identity named and its captured count, the captured values
+   runtime data and never part of the key. An instance is the
+   template at a tuple of shapes, one E program per distinct tuple
+   per module, named `MODULE.T_flat[_TYPE…].of.SHAPE…` (the type
+   arguments in the name); its L meaning a generated definition
+   definitionally the specialized body, its equations the template's
+   instantiated (`NAME.eq_N` from `T.eq_N`), read by the reducer and
+   the rewriter; `INSTANCE NAME of=T shapes=g/1,… equations=…`;
+   `instance_clash` when a name's demands differ. The E-first instance
+   (a body with no L reading): a program and no definition
+   (`take_instances`, `read_template_app`, `EBind`), the type
+   arguments solved by unification of E types; refused E-first with
+   pointers: a lambda, a bound variable, a registry constant, a
+   polymorphic fn, a template, a constructor, an extern, a package
+   parameter. Pins `template_lift`, `template_named`,
+   `template_partial`, `template_passed`, `template_escape`,
+   `template_transform`, `template_e_first`.
+4. **Finite specialization (T3)**: a static argument is never a term
+   built from a static parameter (`function_value`); a template
+   calling itself at another shape or at a type built from its type
+   parameter is `realize_descent` (pin `template_growth`); the budget
+   `instance_budget` 1,024 per template per load (`Load.budget`,
+   `--instance-budget N`), past it `specialization_budget` under the
+   taker's name (pin `template_budget`); the workload
+   `examples/template/workload.shard` takes 64 instances in one file.
+5. **Static law-bearing packages**: a `structure` with a function-typed
+   field is a package type (`package_of`: one constructor, no indices,
+   no E type — no runtime dictionary); a package constant is a `def`
+   whose value K's whnf reads as the constructor applied, its function
+   fields static arguments, its laws erased, its values closed E terms;
+   a binder of a package type is a static parameter of arity 0, its
+   shape the constant's identity (`IntAdd/0`); a projection erases at
+   the instance as the field's shape applied (`erase_package_proj`,
+   `package_subject`, `package_field_shape`); a structure's parameters
+   are implicit in its constructor and projections (`implicit_prefix`);
+   the generic theorem over `m` is proven once and applies at the
+   constant by unification. Pin `template_package`.
+6. **Init's higher-order list functions as templates in `std/list`**:
+   `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` realized by
+   supplied bodies whose function binder is static (`realize_template`,
+   `static_signature`), their equations proven by K (`filter`'s through
+   the `equations` clause by `List.filter_cons`); law §5.3's
+   `add_offset` written as the law writes it.
+7. **The gates**: `kernel/test/template_test.sh`, the 40th entrypoint,
+   over `v3/examples/template/` (`add_offset`, `named`, `package`,
+   `workload`, `template_main`) — the loads, the runs, the artifact
+   check over `--dump` (no `fun` and no `->` in any program line while
+   the sources hold them); `docs/records/T2-T3-2026-10-11.md` records
+   T2 and T3 against law §12.5's risk columns.
+8. **Route 1 unchanged**: the artifact check is on the E programs `ev`
+   runs; route 1 over user files is phase 4's.
 
-Weighed and deferred, each with the consumer that reopens it: **T2 and
-T3** (law §4.3's lambda profile — closed lambdas as template arguments,
-named partial application, a captured value as a runtime parameter;
-`add_offset`; the static law-bearing package with no runtime
-dictionary; the type-growing recursion refused loudly) are a language
-slice, not a library one, and become **slice 3.28** with its design at
-this arc's close; **T10** (an ordinary E library contributing an
-I-producing tactic through law §7.3's API — `engine.shard` is that
-library today, inside the kernel) becomes **slice 3.29**; the derived
-view of Lean's compiled structural recursion (rule 6's lever; consumer:
-the count of supplied bodies, twelve at landing 3, growing with the
-bulk port); the loader native (item 60(f); the std entrypoint will be
-the next multi-load cost); general instance search (rule 3's door); the
-migration tool's tier 0 (law §12.3) — phase 5's opener, these records
-its calibration data: the law's "calibrated on `std` in phase 3" is
-read so, because the six modules mostly vanish under rule 1 and a tool
-that re-spells them would mostly delete, stated here as a departure.
-Rejected: a V3 declaration beside an Init one for an executable
-spelling (`List.sum`, calc's `len` and `append`; law §4.4's "no second
-mathematical declaration"); a V3 function spelling for `min`
-(`Nat.min` is Init's own second spelling, ordinal 10,228, not the
-instance's); porting `std/bits`' proofs (Init has the theorems); a
-materialize-and-retry at the horizon (slice 3.26's one mechanism).
+Deferred with their consumers: the dynamic tier (law §4.3's door);
+instances shared across modules; an extern as a static argument; a
+lambda returning a lambda; a function-typed field of an E type.
+Rejected: a runtime closure or dictionary; captured values in the
+key; an instance per call site; a `template` keyword; untyped lambda
+binders.
 
-**Slice 3.27 as built, landing 1 (2026-10-10) — the seams.** Rules
-2–5, in the elaborator, the unifier and the loader, each with a pin.
-- **Rule 2 as built — the one spelling is a table, not a transparency.**
-  Slice 3.21 rule 3's reading of a class method under Init's closed
-  instance as its function (`ar_canon`, arith.shard) is the shared
-  module `kernel/spelling.shard` (`sp_canon`), with the rows the
-  library needs added: `HAnd`/`AndOp`, `HOr`/`OrOp`, `HXor`/`XorOp`,
-  `HShiftLeft`/`ShiftLeft`, `HShiftRight`/`ShiftRight` at `Nat` to
-  `Nat.land`, `lor`, `xor`, `shiftLeft`, `shiftRight`; `HAppend`/`Append`
-  at `List α` to `List.append`. The unifier reads both sides through it
-  at a structural mismatch under a metavariable, before K's whnf
-  (`unify_fallback`): K's whnf of `0 &&& ?n` against `Nat.land 0 b`
-  computes the closed side to `0` and the metavariable is never
-  assigned — the probe's `witness_open`; read as `Nat.land 0 ?n` the two
-  unify structurally. The rewriter needed nothing new: since slice 3.21
-  every goal's statement (`tac_goal`) and every lemma's equation
-  (`eq_of_lemma`) enter in the one spelling, so `rw` and `simp_only`
-  across the two spellings follow from the rows alone. The mechanism
-  the rule's text names — an instance constant and a class projection
-  unfolding, Lean's `instances` transparency — would need the
-  environment at every mismatch and would unfold Init's definitions
-  past the instance (K's whnf has no smart unfolding: `Nat.add a ?b`
-  becomes a stuck `Nat.rec`); the table is the same reading `arith`
-  has trusted since 3.21, closed over the pin's names, and K rechecks
-  every term it shapes. A class the table lacks is the door's wake
-  condition, as rule 3 has it for instances.
-- **Rule 3 as built.** `sp_instance`: the type of an instance-implicit
-  metavariable, closed, to the pin's instance — at `Nat`: `instAddNat`,
-  `instSubNat`, `instMulNat`, `Nat.instDiv`, `Nat.instMod`, `instLTNat`,
-  `instLENat`, `instMinNat`, `Nat.instMax`, `instDecidableEqNat`,
-  `Nat.instAndOp`/`instOrOp`/`instXorOp`/`instShiftLeft`/`instShiftRight`,
-  `Zero` as `Zero.ofOfNat0 Nat (instOfNatNat 0)`; at `Int`:
-  `Int.instAdd`, `instSub`, `instMul`, `instDiv`, `instMod`, `instNegInt`,
-  `instLTInt`, `instLEInt`, `instMin`, `instMax`, `instDecidableEq`,
-  `Zero` as `Zero.ofOfNat0 Int (instOfNat 0)`; at `Bool`:
-  `instDecidableEqBool`; at `List α`: `List.instAppend`,
-  `instDecidableEqList` over the element's; at any type `BEq` as
-  `instBEqOfDecidableEq` over its `DecidableEq`; the heterogeneous
-  `HAdd`…`HAppend` at one type as `instHAdd`…`instHAppendOfAppend` over
-  the homogeneous row; `OfNat Nat n`/`OfNat Int n` as `instOfNatNat n`/
-  `instOfNat n`. Asked (`el_solve_slots`) for an application's own
-  binders once the expected type has had its say, for every
-  metavariable when a declaration finishes (`el_finish`), and for a
-  tactic opening's premises (`witness_close`); anything left is
-  `instance_needed` with the pointer as before (`elab_instance`: `ite`'s
-  `Decidable True` is no row — `if` has its own decisions, slice 3.16).
-  `(min a b)`/`(max a b)` are operator rows to `Min.min`/`Max.max`, their
-  instance from the table; `min` and `max` join the operator symbols,
-  which take precedence over a declared constant of the same name as
-  `+` does (no V3 file declares either). The table's constants are no
-  token of the file that needs them: `sp_kit` lists every name the two
-  tables write and joins the loader's demand (`init_kit`), loaded where
-  the module's horizon admits it — 39 declarations on the probe file.
-- **Rule 4 as built.** `op_at`: `/` at `Int` is `Int.ediv`; `%` was
-  `Int.emod` already; at `Nat` the pair stays `Nat.div`/`Nat.mod`.
-- **Rule 5 as built.** `init_resolve` keeps the names the name table
-  places at or above the module's horizon (`Fx.above`, with their
-  ordinals; the walk already looked them up to skip them), and a
-  reading's `unknown_constant` on one of them is `above_horizon`:
-  `NAME is declaration N of the export, at or above the module's
-  horizon H (import Init X): write (import Init NAME)`. The name is
-  matched as a token of the refusal's message (the elaborator's
-  detail, or a tactic step's `step 1: NAME — the goal: …`), itself or
-  under a prefix an opened namespace supplies (`zero_and` under `(use
-  Init.Nat)` names `Nat.zero_and`). `init_horizon_beyond` now expects
-  `above_horizon`.
-- **Cleanup beside the landing:** `mk_app_n` moved from matcher.shard
-  to expr.shard, where its users are; arith's `ar_cast`, `ar_not`,
-  `ar_carrier` are the shared module's `sp_cast`, `sp_not`, `sp_carrier`.
-- **Pins:** `op_int_div`, `one_spelling` (`apply`, `rw`, `simp_only`
-  across the two spellings at the bitwise operators and `List.append`),
-  `instance_table` (`List.sum` at `Int` and `Nat`, `min`/`max`,
-  `List.length_take`), `init_above_horizon` (never loaded, cited bare),
-  `init_above_horizon_by` (inside a by block); `unify_test` gains the
-  one-spelling case in both orders. **Gates run:** the 230 loader pins 0 failed in 54 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 44 s, `define_test` 12 checks 0 failed in 241 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `derive_test` 14 checks, `wire_test` 15 checks, `k_clients_test` 7 tests in 72 s, parity byte-identical over 31 closures and 133,762 declarations in 350 s, the full suite's 38 entrypoints with 0 failed in 553 s (under contention with the targeted gates; `store_test` 400 s, `parity_test` 333 s, `define_test` 308 s, `calc_test` 298 s, `path_test` 289 s). Route 1's kernel build, the full replay and the corpus are CI's.
-
-**Slice 3.27 as built, landing 2 (2026-10-10) — the records.** Rules
-1, 8 and 9's twelve, with the gate the design named. `v3/std/facts.shard`:
-the twelve former axioms as theorems under their old names — `mod_lo`,
-`mod_hi` by `Int.emod_nonneg` (its premise `d ≠ 0` by `Int.ne_of_gt`) and
-`Int.emod_lt_of_pos`; `ediv_mod_id` by `arith` over `Int.emod_def`;
-`div_unique` and `mod_unique` as the two halves of
-`@Int.ediv_emod_unique n d r q`, the divisor's positivity and the
-identity's orientation two `have`s by `arith`; `mul_comm`, `mul_assoc`,
-`mul_dist` by Init's ring laws; `bshl_z`, `bshl_s`, `bshr_z`, `bshr_s` at
-`Nat` by the shift lemmas, the `0 ≤` premises the type, the two with
-implicit binders written `@` — twelve lines, the horizon
-`Nat.shiftRight_zero` (1,440 declarations admitted, 38 s on the
-bootstrap). `v3/std/migration.shard`: one theorem per row of law §10.3
-(twenty, with a `def Nonneg` for row 11), each the row's V3 spelling and
-the exceptional behavior its third column names — `Int.tdiv x 0 = 0`,
-`Int.tmod x 0 = x`, `x / 0 = 0`, `x % 0 = x` by Init's theorems; the
-decision bridges `decide (a ≤ b) = true ↔ a ≤ b` and `BEq.beq a b = true ↔
-a = b` by `decide_eq_true_iff`; `Bool.and_eq_true`; `Nat.zero_sub`;
-`Nat.and_le_right` as the unpremised bound; the rest `Eq.refl` — and, after
-the rows, the records' evidence: `std/order`'s claims (twenty-one; the `if`
-swap waits for a consumer), `std/nat`'s four, `std/div`'s seven and
-`std/arith`'s seven as theorems, Init's name where one exists and `arith`
-where the claim is an entailment, so each record is checked rather than
-asserted (horizon `List.getD`, 1,706 declarations, 41 s). Two rows
-corrected on the pin: row 8's `List.get?` is no constant of Lean v4.33.1 —
-the index `l[i]?` is `GetElem?.getElem?` under `List`'s instance,
-`List.get?Internal` by definition, `List.getD` the named default (law
-§10.3's row amended in place, dated); row 14's `String` is a structure
-over its UTF-8 `ByteArray` and the proof it is valid (`String.ofByteArray
-b h`), the view's round trip `String.toList_ofList` cited in the record
-and not loaded: its closure is 3,282 declarations of the export, 277 s,
-against the file's 1,700 without it. `v3/std/README.md`: the six
-per-interface records (law §10.1) — every declaration of the old
-`mod.req.shard`, its V3 spelling or Init's name, the evidence, the class —
-`order` (22), `nat` (7), `div` (7, and the two it cited from the old
-`kernel/facts.shard`), `arith` (7) with no file; `list` (29)
-and `bits` (38) with Init's names each checked against the export's
-index, their files at landing 3. `kernel/test/std_test.sh`, the 39th
-entrypoint: the std root's six files loaded in one process (Init on
-demand, shared), 211 declarations stored and replayed by K alone, the
-records' theorems held by name under no axiom but Lean's own (`propext`,
-`Quot.sound`, `Classical.choice` — what the cited Init theorems carry):
-76 checks. Slice 3.13's `v3/std/list.shard` with V3's own `List.sum` is
-deleted (rule 1) and `define_test`'s expectation on it removed; the
-library's files are `std_test`'s. **Found and fixed on the way, each with
-a pin.** (i) The instance table's dispatch (landing 1) tried the type's
-own rows and stopped: `BEq Int` reached the `Int` rows, which have no
-`BEq`, and never the any-type row — `sp_inst_typed` falls through to
-`sp_inst_any`; the `instance_table` pin gains `BEq.beq` at `Int` and
-`Nat`. (ii) `arith`'s equation path (slice 3.21): `lin_same` read a
-missing trailing coefficient as 0 while the two evaluation terms it then
-equated by `Eq.trans` carry their exact lists, and K's conversion of
-`[1]` against `[1, 0]` is stuck at `0 * x` for a symbolic `x` — the
-elaborator built an ill-typed term and K refused it
-(`app_type_mismatch` on `n = 10 * (n / 10) + n % 10` and on
-`((b + 1) + y - 1) - y = b`, a bare variable against a sum whose atoms were
-collected after it), the boundary doing what law §3 says it does.
-`lin_eq` compares entry for entry; the differing case takes the
-two-inequality path, which was sound (pin `arith_eq_bare`, six shapes).
-**Found and recorded for `LEAN.md` (landing 4), not changed:** a bare
-`true`, `some`, `cons` resolves in a pattern only — in a term the
-constructor is written under its namespace (`Bool.true`, `Option.some`,
-`List.cons`), item 7's ruling that `use` opens no constructors meeting
-law §5.3's "lowercase constructors"; `==`, `&&`, `||` are not operator
-symbols of the elaborator — `and`, `or`, `not` at `Bool` operands are
-`Bool.and`, `Bool.or`, `Bool.not`. **Gates run:** the 231 loader pins 0 failed in 56 s, `std_test` 76 checks 0 failed in 117 s (the root loaded and stored in 69 s, K's replay 48 s; 158 s inside the suite), `tactic_test` 110 checks (calc's 100 claims) 0 failed in 43 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged), `define_test` 12 checks 0 failed, `derive_test` 14 checks, `unify_test` 0 failed, `k_clients_test` 7 tests in 70 s, parity byte-identical over 31 closures and 133,785 declarations in 292 s, the full suite's 39 entrypoints with 0 failed in 640 s (`store_test` 505 s, `parity_test` 364 s, `path_test` 316 s, `calc_test` 300 s, `define_test` 297 s). Route 1's kernel build, the full replay and the corpus are CI's.
-
-**Slice 3.27 as built, landing 3 (2026-10-10) — `std/list` and `std/bits`.**
-Rules 6–9 built, calc retired onto the library, five pins. **Rule 6, the
-realizations** (`v3/std/list.shard`): `List.length`, `List.append`,
-`List.reverseAux`, `List.reverse`, `List.take`, `List.drop`,
-`List.get?Internal` and `List.getD` by supplied bodies, their equations
-theorems K proves — by `rfl` where the body follows Init's recursion, by
-`cases` on the count where Init recurses on it first (`take n [] = []`
-is `take_nil_eq`, a term-level match on `n` with `Eq.refl` at both
-constructors), by cases on the index for `get?Internal` (slice 3.24's
-path); `List.getD` is one leaf, `Option.getD (List.get?Internal xs i) d`,
-K unfolding `as[i]?` through `GetElem?`'s instance (law §10.3 row 8).
-**The matcher of an Init definition realized through its own
-definition**, as the rule said it would be measured: `(realize
-Option.getD (view))` is refused before this landing — `Option.getD.match_1:
-no realization attached` — and accepted after, the derived view
-(`erasure.shard`) unfolding a definition named `NAME.match_N` that has no
-descriptor of this run at its arguments (`beta_head`) and erasing the
-`casesOn` it is, an application whose head is a lambda now beta-reduced
-on the way; the view attaches no equations, the E body being the value's
-erasure. **Rule 7, the dependent match** (`elab.shard`): a `match` on a
-local generalizes, beside the expected type (slice 3.19 rule 9), every
-local in scope whose type mentions the scrutinee or one of these,
-outermost first — Lean's revert: the motive is the expected type under a
-Pi over them, each arm reads its body with them re-bound at the pattern's
-type under the names the context binds them by (a realize's telescope
-local carries Lean's binder name, `a._@._internal._hyg.0`; the body knows
-it as `i`), and the matcher's result is applied back to them. The
-dependent reading is tried first, then the expected type's, then the
-constant motive; the first reading's error is the one reported. Under
-`match xs` with `i : Fin (List.length xs)` the nil row sees `i : Fin
-(List.length List.nil)` and refutes it: **the refuted row is Init's
-`absurd`** (or `False.elim`) applied to a proof and its negation, an L
-term of the row's type — `(absurd (Fin.isLt i) (Nat.not_lt_zero (Fin.val
-i)))` — erased to `EAbsurd`, a node of `ETerm` that `ev` lowers to
-`LAbsurd` and is stuck `unreachable` if a program K did not warrant ever
-reaches it; the E-first route refuses the form by name
-(`absurd_needs_init`), as it refuses `dif`. What followed from the
-generalization: a matcher applied past its alternatives (the generalized
-locals) is read by the erasure with each alternative instantiated at
-them under its fields (`alt_with_extra`) and by the realizer's leaf
-splitting, which took one extra argument (the measured function's
-`Eq.refl`) and takes any number now; and a leaf's binders are ordered so
-that a kept binder re-typed by the split — `i : Fin (List.length (x ::
-t))` — follows the fields it names (`leaf_binders`: the binders the
-split left, the fields, the re-typed ones), where the as-built of slice
-3.16 put every kept binder before the fields and the equation of a
-dependent `fn` was `fvar_in_type`. `List.get` is realized so, its two
-equations `get_nil_eq` (proved by the refutation itself) and
-`get_cons_eq` (a term-level match on the `Fin`, then on its value under
-its bound — the dependent match again —, `Eq.refl` at both), its cons
-row `dif` on `Fin.val i = 0` with the bound carried into the tail by
-`Nat.sub_lt_right_of_lt_add`. **A realize's binders are E types**: the
-`Fin` index is written `Fin`, the registry's row (`(i Fin)`), since an E
-type names no term; the signature check said so (`realize_signature:
-… another type than the L type's erasure`). **Rule 8, what Init lacks**:
-`sum_append` at `Nat` by induction (Init's `List.sum_append` asks for
-`Std.LawfulLeftIdentity`, which the table does not hold), and the ghost
-refinement phase 3 owes — `Sorted` is `(@Subtype (List Nat) (List.Pairwise
-Nat.le))`, `sorted_insert` keeps the proof by `insert_sorted`, proved by
-induction on the list with the hypothesis stated as an implication
-(`cases` and `induction` generalize the target only) over `mem_insert`,
-`List.pairwise_cons` and `List.mem_cons` as iffs (both inductives are
-indexed families: `cases` on a hypothesis of either is a later form),
-the `if` split by `cases` on `Nat.lt_or_ge` and `if_pos`/`if_neg`. For
-that, **`Subtype` is a row of the registry** (law §10.3 row 11; `erase.shard`
-`rep_row`): one constructor, one runtime field, `Subtype.mk v h` runs as
-`v`, `Subtype.val s` as `s`; a row constructor's parameters are opened
-unclassified before its fields (`tele_of_fields`) — `Subtype`'s
-predicate `p : α → Prop` is neither a type, a proposition nor data, and
-the field walk refused the row on it. The carrier is named by a `def`
-(`(def Sorted () Type …)`): a `fn` signature reads `(@Subtype (List Nat)
-P)` at `Sort 0` and `(Subtype P)` with its carrier unsolved — a finding,
-the def the idiom until it is fixed. **The old `std/list`'s 24
-requirements** are `list_*` theorems citing Init by name (`apply` for the
-implicit-binder ones, `exact` with the arguments for the explicit), so the
-record is checked; `length_nil`, `length_cons` and `reverse_nil` by
-`Eq.refl` rather than past-horizon citations. **Rule 9, the three
-recurrences** (`std/facts.shard`, horizon `Nat.and_mod_two_eq_one`):
-`band_rec`, `bor_rec`, `bxor_rec` at `Nat`, each the Euclidean split of
-the operation by 2 — Init's `and_div_two`, `or_div_two`, `xor_div_two` for
-the quotient; `land_low`, `lor_low`, `lxor_low` for the remainder, four
-cases of `a % 2` and `b % 2` on `Nat.mod_two_eq_zero_or_one` with the
-operation's low bit decided by Init's `and_mod_two_eq_one`,
-`or_mod_two_eq_one`, `xor_mod_two_eq_one` iffs (the xor case needs
-`¬(p = 1 ↔ q = 1)`: `intro` on the negation, `Iff.refl` after rewriting
-both sides, `absurd`) — joined by `arith` over `Nat.div_add_mod`. Stated
-subtraction-free, the product moved to the left (`lor a b + p·q = 2·lor' +
-p + q`), since `arith` reads `Nat.sub` as an atom. **`std/bits.shard`**
-(horizon `Nat.le_sub_one_iff_lt`): the old module's 37 requirements as
-theorems under the old names citing Init at `Nat`, `pow2 k` as `(Nat.pow
-2 k)` — **one spelling with Init's `2 ^ k`** by a row of the table for
-`HPow`/`Pow` at `Nat` (`spelling.shard`; `Nat.pow` in the kit), without
-which `Nat.or_lt_two_pow ha hb` could not read `a < Nat.pow 2 32` —, the
-width instances at 32 and 64 bits through a `Nat.pow` hypothesis (a
-literal does not determine the exponent: `2 ^ ?n` against `4294967296`
-is refused by the unifier, `exact` between `Nat.pow 2 32` and the literal
-is K's conversion), the masks at 8, 32 and 64, the literal shifts (one
-step by `Eq.refl`, a count by `Nat.shiftLeft_eq` with the power rewritten
-to its literal and `arith`). **Calc retired onto the library**: its
-`examples/calc/list.shard` deleted, seven files `(use std.list)` and
-`(import "../../std/list.shard")`, `append`/`len` re-spelled
-`List.append`/`List.length`, its two append laws Init's `List.append_nil`
-and `List.append_assoc`, and one `rfl`-proved equation re-oriented —
-`List.length (x :: t)` is `length t + 1` where calc's `len` was `1 + len
-t`, and the two are not convertible. Two kernel facilities for that:
-**the reducer reads a realization's equations** (`tactic.shard`
-`equations_of`: a fn's `f.eq_k`, else `M.f.realize_k` for the module M
-that attached the realization — this module, or one it opens), so
-`(reduce)` over `List.length (cons h t)` steps by `realize_2` as it
-stepped by calc's own `len.eq_2`, where K's whnf had unfolded Init's
-structural recursion into its `brecOn` encoding (`proj 0 (PProd.mk …)`
-atoms to `arith`, `rw_no_match` on the appended list); and **the loader
-marks a use needed when a token of the file hits an identity the module
-realized** (`mark_hits`: the entry's module beside the prefix above the
-token), so calc's `(use std.list)`, under which it runs Init's
-`List.append`, is not recorded UNUSED for the prune. **The gate**:
-`std_test.sh` holds the three new files' theorems and the realizations'
-equations by name (181 checks), `Option.getD`'s view by
-its record. **Pins**: `dependent_match` (the fn, the term-level match
-under a bound, `List.get` realized), `matcher_view`, `refined_row`
-(`Pos` = `Subtype Nat (Nat.le 1)`, `bump` running as its value),
-`absurd_e_first` (the pointer). **Findings for `LEAN.md` at landing 4**:
-`arith` reads `Nat.sub` and `2 ^ k` as atoms (state subtraction-free;
-rewrite a literal power first); an exponent is not inferred from a
-literal; `@NAME` with an unknown implicit order is a guess — prefer
-unification from a hypothesis; `cases`/`induction` generalize the target
-only — state the hypothesis as an implication; `cases` on an indexed
-family's hypothesis is refused — use Init's iff; a `fn` signature cannot
-name `@Subtype T P` — name the carrier by a `def`; `--run` takes a World
-entry; `List.length (x :: t)` is `length t + 1`; a `def` has no E body —
-a value a program calls is a `fn`. Measured: the std root's three new
-files load in 82 s alone (facts' demand 1,705 declarations at horizon
-56,062; bits' 256; list's 68). Gates run: the 235 loader pins 0 failed in 56 s, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 53 s, `calc_test` byte-identical over 21 inputs in 249 s, `calc_main_test` byte-identical to the model world in 112 s, `engine_test` 24 checks 0 failed (54 of calc's 100 claims unaided, unchanged) in 193 s, `define_test` 12 checks 0 failed in 246 s, `derive_test` 14 checks 0 failed, `unify_test` 0 failed, `k_clients_test` 7 tests in 78 s, `std_test` 181 checks 0 failed in 167 s (the root's 8 files and 336 declarations loaded and stored in 97 s, K's replay 70 s), `path_test` 18 checks 0 failed in 251 s, parity byte-identical over 31 closures and 133,990 declarations in 278 s, the full suite's 39 entrypoints with 0 failed in 559 s (`store_test` 424 s, `parity_test` 301 s, `define_test` 278 s, `calc_test` 265 s, `path_test` 257 s). Route 1's kernel build, the full replay and the corpus are CI's.
-
-**Slice 3.27 as built, landing 4 (2026-10-10) — `LEAN.md` and T9 small.** Rules 10 and 11, with what the gate found.
-
-- **Rule 10, `docs/LEAN.md`.** The three lists of law §5.4 as tables, 92 rows: the same as Lean (the names and the naming grammar cited by guess, `use` as `open`, the binders and `@`, the connectives and `Bool`'s, `if`/`dif`/`match`, numerals and the one coercion, the operators by type with `/` and `%` Euclidean, the one spelling of `2 ^ k` and the bitwise operators, the list accesses by Init's names, the instance table, structures and `Subtype`/`Fin`, `def`/`theorem`/`fn`, the equation names, the policy, the steps of `by` against Lean's tactics, `cases` on a term, the anonymous constructor, the list literal, the conversion idiom for a `fn`'s step); refused with the reason, the ruling and the pointer (the Lean keywords, `instance`/`class` and the reserved forms, a file import, `NAME!`, infix, `==`/`&&` and Lean's Unicode spellings, `by` in a term, a `Fin` numeral, `omega`'s reach against `arith`'s, `simp`/`ring`/`aesop` against replay without search, `cases` on an indexed family, `induction … generalizing`, a guessed implicit order, a theorem over-applied, an exponent against a literal, function values, a `def` called from a `fn`, `@Subtype` in a `fn` signature, `absurd` and `dif` on the E-first route, `nat_operator`, `Array`/`IO`/`do`, the horizon, `#eval`); shard-only (`fn`, `realize`, the output idiom, externs and the World entry, the imports and the horizon, views, `trusts`, the data sugar, `derive`, `dif`, `by` as I, `auto`, the store, the spelling tables, the registry's rows, the refusal vocabulary). The header gives the loader's command line, the records and which refusals end a file. Every row stated from a run: the rows written from recall were probed before the gate and five corrected (`bad_import` for a Lean file import; the exponent finding's shape is `type_mismatch` showing `2 ^ ?n` against the literal; `by` in a term is no term; `#eval`'s message; the Unicode symbols reach the elaborator as `unknown_constant`).
-- **The refusals the lists name carry their pointer** (four kernel edits, eight pins). A Lean keyword with no form here — `partial`, `unsafe`, the notation and macro layer, `open`, `lemma`/`example`, `mutual`, `termination_by`/`decreasing_by`, `noncomputable`/`private`/`protected`, `universe`, `deriving`, `implemented_by`, `attribute`/`set_option` — is `lean_form` with the V3 spelling or the law's reason (`reader.shard`'s `lean_form` table; `unknown_form` stays for a head that is neither Lean's nor V3's; `instance`/`class` point to the instance table). A name ending in `!` is `inhabited_default` with the Option form and the supplied-default form, on both routes and before the horizon's refusal (`loader.shard`'s `lean_pointer`: `List.get!` above the horizon must not be answered "import it"; the Option form is named where the export declares it — `List.get?` is no constant of this pin, T9's finding 3). `==`, `&&`, `||`, a `!`-prefixed name, `by` inside a term and Lean's `∀ ∃ λ → ↔ ¬ ∧ ∨ ≤ ≥ ≠ ℕ ℤ ×` are `lean_symbol` with the spelling (`lean_symbol_pointer`; they lex as symbols and reach the elaborator as `unknown_constant`). An operator symbol where an argument is expected — `(n + 1)` — is `infix_form` with the prefix spelling (`elab.shard`'s `tele`, where it was `function_expected: applied to 2 more arguments than its type has: Nat`). Before this landing `partial` and `notation` were a bare `unknown_form: partial`, `List.get!` the E-first route's `unknown_head`, `==` likewise — law §12.5's T9 row asks for the `fn`/`def` pointer on a refused `notation`.
-- **Rule 11, T9 small** (`docs/records/T9-small-2026-10-10.md`, the report verbatim with the count agreed before the run). DEPARTURE from the design's (ii): "a `fn` that lowers" is measured on route 2 — route 1's `v3/build.sh` compiles the kernel's bring-up dialect and refuses a V3 user file at its first form (`malformed declaration (realize List.length ...)`, measured on `examples/path/path.shard`); a user `fn` lowers when the typed route defines it (`DEFINE` with its equations) and `ev` runs it under `--run`. The count: 0 interventions; at most 2 refusals before success on (i)–(v); (vi) succeeds when its three forms receive their pointers; pass = all six accepted with no workaround from a forbidden source. The agent: fresh, with `LANGUAGE.md`, `LEAN.md`, the library it imports (`v3/std/`) and the loader's command line; forbidden `v3/kernel/`, `v3/pins/`, `v3/examples/`, the other docs, the records, memory, the transcript. **Result: pass** — 0 interventions, 1 refusal before success (task ii), 7 loader runs, 11 minutes; `sum_list_append` at `Int` by induction with the conversion idiom and `arith`, four Init theorems cited by guess and every one resolved (`Int.zero_add`, `Int.add_assoc`, `Nat.lt_succ_self`, `List.length_map` by `apply`), `SortedInt` as `@Subtype (List Int) (List.Pairwise Int.le)` named by a `def` with its empty value and two theorems, `safe_index` under `dif` with both branches proved by `dif_pos`/`dif_neg`, a `main` entry printing the count below its argument, the three refused forms with their pointers; verified by a second load of the four files (196 accepted, 0 refused) and the entry's output. **Ten gaps reported, each disposed of**: seven are `LEAN.md` rows or header sentences (which refusals end a file; the list literal; the inherited horizon and `INIT -:`; the output idiom through `Nat.renderOnto` and `Bytes.ofNats`; a successful `--run` prints no records; an arm's fields then its hypotheses; the conversion idiom for a `fn`'s step); two are kernel fixes — a zero-parameter `fn` written bare in argument position is its call on the E-first route as on the typed route (`classify.shard`'s `read_esym`; before, `function_value` where the typed route read the constant as the value it is — the one refusal the author met; pin `zero_arity_bare`; the `function_value` message names the arity) and the `inhabited_default` pointer's name; one is the author's misreading of two ordinals (noted in the header: the loader's horizon is the ordinal past the name). T9 runs again at phase 3's close, with the then-current `LEAN.md`. Gates run: the 243 loader pins 0 failed in 53 s, `unify_test` 0 failed, `tactic_test` 110 checks (calc's 100 claims) 0 failed in 51 s, parity byte-identical over 31 closures and 134,028 declarations in 293 s, the full suite's 39 entrypoints with 0 failed in 580 s (`store_test` 436 s, `parity_test` 329 s, `define_test` 298 s, `path_test` 283 s, `calc_test` 283 s). Route 1's kernel build, the full replay and the corpus are CI's..
-
-**Slice 3.28 — the lambda profile: templates, lifted lambdas and
-static packages (T2, T3)** (designed 2026-10-10 at the boundary after
-slice 3.27, on the user's "continue to the next slice"; §13 item 62 —
-**ratified 2026-10-11 as designed, the four leans taken: instances
-named by their flattened shapes, the budget 1,024, six list templates,
-packages as structures with no new form**). Law §4.3 names the profile E
-supports in v1, in order: closed lambdas as template arguments; named
-partial application to known E values; non-escaping value capture by
-lambda lifting, the captured value an ordinary runtime parameter and
-never a specialization key; templates — a `fn` with function-typed
-parameters, specialized per distinct static argument tuple, its
-theorem proven once in L over arbitrary `f`, each instance
-definitionally the specialized body or bridged by a generated equation
-where the arity changed; the escape rule; enforcement by the classifier
-at declaration and by the lowering on the post-specialization closure;
-finite specialization, a budget a refusal; the dynamic tier a named
-door. Law §4.1 adds the static law-bearing package — operations plus
-laws, selected statically, its operation projections specialized and
-its laws erased, no runtime dictionary. The gates are T2 (a closed
-lambda, a named partial application, the captured-value `add_offset`
-of law §5.3's example, a static law-bearing package with no runtime
-dictionary, the generic theorem reused; the risk column: a source
-restriction mistaken for an artifact restriction) and T3 (the
-type-growing recursion refuses loudly; a large finite workload within
-limits; the risk column: totality mistaken for compiler termination).
-
-**Measured before this design** (four probe files under the on-demand
-loader on the bootstrap, 2026-10-10, 16 s a run): (i) the law's
-`add_offset` is refused before its lambda is reached —
-`no_realization: List.map: no realization attached — realize it first`
-on the typed route, `unknown_head` E-first — and `List.map` cannot be
-realized: its function binder is `realize_signature: f: a binder that
-is neither a type parameter, a proposition nor an E type`; (ii) a `fn`
-with a binder `(f (-> Int Int))` is `no_l_identity: a binder whose type
-is not an E type` on the typed route and `unknown_type: ->` E-first;
-(iii) a `def` with the same binder, a `def` whose value is a lambda and
-a theorem over them are accepted — L has function values, only E lacks
-them, which is the law's split; (iv) the type-growing recursion (`grow`
-over `(List a)` calling itself over `(List (List a))`) is refused
-today, `realize_descent: a recursive call at other type arguments
-(polymorphic recursion)` — `define.shard`'s self-call check since slice
-3.16 — so T3's first half holds and this slice pins it; (v) the old
-tree's `std/list` has no `map`, `filter` or `fold` and no file of the
-old tree writes a lambda: v2 had no function values either, so §12
-changes no row (this slice adds and drops nothing).
-
-**The rules.**
-
-1. **The static role.** A binder of a `fn` or of a supplied `realize`
-   whose type is a function type — a Pi whose domain is runtime data,
-   after the erased-Pi rule has dropped the proposition domains — is a
-   **static parameter**, a fourth role beside the type parameter, the
-   erased evidence and the runtime datum (`erase.shard`'s `BRole` gains
-   it); so is a binder of a package type (rule 5). A declaration with a
-   static parameter is a **template**. Its L half is what it is today:
-   the definition with its equations, elaborated once (`List.map f xs`
-   is an ordinary L term, and a theorem over it is proven once, over
-   arbitrary `f`); its E half is no program of its own but one per
-   instance (rule 3). A template is not `RUNNABLE` and has no `REALIZE`
-   record; its record is `TEMPLATE NAME static=f,…`. No keyword: the law
-   says "a `fn` with function-typed parameters", and the binder's type
-   is the whole signal.
-2. **The escape rule, at the positions the erasure already refuses.**
-   In a template's body a static parameter `f` occurs as a call head
-   applied to its full arity, `(f x …)`, or as a static argument of a
-   template call (rule 3(d)); a package parameter's projections stand
-   as call heads or as the closed values rule 5 names. Anywhere else —
-   an argument of a non-template, a constructor field, a `let` value, a
-   `match` scrutinee, a return position, an application to fewer
-   arguments than its arity — the refusal is `function_value` with law
-   §4.3's pointer, as `erasure.shard` says today for a lambda in a
-   runtime position and for a variable applied to a runtime value; the
-   E-first route's `unknown_type: ->` becomes the same refusal with the
-   pointer.
-3. **Instances, by shape.** A call of a template from an E body — a
-   `fn`'s, a supplied `realize`'s, an instance's — supplies for each
-   static parameter a **static argument**, one of: (a) the name of a
-   `fn`, a realized constant or an instance, of the parameter's arity;
-   (b) a **named partial application** `(g a …)` of such a name to
-   runtime terms of the caller, the remaining arity the parameter's;
-   (c) a **closed lambda** `(fun ((x T) …) BODY)` — closed up to the
-   caller's runtime parameters and locals, which it captures: it is
-   **lifted** to a generated `fn` under the caller's name,
-   `CALLER.lam_N` (N in order of occurrence in the body), the captured
-   locals its leading parameters in order of first occurrence and the
-   lambda's binders after them, its body the lambda's; the argument is
-   then case (b), `(CALLER.lam_N captured …)`, or case (a) when nothing
-   is captured; (d) a static parameter of the enclosing template,
-   passed on unchanged — the call is instantiated when the enclosing
-   template is (instantiation is transitive and happens at the
-   outermost E body); (e) a package constant (rule 5). The **shape** of
-   a static argument is the identity it names and its captured count;
-   the captured values are runtime data and never part of the key (law
-   §4.3). An **instance** is the template at a tuple of shapes, one E
-   program per distinct tuple per module — the taking module owns it,
-   as a module owns the derivations it takes (slice 3.19) — named by
-   the derive precedent's flattening, `MODULE.TEMPLATE_flat.of.SHAPE…`
-   (`main.List_map.of.main_add_offset_lam_1_1`: the lifted lambda's
-   identity, then its captured count), a second taking of the same
-   tuple reusing it. The instance's E program: its parameters are the
-   captured values of each static argument, group by group in parameter
-   order, then the template's runtime parameters; its body the
-   template's L body erased with each static parameter bound to an
-   entry carrying its shape — slice 3.16 rule 6's callee-local entry
-   (`EKCall id flags`) extended by the captured slots — so `(f x)`
-   erases to `(ECall g (c … x))`, and the template's recursion at its
-   own static parameters is a call of the same instance. Its L meaning:
-   a generated definition of the same name, `… := fun c … r … =>
-   List.map (g c …) r …`, admitted to K — the instance is
-   **definitionally** the specialized body (delta and beta), which is
-   how a caller's L body, written with the lambda, and its E program,
-   calling the instance, correspond; its equations `….eq_N` are the
-   template's equations instantiated at the static arguments, each a
-   theorem K checks (the template's `eq_N` applied, under the unfolding
-   — the generated equation the law names where the arity changed),
-   registered as a realization's equations are, so the reducer and the
-   rewriter read them (slice 3.27's lever) and a theorem proven over
-   arbitrary `f` applies to the instance's uses by unification through
-   the unfolding — T2's "generic theorem reused". Record: `INSTANCE
-   NAME of=TEMPLATE shapes=g/1,… equations=…`. On the E-first route (a
-   body with no L reading, `main` over a World) the instance is taken
-   with no generated definition, the route having no L half.
-4. **Finite specialization (T3).** The shapes a load can write are
-   finite: a static argument is a name, a partial application of a
-   name, a lifted lambda or a parameter passed on, never a term built
-   from a static parameter — `(f a)` or `(fun ((y U)) (f y))` as a
-   static argument inside a template is refused (`function_value`: a
-   static parameter is passed on, not transformed), which closes the
-   shape set. The type-growing recursion stays `realize_descent` (probe
-   (iv)), and a template calling itself at another shape is refused by
-   the same check extended from type arguments to static arguments (`a
-   recursive call at other static arguments`). Beside the closure, law
-   §4.3's budget: `instance_budget`, 1,024 instances of one template
-   per load, past which `specialization_budget` refuses, naming the
-   template — a refusal, never a proof of anything. A workload example
-   takes many instances in one file and runs under `ev` (rule 7).
-5. **Static law-bearing packages.** A `structure` with a
-   function-typed field — `(structure Monoid ((a Type)) (op (-> a a
-   a)) (unit a) (op_assoc (forall ((x y z a)) (= (op (op x y) z) (op x
-   (op y z))))) (unit_left (forall ((x a)) (= (op unit x) x))))` — the
-   fields directly after the binders, as §4 (a spelling corrected at
-   slice 3.30 landing 2) — is
-   a **package type**: never an E type (`ind_eligible` says no, as
-   today), so no runtime value of it exists — the law's "no runtime
-   dictionary". A **package constant** is a `def` of a package type
-   whose value K's whnf reads as the constructor applied: its function
-   fields static arguments in rule 3's senses (a name, a partial
-   application, a lambda lifted under the constant's name), its
-   proposition fields erased, its value fields closed E terms. A binder
-   of a package type is a static parameter (rule 1); its shape is the
-   constant's identity. In a template `(Monoid.op m x y)` erases at the
-   instance as the field's shape applied — a call head —, `(Monoid.unit
-   m)` as the closed value's E term, and a law field is never in a
-   runtime position. The generic theorem over `m` is proven once and
-   applies at the constant by unification (T2's package half). Outside
-   a template a package constant's projection erases the same way
-   (`(Monoid.op IntAdd 1 2)` is `(Int.add 1 2)`) — by the reduction,
-   not by a table.
-6. **Init's higher-order list functions as templates in `std/list`.**
-   Slice 3.27's rule 6 extended: `List.map`, `List.filter`,
-   `List.foldl`, `List.foldr`, `List.any`, `List.all` realized by
-   supplied bodies whose function binder is a static parameter, their
-   equations per case-tree leaf proven by K as today's are, held by
-   `std_test.sh`; their definitions are Init's (ordinals 98 to 2,907).
-   Law §5.3's `add_offset` is then written as the law writes it.
-7. **The gates: T2 and T3 as a test, and the pins.**
-   `kernel/test/template_test.sh`, the 40th entrypoint, over
-   `v3/examples/template/`: `add_offset` (a lifted lambda with a
-   captured value), a named `fn` and a named partial application as
-   arguments, a package at `Int` with a generic theorem proven once over
-   `m` and applied at the constant, a workload file taking 64 instances;
-   each loaded, the entries run under `--run` with their outputs
-   compared, and the programs dumped (`--dump`) for the **artifact**
-   check — no program line holds a lambda, a partial application or a
-   function-typed parameter while the source files hold the lambdas —
-   T2's risk column checked on the artifact, not read off the source.
-   Pins: `template_lift`, `template_named`, `template_partial`,
-   `template_passed`, `template_escape` (a lambda in a constructor
-   field), `template_transform` (`(f a)` as a static argument),
-   `template_package`, `template_growth` (`f[A]` recursing at `f[List
-   A]`, T3's canonical refusal, by name), `template_budget`.
-   `docs/LEAN.md`'s function-value row becomes rows of what is now the
-   same as Lean (`List.map (fun x => …) xs`, `f ∘ g` as a lambda, a
-   package as a structure) and of what stays refused (a lambda in data,
-   currying, a function-valued field at runtime, a static argument
-   built from a parameter); the kernel README's rows; records §9. Gates
-   run per landing: the pins, `std_test`, `define_test`, parity, the
-   full suite; CI's pipeline per landing.
-8. **Route 1 unchanged.** The law's authority on the post-specialization
-   closure is the lowering; route 1 compiles the kernel's bring-up
-   dialect only (the departure recorded at slice 3.27 landing 4), so
-   this slice's artifact check is on the E programs `ev` runs and
-   `--dump` prints — first-order by construction, the programs route 1
-   will consume when it compiles user files (phase 4). Stated as the
-   slice's limit, not solved here.
-
-**Landings.** (1) Rules 1–3: the static role, the escape rule with its
-pointers on both routes, instances by shape with lifted lambdas and
-named partial applications, the generated definitions and the
-instantiated equations, the records; pins `template_lift`,
-`template_named`, `template_partial`, `template_passed`,
-`template_escape`, `template_transform`. (2) Rules 5–6 and the example:
-packages, the six list templates in `std/list`, `v3/examples/template/`
-with `add_offset` and the package, `template_test.sh`; pin
-`template_package`. (3) Rule 4's budget and the workload,
-`template_growth` and `template_budget`, `LEAN.md`'s rows, the §12.5
-gate records for T2 and T3, the close-out.
-
-**As built, landing 1 (2026-10-11): the static role, the escape rule,
-instances by shape.** Rules 1–3 on the typed route. `erase.shard`'s
-`BRole` gains `BStatic k` (`fn_arity`: a Pi chain of E-typed domains
-over an E result, `k` its length; a proposition or a Sort domain is no
-static parameter); `erase_predef` answers `PdEraseTemplate` for a `fn`
-with one — no program — and the loader (`load_template`) checks the
-template's body once at its declaration (`template.shard`'s
-`check_template`: the body erased with each static parameter at a
-placeholder shape, so a static parameter in a runtime position, applied
-as a static argument or under a lambda, and a self-call at other shapes
-are refused where the law has the classifier enforce the escape rule),
-defines it in K as any `fn` (the definition, its equations), registers
-it as `EITemplate` and keeps its pre-definition with its roles
-(`Load.templates`); the record `TEMPLATE NAME static=f,…
-equations=…`. A template's call in a body (`erasure.shard`'s
-`erase_template_call`, by `is_template` at the constant, by
-`EKTemplate` at a template's own self-local) erases to the instance's
-call at the captured values group by group then the data: a type
-argument must be closed (`l_to_etype` with no type local — a
-polymorphic taker is this landing's limit, refused `function_value`),
-a static argument's shape is read by `static_shape` — (a) a name with
-a program (`shape_kind`: an `EFn` of the table, or a constant of the
-realization registry, whose instance calls the primitive — a decision
-through `erase_dec_value`), (b) `(g a …)` with `g`'s type and erased
-arguments kept closed and its runtime arguments captured with their
-closed types (`shape_args`; the trailing binders exactly the parameter's
-arity), (c) a lambda lifted (`lift_lambda`: the caller's runtime locals
-it mentions in order of first occurrence, then its binders opened at
-the arity — eta past the lambdas written —; the program `EFn` over
-their closed E types, the L definition the same lambda over the
-captured locals, `DefnDecl` under `CALLER.lam_N`; a lambda over a type
-parameter, a proof, a function with no K constant, the enclosing
-function, a static parameter or the template it stands in is refused
-by name), (d) a static parameter passed on (`passed_shape`, by its
-`EKShape` entry at the enclosing instance). The instance is demanded of
-the loader (`Tr.demands`, deduplicated by name) with the type
-arguments and the shapes; its name `MODULE.T_flat[_TYPE…].of.SHAPE…`
-— the template flattened **with its type arguments** (derive's
-precedent; a template without type parameters as the design wrote it:
-`main.main_twice.of.main_add_off_lam_1_1`), then each shape as its
-identity flattened and its captured count. `template.shard` builds it
-(`build_instance`): the program — the template's body at the type
-arguments (`subst_types`), erased over entries where each static
-binder is `EKShape shape slots` and the slots are `EKVar` entries
-under ids below zero (the instance's leading parameters), the
-self-local `EKTemplate` with the template's own binders carried by
-`Tr` (`tr_own`: its constant is not in the pre-definition's walk), a
-structural measure shifted past the captured parameters —; the L
-definition `λ captured… binders…, T types… (g leading… captured…)…
-binders…` with the template's data and erased binders re-opened at
-the substitution (`rebuild_binders`), admitted as a `DefnDecl`; the
-equations `NAME.eq_N` from `T.eq_N` — its binders opened, the type and
-static positions' locals replaced by the type arguments and the
-shapes' terms, the rest re-opened at the substitution
-(`reopen_locals`), the statement over the instance applied, the proof
-`T.eq_N` at the same arguments, which K accepts through the instance's
-unfolding. The loader (`build_demands`) admits the lifted lambdas'
-definitions first (`admit_lifted`: once — a body read again after an
-auxiliary regenerates the same —, `DEFINE CALLER.lam_N equations=`),
-then each instance's definition and equations, adds the program, records
-`INSTANCE NAME of=T shapes=g/1,… equations=…`, then the instances the
-instance's own body demanded, to a fixpoint; a name already built is
-reused when the demand's arguments agree (`demand_same`) and refused
-`instance_clash` when they differ — never silently reused. The escape
-rule's pointers (rule 2) at `erasure.shard`'s sites and on the E-first
-route: a `(-> …)` type in an E signature and a `fun` in an E-first body
-are `function_value` naming the template route, where they were
-`unknown_type: ->` and `unknown_head: fun`; a template cited from an
-E-first body is refused the same way, since this landing takes
-instances on the typed route only (rule 3's E-first instance, with no
-generated definition, is deferred to landing 2 with the examples; a
-`realize` body lifting a lambda or taking an instance, and a `realize`
-with a function-typed binder, are refused until landing 2's realize
-templates). Measured: a theorem over the instance by `Eq.refl` through
-the unfolding (`inc2 x = twice inc x`), a generic theorem over the
-template applied at the instance under `apply`, an entry run under
-`--run` through a typed `fn` calling an instance and a lifted lambda
-(`01`). The six pins; the loader pins' entrypoint 250 cases 0 failed;
-parity byte-identical over 31 closures and 135,063 declarations; the full suite's 39 entrypoints with 0
-failed in 568 s (`store_test` 437 s, `parity_test` 315 s, `define_test` 273 s, `path_test` 259 s, `calc_test` 251 s). Route 1's kernel build, the full replay and the
-corpus are CI's.
-
-**As built, landing 2 (2026-10-11): realize templates, packages, the six
-list templates, the examples and the entrypoint.** Rules 5–6 and rule 1's
-realize half. A supplied `realize` with a function-typed binder is a
-template (`realize.shard`'s `realize_template`): its body elaborated once
-against the constant's telescope and its equations proven over the
-arbitrary function as any realization's — the L half —, its written static
-type `(-> D… R)` checked against the L type's domains and result as E
-types (`static_signature`; `erase.shard`'s `static_etypes`, of which
-`fn_arity` is the count), no program; the loader
-(`load_realize_template`) checks the body at placeholder shapes
-(`check_template`), admits the equations, registers `EITemplate` and
-records `TEMPLATE NAME static=f equations=NAME.realize_1,…`.
-`template.shard`'s `Template` carries either kind — `TmFn` with the
-pre-definition, `TmRealize` with the result's L type, the levels and the
-equations' identities as the realizing module declared them —; an instance
-of a realize template is built as a fn's, its equations `NAME.eq_N` from
-`T.realize_N`, and a realize template's self-call names its constant
-(`erase_const_at` routes the walk's owner to `erase_template_call`). A
-realize body that lifts a lambda or demands an instance now takes them
-(`RzOk` carries them; `load_realized` builds them before the program is
-added; `admit_theorems` shared with the template's path). `std/list`
-realizes `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` (rule 6):
-five by `Eq.refl` per leaf, `filter`'s rows through the `equations` clause
-— Init's cons row is a match on the test and the body's an `if`, equal by
-`List.filter_cons`, not by reduction. Packages (rule 5): `erase.shard`'s
-`package_of` — a structure of one constructor and no indices that is no E
-type, its fields read by `binder_role` over the parameters' locals: a
-function field static, a proposition a law, an E-typed field a value, a
-type field no package —; `binder_role` answers `BStatic 0` for a binder of
-a package type (a function type has arity at least 1), so a package
-parameter is a static parameter of arity 0 and passed on as any. A package
-constant as a static argument (`erasure.shard`'s `package_shape`): a closed
-term whose whnf is the constructor applied, the shape its identity with
-its arguments and nothing captured (`IntAdd/0`). A projection of a package
-(`erase_package_proj`: from the projection function applied past its
-lambdas — `proj_fn_app` now returns the arguments past the subject — and
-from `Proj`): the subject a package parameter at its shape or a closed
-package term, its fields the constructor's arguments after whnf
-(`package_subject`); the field's term applied to the arguments and erased
-— a name a call, a lambda beta-reduced, a value field its closed term, a
-law field `erased_in_runtime` —; at the declaration's check the
-placeholder's field by its role. A package's function field as a static
-argument of another template (`package_field_shape`: `(List.map (Monoid.op
-m (Monoid.unit m)) xs)` in a template over `m`) is the field's term at the
-constant, the parameter replaced by the constant in the arguments, read as
-any static argument — a lambda field applied is beta-reduced and lifted
-under the taking body's name, not the constant's (departure for the
-close-out). The structure reader makes a structure's parameters implicit
-in its constructor and projections and explicit in its type, as Lean
-declares them (`implicit_prefix`) — so `(Monoid.op m x y)` and `(Monoid.mk
-Int.add 0 …)` read as the design wrote them —, and an earlier field applied
-in a later field's type resolves as the projection alias it is
-(`elab_app_sym`; it was `unknown_constant`). Two landing-1 defects found
-and fixed: a polymorphic recursive template was refused at its declaration
-(`template_args` refused the self-call's type arguments — the template's
-own type parameters — as an open type; now a template inside a template's
-body is taken at the enclosing template's type parameters, the template
-itself only at them exactly, rule 4's `realize_descent` at a type built
-from them), and `check_template` passed the instance's name where the
-walk's type parameters go, a type error the bootstrap never saw. The
-E-first instance (rule 3's last sentence) is deferred to landing 3: the
-E-first reader carries no types, and an instance needs the type arguments
-from the arguments' E types; an E-first body calls a typed fn that took
-the instance (the entry's idiom). `v3/examples/template/`: `add_offset`
-(law §5.3's, as the law writes it), `named` (a fn, a partial application,
-the registry's `Int.add` under `foldl` and `foldr`, a predicate under
-`filter`, `any` and `all`), `package` (`Monoid` at `Int` by a name and by a
-lambda, `fold_m` over `m` with its generic theorems applied at the
-constants by `apply`, `scale_all` passing the operation on),
-`template_main` (the entry, `9662014`). `kernel/test/template_test.sh`,
-the 40th entrypoint: the load, the records, the run, the artifact check
-over `--dump` — no `fun` and no `->` in any program line while the sources
-hold them, a partial application unwritable in the dump's grammar; the
-instances and the lifted lambda programs of the artifact, the templates
-none. Pin `template_package`. Gates: the loader pins' entrypoint 251 cases 0 failed in 56 s; `std_test` 201 checks 0 failed in 151 s (the std root's 8 files and 356 declarations, 20 more than at landing 1 — the six templates' twelve equations and `filter`'s two —, stored in 86 s and replayed by K alone in 65 s); `template_test` 40 checks 0 failed in 102 s (15 instances in the artifact, 17 lambdas and function types in the sources, none in the programs; load 35 s, run 33 s, dump 34 s); parity byte-identical over 31 closures and 135,443 declarations in 297 s; the seven touched kernel files clean under the V3 loader (no refusal, no unused open); the full suite's 40 entrypoints in 552 s with one failure, `define_test`'s two stale counts (28 and 20 defined became 34 and 26, the six templates), corrected and rerun green (12 checks 0 failed in 259 s).
-
-**As built, landing 3 (2026-10-11): the budget and the workload, the growth,
-budget and E-first pins, the E-first instance, `LEAN.md`'s rows, the T2 and
-T3 record — the slice's close-out.** Rule 4's budget: `Load.budget`
-(`loader.shard`'s `instance_budget`, 1,024; carried across re-roots; set for a
-load by the driver's `--instance-budget N`); at a demand the template's
-instances in `Load.instances` are counted (`instances_of`) and the next past
-the budget is refused `specialization_budget` under the taker's name
-(`over_budget`, shared by both routes) — a refusal, never a proof. T3's
-workload: `v3/examples/template/workload.shard` takes 64 instances in one
-file — `List.map`, `filter`, `any` and `all` at 16 lifted lambdas each: 64
-lifted fns and 64 instances with their 128 equations built and checked by K in
-one load (33 s on the bootstrap with `std/list`); `workload` combines every
-instance's result (509 over `(1 2 3)`), the entry's last three digits by `/`
-and `mod` at `Int`. Pins `template_growth` (`f[A]` recursing at `f[List A]`:
-`realize_descent` at the declaration — landing 2's check, the pin T3's
-canonical refusal) and `template_budget` (the harness loads that case at a
-budget of 2, `case_budget`, so the third shape of `twice` is refused under its
-taker). The E-first instance (rule 3's last sentence): a template called in a
-body with no L reading takes an instance with a program and no generated
-definition. The E table's `EITemplate` carries the template's written binders'
-E signatures (`etable.shard`'s `EBind` — a static binder's domains and result
-over the type parameters, a data binder's type, a package binder;
-`template.shard`'s `tm_ebinds` over `static_etypes`, at registration by
-`loader.shard`'s `register_template`, one path for a fn's and a realize's
-template), so the classifier reads a template call (`read_template_app`): a
-data position as any term, a static position as a shape (`read_static_arg`) —
-a name of the E table with a program and no type parameters, bare or applied
-to runtime terms short of its arity, transiently the name applied to its
-captured terms. Once the body is read, `take_instances` walks it with its
-types (a match's variables from the scrutinee, a let's from its value, as
-`c_type` reads them), solves the type arguments by unification of the binders'
-E types against the arguments' (a static binder's domains and result against
-the name's trailing parameter types and result, a data binder's type against
-its argument's static type), refuses a type argument left open
-(`function_value`: a polymorphic taker is the typed route's), names the
-instance by the one formula (`etable.shard`'s `instance_name_of`, which
-`erasure.shard`'s `instance_name` now calls) and rewrites the call to the
-instance at the captured values then the data; the classifier answers `COkT`
-with the demands (`EDemand`), and the loader (`load_e_first` →
-`build_e_demands`) builds each from the template's program half alone
-(`template.shard`'s `build_program`, split out of `build_instance`;
-`build_instance_e`; the E types to L by `etype_to_l` — every E type in Type,
-a constant's levels by `solve_levels`), reuses a name already built at the
-same arguments, holds the budget, admits what the template's body lifts and
-builds what it demands as typed, and records `INSTANCE NAME of=T shapes=…
-equations=` with no equation. Refused E-first with pointers: a lambda (nothing
-lifts it in a body with no L reading — name it as a fn and pass the name, or
-give the body an L reading), a bound variable, a constant of the realization
-registry (`Int.add`: name a fn over it), a polymorphic fn (its type arguments
-are not written E-first), a template, a constructor, an extern, a package
-parameter. The entry `template_main.main` takes `List.map` at `digit` over
-the results itself (`List_map_Int_UInt8.of.…digit_0`, no equations); pin
-`template_e_first` takes `twice` at a name and at a named partial application
-and the polymorphic `mapi` at `Int` — ten pins, the design's nine and this.
-`LEAN.md`: the function-value row became four rows of what is now the same as
-Lean (a lambda under the six, `f ∘ g` as a lambda, a fn over a function, a
-package as a structure), five of what stays refused (a function in a value
-position, a static argument built from a parameter, the type-growing
-recursion, the budget, the E-first forms) and three shard-only rows
-(templates and instances, the package, `--instance-budget`).
-`docs/records/T2-T3-2026-10-11.md` records T2 and T3 against law §12.5's risk
-columns, the count fixed by the design before the build. Gates: the loader pins' entrypoint 254 cases 0 failed in 53 s (55 s inside the suite); `template_test` 46 checks 0 failed in 101 s (80 instances in the artifact — landing 2's 15, the workload's 64, the entry's E-first one —, 81 lambdas and function types in the sources, none in the programs; load 35 s, run 34 s, dump 33 s); `std_test` 201 checks 0 failed in 152 s (356 declarations stored in 88 s, replayed by K alone in 63 s); `define_test` 12 checks 0 failed in 252 s; parity byte-identical over 31 closures and 135,867 declarations in 311 s (424 more than at landing 2, the kernel's growth); the five touched kernel files clean under the V3 loader; the full suite's 40 entrypoints with 0 failed in 519 s (`store_test` 399 s, `parity_test` 311 s, `define_test` 252 s, `path_test` 234 s, `calc_test` 227 s). Route 1's kernel build, the full replay and the corpus are CI's.
-
-**Weighed and deferred,** each with the consumer that reopens it: the
-dynamic tier (escaping closures, function values in data, dispatch on
-functions) — law §4.3's named door, sealed variants the alternative,
-wake = a named workload with a demonstrated cost; instances shared
-across modules (each module takes its own, as with derivations, and the
-store holds them per file; a consumer measuring the duplication reopens
-it); an extern as a static argument (it takes a World; §4.7's effect-use
-contract is phase 4's); a lambda returning a lambda and a function-typed
-field of an E type (the escape rule; a consumer names the workload);
-route 1 over user files (phase 4). **Rejected:** a runtime closure or
-dictionary representation (law §4.1, §4.3); the captured values in the
-specialization key (law §4.3: never); an instance per call site (the
-shape tuple dedupes); a `template` keyword (the binder's type is the
-signal, one grammar); untyped lambda binders (`(fun ((x T)) …)` is L's
-form, §5.1).
-
-**Slice 3.29 — the tactic library: T10, the proof IR's gate**
-(designed 2026-10-12 at the boundary after slice 3.28, on the user's
-"proceed with the next slice"; §13 item 63 — **ratified 2026-10-12 as
-designed, the four leans taken and rule 10's limit accepted: a library
-composes at I's level until route 1 compiles user files (the user: "the
-limit is okay for now")**). Law
-§12.5's T10 row names the gate: an ordinary E library contributing an
-I-producing tactic through the fixed interface, its evidence checked
-through the same path as built-in tooling, while a proposed grammar
-extension receives the documented refusal; replay unchanged under
-changed ambient simp and instance settings; a dependent motive; reused
-local names in sibling branches; a guarded occurrence whose source
-changed; an external P accepted through `exact`; an I schema upgrade
-separate from a foundation change; one engine's solution checked
-identically by another — the risk column: an IR only its producer can
-read. Law §7.3 (the goal graph API as E functions over E data; a search
-engine any E program composing them), §7.2 (the replay contract; the
-four versions), §7.5 (sources carry tactic blocks or an `auto`
-delegation naming the policy; no tool writes into a source file; a
-stale pin is a pending obligation) and §5.3 departure 6 (the syntax ban
-scoped: E libraries producing I through the published APIs are the
-extension model; R40) fix the shape.
-
-*Where the slice starts.* Slices 3.20–3.22 built I's core, the two
-engine-carrying forms and the producers: `kernel/tactic.shard` holds
-the API's four functions over one derivation (`goal_of`, `applicable`,
-`tac_step`, `tac_prove`), `kernel/engine.shard` the ladder — a producer
-of I composing them in-process — and `kernel/prove.shard` the driver
-(the engine on each `auto` without a valid entry, the sidecar rewritten
-whole). The engine is the one producer, and it is wired into the reader
-(`reader.shard` imports `engine.shard`; `read_auto` calls
-`engine_prove`): a library has no door. The sidecar's header names the
-engine's version in a comment the loader never reads. **Measured before
-this design** (three probe files under the on-demand loader, the
-bootstrap, 2026-10-12, 25 s a run): (i) `cases` on a local with a
-hypothesis over it leaves the hypothesis speaking of the old local —
-the zero arm of `(n : Nat) (h : (< 0 n)) ⊢ (<= 1 n)` faces `(h : (< 0
-n)) ⊢ (<= 1 Nat.zero)`, which no step closes (slice 3.20's as-built:
-"a dependent would be left speaking of the old local, so then it
-stays"); T10's dependent motive is this gap; (ii) an unknown step is
-refused by name with I's roster and no pointer to a producer; (iii)
-`ev` already carries text in through the entry's codec and a value out
-(`run_prog`'s `arg_in`; `ev` the pure call), so a library's function
-runs on route 2 with nothing new in `ev`.
-
-*The ruling asked for* (four leans; the rest decided in the rules).
-(1) **The fixed interface is data at the boundary, one shot**: a
-tactic is a `fn` taking the goal as S text and answering a block as S
-text; the kernel elaborates and K checks what comes back, as it does a
-hand-written block. Rejected: the elaborator's state crossing into the
-library (the environment is sealed — a `CheckedEnv` is built by K
-alone, §13 item 26 — and a value conversion of Init's 58,000
-declarations per call); a host callback (law §7.3: never); a
-round-trip protocol (law §6's `attempt`/`commit` has no concurrent
-caller, as at 3.20). In-process composition of `step` is the kernel's
-engine's until route 1 compiles user files (phase 4); the law's "any
-E program composing these" reads at this phase as: the engine is such a
-program, a library composes at I's level. (2) **The producer is named
-in the source's delegation**: `(auto (tactic M.FN) HINT…)`. Rejected: a
-`--tactic` flag on `prove` (law §7.5: the source carries the delegation
-naming the policy); `(by (tactic M.FN))` run at build (the build never
-searches). (3) **The sidecar carries I's schema**: `(sidecar N)` as its
-first form, N = 2 from this slice; a sidecar without it is schema 1,
-replayed and reported, never refused; one above the current is refused.
-Rejected: the engine's version as the schema (law §7.2 keeps four
-versions apart; the implementation's stays in the comment); a version
-per entry. (4) **The guarded occurrence carries its expected subterm**:
-`(occ K EXPECT)`. Rejected: a positional path (law §7.2: "not a
-pretty-printed index").
-
-*The rules.*
+**The tactic library — slice 3.29 (T10)** (records §9.1 "Slice 3.29";
+§13 item 63, ratified 2026-10-12 as designed and 2026-10-13 as built;
+two landings 2026-10-12; law §7.2, §7.3, §7.5, §5.3 departure 6). The
+leans: the fixed interface is data at the boundary, one shot; the
+producer is named in the source's delegation; the sidecar carries I's
+schema; the guarded occurrence carries its expected subterm.
 
 1. **The tactic signature.** A tactic is a `fn` of an ordinary module,
    `(fn NAME ((goal TEXT) (hints TEXT)) TEXT)`, TEXT any byte type the
-   entry codec carries (§9: the prelude's `(List Int)`, Init's `(List
-   Nat)` or `(List Int)`, `ByteArray`), no World. The goal arrives as
-   one S form, `(goal ((NAME TYPE)…) TARGET (applicable SYM…))`: the
-   named context in order, the target, and the forms whose
-   precondition the goal meets as `applicable` answers them (a hint,
-   not a completeness claim); every term as the elaborator renders a
-   goal — bound names, `=` and the comparisons under their operators,
-   `Int` literals as source writes them — with the binder spelling made
-   S's (`(forall ((x T)) …)`, `(fun ((x T)) …)`, `(let ((x V)) …)`;
-   `goal_of`'s display keeps `(x : T) … ⊢` at the top only). The hints
-   arrive as the S text of the forms after `(tactic M.FN)` in the
-   delegation, `()` when none. The answer is a block `(STEP…)` in I's
-   concrete syntax, or the empty text for no answer. The library sees
-   no `El`, no `Expr`, no environment: it plans over data, and what it
-   plans is checked.
+   entry codec carries, no World; the goal arrives as `(goal ((NAME
+   TYPE)…) TARGET (applicable SYM…))` rendered by the one renderer the
+   refusals use (`tc_show`, `goal_sx`; binders as source writes them),
+   the hints as the S text after `(tactic M.FN)`; the answer a block
+   `(STEP…)` or the empty text. The library sees no `El`, no `Expr`,
+   no environment.
 2. **The delegation names it.** `(auto (tactic M.FN) HINT…)` in a
-   `theorem`, a `fulfills` or a discharge: M.FN the module-qualified
-   name of a `fn` in the load — the file imports the library as any
-   module. Under `prove` (mode `solve`) a theorem so delegated without
-   a valid entry runs the tactic under `ev` on the loaded programs
-   (route 2; the goal text through the entry's codec; the driver's
-   fuel), reads the answer as a block and replays it through
-   `tac_prove` before the theorem is accepted — the engine's path and
-   a hand-written block's; the sidecar entry it writes is `(proof-for
-   NAME FP (by STEP…))`, indistinguishable at the pin (law §7.5). A
-   name not in the load or not of rule 1's signature is `PENDING NAME
-   auto_unsolved fp=N tactic=M.FN: REASON` with the signature in the
-   message; a refused answer `… tactic=M.FN step K: REASON — the goal:
-   …` (the library author's feedback); the empty answer `… no answer`;
-   a run out of fuel or stuck `… ev: REASON`. Under `load.shard` the
-   delegation is the producer's and unread, as the hints are: the
-   build replays the sidecar only. Under `--measure` the engine runs
-   as today, and the tactic when named: `ENGINE NAME solved|unsolved`
-   and `TACTIC NAME M.FN solved|unsolved`.
-3. **The refusals (the row's "documented refusal").** An unknown step
-   in a block is `unknown_step` with I's roster and the pointer: a new
-   tactic is an E library producing these forms, named by `(auto
-   (tactic M.FN))` (§8.4 slice 3.29); `notation` and its kin keep
-   `lean_form`'s pointer, naming the library route. A `(tactic …)`
-   inside a hand-written `by` is `unknown_step` too: a producer is
-   named in a delegation, never inside I.
-4. **The schema.** A sidecar's first form is `(sidecar N)`: I's schema
-   version — the roster of forms, their arguments and the
-   reconstruction defaults — 2 from this slice (rule 5's guard and
-   rule 2's delegation are the change). A sidecar without the form is
-   schema 1 (every sidecar written before this slice), replayed as
-   before and reported once per file, `SIDECAR FILE schema=1
-   current=2` (the counts unchanged: a report, not a refusal); one at
-   a schema above the current is `sidecar_schema`, the file's load
-   error and its theorems pending — the future is unreadable. `prove`
-   writes the current. Law §7.2's four versions in V3: K's logical
-   rules (the kernel's sources, pinned by T0 against the export); I's
-   schema (this form); P's encoding (the store's format 3.1.0); the
-   producer's implementation (the engine's version in the sidecar's
-   comment, a library's in its own module). A foundation change — a
-   new export, a new K — moves none of these; the gate shows a
-   schema-1 sidecar replaying under schema 2 with the records equal but
-   for the report.
-5. **The guard.** `(rw LEMMA (occ K EXPECT) STEP-BLOCK…)`: EXPECT a term
-   elaborated at the matched instance's type; the instance the first
-   match found must be EXPECT after zonk (syntactically, as `rw`
-   matches), else `rw_occ_changed` showing both — the target's source
-   changed since the block was written and the K-th occurrence is
-   another instance. `(occ K)` alone stays as built (the K-th
-   occurrence of the first instance, Lean's). The engine writes no
-   `occ`; a library may; the pin writes one by hand.
-6. **The dependent motive.** Under `cases` and `induction`, every local
-   of the context whose type mentions the eliminated local
-   (transitively), and the equation hypothesis when named, is reverted
-   into the motive — `λ x. (h : T[x]) → … → target[x]` — and each arm
-   re-introduces them under their names after the constructor's
-   fields, so the arm sees `h : T[CTOR fields…]` (Lean's `cases`
-   reverts dependents). The eliminated local leaves the arm's context
-   (today it stays when a dependent exists). `wf` is unchanged: its
-   hypothesis quantifies.
-7. **Sibling names, external P, settings: pinned, nothing built.** Two
-   arms naming the same fields and the same `have`, each filling
-   closing over its own locals — a goal is scope-safe by construction
-   (an arm opens fresh locals; display names are the binders', slice
-   3.20 rule 2). A theorem closed by `(exact TERM)` with TERM a proof
-   term from outside the elaborator's producers: one of Init's theorems
-   applied (Lean's P through the export) and one the example library
-   builds as text (`(exact (Nat.le_refl n))`), accepted through the one
-   check. A sidecar replaying unchanged when the source's hints changed
-   and when an unrelated lemma module is imported: an entry carries its
-   rules (`simp_only RULE…`, `arith only FACT…`), hints are the
-   producer's and unread at replay, there is no ambient simp set, and
-   Init's instances are closed by the export (slice 3.27 rule 3's
-   table).
-8. **One solution checked identically.** The example's theorems are
-   solved twice, by the engine and by the library, and the test replays
-   each sidecar under `load.shard` to the same `ACCEPT` records (the
-   fingerprints the statements'), stores each with `--store` and
-   verifies each by K alone (`verify_release`): the proof terms differ,
-   the acceptance does not, and no producer is consulted at replay.
-9. **The example and the gate.** `v3/examples/tactic/`: `bool_split.shard`,
-   an ordinary E library importing `kernel/sexpr.shard` for the S
-   reader and printer — a decision procedure for goals over `Bool`
-   locals: it reads the goal, collects the context's `Bool` locals and
-   answers nested `(cases b ((false () …) (true () …)))` with every
-   leaf `(decide)`, complete for its fragment; a target `(<= x x)` or
-   `(= x x)` by an `exact` term (rule 7's external P); about 80 lines.
-   `use_split.shard`: theorems delegated `(auto (tactic
-   examples.tactic.bool_split.solve))` — commutativity of `&&`, De
-   Morgan, `(|| a (! a)) = true`, `(<= n n)` — with its committed
-   sidecar. `kernel/test/tactic_lib_test.sh`, the suite's 41st
-   entrypoint: the replay (no `PROVED`; every theorem `ACCEPT`); the
-   regeneration byte-identical to the committed sidecar but for the
-   fingerprints (as `engine_test.sh`); the engine's sidecar for the
-   same statements regenerated under `(auto)` in a scratch copy, both
-   replayed, stored and verified (rule 8); the schema-1 copy reported
-   (rule 4); the hints-changed copy replayed (rule 7). Pins:
-   `by_cases_dependent`, `by_sibling_names`, `by_exact_external` (ok);
-   `by_rw_occ_guard` (`rw_occ_changed`); `auto_tactic` (an entry a
-   tactic wrote replays with the library imported and never run);
-   `auto_schema_old` (ok, reported); `auto_schema_future`
-   (`sidecar_schema`); `auto_hints_changed` (ok); `by_unknown_step` and
-   `lean_notation` with their pointers (expectations unchanged). The
-   record `docs/records/T10-DATE.md` against law §12.5's row, each
-   clause with its pin or test; `docs/LEAN.md` gains the row for a
-   tactic extension (Lean's `macro`/`elab` tactic → an E library named
-   by the delegation) and the syntax row's pointer.
-10. **Not in 3.29**, named: a library composing `step` in-process
-    (route 1 over user files, phase 4; the engine stays the kernel's);
-    `attempt`/`commit`, owners and snapshots (law §6; a concurrent
-    caller first); incremental goal states (T6, phase 4); `rw` at a
-    hypothesis; a tactic with World access (a tactic is pure); several
-    tactics in one delegation (name one; a library composes its own).
-
-*Landings.* 1: rules 3–7's kernel half — the pointers, the schema, the
-guard, the dependent revert, the pins; gate: the pins, `tactic_test`
-and `engine_test` unchanged. 2: rules 1, 2, 8 and 9 — the interface,
-the delegation under `prove`, the example library, the entrypoint, the
-T10 record, `LEAN.md`'s rows.
-
-*As built, landing 1 (2026-10-12).* Rules 3–7's kernel half as
-designed, with three readings recorded for ratification at the
-close-out. (i) The guard compares the instance found with EXPECT by
-structure first and by the elaborator's unification second
-(`rw_occ_check`: `expr_eq`, then `el_unify`, K's conversion under it),
-so a literal spelled one way in the source and another in the lemma
-never trips it; `rw_occ_changed` shows both instances. (ii) The
-equation hypothesis precedes the reverted dependents in the motive —
-`λ d. (= x d) → (h : T[d]) → … → target[d]` — and an arm re-introduces
-the fields, then `H`, then the dependents under their names
-(`cases_minors` opens them as it opens the fields; `ctx_dependents`
-collects them transitively in the context's order); with an equation
-name the eliminated local stays, the equation naming it, without one
-it leaves; an induction hypothesis quantifies over the dependents —
-calc's 100 claims replay unchanged. (iii) A sidecar's first form
-`(sidecar N)` is read by `sidecar_split` before its entries, and
-`prove` writes `(sidecar 2)` after the header comment whenever it
-rewrites a file whole; an entry still valid is never rewritten, so the
-schema form appears only when a file is written — the two committed
-sidecars (`examples/auto`, pin `auto_core`) were regenerated by `prove`
-from nothing, and the engine now closes `auto_core`'s `u` by `rfl`
-where the slice-3.22 entry held an induction; pin `auto_schema_old`
-keeps that older sidecar as the schema-1 artifact it is. The refusal
-pointers: `unknown_step`'s two messages and `lean_form`'s notation row
-end with "a new tactic is an E library producing these forms, named by
-(auto (tactic M.FN)) (§8.4 slice 3.29)"; `(tactic …)` inside a hand
-`by` is `unknown_step`. Measured as pinned: the dependent motive
-closes the probe's theorems (`by_cases_dependent`, three: the zero
-arm's `h : (< 0 Nat.zero)` refuted by `arith`); sibling names and the
-external P held before the landing (`by_sibling_names`,
-`by_exact_external`, loaded first, nothing built); `by_rw_occ_guard`'s
-`moved` is refused with both instances shown; `auto_schema_old`
-replays with `SIDECAR main.shard schema=1 current=2`;
-`auto_schema_future`'s `(sidecar 3)` is the load error
-`sidecar_schema`; `auto_hints_changed` replays an entry written under
-`(induct n)` with the source now saying `(budget 1)`. Gates: the
-loader pins' entrypoint 259 cases, 0 failed, 58 s (the list's
-duplicated `arith_eq_bare` entry removed); `tactic_test` 110 checks,
-0 failed, 52 s; `engine_test` 24 checks, 0 failed, 179 s (the
-regenerated sidecar byte-identical but for the fingerprints, 54 of
-100 claims); parity byte-identical over 31 closures and 135,940
-declarations in 308 s; the full suite's 40 entrypoints, 0 failed, in 530 s.
-
-*As built, landing 2 (2026-10-12).* Rules 1, 2, 8 and 9 as designed,
-with the readings recorded for ratification at the close-out. (i) The
-goal's terms are rendered by the one renderer the refusals use
-(`tc_show`), whose binders now read as source writes them —
-`(forall ((x T)) P)`, `(fun ((x T)) e)` — in every message as well,
-one spelling; `goal_sx` frames them as `(goal ((NAME TYPE)…) TARGET
-(applicable SYM…))`. (ii) The producers' inputs travel together:
-`reader.shard`'s `Producers` carries a file's sidecar entries, the
-programs loaded so far (`Load.etab`) and the fuel (`Load.fuel`:
-`default_fuel`, now the loader's, or `prove.shard --fuel N`), built by
-the loader at the three proof sites (a theorem, a `fulfills`, a
-discharge); `run_tactic` finds M.FN in the programs (`prog_find`),
-requires two parameters and a result of byte types (`ev.shard`'s
-`text_type`, `list_ctors`' judgment) and no type parameter, makes the
-goal as `engine_prove` does, carries the texts through `val_of_text`
-and `text_of_val` (the entry codec's cells) and runs `ev` on the
-loaded programs; the answer is one form, the block's steps, read by
-`read_all`. (iii) The refusals as designed, each measured: an unknown
-name, a wrong signature (the signature shown), a refused answer
-(`tactic=M.FN: decide_failed: step 1: … — the goal: …`), the empty
-answer (`no answer`), an answer that does not read (`the answer does
-not read: unterminated_list at byte 1 of (`), two forms (`the answer
-is not one block (STEP…): ()()`), a stuck or exhausted run (`ev: …`),
-two tactics in one delegation (rule 10's refusal), `(tactic)` without
-a name; `(by (tactic …))` is `unknown_step`. (iv) `--measure` runs the
-engine as today and the tactic when named, `RDMeasured` carrying the
-tactic's name and result, the loader recording `TACTIC NAME M.FN
-solved|unsolved` beside `ENGINE`. (v) The example library is E-first
-(`RUNNABLE … route=e_first`, as the kernel's own S reader it imports
-is), six theorems rather than four — `and_assoc` (three locals) and
-`eq_self` (the `(= x x)` term) added —, and a statement over Init's
-names alone has the same fingerprint in every module, so the
-entrypoint's regenerated sidecar is byte-identical to the committed
-one with nothing masked (`engine_test`'s mask is for a statement that
-names the module's own constants); the engine closes the same six
-(`and_comm` by nested inductions, `de_morgan`, `excluded` and
-`and_assoc` by one induction and `rfl`, `le_self` by `arith`, `eq_self`
-by `rfl`), and the two sidecars replay to the same six `ACCEPT`
-records but for the axiom closure, which is the proof's and not the
-statement's — the engine's `le_self` by `arith` rests on `propext` and
-`Quot.sound` (Omega's kit), the library's `(exact (Nat.le_refl n))` on
-nothing; rule 8's "the same `ACCEPT` records" holds in the name, the
-module, the fingerprint (the `hash` field), the horizon and the
-parameters, and the gate compares those and reports the two closures.
-(vi) Pin
-`auto_tactic`'s library is a constant tactic of the pin's root (a
-pin imports nothing outside it), typed over Init's `(List Int)`;
-`bool_split` imports `kernel/sexpr.shard` by relative path, so the
-entrypoint's scratch copy one level under `v3` rewrites that path.
-Gates: the loader pins' entrypoint 260 cases, 0 failed, 58 s; `tactic_test` 110 checks, 0 failed, 52 s; `engine_test` 24 checks, 0 failed, 182 s; parity byte-identical over 31 closures and 136,735 declarations in 313 s; `tactic_lib_test` 30 checks, 0 failed, 280 s; the six touched kernel files clean under the V3 loader; the full suite's 41 entrypoints, 0 failed, in 548 s.
-
-**The close-out (2026-10-12): the two landings are built and hold on
-the full gate (pipelines 588 and 589, 2026-10-13); the as-built
-readings above — landing 1's guard by structure then unification, the
-equation hypothesis before the reverted dependents, the sidecars
-regenerated from nothing; landing 2's one renderer with the source's
-binder spelling, `Producers`, the E-first library and the six theorems,
-the fingerprint's independence from the module — ratified
-2026-10-13 (§13 item 63's note).**
+   `theorem`, a `fulfills` or a discharge; under `prove` (mode
+   `solve`) a theorem without a valid entry runs the tactic under `ev`
+   on the loaded programs (`reader.shard`'s `Producers`: the sidecar
+   entries, `Load.etab`, `Load.fuel` — `default_fuel` or `prove.shard
+   --fuel N`; `run_tactic`, `prog_find`, the texts through
+   `val_of_text`/`text_of_val`) and replays the answer through
+   `tac_prove` before acceptance, the entry it writes any entry;
+   `PENDING NAME auto_unsolved fp=N tactic=M.FN: REASON` for an unknown
+   name, a wrong signature, a refused step with its goal, no answer,
+   an answer that does not read, several forms, `ev` stuck or
+   exhausted, two tactics, `(tactic)` without a name; under
+   `load.shard` the delegation is unread — the build replays the
+   sidecar only; under `--measure` `TACTIC NAME M.FN solved|unsolved`
+   beside `ENGINE`.
+3. **The refusals**: an unknown step is `unknown_step` with I's roster
+   and the pointer "a new tactic is an E library producing these
+   forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)"; `notation`
+   and its kin keep `lean_form`'s pointer naming the library route;
+   `(tactic …)` inside a hand-written `by` is `unknown_step`.
+4. **The schema.** A sidecar's first form is `(sidecar N)`, I's schema
+   version, 2 since this slice; a sidecar without it is schema 1,
+   replayed and reported once per file (`SIDECAR FILE schema=1
+   current=2`); one above the current is the load error
+   `sidecar_schema`; `prove` writes the current whenever it rewrites a
+   file whole (an entry still valid is never rewritten). Law §7.2's
+   four versions in V3: K's rules (pinned by T0), I's schema (this
+   form), P's encoding (the store's format 3.1.0), the producer's
+   implementation (the sidecar's comment). Pins `auto_schema_old`,
+   `auto_schema_future`.
+5. **The guard.** `(rw LEMMA (occ K EXPECT) STEP-BLOCK…)`: the
+   instance the first match found must be EXPECT — by structure first,
+   by the elaborator's unification second (`rw_occ_check`) — else
+   `rw_occ_changed` showing both (the source moved under the guard, or
+   the expectation written is wrong, since 3.30 landing 2); `(occ K)`
+   alone stays Lean's. Pin `by_rw_occ_guard`.
+6. **The dependent motive.** Under `cases` and `induction` every local
+   whose type mentions the eliminated local (transitively), and the
+   equation hypothesis when named, is reverted into the motive — the
+   equation first, then the dependents — and each arm re-introduces
+   the fields, then the equation, then the dependents under their
+   names (`cases_minors`, `ctx_dependents`); the eliminated local
+   leaves the arm's context unless an equation names it; an induction
+   hypothesis quantifies over the dependents. Pin `by_cases_dependent`.
+7. **Sibling names, external P, settings — pinned, nothing built**: two
+   arms naming the same fields and `have` (`by_sibling_names`); a
+   theorem closed by an `exact` term from outside the elaborator's
+   producers (`by_exact_external`); a sidecar replaying unchanged when
+   the hints changed or an unrelated lemma module is imported
+   (`auto_hints_changed`) — an entry carries its rules, there is no
+   ambient simp set, Init's instances are closed by the export.
+8. **One solution checked identically**: the example's theorems solved
+   by the engine and by the library, each sidecar replayed under
+   `load.shard` to the same `ACCEPT` records (the name, module,
+   fingerprint, horizon and parameters; the axiom closure the proof's
+   — the engine's `arith` rests on `propext` and `Quot.sound`, the
+   library's `exact` on nothing), each stored and verified by K alone.
+9. **The example and the gate**: `v3/examples/tactic/bool_split.shard`
+   (an E-first library over `kernel/sexpr.shard`: the context's `Bool`
+   locals split by nested `cases` with `(decide)` at the leaves, a
+   reflexive target by an `exact` term), `use_split.shard` with six
+   theorems delegated to it and its committed sidecar (a statement
+   over Init's names alone fingerprints the same in every module);
+   `kernel/test/tactic_lib_test.sh`, the 41st entrypoint (the replay,
+   the regeneration byte-identical, the engine's sidecar for the same
+   statements, the schema-1 copy reported, the hints-changed copy
+   replayed, `--measure` 6 of 6 by each producer); pin `auto_tactic`;
+   `docs/records/T10-2026-10-12.md`; `LEAN.md`'s rows for a tactic
+   extension, the delegation, the schema form, the guard, `--fuel`.
+10. **Not in 3.29**: a library composing `step` in-process (phase 4,
+    route 1 over user files; the engine stays the kernel's);
+    `attempt`/`commit`, owners and snapshots; incremental goal states
+    (T6); `rw` at a hypothesis; a tactic with World access; several
+    tactics in one delegation.
 
 **Slice 3.30 — the phase-3 close-out: the gate ledger, the carried
 rows, T9 again, the consolidation** (designed 2026-10-13 at the
@@ -6399,6 +3124,38 @@ verbatim).
   edited kernel files clean under the V3 loader; `names.py` at its
   baseline. Route 1's kernel build, the full replay and the corpus are
   CI's.
+
+**Slice 3.30 as built, landing 3 (2026-10-13) — the consolidation.**
+Rule 6 by its lean (§13 item 64(e)).
+
+- **The move.** The design and as-built texts of slices 3.13–3.29 —
+  4,391 lines, from "The rules of slice 3.13" to the line before this
+  slice's own text — moved verbatim to records §9.1, one `#### Slice
+  3.N` heading per slice added as the record's index and nothing
+  else; the moved text's SHA-256 prefix `a500557b5ca452f3`, taken before
+  the cut and after the paste, equal. `LANGUAGE.md` 7,818 lines to
+  4,544; the records 3,223 to 7,654.
+- **What stays.** Per facility, the current statement of each rule
+  with its as-built note beside it, numbered as its slice numbered
+  it — definitions (3.13–3.16), the porting facilities and bytes
+  (3.17–3.18), deriving (3.19), I (3.20–3.21b), the producers and the
+  store (3.22), `Init` (3.23–3.26), the library (3.27), templates
+  (3.28), the tactic library (3.29) — 1,115 lines, a quarter of the
+  moved text, each slice labelled, so that `§8.4 slice N rule K` (151
+  pointers in the kernel's comments and messages, `LEAN.md`'s rows,
+  the READMEs) names a rule here and its full text in the record; a
+  rule another slice superseded says so and points on (3.13 rules 2,
+  4 and 5, 3.14 rule 3, 3.23 whole). The slice table stays as the
+  index, each row ending in its record's heading, "below" read as
+  the record. The title is "S, L, E and I as phase 3 built them" and
+  the status block is rewritten for the close. This slice's own text
+  stays here until the close.
+- **The departure, stated.** The current statements are new prose —
+  a compression written from the full texts facility by facility,
+  not moved text; where a statement and the record differ the record
+  is the authority, and GPT-6's memo over the SHA is the review
+  (rule 6). No kernel change and no test run: the landing is
+  documents, the kernel's pointers unchanged in text.
 
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
@@ -7816,3 +4573,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     allowed); ten of the fourteen reported gaps `LEAN.md` rows, one a
     spelling in slice 3.28's rule 5 corrected, the rest the author's
     reading or the brief's wording (`docs/records/T9-2026-10-13.md`).
+    **As built, landing 3 (2026-10-13), for ratification at the
+    close:** the consolidation by the lean — 4,391 lines moved
+    verbatim to records §9.1 (the digest equal before and after),
+    1,115 lines of per-facility current statements kept in §8.4,
+    numbered as the slices numbered their rules; the slice table the
+    index; the title and the status block rewritten. The current
+    statements are new prose, the record the authority where the two
+    differ.
