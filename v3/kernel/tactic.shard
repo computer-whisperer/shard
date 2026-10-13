@@ -88,7 +88,7 @@
   (NDecide)                                   ; decide
   (NUnfold (List Name))                       ; (unfold NAME…)
   (NReduce Symbol)                            ; (reduce), (reduce lhs), (reduce rhs)
-  (NRw Bool SExpr Int (List Node))            ; (rw LEMMA | (<- LEMMA)) (occ K)? (STEP…)…: K = 0 is every occurrence
+  (NRw Bool SExpr Int (Option SExpr) (List Node))   ; (rw LEMMA | (<- LEMMA)) (occ K EXPECT?)? (STEP…)…: K = 0 is every occurrence; EXPECT the instance expected at the occurrence (slice 3.29 rule 5: refused rw_occ_changed when another is found)
   (NSorry)                                    ; sorry
   (NArith Bool (List SExpr) (List (List Int))) ; (arith only? FACT… (farkas K…)?): only (no context row; slice 3.22 rule 3), the facts, the certificates given (two for an equation)
   (NSimp (List (Pair Bool SExpr)))            ; (simp_only RULE…): each a lemma and whether it is reversed
@@ -115,7 +115,7 @@
      (if (sym_eq x (quote decide)) (NROk (NDecide))
      (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both)))
      (if (sym_eq x (quote arith)) (NROk (NArith False Nil Nil))
-       (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, arith, or a list)"))))))))
+       (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, arith, or a list); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)"))))))))
     ((SList (Cons (SSym h) args))
      (if (sym_eq h (quote intro)) (read_names args Nil (quote intro))
      (if (sym_eq h (quote exact)) (match args ((Cons t Nil) (NROk (NExact t))) (_ (NRErr (quote bad_step) "(exact TERM)")))
@@ -133,7 +133,7 @@
      (if (sym_eq h (quote rw)) (read_rw args)
      (if (sym_eq h (quote arith)) (read_arith args Nil Nil)
      (if (sym_eq h (quote simp_only)) (read_simp args Nil)
-       (NRErr (quote unknown_step) (append (chars_of_sym h) ": not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry)")))))))))))))))))))
+       (NRErr (quote unknown_step) (append (chars_of_sym h) ": not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)")))))))))))))))))))
     (_ (NRErr (quote bad_step) "a step is a symbol or (FORM …)"))))
 (fn read_names ((ss (List SExpr)) (acc (List Name)) (form Symbol)) NodeRes
   (measure (struct ss))
@@ -241,13 +241,16 @@
      (match (rw_lemma lem)
        ((Pair rev1 t)
         (match rest
-          ((Cons (SList (Cons (SSym o) (Cons (SNum k) Nil))) blocks)
+          ((Cons (SList (Cons (SSym o) (Cons (SNum k) more))) blocks)
            (if (sym_eq o (quote occ))
              (if (lt k 1) (NRErr (quote bad_step) "(occ K): K counts from 1")
-               (match (read_blocks blocks Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t k bs)))))
-             (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs))))))
-          (_ (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 bs)))))))))
-    (_ (NRErr (quote bad_step) "(rw LEMMA (occ K)? (STEP…)…) or (rw (<- LEMMA) …)"))))
+               (match more
+                 (Nil (match (read_blocks blocks Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t k None bs)))))
+                 ((Cons ex Nil) (match (read_blocks blocks Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t k (Some ex) bs)))))
+                 (_ (NRErr (quote bad_step) "(occ K) or (occ K EXPECT): the occurrence, and the instance expected there"))))
+             (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 None bs))))))
+          (_ (match (read_blocks rest Nil) ((BRErr e m) (NRErr e m)) ((BROk bs) (NROk (NRw rev1 t 0 None bs)))))))))
+    (_ (NRErr (quote bad_step) "(rw LEMMA (occ K EXPECT?)? (STEP…)…) or (rw (<- LEMMA) …)"))))
 ;; (arith FACT… (farkas K…)…): the facts, then the certificates
 (fn read_arith ((args (List SExpr)) (facts (List SExpr)) (certs (List (List Int)))) NodeRes
   (match args
@@ -317,10 +320,11 @@
      (match (el_fresh e1 (n1 (quote goal)) stmt (quote goal))
        ((Pair e2 (MVar _ i)) (Made e2 (Goal i stmt (len ctx)) (mk_app_n (mk_mvar i) ctx)))
        ((Pair e2 m) (Made e2 (Goal 0 stmt (len ctx)) m)))))))
-;; the context without the local `x`, when no other local's type mentions it (a split or an
-;; induction replaces it by its cases; a dependent would be left speaking of the old local, so
-;; then it stays); the occurrence of a goal over the smaller context still closes, K's
-;; mk_binding abstracting only what the term mentions
+;; the context without the local `x`, when no other local's type mentions it (wf replaces it by
+;; its hypothesis's local; a dependent would be left speaking of the old local, so then it
+;; stays); the occurrence of a goal over the smaller context still closes, K's mk_binding
+;; abstracting only what the term mentions. cases and induction revert the dependents instead
+;; (slice 3.29 rule 6: ctx_dependents) and the eliminated local always leaves
 (fn ctx_without ((e El) (ctx (List Expr)) (x Expr)) (List Expr)
   (match x
     ((FVar _ id) (if (ctx_depends e ctx id) ctx (remove_local ctx id)))
@@ -335,6 +339,35 @@
          ((Some ty) (if (mem_int id (expr_fvars ty Nil)) True (ctx_depends e r id)))
          (None (ctx_depends e r id)))))
     ((Cons _ r) (ctx_depends e r id))))
+;; the locals of the context whose types mention `x` — transitively, in the context's order (a
+;; later local's type may mention an earlier dependent); none for a term scrutinee
+(fn ctx_dependents ((e El) (ctx (List Expr)) (x Expr)) (List Expr)
+  (match x
+    ((FVar _ id) (ctx_dependents_go e ctx (list id) Nil))
+    (_ Nil)))
+(fn ctx_dependents_go ((e El) (ctx (List Expr)) (ids (List Int)) (acc (List Expr))) (List Expr)
+  (measure (struct ctx))
+  (match ctx
+    (Nil (rev acc))
+    ((Cons (FVar d j) r)
+     (if (mem_int j ids) (ctx_dependents_go e r ids acc)
+       (match (w_local_type (el_w e) j)
+         ((Some ty) (if (ids_meet (expr_fvars ty Nil) ids) (ctx_dependents_go e r (Cons j ids) (Cons (FVar d j) acc)) (ctx_dependents_go e r ids acc)))
+         (None (ctx_dependents_go e r ids acc)))))
+    ((Cons _ r) (ctx_dependents_go e r ids acc))))
+;; the context without the given locals
+(fn ctx_minus ((ctx (List Expr)) (xs (List Expr))) (List Expr)
+  (measure (struct xs))
+  (match xs
+    (Nil ctx)
+    ((Cons (FVar _ j) r) (ctx_minus (remove_local ctx j) r))
+    ((Cons _ r) (ctx_minus ctx r))))
+(fn local_names ((e El) (xs (List Expr))) (List Name)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (FVar _ j) r) (Cons (local_name e j) (local_names e r)))
+    ((Cons _ r) (local_names e r))))
 (fn remove_local ((ctx (List Expr)) (id Int)) (List Expr)
   (measure (struct ctx))
   (match ctx
@@ -469,7 +502,7 @@
        ((NDecide) (step_decide e1 ctx target))
        ((NUnfold ns) (step_unfold e1 ctx target ns))
        ((NReduce side) (step_reduce e1 ctx target side))
-       ((NRw rv lem occ bs) (step_rw e1 ctx target rv lem occ bs))
+       ((NRw rv lem occ ex bs) (step_rw e1 ctx target rv lem occ ex bs))
        ((NArith only facts certs) (step_arith e1 ctx target only facts certs))
        ((NSimp rules) (step_simp e1 ctx target rules))
        (_ (StepErr (quote bad_step) "an arm or a block is not a step"))))))
@@ -759,9 +792,14 @@
     ((FVar _ id) (match (w_subst (el_w e) target id d) ((Pair w1 r) (Pair (el_set_w e w1) r))))
     (_ (Pair e (tc_replace target x d 0)))))
 
-;; (cases X ARM…) and (induction X ARM…): the eliminator applied to the generalized motive
-;; with an equation name, the motive is `λ d. x = d → target[d]` and the eliminator's result is
-;; applied to Eq.refl x, so each arm has `H : x = CTOR fields` (Lean's `cases h : x`)
+;; (cases X ARM…) and (induction X ARM…): the eliminator applied to the generalized motive —
+;; the locals whose types mention x reverted into it first (slice 3.29 rule 6: the motive is
+;; `λ d. (h : T[d]) → … → target[d]`, the eliminator's result applied back to them, and each arm
+;; re-introduces them after the constructor's fields, under their names, so an arm sees
+;; `h : T[CTOR fields]` and an induction hypothesis quantifies over them; Lean's `cases` reverts
+;; dependents, `induction … generalizing`); the eliminated local leaves the arm's context. With
+;; an equation name, the motive is `λ d. x = d → …` and the eliminator's result is applied to
+;; Eq.refl x, so each arm has `H : x = CTOR fields` (Lean's `cases h : x`; x stays, H names it)
 (fn step_cases ((e El) (ctx (List Expr)) (target Expr) (t SExpr) (hn (Option Name)) (arms (List Node)) (ind Bool)) TStep
   (match (elab e t None)
     ((EErr x m) (StepErr x m))
@@ -782,7 +820,10 @@
                 (let ((levels (if (lt (len ils) (len (ci_lparams einfo))) (Cons LZero ils) ils)))
                   (match (el_local e2 (n1 (quote d)) (el_zonk e2 xty) BDefault)
                     ((Pair e3 d)
-                     (match (generalize e3 (el_zonk e3 target) x d)
+                     (let ((deps (ctx_dependents e3 ctx x)))
+                     (match (el_pis e3 deps (el_zonk e3 target))
+                       ((Pair e3b target1)
+                     (match (generalize e3b target1 x d)
                        ((Pair e4a body0)
                         (match (cases_eq_motive e4a hn xty x d body0)
                           ((Pair e4 body)
@@ -793,13 +834,13 @@
                              (match (el_infer e5 head)
                                ((Pair e6 None) (StepErr (quote cases_type) (append "K could not type " (append (show_name elim) " at this motive"))))
                                ((Pair e6 (Some hty))
-                                (match (cases_minors e6 (match hn ((Some _) ctx) (None (ctx_without e6 ctx x))) hty ctors arms hn Nil Nil Nil (if ind (quote induction) (quote cases)))
+                                (match (cases_minors e6 (ctx_minus (match hn ((Some _) ctx) (None (ctx_minus ctx (list x)))) deps) hty ctors arms hn (local_names e6 deps) Nil Nil Nil (if ind (quote induction) (quote cases)))
                                   ((MinErr xx m) (StepErr xx m))
                                   ((MinOk e7 minors gs bls)
                                    (step_close e7 ctx
                                      (mk_app_n (mk_app_n head (if ind (append minors (list x)) minors))
-                                       (match hn ((Some _) (list (mk_app_n (mk_const (nm_eq_refl) (list (sort_level_of e7 xty))) (list (el_zonk e7 xty) x)))) (None Nil)))
-                                     gs bls))))))))))))))))))))))))))))
+                                       (append (match hn ((Some _) (list (mk_app_n (mk_const (nm_eq_refl) (list (sort_level_of e7 xty))) (list (el_zonk e7 xty) x)))) (None Nil)) deps))
+                                     gs bls)))))))))))))))))))))))))))))))
 ;; the motive's body under an equation name: `(= x d) -> body`
 (fn cases_eq_motive ((e El) (hn (Option Name)) (xty Expr) (x Expr) (d Expr) (body Expr)) (Pair El Expr)
   (match hn
@@ -810,9 +851,10 @@
 (fn sort_level_of ((e El) (ty Expr)) Level
   (match (tac_sort_level e ty) ((Pair _ (Some u)) u) ((Pair _ None) (LSucc LZero))))
 ;; one minor premise per constructor: its telescope opened under the arm's names, its result
-;; the child goal (with the equation hypothesis opened after the fields, under its name)
+;; the child goal (with the equation hypothesis opened after the fields, under its name, and
+;; the reverted dependents after it under theirs — `depn`, their names in the motive's order)
 (type Minors (MinOk El (List Expr) (List Goal) (List (List Node))) (MinErr Symbol (List Int)))
-(fn cases_minors ((e El) (ctx (List Expr)) (hty Expr) (ctors (List Name)) (arms (List Node)) (hn (Option Name)) (macc (List Expr)) (gacc (List Goal)) (bacc (List (List Node))) (who Symbol)) Minors
+(fn cases_minors ((e El) (ctx (List Expr)) (hty Expr) (ctors (List Name)) (arms (List Node)) (hn (Option Name)) (depn (List Name)) (macc (List Expr)) (gacc (List Goal)) (bacc (List (List Node))) (who Symbol)) Minors
   (measure (struct ctors))
   (match ctors
     (Nil (match arms
@@ -831,12 +873,14 @@
                ((Opened e2 fields res)
               (if (bool_not (int_eq (minor_binders (el_zonk e1 mty) 64) (len names)))
                 (MinErr (sym_of_chars (append (chars_of_sym who) "_fields")) (append (show_name c) (append "'s arm names " (append (show_nat (len names)) (append " binder(s) and its case has " (append (show_nat (len fields)) (append ": " (fields_list e2 ctx fields))))))))
-                (match (tac_goal e2 (append ctx fields) res)
+                (match (tac_fields_open e2 res depn Nil)
+                  ((Pair _ (Opened e2b deps res1))
+                (match (tac_goal e2b (append ctx (append fields deps)) res1)
                   ((Made e3 g occ)
-                   (match (el_lams e3 fields occ)
+                   (match (el_lams e3 (append fields deps) occ)
                      ((Pair e4 minor)
                       (match (w_inst1 (el_w e4) body minor)
-                        ((Pair w5 hty1) (cases_minors (el_set_w e4 w5) ctx hty1 cr rest hn (Cons minor macc) (Cons g gacc) (Cons ablock bacc) who)))))))))))))
+                        ((Pair w5 hty1) (cases_minors (el_set_w e4 w5) ctx hty1 cr rest hn depn (Cons minor macc) (Cons g gacc) (Cons ablock bacc) who)))))))))))))))
           ((Pair e1 _) (MinErr (quote cases_type) "the eliminator's type has fewer minor premises than constructors"))))
        ((Some _) (MinErr (quote bad_step) "an arm is (CTOR (NAME…) STEP…)"))))))
 ;; the arm named after the constructor (by its last component or in full), and the rest
@@ -1128,9 +1172,12 @@
                                (mk_app_n (mk_const (n1 (quote congrArg)) (list u (LSucc LZero))) (list ty (mk_sort LZero) a b motive heq))
                                occ))))))))))))))))
 
-;; (rw LEMMA (occ K)? BLOCK…): the lemma's left side matched against the target's subterms, every
-;; occurrence of the instance rewritten; the premises left open are child goals
-(fn step_rw ((e El) (ctx (List Expr)) (target Expr) (rv Bool) (lem SExpr) (sel Int) (bs (List Node))) TStep
+;; (rw LEMMA (occ K EXPECT?)? BLOCK…): the lemma's left side matched against the target's subterms,
+;; every occurrence of the instance rewritten (the K-th alone under occ); the premises left open
+;; are child goals. The guard (slice 3.29 rule 5): EXPECT names the instance the author saw at the
+;; occurrence — the instance found must be it, by structure or by K's conversion, else the step
+;; is refused rw_occ_changed showing both (the source moved under the guard)
+(fn step_rw ((e El) (ctx (List Expr)) (target Expr) (rv Bool) (lem SExpr) (sel Int) (expect (Option SExpr)) (bs (List Node))) TStep
   (match (elab e lem None)
     ((EErr x m) (StepErr x m))
     ((EOk e1 v ty)
@@ -1151,6 +1198,9 @@
                      (match (tac_unsolved e4 hz)
                        ((Some (Pair x m)) (StepErr x m))
                        (None
+                        (match (rw_occ_check e4 ctx expect az pz)
+                          ((Pair _ (Some (Pair x m))) (StepErr x m))
+                          ((Pair _ None)
                         (if (bool_and (lt 0 sel) (lt (tc_count target pz) sel))
                           (StepErr (quote rw_no_match) (append "the target has " (append (show_nat (tc_count target pz)) (append " occurrence(s) of " (tc_show_closed e4 ctx pz)))))
                           (let ((heq (if rv (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list u)) (list az (el_zonk e4 l) (el_zonk e4 r) hz)) hz)))
@@ -1158,7 +1208,19 @@
                               ((TRwErr x m) (StepErr x m))
                               ((TRwOk e5 g _ term)
                                (match (tac_close e5 ctx term)
-                                 ((Pair e6 filling) (StepOk e6 filling gs (blocks_of bs Nil) (Some g)))))))))))))))))))))))
+                                 ((Pair e6 filling) (StepOk e6 filling gs (blocks_of bs Nil) (Some g)))))))))))))))))))))))))
+(fn rw_occ_check ((e El) (ctx (List Expr)) (expect (Option SExpr)) (ty Expr) (found Expr)) (Pair El (Option (Pair Symbol (List Int))))
+  (match expect
+    (None (Pair e None))
+    ((Some s)
+     (match (elab e s (Some ty))
+       ((EErr x m) (Pair e (Some (Pair x m))))
+       ((EOk e1 v _)
+        (let ((vz (sp_canon (el_zonk e1 v))))
+          (if (expr_eq vz found) (Pair e1 None)
+            (match (el_unify e1 vz found)
+              ((Some e2) (Pair e2 None))
+              (None (Pair e1 (Some (Pair (quote rw_occ_changed) (append "(occ K EXPECT): the occurrence found is " (append (tc_show_closed e1 ctx found) (append ", not the expected " (append (tc_show_closed e1 ctx vz) " — the source moved under the guard"))))))))))))))))
 
 ;; ---- unfold and reduce (rule 6) --------------------------------------------------------------
 ;; a redex found in the target: the subterm, its replacement, and the equation that justifies it

@@ -102,7 +102,7 @@ departures unless another section is named.
 |---|---|---|---|
 | `partial def f …` | `lean_form` | law §5.3 departure 4 (ruled 2026-09-06); slice 3.14 | `(fn f BINDERS RET (measure M) BODY)` — the measure is the totality obligation; a structural one is `(measure (struct xs))` |
 | `unsafe …` | `lean_form` | departure 4 | nothing: every declaration is K-checked |
-| `notation`, `infix`, `infixl`, `infixr`, `prefix`, `postfix`, `syntax`, `macro`, `macro_rules`, `elab`, `elab_rules`, `declare_syntax_cat` | `lean_form` | departure 6 (ruled 2026-09-06): a notation is a private dialect an agent cannot guess | a `fn`, a `def` or a tactic; the surface is fixed with the elaborator |
+| `notation`, `infix`, `infixl`, `infixr`, `prefix`, `postfix`, `syntax`, `macro`, `macro_rules`, `elab`, `elab_rules`, `declare_syntax_cat` | `lean_form` | departure 6 (ruled 2026-09-06): a notation is a private dialect an agent cannot guess | a `fn`, a `def` or a tactic — an E library producing I's forms, named by `(auto (tactic M.FN))` (slice 3.29); the surface is fixed with the elaborator |
 | `open M` | `lean_form` | §3.1 | `(use M)`; `import` opens nothing |
 | `lemma`, `example` | `lean_form` | §4 | `(theorem NAME BINDERS PROP PROOF)`: every theorem is named |
 | `mutual … end` | `lean_form` | deferred (§12.4) | one measured `fn` at a time |

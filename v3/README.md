@@ -1524,6 +1524,20 @@ the arm cannot close. The example `v3/examples/tactic/` — `bool_split`,
 a `Bool` decision procedure as an E library — and `tactic_lib_test.sh`,
 the 41st entrypoint. Two landings.
 
+**Landing 1 built 2026-10-12** (`LANGUAGE.md` §8.4 "as built, landing
+1"): rules 3–7's kernel half — `cases` and `induction` revert the
+locals whose types mention the eliminated local into the motive and
+re-open them per arm after the fields (the probe's zero arm now faces
+`h : (< 0 Nat.zero)` and `arith` refutes it; calc's 100 claims replay
+unchanged); `(rw LEMMA (occ K EXPECT))` refused `rw_occ_changed` when
+the instance found is not the one expected; a sidecar's first form
+`(sidecar N)`, an older schema replayed and reported `SIDECAR`, a
+newer one the load error `sidecar_schema`, `prove` writing `(sidecar
+2)`; `unknown_step` and the notation refusal name the library route;
+seven pins (259 cases). Gates: the pins 0 failed in 58 s, `tactic_test`
+110/0 in 52 s, `engine_test` 24/0 in 179 s (the regenerated sidecar
+byte-identical), parity over 135,940 declarations in 308 s; the full suite 40 entrypoints, 0 failed, in 530 s.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

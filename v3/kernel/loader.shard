@@ -224,6 +224,7 @@
   (RLoadErr (List Int) Symbol (List Int))     ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))                  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
   (RProved Name Int (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the statement's fingerprint — what the sidecar's entry holds
+  (RSidecar (List Int) Int Int)               ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
   (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
   (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
@@ -282,7 +283,11 @@
   (match cs (Nil l) ((Cons (Pair n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
 ;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof (slice 3.22 rule 1):
 ;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
-;; that does not read, or a form of another shape, is the file's load error and no entries
+;; that does not read, or a form of another shape, is the file's load error and no entries.
+;; Its first form may be the schema (sidecar N) — I's schema the entries are written in (slice
+;; 3.29 rule 4; no form = schema 1, the form before the slice): an older schema is replayed and
+;; reported SIDECAR; a newer one is the load error sidecar_schema (this loader cannot read it)
+(fn sidecar_schema () Int 2)
 (fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World)) (Pair (Pair Load (List Auto)) World)
   (if (bool_not (forms_want_auto forms)) (Pair (Pair l Nil) w)
     (let ((path (append (drop_shard_suffix (join_path (append (Load.root l) rel))) ".auto.shard")))
@@ -292,9 +297,24 @@
          (match (read_all src)
            ((RAErr e off) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " (append (chars_of_sym e) (append " at byte " (show_nat off))))))) Nil) w1))
            ((RAOk es)
-            (match (sidecar_entries es Nil)
-              ((Pair (Some autos) _) (Pair (Pair l autos) w1))
-              ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1))))))))))
+            (match (sidecar_split es)
+              ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1))
+              ((Pair (Some (Pair schema rest)) _)
+               (if (lt (sidecar_schema) schema)
+                 (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_schema) (append path (append ": schema " (append (show_nat schema) (append " is past this loader's " (append (show_nat (sidecar_schema)) " — regenerate the sidecar with prove.shard"))))))) Nil) w1)
+                 (match (sidecar_entries rest Nil)
+                   ((Pair (Some autos) _) (Pair (Pair (if (lt schema (sidecar_schema)) (ld_rec l (RSidecar (join_path rel) schema (sidecar_schema))) l) autos) w1))
+                   ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1)))))))))))))
+;; the schema form at the head of a sidecar, and the forms after it; no form = schema 1
+(fn sidecar_split ((es (List SExpr))) (Pair (Option (Pair Int (List SExpr))) (List Int))
+  (match es
+    ((Cons (SList (Cons (SSym h) more)) r)
+     (if (sym_eq h (quote sidecar))
+       (match more
+         ((Cons (SNum n) Nil) (if (lt n 1) (Pair None "(sidecar N): N counts from 1") (Pair (Some (Pair n r)) Nil)))
+         (_ (Pair None "the schema form is (sidecar N)")))
+       (Pair (Some (Pair 1 es)) Nil)))
+    (_ (Pair (Some (Pair 1 es)) Nil))))
 ;; FILE.shard → FILE (the sidecar is FILE.auto.shard); another suffix is kept
 (fn drop_shard_suffix ((path (List Int))) (List Int)
   (let ((n (len path)))
@@ -2148,6 +2168,7 @@
     ((RReadErr file e m) (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RProved n fp steps) (append "PROVED " (append (show_name n) (append " fp=" (append (show_int fp) (append " (by " (append (show_sexprs steps) ")")))))))
+    ((RSidecar file schema cur) (append "SIDECAR " (append file (append " schema=" (append (show_nat schema) (append " current=" (show_nat cur)))))))
     ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
     ((RDerive p ty cap policy procs)
      (append "DERIVE " (append (show_name p) (append " type=" (append (dv_show_ty ty) (append " cap=" (append (chars_of_sym cap)
@@ -2188,6 +2209,7 @@
        ((RInit _ _ _) acc)
        ((RUnused _ _) acc)
        ((RProved _ _ _) acc)
+       ((RSidecar _ _ _) acc)
        ((REngine _ _) acc)
        ((RDerive _ _ _ _ _) acc)
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
