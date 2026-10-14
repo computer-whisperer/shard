@@ -11,6 +11,12 @@
 # V3_TEST_JOBS at a time (default 8; 1 is the old sequential run). Each one's
 # output is held and printed in the list's order with its seconds, so the log
 # reads as the sequential run's did.
+#
+# The native toolchain's byte-tie gate (kernel/test/native_tie_test.sh; LANGUAGE.md
+# §8.6 slice 4.1 rule 3) is the 42nd entrypoint under V3_NATIVE=1, after
+# `v3/build.sh --all`: it needs every binary of the inventory present and current
+# and fails otherwise — never a silent fallback (R84). Without V3_NATIVE it is
+# not run and the last line says so; CI's `native` job runs it beside this suite.
 set -u
 cd "$(dirname "$0")/.."
 export EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -31,7 +37,8 @@ run_one() {   # ENTRYPOINT INDEX: its output, exit code and seconds under $OUT
 }
 export -f run_one
 export OUT
-tests=(v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard v3/kernel/test/*_test.sh)
+tests=(v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard $(ls v3/kernel/test/*_test.sh | grep -v native_tie_test.sh))
+[ "${V3_NATIVE:-0}" = 1 ] && tests+=(v3/kernel/test/native_tie_test.sh)
 for i in "${!tests[@]}"; do printf '%s %s\n' "${tests[$i]}" "$i"; done | xargs -P "$JOBS" -L 1 bash -c 'run_one "$0" "$1"'
 total=0; failed=0
 for i in "${!tests[@]}"; do
@@ -43,5 +50,6 @@ for i in "${!tests[@]}"; do
   esac
   [ "$secs" -ge 30 ] && echo "   ($t: ${secs} s)"
 done
-echo "v3 tests: $total entrypoints, $failed failed"
+if [ "${V3_NATIVE:-0}" = 1 ]; then echo "v3 tests: $total entrypoints, $failed failed (the native tie among them)"
+else echo "v3 tests: $total entrypoints, $failed failed; the native tie not run (V3_NATIVE=1 after v3/build.sh --all; CI's native job)"; fi
 exit $failed

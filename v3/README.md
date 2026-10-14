@@ -1659,9 +1659,26 @@ Landing 1 holds on the full gate: **2026-10-14 — pipeline 602 green on `a1c5c1
 
 Landing 2 holds on the full gate: **2026-10-14 — pipeline 603 green on `62587df`: engine 50 s; corpus 1,500 s against 1,465, the old tree's sources untouched; v3 4,996 s of a 3 h limit, 63 s under pipeline 602's 5,059 (the export 136 s; the index driver built by route 1 in 11 s and the export's index built in 96 s on the runner; 41 entrypoints with 0 failed in 1,803 s against 1,809 — `store_test` 1,492 s against 1,488 (calc's five leaves stored in 534 s against 552; replayed in 93 s against 93), parity byte-identical over 31 closures and 136,972 declarations in 873 s against 856 over 136,792 — the 180 declarations more the landing's kernel growth, the transfer and its identity checks —, `tactic_lib_test` 734 against 755, `define_test` 669 against 703, `path_test` 646 against 688 (load 65 s, run 84 s, store 71 s, verify 15 s), `calc_test` 644 against 635, `engine_test` 504 against 504, `std_test` 456 against 444 — the std root loaded and stored in 238 s and K's replay 215 s —, `wire_test` 374 against 399, `derive_test` 292 against 300, `calc_main_test` 292 against 289, `template_test` 274 against 283 (load 96 s, run 95 s, dump 82 s), `k_clients_test` 204 against 197 (the seven transfer cases), `tactic_test` 146 against 145, the loader pins' entrypoint 136 against 147 (265 cases against 264 — `k_client_admit` the one more), `rows_test` 121 against 132, `matcher_test` 63 against 75 — the runner's variance both ways; route 1's native build of the kernel 432 s against 431; the replay 2,438 s at 32.2 GB against 2,514 at 32.3 — K's sealed module changed by the landing (the transfer in `add.shard`, the modes out of `import.shard`), the replay's path through `check_into` the checked one as before); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 4.0 holds on the full gate; the slice is closed on the full gate.**
 
+**Slice 4.1 landing 1 built 2026-10-14 — the emitter, the build, the
+tie** (`LANGUAGE.md` §8.6 "as built, landing 1"; item 65 ratified
+2026-10-14 as amended by R84): `kernel/emit.shard` and `load.shard
+--emit DIR` print a loaded closure in the dialect the old tree's chain
+reads (one file per module, the parity projection's names, every local by
+its depth, records expanded, `let` nested, strings re-escaped, the
+unlexable symbol by `sym_of_chars`, `chain` → `chain_`; what the chain
+cannot take refused; `map` the origin map, `sources` the stamp's input);
+`v3/build.sh` runs emit → lower → codegen → cc, `--all` over the 29-root
+inventory in parallel with a stamp beside each binary;
+`kernel/test/native_tie_test.sh` ties the bootstrap and the binaries on
+stdout, stderr, exit status and artifacts over the loader, `prove`,
+`verify_release`, `t0`, `initindex`, the loader pins' harness and the
+eleven discriminating cases of `v3/pins/emit/` (nine tied, two refusals
+expected), with an empty normalization list; the 42nd entrypoint under
+`V3_NATIVE=1`, and CI's `native` job beside `v3`. the tie's 68 checks, 0 failed, in 368 s alone (349 s inside the suite); the full suite's 42 entrypoints under `V3_NATIVE=1` in 680 s on the quiet box — 41 green, parity byte-identical over 31 closures and 137,040 declarations in 329 s (the 68 more the emitter and the driver's flag), and the tie failing its store step through its own scaffolding (the store's directory removed between the engines' runs, the native side left nowhere to write); the scaffolding fixed, the tie rerun green alone. Landing 2 is the shim and the suite switch.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
-the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65 for
-ratification): `load.shard --emit` projects a driver's closure, as the
+the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
+2026-10-14): `load.shard --emit` projects a driver's closure, as the
 V3 loader accepted it, into the dialect v2's chain reads (records
 expanded, locals lowercase, short names by parity's injective
 projection, measure clauses dropped); `v3/build.sh --all` builds the

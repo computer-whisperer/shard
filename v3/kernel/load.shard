@@ -37,12 +37,21 @@
 ;;; implementation forks of views (§6.6) are checked, recorded under IMPL and
 ;;; not stored (their constants live in the fork, not the load's environment).
 ;;; verify_release.shard replays a store with K alone.
+;;; `--emit DIR` (§8.6 slice 4.1 rule 1): after a clean load, the program the load
+;;; yielded is written under DIR as the files route 1's chain reads (emit.shard) —
+;;; one per module, DIR/map (each emitted declaration against its identity and source)
+;;; and DIR/sources (each module's source file and hash); `EMIT: DIR entry=FILE
+;;; modules=N declarations=M` names the file the chain lowers. What the chain cannot
+;;; take is refused (`EMIT: …`, exit 2) and nothing is written.
 
 (import "loader.shard")
 (import "store.shard")
 (import "ev.shard")
 (import "dump.shard")
+(import "emit.shard")
 (use kernel.dump)
+(use kernel.emit)
+(use kernel.emit.EmitRes)
 (use kernel.etable)
 (use kernel.ev)
 (use kernel.host)
@@ -57,32 +66,34 @@
 (use kernel.util)
 (use kernel.ev.RunRes)
 (use kernel.host.World)
+(use kernel.loader.ModPath)
 (use kernel.loader.Rec)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory
+(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int (List Int)))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
-    ((Args root export index route engine files run fuel argv dump store budget)
+    ((Args root export index route engine files run fuel argv dump store budget emit)
      (match args
-       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget))
+       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget emit))
        ((Cons x r)
-        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget))
-        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0)))) (Nil (parse_args Nil a)))
-          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget))))))))))))))))))
+        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget emit)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget emit))
+        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget emit))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--emit") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget v))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0) emit))) (Nil (parse_args Nil a)))
+          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget emit)))))))))))))))))))
 
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
@@ -97,8 +108,8 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget)))
-       ((Args root export index route engine files run fuel argv dump store budget)
+     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget) Nil))
+       ((Args root export index route engine files run fuel argv dump store budget emit)
         (match (parts_of root)
           (None (exit 2 (write_line "load: --root DIR is required" w1)))
           ((Some rootp)
@@ -106,9 +117,10 @@
              (exit 2 (write_line "load: --root DIR is required" w1))
              (let ((l0 (ld_with_budget (ld_start rootp export index) budget)))
                (if dump (main_dump l0 files w1)
+               (if (lt 0 (len emit)) (main_emit l0 files emit w1)
                (match run
                  (None (main_records l0 route engine files store w1))
-                 ((Some entry) (main_run l0 files entry argv fuel w1)))))))))))))
+                 ((Some entry) (main_run l0 files entry argv fuel w1))))))))))))))
 
 ;; a clean load, then the canonical text of the program it yielded (§10 item 1)
 (fn main_dump ((l0 Load) (files (List (List Int))) (w World)) World
@@ -121,6 +133,57 @@
 (fn print_lines ((ls (List (List Int))) (w World)) World
   (measure (struct ls))
   (match ls (Nil w) ((Cons x r) (print_lines r (write_line x w)))))
+;; a clean load, then the closure written under DIR in the chain's dialect (§8.6 slice 4.1 rule 1)
+(fn main_emit ((l0 Load) (files (List (List Int))) (dir (List Int)) (w World)) World
+  (match (load_files l0 files w)
+    ((Pair l w2)
+     (let ((cs (rec_counts (ld_recs l) (zero_counts))))
+       (if (lt 0 (load_failures cs))
+         (exit 2 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))
+         (match (emit_prog (Load.etab l) (es_prog (Load.etab l)) (root_module l0 files) (module_files (ld_recs l)))
+           ((EmitFail msg) (exit 2 (write_line (append "EMIT: " msg) w2)))
+           ((EmitOk fs mp entry)
+            (match (write_under dir (append fs (list (Pair "map" (join_lines mp)) (Pair "sources" (join_lines (source_lines (ld_recs l)))))) w2)
+              ((Pair (Some p) w3) (exit 2 (write_line (append "EMIT: cannot write " p) w3)))
+              ((Pair None w3)
+               (write_line (append "EMIT: " (append dir (append " entry=" (append entry (append " modules=" (append (show_nat (len fs)) (append " declarations=" (show_nat (len mp))))))))) w3))))))))))
+;; the first file's module: the root the chain is built from
+(fn root_module ((l Load) (files (List (List Int)))) Name
+  (match files
+    (Nil Anon)
+    ((Cons f _)
+     (match (parts_of f)
+       (None Anon)
+       ((Some parts)
+        (match (strip_parts (Load.root l) parts)
+          (None Anon)
+          ((Some rel) (match (module_of rel) ((MPOk mp) mp) (_ Anon)))))))))
+;; each loaded module's source file, from the MODULE records
+(fn module_files ((rs (List Rec))) (List (Pair Name (List Int)))
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RModule m file _ _) r) (Cons (Pair m file) (module_files r)))
+    ((Cons _ r) (module_files r))))
+(fn source_lines ((rs (List Rec))) (List (List Int))
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RModule m file h _) r) (Cons (append (show_name m) (append " " (append file (append " " (show_nat h))))) (source_lines r)))
+    ((Cons _ r) (source_lines r))))
+(fn join_lines ((ls (List (List Int)))) (List Int)
+  (measure (struct ls))
+  (match ls (Nil Nil) ((Cons x r) (append x (Cons 10 (join_lines r))))))
+;; every file written under DIR; the first path that cannot be written
+(fn write_under ((dir (List Int)) (fs (List (Pair (List Int) (List Int)))) (w World)) (Pair (Option (List Int)) World)
+  (measure (struct fs))
+  (match fs
+    (Nil (Pair None w))
+    ((Cons (Pair name text) r)
+     (let ((path (append dir (Cons 47 name))))
+       (match (write_file path text w)
+         ((Pair True w2) (write_under dir r w2))
+         ((Pair False w2) (Pair (Some path) w2)))))))
 ;; the records and the counts; the exit code is refused + errors; then the store, after a clean load
 (fn main_records ((l0 Load) (route (List Int)) (engine (List Int)) (files (List (List Int))) (store (List Int)) (w World)) World
   (match (load_files l0 files (write_line (append "LOAD root=" (append (join_path (Load.root l0)) (append " route=" (append route (append " engine=" engine))))) w))

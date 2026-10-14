@@ -3316,7 +3316,7 @@ it entrenches. The slices, in the order built:
 | slice | content | first consumer |
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
-| 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries | every author's load; the suite; the compiler proof |
+| 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie)** | every author's load; the suite; the compiler proof |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3544,8 +3544,9 @@ ledger's release row amended at the close-out of this landing.
 (designed 2026-10-13 at phase 3's close, on the user's "Let's find a
 near-term slot in the schedule to implement the compiler path for the
 v3 kernel, similar to how we did it for v2 … or should we just do it
-next?"; §13 item 65 for ratification; law §9.1 route 1, §12.4 item 4
-by the boundary's ruling, §12.1's "generated files never
+next?"; §13 item 65 — **ratified 2026-10-14 as amended by R84 (the
+user: "Good. Call it ratified and continue.")**; law §9.1 route 1,
+§12.4 item 4 by the boundary's ruling, §12.1's "generated files never
 hand-patched"). The v2 chain — `tools/lower` to its low dialect,
 `tools/codegen` to C, `cc` — compiled v2's kernel into
 `bin/shard_eval` and `bin/shard_check` from 2026-07, gen-N building
@@ -3694,6 +3695,110 @@ pins (a record, a capitalised local, a dotted head, a measure clause
 — each emitted and lowered); the tie green locally and on CI. **Landing
 2**: the shim and the suite switch (rule 4), CI's second run and its
 comparison, the measurements (rule 7), the close-out.
+
+**As built, landing 1 (2026-10-14):** the emitter `kernel/emit.shard`
+and `load.shard --emit DIR FILE…`: after a clean load, one file per
+module of the closure under DIR in the load's order, the root's file
+importing every other — the old reader's dependency order is the load's,
+so a constructor is declared before any module matches on it, and a
+consumer never matches on a sig type's constructors, so K's
+implementation linked after its consumers is safe behind the root's
+imports —; the names the parity projection's (`dm_head`, `dm_short`), a
+dotted head mangled to one identifier (`Load.env` → `Load_env`; a
+collision the mangling makes refused) and a head the old reader reserves
+given a trailing underscore (`chain` → `chain_`, the one such name in the
+kernel; the set is its sugar and special forms); every local printed by
+its de Bruijn depth, `v0 v1 …` — the Prog carries no binder name, so the
+design's "the Prog's binder name where it has one" was moot and the
+capitalised-local difference is gone by construction; a many-binding
+`let` nested one binding each, so the sequential rule (R44) holds under
+either reader; a string literal re-escaped (`\" \\ \n \t \r`, any other
+byte raw); a symbol literal the old reader cannot lex as one atom (`t'`
+in `define.shard` — its quote macro) built by `sym_of_chars` over its
+text; the primitives under the chain's spellings (`int_eq lt le`); the
+measure clause dropped. Refused with nothing written: a sig fn or sig
+type left unlinked (the implementation's directory not given as a root),
+`absurd`, a primitive beyond the profile's eighteen, a string literal
+over any list but one spelled `Cons`/`Nil` (what the old reader builds),
+a string or unlexable-symbol pattern, a mangling collision. `DIR/map` is
+the origin map (R85) at declaration granularity — each emitted name
+against its kind, its identity and its module's source file — and
+`DIR/sources` each module's file and hash; the emitted file names its
+source in its first line. `v3/build.sh` rewritten (rules 2 and 8): emit
+→ lower → codegen → cc; `--all` over the inventory written in the
+script — the 29 roots, parity's list, K's directory added as a second
+root where the bootstrap's dump of the root shows `env_empty` (parity's
+rule) — `V3_BUILD_JOBS` at a time, a current binary kept; `--stamp
+NAME`, `--list`; the stamp sha256 over the root's closure sources (the
+emit's list), the emitter's closure (`kernel/*.shard`, `k/*.shard`, the
+view), the chain's three files and the compiler's flags, beside the
+binary; every shell entrypoint's invocation of an engine has its
+disposition in the script's header. The tie
+`kernel/test/native_tie_test.sh` (rule 3): the gate's own test first
+(an altered verdict, a differing exit, a differing artifact, a missing
+binary — each detected), every binary of the inventory present with a
+current stamp, the discriminating cases built fresh and tied, the
+loader over four pins, a dump, an example, t0 run under `ev` with and
+without fuel and a store written, `prove` over two examples' sidecars
+regenerated and a measure run, `verify_release` over the tie's store, a
+store without a manifest and the usage line, `t0` over the export's
+first 3,000 lines with `-v -a -p`, the wrong-pin fixture and the usage
+line, `initindex` building and verifying an index, one harness
+(`loader_pins_test`, every loader pin), the tree's authored files
+byte-identical before and after; stdout, stderr, the exit status and
+the artifacts compared, a verdict line required on both sides. The
+normalization list, stated in the script, is empty: no workload prints
+a time or a size and both engines use the same scratch paths. The
+discriminating cases are `v3/pins/emit/` (its README): nine
+self-contained programs tied — a record built and updated, capitalised
+locals beside constructors of their spelling, nested shadowing, quoted
+symbols (`t'` among them), two records' accessors sharing a last
+component, a sealed client (a directory module's view, the
+implementation linked), a nonzero exit after output, string escapes, the
+profile's primitives at their edges (negative operands of `mod`, `tmod`
+and `ediv`, the shifts, a product near 2^62 — the chain's runtime
+against the bootstrap's) — and two refusals expected (`refused_symbol_pattern`,
+`refused_mangle_collision`), each case's first line the emitter's
+message. The entrypoint runs under `V3_NATIVE=1` in `v3/test.sh` (the
+42nd; without it the suite's last line says the tie was not run — a
+stated omission, never a fallback) and in CI's new `native` job beside
+`v3` (the export, `--all` with 16 jobs, the index, the tie), so the
+bootstrap suite's job keeps its time. *Departures, stated:* (1) the
+emitted files live per root under `v3/bin/emit/NAME/` rather than one
+shared tree, so parallel builds never race on a module two roots share;
+(2) the tie runs in its own CI job rather than inside the `v3` job's
+suite — the build is 29 closures through the chain and the bootstrap
+suite is the authority whose time the job records; (3) the pins'
+programs live at `CASE/kernel/main.shard`: the toolchain profile (the
+bare comparison spellings, the prelude's string) is a property of the
+module path's first component `kernel` (`scope.shard` `toolchain_scope`),
+so a self-contained program in that dialect is a module under `kernel`
+— a limit on where such a program may live, carried as is; (4) `t0` and
+`initindex` moved onto the emitted path (rule 2) — the replay's byte-tie
+exercises the emitter from this landing. *Found in the build:* the
+reserved head `chain` (the old reader's statement-literal sugar;
+record.shard's `chain` lowered as a malformed form until the suffix); the
+quote-macro symbol `t'` (the closure unreadable at `define.shard` until
+`sym_of_chars`); the import order (a first cut imported the modules
+reversed and the old reader refused `JErr` as an unknown constructor in
+`index.shard`, read before `json.shard` — the dependency order is the
+load's, kept); the K-root detection under `pipefail` (`grep -q` closing
+the dump's pipe early failed the test, so no consumer got the directory
+until the grep read to the end). *Measured on the dev box, under a load
+of 30–40 from other sessions' jobs:* `v3/build.sh --all` over the 29 roots in 4,167 s with six roots in flight and at most two — then, for the box's memory beside other sessions' jobs, one — heavy steps at once, and the two interrupted roots in a second pass of 695 s; on the quiet box the loader's closure (49 modules, 8,438 declarations) emits in 22 s, lowers in 73 s, generates in 236 s and compiles in 63 s, the K harnesses (5,560 declarations) in 10, 45, 46 and 16 s, a harness of a few hundred declarations in seconds; the lowerer holds 12 GB and the generator up to 40 GB on a driver-sized closure, so the build caps the heavy steps (`V3_HEAVY_JOBS`: two on the dev box, sixteen on the runner's 2.7 TB); the tie's 68 checks, 0 failed, in 368 s alone (349 s inside the suite); the full suite's 42 entrypoints under `V3_NATIVE=1` in 680 s on the quiet box — 41 green, parity byte-identical over 31 closures and 137,040 declarations in 329 s (the 68 more the emitter and the driver's flag), and the tie failing its store step through its own scaffolding (the store's directory removed between the engines' runs, the native side left nowhere to write); the scaffolding fixed, the tie rerun green alone; the native
+gains on the tie's workloads — `verify_release` over calc's release
+(467 declarations) 98 s on the bootstrap, 13 s native; `prove`
+regenerating `auto`'s sidecar 47 → 7; `prove --measure` over
+`calc_ndigit` 121 → 36; the loader's dump of `auto` 43 → 6; `calc_spec`'s
+load 61 → 10; t0 over 300 lines under `ev` through the loader 17 → 10 —
+the bootstrap's parse of the loader's closure (0.4 s) is not what the
+native route saves; the interpreted work is. The chain's cost is the old
+tree's: the lowerer and the code generator on `bin/shard_eval`, the
+latter superlinear in the closure (t0's 5,697 declarations in 164 s,
+the loader's 8,438 in 653 s), so the inventory is built in parallel and
+a binary whose stamp is current is never rebuilt. Landing 2 is the shim
+and the suite switch (rule 4), CI's second run compared, the
+measurements (rule 7), the close-out.
 
 *Not in this slice, stated:* the compiler proof (law §12.4 item 4's
 first item; after this slice, over the engine it builds); route 1 over
@@ -5117,7 +5222,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     slice 4.0 landing 0): rules 1, 3 and 4 and landing 1 as they now
     read, rule 8 added — the comparison boundary, no silent fallback,
     the root inventory and the stamps, the discriminating cases; point
-    1 of R84 was the design as committed.**
+    1 of R84 was the design as committed.** **Ratified 2026-10-14 as
+    amended (the user, on the report of slice 4.0 closed on pipeline 603:
+    "Good. Call it ratified and continue.").** **As built, landing 1
+    (2026-10-14):** the emitter, the build and the tie as §8.6 "as built,
+    landing 1" states them; the departures stated there — per-root
+    emit directories, the tie in its own CI job, the pins' programs
+    under `kernel/` (the toolchain profile keyed on the module path), `t0`
+    and `initindex` on the emitted path from this landing.
 
 66. **Slice 4.0, the checkpoint memo answered (designed 2026-10-14 at
     phase 4's opening; §8.6 "Slice 4.0"; records §4.12; for

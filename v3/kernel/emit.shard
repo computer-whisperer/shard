@@ -1,0 +1,418 @@
+;;; v3/kernel/emit.shard — a loaded closure printed in the dialect route 1's chain
+;;; reads: the pre-pass of the native toolchain (v3/LANGUAGE.md §8.6 slice 4.1
+;;; rule 1; law §9.1 route 1). `load.shard --emit DIR FILE…` loads the closure as
+;;; `--dump` does for parity (§10 item 1) and writes one file per module of the
+;;; closure under DIR, in the order the load reached them, each the module's
+;;; declarations in the surface the old tree's reader (kernel/reader.shard, the
+;;; chain tools/lower → tools/codegen → cc) reads:
+;;;
+;;;   (type NAME (CTOR T…)…)  (type (NAME T0 …) (CTOR T…)…)     an inductive, its type parameters first
+;;;   (fn NAME ((T0 Type) … (v0 T) …) T BODY)                   the measure clause dropped
+;;;   (extern NAME ((v0 T) …) T)
+;;;   BODY ::= vN | INT | "…" | (quote S) | CTOR | (CTOR BODY…) | (NAME BODY…) | (PRIM BODY…)
+;;;          | (match BODY (PAT BODY)…) | (let ((vN BODY)) BODY) | (if BODY BODY BODY)
+;;;   PAT  ::= vN | CTOR | (CTOR PAT…) | INT | (quote S)
+;;;
+;;; The names are the parity projection's (dump.shard: a head prints as its identity
+;;; beyond its module, a type and a constructor as their last component — injective
+;;; by parity's check of every closure), with a dotted head mangled to one identifier
+;;; (`Load.env` → `Load_env`; a collision the mangling makes is refused) and a head the
+;;; old reader reserves (`chain`, its statement-literal sugar) given a trailing underscore. Every local
+;;; is printed by its de Bruijn depth, `v0 v1 …` — the Prog carries no binder names,
+;;; so a capitalised local of the source (the old reader's constructor rule) cannot
+;;; reach the chain. Records are already expanded by the loader; a `let` with several
+;;; bindings is printed nested, one binding each, so the sequential rule (R44) holds
+;;; under either reader; a string literal is printed as the literal with the escapes
+;;; both readers decode (`\" \\ \n \t \r`; any other byte raw); the primitives print
+;;; under the chain's spellings (`int_eq lt le` for `= < <=`); a symbol literal the old
+;;; reader cannot lex as one atom (`t'`: its quote macro) is built by `sym_of_chars` over
+;;; its text. What the chain cannot
+;;; take is refused here, not approximated: a sig fn or sig type left unlinked (the
+;;; implementation's directory not given as a root), `absurd`, a primitive beyond the
+;;; profile's eighteen (the naming law's `Int.tdiv`…), a string literal over any list
+;;; but one spelled Cons and Nil (the old reader's string), a string pattern. The emitted text is a derivation, never an
+;;; origin (R85): DIR/map lists every emitted declaration against its identity and its
+;;; module's source file, and the emitted file names the source it came from.
+
+(import "prog.shard")
+(import "etable.shard")
+(import "dump.shard")
+(use kernel.dump)
+(use kernel.etable)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.util)
+(use kernel.etable.ESt)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog.EArm)
+(use kernel.prog.ECtorDef)
+(use kernel.prog.EDecl)
+(use kernel.prog.ELit)
+(use kernel.prog.EPat)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
+(use kernel.prog.Prog)
+
+;; the files (name, text) in emission order, the map's lines, the entry file's name;
+;; or the first refusal
+(type EmitRes
+  (EmitOk (List (Pair (List Int) (List Int))) (List (List Int)) (List Int))
+  (EmitFail (List Int)))
+
+;; the module's declarations grouped in the order the load reached them (es_prog's);
+;; mf: module → its source file (the load's MODULE records)
+(fn emit_prog ((es ESt) (p Prog) (root Name) (mf (List (Pair Name (List Int))))) EmitRes
+  (match p
+    ((Prog ds)
+     (match (em_check es ds)
+       ((Some msg) (EmitFail msg))
+       (None
+        (match (em_dups es ds)
+          ((Some msg) (EmitFail msg))
+          (None
+           (let ((groups (em_groups es ds)))
+             (if (bool_not (em_has_module groups root))
+               (EmitFail (append "the root module " (append (show_name root) " has no declarations")))
+               (EmitOk (em_files es groups root mf) (em_map es ds mf) (em_file root)))))))))))
+
+;; ---- grouping -----------------------------------------------------------------------------
+(fn em_groups ((es ESt) (ds (List EDecl))) (List (Pair Name (List EDecl)))
+  (em_groups_rev (em_group_go es ds Nil)))
+(fn em_group_go ((es ESt) (ds (List EDecl)) (acc (List (Pair Name (List EDecl))))) (List (Pair Name (List EDecl)))
+  (measure (struct ds))
+  (match ds
+    (Nil acc)
+    ((Cons d r) (em_group_go es r (em_group_add acc (em_module es (edecl_name d)) d)))))
+(fn em_module ((es ESt) (n Name)) Name
+  (match (es_module es n) ((Some m) m) (None Anon)))
+;; acc holds the groups newest first, each group's declarations newest first
+(fn em_group_add ((acc (List (Pair Name (List EDecl)))) (m Name) (d EDecl)) (List (Pair Name (List EDecl)))
+  (measure (struct acc))
+  (match acc
+    (Nil (list (Pair m (list d))))
+    ((Cons (Pair k ds) r) (if (name_eq k m) (Cons (Pair k (Cons d ds)) r) (Cons (Pair k ds) (em_group_add r m d))))))
+;; the groups stay in the order the load reached them; each group's declarations back in order
+(fn em_groups_rev ((gs (List (Pair Name (List EDecl))))) (List (Pair Name (List EDecl)))
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair m ds) r) (Cons (Pair m (rev ds)) (em_groups_rev r)))))
+(fn em_has_module ((gs (List (Pair Name (List EDecl)))) (m Name)) Bool
+  (measure (struct gs))
+  (match gs (Nil False) ((Cons (Pair k _) r) (if (name_eq k m) True (em_has_module r m)))))
+
+;; ---- the files ----------------------------------------------------------------------------
+;; one file per module: a header naming the source, and for the root module an import of
+;; every other module's file (the closure assembled under the old reader's dependency
+;; order, which is the load's order); then the declarations
+(fn em_files ((es ESt) (gs (List (Pair Name (List EDecl)))) (root Name) (mf (List (Pair Name (List Int))))) (List (Pair (List Int) (List Int)))
+  (em_files_go es gs root mf (em_imports gs root)))
+(fn em_files_go ((es ESt) (gs (List (Pair Name (List EDecl)))) (root Name) (mf (List (Pair Name (List Int)))) (imports (List Int))) (List (Pair (List Int) (List Int)))
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair m ds) r)
+     (Cons (Pair (em_file m)
+                 (append (em_header m mf) (append (if (name_eq m root) imports Nil) (em_decls es ds))))
+           (em_files_go es r root mf imports)))))
+(fn em_header ((m Name) (mf (List (Pair Name (List Int))))) (List Int)
+  (append ";;; " (append (show_name m) (append " — emitted by v3/kernel/emit.shard from " (append (em_source m mf) " (derived, never edited; LANGUAGE.md §8.6 slice 4.1)\n")))))
+(fn em_source ((m Name) (mf (List (Pair Name (List Int))))) (List Int)
+  (measure (struct mf))
+  (match mf
+    (Nil "(no source file)")
+    ((Cons (Pair k f) r) (if (name_eq k m) f (em_source m r)))))
+(fn em_imports ((gs (List (Pair Name (List EDecl)))) (root Name)) (List Int)
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair m _) r)
+     (if (name_eq m root) (em_imports r root)
+       (append "(import \"" (append (em_file m) (append "\")\n" (em_imports r root))))))))
+;; a module's file name: its path with the dots mangled
+(fn em_file ((m Name)) (List Int) (append (em_mangle (show_name m)) ".shard"))
+(fn em_mangle ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons c r) (Cons (if (int_eq c 46) 95 c) (em_mangle r)))))
+
+;; ---- the map (R85): one line per declaration — the emitted name, the kind, the identity,
+;; the module's source file
+(fn em_map ((es ESt) (ds (List EDecl)) (mf (List (Pair Name (List Int))))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d r)
+     (Cons (append (em_decl_name es d) (append " " (append (em_kind d) (append " " (append (show_name (edecl_name d)) (append " " (em_source (em_module es (edecl_name d)) mf)))))))
+           (em_map es r mf)))))
+(fn em_kind ((d EDecl)) (List Int)
+  (match d
+    ((EInd _ _ _) "type")
+    ((EFn _ _ _ _ _ _) "fn")
+    ((EExtern _ _ _ _) "extern")
+    ((ESig _ _ _ _) "sig")
+    ((ESigType _ _) "sigtype")))
+(fn em_decl_name ((es ESt) (d EDecl)) (List Int)
+  (match d
+    ((EInd n _ _) (dm_short n))
+    ((EFn n _ _ _ _ _) (em_head es n))
+    ((EExtern n _ _ _) (em_head es n))
+    ((ESig n _ _ _) (em_head es n))
+    ((ESigType n _) (dm_short n))))
+;; a head: the parity projection's spelling mangled; a name the old reader reserves in a body
+;; (its sugar and special forms: `chain`, `inline`, `S^`, `tv`, `ty`, `refine_try`, `make`,
+;; `with`) carries a trailing underscore, so the kernel's `chain` is the chain's `chain_`
+(fn em_head ((es ESt) (n Name)) (List Int) (em_unreserved (em_mangle (dm_head es n))))
+(fn em_unreserved ((h (List Int))) (List Int)
+  (if (em_reserved h (list "chain" "inline" "S^" "tv" "ty" "refine_try" "make" "with" "list" "if" "let" "match" "quote")) (append h "_") h))
+(fn em_reserved ((h (List Int)) (rs (List (List Int)))) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons r rest) (if (int_list_eq h r) True (em_reserved h rest)))))
+
+;; ---- the declarations --------------------------------------------------------------------
+(fn em_decls ((es ESt) (ds (List EDecl))) (List Int)
+  (measure (struct ds))
+  (match ds (Nil Nil) ((Cons d r) (append (em_decl es d) (append "\n" (em_decls es r))))))
+(fn em_decl ((es ESt) (d EDecl)) (List Int)
+  (match d
+    ((EInd n np ctors) (append "(type " (append (em_tyhead (dm_short n) np) (append (em_ctors ctors) ")"))))
+    ((EFn n nt ps rt _ body)
+     (append "(fn " (append (em_head es n) (append " (" (append (em_binders nt ps) (append ") " (append (em_type rt) (append "\n  " (append (em_term es (len ps) body) ")")))))))))
+    ((EExtern n nt ps rt)
+     (append "(extern " (append (em_head es n) (append " (" (append (em_binders nt ps) (append ") " (append (em_type rt) ")")))))))
+    ((ESig n _ _ _) (append ";; unlinked sig " (dm_short n)))          ; refused by em_check before any file is written
+    ((ESigType n _) (append ";; unlinked sig type " (dm_short n)))))
+(fn em_tyhead ((name (List Int)) (np Int)) (List Int)
+  (if (lt np 1) name (append "(" (append name (append (em_tvars 0 np) ")")))))
+;; " T0 T1 …"
+(fn em_tvars ((i Int) (n Int)) (List Int)
+  (measure (- n i))
+  (if (le n i) Nil (append " T" (append (show_int i) (em_tvars (+ i 1) n)))))
+(fn em_ctors ((cs (List ECtorDef))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (ECtorDef c fs) r) (append " (" (append (dm_short c) (append (em_types fs) (append ")" (em_ctors r))))))))
+;; "(T0 Type) … (v0 T) (v1 T)"
+(fn em_binders ((nt Int) (ps (List EType))) (List Int)
+  (em_join_sp (append (em_tbinders 0 nt) (em_pbinders 0 ps))))
+(fn em_tbinders ((i Int) (n Int)) (List (List Int))
+  (measure (- n i))
+  (if (le n i) Nil (Cons (append "(T" (append (show_int i) " Type)")) (em_tbinders (+ i 1) n))))
+(fn em_pbinders ((i Int) (ps (List EType))) (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons t r) (Cons (append "(" (append (em_var i) (append " " (append (em_type t) ")")))) (em_pbinders (+ i 1) r)))))
+(fn em_join_sp ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) x)
+    ((Cons x r) (append x (Cons 32 (em_join_sp r))))))
+(fn em_var ((k Int)) (List Int) (Cons 118 (show_int k)))
+
+;; ---- types ----------------------------------------------------------------------------------
+(fn em_type ((t EType)) (List Int)
+  (measure (struct t))
+  (match t
+    ((ETVar i) (Cons 84 (show_int i)))
+    ((ETCon n Nil) (dm_short n))
+    ((ETCon n args) (append "(" (append (dm_short n) (append (em_types args) ")"))))))
+(fn em_types ((ts (List EType))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append " " (append (em_type t) (em_types r))))))
+
+;; ---- terms: d is the depth (the binders in scope); EBVar i is the (d-1-i)-th ----------------
+(fn em_term ((es ESt) (d Int) (t ETerm)) (List Int)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (em_var (- (- d 1) i)))
+    ((ELit l) (em_lit l))
+    ((ECtor n Nil) (dm_short n))
+    ((ECtor n args) (em_app es d (dm_short n) args))
+    ((ECall n args) (em_app es d (em_head es n) args))
+    ((EPrim n args) (em_app es d (em_prim n) args))
+    ((EExt n args) (em_app es d (dm_short n) args))
+    ((EMatch s arms) (append "(match " (append (em_term es d s) (append (em_arms es d arms) ")"))))
+    ((ELet rs body) (em_let es d rs body))
+    ((EIf c a b) (append "(if " (append (em_term es d c) (append " " (append (em_term es d a) (append " " (append (em_term es d b) ")")))))))
+    (EAbsurd "(absurd)")))   ; refused by em_check before any file is written
+(fn em_app ((es ESt) (d Int) (head (List Int)) (args (List ETerm))) (List Int)
+  (append "(" (append head (append (em_terms es d args) ")"))))
+(fn em_terms ((es ESt) (d Int) (ts (List ETerm))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append " " (append (em_term es d t) (em_terms es d r))))))
+;; the sequential let nested one binding at a time: binding i is printed at depth d+i
+(fn em_let ((es ESt) (d Int) (rs (List ETerm)) (body ETerm)) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil (em_term es d body))
+    ((Cons r rest)
+     (append "(let ((" (append (em_var d) (append " " (append (em_term es d r) (append ")) " (append (em_let es (+ d 1) rest body) ")")))))))))
+(fn em_arms ((es ESt) (d Int) (arms (List EArm))) (List Int)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (EArm p b) r)
+     (match (em_pat d p)
+       ((Pair pt d2) (append " (" (append pt (append " " (append (em_term es d2 b) (append ")" (em_arms es d r)))))))))))
+;; a pattern's text and the depth after its binders (bound left to right, depth first)
+(fn em_pat ((d Int) (p EPat)) (Pair (List Int) Int)
+  (measure (struct p))
+  (match p
+    (PVar (Pair (em_var d) (+ d 1)))
+    ((PCtor n Nil) (Pair (dm_short n) d))
+    ((PCtor n subs) (match (em_pats d subs) ((Pair ts d2) (Pair (append "(" (append (dm_short n) (append ts ")"))) d2))))
+    ((PLit l) (Pair (em_lit l) d))))
+(fn em_pats ((d Int) (ps (List EPat))) (Pair (List Int) Int)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair Nil d))
+    ((Cons p r)
+     (match (em_pat d p)
+       ((Pair t d2) (match (em_pats d2 r) ((Pair ts d3) (Pair (append " " (append t ts)) d3))))))))
+(fn em_lit ((l ELit)) (List Int)
+  (match l
+    ((LNat k) (show_int k))
+    ((LInt k) (show_int k))
+    ((LSym s) (if (em_sym_ok (chars_of_sym s)) (append "(quote " (append (chars_of_sym s) ")")) (append "(sym_of_chars " (append (Cons 34 (em_str (chars_of_sym s))) ")"))))
+    ((LStr _ _ bs) (Cons 34 (em_str bs)))))
+;; a symbol the old reader lexes as one atom and not as a number: nonempty, none of its
+;; delimiters (whitespace, parens, the quote characters, the comment character), not digits,
+;; not a minus and digits; any other symbol is built at run time by sym_of_chars over its text
+(fn em_sym_ok ((cs (List Int))) Bool
+  (match cs
+    (Nil False)
+    ((Cons 45 r) (bool_and (em_sym_chars r) (match r (Nil True) (_ (bool_not (em_all_digits r))))))
+    (_ (bool_and (em_sym_chars cs) (bool_not (em_all_digits cs))))))
+(fn em_sym_chars ((cs (List Int))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil True)
+    ((Cons c r)
+     (if (bool_or (le c 32) (bool_or (int_eq c 40) (bool_or (int_eq c 41) (bool_or (int_eq c 34) (bool_or (int_eq c 59) (int_eq c 39)))))) False (em_sym_chars r)))))
+(fn em_all_digits ((cs (List Int))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil True)
+    ((Cons c r) (if (bool_and (le 48 c) (le c 57)) (em_all_digits r) False))))
+(fn em_str ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil (list 34))
+    ((Cons b r)
+     (if (int_eq b 34) (Cons 92 (Cons 34 (em_str r)))
+     (if (int_eq b 92) (Cons 92 (Cons 92 (em_str r)))
+     (if (int_eq b 10) (Cons 92 (Cons 110 (em_str r)))
+     (if (int_eq b 9) (Cons 92 (Cons 116 (em_str r)))
+     (if (int_eq b 13) (Cons 92 (Cons 114 (em_str r)))
+       (Cons b (em_str r))))))))))
+;; the chain's spelling of a profile primitive (prog.shard's table, codes 0–17)
+(fn em_prim ((n Name)) (List Int)
+  (let ((s (show_name n)))
+    (if (int_list_eq s "=") "int_eq"
+    (if (int_list_eq s "<") "lt"
+    (if (int_list_eq s "<=") "le"
+      s)))))
+
+;; ---- what the chain cannot take, refused before any file is written ------------------------
+(fn em_check ((es ESt) (ds (List EDecl))) (Option (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d r)
+     (match (em_check_decl es d)
+       ((Some m) (Some m))
+       (None (em_check es r))))))
+(fn em_check_decl ((es ESt) (d EDecl)) (Option (List Int))
+  (match d
+    ((ESig n _ _ _) (Some (append "unlinked sig fn " (append (show_name n) ": the implementation's directory was not loaded (give it as a root)"))))
+    ((ESigType n _) (Some (append "unlinked sig type " (append (show_name n) ": the implementation's directory was not loaded (give it as a root)"))))
+    ((EFn n _ _ _ _ body) (em_in n (em_check_term body)))
+    ((EInd _ _ _) None)
+    ((EExtern _ _ _ _) None)))
+(fn em_in ((n Name) (r (Option (List Int)))) (Option (List Int))
+  (match r (None None) ((Some m) (Some (append m (append " in " (show_name n)))))))
+(fn em_or ((a (Option (List Int))) (b (Option (List Int)))) (Option (List Int))
+  (match a ((Some m) (Some m)) (None b)))
+(fn em_check_term ((t ETerm)) (Option (List Int))
+  (measure (struct t))
+  (match t
+    ((EBVar _) None)
+    ((ELit l) (em_check_lit l))
+    ((ECtor _ as) (em_check_terms as))
+    ((ECall _ as) (em_check_terms as))
+    ((EPrim n as) (em_or (if (mem_int 46 (show_name n)) (Some (append "the primitive " (append (show_name n) " has no spelling in the chain (the profile's eighteen only)"))) None) (em_check_terms as)))
+    ((EExt _ as) (em_check_terms as))
+    ((EMatch s arms) (em_or (em_check_term s) (em_check_arms arms)))
+    ((ELet rs b) (em_or (em_check_terms rs) (em_check_term b)))
+    ((EIf a b c) (em_or (em_check_term a) (em_or (em_check_term b) (em_check_term c))))
+    (EAbsurd (Some "absurd has no form in the chain"))))
+(fn em_check_terms ((ts (List ETerm))) (Option (List Int))
+  (measure (struct ts))
+  (match ts (Nil None) ((Cons t r) (em_or (em_check_term t) (em_check_terms r)))))
+(fn em_check_arms ((arms (List EArm))) (Option (List Int))
+  (measure (struct arms))
+  (match arms (Nil None) ((Cons (EArm p b) r) (em_or (em_check_pat p) (em_or (em_check_term b) (em_check_arms r))))))
+(fn em_check_pat ((p EPat)) (Option (List Int))
+  (measure (struct p))
+  (match p
+    (PVar None)
+    ((PCtor _ subs) (em_check_pats subs))
+    ((PLit (LStr _ _ _)) (Some "a string pattern has no form in the chain"))
+    ((PLit (LSym s)) (if (em_sym_ok (chars_of_sym s)) None (Some (append "the symbol pattern " (append (chars_of_sym s) " is not an atom of the chain's reader")))))
+    ((PLit _) None)))
+(fn em_check_pats ((ps (List EPat))) (Option (List Int))
+  (measure (struct ps))
+  (match ps (Nil None) ((Cons p r) (em_or (em_check_pat p) (em_check_pats r)))))
+(fn em_check_lit ((l ELit)) (Option (List Int))
+  (match l
+    ((LStr nl cs _)
+     (if (bool_and (int_list_eq (dm_short nl) "Nil") (int_list_eq (dm_short cs) "Cons")) None
+       (Some (append "a string literal over " (append (show_name cs) ": the chain builds its closure's Cons and Nil")))))
+    (_ None)))
+
+;; the emitted names unique in their classes — the heads (fn, extern), the types, the
+;; constructors — after the mangling (parity checks the short names; `A.b` and `A_b` are
+;; one name here)
+(fn em_dups ((es ESt) (ds (List EDecl))) (Option (List Int))
+  (em_or (em_dup_in "head" (dm_sort (em_heads es ds)))
+  (em_or (em_dup_in "type" (dm_sort (em_tnames ds)))
+         (em_dup_in "constructor" (dm_sort (em_cnames ds))))))
+(fn em_heads ((es ESt) (ds (List EDecl))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (EFn n _ _ _ _ _) r) (Cons (em_head es n) (em_heads es r)))
+    ((Cons (EExtern n _ _ _) r) (Cons (em_head es n) (em_heads es r)))
+    ((Cons _ r) (em_heads es r))))
+(fn em_tnames ((ds (List EDecl))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (EInd n _ _) r) (Cons (dm_short n) (em_tnames r)))
+    ((Cons _ r) (em_tnames r))))
+(fn em_cnames ((ds (List EDecl))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (EInd _ _ cs) r) (append (em_ctor_names cs) (em_cnames r)))
+    ((Cons _ r) (em_cnames r))))
+(fn em_ctor_names ((cs (List ECtorDef))) (List (List Int))
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (ECtorDef c _) r) (Cons (dm_short c) (em_ctor_names r)))))
+;; a duplicate among sorted names
+(fn em_dup_in ((what (List Int)) (sorted (List (List Int)))) (Option (List Int))
+  (measure (struct sorted))
+  (match sorted
+    (Nil None)
+    ((Cons x Nil) None)
+    ((Cons x (Cons y r))
+     (if (int_list_eq x y)
+       (Some (append "the " (append what (append " " (append x " is emitted twice (the mangling of a dotted name collides)")))))
+       (em_dup_in what (Cons y r))))))

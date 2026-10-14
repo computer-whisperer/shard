@@ -2696,6 +2696,36 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-14 — slice 4.1 landing 1 built: the emitter, the build, the
+  tie** (`v3/LANGUAGE.md` §8.6 "Slice 4.1 as built, landing 1"; §13 item
+  65 ratified 2026-10-14 as amended by R84 — the user: "Good. Call it
+  ratified and continue."). `kernel/emit.shard` and `load.shard --emit
+  DIR`: the V3 loader's projection of a closure into the dialect the old
+  tree's chain reads — one file per module in the load's order, the
+  parity projection's names with a dotted head mangled and a reserved
+  head suffixed, every local by its de Bruijn depth, records expanded,
+  `let` nested one binding each, strings re-escaped, a symbol the old
+  reader cannot lex built by `sym_of_chars`, the primitives under the
+  chain's spellings, the measure clause dropped; an unlinked sig,
+  `absurd`, a primitive beyond the profile's, a string over another
+  list, a string or unlexable-symbol pattern and a mangling collision
+  refused with nothing written; `map` (R85) and `sources` beside the
+  files. `v3/build.sh`: emit → lower → codegen → cc, `--all` over the
+  29-root inventory (K's directory as a second root by the bootstrap's
+  dump), stamps over the closure's sources, the emitter's closure, the
+  chain and the flags. `kernel/test/native_tie_test.sh`: the gate's own
+  test, the inventory's stamps, the eleven discriminating cases of
+  `v3/pins/emit/` built and tied (two refusals expected), the loader,
+  `prove`, `verify_release`, `t0`, `initindex` and the loader pins'
+  harness under both engines on stdout, stderr, exit status and
+  artifacts, the tree untouched; no normalization. The 42nd entrypoint
+  under `V3_NATIVE=1`; CI's `native` job beside `v3`. Found in the build:
+  the reserved head `chain`, the quote-macro symbol `t'`, the import
+  order, the K-root detection under `pipefail`. Measured under a load of
+  30–40: `v3/build.sh --all` over the 29 roots in 4,167 s with six roots in flight and at most two — then, for the box's memory beside other sessions' jobs, one — heavy steps at once, and the two interrupted roots in a second pass of 695 s; on the quiet box the loader's closure (49 modules, 8,438 declarations) emits in 22 s, lowers in 73 s, generates in 236 s and compiles in 63 s, the K harnesses (5,560 declarations) in 10, 45, 46 and 16 s, a harness of a few hundred declarations in seconds; the lowerer holds 12 GB and the generator up to 40 GB on a driver-sized closure, so the build caps the heavy steps (`V3_HEAVY_JOBS`: two on the dev box, sixteen on the runner's 2.7 TB); the tie's 68 checks, 0 failed, in 368 s alone (349 s inside the suite); the full suite's 42 entrypoints under `V3_NATIVE=1` in 680 s on the quiet box — 41 green, parity byte-identical over 31 closures and 137,040 declarations in 329 s (the 68 more the emitter and the driver's flag), and the tie failing its store step through its own scaffolding (the store's directory removed between the engines' runs, the native side left nowhere to write); the scaffolding fixed, the tie rerun green alone; `verify_release` over calc's release
+  98 s → 13 s native, `prove` over auto 47 → 7, `--measure` 121 → 36,
+  the loader's dump 43 → 6, calc_spec 61 → 10. Route 1's binaries are
+  engines; the bootstrap suite stays the authority.**
 - **2026-10-14 — pipeline 603 green on `62587df`: engine 50 s; corpus 1,500 s against 1,465, the old tree's sources untouched; v3 4,996 s of a 3 h limit, 63 s under pipeline 602's 5,059 (the export 136 s; the index driver built by route 1 in 11 s and the export's index built in 96 s on the runner; 41 entrypoints with 0 failed in 1,803 s against 1,809 — `store_test` 1,492 s against 1,488 (calc's five leaves stored in 534 s against 552; replayed in 93 s against 93), parity byte-identical over 31 closures and 136,972 declarations in 873 s against 856 over 136,792 — the 180 declarations more the landing's kernel growth, the transfer and its identity checks —, `tactic_lib_test` 734 against 755, `define_test` 669 against 703, `path_test` 646 against 688 (load 65 s, run 84 s, store 71 s, verify 15 s), `calc_test` 644 against 635, `engine_test` 504 against 504, `std_test` 456 against 444 — the std root loaded and stored in 238 s and K's replay 215 s —, `wire_test` 374 against 399, `derive_test` 292 against 300, `calc_main_test` 292 against 289, `template_test` 274 against 283 (load 96 s, run 95 s, dump 82 s), `k_clients_test` 204 against 197 (the seven transfer cases), `tactic_test` 146 against 145, the loader pins' entrypoint 136 against 147 (265 cases against 264 — `k_client_admit` the one more), `rows_test` 121 against 132, `matcher_test` 63 against 75 — the runner's variance both ways; route 1's native build of the kernel 432 s against 431; the replay 2,438 s at 32.2 GB against 2,514 at 32.3 — K's sealed module changed by the landing (the transfer in `add.shard`, the modes out of `import.shard`), the replay's path through `check_into` the checked one as before); T0 accepted 57,977, 20 pinned, closures identical. Landing 2 of slice 4.0 holds on the full gate; the slice is closed on the full gate.**
 - **2026-10-14 — slice 4.0 landing 2 built: the seal; slice 4.0 closed**
   (`v3/LANGUAGE.md` §8.6 "Slice 4.0 as built, landing 2"; rule 4, R78).
