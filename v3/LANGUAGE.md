@@ -3316,7 +3316,7 @@ it entrenches. The slices, in the order built:
 | slice | content | first consumer |
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
-| 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie)** | every author's load; the suite; the compiler proof |
+| 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608** | every author's load; the suite; the compiler proof |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
