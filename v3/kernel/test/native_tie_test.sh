@@ -15,8 +15,10 @@
 # fingerprint, a record are never normalized.
 #
 # THE WORKLOADS: (0) the gate's own test — an altered verdict, a missing binary, each
-# detected; (1) every binary of the inventory present with a current stamp (a missing or
-# stale binary fails: never a silent fallback to the bootstrap); (2) the discriminating
+# detected, and the suite comparison's (suite_tie.sh) likewise; (1) every binary of the
+# inventory present with a current stamp (a missing or stale binary fails: never a silent
+# fallback to the bootstrap), and the shim v3/bin/eval present, running a current binary as
+# the bootstrap does and failing loudly on a missing binary and a stale stamp; (2) the discriminating
 # cases v3/pins/emit/* built fresh and tied, the refused_* cases refused with their first
 # line's message; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
 # view), a dump, an example, a program run under ev with and without fuel, a store written;
@@ -27,7 +29,8 @@
 # loader pin; (9) the tree's authored files byte-identical before and after. Exit = the
 # checks that failed. Run after `v3/build.sh --all`; v3/test.sh runs it under V3_NATIVE=1.
 cd "$(dirname "$0")/../../.."
-EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
+# the bootstrap side, never the shim: v3/test.sh exports EVAL=v3/bin/eval under V3_ENGINE=native
+BOOT=${RUST_EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "native_tie_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}
@@ -66,18 +69,19 @@ run_into() { local d=$1; shift; mkdir -p "$d"; "$@" > "$d/out" 2> "$d/err"; echo
 # tie LABEL NAME ARGS…: v3/kernel/NAME.shard under the bootstrap and v3/bin/$(basename NAME)
 # over ARGS, compared; a verdict line required on both sides when VERDICT is set
 tie() {
-  local l=$1 n=$2 bin; shift 2
+  local l=$1 n=$2 bin ta tb; shift 2
   bin=v3/bin/$(basename "$n")
   checks=$((checks+1))
-  run_into "$OUT/$l/a" "$EVAL" direct "v3/kernel/$n.shard" "$@"
+  ta=$(date +%s); run_into "$OUT/$l/a" "$BOOT" direct "v3/kernel/$n.shard" "$@"; ta=$(( $(date +%s) - ta ))
   set_aside "$OUT/$l/a"
   [ -x "$bin" ] || { bad "$l: $bin is missing (v3/build.sh --all)"; return; }
-  run_into "$OUT/$l/b" "$bin" "$@"
+  tb=$(date +%s); run_into "$OUT/$l/b" "$bin" "$@"; tb=$(( $(date +%s) - tb ))
   set_aside "$OUT/$l/b"
   if [ -n "${VERDICT:-}" ]; then
     for side in a b; do grep -q "$VERDICT" "$OUT/$l/$side/out" || { bad "$l: no verdict line ($VERDICT) on side $side"; return; }; done
   fi
-  compare "$l" "$OUT/$l/a" "$OUT/$l/b" && echo "   tie $l: exit $(cat "$OUT/$l/b/rc"), $(wc -l < "$OUT/$l/b/out") lines" || bad "$l differs"
+  # the seconds of both sides: rule 7's measurement per driver, from every run of the gate
+  compare "$l" "$OUT/$l/a" "$OUT/$l/b" && echo "   tie $l: exit $(cat "$OUT/$l/b/rc"), $(wc -l < "$OUT/$l/b/out") lines (bootstrap $ta s, native $tb s)" || bad "$l differs"
 }
 
 # ---- (0) the gate's own test (t0_gate_test.sh's shape): the compare must detect an altered
@@ -93,6 +97,19 @@ mkdir -p "$OUT/self/a/artifacts" "$OUT/self/b/artifacts"; echo x > "$OUT/self/a/
 checks=$((checks+1)); compare self-artifact "$OUT/self/a" "$OUT/self/b" > /dev/null && bad "the gate accepts a differing artifact"
 checks=$((checks+1)); f0=$fail; ( fail=0; tie self-missing no_such_binary_for_the_tie > /dev/null 2>&1; exit $fail ) && bad "a missing binary passes the tie"
 echo "native_tie_test: the gate detects an altered verdict, a differing exit, a differing artifact and a missing binary"
+# the suite comparison's own test: two kept runs identical up to a count of seconds pass; a verdict
+# altered, an exit altered and an entrypoint missing on one side each fail
+mkdir -p "$OUT/sa" "$OUT/sb"
+printf 'x_test: 3 checks, 0 failed, in 12 s\n' > "$OUT/sa/x_test.out"; echo 0 > "$OUT/sa/x_test.rc"; echo 12 > "$OUT/sa/x_test.secs"; echo bootstrap > "$OUT/sa/engine"; echo 12 > "$OUT/sa/wall"
+printf 'x_test: 3 checks, 0 failed, in 4 s\n' > "$OUT/sb/x_test.out"; echo 0 > "$OUT/sb/x_test.rc"; echo 4 > "$OUT/sb/x_test.secs"; echo native > "$OUT/sb/engine"; echo 4 > "$OUT/sb/wall"
+checks=$((checks+1)); v3/kernel/test/suite_tie.sh "$OUT/sa" "$OUT/sb" > /dev/null || bad "suite_tie.sh rejects two runs identical up to their seconds"
+printf 'x_test: 3 checks, 1 failed, in 4 s\n' > "$OUT/sb/x_test.out"
+checks=$((checks+1)); v3/kernel/test/suite_tie.sh "$OUT/sa" "$OUT/sb" > /dev/null && bad "suite_tie.sh accepts an altered verdict"
+cp "$OUT/sa/x_test.out" "$OUT/sb/x_test.out"; echo 1 > "$OUT/sb/x_test.rc"
+checks=$((checks+1)); v3/kernel/test/suite_tie.sh "$OUT/sa" "$OUT/sb" > /dev/null && bad "suite_tie.sh accepts a differing exit status"
+echo 0 > "$OUT/sb/x_test.rc"; cp "$OUT/sa/x_test.out" "$OUT/sa/y_test.out"; cp "$OUT/sa/x_test.rc" "$OUT/sa/y_test.rc"; cp "$OUT/sa/x_test.secs" "$OUT/sa/y_test.secs"
+checks=$((checks+1)); v3/kernel/test/suite_tie.sh "$OUT/sa" "$OUT/sb" > /dev/null && bad "suite_tie.sh accepts an entrypoint missing on one side"
+echo "native_tie_test: the suite comparison detects an altered verdict, a differing exit and a missing entrypoint"
 
 # ---- (1) every binary of the inventory present and current
 n_inv=0
@@ -103,6 +120,17 @@ while read -r name src; do
   elif [ -z "$st" ] || [ "$(cat "v3/bin/$name.stamp" 2>/dev/null)" != "$st" ]; then bad "v3/bin/$name is stale (v3/build.sh --all)"; fi
 done < <(v3/build.sh --list)
 echo "native_tie_test: $n_inv binaries of the inventory present and current"
+# the shim (rule 4): present; a current binary run as the bootstrap runs it; a missing binary and a
+# stale stamp each refused with exit 70 and a message — never a silent fallback
+checks=$((checks+1)); [ -x v3/bin/eval ] || bad "v3/bin/eval is missing (v3/build.sh --all)"
+checks=$((checks+1)); v3/bin/eval direct v3/kernel/no_such_binary_for_the_tie.shard > "$OUT/shim_missing.txt" 2>&1; rc=$?
+[ "$rc" = 70 ] && grep -q "no native binary" "$OUT/shim_missing.txt" || bad "the shim does not fail loudly on a missing binary (exit $rc)"
+cp v3/bin/json_test "v3/bin/tie_stale_$$"   # a binary without a stamp of its own: never emitted, so stale
+v3/bin/eval direct "v3/kernel/tie_stale_$$.shard" > "$OUT/shim_stale.txt" 2>&1; rc=$?; rm -f "v3/bin/tie_stale_$$"
+checks=$((checks+1)); [ "$rc" = 70 ] && grep -q "stale" "$OUT/shim_stale.txt" || bad "the shim does not fail loudly on a stale stamp (exit $rc)"
+run_into "$OUT/shim/a" "$BOOT" direct v3/kernel/test/json_test.shard; run_into "$OUT/shim/b" v3/bin/eval direct v3/kernel/test/json_test.shard
+checks=$((checks+1)); compare "shim json_test" "$OUT/shim/a" "$OUT/shim/b" || bad "the shim's run of json_test differs from the bootstrap's"
+echo "native_tie_test: the shim runs a current binary and refuses a missing binary and a stale stamp"
 
 # ---- (2) the discriminating cases: each built fresh through route 1, run under both engines
 for d in v3/pins/emit/*/; do
@@ -110,7 +138,7 @@ for d in v3/pins/emit/*/; do
   checks=$((checks+1))
   if v3/build.sh "$d/kernel/main.shard" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
-    run_into "$OUT/pin_$c/a" "$EVAL" direct "$d/kernel/main.shard"
+    run_into "$OUT/pin_$c/a" "$BOOT" direct "$d/kernel/main.shard"
     run_into "$OUT/pin_$c/b" "$OUT/bin_$c"
     compare "pin $c" "$OUT/pin_$c/a" "$OUT/pin_$c/b" || bad "pin $c differs"
   else

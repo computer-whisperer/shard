@@ -8,6 +8,9 @@
 # order; a disagreement is a finding, never a rendering to patch around.
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
+# the old tree's side is the bootstrap's expression mode (`eval FILE EXPR`), never the shim's
+# (v3/build.sh's dispositions): the reference under comparison, whichever engine runs the harness
+BOOT=${RUST_EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "calc_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
@@ -23,8 +26,8 @@ echo "calc_test: the port under ev in $((e-s)) s, $(wc -l < "$v3out") lines"
 # a text line as the old tree's (list BYTE…)
 lst() { printf '(list'; printf '%s' "$1" | od -An -v -tu1 | tr -s ' \n' ' ' | sed 's/ \([0-9]\)/ \1/g'; printf ')'; }
 # one case: [i] NAME: the tower's rendering of EXPR
-case_() { printf '[%s] %s: %s\n' "$1" "$2" "$("$EVAL" "$OLD" "$3" 2>&1)"; }
-fold_() { printf '* %s: %s\n' "$1" "$("$EVAL" "$OLD" "$2" 2>&1)"; }
+case_() { printf '[%s] %s: %s\n' "$1" "$2" "$("$BOOT" "$OLD" "$3" 2>&1)"; }
+fold_() { printf '* %s: %s\n' "$1" "$("$BOOT" "$OLD" "$2" 2>&1)"; }
 
 s=$(date +%s)
 i=0; P='(list'; ALL='(list'

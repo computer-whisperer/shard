@@ -57,6 +57,7 @@
 stages:
   - engine
   - gate
+  - tie
 
 # The engine job is deliberately NOT interruptible: the one-time cold
 # bootstrap (Rust interpreter compiles both engines; ~5-6h on the
@@ -216,13 +217,14 @@ v3:
     - v3/export.sh
     - v3/build.sh v3/kernel/initindex.shard v3/bin/initindex
     - v3/kernel/test/init_index.sh
-    - bash v3/test.sh
+    - V3_TEST_OUT=v3/bin/suite/bootstrap bash v3/test.sh
     - v3/build.sh
     - v3/t0_full.sh v3_t0_full.log
   artifacts:
     paths:
       - v3_t0_full.log
       - v3/release/
+      - v3/bin/suite/
     when: always
     expire_in: 30 days
 
@@ -231,10 +233,13 @@ v3:
 # kernel/emit.shard) through the old tree's chain into v3/bin/ — and the
 # byte-tie gate (kernel/test/native_tie_test.sh): the suite's workloads under
 # the bootstrap and the binaries, stdout, stderr, exit status and artifacts
-# byte for byte. Its own job beside `v3` so that the bootstrap suite (the
-# authority) keeps its time; the build is 29 roots through the chain, parallel
-# (the code generator holds 20–30 GB per driver-sized closure: the runner's
-# 2.7 TB takes sixteen at once, the dev box two — V3_HEAVY_JOBS).
+# byte for byte; then the whole suite on the binaries (V3_ENGINE=native: the
+# shim v3/bin/eval, rule 4), its outputs kept for the suite_tie job below. Its
+# own job beside `v3` so that the bootstrap suite (the authority) keeps its
+# time; the build is 29 roots through the chain, parallel (the code generator
+# holds 20–30 GB per driver-sized closure: the runner's 2.7 TB takes sixteen
+# at once, the dev box two — V3_HEAVY_JOBS). The gate jobs share the runner:
+# pipeline 608 measured the build beside them at 1.2–1.4× on every entrypoint.
 native:
   stage: gate
   tags:
@@ -274,12 +279,46 @@ native:
     - V3_BUILD_JOBS=16 V3_HEAVY_JOBS=16 v3/build.sh --all
     - v3/kernel/test/init_index.sh
     - v3/kernel/test/native_tie_test.sh
+    - V3_ENGINE=native V3_TEST_OUT=v3/bin/suite/native bash v3/test.sh
   artifacts:
     paths:
       - v3/bin/*.build.log
       - v3/bin/*.stamp
+      - v3/bin/suite/
     when: always
     expire_in: 30 days
+
+# The suite's two runs compared (v3/LANGUAGE.md §8.6 slice 4.1 rule 4): the v3
+# job's bootstrap run and the native job's run on the binaries, entrypoint by
+# entrypoint — exit status and output byte for byte under suite_tie.sh's stated
+# normalization (a count of seconds, a store's size, a scratch name). Needs
+# both jobs' kept outputs (v3/bin/suite/); seconds, not minutes.
+suite_tie:
+  stage: tie
+  tags:
+    - high-cpu
+  image: docker.io/library/rust:latest
+  timeout: 20m
+  interruptible: true
+  rules:
+    - if: $PIO_DEEP == "1"
+      when: never
+    - if: $SWAP_DEEP == "1"
+      when: never
+    - if: $ENGINE_RUN == "1"
+      when: never
+    - if: $CORPUS_LONG == "1"
+      when: never
+    - if: $CORPUS_CLOSED == "1"
+      when: never
+    - if: $CORPUS_IMAGES == "1"
+      when: never
+    - when: on_success
+  needs:
+    - v3
+    - native
+  script:
+    - v3/kernel/test/suite_tie.sh v3/bin/suite/bootstrap v3/bin/suite/native
 
 # The LONG corpus: everything the default corpus runs PLUS the ~45-90 min
 # block of search/PIO engine-run pins gated behind CORPUS_LONG=1 in

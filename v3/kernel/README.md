@@ -111,12 +111,21 @@ these files a different module identity by design (LAYOUT.md). The
 `use` lines arrived with phase 3's slice 3.3 (2026-09-14) under the V3
 reader's own resolution.
 
-The same flat reading is what the compiler chain's RUN-mode front end
-reads, so `v3/build.sh` compiles `t0.shard` to a native binary through
-`tools/lower` → `tools/codegen` → cc (FOUNDATION §9.1 route 1, unproven:
-the interpreter stays the authority and `v3/t0_full.sh` byte-ties the
-two on a prefix before every full-export replay; ruled 2026-09-07). Name
-the tools repo-relative from the repo root — #41.
+Since phase 4's slice 4.1 (2026-10-14) route 1 starts from the V3
+loader's own reading: `load.shard --emit` (`emit.shard`) projects a
+closure as the loader accepted it into the dialect the old chain reads,
+and `v3/build.sh` (`--all`: the five drivers, `calc_harness` and the 23
+harnesses, a stamp beside each binary) runs `tools/lower` →
+`tools/codegen` → cc into `v3/bin/` (FOUNDATION §9.1 route 1, unproven:
+the interpreter stays the authority; `v3/t0_full.sh` byte-ties the two on
+a prefix before every full-export replay, ruled 2026-09-07, and
+`test/native_tie_test.sh` ties the drivers and a harness on the suite's
+workloads). `v3/test.sh` runs the whole suite on the binaries under
+`V3_ENGINE=native` through the shim `v3/bin/eval` (`direct FILE` →
+`v3/bin/NAME` when its stamp is current, else a loud failure; `dump` and
+`run` the bootstrap's), and `test/suite_tie.sh` compares that run with
+the bootstrap's entrypoint by entrypoint (CI's `suite_tie` job). Name the
+tools repo-relative from the repo root — #41.
 
 Two more gates since slice 6 (2026-09-13; `v3/LANGUAGE.md` §10),
 both run by `v3/test.sh`: **frontend parity** — `test/parity_test.sh`

@@ -1678,6 +1678,28 @@ expected), with an empty normalization list; the 42nd entrypoint under
 
 Landing 1 holds on the full gate: **2026-10-14 — pipeline 608 green on `7c17c1e`, the native job's first run: engine 55 s; corpus 2,020 s against 1,500, the old tree's sources untouched — the three gate jobs on one node, the native job's sixteen-way build beside them; v3 5,398 s of a 3 h limit, 402 s over pipeline 603's 4,996 (the export 134 s; the index driver built by route 1 in 16 s and the export's index built in 116 s on the runner; 41 entrypoints with 0 failed in 2,170 s against 1,803 — `store_test` 1,780 s against 1,492 (calc's five leaves stored in 579 s against 534; replayed in 107 s against 93), parity byte-identical over 31 closures and 137,040 declarations in 1,103 s against 873 over 136,972 — the 68 declarations more the landing's kernel growth, the emitter and the loader's flag —, `tactic_lib_test` 940 against 734, `calc_test` 819 against 644, `path_test` 817 against 646 (load 79 s, run 109 s, store 76 s, verify 15 s), `define_test` 814 against 669, `engine_test` 608 against 504, `std_test` 568 against 456 — the std root loaded and stored in 297 s and K's replay 266 s —, `wire_test` 498 against 374, `template_test` 374 against 274 (load 125 s, run 125 s, dump 123 s), `derive_test` 366 against 292, `calc_main_test` 363 against 292, `k_clients_test` 243 against 204, `tactic_test` 195 against 146, the loader pins' entrypoint 168 against 136 for 265 cases, `rows_test` 151 against 121, `matcher_test` 77 against 63 — every entrypoint 1.2–1.4× pipeline 603's and the corpus job 1.35×, the native job's build running beside them on the same node for the suite's whole span, not the runner's variance; route 1's native build of the kernel 483 s against 432; the replay 2,454 s at 32.2 GB against 2,438 at 32.2, K's sealed module untouched by the landing); T0 accepted 57,977, 20 pinned, closures identical. The native job 3,657 s: the export 131 s; `v3/build.sh --all` over the 29 roots with sixteen in flight and sixteen heavy steps among them in 2,495 s — 29 built, 0 failed, the wall time the longest closure's chain (the loader's 8,438 declarations: emit 62 s, lower 595, codegen 1,688, cc 148, against 22, 73, 236 and 63 on the quiet dev box — the lowerer and the generator at 7–8× under sixteen of each at once; `prove` 57, 612, 1,643, 140; `verify_release` 30, 362, 725, 96; `t0` 28, 353, 588, 86; `initindex` 2, 3, 5, 5; the six driver-sized harnesses 1,570–1,655 s each in the generator; no memory figure, the image without `/usr/bin/time`); the export's index 93 s; the tie's 68 checks, 0 failed, in 914 s against 368 on the quiet dev box, byte-identical under both engines on every workload. Landing 1 of slice 4.1 holds on the full gate.**
 
+**Slice 4.1 landing 2 built 2026-10-14 — the shim and the suite on the
+binaries; slice 4.1 closed** (`LANGUAGE.md` §8.6 "as built, landing 2";
+item 65's note): `v3/bin/eval`, written by `v3/build.sh --all`, answers
+`direct FILE` with `v3/bin/NAME` when its stamp is current and fails
+loudly otherwise, `dump` and `run` with the bootstrap; `v3/test.sh`
+runs every entrypoint on it under `V3_ENGINE=native` and keeps the
+outputs under `V3_TEST_OUT`; `kernel/test/suite_tie.sh` compares a
+bootstrap run and a native run entrypoint by entrypoint under a stated
+normalization (seconds, a size, a scratch name); CI's `native` job runs
+the tie and then the suite on the binaries, and a `suite_tie` job
+compares it with the `v3` job's bootstrap run. Found in the build:
+`calc_test`'s old-tree side is the bootstrap's expression mode, named
+in the script as the bootstrap's; the tie names the bootstrap
+explicitly. Locally, under a load of ~340 from other sessions: the
+suite on the binaries 532 s of wall against the bootstrap's 1,130
+(1,519 s of entrypoint time against 3,925 — `store_test` 890 → 259,
+parity 348 → 165, `path_test` 323 → 94, `tactic_lib_test` 289 → 53,
+`define_test` 237 → 43, `std_test` 162 → 29, `wire_test` 153 → 22, the
+loader pins' entrypoint 57 → 13); the tie 76 checks, 0 failed; the two
+runs byte-identical on all 42 entrypoints. The bootstrap suite stays
+the authority; the binaries are engines.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
 2026-10-14): `load.shard --emit` projects a driver's closure, as the
