@@ -72,7 +72,7 @@ verify "$OUT/storeA" > "$OUT/vA.txt" 2>&1; rcA=$?
 verify "$OUT/storeB" > "$OUT/vB.txt" 2>&1; rcB=$?
 checks=$((checks+1)); [ "$rcA" = 0 ] || { bad "verify_release failed on the library's store (exit $rcA)"; grep -v '^ACCEPT' "$OUT/vA.txt" | head -4 | cut -c1-300; }
 checks=$((checks+1)); [ "$rcB" = 0 ] || { bad "verify_release failed on the engine's store (exit $rcB)"; grep -v '^ACCEPT' "$OUT/vB.txt" | head -4 | cut -c1-300; }
-checks=$((checks+1)); grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0$' "$OUT/vA.txt" && grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0$' "$OUT/vB.txt" || bad "a release line is not clean"
+checks=$((checks+1)); grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0 ' "$OUT/vA.txt" && grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0 ' "$OUT/vB.txt" || bad "a release line is not clean"
 checks=$((checks+1)); [ "$(grep -c '^ACCEPT' "$OUT/vA.txt")" = "$(grep -c '^ACCEPT' "$OUT/vB.txt")" ] || bad "the two stores do not verify the same number of declarations"
 echo "tactic_lib_test: the engine's and the library's sidecars differ, replay to the same ACCEPT records, and both stores verify by K alone"
 

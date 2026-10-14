@@ -48,6 +48,7 @@
 (use kernel.host)
 (use kernel.loader)
 (use kernel.name)
+(use kernel.name.Name)
 (use kernel.prelude)
 (use kernel.scope)
 (use kernel.store)
@@ -128,7 +129,7 @@
        (let ((w3 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2))))
          (if (bool_or (lt 0 (load_failures cs)) (int_eq (len store) 0))
            (exit (load_failures cs) w3)
-           (match (store_write (Load.env l) store (stored_names (ld_recs l)) w3)
+           (match (store_write (Load.env l) store (stored_names (ld_recs l)) (stored_params (ld_recs l) (stored_discharges (ld_recs l))) (stored_discharges (ld_recs l)) w3)
              ((Pair (StoreOk new shared) w4)
               (exit 0 (write_line (append "STORE: " (append store (append " new=" (append (show_nat new) (append " shared=" (show_nat shared)))))) w4)))
              ((Pair (StoreFail path) w4) (exit 2 (write_line (append "STORE: cannot write " path) w4))))))))))
@@ -140,6 +141,27 @@
     ((Cons (RAccept n _ _ _ _ _) r) (Cons n (stored_names r)))
     ((Cons (RParam n _ _) r) (Cons n (stored_names r)))
     ((Cons _ r) (stored_names r))))
+;; the manifest's parameters (slice 4.0 rule 3): every PARAM record's name — a view parameter,
+;; or an obligation the load did not discharge (a discharged one is a `discharge` line instead)
+(fn stored_params ((rs (List Rec)) (ds (List (Pair Name Name)))) (List Name)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RParam n _ _) r) (if (is_discharged_of ds n) (stored_params r ds) (Cons n (stored_params r ds))))
+    ((Cons (RImplRec (RParam n _ _)) r) (if (is_discharged_of ds n) (stored_params r ds) (Cons n (stored_params r ds))))
+    ((Cons _ r) (stored_params r ds))))
+(fn is_discharged_of ((ds (List (Pair Name Name))) (n Name)) Bool
+  (measure (struct ds))
+  (match ds (Nil False) ((Cons (Pair o _) r) (if (name_eq o n) True (is_discharged_of r n)))))
+;; the manifest's discharges: every obligation a DISCHARGE record settled as proved, with its
+;; proof's name (the theorem OBL.proof the fulfills read; loader.shard load_discharge)
+(fn stored_discharges ((rs (List Rec))) (List (Pair Name Name))
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons (RDischarge n k) r) (if (sym_eq k (quote proved)) (Cons (Pair n (Str n (quote proof))) (stored_discharges r)) (stored_discharges r)))
+    ((Cons (RImplRec (RDischarge n k)) r) (if (sym_eq k (quote proved)) (Cons (Pair n (Str n (quote proof))) (stored_discharges r)) (stored_discharges r)))
+    ((Cons _ r) (stored_discharges r))))
 ;; a clean load, then the program run from the entry; a failed load prints its records and exits 2
 (fn main_run ((l0 Load) (files (List (List Int))) (entry Name) (argv (List (List Int))) (fuel Int) (w World)) World
   (match (load_files l0 files w)

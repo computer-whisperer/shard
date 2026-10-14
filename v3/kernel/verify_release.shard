@@ -1,22 +1,40 @@
 ;;; v3/kernel/verify_release.shard — the release gate (LANGUAGE.md §8.4 slice 3.22
-;;; rule 7; law §7.5): `eval direct v3/kernel/verify_release.shard [-v] DIR EXPORT INDEX`
+;;; rule 7, §8.6 slice 4.0 rules 2–3; law §7.5): `eval direct v3/kernel/verify_release.shard [-v] DIR EXPORT INDEX`
 ;;; K replays the store DIR holds (store.shard: DIR/order lists `ID NAME` in
-;;; admission order, DIR/ID.ndjson the declaration's records) after the closure of
-;;; the pinned Init EXPORT the store cites, read through its INDEX (slice 3.26:
-;;; every constant the store's records cite by name, their records' closure walked
-;;; by range reads and checked — never admitted — in export order), with no
-;;; elaborator loaded — this file imports K, the host, the JSON reader and the
-;;; walk alone: the T0 machinery over a second stream. A stored declaration
-;;; bearing a name the export declares is refused (`TAKEN`: Init's names are
-;;; Init's, slice 3.25 rule 2). Every non-ACCEPT verdict prints (ACCEPT too with
-;;; -v), then `INIT: counts` after the closure and `RELEASE: declarations N
-;;; accepted A rejected … malformed X  mistied Y  missing Z  taken T` for the
-;;; store — mistied: a declaration accepted under a name or with a content
-;;; fingerprint other than its order line's (a dropped name record lands a theorem
-;;; under a shorter name: the import reads a missing table index as anonymous);
-;;; each file is its own stream, fresh tables over the environment so far, as it
-;;; was written. The exit code is the declarations not accepted + malformed +
-;;; mistied + missing + taken + the closure's failures.
+;;; admission order, DIR/ID.ndjson the declaration's records, DIR/manifest the fixed
+;;; target — `manifest 1`, then `decl ID KIND NAME` per declaration, `param NAME` per
+;;; declared parameter, `discharge OBL PROOF` per discharged obligation) after the
+;;; closure of the pinned Init EXPORT the store cites, read through its INDEX (slice
+;;; 3.26: every constant the store's records cite by name, their records' closure
+;;; walked by range reads and checked — never admitted — in export order), with no
+;;; elaborator loaded — this file imports K, the host, the JSON reader and the walk
+;;; alone: the T0 machinery over a second stream. Each file is its own stream, fresh
+;;; tables over the environment so far, as it was written.
+;;;
+;;; The verdicts printed: every non-ACCEPT verdict of K (ACCEPT too with -v);
+;;; MISTIED — a declaration accepted under a name or with a content fingerprint other
+;;; than the manifest's (a dropped name record lands a theorem under a shorter name:
+;;; the import reads a missing table index as anonymous), or an order line naming
+;;; another declaration than the manifest's; MISKIND — a record of another kind than
+;;; the manifest's (a theorem replaced by a same-name same-type axiom; R79);
+;;; CARDINALITY — a file yielding other than one accepted declaration (R80);
+;;; UNLISTED — an order line the manifest lacks; MISSING — a manifest declaration
+;;; without its file or its order line; TAKEN — a stored name the export declares
+;;; (Init's names are Init's, slice 3.25 rule 2); UNDECLARED — an accepted axiom the
+;;; manifest declares neither as a parameter nor as a discharged obligation; PARAM — each declared parameter, so a
+;;; conditional bundle reports what it rests on; DISCHARGE — an obligation whose
+;;; proof the store holds as the theorem OBL.proof at the obligation's statement, and
+;;; BAD-DISCHARGE when it does not; CONDITIONAL — a declaration whose assumption
+;;; closure (K's axiom walk, axioms.shard; a discharged obligation standing for its
+;;; proof's own closure) reaches an axiom that is neither the export's nor a declared
+;;; parameter. Then `INIT: counts` after the closure and the `RELEASE:` line with
+;;; every count. The exit is 0 exactly when every count of a failed class is zero —
+;;; rejected, exhausted, mismatched, unsupported, malformed, mistied, missing, taken,
+;;; unlisted, miskind, cardinality, undeclared, conditional, the closure's failures —
+;;; never a subtraction across units (R80); else 1; 2 for a store or an argument the
+;;; gate cannot read. The fingerprint is identity_hash — a report's fingerprint,
+;;; never an authority: K's acceptance is the gate's guarantee, the manifest the
+;;; target, the closure walk the policy.
 
 (import "host.shard")
 (import "json.shard")
@@ -28,6 +46,10 @@
 (use kernel.initload.OdLoad)
 (use kernel.initload.OdOpen)
 (use kernel.json)
+(use kernel.decl)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
+(use kernel.expr)
 (use kernel.prelude)
 (use kernel.util)
 (use kernel.host.World)
@@ -40,37 +62,113 @@
 (use kernel.prelude.Pair)
 (use kernel.verdict.Verdict)
 
-;; the records of one stream, each through K: the run, the malformed count and the
-;; mistied count — a declaration accepted under a name other than WANT's (empty: any
-;; name) or with a content fingerprint other than FP (0: any), which a dropped name
-;; record produces (the import reads a missing table index as anonymous) and which
-;; ties a replayed constant to the build's ACCEPT record (identity_hash is the
-;; report's fingerprint, never an authority: K's acceptance is the gate's guarantee,
-;; the tie says the bundle is the build's)
-(type VL (VL Run Int Int))
-(fn vr_lines ((v VL) (bs0 (List Int)) (verbose Bool) (want (List Int)) (fp Int) (w World)) (Pair VL World)
+;; ---- the manifest (slice 4.0 rule 3) ---------------------------------------------------------
+;; declarations id → (kind, name); the declared parameters; the discharges (obligation, proof)
+(type Man (Man (List (Pair (List Int) (Pair (List Int) (List Int)))) (List (List Int)) (List (Pair (List Int) (List Int)))))
+(type ManRes (ManOk Man) (ManErr (List Int)))
+(fn vr_tokens ((ln (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ln))
+  (match ln
+    (Nil (rev (match cur (Nil acc) (_ (Cons (rev cur) acc)))))
+    ((Cons 32 r) (vr_tokens r Nil (match cur (Nil acc) (_ (Cons (rev cur) acc)))))
+    ((Cons c r) (vr_tokens r (Cons c cur) acc))))
+(fn man_parse ((bs (List Int)) (ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (ps (List (List Int))) (dc (List (Pair (List Int) (List Int))))) ManRes
+  (measure (struct bs))
+  (match bs
+    (Nil (ManOk (Man (rev ds) (rev ps) (rev dc))))
+    (_
+     (match (take_line bs Nil)
+       ((Pair ln rest)
+        (match (vr_tokens ln Nil Nil)
+          (Nil (man_parse rest ds ps dc))
+          ((Cons h args)
+           (if (int_list_eq h "manifest")
+             (match args
+               ((Cons v Nil) (if (int_list_eq v "1") (man_parse rest ds ps dc) (ManErr (append "a manifest of version " (append v ", this gate reads 1")))))
+               (_ (ManErr "the header is `manifest 1`")))
+           (if (int_list_eq h "decl")
+             (match args
+               ((Cons id (Cons kind (Cons nm Nil))) (man_parse rest (Cons (Pair id (Pair kind nm)) ds) ps dc))
+               (_ (ManErr (append "a declaration line is `decl ID KIND NAME`: " ln))))
+           (if (int_list_eq h "param")
+             (match args
+               ((Cons nm Nil) (man_parse rest ds (Cons nm ps) dc))
+               (_ (ManErr (append "a parameter line is `param NAME`: " ln))))
+           (if (int_list_eq h "discharge")
+             (match args
+               ((Cons o (Cons p Nil)) (man_parse rest ds ps (Cons (Pair o p) dc)))
+               (_ (ManErr (append "a discharge line is `discharge OBL PROOF`: " ln))))
+             (ManErr (append "unknown line: " ln)))))))))))))
+(fn man_decl ((ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (id (List Int))) (Option (Pair (List Int) (List Int)))
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons (Pair i kn) r) (if (int_list_eq i id) (Some kn) (man_decl r id)))))
+(fn vr_mem ((x (List Int)) (xs (List (List Int)))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (int_list_eq x y) True (vr_mem x r)))))
+;; the ids of an order file: each line's first token
+(fn vr_order_ids ((bs (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev acc))
+    (_ (match (take_line bs Nil)
+         ((Pair ln rest) (vr_order_ids rest (match (vr_id ln) (Nil acc) (t (Cons t acc)))))))))
+;; the manifest's declarations without an order line, each printed
+(fn man_missing ((ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (ids (List (List Int))) (w World)) (Pair Int World)
+  (measure (struct ds))
+  (match ds
+    (Nil (Pair 0 w))
+    ((Cons (Pair i (Pair _ nm)) r)
+     (if (vr_mem i ids) (man_missing r ids w)
+       (match (man_missing r ids (write_line (append "MISSING " (append i (append " " (append nm " (a manifest declaration without an order line)")))) w))
+         ((Pair k w1) (Pair (+ k 1) w1)))))))
+(fn vr_print_params ((ps (List (List Int))) (w World)) World
+  (measure (struct ps))
+  (match ps (Nil w) ((Cons p r) (vr_print_params r (write_line (append "PARAM " p) w)))))
+
+;; the kind of an accepted constant, as the manifest spells it
+(fn vr_kind_text ((env CheckedEnv) (n Name)) (List Int)
+  (match (env_find env n)
+    ((Some (AxiomInfo _ _)) "axiom")
+    ((Some (DefnInfo _ _ _ _ _)) "def")
+    ((Some (ThmInfo _ _ _)) "thm")
+    ((Some (OpaqueInfo _ _ _ _)) "opaque")
+    ((Some (InductInfo _ _ _ _ _ _ _ _ _)) "inductive")
+    ((Some _) "other")
+    (None "none")))
+
+;; the records of one stream, each through K: the run, the malformed count, the mistied
+;; count, the accepted count, the miskind count and the accepted names — a declaration
+;; accepted under a name other than WANT's (empty: any name), with a content fingerprint
+;; other than FP (0: any), or of a kind other than KIND (empty: any) is not counted accepted
+(type VL (VL Run Int Int Int Int (List Name)))
+(fn vr_lines ((v VL) (bs0 (List Int)) (verbose Bool) (want (List Int)) (fp Int) (kind (List Int)) (w World)) (Pair VL World)
   (measure (struct bs0))
   (let ((bs (skip_ws bs0)))
     (match bs
       (Nil (Pair v w))
       (_
        (match v
-         ((VL r bad wrong)
+         ((VL r bad wrong acc mk ns)
           (match (json_parse bs)
-            (JErr (Pair (VL r (+ bad 1) wrong) (write_line "MALFORMED json (stream)" w)))
+            (JErr (Pair (VL r (+ bad 1) wrong acc mk ns) (write_line "MALFORMED json (stream)" w)))
             ((JRes j rest)
              (match (process_record r j)
                ((Pair r1 vd)
                 (match vd
-                  ((VMalformed k) (vr_lines (VL r1 (+ bad 1) wrong) rest verbose want fp (write_line (append "MALFORMED " k) w)))
+                  ((VMalformed k) (vr_lines (VL r1 (+ bad 1) wrong acc mk ns) rest verbose want fp kind (write_line (append "MALFORMED " k) w)))
                   ((VAccept n)
-                   (if (bool_and (bool_or (int_eq (len want) 0) (int_list_eq want (show_name n)))
-                                 (bool_or (int_eq fp 0) (vr_fp_is (run_env r1) n fp)))
-                     (vr_lines (VL r1 bad wrong) rest verbose want fp (if verbose (write_line (append "ACCEPT " (show_name n)) w) w))
-                     (vr_lines (VL r1 bad (+ wrong 1)) rest verbose want fp
-                       (write_line (append "MISTIED " (append want (append " accepted as " (append (show_name n) (append " fp=" (vr_fp_text (run_env r1) n)))))) w))))
-                  (VSkip (vr_lines (VL r1 bad wrong) rest verbose want fp w))
-                  (_ (vr_lines (VL r1 bad wrong) rest verbose want fp (match (show_verdict vd) ((Some x) (write_line x w)) (None w)))))))))))))))
+                   (if (bool_not (bool_and (bool_or (int_eq (len want) 0) (int_list_eq want (show_name n)))
+                                           (bool_or (int_eq fp 0) (vr_fp_is (run_env r1) n fp))))
+                     (vr_lines (VL r1 bad (+ wrong 1) acc mk ns) rest verbose want fp kind
+                       (write_line (append "MISTIED " (append want (append " accepted as " (append (show_name n) (append " fp=" (vr_fp_text (run_env r1) n)))))) w))
+                   (if (bool_not (bool_or (int_eq (len kind) 0) (int_list_eq kind (vr_kind_text (run_env r1) n))))
+                     (vr_lines (VL r1 bad wrong acc (+ mk 1) ns) rest verbose want fp kind
+                       (write_line (append "MISKIND " (append (show_name n) (append ": the manifest says " (append kind (append ", the record is " (vr_kind_text (run_env r1) n)))))) w))
+                     (vr_lines (VL r1 bad wrong (+ acc 1) mk (Cons n ns)) rest verbose want fp kind (if verbose (write_line (append "ACCEPT " (show_name n)) w) w)))))
+                  (VSkip (vr_lines (VL r1 bad wrong acc mk ns) rest verbose want fp kind w))
+                  (_ (vr_lines (VL r1 bad wrong acc mk ns) rest verbose want fp kind (match (show_verdict vd) ((Some x) (write_line x w)) (None w)))))))))))))))
 (fn vr_fp_is ((env CheckedEnv) (n Name) (fp Int)) Bool
   (match (identity_hash env n) ((Some h) (int_eq h fp)) (None False)))
 (fn vr_fp_text ((env CheckedEnv) (n Name)) (List Int)
@@ -114,12 +212,16 @@
   (measure (struct ts))
   (match ts (Nil w) ((Cons t r) (vr_print_taken r (write_line (append "TAKEN " (append t " is a declaration of the export")) w)))))
 
-;; the store's declarations in order, each file its own stream over the environment
-;; so far — fresh tables, as a file is written (store.shard): a record a file lacks is
-;; malformed there, never read from an earlier file's table. The state: the
-;; environment, K's five counts summed, declarations, malformed, mistied, missing.
-(type VR (VR CheckedEnv (List Int) Int Int Int Int))
-(fn vr_store ((v VR) (dir (List Int)) (order (List Int)) (verbose Bool) (w World)) (Pair VR World)
+;; the store's declarations in order, each file its own stream over the environment so
+;; far — fresh tables, as a file is written (store.shard): a record a file lacks is
+;; malformed there, never read from an earlier file's table. The state: the environment,
+;; K's five counts summed, declarations, malformed, mistied, missing, unlisted, miskind,
+;; cardinality, the accepted names (newest first). An order line the manifest lacks is
+;; UNLISTED and its file is still checked (what it declares may be cited later, and the
+;; policy pass then names the citation); an order line naming another declaration than
+;; the manifest's is MISTIED and the file is held to the manifest's name and kind.
+(type VR (VR CheckedEnv (List Int) Int Int Int Int Int Int Int (List Name)))
+(fn vr_store ((v VR) (man Man) (dir (List Int)) (order (List Int)) (verbose Bool) (w World)) (Pair VR World)
   (measure (struct order))
   (match order
     (Nil (Pair v w))
@@ -127,16 +229,117 @@
      (match (take_line order Nil)
        ((Pair ln rest)
         (match (vr_id ln)
-          (Nil (vr_store v dir rest verbose w))
+          (Nil (vr_store v man dir rest verbose w))
           (fid
            (match v
-             ((VR env counts n bad wrong missing)
-              (match (read_file (append dir (Cons 47 (append fid ".ndjson"))) w)
-                ((Pair None w1) (vr_store (VR env counts (+ n 1) bad wrong (+ missing 1)) dir rest verbose (write_line (append "MISSING " ln) w1)))
-                ((Pair (Some bs) w1)
-                 (match (vr_lines (VL (run_with_env (empty_run False False) env (st_for env)) 0 0) bs verbose (vr_name ln) (vr_digits fid 0) w1)
-                   ((Pair (VL r1 bad1 wrong1) w2)
-                    (vr_store (VR (run_env r1) (vr_sum counts (run_counts r1)) (+ n 1) (+ bad bad1) (+ wrong wrong1) missing) dir rest verbose w2))))))))))))))
+             ((VR env counts n bad wrong missing unl mk card ns)
+              (match (match man ((Man ds _ _) (man_decl ds fid)))
+                (None
+                 (vr_store_file (VR env counts n bad wrong missing (+ unl 1) mk card ns) man dir fid (vr_name ln) "" rest verbose
+                   (write_line (append "UNLISTED " (append fid (append " " (append (vr_name ln) " (an order line the manifest lacks)")))) w)))
+                ((Some (Pair kind nm))
+                 (if (int_list_eq nm (vr_name ln))
+                   (vr_store_file v man dir fid nm kind rest verbose w)
+                   (vr_store_file (VR env counts n bad (+ wrong 1) missing unl mk card ns) man dir fid nm kind rest verbose
+                     (write_line (append "MISTIED " (append fid (append ": the order line says " (append (vr_name ln) (append ", the manifest " nm))))) w))))))))))))))
+;; one file of the store through K, then the rest of the order
+(fn vr_store_file ((v VR) (man Man) (dir (List Int)) (fid (List Int)) (want (List Int)) (kind (List Int)) (rest (List Int)) (verbose Bool) (w World)) (Pair VR World)
+  (match v
+    ((VR env counts n bad wrong missing unl mk card ns)
+     (match (read_file (append dir (Cons 47 (append fid ".ndjson"))) w)
+       ((Pair None w1)
+        (vr_store (VR env counts (+ n 1) bad wrong (+ missing 1) unl mk card ns) man dir rest verbose (write_line (append "MISSING " (append fid (append " " want))) w1)))
+       ((Pair (Some bs) w1)
+        (match (vr_lines (VL (run_with_env (empty_run False False) env (st_for env)) 0 0 0 0 Nil) bs verbose want (vr_digits fid 0) kind w1)
+          ((Pair (VL r1 bad1 wrong1 acc1 mk1 ns1) w2)
+           (vr_store (VR (run_env r1) (vr_sum counts (run_counts r1)) (+ n 1) (+ bad bad1) (+ wrong wrong1) missing unl (+ mk mk1) (if (int_eq acc1 1) card (+ card 1)) (append ns1 ns))
+             man dir rest verbose
+             (if (int_eq acc1 1) w2
+               (write_line (append "CARDINALITY " (append fid (append ": " (append (show_nat acc1) " declarations accepted, one expected")))) w2))))))))))
+
+;; ---- the policy (slice 4.0 rule 3) ------------------------------------------------------------
+;; a stored name among the accepted ones, by its rendering
+(fn vr_find_name ((ns (List Name)) (t (List Int))) (Option Name)
+  (measure (struct ns))
+  (match ns
+    (Nil None)
+    ((Cons n r) (if (int_list_eq (show_name n) t) (Some n) (vr_find_name r t)))))
+(fn vr_proof_name ((o Name)) Name (Str o (quote proof)))
+;; the manifest's discharges the store holds at their statements: OBL an accepted axiom,
+;; PROOF the accepted theorem OBL.proof whose type is OBL's; each verified one printed,
+;; each other BAD-DISCHARGE and counted
+(fn vr_discharges ((env CheckedEnv) (ns (List Name)) (dc (List (Pair (List Int) (List Int)))) (acc (List (Pair Name Name))) (bad Int) (w World)) (Pair (Pair (List (Pair Name Name)) Int) World)
+  (measure (struct dc))
+  (match dc
+    (Nil (Pair (Pair acc bad) w))
+    ((Cons (Pair o p) r)
+     (match (vr_find_name ns o)
+       (None (vr_discharges env ns r acc (+ bad 1) (write_line (append "BAD-DISCHARGE " (append o " is not an accepted declaration of the store")) w)))
+       ((Some on)
+        (if (bool_not (int_list_eq p (show_name (vr_proof_name on))))
+          (vr_discharges env ns r acc (+ bad 1) (write_line (append "BAD-DISCHARGE " (append o (append ": its proof is the theorem " (append (show_name (vr_proof_name on)) (append ", not " p))))) w))
+          (match (env_find env on)
+            ((Some (AxiomInfo (ConstantVal _ _ oty) _))
+             (match (env_find env (vr_proof_name on))
+               ((Some (ThmInfo (ConstantVal _ _ pty) _ _))
+                (if (expr_eq oty pty)
+                  (vr_discharges env ns r (Cons (Pair on (vr_proof_name on)) acc) bad (write_line (append "DISCHARGE " (append o (append " by " p))) w))
+                  (vr_discharges env ns r acc (+ bad 1) (write_line (append "BAD-DISCHARGE " (append o ": the proof's statement is not the obligation's")) w))))
+               (_ (vr_discharges env ns r acc (+ bad 1) (write_line (append "BAD-DISCHARGE " (append o ": the proof is not an accepted theorem of the store")) w)))))
+            (_ (vr_discharges env ns r acc (+ bad 1) (write_line (append "BAD-DISCHARGE " (append o " is not an axiom of the store")) w))))))))))
+(fn vr_proof_of ((dcs (List (Pair Name Name))) (o Name)) (Option Name)
+  (measure (struct dcs))
+  (match dcs
+    (Nil None)
+    ((Cons (Pair a p) r) (if (name_eq a o) (Some p) (vr_proof_of r o)))))
+(fn vr_is_some ((T Type) (x (Option T))) Bool (match x ((Some _) True) (None False)))
+;; the axioms of a closure that are neither the export's (ENV0, the Init closure's
+;; environment) nor declared parameters, a verified discharge standing for its proof's own
+;; closure; fuel-bounded, a cycle of discharges or exhausted fuel leaves the axiom bad —
+;; never a silent acceptance
+(fn vr_undeclared ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (axs (List Name)) (seen (List Name)) (fuel Int) (bad (List Name))) (Pair AxMemo (List Name))
+  (measure fuel)
+  (if (lt fuel 1) (Pair m (append axs bad))
+    (match axs
+      (Nil (Pair m bad))
+      ((Cons a r)
+       (if (vr_is_some (env_find env0 a)) (vr_undeclared env env0 m params dcs r seen (- fuel 1) bad)
+       (if (vr_mem (show_name a) params) (vr_undeclared env env0 m params dcs r seen (- fuel 1) bad)
+         (match (vr_proof_of dcs a)
+           (None (vr_undeclared env env0 m params dcs r seen (- fuel 1) (Cons a bad)))
+           ((Some p)
+            (if (mem_name a seen) (vr_undeclared env env0 m params dcs r seen (- fuel 1) (Cons a bad))
+              (match (axioms_of env m p)
+                ((Pair m1 None) (vr_undeclared env env0 m1 params dcs r seen (- fuel 1) (Cons a bad)))
+                ((Pair m1 (Some paxs))
+                 (match (vr_undeclared env env0 m1 params dcs paxs (Cons a seen) (- fuel 1) bad)
+                   ((Pair m2 bad2) (vr_undeclared env env0 m2 params dcs r seen (- fuel 1) bad2))))))))))))))
+(fn vr_names_sp ((ns (List Name))) (List Int)
+  (measure (struct ns))
+  (match ns (Nil "") ((Cons n r) (append " " (append (show_name n) (vr_names_sp r))))))
+;; every accepted declaration: an axiom must be a declared parameter or a verified
+;; discharge's obligation (UNDECLARED otherwise); any
+;; other's closure must rest on the export's axioms, the parameters and the verified
+;; discharges alone (CONDITIONAL, the offending axioms named)
+(fn vr_policy ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (ns (List Name)) (undeclared Int) (conditional Int) (w World)) (Pair (Pair Int Int) World)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (Pair undeclared conditional) w))
+    ((Cons n r)
+     (if (int_list_eq (vr_kind_text env n) "axiom")
+       (if (bool_or (vr_mem (show_name n) params) (vr_is_some (vr_proof_of dcs n))) (vr_policy env env0 m params dcs r undeclared conditional w)
+         (vr_policy env env0 m params dcs r (+ undeclared 1) conditional
+           (write_line (append "UNDECLARED " (append (show_name n) ": an axiom the manifest declares neither as a parameter nor as a discharged obligation")) w)))
+       (match (axioms_of env m n)
+         ((Pair m1 None)
+          (vr_policy env env0 m1 params dcs r undeclared (+ conditional 1) (write_line (append "CONDITIONAL " (append (show_name n) ": ?depth")) w)))
+         ((Pair m1 (Some axs))
+          (match (vr_undeclared env env0 m1 params dcs axs Nil 100000 Nil)
+            ((Pair m2 Nil) (vr_policy env env0 m2 params dcs r undeclared conditional w))
+            ((Pair m2 bad)
+             (vr_policy env env0 m2 params dcs r undeclared (+ conditional 1)
+               (write_line (append "CONDITIONAL " (append (show_name n) (append ": rests on" (vr_names_sp bad)))) w))))))))))
+
 ;; an order line's name: what follows the first space
 (fn vr_name ((ln (List Int))) (List Int)
   (measure (struct ln))
@@ -156,6 +359,10 @@
   (measure (struct ln))
   (match ln (Nil Nil) ((Cons 32 _) Nil) ((Cons c r) (Cons c (vr_id r)))))
 
+(fn nth_int ((xs (List Int)) (i Int)) Int
+  (measure (struct xs))
+  (match xs (Nil 0) ((Cons x r) (if (int_eq i 0) x (nth_int r (- i 1))))))
+
 (fn vr_failures ((r Run)) Int (match (run_counts r) ((Cons _ (Cons b (Cons c (Cons d _)))) (+ b (+ c d))) (_ 0)))
 
 (fn vr_args ((args (List (List Int))) (verbose Bool)) (Pair Bool (List (List Int)))
@@ -164,33 +371,53 @@
     ((Cons x r) (if (int_list_eq x "-v") (vr_args r True) (Pair verbose args)))
     (Nil (Pair verbose Nil))))
 
+(fn vr_count ((label (List Int)) (k Int)) (List Int) (append "  " (append label (append " " (show_nat k)))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match (vr_args args False)
        ((Pair verbose (Cons dir (Cons export (Cons index Nil))))
-        (match (od_open export index w1)
-          ((Pair (OdOpenErr e m) w2) (exit 2 (write_line (append "verify_release: " (append export (append ": " (append (chars_of_sym e) (append ": " m))))) w2)))
-          ((Pair (OdOpened x) w2)
-           (match (read_file (append dir "/order") w2)
-             ((Pair None w3) (exit 2 (write_line (append "verify_release: cannot read " (append dir "/order")) w3)))
-             ((Pair (Some order) w3)
-              (match (vr_demand x dir order Nil Nil 0 w3)
-                ((Pair (VD x1 ords taken _) w4)
-                 (match (od_load x1 (empty_run False False) (odd0) ords w4)
-                   ((Pair (OdLoadErr _ e m) w5) (exit 2 (write_line (append "INIT: " (append (chars_of_sym e) (append ": " m))) w5)))
-                   ((Pair (OdLoaded _ r0 _ _ _ _) w5)
-                    (let ((w6 (vr_print_taken taken (write_line (append "INIT: " (show_counts r0)) w5))))
-                      (match (vr_store (VR (run_env r0) (list 0 0 0 0 0) 0 0 0 0) dir order verbose w6)
-                        ((Pair (VR _ counts n bad wrong missing) w7)
-                         (let ((accepted (nth_int counts 0)))
-                           (exit (+ (- n accepted) (+ bad (+ wrong (+ missing (+ (len taken) (vr_failures r0))))))
-                             (write_line (append "RELEASE: declarations " (append (show_nat n) (append "  accepted " (append (show_nat accepted)
-                                           (append "  rejected " (append (show_nat (nth_int counts 1)) (append "  exhausted " (append (show_nat (nth_int counts 2))
-                                           (append "  mismatched " (append (show_nat (nth_int counts 3)) (append "  unsupported " (append (show_nat (nth_int counts 4))
-                                           (append "  malformed " (append (show_nat bad) (append "  mistied " (append (show_nat wrong) (append "  missing " (append (show_nat missing) (append "  taken " (show_nat (len taken)))))))))))))))))))))
-                               w7)))))))))))))))
+        (match (read_file (append dir "/manifest") w1)
+          ((Pair None w2) (exit 2 (write_line (append "verify_release: no manifest in " (append dir " (a store of slice 4.0's format writes one beside order)")) w2)))
+          ((Pair (Some mbs) w2)
+           (match (man_parse mbs Nil Nil Nil)
+             ((ManErr m) (exit 2 (write_line (append "verify_release: manifest: " m) w2)))
+             ((ManOk man)
+              (match (od_open export index w2)
+                ((Pair (OdOpenErr e m) w3) (exit 2 (write_line (append "verify_release: " (append export (append ": " (append (chars_of_sym e) (append ": " m))))) w3)))
+                ((Pair (OdOpened x) w3)
+                 (match (read_file (append dir "/order") w3)
+                   ((Pair None w4) (exit 2 (write_line (append "verify_release: cannot read " (append dir "/order")) w4)))
+                   ((Pair (Some order) w4)
+                    (match (vr_demand x dir order Nil Nil 0 w4)
+                      ((Pair (VD x1 ords taken _) w5)
+                       (match (man_missing (match man ((Man ds _ _) ds)) (vr_order_ids order Nil) w5)
+                         ((Pair missing0 w6)
+                          (match (od_load x1 (empty_run False False) (odd0) ords w6)
+                            ((Pair (OdLoadErr _ e m) w7) (exit 2 (write_line (append "INIT: " (append (chars_of_sym e) (append ": " m))) w7)))
+                            ((Pair (OdLoaded _ r0 _ _ _ _) w7)
+                             (let ((env0 (run_env r0)))
+                               (let ((w8 (vr_print_taken taken (write_line (append "INIT: " (show_counts r0)) w7))))
+                                 (match (vr_store (VR env0 (list 0 0 0 0 0) 0 0 0 missing0 0 0 0 Nil) man dir order verbose w8)
+                                   ((Pair (VR env counts n bad wrong missing unl mk card ns) w9)
+                                    (let ((names (rev ns)))
+                                      (match man
+                                        ((Man _ params dctexts)
+                                         (match (vr_discharges env names dctexts Nil 0 (vr_print_params params w9))
+                                           ((Pair (Pair dcs baddc) w10)
+                                            (match (vr_policy env env0 (ax_memo_empty) params dcs names 0 0 w10)
+                                              ((Pair (Pair undeclared conditional0) w11)
+                                               (let ((conditional (+ conditional0 baddc)))
+                                                 (let ((failures (+ (nth_int counts 1) (+ (nth_int counts 2) (+ (nth_int counts 3) (+ (nth_int counts 4)
+                                                                  (+ bad (+ wrong (+ missing (+ (len taken) (+ unl (+ mk (+ card (+ undeclared (+ conditional (vr_failures r0))))))))))))))))
+                                                   (exit (if (int_eq failures 0) 0 1)
+                                                     (write_line (append "RELEASE: declarations " (append (show_nat n)
+                                                                   (append (vr_count "accepted" (nth_int counts 0)) (append (vr_count "rejected" (nth_int counts 1))
+                                                                   (append (vr_count "exhausted" (nth_int counts 2)) (append (vr_count "mismatched" (nth_int counts 3))
+                                                                   (append (vr_count "unsupported" (nth_int counts 4)) (append (vr_count "malformed" bad)
+                                                                   (append (vr_count "mistied" wrong) (append (vr_count "missing" missing) (append (vr_count "taken" (len taken))
+                                                                   (append (vr_count "unlisted" unl) (append (vr_count "miskind" mk) (append (vr_count "cardinality" card)
+                                                                   (append (vr_count "undeclared" undeclared) (vr_count "conditional" conditional))))))))))))))))
+                                                       w11))))))))))))))))))))))))))))))
        (_ (exit 2 (write_line "verify_release: [-v] DIR EXPORT INDEX" w1)))))))
-(fn nth_int ((xs (List Int)) (i Int)) Int
-  (measure (struct xs))
-  (match xs (Nil 0) ((Cons x r) (if (int_eq i 0) x (nth_int r (- i 1))))))

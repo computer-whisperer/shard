@@ -16,6 +16,11 @@
 ;;; is trusted: K re-checks every record the store holds (verify_release.shard),
 ;;; and a record this writer gets wrong is that run's verdict, never an
 ;;; acceptance.
+;;; Beside `order`, `manifest` (slice 4.0 rule 3; R79) is the release's fixed target:
+;;; `manifest 1`, then `decl ID KIND NAME` per stored declaration, `param NAME` per
+;;; declared parameter the store holds as an axiom (a view parameter, an undischarged
+;;; obligation), `discharge OBL PROOF` per obligation the load discharged; appended,
+;;; never rewritten, as `order` is.
 
 (import "host.shard")
 (import "json.shard")
@@ -452,20 +457,69 @@
 ;; text, FP-K for the first free K. A file already holding the text is shared and listed
 ;; once; order is appended, never rewritten, so several loads fill one store in sequence
 ;; (a shared module's declarations come from the first load that admitted them).
-(type StoreSt (StoreSt (List (List Int)) (List (List Int)) Int Int))   ; ids listed, new order lines (newest first), new, shared
+(type StoreSt (StoreSt (List (List Int)) (List (List Int)) (List (List Int)) Int Int))   ; ids listed, new order lines (newest first), new manifest lines (newest first), new, shared
 (type StoreRes (StoreOk Int Int) (StoreFail (List Int)))                 ; new shared; the path that could not be written
 
-(fn store_write ((env CheckedEnv) (dir (List Int)) (ns (List Name)) (w World)) (Pair StoreRes World)
+(fn store_write ((env CheckedEnv) (dir (List Int)) (ns (List Name)) (params (List Name)) (discharges (List (Pair Name Name))) (w World)) (Pair StoreRes World)
   (match (read_file (store_path dir "order") w)
     ((Pair old w1)
      (let ((olds (match old ((Some bs) bs) (None Nil))))
-       (match (store_decls env dir ns (StoreSt (order_ids olds Nil) Nil 0 0) w1)
-         ((Pair (Some (StoreSt _ lines new shared)) w2)
-          (if (int_eq new 0) (Pair (StoreOk new shared) w2)
-            (match (write_file (store_path dir "order") (append olds (store_bytes (rev lines))) w2)
-              ((Pair True w3) (Pair (StoreOk new shared) w3))
-              ((Pair False w3) (Pair (StoreFail (store_path dir "order")) w3)))))
+       (match (store_decls env dir ns (StoreSt (order_ids olds Nil) Nil Nil 0 0) w1)
+         ((Pair (Some (StoreSt _ lines mlines new shared)) w2)
+          (match (if (int_eq new 0) (Pair True w2) (write_file (store_path dir "order") (append olds (store_bytes (rev lines))) w2))
+            ((Pair False w3) (Pair (StoreFail (store_path dir "order")) w3))
+            ((Pair True w3)
+             (match (store_manifest env dir (rev mlines) params discharges w3)
+               ((Pair True w4) (Pair (StoreOk new shared) w4))
+               ((Pair False w4) (Pair (StoreFail (store_path dir "manifest")) w4))))))
          ((Pair None w2) (Pair (StoreFail dir) w2)))))))
+;; the manifest (slice 4.0 rule 3): the header when the file is new, then the lines the
+;; store does not hold yet — the new declarations' `decl` lines, a `param` line per parameter
+;; the environment holds as an axiom, a `discharge` line per discharged obligation
+(fn store_manifest ((env CheckedEnv) (dir (List Int)) (decls (List (List Int))) (params (List Name)) (discharges (List (Pair Name Name))) (w World)) (Pair Bool World)
+  (match (read_file (store_path dir "manifest") w)
+    ((Pair old w1)
+     (let ((have (match old ((Some bs) (manifest_lines bs Nil)) (None Nil))))
+       (let ((add (append (lines_not_in decls have) (append (param_lines env params have) (discharge_lines discharges have)))))
+         (match old
+           (None (write_file (store_path dir "manifest") (store_bytes (Cons "manifest 1" add)) w1))
+           ((Some bs) (if (int_eq (len add) 0) (Pair True w1) (write_file (store_path dir "manifest") (append bs (store_bytes add)) w1)))))))))
+(fn manifest_lines ((bs (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev acc))
+    (_ (match (take_line bs Nil) ((Pair ln rest) (manifest_lines rest (Cons ln acc)))))))
+(fn lines_not_in ((xs (List (List Int))) (have (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r) (if (mem_bytes x have) (lines_not_in r have) (Cons x (lines_not_in r have))))))
+(fn param_lines ((env CheckedEnv) (ps (List Name)) (have (List (List Int)))) (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p r)
+     (match (env_find env p)
+       ((Some (AxiomInfo _ _))
+        (let ((ln (append "param " (show_name p))))
+          (if (mem_bytes ln have) (param_lines env r have) (Cons ln (param_lines env r (Cons ln have))))))
+       (_ (param_lines env r have))))))
+(fn discharge_lines ((ds (List (Pair Name Name))) (have (List (List Int)))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (Pair o p) r)
+     (let ((ln (append "discharge " (append (show_name o) (append " " (show_name p))))))
+       (if (mem_bytes ln have) (discharge_lines r have) (Cons ln (discharge_lines r (Cons ln have))))))))
+;; a stored declaration's kind, as the manifest spells it
+(fn sw_kind ((env CheckedEnv) (n Name)) (List Int)
+  (match (env_find env n)
+    ((Some (AxiomInfo _ _)) "axiom")
+    ((Some (DefnInfo _ _ _ _ _)) "def")
+    ((Some (ThmInfo _ _ _)) "thm")
+    ((Some (OpaqueInfo _ _ _ _)) "opaque")
+    ((Some (InductInfo _ _ _ _ _ _ _ _ _)) "inductive")
+    (_ "other")))
 (fn store_path ((dir (List Int)) (file (List Int))) (List Int) (append dir (Cons 47 file)))
 ;; the ids of an order file: each line's first token
 (fn order_ids ((bs (List Int)) (acc (List (List Int)))) (List (List Int))
@@ -486,11 +540,11 @@
      (match (store_records env n)
        (None (store_decls env dir r st w))
        ((Some lines)
-        (match (store_place dir (show_nat (match (identity_hash env n) ((Some h) h) (None 0))) 0 n (store_bytes lines) st 100 w)
+        (match (store_place dir (show_nat (match (identity_hash env n) ((Some h) h) (None 0))) 0 n (sw_kind env n) (store_bytes lines) st 100 w)
           ((Pair (Some st1) w1) (store_decls env dir r st1 w1))
           ((Pair None w1) (Pair None w1))))))))
 ;; the file for one declaration: FP, else FP-K
-(fn store_place ((dir (List Int)) (fp (List Int)) (k Int) (n Name) (bytes (List Int)) (st StoreSt) (fuel Int) (w World)) (Pair (Option StoreSt) World)
+(fn store_place ((dir (List Int)) (fp (List Int)) (k Int) (n Name) (kind (List Int)) (bytes (List Int)) (st StoreSt) (fuel Int) (w World)) (Pair (Option StoreSt) World)
   (measure fuel)
   (if (lt fuel 1) (Pair None w)
     (let ((id (if (int_eq k 0) fp (append fp (Cons 45 (show_nat k))))))
@@ -498,18 +552,20 @@
         (match (read_file path w)
           ((Pair None w1)
            (match (write_file path bytes w1)
-             ((Pair True w2) (Pair (Some (store_listed st id n True)) w2))
+             ((Pair True w2) (Pair (Some (store_listed st id n kind True)) w2))
              ((Pair False w2) (Pair None w2))))
           ((Pair (Some have) w1)
            (if (int_list_eq have bytes)
-             (Pair (Some (store_listed st id n False)) w1)
-             (store_place dir fp (+ k 1) n bytes st (- fuel 1) w1))))))))
-(fn store_listed ((st StoreSt) (id (List Int)) (n Name) (new Bool)) StoreSt
+             (Pair (Some (store_listed st id n kind False)) w1)
+             (store_place dir fp (+ k 1) n kind bytes st (- fuel 1) w1))))))))
+(fn store_listed ((st StoreSt) (id (List Int)) (n Name) (kind (List Int)) (new Bool)) StoreSt
   (match st
-    ((StoreSt ids lines nw sh)
+    ((StoreSt ids lines mlines nw sh)
      (if (mem_bytes id ids)
-       (StoreSt ids lines nw (+ sh 1))
-       (StoreSt (Cons id ids) (Cons (append id (Cons 32 (show_name n))) lines) (if new (+ nw 1) nw) (if new sh (+ sh 1)))))))
+       (StoreSt ids lines mlines nw (+ sh 1))
+       (StoreSt (Cons id ids) (Cons (append id (Cons 32 (show_name n))) lines)
+                (Cons (append "decl " (append id (Cons 32 (append kind (Cons 32 (show_name n)))))) mlines)
+                (if new (+ nw 1) nw) (if new sh (+ sh 1)))))))
 (fn mem_bytes ((x (List Int)) (xs (List (List Int)))) Bool
   (measure (struct xs))
   (match xs (Nil False) ((Cons y r) (if (int_list_eq x y) True (mem_bytes x r)))))

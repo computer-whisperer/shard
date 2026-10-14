@@ -1643,7 +1643,13 @@ corrections and rows, 4.1's amendments for R84); the release gate
 assumption-closure check through K's axiom walk); the seal (R78's
 checked transfer in place of the admit flag, a generator run in place
 of the pins flag). **Landing 0 built 2026-10-14**: the documents,
-nothing else.
+nothing else. **Landing 1 built 2026-10-14 — the release gate**: the
+manifest beside `order` as the fixed target, the verifier's kind,
+cardinality, unlisted and missing checks against it, the policy
+through K's axiom walk with verified discharges standing for their
+proofs, the exit the sum of fourteen failed classes; the memo's seven
+tampers as pins (`store_test` 29 checks); the full suite 41
+entrypoints, 0 failed, in 820 s.
 
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65 for

@@ -2542,15 +2542,33 @@ artifact, never committed; the engine's reach is measured over calc's
    block), `DIR/ID.ndjson` per declaration with ID the content
    fingerprint (`FP-K` on a collision of texts), `DIR/order`
    appended, never rewritten; a failed load writes nothing.
+   Beside `order`, `DIR/manifest` is the release's fixed target
+   (slice 4.0 rule 3, R79): `manifest 1`, then `decl ID KIND NAME` per
+   declaration, `param NAME` per parameter the store holds as an axiom
+   (a view parameter, an undischarged obligation), `discharge OBL
+   PROOF` per obligation the load discharged — appended as `order` is.
    `kernel/verify_release.shard DIR EXPORT INDEX` is K, the host and
    the JSON reader alone: Init's closure of the store's citations on
    demand from the export through its index (3.26; the chunks as one
    stream before it), then each store file in `order`'s order as its own stream
-   over the environment so far, each held to its order line by name
-   and fingerprint (`MISTIED`, `MALFORMED`, `MISSING`, `REJECTED`);
-   `RELEASE: declarations N accepted A …`. `store_test.sh` (the 36th
-   entrypoint); `v3/release/` the v3 job's artifact. Not built: a
-   store over implementation forks; a release across roots.
+   over the environment so far, each held to the manifest by name,
+   fingerprint and kind (`MISTIED`, `MISKIND`), one accepted
+   declaration per file (`CARDINALITY`), every order line in the
+   manifest and every manifest declaration in `order` with its file
+   (`UNLISTED`, `MISSING`); then the policy (rule 3): an accepted axiom
+   is a declared parameter or `UNDECLARED`, each `discharge` is held
+   at its statement (`DISCHARGE`, else `BAD-DISCHARGE`), and every
+   other declaration's assumption closure — K's axiom walk, a verified
+   discharge standing for its proof's closure — rests on the export's
+   axioms and the declared parameters alone or is `CONDITIONAL` with
+   the axioms named; `PARAM` lines report what a conditional bundle
+   rests on. `RELEASE: declarations N  accepted A  … conditional Q`;
+   the exit is 0 exactly when every failed class counts zero (rule 2,
+   R80), else 1, never a subtraction across units. `store_test.sh`
+   (the 36th entrypoint; the memo's tampers as pins); `v3/release/`
+   the v3 job's artifact. Not built: a store over implementation
+   forks; a release across roots; the three persisted identities (R82,
+   §11).
 
 **`Init` — slices 3.23–3.26: the cache (retired), the connected path,
 the shared load, Init on demand** (records §9.1 "Slice 3.23" to
@@ -3289,7 +3307,7 @@ it entrenches. The slices, in the order built:
 
 | slice | content | first consumer |
 |---|---|---|
-| 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run | the ledger; the release; K's clients |
+| 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate)** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries | every author's load; the suite; the compiler proof |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
@@ -3396,6 +3414,69 @@ pins through `k_clients_test`.
 *Not in this slice, stated:* R82's three identities (phase 4, its own
 slice before T6); R85's origin map (before the incremental goal-state
 slice); slice 4.1 itself, amended here and built after.
+
+**Slice 4.0 as built, landing 1 (2026-10-14) — the release gate.**
+Rules 2 and 3.
+
+- **The exit (rule 2, R80).** `verify_release` counts, beside K's five
+  verdict classes, malformed, mistied, missing, taken, unlisted,
+  miskind, cardinality, undeclared and conditional; the exit is 0
+  exactly when every one is zero, else 1 — the sum of the failed
+  classes, never `n − accepted`; the `RELEASE:` line carries all
+  fourteen counts. A file yielding other than one accepted declaration
+  under its manifest line is `CARDINALITY`; a second record K accepts
+  under another name is `MISTIED` against the manifest, which now
+  fails the gate where the subtraction cancelled it (the memo's second
+  case lands there, not at cardinality: K accepts the copy, the
+  manifest does not know it); an inductive whose metadata mismatches
+  after its acceptance fails through the mismatched count.
+- **The target (rule 3, R79).** `store.shard` writes `DIR/manifest`
+  beside `order` (`store_manifest`: the header `manifest 1`, a `decl ID
+  KIND NAME` line per declaration listed, a `param NAME` line per
+  parameter the store holds as an axiom, a `discharge OBL PROOF` line
+  per obligation the load settled as proved — appended, never
+  rewritten; `load.shard --store` supplies the parameters as every
+  `PARAM` record not discharged and the discharges as every
+  `DISCHARGE … proved` record with the proof `OBL.proof`). The
+  verifier reads the manifest first (a store without one is exit 2:
+  the format's one incompatible change), holds each file to its
+  manifest line's name, fingerprint and kind (`MISKIND`), an order
+  line the manifest lacks is `UNLISTED` and its file still checked, a
+  manifest declaration without an order line is `MISSING`.
+- **The policy (rule 3).** After the store: each manifest discharge is
+  verified — the obligation an accepted axiom, the proof the accepted
+  theorem `OBL.proof` whose type is the obligation's by `expr_eq`
+  (`DISCHARGE`, else `BAD-DISCHARGE`, counted conditional); every
+  accepted axiom is a declared parameter or a verified discharge's
+  obligation, else `UNDECLARED`; every other accepted declaration's
+  assumption closure (`axioms_of`, K's walk) is resolved — the export's
+  axioms (the Init closure's environment holds them) and the declared
+  parameters allowed, a verified discharge replaced by its proof's own
+  closure, fuel-bounded with a cycle or exhausted fuel left bad — and
+  a remainder is `CONDITIONAL NAME: rests on AX…`; `PARAM` lines name
+  every declared parameter. Found in the build: an obligation's axiom
+  was first flagged `UNDECLARED` beside its own `DISCHARGE` line (the
+  std root's `renderOnto.dec_1`, calc's four, the pin's three) — the
+  policy now exempts a verified discharge's obligation.
+- **The pins** (`store_test.sh`, 29 checks): the memo's seven — a
+  second rejected record in a file and a second accepted one under
+  another name (R80), calc's inductive with `isRec` flipped (R80), the
+  theorem replaced by a same-name same-type axiom (`MISKIND`), a proof
+  rewritten to rest on an axiom whose file is added unlisted
+  (`UNLISTED`, `UNDECLARED`, `CONDITIONAL le_step: rests on
+  le_step_ax`), a target removed from `order` with its file
+  (`MISSING`), and `discharge_measure` stored with three `discharge`
+  lines and no parameter, verifying with three `DISCHARGE` lines, then
+  its `count.dec_1` discharge removed (`CONDITIONAL count` and
+  `count_self`, `UNDECLARED count.dec_1`) — each a nonzero exit; the
+  manifest's header and 23 `decl` lines checked on the example.
+- **Gates run.** `store_test` 29 checks, 0 failed, 640 s;
+  `std_test` 201, 0 failed; `path_test` 18, 0 failed;
+  `tactic_lib_test` 30, 0 failed; the full suite's 41 entrypoints, 0
+  failed, in 820 s (parity byte-identical over 31 closures and 136,792
+  declarations); the three edited kernel files clean under the V3
+  loader; names at the baseline. Route 1's kernel build, the full
+  replay and the corpus are CI's.
 
 **Slice 4.1 — the native toolchain: route 1 over the kernel's drivers**
 (designed 2026-10-13 at phase 3's close, on the user's "Let's find a
@@ -4993,3 +5074,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     yields no environment (rule 4). (e) R82's identities and R85's
     origin map carried as §11 rows, not built here. **Ratified
     2026-10-14 as designed (the user: "Agreed, go ahead with 4.0").**
+    **As built, landing 1 (2026-10-14):** the manifest beside `order`
+    (`decl`, `param`, `discharge` lines) the fixed target, the
+    verifier's exit the sum of fourteen failed classes, the kind and
+    cardinality checks, the policy through `axioms_of` with verified
+    discharges standing for their proofs' closures; the memo's seven
+    tampers as pins; the memo's second cardinality case lands as
+    `MISTIED` against the manifest, which fails the gate as asked.

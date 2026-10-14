@@ -2696,6 +2696,22 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-14 — slice 4.0 landing 1 built: the release gate** (`v3/LANGUAGE.md`
+  §8.6 "Slice 4.0 as built, landing 1"; rules 2–3, R79 and R80).
+  `store.shard` writes `DIR/manifest` beside `order` — `decl`, `param`
+  and `discharge` lines, the fixed target; `load.shard --store`
+  supplies the undischarged parameters and the proved discharges;
+  `verify_release.shard` holds each file to its manifest line by name,
+  fingerprint and kind, counts cardinality, unlisted and missing
+  against the manifest, verifies each discharge at its statement,
+  requires every accepted axiom declared or discharged, resolves every
+  other declaration's assumption closure through K's axiom walk with
+  verified discharges standing for their proofs, and exits 0 exactly
+  when every failed class counts zero. Found in the build: a verified
+  discharge's obligation was first flagged `UNDECLARED`; exempted.
+  Gates: `store_test` 29 checks, 0 failed, 640 s; `std_test` 201;
+  `path_test` 18; `tactic_lib_test` 30; the full suite 41 entrypoints,
+  0 failed, in 820 s (parity over 136,792 declarations).
 - **2026-10-14 — slice 4.0 landing 0 built: the documents** (`v3/LANGUAGE.md`
   §8.6 "Slice 4.0", rule 1; §13 item 66 ratified 2026-10-14 as
   designed — the user: "Agreed, go ahead with 4.0"). R81's four statements rewritten with
