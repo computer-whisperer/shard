@@ -1649,7 +1649,11 @@ cardinality, unlisted and missing checks against it, the policy
 through K's axiom walk with verified discharges standing for their
 proofs, the exit the sum of fourteen failed classes; the memo's seven
 tampers as pins (`store_test` 29 checks); the full suite 41
-entrypoints, 0 failed, in 820 s.
+entrypoints, 0 failed, in 820 s. **Landing 2 built 2026-10-14 — the
+seal; slice 4.0 closed**: `env_transfer` in K's view in place of the
+admit mode, the admit and pins flags deleted, `od_admit` over the
+transfer; pin `k_client_admit` (265 cases) and seven client cases; the
+full suite 41 entrypoints, 0 failed, in 1,381 s.
 
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65 for

@@ -2581,10 +2581,12 @@ receipt (`t0.shard --receipt`, `load.shard --init-receipt`,
 the export's prefix under a receipt of a full replay. Measured under
 Init on demand, admission saved a tenth to a fifth of a demanded load
 and its only writer was the full replay, so the receipt, the flag and
-the currency script were deleted. What stays: `k/add.shard`'s
+the currency script were deleted. What stayed — `k/add.shard`'s
 `admit_decl_pinning` and the run's admit mode (`run_admitting`),
 repurposed for the loader's second admission of records it checked a
-moment ago (3.26's `od_admit`); `verify_release` never took a receipt.
+moment ago (3.26's `od_admit`) — was deleted at slice 4.0 landing 2
+(R78, §8.6): the second admission is the checked transfer
+`env_transfer`, under identity; `verify_release` never took a receipt.
 
 *Slice 3.24 (ruled 2026-10-09 on R76, item 58; built 2026-10-09):*
 law §12.4's first connected path assembled and broken at each joint.
@@ -2667,9 +2669,15 @@ cites; no fixture, no receipt.
    blocks scheduled highest first, a constant resolved by its name id
    through the declaration table — and feeds K's run of Init alone
    the lines ascending through `process_record`, checked; then
-   `od_admit` admits them into the loader's environment without the
-   typing judgments (K's admit mode); what K has been fed persists in
-   the process (`OdDone`); `ld_reroot` starts a root on that run.
+   `od_admit` transfers them into the loader's environment under
+   identity (`k/add.shard` `env_transfer`, slice 4.0 rule 4, R78: each
+   constant as K's Init run holds it, identical to any constant of its
+   name the destination holds, every citation present under the same
+   identity or travelling with it, pinned by identity afterwards; the
+   typing judgments are the Init run's — before 4.0 the records were
+   re-fed in an admit mode that skipped them on the caller's word);
+   what K has been fed persists in the process (`OdDone`);
+   `ld_reroot` starts a root on that run.
    `INIT NAME: horizon H, N declarations admitted`.
 4. **The law unchanged**: visibility is the ordinal below the horizon
    (`init_within` on the true ordinals; `ACCEPT … init=H`); a name no
@@ -3307,7 +3315,7 @@ it entrenches. The slices, in the order built:
 
 | slice | content | first consumer |
 |---|---|---|
-| 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate)** | the ledger; the release; K's clients |
+| 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate); landing 2 built 2026-10-14 (the seal) — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries | every author's load; the suite; the compiler proof |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
@@ -3477,6 +3485,60 @@ Rules 2 and 3.
   declarations); the three edited kernel files clean under the V3
   loader; names at the baseline. Route 1's kernel build, the full
   replay and the corpus are CI's.
+
+**Slice 4.0 as built, landing 2 (2026-10-14) — the seal.** Rule 4.
+
+- **The transfer.** `k/add.shard` `env_transfer src dst names`: each
+  name present in `src`; identical to any constant of that name `dst`
+  holds (`ci_identical`: the kind, the level parameters, the type and
+  the value by `expr_eq`, an inductive's, a constructor's and a
+  recursor's shape — hints are not identity); every constant its type,
+  value or rules cite present in `dst` under the same identity as in
+  `src` or itself among the names (an inductive's constructors and
+  recursor travel with it; `ci_cited` through `expr_consts`); any
+  failure refuses the whole and `dst` is unchanged; then the watermark
+  raised to both environments' and the names pinned by identity
+  (`pin_names`, after the whole transfer). Exported by the view;
+  `initload.shard`'s `od_admit` is its caller, over the constants the
+  load fed (`OdLoaded`'s list, in feed order), no longer over the
+  lines.
+- **The deletions.** `run_admitting`, `admit_decl_pinning` and
+  `admit_decl_core`, `pin_names_unconditionally`, the run's admit and
+  pins flags (`Run` is ten fields), the view's `run_admitting`;
+  `empty_run` takes the `-a` flag alone; `check_into` checks and pins
+  by identity only. Departure from the design: no generator run type
+  — the pin table's generator (`t0.shard --pins`, `gen_pins.sh`) needs
+  no privileged mode, since `refgen.shard` prints every candidate
+  present in the environment and reads no pin flag; the flag that
+  "pinned every candidate as admitted" was unnecessary and is gone.
+- **The pins.** `k_client_admit` (265 cases): a client of the view
+  naming `run_admitting` is refused `unknown_head`. `k_client_test`'s
+  seven cases through the V3 loader: Nat's block and `z` transferred
+  into the empty environment hold both and pin the export's `Nat` by
+  identity; `Nat` without its constructors refused (the recursor's
+  citations absent); `z` alone refused (`Nat` absent); `z` onto an
+  environment holding another `z` refused; `z` onto the same `z`
+  accepted; a name the source lacks refused.
+- **Found in the build.** Pinning each constant as it entered left
+  `String` unpinned in every load (pin `ev_string` failed
+  `string_literal_unpinned_String`): an inductive's identity closure
+  holds its constructors, which enter after it — the names are pinned
+  once the whole transfer is in. A pattern variable spelled `n2`
+  shadowed `util.n2` (`pattern_name`); renamed. The old lines-based
+  path re-decoded the records through the Init run's tables, which
+  carried the run's node ids into the loader's environment without
+  raising its watermark; the transfer raises it to both.
+- **Gates run.** The loader pins' entrypoint 265 cases, 0 failed, 53 s;
+  `k_clients_test` 7 tests, 0 failed, 110 s; the full suite's 41
+  entrypoints, 0 failed, in 1,381 s (parity byte-identical over 31
+  closures and 136,972 declarations); K and the loader clean under the V3
+  loader with K's directory as a second root; names at the baseline.
+  Route 1's kernel build, the full replay and the corpus are CI's.
+
+**Slice 4.0 closed 2026-10-14** at this landing: the memo's eight items
+answered as records §4.12 disposes them — R78–R80 fixed with pins,
+R81–R83 and R85 in the documents, R84 in slice 4.1's design; the
+ledger's release row amended at the close-out of this landing.
 
 **Slice 4.1 — the native toolchain: route 1 over the kernel's drivers**
 (designed 2026-10-13 at phase 3's close, on the user's "Let's find a
@@ -5081,3 +5143,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     discharges standing for their proofs' closures; the memo's seven
     tampers as pins; the memo's second cardinality case lands as
     `MISTIED` against the manifest, which fails the gate as asked.
+    **As built, landing 2 (2026-10-14):** the checked transfer
+    `env_transfer` in place of the admit mode, the admit and pins flags
+    deleted outright (no generator run type: the generator needed no
+    privileged mode), the pin `k_client_admit` and seven client cases;
+    the names pinned after the whole transfer (found: `String`
+    unpinned when pinned one by one). Slice closed.
