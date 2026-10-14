@@ -2660,6 +2660,22 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-13 — slice 4.1 designed: the native toolchain, route 1
+  over the kernel's drivers** (`v3/LANGUAGE.md` §8.6 "Slice 4.1"; §13
+  item 65 for ratification; phase 4's opener on the user's "find a
+  near-term slot … or should we just do it next?"). The probe at the
+  close, on scratch copies: `t0` lowers in 81 s; `load.shard`'s
+  closure (55 files, 32,644 lines; route 1 today 29 and 13,497) is
+  refused at source 30, `matcher.shard`, where v2's reader reads the
+  capitalised local `M` as a constructor — renamed, the whole matcher
+  closure lowers in 50 s; 26 such binders in 4 files; records the next
+  class (7 declarations, 73 accessors, 48 `with`, 11 `make` in 7
+  files); the dialects otherwise identical, every extern in `rt.h`; the
+  bootstrap's parse of the closure 369 ms. The design: the V3 loader's
+  projection as the pre-pass (`--emit`), one build for every driver and
+  harness, a byte-tie entrypoint, CI's bootstrap suite the authority
+  with the native suite compared beside it, the old tree untouched,
+  the binaries engines. Documents only.
 - **2026-10-13 — slice 3.30 landing 4 built: the close — phase 3
   closed** (`v3/LANGUAGE.md` §8.4 "as built, landing 4"; §13 items
   39–42, 44–46 and 48, and item 64's as-built notes of landings 2 and

@@ -6,7 +6,8 @@
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
 > 60 as amended there, 61–64 as built); 39–42, 44–46 and 48, and item
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
-> open, its first slice designed at this boundary.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> open; its first slice, 4.1 the native toolchain, designed 2026-10-13 at
+> this boundary (§8.6; §13 item 65 for ratification).** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -3243,6 +3244,156 @@ stance is stated now (§13 item 46):
   unfolding of a parameter — opacity by selective loading, as v2's,
   never by a name gate.
 
+### 8.6 Phase 4 — entrenchment (opened 2026-10-13 at phase 3's close)
+
+Law §12.4 item 4 names the phase's content: a `tb_len`-class compiler
+proof; coupled program/proof holes and refutation scope (T4, T7);
+incremental goal states; prepared invocation, stale handles, buffer
+rules and reclamation (T6); evaluation reflection and its cost
+comparison (T8); the World-use and model tests before any effectful
+certificate is called ported. Carried in by ruling: `Symbol`'s
+`String` flip with route 1's chain (slice 3.30 rule 3b, item 64).
+Route 1 — K compiled by shard's own lowering (law §9.1) — is the
+engine the compiler proof is about, and today it compiles two of the
+kernel's drivers; the phase opens by compiling the rest, so that
+every later slice of the phase is built and measured on the engine
+it entrenches. The slices, in the order built:
+
+| slice | content | first consumer |
+|---|---|---|
+| 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries | every author's load; the suite; the compiler proof |
+
+**Slice 4.1 — the native toolchain: route 1 over the kernel's drivers**
+(designed 2026-10-13 at phase 3's close, on the user's "Let's find a
+near-term slot in the schedule to implement the compiler path for the
+v3 kernel, similar to how we did it for v2 … or should we just do it
+next?"; §13 item 65 for ratification; law §9.1 route 1, §12.4 item 4
+by the boundary's ruling, §12.1's "generated files never
+hand-patched"). The v2 chain — `tools/lower` to its low dialect,
+`tools/codegen` to C, `cc` — compiled v2's kernel into
+`bin/shard_eval` and `bin/shard_check` from 2026-07, gen-N building
+gen-N+1 with the Rust interpreter as the bootstrap authority and a
+byte-tie on a fixture before every fast build (`bin/rebuild.sh`).
+Route 1 runs that chain over `v3/kernel/t0.shard` and
+`v3/kernel/initindex.shard` today (`v3/build.sh`; CI builds both; the
+suite's `init_index.sh` runs the index native). Everything else an
+author or the suite runs — the loader, `prove`, `verify_release`,
+the 23 harnesses — runs on the Rust bootstrap, route 3. Measured
+2026-10-13 at the close, on scratch copies, the lowerer booted by
+`bin/shard_eval`:
+
+| what | measurement |
+|---|---|
+| route 1 today: `t0` + `initindex` closures | 29 files, 13,497 lines; `t0` lowers in 81 s locally |
+| the loader's closure (`load.shard`) | 55 files, 32,644 lines; `prove` 53 files, 31,950 — 29 files, 19,450 lines beyond route 1 |
+| the lowerer on `load.shard` | refused at source 30 of 55 (`matcher.shard`): v2's reader reads a capitalised local (`M`, the motive) as a constructor and reports the fn malformed; sources 1–29 accepted unchanged; with that one local renamed the whole matcher closure lowers in 50 s |
+| capitalised locals in the kernel | 26 binders, 6 names, 4 files (`reader` 19, `matcher` 4, `predef` 2, `tactic` 1); type parameters `(T Type)` are not among them, v2's reader has that rule since slice 3.3 |
+| records in the loader's closure | 7 declarations, 73 accessor names, 48 `with`, 11 `make` in 7 files — item 42's stated cost: v2's reader expands a record under v2's accessor names |
+| the two dialects otherwise | identical: the two fn shapes (4-part; 5-part with a measure clause, 843 fns outside the route-1 closure against 222 inside), `match`/`let`/`list`/`if`/`quote`; every host extern `host.shard` declares already in `tools/codegen/rt.h` (`read_range` included) |
+| the bootstrap's fixed cost | 369 ms to parse the loader's closure; a load's 16–40 s is interpreted work, all of it in scope for the native route |
+| the native gain, measured | the index: 952 s on the bootstrap, 68 s native (14×); the replay: 4,591 s against 2,489 s (1.9×, memory-bound on 32 GB of tables) |
+| the suite's entrypoints | 41: 23 `.shard` harnesses run as `eval direct`, 18 `.sh` scripts invoking `load.shard` (24 sites), `verify_release` (6), `initindex` (6), `prove` (3), `calc_harness` (2); 1,439 s on the runner, 536 s on the quiet dev box |
+
+The rules:
+
+1. **The pre-pass is the V3 loader's projection, not the bootstrap's
+   flat read and not an edit of v2's reader.** `load.shard --emit DIR
+   FILE` loads the driver's closure as `--dump` does for parity (§10
+   item 1: every toolchain closure is already loaded by the V3 loader
+   and projected to one canonical text, the projection's injectivity
+   checked per closure) and prints each module of the closure as one
+   file of the dialect v2's reader reads: the types, the externs, the
+   fns with their bodies — a sequential `let`, `match` over
+   constructor patterns, `if`, `list`, `quote`, string literals as
+   the byte-list constructor chains both loaders build — under the
+   closure's short names (the parity projection's, injective by its
+   check), records already expanded by the loader (the constructor
+   type, an accessor and an updater per field as plain fns, `make`
+   and `with` rewritten — item 42's cost dissolved without a change
+   to the language), the dotted heads mangled to one identifier,
+   every local printed under a lowercase name (the Prog's binder name
+   where it has one, generated otherwise — the capitalised-local
+   difference dissolved the same way), the measure clause dropped
+   (the lowerer carries the body only; totality is K's and the V3
+   loader's, never the chain's), `use` lines dropped (the emitted
+   closure is flat), the imports as relative paths. The emitted
+   files are derived and untracked (`v3/bin/emit/`, as `*.low.shard*`
+   are). Law §9.2's "the Rust loader reads them exactly as it reads
+   `kernel/*.shard`" stays true of route 3; route 1 is now built from
+   what the V3 loader accepted — item 49's one front end extended to
+   the native route.
+2. **The build.** `v3/build.sh SRC OUT` gains the emit step before the
+   lowerer (emit → lower → codegen → cc) and a list form,
+   `v3/build.sh --all`, building the five drivers (`load`, `prove`,
+   `verify_release`, `t0`, `initindex`), `calc_harness` and the 23
+   harnesses into `v3/bin/NAME`; the boot engine as today
+   (`bin/shard_eval` when present, else the Rust interpreter; CI
+   caches the former). `t0` and `initindex` move onto the same path,
+   so route 1 has one build and the pre-pass is exercised by the
+   replay's byte-tie from the first landing.
+3. **The byte-tie gate.** `v3/kernel/test/native_tie_test.sh`, the
+   42nd entrypoint, runs a fixed set of the suite's workloads under
+   both engines and compares their outputs byte for byte — the
+   loader over the pins' cases and the examples, `prove` over
+   `examples/auto` and `examples/tactic`, `verify_release` over
+   `v3/release/`, one harness — each engine required to exit with the
+   same code and print its verdict line before the comparison (GPT-6
+   R54, `t0_full.sh`'s shape); timings are the harness's, outside the
+   compared text. A divergence is a miscompile or a semantic gap
+   between the bootstrap and the chain, and it fails the gate: the
+   binary is never patched, the emitter or the chain is fixed and the
+   build rerun.
+4. **The suite on the binaries, the bootstrap the authority.** An
+   engine shim `v3/bin/eval` (built by rule 2) answers `direct FILE
+   ARGS…` with `v3/bin/NAME` when that binary exists and is newer
+   than its closure, else with the Rust bootstrap, and passes every
+   other subcommand (`dump`, `run`) to the bootstrap unchanged;
+   `v3/test.sh` runs on the shim when `V3_ENGINE=native` and on the
+   bootstrap otherwise. CI runs both: the bootstrap suite as today
+   (route 3, the authority) and the native suite beside it, their
+   per-entrypoint outputs compared as rule 3 compares — two
+   independent runs of 41 entrypoints agreeing byte for byte is the
+   full tie; the native run's time is the measurement. Locally the
+   native run is the default once built; the bootstrap run is the
+   authority a landing records before its commit, as the full suite is
+   today. Parity (§10 item 1) keeps the bootstrap as its second
+   reader; `eval dump` is not compiled.
+5. **The old tree untouched.** No edit to `tools/lower`,
+   `tools/codegen`, `kernel/reader.shard` or `rt.h`: the emitter
+   speaks the dialect those read, found by lowering until the chain
+   accepts the closure (each probe under 90 s), and a form the chain
+   cannot take is answered in the emitter. If a blocker needs the old
+   tree changed — a runtime limit, a missing extern, a reader rule —
+   it is a ruling, since the corpus gate fires on every old-tree edit
+   and the chain's determinism is what the byte-tie rests on.
+6. **The binaries are engines, not proven artifacts.** Route 1's
+   status in the law is unchanged: "its proof is still to come"
+   (`v3/build.sh`'s header; law §9.1 route 1); the compiler proof is a
+   later slice of this phase, over this chain or V3's own. Nothing a
+   binary computes is admitted on its own word: K's verdicts, the
+   store's records and the release's verification stand on route 3
+   until that proof, and every pipeline's bootstrap run says so.
+7. **Measured and recorded.** At the close-out: per driver, the
+   binary's time against the bootstrap's on the tie's workloads; the
+   pins' entrypoint; `store_test`'s calc leaves; the full native suite
+   against the bootstrap's; one author's load of a single file. The
+   numbers go to records §9 and the slice table.
+
+*Landings.* **Landing 1**: the emitter (`load.shard --emit`), the
+build (rule 2, `--all`), the tie entrypoint (rule 3) over the pins
+and the examples, the drivers and harnesses built, the emitter's
+pins (a record, a capitalised local, a dotted head, a measure clause
+— each emitted and lowered); the tie green locally and on CI. **Landing
+2**: the shim and the suite switch (rule 4), CI's second run and its
+comparison, the measurements (rule 7), the close-out.
+
+*Not in this slice, stated:* the compiler proof (law §12.4 item 4's
+first item; after this slice, over the engine it builds); route 1 over
+user files and specialization (§11); `Symbol`'s `String` flip (carried
+with "route 1's chain is V3's own", which this slice does not make it:
+the chain stays v2's, fed by V3's front end); any edit of the old tree
+(rule 5); the migration tool's tier 0 (phase 5's opener).
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -4629,3 +4780,27 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     answered in records §4 as every memo before it; phase 4 open, its
     first slice designed at the boundary. Slice 3.30 closed; phase 3
     closed.
+
+65. **Slice 4.1, the native toolchain (designed 2026-10-13 at phase 3's
+    close; §8.6 "Slice 4.1"; law §9.1 route 1, §12.4 item 4; for
+    ratification before landing 1):** the leans taken in the design.
+    (a) Phase 4 opens with this slice, ahead of law §12.4 item 4's
+    list: route 1 is the engine the compiler proof is about, and the
+    turnaround it buys (a load's 16–40 s interpreted; the index 14×
+    faster native) is what every later slice and every author pays
+    today; the alternative, the compiler proof first on today's two
+    binaries, stated. (b) The pre-pass is the V3 loader's projection
+    (`--emit`, rule 1), so the native route is built from what the V3
+    loader accepted — item 49's one front end — rather than from the
+    bootstrap's flat read, and rather than teaching v2's reader V3's
+    records and capitalised locals (an old-tree edit under the corpus
+    gate; item 42's cost dissolves in the emitter instead).
+    (c) CI keeps the bootstrap suite as the authority and adds the
+    native run compared to it byte for byte (rule 4); the alternative,
+    the native suite alone with a subset tie, is cheaper in CI minutes
+    and weaker, since a miscompile outside the subset would hide a
+    kernel bug until the next bootstrap run. (d) The binaries are
+    engines, route 1's proof still to come (rule 6). (e) The old tree
+    untouched; a needed old-tree change is a ruling (rule 5). (f)
+    `Symbol`'s `String` flip stays carried (slice 3.30 rule 3b): the
+    chain remains v2's.

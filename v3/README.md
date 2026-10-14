@@ -1633,9 +1633,23 @@ incremental goal states; prepared invocation, stale handles, buffer
 rules and reclamation, T6; evaluation reflection and its cost, T8;
 the World-use and model tests before any effectful certificate is
 called ported). Carried in by ruling: `Symbol`'s `String` flip with
-route 1's chain (slice 3.30 rule 3b). The first slice is designed at
-this boundary and written for ratification as `LANGUAGE.md` §13's
-next item.
+route 1's chain (slice 3.30 rule 3b).
+
+**Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
+the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65 for
+ratification): `load.shard --emit` projects a driver's closure, as the
+V3 loader accepted it, into the dialect v2's chain reads (records
+expanded, locals lowercase, short names by parity's injective
+projection, measure clauses dropped); `v3/build.sh --all` builds the
+five drivers, `calc_harness` and the 23 harnesses; a byte-tie
+entrypoint compares both engines over the pins, the examples and the
+release; CI runs the bootstrap suite as the authority and the native
+suite beside it, compared; the old tree untouched, the binaries
+engines, the `String` flip still carried. Two landings. The probe at
+the close: the loader's closure is 55 files and 32,644 lines, route
+1's today 29 and 13,497; v2's reader refuses the closure at its 30th
+source over a capitalised local and would refuse the records next;
+the rest of the dialect is identical.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
