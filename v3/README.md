@@ -1133,7 +1133,7 @@ Landing 2 is closed: **pipeline 550 green on `c98c2cd`** — engine 54 s; corpus
   order; a file already holding the text is shared, so several loads
   fill one store in sequence. An inductive type is its whole block,
   recursors included, for the import's validation against K's own.
-- **`verify_release`** (`kernel/verify_release.shard DIR CHUNK…`): K,
+- **`verify_release`** (`kernel/verify_release.shard DIR CHUNK…`; since slice 3.26 `DIR EXPORT INDEX`): K,
   the host and the JSON reader, no elaborator — the Init chunks as one
   stream, then each store file as its own stream over the environment
   so far; each accepted declaration held to its order line's name and
@@ -1634,6 +1634,16 @@ rules and reclamation, T6; evaluation reflection and its cost, T8;
 the World-use and model tests before any effectful certificate is
 called ported). Carried in by ruling: `Symbol`'s `String` flip with
 route 1's chain (slice 3.30 rule 3b).
+
+**Slice 4.0 designed and ratified 2026-10-14 — the checkpoint memo
+answered** (`LANGUAGE.md` §8.6 "Slice 4.0"; §13 item 66; records
+§4.12; the user: "Agreed, go ahead with 4.0"): three landings — the documents (R81–R85's
+corrections and rows, 4.1's amendments for R84); the release gate
+(R80's exit as a conjunction, R79's manifest with kinds and an
+assumption-closure check through K's axiom walk); the seal (R78's
+checked transfer in place of the admit flag, a generator run in place
+of the pins flag). **Landing 0 built 2026-10-14**: the documents,
+nothing else.
 
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65 for

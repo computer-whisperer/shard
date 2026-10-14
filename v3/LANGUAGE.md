@@ -1856,9 +1856,13 @@ front end** (records §9.1 "Slice 3.13" to "Slice 3.16"; §13 items
    `ev` already agrees with K**: `+ *` at `Nat` are `Nat.add`,
    `Nat.mul`; `+ - *` at `Int` are `Int.add`, `Int.sub`, `Int.mul`;
    `= < <=` are `Nat.decEq`/`Nat.decLt`/`Nat.decLe` and the `Int`
-   three; `-`, `/` and `mod` at `Nat` are refused `nat_operator` with
-   the pointer (`Nat.sub`, `Nat.div`, `Nat.mod`); bitwise and symbol
-   entries have none. As built: the operand types are the classifier's
+   three; `-`, `/` and `mod` at `Nat` were refused `nat_operator` with
+   the pointer (`Nat.sub`, `Nat.div`, `Nat.mod`) — **superseded on the
+   typed route at 3.16 rule 4**: they resolve to `Nat.sub`, `Nat.div`,
+   `Nat.mod` (saturating, total at a zero divisor; `elab.shard`
+   `op_at`), the E-first route keeping the refusal for the sources that
+   stay on it (R81, records §4.12); bitwise and symbol entries have
+   none. As built: the operand types are the classifier's
    static types (`prim_static`); a numeral at an expected `Int` is
    `Int.ofNat n` or `Int.negSucc`, at `Nat` or with no expected type
    K's literal; since 3.21b rule 1 the expected type decides the
@@ -1878,13 +1882,19 @@ front end** (records §9.1 "Slice 3.13" to "Slice 3.16"; §13 items
    on any recursive field at any depth is the table entry's value;
    `T.below` and `T.brecOn` are generated for a native inductive on
    first need under Lean's names (two `ACCEPT`s before the function);
-   the equations stay `Eq.refl`; `recursion_depth` survives only for
-   a self-call on a variable bound outside the leading case tree. As
-   built: the table's shape is read off the export's `List.below` and
-   `Nat.below` (`PProd` pairs, right-nested, no unit), a field's entry
-   derived positionally and K's check holding the shape to Lean's; a
-   file without `Init`'s `PProd` in scope cannot have a table —
-   `below_unreached`.
+   the equations stay `Eq.refl`. As built at 3.14: the table's shape
+   is read off the export's `List.below` and `Nat.below` (`PProd`
+   pairs, right-nested, no unit), a field's entry derived positionally
+   and K's check holding the shape to Lean's, `recursion_depth`
+   surviving for a self-call on a variable bound outside the leading
+   case tree — **superseded at 3.16** (records §9.1 "Slice 3.16", the
+   as-built): the entry is found by type, each table kept with its type
+   over an abstract motive and searched through `PProd`'s projections
+   with K's normal form (`define.shard` `pj_find`, `pj_search`), so a
+   self-call under a match in an argument or a `let`'s value finds its
+   entry as one in tail position does and `recursion_depth` is retired;
+   no entry is `realize_descent` (R81, records §4.12). A file without
+   `Init`'s `PProd` in scope cannot have a table — `below_unreached`.
 2. **A measure becomes `WellFounded.fix`, the decreasing facts admitted
    obligations.** `(measure M)` with `M` a `Nat`-valued E term is
    `WellFounded.fix (InvImage.wf m …)` over the data parameters packed
@@ -1929,7 +1939,10 @@ front end** (records §9.1 "Slice 3.13" to "Slice 3.16"; §13 items
    `Nat` included in L.
 5. **The constructor-structure bundle** is generated after a native
    inductive's admission in Lean 4.33's shapes (`define.shard`'s
-   `confusion_bundle`): `T.casesOn` always; `T.noConfusionType`,
+   `confusion_bundle`): `T.casesOn` for every native inductive without
+   indices, nested or mutual structure whose recursor eliminates into
+   every universe, when its generation succeeds (else nothing, the type
+   stands; R81, records §4.12); `T.noConfusionType`,
    `T.noConfusion` and `T.c.inj` for a type without parameters,
    indices, universe parameters or dependent fields where `Eq`,
    `Eq.ndrec` and `And` are in scope; the motive of `T.casesOn` found
@@ -2028,8 +2041,13 @@ deleted.
 8. **One descent obligation discharged end to end** (R65, R69).
    `(fulfills f.dec_N PROOF)` outside a view: PROOF read against the
    obligation's statement as the theorem `f.dec_N.proof`, checked by K
-   in the environment without the obligation; the closure instrument
-   is the acyclicity check (`fulfills_cycle` closes nothing); on
+   in the file's environment with the obligation standing as the
+   parameter it is; the proof's closure — every discharged obligation
+   replaced by what its proof rests on, to a fixpoint — must not reach
+   `f.dec_N` directly, through `f`, through a theorem or through an
+   earlier discharge (`fulfills_cycle`, nothing admitted: the closure is
+   the acyclicity check and the circularity defence; R81, records
+   §4.12); on
    success `DISCHARGE f.dec_N proved` and every account recomputed —
    each `ACCEPT` that named the obligation names the proof's account,
    a function with no open obligation leaves `PENDING`. Fixture
@@ -2472,10 +2490,19 @@ artifact, never committed; the engine's reach is measured over calc's
    machine-owned and rewritten whole by `prove` — and replays the
    entry's block as a hand-written one; `PENDING NAME auto_missing
    fp=N`, `auto_stale fp=N`, `sidecar_malformed`.
-2. **The key is the resolved requirement**: the fingerprint is
-   `hash_expr` of the closed statement, what the `ACCEPT` record
-   carries, so a changed reading is a different requirement and a
-   changed strategy is not.
+2. **The key is the statement fingerprint**: `hash_expr` of the closed
+   statement, what the `ACCEPT` record carries, so a changed reading of
+   the statement is a different key and a changed strategy is not. It
+   is not law §5.2's resolved requirement (R82, records §4.12): a
+   referenced declaration's body can change under its name, a policy
+   change never enters the key, and an older sidecar schema is replayed
+   by the current implementation with no version dispatch — replay
+   re-elaborates and K checks, so nothing invalid is accepted by this,
+   but a changed task is not detected. The three identities the law
+   names — the resolved requirement with its dependencies' identities
+   and policy, the reconstruction contract, retained P under the
+   canonical encoding (§7.5, display names outside it) — are owed to
+   phase 4 before T6's prepared handles (§11).
 3. **`(arith only FACT… (farkas K…))`**: the rows are the goal
    negated, the FACTs in order, the atoms' rows — no context row
    (`NArith` carries `only`; pin `arith_only`).
@@ -2515,9 +2542,10 @@ artifact, never committed; the engine's reach is measured over calc's
    block), `DIR/ID.ndjson` per declaration with ID the content
    fingerprint (`FP-K` on a collision of texts), `DIR/order`
    appended, never rewritten; a failed load writes nothing.
-   `kernel/verify_release.shard DIR CHUNK…` is K, the host and the
-   JSON reader alone: the Init chunks (since 3.26 the export) as one
-   stream, then each store file in `order`'s order as its own stream
+   `kernel/verify_release.shard DIR EXPORT INDEX` is K, the host and
+   the JSON reader alone: Init's closure of the store's citations on
+   demand from the export through its index (3.26; the chunks as one
+   stream before it), then each store file in `order`'s order as its own stream
    over the environment so far, each held to its order line by name
    and fingerprint (`MISTIED`, `MALFORMED`, `MISSING`, `REJECTED`);
    `RELEASE: declarations N accepted A …`. `store_test.sh` (the 36th
@@ -3261,7 +3289,113 @@ it entrenches. The slices, in the order built:
 
 | slice | content | first consumer |
 |---|---|---|
+| 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries | every author's load; the suite; the compiler proof |
+
+**Slice 4.0 — the checkpoint memo answered: the documents, the release
+gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
+R78–R85 of records §4.12; §13 item 66 — **ratified 2026-10-14 as
+designed (the user: "Agreed, go ahead with 4.0")**; law §3.2, §7.5, §12.4 item 4). The
+phase-3 checkpoint memo (records §4.12;
+`docs/archive/foundation-v3/SHARD_V3_PHASE3_CHECKPOINT_MEMO_v0.1.md`)
+found three source-traced defects on the admission and release paths,
+two drifts in this document and the ledger, one contract gap and two
+risks; every observation was verified against the tree at `bea4345`.
+As slice 9 answered R49–R54 before phase 3 opened, this slice answers
+R78–R85 before 4.1 builds the engines that would otherwise agree with
+the defects. The rules:
+
+1. **The documents (landing 0; R81, R82, R83, R85, R84).** The four
+   current statements of §8.4 that kept a superseded rule are rewritten
+   to the final behaviour with their supersession pointers: 3.13 rule 3
+   (`-`, `/`, `mod` at `Nat` resolve on the typed route, 3.16 rule 4;
+   the E-first route keeps `nat_operator`); 3.14 rule 1 (the entry
+   found by type, `recursion_depth` retired at 3.16); 3.16 rule 5
+   (`T.casesOn` under the bundle's conditions); 3.20 rule 8 (the proof
+   checked in the file's environment with the obligation standing, the
+   closure the acyclicity check). §11's R60 row no longer says `Name`
+   literals landed (item 51's deferral); 3.22's verifier spelling is
+   `DIR EXPORT INDEX`. 3.22 rule 2 names its key the statement
+   fingerprint and states law §5.2's three identities as owed, with a
+   §11 row placing them in phase 4 before T6; a §11 row for occurrence
+   provenance (R85) before the incremental goal-state slice. Records
+   §9's ledger says "covered" in four terms — established, recorded
+   experiment, covered under a ratified restriction, artifact built —
+   with the release row pending rules 2–3 and the T9 and T10 rows
+   stating their readings. Slice 4.1's design takes R84's points 2–5
+   (its rules 1, 3 and 4 amended, rule 8 added) and item 65 notes the
+   amendment.
+2. **The release gate's exit (landing 1; R80).** `verify_release`
+   succeeds exactly when every `order` line's file was read; each file
+   yielded exactly one accepted declaration, under its line's name,
+   kind and fingerprint; no verdict of a failed class (rejected,
+   exhausted, mismatched, unsupported) and no malformed, mistied,
+   missing or taken record occurred; and the Init closure's failures
+   are zero. Otherwise the exit is 1; the counts stay in the
+   `RELEASE:` line. Pins in `store_test.sh`: one file holding an
+   accepted and a rejected record; one file holding two accepted
+   records under two names; an inductive whose metadata mismatches
+   after its acceptance.
+3. **The release gate's target and policy (landing 1; R79).** The
+   store writes, beside `order`, a `manifest`: per file the
+   declaration's kind, name and statement fingerprint, the file's
+   declared parameters (`PARAM`) and its discharged obligations with
+   their proofs' names; the format's version is bumped. The manifest
+   is the fixed target: `order` is the admission sequence only, and a
+   manifest entry with no order line is `MISSING`. The verifier refuses
+   an accepted record whose kind differs from the manifest's
+   (`MISKIND`: a theorem replaced by an axiom). The policy: the
+   verifier walks each accepted theorem's assumption closure through
+   K's axiom memo (the walk `t0.shard`'s `-a` lines use) and compares
+   it with the declared set — Init's axioms, the file's parameters, a
+   discharged obligation standing for its proof's own closure, the
+   proof required accepted at the obligation's statement — and reports
+   a theorem whose closure exceeds the set as `CONDITIONAL NAME:
+   AXIOM…`; a bundle verifies as conditional only when its manifest
+   declared the parameters it rests on, else the exit is 1. Pins: a
+   theorem replaced by a same-name same-type axiom (`MISKIND`); a proof
+   rewritten to rest on an axiom the manifest does not declare
+   (`CONDITIONAL`, exit 1); a manifest target whose order line and file
+   are removed (`MISSING`); a discharge entry removed from the manifest
+   while the obligation axiom and its consumers stay (the consumers'
+   closures reach the obligation: `CONDITIONAL`, exit 1).
+4. **The seal (landing 2; R78).** `run_admitting` leaves the public
+   view. In its place K exports a checked transfer, `run_transfer src
+   dst names`: the constants `names` of `src`'s environment (the run
+   that checked them) enter `dst`'s, each required present in `src`,
+   identical to any constant of that name `dst` already holds (kind,
+   level parameters, type and value by `expr_eq`), every constant its
+   type and value cite present in `dst` under the same identity (the
+   identity-closure walk of `pin_if_matches`' shape, fuel-bounded: out
+   of fuel is a refusal, never an admission) — else the transfer
+   refuses as a whole and `dst` is unchanged; `od_admit` is its one
+   caller. `empty_run`'s pins flag leaves the view: the pin table's
+   generator (`t0.shard` for `gen_pins.sh`) uses a generator run type
+   whose only product is the candidates' identity closures as the
+   table's rows, never a `CheckedEnv`; `check_into` pins by
+   `pin_if_matches` alone. Every `CheckedEnv` a client can hold is
+   then one K checked or transferred under identity. Pins under
+   `k_clients_test` (clients through the V3 loader): a client naming
+   `run_admitting` (refused: no such service); a transfer of a
+   declaration whose destination holds a different constant of that
+   name (refused); a transfer whose citation is absent from the
+   destination (refused); the generator's run yielding no environment
+   (a client asking one is ill-typed).
+5. **Gates.** Landing 0 documents only. Landings 1 and 2 each on the
+   full gate — the pins' entrypoint, the suite with `store_test` and
+   `k_clients_test` carrying the new pins, parity after each kernel
+   edit, CI's pipeline — and recorded.
+
+*Landings.* **Landing 0**: the documents (rule 1). **Landing 1**: the
+release gate (rules 2–3): `verify_release.shard`, `store.shard`,
+`load.shard --store`, `store_test.sh`, the format's version. **Landing
+2**: the seal (rule 4): `k/import.shard`, `k/add.shard`,
+`k/mod.req.shard`, `initload.shard`, `t0.shard`, `gen_pins.sh`, the
+pins through `k_clients_test`.
+
+*Not in this slice, stated:* R82's three identities (phase 4, its own
+slice before T6); R85's origin map (before the incremental goal-state
+slice); slice 4.1 itself, amended here and built after.
 
 **Slice 4.1 — the native toolchain: route 1 over the kernel's drivers**
 (designed 2026-10-13 at phase 3's close, on the user's "Let's find a
@@ -3321,7 +3455,10 @@ The rules:
    are). Law §9.2's "the Rust loader reads them exactly as it reads
    `kernel/*.shard`" stays true of route 3; route 1 is now built from
    what the V3 loader accepted — item 49's one front end extended to
-   the native route.
+   the native route. The emitted text is a derivation, never an
+   origin: the emitter keeps the map from each emitted form to its
+   source occurrence (R85), so a diagnostic from a native run names the
+   source, not the emitted file.
 2. **The build.** `v3/build.sh SRC OUT` gains the emit step before the
    lowerer (emit → lower → codegen → cc) and a list form,
    `v3/build.sh --all`, building the five drivers (`load`, `prove`,
@@ -3333,23 +3470,36 @@ The rules:
    replay's byte-tie from the first landing.
 3. **The byte-tie gate.** `v3/kernel/test/native_tie_test.sh`, the
    42nd entrypoint, runs a fixed set of the suite's workloads under
-   both engines and compares their outputs byte for byte — the
-   loader over the pins' cases and the examples, `prove` over
-   `examples/auto` and `examples/tactic`, `verify_release` over
-   `v3/release/`, one harness — each engine required to exit with the
-   same code and print its verdict line before the comparison (GPT-6
-   R54, `t0_full.sh`'s shape); timings are the harness's, outside the
-   compared text. A divergence is a miscompile or a semantic gap
-   between the bootstrap and the chain, and it fails the gate: the
+   both engines in paired scratch roots of the same name and compares
+   them — the loader over the pins' cases and the examples, `prove`
+   over `examples/auto` and `examples/tactic`, `verify_release` over
+   `v3/release/`, one harness — on four things: stdout, stderr, the
+   exit status and every artifact written (a sidecar, a store's files,
+   a dump), byte for byte, each engine required to exit with the same
+   status and print its verdict line before the comparison (GPT-6 R54,
+   `t0_full.sh`'s shape). The normalization is a list, stated in the
+   script: the runner's seconds, a store's size line, a scratch root's
+   generated name; never a verdict, an assumption closure, a
+   fingerprint or a record. A divergence is a miscompile or a semantic
+   gap between the bootstrap and the chain, and it fails the gate: the
    binary is never patched, the emitter or the chain is fixed and the
-   build rerun.
+   build rerun. The gate's own discriminating cases (R84, records
+   §4.12): a record built and updated, a capitalised local colliding
+   with a constructor's name, nested shadowing, a quoted capitalised
+   symbol, two dotted names sharing a last component, a sealed client,
+   an accepted and a rejected K admission, a malformed input, an
+   exhaustion, a nonzero program exit, a sidecar written, a store
+   verified; and the gate itself tested — a native verdict altered by
+   hand and a binary removed are each detected.
 4. **The suite on the binaries, the bootstrap the authority.** An
    engine shim `v3/bin/eval` (built by rule 2) answers `direct FILE
-   ARGS…` with `v3/bin/NAME` when that binary exists and is newer
-   than its closure, else with the Rust bootstrap, and passes every
-   other subcommand (`dump`, `run`) to the bootstrap unchanged;
-   `v3/test.sh` runs on the shim when `V3_ENGINE=native` and on the
-   bootstrap otherwise. CI runs both: the bootstrap suite as today
+   ARGS…` with `v3/bin/NAME` when that binary exists and its stamp is
+   current (rule 8), and fails loudly otherwise — never a silent
+   fallback to the bootstrap, so a missing binary cannot satisfy native
+   coverage (R84); it passes `dump` and `run` to the bootstrap
+   unchanged, the two operations that stay the bootstrap's (parity's
+   second reader; the old chain's boot); `v3/test.sh` runs on the shim
+   when `V3_ENGINE=native` and on the bootstrap otherwise. CI runs both: the bootstrap suite as today
    (route 3, the authority) and the native suite beside it, their
    per-entrypoint outputs compared as rule 3 compares — two
    independent runs of 41 entrypoints agreeing byte for byte is the
@@ -3379,9 +3529,24 @@ The rules:
    against the bootstrap's; one author's load of a single file. The
    numbers go to records §9 and the slice table.
 
+8. **The roots and the stamps** (R84). The root inventory is written
+   in full in `v3/build.sh --all`: the five drivers (`load`, `prove`,
+   `verify_release`, `t0`, `initindex`), `calc_harness`, the 18 public
+   harnesses of `kernel/test/` and the 5 of `k/test/` — 29 roots,
+   parity's list; and every shell entrypoint's invocation has its
+   disposition in the script — `direct load.shard … --run M.FN` native
+   (the K-client harness), `--dump` and `eval dump` the bootstrap's.
+   Each binary carries a stamp: the hash of its closure's sources, of
+   the emitter, of `tools/lower`, `tools/codegen` and `rt.h`, and of
+   the compiler's flags; the shim refuses a stale stamp. Generated files
+   live under `v3/bin/` only; an authored file is never written by the
+   build, and the tie checks the tree's authored files byte-identical
+   before and after.
+
 *Landings.* **Landing 1**: the emitter (`load.shard --emit`), the
 build (rule 2, `--all`), the tie entrypoint (rule 3) over the pins
-and the examples, the drivers and harnesses built, the emitter's
+and the examples with its discriminating cases, the drivers and
+harnesses built under rule 8's inventory and stamps, the emitter's
 pins (a record, a capitalised local, a dotted head, a measure clause
 — each emitted and lowered); the tie green locally and on CI. **Landing
 2**: the shim and the suite switch (rule 4), CI's second run and its
@@ -3606,11 +3771,13 @@ never compared as verdicts.
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | **carried to phase 5** (ruled 2026-10-13, slice 3.30 rule 3a): built as a landing when the port's first consumer needs two implementations of one view — a loader rule naming the implementing file and R57's checked-instance record by substitution; the mechanism for one implementation is built (§6.6) |
 | T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3 — **landed slice 3.30 landing 1**: pin `realize_imported` (Init's `List.append_nil` cited before and after a supplied realization of `List.append`, under the on-demand load) |
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
-| the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3 — **landed**: list literals and the negative numeral (3.15–3.16), `make`/`with` and the fresh-name supply (3.17), the byte and text adapters, `Name` literals and symbols (3.18) |
+| the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3 — **landed**: list literals and the negative numeral (3.15–3.16), `make`/`with` and the fresh-name supply (3.17), the byte and text adapters (3.18); `Name` literals and symbols **deferred** to the toolchain's port (item 51; 3.18 rule 5: `(quote x)` keeps `no_l_identity route=e_first`; corrected at slice 4.0 landing 0, R81) |
 | the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | **carried to phase 5** with the two-instance gate (ruled 2026-10-13, slice 3.30 rule 3a) |
 | programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 |
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
 | `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
+| the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; today the sidecar's key is the statement fingerprint and the store's sharing compares binder names | §8.4 3.22 rule 2 | 4, its own slice before T6's prepared handles and before phase 5's tools police frozen requirements |
+| occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | 4, before the incremental goal-state slice; slice 4.1's emitter keeps the map |
 | user notation | §5.3 departure 6 | never in v1 |
 
 ## 12. Changes from v2 — the compatibility ledger
@@ -4803,4 +4970,26 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     engines, route 1's proof still to come (rule 6). (e) The old tree
     untouched; a needed old-tree change is a ruling (rule 5). (f)
     `Symbol`'s `String` flip stays carried (slice 3.30 rule 3b): the
-    chain remains v2's.
+    chain remains v2's. **Amended 2026-10-14 by R84 (records §4.12;
+    slice 4.0 landing 0): rules 1, 3 and 4 and landing 1 as they now
+    read, rule 8 added — the comparison boundary, no silent fallback,
+    the root inventory and the stamps, the discriminating cases; point
+    1 of R84 was the design as committed.**
+
+66. **Slice 4.0, the checkpoint memo answered (designed 2026-10-14 at
+    phase 4's opening; §8.6 "Slice 4.0"; records §4.12; for
+    ratification before landing 0):** the dispositions of R78–R85 as
+    records §4.12 proposes them — all eight accepted, R84's premise
+    amended — and the leans: (a) the slice before 4.1, as slice 9 came
+    before phase 3; the alternative, 4.1 first for the turnaround with
+    the byte-tie agreeing with the defects, stated. (b) The release
+    gate's exit an explicit conjunction (rule 2). (c) The fixed target
+    a manifest the store writes beside `order` — kinds, names,
+    fingerprints, the parameters, the discharges — and the policy an
+    assumption-closure check through K's axiom walk, a conditional
+    bundle verifying only as declared (rule 3). (d) The seal's admit
+    flag replaced by a checked transfer that re-derives identity rather
+    than trusting a Boolean, the pins flag by a generator run that
+    yields no environment (rule 4). (e) R82's identities and R85's
+    origin map carried as §11 rows, not built here. **Ratified
+    2026-10-14 as designed (the user: "Agreed, go ahead with 4.0").**

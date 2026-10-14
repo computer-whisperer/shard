@@ -2696,6 +2696,16 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-14 — slice 4.0 landing 0 built: the documents** (`v3/LANGUAGE.md`
+  §8.6 "Slice 4.0", rule 1; §13 item 66 ratified 2026-10-14 as
+  designed — the user: "Agreed, go ahead with 4.0"). R81's four statements rewritten with
+  their supersession pointers (3.13 rule 3, 3.14 rule 1, 3.16 rule 5,
+  3.20 rule 8), §11's R60 row and 3.22's verifier spelling corrected;
+  R82: 3.22 rule 2's key named the statement fingerprint, the three
+  identities a §11 row for phase 4; R85: a §11 row; R83: this ledger's
+  status column in four terms, the release row pending R79–R80, the
+  T9 and T10 rows stating their readings; R84: slice 4.1's rules 1, 3
+  and 4 amended, rule 8 added, item 65 noting it. Documents only.
 - **2026-10-13 — slice 4.1 designed: the native toolchain, route 1
   over the kernel's drivers** (`v3/LANGUAGE.md` §8.6 "Slice 4.1"; §13
   item 65 for ratification; phase 4's opener on the user's "find a
@@ -3245,35 +3255,39 @@ is `docs/FOUNDATION.md` §5.3.
   landing 1, closed at landing 4 — phase 3 closed 2026-10-13).** Each item of law §12.4 item 3 and
   its gates, the evidence, the status (`v3/LANGUAGE.md` §8.4 slice
   3.30's table as measured at the design, carried forward landing by
-  landing):
+  landing; the status in four terms since slice 4.0 landing 0 (R83):
+  established = the law's item as stated; recorded experiment = a
+  gate's protocol met as written; covered under a ratified restriction
+  = a ruling narrowed the item; artifact built = the thing exists, its
+  guarantee stated beside it):
 
   | gate item | evidence | status |
   |---|---|---|
-  | the loader to the whole of E, the profile retired | slices 3.1–3.5; pipeline 487 | covered |
-  | Stage 1 | slices 3.13–3.19 | covered |
-  | Stage 2: the I elaborator, the goal graph (law §7.3), core tactics | slices 3.20–3.22: `goal_of`, `applicable`, `step`, `elaborate` as E functions over one derivation; the law's `change` is `show`; holes shared across goals and incremental goal states are T4's and T6's, phase 4 | covered |
-  | certified arithmetic | slice 3.21 (`arith`) | covered |
-  | the `Init` import with E realizations attached | slices 5b, 3.18, 3.26 | covered |
-  | `std/list`, `order`, `nat`, `div`, `bits`, `arith` | slice 3.27: `list` and `bits` as files, the rest migration records (item 61) | covered as ruled |
-  | the fifteen former axioms as theorems | `std/facts.shard` | covered |
-  | the migration table validated | `std/migration.shard`, `std_test` | covered |
-  | one arbitrary-`Prop` ghost refinement | `std/list`'s `Pairwise` subtype; T9 small (iv) | covered |
-  | one static law-bearing package | slice 3.28 | covered |
-  | `LEAN.md` | slice 3.27 landing 4; 108 rows | covered |
-  | the first release bundle with retained P | slice 3.22 landing 3 | covered |
-  | the pipeline measured | every pipeline's record above | covered |
-  | T2, T3 | `records/T2-T3-2026-10-11.md` | met |
-  | T9 small | `records/T9-small-2026-10-10.md` | met |
-  | T9 again at the close (law §5.4) | slice 3.30 rule 5: nine tasks, the count agreed at the ratification | **met at landing 2**: 9 of 9 on the count, two kernel findings fixed (`records/T9-2026-10-13.md`) |
-  | T10 | `records/T10-2026-10-12.md` | met |
+  | the loader to the whole of E, the profile retired | slices 3.1–3.5; pipeline 487 | established (the law's item as stated) |
+  | Stage 1 | slices 3.13–3.19 | established |
+  | Stage 2: the I elaborator, the goal graph (law §7.3), core tactics | slices 3.20–3.22: `goal_of`, `applicable`, `step`, `elaborate` as E functions over one derivation; the law's `change` is `show`; holes shared across goals and incremental goal states are T4's and T6's, phase 4 | covered under a ratified restriction: sequential goals over one derivation; never to be read as the incremental goal graph complete |
+  | certified arithmetic | slice 3.21 (`arith`) | established |
+  | the `Init` import with E realizations attached | slices 5b, 3.18, 3.26 | established |
+  | `std/list`, `order`, `nat`, `div`, `bits`, `arith` | slice 3.27: `list` and `bits` as files, the rest migration records (item 61) | covered under a ratified restriction (item 61) |
+  | the fifteen former axioms as theorems | `std/facts.shard` | established: `std_test` checks the named theorems and their assumption closures |
+  | the migration table validated | `std/migration.shard`, `std_test` | recorded experiment (`std_test`) |
+  | one arbitrary-`Prop` ghost refinement | `std/list`'s `Pairwise` subtype; T9 small (iv) | artifact built; recorded experiment (T9 small (iv)) |
+  | one static law-bearing package | slice 3.28 | recorded experiment (T2) |
+  | `LEAN.md` | slice 3.27 landing 4; 109 rows at the close | artifact built |
+  | the first release bundle with retained P | slice 3.22 landing 3 | artifact built (the store; `verify_release` as K alone over the streams); law §7.5's release guarantee — the fixed target, the kind, the assumption policy — **not established: pending R79–R80 (slice 4.0 landing 1)** |
+  | the pipeline measured | every pipeline's record above | established |
+  | T2, T3 | `records/T2-T3-2026-10-11.md` | recorded experiment under its stated boundary: specialized E programs on route 2, the refusal and budget behaviour; no native compilation of user programs |
+  | T9 small | `records/T9-small-2026-10-10.md` | recorded experiment under the ratified protocol (route 2 for (ii)) |
+  | T9 again at the close (law §5.4) | slice 3.30 rule 5: nine tasks, the count agreed at the ratification | **met at landing 2**: recorded experiment, 9 of 9 on the count, two kernel findings fixed (`records/T9-2026-10-13.md`); route 2 retained by ratification, the diagnostics' success defined by goal and call identification — not the source-origin requirement (R85) |
+  | T10 | `records/T10-2026-10-12.md` | recorded experiment: the producer-and-replay and syntax-schema experiments; the schema test a schema-1 replay, not a reconstruction-version migration (R82) |
   | Stage 3 (typeclasses, coercions) | the fixed instance table (3.27), the coercion (3.15); search the door | as ruled (item 61) |
   | §11: T1's branch-local proof | slice 3.24 | covered; the row rewritten at landing 1 |
   | §11: T5's imported-theorem form | pin `realize_imported` | **closed at landing 1** |
   | §11: T5's two instances; R57's checked instance | no consumer with two implementations of one view | **carried to phase 5** (ruled 2026-10-13, item 64) |
   | §11: `Symbol`'s `String` flip | open since 3.18 | **carried to phase 4** with route 1's chain (ruled 2026-10-13, item 64) |
-  | §11: R60's facilities; lambda lifting | slices 3.15–3.18; slice 3.28 | covered; the rows rewritten at landing 1 |
+  | §11: R60's facilities; lambda lifting | slices 3.15–3.18; slice 3.28 | covered; the rows rewritten at landing 1, the R60 row corrected at slice 4.0 landing 0 (`Name` literals deferred, item 51; R81) |
   | law §10.5's phase-3 doc rows | `LEAN.md` written; `TOTALITY.md`, `REFINEMENT.md`, `STORAGE.md` superseded and `CERT.md` amended by banner | **done at landing 1** |
-  | the LANGUAGE.md consolidation (ruled 2026-09-17) | rule 6's shape, ratified | **done at landing 3**: the slice texts §9.1 below, the current statements §8.4 |
+  | the LANGUAGE.md consolidation (ruled 2026-09-17) | rule 6's shape, ratified | **done at landing 3**: the slice texts §9.1 below, the current statements §8.4; four statements corrected at slice 4.0 landing 0 (R81) |
   | §13 for ratification | items 39–42, 44–46, 48 without a ruling marker; 64 ratified 2026-10-13 | **ratified 2026-10-13 at landing 4** (the user's pass; item 46 with its reason recorded); every item of §13 ruled |
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
