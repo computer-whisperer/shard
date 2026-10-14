@@ -101,7 +101,7 @@ against v4.33.1 (the head `411dce7` pins v4.34.0-rc2 and cannot export
 the pinned kernel; recorded as the phase 1 tool bump), split into
 20,000-line chunks (`split -l 20000`) for the streaming reader.
 
-## Phase 2 status (opened 2026-09-07)
+## Phase 2 status (opened 2026-09-07, closed 2026-09-13)
 
 Front-end and `ev` (FOUNDATION §12.4 item 2; gates: T1's three named
 items, T5, T8's replay half, conformance). **Rulings 2026-09-07:**
@@ -415,7 +415,7 @@ the consolidated text. Tests: 22 entrypoints, 0 failed (parity 20
 closures, 68,076 declaration lines, 42 s, every projection injective).
 **CI (pipeline 479, `db2dee3`, 2026-09-14): green** — 22 entrypoints, the calc differential byte-identical in 399 s on the runner (the port under `ev` 15 s, the old tree 384 s), parity byte-identical over 20 closures and 68,076 declaration lines in 132 s with every projection injective, route 2's byte-tie in 51 s, the gate test's five scenarios, the byte-ties with both engines complete (the fixture 301 lines, chunks 0–4 3,395 lines), the full-export replay on compiled K in 2,494 s at a 30.7 GB peak, all 20 candidates pinned, closures identical (engine 164 s, corpus 1,537 s, v3 3,938 s; the pipeline 4,104 s) — R56, R58 and R59 closed on the full gate.
 
-## Phase 3 status (opened 2026-09-14)
+## Phase 3 status (opened 2026-09-14, closed 2026-10-13)
 
 Elaboration, I, the first library (FOUNDATION §12.4 item 3, as amended
 2026-09-14). **The opening ruling (the user, 2026-09-14):** the Rust
@@ -1615,6 +1615,27 @@ slice table as the index; the title "S, L, E and I as phase 3 built
 them" and the status block rewritten. `LANGUAGE.md` 7,818 lines to
 4,544. The current statements are new prose, the record the
 authority; GPT-6's memo over the SHA is the review. No kernel change.
+
+**Landing 4 built 2026-10-13 — the close; phase 3 closed**
+(`LANGUAGE.md` §8.4 "as built, landing 4"; records §9's ledger): the
+ratification pass done — §13 items 39–42, 44–46 and 48, and item 64's
+as-built notes, ratified 2026-10-13 (the user: "Read through this, and all of that looks good to ratify to me"), item 46 with
+its reason recorded; every item of §13 ruled. The phase-3 close-out
+ledger closed beside phase 2's. This landing's commit is the SHA for
+the phase-3 checkpoint memo, run through `codex` on the user's steer
+and answered in records §4. Phase 4 open below. Documents only.
+
+## Phase 4 status (opened 2026-10-13)
+
+Entrenchment (FOUNDATION §12.4 item 4: a `tb_len`-class compiler
+proof; coupled program/proof holes and refutation scope, T4 and T7;
+incremental goal states; prepared invocation, stale handles, buffer
+rules and reclamation, T6; evaluation reflection and its cost, T8;
+the World-use and model tests before any effectful certificate is
+called ported). Carried in by ruling: `Symbol`'s `String` flip with
+route 1's chain (slice 3.30 rule 3b). The first slice is designed at
+this boundary and written for ratification as `LANGUAGE.md` §13's
+next item.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

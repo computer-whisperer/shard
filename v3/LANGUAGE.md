@@ -1,11 +1,12 @@
 # The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-10-13): S, L, E and I as phase 3 built them — §13
-> items 1–38 ratified 2026-09-15; items 54–64 ratified 2026-10-08 to
-> 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and 60 as amended
-> there, 61–63 as built); items 39–42, 44–46 and 48, and item 64's
-> as-built notes, for the ratification pass at phase 3's close (slice
-> 3.30 landing 4).** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> **STATUS (2026-10-13): S, L, E and I as phase 3 built them — phase 3
+> closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–64 all ruled:
+> 1–38 ratified 2026-09-15; 43, 47 and 49–53 at their slices; 54–64
+> 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
+> 60 as amended there, 61–64 as built); 39–42, 44–46 and 48, and item
+> 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
+> open, its first slice designed at this boundary.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -1812,7 +1813,7 @@ parity, route 2's byte-tie and T0 green:
 | 3.27 | the library arc (designed 2026-10-09 at the boundary after 3.26, on the user's "continue with the next arc"; item 61; the design in the record; **ratified 2026-10-10 as designed, with calc's `list.shard` retiring onto `std/list` at landing 3 and the migration tool's tier 0 moved to phase 5; landing 1 built 2026-10-10, green on pipeline 570; landing 2 built 2026-10-10, green on pipeline 572; landing 3 built 2026-10-10, green on pipeline 574; landing 4 built 2026-10-10 — `docs/LEAN.md`, T9 small PASSED, green on pipeline 576; closed 2026-10-10, the as-built notes ratified**): Init is the library — a statement Init has is cited by its name, `v3/std` declares what Init lacks, an old module whose declarations are all Init's becomes a migration record; the fifteen former axioms as theorems (twelve by Init's names, measured); the seams the probes found closed — one spelling at the unifier and the matcher, instances by table, `/` at `Int` Euclidean, the horizon refusal's pointer; `std/list` with the dependent match and the matcher, `std/bits` as bridges; `docs/LEAN.md`; T9 small; T2/T3 and T10 as slices 3.28 and 3.29 — records §9.1 "Slice 3.27" | the bulk port cites this library; calc's `list.shard`; T9's author |
 | 3.28 | the lambda profile (designed 2026-10-10 at the boundary after 3.27, on the user's "continue to the next slice"; item 62; the design in the record; **ratified 2026-10-11 as designed; landing 1 built 2026-10-11, green on pipeline 581; landing 2 built 2026-10-11, green on pipeline 583; landing 3 built 2026-10-11, green on pipeline 585; the as-built departures ratified 2026-10-12 — closed**): a function-typed binder is a static parameter and its `fn` a template; instances by shape — the identity and the captured count, never the captured values —, closed lambdas lifted to `CALLER.lam_N`, named partial application, a generated definition per instance with the template's equations instantiated; the shape set closed and a budget; static law-bearing packages as structures with function-typed fields, never E types; `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates in `std/list`; T2 and T3 as `template_test.sh` with the artifact check — records §9.1 "Slice 3.28" | law §5.3's `add_offset` written as the law writes it; the first static package; the bulk port's higher-order list code |
 | 3.29 | the tactic library — T10, the proof IR's gate (designed 2026-10-12 at the boundary after 3.28, on the user's "proceed with the next slice"; item 63; the design in the record; **ratified 2026-10-12 as designed; landing 1 built 2026-10-12, green on pipeline 588; landing 2 built 2026-10-12, green on pipeline 589 — the slice closed 2026-10-13, the as-built readings ratified 2026-10-13**): a tactic is a `fn` of an ordinary module over text — the goal in as one S form with its named context, target and the applicable forms, a block of I out — named by the source's delegation `(auto (tactic M.FN) HINT…)`, run by `prove` under `ev` and its answer replayed through `tac_prove` before the theorem is accepted, the sidecar entry it writes indistinguishable from the engine's; the sidecar's schema form `(sidecar N)`; the guarded occurrence `(occ K EXPECT)`; dependents reverted into the motive under `cases` and `induction`; the refusals with the library pointer; the T10 record — records §9.1 "Slice 3.29" | `v3/examples/tactic/` — `bool_split`, a decision procedure for `Bool` goals as an E library, its theorems solved twice (the engine and the library) and both sidecars replayed, stored and verified by K alone; `tactic_lib_test.sh` |
-| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593; landing 2 built 2026-10-13 — T9 again passed on the count, two kernel findings fixed, green on pipeline 595; landing 3 built 2026-10-13 — the consolidation**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
+| 3.30 | the phase-3 close-out (designed 2026-10-13 at the boundary after 3.29, on the user's "Let's proceed to the next slice"; item 64; the design below; **ratified 2026-10-13 as designed; landing 1 built 2026-10-13, green on pipeline 593; landing 2 built 2026-10-13 — T9 again passed on the count, two kernel findings fixed, green on pipeline 595; landing 3 built 2026-10-13 — the consolidation; landing 4 built 2026-10-13 — the close: the pass done, the ledger closed, phase 3 closed**): law §12.4 item 3's list audited against the tree — every item covered, the gates T2, T3, T9 small and T10 met — and what the close owes: the gate ledger in records §9 with §11's phase-3 rows rewritten; the carried T5 fixture as pin `realize_imported` (measured: the imported theorem cited before and after a supplied realization, every record `ACCEPT`); the two rows still open for ruling (the two-instance gate, the `String` flip); the phase-3 doc banners; T9 again — nine tasks, the count agreed before the run (landing 2); the LANGUAGE.md consolidation ruled 2026-09-17, its shape for ruling (landing 3); the ratification pass over items 39–42, 44–46, 48 and 64, GPT-6's checkpoint SHA, phase 4 opened (landing 4) | the ratifier; phase 4 |
 
 **The facilities, their rules' current statements (slice 3.30 landing
 3, 2026-10-13).** The design and as-built texts of slices 3.13–3.29
@@ -3157,6 +3158,37 @@ Rule 6 by its lean (§13 item 64(e)).
   (rule 6). No kernel change and no test run: the landing is
   documents, the kernel's pointers unchanged in text.
 
+**Slice 3.30 as built, landing 4 (2026-10-13) — the close.** Rule 7.
+
+- **The ratification pass.** §13 items 39–42, 44–46 and 48, and item
+  64's as-built notes of landings 2 and 3, ratified 2026-10-13 (the
+  user: "Read through this, and all of that looks good to ratify to me"), item 46 with its reason stated: "the requirements holding the opaque boundary of the module is an important boundary to keep so that internal mutations that preserve requirements are safe without rippling to all consumers" — the view's
+  requirements are the consumer's whole knowledge so that an
+  implementation may change under them without a consumer's proof
+  moving. Every item of §13 now carries its ruling. Item 42's stated
+  cost was found live at the close (route 1's reader expands a record
+  under v2's accessor names; the kernel's drivers wait on a pre-pass)
+  and is noted at the item.
+- **The ledger.** Records §9's phase-3 close-out ledger complete and
+  closed beside phase 2's: every item of law §12.4 item 3 covered or
+  carried by ruling (T5's two instances and R57's instance to phase 5,
+  `Symbol`'s `String` flip to phase 4 with route 1's chain), T2, T3,
+  T9 small, T9 again and T10 met.
+- **The checkpoint review.** This landing's commit is the SHA for the
+  phase-3 checkpoint memo, as phase 2's close-out commit was for
+  R49–R54. The review runs through `codex` (GPT-6 by its CLI; the user:
+  "feel free to use 'codex' with cli options for an outside perspective
+  with a different model's viewpoints"), over the tree at the SHA with
+  this document, the law and records §9 as the brief's reading; the
+  memo is archived under `docs/archive/foundation-v3/` and answered in
+  records §4 as every memo before it.
+- **Phase 4 open.** Phase 3 closed at this landing; phase 4 (law §12.4
+  item 4) open, its first slice designed at this boundary and written
+  for ratification as §13's next item. Not in this landing: that
+  design.
+
+No kernel change and no test run: documents only.
+
 ### 8.5 Views under Stage 1 — the interface is the whole of a consumer's knowledge (RULED 2026-09-17)
 
 The user's steer at the Stage-1 design: v2's module system was built
@@ -3898,7 +3930,7 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     which a wrapper cannot give a type short of boxing it (an
     allocation per call, every answer type crossing the box); identity
     aliasing in the fork — two names on one declaration, against the
-    one-identity rule K's environment rests on.
+    one-identity rule K's environment rests on. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 40. **E-only view parameters** (§3.3; landing 2): a `sig fn` whose
     signature names an E-only type is an E parameter only — no axiom
     in K, the head linked at `run` — and a `sig type` whose
@@ -3906,13 +3938,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     sig type as an opaque constant. Alternative: making the data
     vocabulary K types by importing `Init` into `name`, `expr`, `decl`
     — `Symbol`'s L identity is phase 3's later slice, and every
-    identity and the load's cost would change for no client's gain.
+    identity and the load's cost would change for no client's gain. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 41. **A view may import a plain file outside its own directory**
     (§6.6's req-scope gate refined; landing 2): the K view states its
     signatures over the public data files. A file of the view's own
     directory stays `req_scope` — the implementation's side. Alternative:
     the data files under `k/mod.req/` as req-scope siblings, which
-    moves six public files behind a path nothing else needs.
+    moves six public files behind a path nothing else needs. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 42. **Records are v2's form, expanded at the s-expression level in
     both readers, with the accessors in the record's namespace** (§4;
     slice 3.9): `NAME.FIELD` and `NAME.with_FIELD` with the value
@@ -3937,7 +3969,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     qualified unless a file opens the record with `(use M.T)`: a
     type's automatic open covers its constructors only (item 7 as
     amended), or every field name would be a refused pattern variable
-    of its file.
+    of its file. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").** The cost named above is live: route 1's
+    reader expands a record under v2's accessor names, so the kernel's
+    drivers cannot be lowered until a pre-pass emits the accessors under
+    V3's names (probed 2026-10-13 at the close; phase 4's first slice).
 43. **`fn` = `def` + `realize`, automatic and transitive** (§8.4,
     slice 3.13; the user's ruling of 2026-09-17 on the five leans): a
     `fn` enters K when its signature's types and its body's heads all
@@ -3969,12 +4004,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the comparisons keep the prelude's `Bool` statically (the
     translation reads the decision off K); a numeral at an expected
     `Int` is `Int.ofNat n` / `Int.negSucc (-n-1)` — law §5.2's one
-    coercion, in E only until 3.15.
+    coercion, in E only until 3.15. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 45. **One term grammar for `def` and `fn`, one elaborator** (§8.4
     guard 1, carried from the phase-2 direction checkpoint): the
     surface is the union of the explicit-L and E forms, `tr` the
     elaborator, a `fn` a `def` that also passes the classifier. At
-    3.13 the statement and one pin; the reader is unchanged.
+    3.13 the statement and one pin; the reader is unchanged. **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 46. **The interface is the whole of a consumer's knowledge** (§8.5;
     the user's steer of 2026-09-17): nothing L crosses a view's merge;
     a `sig fn`'s definition and equations exist in the fork only; the
@@ -3983,6 +4018,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     type` is the module's. Alternative: exporting `eq_N` through the
     view automatically — every consumer proof would then weld to
     today's body, which is exactly what v2's weaning rule forbade.
+    **Ratified 2026-10-13 at the close, with the reason stated (the
+    user: "the requirements holding the opaque boundary of the module is an important boundary to keep so that internal mutations that preserve requirements are safe without rippling to all consumers"): the view's requirements are the consumer's whole
+    knowledge so that an implementation may change under them without
+    a consumer's proof moving.**
 47. **Course-of-values, measures and the obligation class** (§8.4's
     slice-3.14 rules; the user's ruling of 2026-09-17): every
     structural recursion is `brecOn` with a generalized table, Lean's
@@ -4021,7 +4060,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `type`'s parameters and a `fn`'s type parameters implicit, so L
     cites what E cites (guard 1). The phase-2 spelling of implicit
     arguments is gone from the pins and stands under `@`. **As built
-    (2026-09-18):** see §8.4's as-built.
+    (2026-09-18):** see records §9.1 "Slice 3.15" (the as-built text
+    moved there at slice 3.30 landing 3). **Ratified 2026-10-13 at the close (the user: "Read through this, and all of that looks good to ratify to me").**
 49. **One front end: the pre-definition and its two projections**
     (§8.4's slice-3.16 design; the user's ruling of 2026-09-18 on the
     reorder and the shape, after the probe recorded there): S
@@ -4580,4 +4620,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     numbered as the slices numbered their rules; the slice table the
     index; the title and the status block rewritten. The current
     statements are new prose, the record the authority where the two
-    differ.
+    differ. **The as-built notes of landings 2 and 3 ratified
+    2026-10-13 (the user: "Read through this, and all of that looks good to ratify to me").** **As built, landing 4 (2026-10-13),
+    the close:** the pass done — items 39–42, 44–46 and 48 and this
+    item's notes ratified, item 46 with its reason recorded; records
+    §9's phase-3 close-out ledger closed; the checkpoint memo over this
+    landing's SHA through `codex` (the user's steer), archived and
+    answered in records §4 as every memo before it; phase 4 open, its
+    first slice designed at the boundary. Slice 3.30 closed; phase 3
+    closed.

@@ -2660,6 +2660,17 @@ is `docs/FOUNDATION.md` §5.3.
   goal (`apply Eq.trans` without its middle term) closed over the
   context and assigned by pattern unification from a premise's block.
   Gates: 221 loader pins (6 new, one renamed), `tactic_test` (110 checks: calc's 100 claims), `define_test` (12 checks), `derive_test` (14 checks), `wire_test` (15 checks), calc byte-identical over 21 inputs and its host program byte-identical to the model world, parity byte-identical over 28 closures and 116,395 declarations, route 2, K's clients, the full suite's 34 entrypoints with 0 failed. None of the files route 1 compiles changed; the full replay and the corpus are CI's.
+- **2026-10-13 — slice 3.30 landing 4 built: the close — phase 3
+  closed** (`v3/LANGUAGE.md` §8.4 "as built, landing 4"; §13 items
+  39–42, 44–46 and 48, and item 64's as-built notes of landings 2 and
+  3, ratified 2026-10-13 — the user: "Read through this, and all of that looks good to ratify to me" — item 46 with its reason
+  recorded: "the requirements holding the opaque boundary of the module is an important boundary to keep so that internal mutations that preserve requirements are safe without rippling to all consumers"; item 42's stated cost found live at the close (route
+  1's reader expands a record under v2's accessor names; the kernel's
+  drivers wait on a pre-pass) and noted at the item; the phase-3
+  close-out ledger below closed; this landing's commit the SHA for the
+  phase-3 checkpoint memo, run through `codex` on the user's steer and
+  answered in §4 as every memo before it; phase 4 open, its first
+  slice designed at the boundary). Documents only.
 - **2026-10-13 — slice 3.30 landing 3 built: the consolidation
   (`v3/LANGUAGE.md` §8.4 "as built, landing 3", the slice table, the
   title and the status block, §13 item 64's as-built note; this
@@ -3179,7 +3190,7 @@ is `docs/FOUNDATION.md` §5.3.
 - **2026-10-06 — pipeline 544 green on `a299187`: slice 3.21 on the
   full gate.** engine 28 s; corpus 1,509 s at the baseline; v3 6,055 s: 34 entrypoints with 0 failed, `tactic_test` 110 checks (the 100 claims), `define_test` 12 checks, `derive_test` 14 checks, `wire_test` 15 checks, calc's host program byte-identical to the model world, parity byte-identical over 28 closures and 116,127 declarations in 608 s, route 1's native build of the kernel (`OK: v3/bin/t0`), the fixture byte-tie identical, replay 2,483 s at 32.1 GB peak, T0 accepted 57,977 with 0 rejected, closures identical to the oracle, all 20 accelerator candidates pinned. Slice 3.21 is closed. The v3 job is 2,083 s shorter than pipeline 542's, the test suite 2,046 s of it (2,952 s against 4,998 s) under the runner of eight: the suite's wall clock is the loader pins' entrypoint's (2,952 s for the 212 pins in one process, against 1,161 s on the development machine), so a wider runner gains nothing and the next cut is that entrypoint's. The entrypoints of 30 s and more sum to 6,177 s of process time: beside the pins, calc's two tests 951 s, parity 608 s, `define_test` 547 s, `derive_test` 422 s, `wire_test` 187 s, K's clients 171 s, `tactic_test` 157 s. The job's limit is 3 h (10,800 s).
 - **Phase 3 close-out ledger (2026-10-13; opened at slice 3.30
-  landing 1, closes at landing 4).** Each item of law §12.4 item 3 and
+  landing 1, closed at landing 4 — phase 3 closed 2026-10-13).** Each item of law §12.4 item 3 and
   its gates, the evidence, the status (`v3/LANGUAGE.md` §8.4 slice
   3.30's table as measured at the design, carried forward landing by
   landing):
@@ -3201,7 +3212,7 @@ is `docs/FOUNDATION.md` §5.3.
   | the pipeline measured | every pipeline's record above | covered |
   | T2, T3 | `records/T2-T3-2026-10-11.md` | met |
   | T9 small | `records/T9-small-2026-10-10.md` | met |
-  | T9 again at the close (law §5.4) | slice 3.30 rule 5: nine tasks, the count agreed at the ratification | **landing 2** |
+  | T9 again at the close (law §5.4) | slice 3.30 rule 5: nine tasks, the count agreed at the ratification | **met at landing 2**: 9 of 9 on the count, two kernel findings fixed (`records/T9-2026-10-13.md`) |
   | T10 | `records/T10-2026-10-12.md` | met |
   | Stage 3 (typeclasses, coercions) | the fixed instance table (3.27), the coercion (3.15); search the door | as ruled (item 61) |
   | §11: T1's branch-local proof | slice 3.24 | covered; the row rewritten at landing 1 |
@@ -3210,8 +3221,8 @@ is `docs/FOUNDATION.md` §5.3.
   | §11: `Symbol`'s `String` flip | open since 3.18 | **carried to phase 4** with route 1's chain (ruled 2026-10-13, item 64) |
   | §11: R60's facilities; lambda lifting | slices 3.15–3.18; slice 3.28 | covered; the rows rewritten at landing 1 |
   | law §10.5's phase-3 doc rows | `LEAN.md` written; `TOTALITY.md`, `REFINEMENT.md`, `STORAGE.md` superseded and `CERT.md` amended by banner | **done at landing 1** |
-  | the LANGUAGE.md consolidation (ruled 2026-09-17) | rule 6's shape, ratified | **landing 3** |
-  | §13 for ratification | items 39–42, 44–46, 48 without a ruling marker; 64 ratified 2026-10-13 | **landing 4**: the user's pass |
+  | the LANGUAGE.md consolidation (ruled 2026-09-17) | rule 6's shape, ratified | **done at landing 3**: the slice texts §9.1 below, the current statements §8.4 |
+  | §13 for ratification | items 39–42, 44–46, 48 without a ruling marker; 64 ratified 2026-10-13 | **ratified 2026-10-13 at landing 4** (the user's pass; item 46 with its reason recorded); every item of §13 ruled |
 - **Phase 2 close-out ledger (2026-09-13; closed at slice 8).** Each
   item of §12.4 item 2's gate, its evidence, its status:
 
