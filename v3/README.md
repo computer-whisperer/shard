@@ -1720,6 +1720,24 @@ parameters, the ghost twin's test. Not in it: `impc`, the generator,
 the runtime laws' discharge, Theorem A (phase 7); the chain and the
 String flip.
 
+**Slice 4.2 landing 0 built 2026-10-15 — the definition gate, and the
+count** (`LANGUAGE.md` §8.6 "as built, landing 0"; records §9): the
+closure ported by hand under `v3/models/imp` with `std/map` and
+`std/mem` beside it, seven files and 931 lines; the loader accepts the
+root with every function and every specification defined with its
+equations — 8 modules, 758 declarations, 152 defined, nothing
+runnable, the theorem alone pending on its `sorry` — in 37 s on the
+bootstrap and 6 s on the native loader (`kernel/test/imp_test.sh`, the
+42nd entrypoint, 81 checks; the inventory rebuilt against the changed
+kernel, 29 binaries in 2,377 s). Gates on the quiet dev box: the
+bootstrap suite 43 entrypoints, 0 failed, in 800 s; the native suite 43,
+0 failed, in 553 s; the comparison 0 differ. Two Stage-1 gaps found at the gate and closed with pins: a
+nested inductive now has its `casesOn` (the statement type carries a
+list of itself), and a `def` with a recursion clause is defined by
+the fn pipeline's K half (the specifications into `Prop` recurse).
+The count of the rung is written in the record before any proof
+step. Landing 1 proves `tb_len`.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
 2026-10-14): `load.shard --emit` projects a driver's closure, as the

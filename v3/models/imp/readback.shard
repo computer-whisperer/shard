@@ -1,0 +1,93 @@
+;;; v3/models/imp/readback.shard — the word kit, the readback relations and the post-predicate of
+;;; a per-function certificate, ported from the old tree's models/imp/probes/tb_kit.shard and
+;;; tbh_kit.shard (LANGUAGE.md §8.6 slice 4.2 landing 0, rule 2; docs/COVERAGE.md B-0, B-1b): the
+;;; definitions `tb_len` cites and none of the two files' 168 laws (landing 1's, by need). A word
+;;; is `Nat` and a source value `Int` (law §10.2's typed class): `imm` is the one bridge, the
+;;; two's-complement i63 immediate of an `Int` as a word; `in63` the band an immediate carries.
+;;; A readback is a relation structural on the value (B-1b's D2): `rb_int w v` says the word is
+;;; v's immediate, `rb_list cs w v` that the word is the list's cons chain in the cells — no
+;;; fuel, no acyclicity side condition. `tbh` is the post-predicate: the run returned the word
+;;; over a memory representing the ghost under the invariant at the roots plus the word, no raw
+;;; cell, the window bound, and the fact `ok`; a reasoned fail is accepted, a trap or an empty
+;;; run is not. The specification side is `def`; `ilsetf`, `tb_mem`, `tb_fam` and `tb_w` are
+;;; functions over data.
+(import Init Nat.sub_one_lt)
+(import "../../std/list.shard")
+(import "../../std/mem.shard")
+(import "imp.shard")
+(import "heap.shard")
+(use std.list)
+(use std.mem)
+(use models.imp.imp)
+(use models.imp.imp.IFam)
+(use models.imp.imp.IpRet)
+(use models.imp.heap)
+
+;; --- the word kit -------------------------------------------------------------------------------
+(def imm ((n Int)) Nat (Int.toNat (% (+ (* 2 n) 1) 18446744073709551616)))
+(def dbl ((n Int)) Nat (Int.toNat (% (* 2 n) 18446744073709551616)))
+(def hi ((w Nat)) Nat (/ w 9223372036854775808))
+(def lo ((w Nat)) Nat (% w 9223372036854775808))
+(def in63 ((v Int)) Prop (And (<= -4611686018427387904 v) (< v 4611686018427387904)))
+;; the locals with the i-th replaced, total: past the end nothing changes
+(fn ilsetf ((ls (List Nat)) (i Nat) (v Nat)) (List Nat)
+  (measure (struct ls))
+  (match ls
+    (List.nil List.nil)
+    ((List.cons h t) (if (= i 0) (List.cons v t) (List.cons h (ilsetf t (- i 1) v))))))
+(def tb_rv ((r (Option IpRet))) Prop
+  (match r
+    (Option.none False)
+    ((Option.some x) (match x ((IpRv _ _) True) (IpRtrap False) ((IpRfailed _) False)))))
+(fn tb_mem ((r (Option IpRet)) (m Mem)) Mem
+  (match r
+    (Option.none m)
+    ((Option.some x) (match x ((IpRv _ m2) m2) (IpRtrap m) ((IpRfailed _) m)))))
+(fn tb_fam ((r (Option IpRet))) IFam
+  (match r
+    (Option.none FOverflow)
+    ((Option.some x) (match x ((IpRv _ _) FOverflow) (IpRtrap FOverflow) ((IpRfailed f) f)))))
+
+;; --- the readbacks ------------------------------------------------------------------------------
+(def rb_int ((w Nat) (v Int)) Prop (And (in63 v) (= w (imm v))))
+;; the cell facts of a constructor word: even, live, the tag, the arity
+(def rb_cell ((cs (List HCell)) (w Nat) (tag Nat) (n Nat)) Prop
+  (And (= (% w 2) 0)
+  (And (List.Mem w (haddrs cs))
+  (And (= (HCell.htag (hfget cs w)) tag) (= (HCell.harity (hfget cs w)) n)))))
+;; the i-th slot word of the cell at w
+(def rb_slot ((cs (List HCell)) (w Nat) (i Nat)) Nat (List.getD (HCell.hslots (hfget cs w)) i 0))
+;; a list: nil is the immediate 1; cons is tag 1, arity 2, the head's immediate and the tail
+(def rb_list ((cs (List HCell)) (w Nat) (v (List Int))) Prop
+  (measure (struct v))
+  (match v
+    (List.nil (= w 1))
+    ((List.cons h t) (And (rb_cell cs w 1 2) (And (rb_int (rb_slot cs w 0) h) (rb_list cs (rb_slot cs w 1) t))))))
+
+;; --- the post-predicate -------------------------------------------------------------------------
+(def graw_none ((g GHeap)) Prop (= (GHeap.graw g) Option.none))
+(def tbh ((r (Option IpRet)) (rb Nat) (msz Nat) (g GHeap) (w Nat) (rs (List Nat)) (ok Prop)) Prop
+  (match r
+    (Option.none False)
+    ((Option.some x)
+     (match x
+       ((IpRv w2 m2)
+        (And (= w2 w)
+        (And (heap_rep m2 rb g)
+        (And (hinv rb g (rinc rs w))
+        (And (graw_none g) (And (<= (GHeap.gend g) msz) ok))))))
+       (IpRtrap False)
+       ((IpRfailed _) True)))))
+;; a run that returned or failed: never a trap, never out of fuel
+(def tb_okr ((r (Option IpRet))) Prop
+  (match r
+    (Option.none False)
+    ((Option.some x) (match x ((IpRv _ _) True) (IpRtrap False) ((IpRfailed _) True)))))
+;; the returned word; 0 otherwise
+(fn tb_w ((r (Option IpRet))) Nat
+  (match r
+    (Option.none 0)
+    ((Option.some x) (match x ((IpRv w _) w) (IpRtrap 0) ((IpRfailed _) 0)))))
+;; an 8-byte load at ad is inside the window and the address space
+(def ldok ((mlo Nat) (msz Nat) (ad Nat)) Prop
+  (And (< ad 4294967296) (And (<= mlo ad) (<= (+ ad 8) msz))))

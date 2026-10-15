@@ -413,10 +413,106 @@
         (match (tr_lams t3 (list mv) rty)
           ((Pair t4 motive) (rec_app_dep t4 (level_one) ind ls largs motive minors major))))))))
 ;; the recursor applied with a given motive at the motive's universe (slice 3.14: a table
-;; generalized in the motive; below's motive into Sort 1 at universe 2)
+;; generalized in the motive; below's motive into Sort 1 at universe 2). A nested inductive's
+;; recursor (slice 4.2 landing 0) takes a motive per auxiliary type after the type's own and the
+;; auxiliary constructors' minors after the type's: those motives are `λ x. PUnit.{u}` and those
+;; minors `λ binders. PUnit.unit.{u}`, read off the recursor's own telescope — K's `casesOn`
+;; shape for a nested type; the type's own minors carry a `PUnit` hypothesis per nested field.
 (fn rec_app_dep ((t Tr) (u Level) (ind Name) (ls (List Level)) (largs (List Expr)) (motive Expr) (minors (List Expr)) (major Expr)) TrRes
-  (match (tr_apps t (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append minors (list major)))))
-    ((Pair t5 e) (TrOk t5 e))))
+  (match (env_find (tr_env t) (Str ind (quote rec)))
+    ((Some (RecInfo _ _ _ _ nmotives nminors _ _ _))
+     (if (int_eq nmotives 1)
+       (match (tr_apps t (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append minors (list major)))))
+         ((Pair t5 e) (TrOk t5 e)))
+       (match (env_find (tr_env t) (Str ind (quote rec)))
+         ((Some rinfo)
+          (match (w_inst_lparams (Tr.w t) (ci_type rinfo) (ci_lparams rinfo) (Cons u ls))
+            ((Pair w1 rty)
+             (match (inst_params w1 rty largs)
+               ((Pair w2 None) (TrErr (quote equation_form) (append (show_name ind) ": the recursor's parameters could not be opened")))
+               ((Pair w2 (Some ty1))
+                (match (nested_tail (tr_set_w t w2) ty1 u motive (- nmotives 1) minors (- nminors (len minors)))
+                  ((Pair t2 None) (TrErr (quote equation_form) (append (show_name ind) ": the recursor's telescope is not the nested shape")))
+                  ((Pair t2 (Some (Pair auxm auxmin)))
+                   (match (tr_apps t2 (mk_const (Str ind (quote rec)) (Cons u ls)) (append largs (Cons motive (append auxm (append minors (append auxmin (list major)))))))
+                     ((Pair t5 e) (TrOk t5 e))))))))))
+         (None (TrErr (quote equation_form) (append (show_name ind) " has no recursor"))))))
+    (_ (TrErr (quote equation_form) (append (show_name ind) " has no recursor")))))
+;; the recursor's telescope after the parameters: the motive, then the auxiliary motives, then the
+;; type's own minors, then the auxiliary minors — the auxiliary ones built and the rest instantiated
+(fn nested_tail ((t Tr) (ty Expr) (u Level) (motive Expr) (naux Int) (minors (List Expr)) (nauxmin Int)) (Pair Tr (Option (Pair (List Expr) (List Expr))))
+  (match ty
+    ((Pi _ _ _ _ body)
+     (match (tr_inst1 t body motive)
+       ((Pair t1 ty1)
+        (match (aux_motives t1 ty1 u naux Nil)
+          ((Pair t2 None) (Pair t2 None))
+          ((Pair t2 (Some (Pair ty2 auxm)))
+           (match (inst_minors t2 ty2 minors)
+             ((Pair t3 None) (Pair t3 None))
+             ((Pair t3 (Some ty3))
+              (match (aux_minors t3 ty3 u nauxmin Nil)
+                ((Pair t4 None) (Pair t4 None))
+                ((Pair t4 (Some auxmin)) (Pair t4 (Some (Pair auxm auxmin))))))))))))
+    (_ (Pair t None))))
+;; an auxiliary motive: the binder's type is `(x : Aux) → Sort u`; the motive is `λ (x : Aux). PUnit.{u}`
+(fn aux_motives ((t Tr) (ty Expr) (u Level) (n Int) (acc (List Expr))) (Pair Tr (Option (Pair Expr (List Expr))))
+  (measure n)
+  (if (lt n 1) (Pair t (Some (Pair ty (rev acc))))
+    (match ty
+      ((Pi _ _ _ dom body)
+       (match dom
+         ((Pi _ xn _ xdom _)
+          (match (tr_local t xn xdom)
+            ((Pair t1 xv)
+             (match (tr_lams t1 (list xv) (mk_const (n1 (quote PUnit)) (list u)))
+               ((Pair t2 am)
+                (match (tr_inst1 t2 body am)
+                  ((Pair t3 body1) (aux_motives t3 body1 u (- n 1) (Cons am acc)))))))))
+         (_ (Pair t None))))
+      (_ (Pair t None)))))
+;; the type's own minors instantiated in order
+(fn inst_minors ((t Tr) (ty Expr) (minors (List Expr))) (Pair Tr (Option Expr))
+  (measure (struct minors))
+  (match minors
+    (Nil (Pair t (Some ty)))
+    ((Cons m r)
+     (match ty
+       ((Pi _ _ _ _ body) (match (tr_inst1 t body m) ((Pair t1 body1) (inst_minors t1 body1 r))))
+       (_ (Pair t None))))))
+;; an auxiliary minor: a lambda over the binder's whole telescope returning PUnit.unit.{u}
+(fn aux_minors ((t Tr) (ty Expr) (u Level) (n Int) (acc (List Expr))) (Pair Tr (Option (List Expr)))
+  (measure n)
+  (if (lt n 1) (Pair t (Some (rev acc)))
+    (match ty
+      ((Pi _ _ _ dom body)
+       (match (open_pi_locals t dom Nil (budget_depth))
+         ((Pair t1 fvs)
+          (match (tr_lams t1 fvs (mk_const (n2 (quote PUnit) (quote unit)) (list u)))
+            ((Pair t2 am)
+             (match (tr_inst1 t2 body am)
+               ((Pair t3 body1) (aux_minors t3 body1 u (- n 1) (Cons am acc)))))))))
+      (_ (Pair t None)))))
+;; a telescope's binders as locals, in order
+(fn open_pi_locals ((t Tr) (ty Expr) (acc (List Expr)) (fuel Int)) (Pair Tr (List Expr))
+  (measure fuel)
+  (if (lt fuel 1) (Pair t (rev acc))
+    (match ty
+      ((Pi _ n _ dom body)
+       (match (tr_local t n dom)
+         ((Pair t1 fv) (match (tr_inst1 t1 body fv) ((Pair t2 body1) (open_pi_locals t2 body1 (Cons fv acc) (- fuel 1)))))))
+      (_ (Pair t (rev acc))))))
+;; a constant occurs in a term
+(fn mentions_const ((e Expr) (n Name)) Bool
+  (measure (struct e))
+  (match e
+    ((Const _ c _) (name_eq c n))
+    ((App _ f a) (bool_or (mentions_const f n) (mentions_const a n)))
+    ((Lam _ _ _ d b) (bool_or (mentions_const d n) (mentions_const b n)))
+    ((Pi _ _ _ d b) (bool_or (mentions_const d n) (mentions_const b n)))
+    ((Let _ _ ty v b) (bool_or (mentions_const ty n) (bool_or (mentions_const v n) (mentions_const b n))))
+    ((Proj _ _ _ x) (mentions_const x n))
+    (_ False)))
 ;; the recursor's checks tr_rec makes, for define.shard's splits
 (fn rec_usable ((t Tr) (ind Name) (ls (List Level))) (Option (Pair Symbol (List Int)))
   (match (env_find (tr_env t) (Str ind (quote rec)))
@@ -1084,7 +1180,9 @@
                             ((Pair t6 ety) (Pair t6 (Pair e ety)))))))))))))))))))))
 ;; ---- the constructor-structure bundle (slice 3.15; LANGUAGE.md §8.4's slice-3.15 rules) ----------
 ;; After a native inductive is admitted: T.casesOn (its recursor with the hypotheses unused, universe
-;; polymorphic as Lean's), and for a type without parameters and indices whose recursor eliminates
+;; polymorphic as Lean's; a nested inductive's — a constructor carrying the type under List or
+;; another inductive — with the auxiliary motives constant PUnit and their minors PUnit.unit, Lean's
+;; own shape, slice 4.2 landing 0), and for a type without parameters and indices whose recursor eliminates
 ;; into every universe, T.noConfusionType, T.noConfusion and T.c.inj per constructor with fields —
 ;; Lean 4.33's shapes read off the export (Nat's; a parametric type's shape generalizes the
 ;; parameters twice with HEq on the fields and eq_of_heq, and is later). Only where Init's Eq,
@@ -1094,7 +1192,7 @@
 (fn confusion_bundle ((es ESt) (sc Scope) (env CheckedEnv) (ind Name)) (List Declaration)
   (match (env_find env ind)
     ((Some (InductInfo _ nparams nindices all ctors nnested _ _ _))
-     (if (bool_or (lt 0 nindices) (bool_or (lt 0 nnested) (bool_not (int_eq (len all) 1)))) Nil
+     (if (bool_or (lt 0 nindices) (bool_not (int_eq (len all) 1))) Nil
      (match (rec_level env ind)
        (None Nil)
        ((Some u)
@@ -1152,7 +1250,7 @@
                        (match (cases_minor_locals t6 motive ps ctors Nil)
                          ((Pair t7 None) (AuxErr t7 (quote equation_form) "a constructor could not be opened"))
                          ((Pair t7 (Some minors))
-                          (match (cases_rec_minors t7 motive ps ctors minors Nil)
+                          (match (cases_rec_minors t7 motive (LParam u) ind ps ctors minors Nil)
                             ((Pair t8 None) (AuxErr t8 (quote equation_form) "a constructor could not be opened"))
                             ((Pair t8 (Some rminors))
                              (match (rec_app_dep t8 (LParam u) ind Nil ps motive rminors tv)
@@ -1187,8 +1285,9 @@
           ((Pair t2 mty)
            (match (tr_local t2 (ctor_short c) mty)
              ((Pair t3 m) (cases_minor_locals t3 motive ps r (Cons m acc)))))))))))
-;; the recursor's minors: λ fields ihs. minor_c fields, each hypothesis at the motive of its field
-(fn cases_rec_minors ((t Tr) (motive Expr) (ps (List Expr)) (ctors (List Name)) (minors (List Expr)) (acc (List Expr))) (Pair Tr (Option (List Expr)))
+;; the recursor's minors: λ fields ihs. minor_c fields, each hypothesis at the motive of its field —
+;; a nested field's (the type under another inductive) at PUnit.{u}, the auxiliary motive's value
+(fn cases_rec_minors ((t Tr) (motive Expr) (u Level) (ind Name) (ps (List Expr)) (ctors (List Name)) (minors (List Expr)) (acc (List Expr))) (Pair Tr (Option (List Expr)))
   (measure (struct ctors))
   (match ctors
     (Nil (Pair t (Some (rev acc))))
@@ -1199,19 +1298,22 @@
         (match (rz_open_ctor t c Nil ps)
           ((Pair t1 None) (Pair t1 None))
           ((Pair t1 (Some (Pair fields _)))
-           (match (open_ihs_dep t1 fields motive Nil)
+           (match (open_ihs_dep t1 fields motive u ind Nil)
              ((Pair t2 ihs)
               (match (tr_apps t2 m (field_fvars fields))
                 ((Pair t3 body)
                  (match (tr_lams t3 (append (field_fvars fields) ihs) body)
-                   ((Pair t4 minor) (cases_rec_minors t4 motive ps r mr (Cons minor acc)))))))))))))))
-(fn open_ihs_dep ((t Tr) (fields (List Field)) (motive Expr) (acc (List Expr))) (Pair Tr (List Expr))
+                   ((Pair t4 minor) (cases_rec_minors t4 motive u ind ps r mr (Cons minor acc)))))))))))))))
+(fn open_ihs_dep ((t Tr) (fields (List Field)) (motive Expr) (u Level) (ind Name) (acc (List Expr))) (Pair Tr (List Expr))
   (measure (struct fields))
   (match fields
     (Nil (Pair t (rev acc)))
     ((Cons (Field fv _ True) r)
-     (match (tr_local t (n1 (quote ih)) (mk_app motive fv)) ((Pair t1 ih) (open_ihs_dep t1 r motive (Cons ih acc)))))
-    ((Cons _ r) (open_ihs_dep t r motive acc))))
+     (match (tr_local t (n1 (quote ih)) (mk_app motive fv)) ((Pair t1 ih) (open_ihs_dep t1 r motive u ind (Cons ih acc)))))
+    ((Cons (Field fv _ False) r)
+     (if (match (tr_type_of_local t fv) ((Some fty) (mentions_const fty ind)) (None False))
+       (match (tr_local t (n1 (quote ih)) (mk_const (n1 (quote PUnit)) (list u))) ((Pair t1 ih) (open_ihs_dep t1 r motive u ind (Cons ih acc))))
+       (open_ihs_dep t r motive u ind acc)))))
 
 ;; a constructor's fields as locals of a binder info, and the constructor applied to them
 ;; (a type without parameters: the fields' types are closed)

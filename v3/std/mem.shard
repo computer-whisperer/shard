@@ -1,0 +1,37 @@
+;;; v3/std/mem.shard — the old `std/mem`'s byte memory under the naming law (LANGUAGE.md §8.6
+;;; slice 4.2 landing 0; the record in std/README.md): one unbounded, default-zero memory from
+;;; addresses to bytes over `std/map`, the substrate the imp machine's call tier reads and
+;;; writes (`v3/models/imp`). Every read is a byte — a store truncates on the way out — and
+;;; a read of an unwritten cell is 0; no bounds and no traps here (those are the machine's).
+;;; Addresses, bytes and words are `Nat` (law §10.2's typed class; the old module's `Int`
+;;; with its `0 ≤` premises). The multi-byte view: `load_le` and `store_le` read and write a
+;;; w-byte little-endian word, the width a structural `Nat` so a law unfolds one byte at a
+;;; time. The old interface's framing laws arrive with their consumers (landing 1).
+(import Init Nat.sub_one_lt)
+(import "map.shard")
+(use std.map)
+
+(record Mem (rep (Map Nat)))
+
+(fn mem_empty () Mem (make Mem (rep (map_empty))))
+
+;; the byte at a: the last store there, truncated; 0 where nothing was stored
+(fn mem_get ((m Mem) (a Nat)) Nat
+  (match (map_lookup a (Mem.rep m))
+    (Option.none 0)
+    ((Option.some v) (% v 256))))
+
+;; a store is an insert; the truncation happens on read
+(fn mem_set ((m Mem) (a Nat) (v Nat)) Mem (make Mem (rep (map_insert a v (Mem.rep m)))))
+
+;; the w-byte little-endian word at a: the lowest address the least significant byte
+(fn load_le ((w Nat) (m Mem) (a Nat)) Nat
+  (measure w)
+  (if (= w 0) 0 (+ (mem_get m a) (* 256 (load_le (- w 1) m (+ a 1))))))
+(fulfills load_le.dec_1 (by (intro p h) (exact (Nat.sub_one_lt h))))
+
+;; the w-byte little-endian word v stored at a: the raw quotient chain, each byte a byte on read
+(fn store_le ((w Nat) (m Mem) (a Nat) (v Nat)) Mem
+  (measure w)
+  (if (= w 0) m (store_le (- w 1) (mem_set m a v) (+ a 1) (/ v 256))))
+(fulfills store_le.dec_1 (by (intro p h) (exact (Nat.sub_one_lt h))))

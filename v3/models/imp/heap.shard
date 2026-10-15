@@ -1,0 +1,215 @@
+;;; v3/models/imp/heap.shard — the ghost heap, its representation in memory and its invariant,
+;;; ported from the old tree's models/imp/probes/rth_kit.shard (LANGUAGE.md §8.6 slice 4.2 landing
+;;; 0, rule 2; docs/COVERAGE.md C2b, Theorem B): the definitions `tb_len` cites and nothing of
+;;; that file's 520 laws — the laws it needs are landing 1's, written by need. A cell is its
+;;; address, count, tag, arity and slot words; the ghost heap is its live cells (newest first),
+;;; sixteen free lists, the window `[glo, gtop)` of `[glo, gend)`, and at most one raw cell under
+;;; construction. `heap_rep m rb g`: memory represents the ghost at base `rb`; `hinv rb g r`: the
+;;; ghost is well formed at the roots `r` — the extents disjoint and inside the window, every
+;;; cell's bands, every count the references to it, every root a cell. Law §10.2's typed class
+;;; throughout: addresses, counts, tags and arities are `Nat`, so the old `0 ≤` conjuncts are
+;;; the type; a Bool predicate of the old file is a `Prop` here, its `andb` chain `And`, its
+;;; `if` a disjunction; `memb` is Init's `List.Mem`, `inth` Init's `List.getD`, `hlen` and
+;;; `fllen` `List.length`; an extent is `Ext` (the old `Pair Int Int`). `count_in` stays the
+;;; file's (Init's `List.count` needs an instance this load does not resolve by table).
+(import Init Nat.sub_one_lt)
+(import "../../std/list.shard")
+(import "../../std/mem.shard")
+(use std.list)
+(use std.mem)
+
+(record HCell (haddr Nat) (hcount Nat) (htag Nat) (harity Nat) (hslots (List Nat)))
+(record HRaw (raddr Nat) (rtag Nat) (rarity Nat) (rfill (List Nat)))
+(record GHeap (gcells (List HCell)) (gfree (List (List Nat))) (glo Nat) (gtop Nat) (gend Nat) (graw (Option HRaw)))
+(type Ext (Ext Nat Nat))   ; an extent: its address and its arity
+
+;; --- the representation in memory -------------------------------------------------------------
+(fn hword ((c HCell)) Nat
+  (+ (HCell.hcount c) (+ (* (HCell.htag c) 4294967296) (* (HCell.harity c) 281474976710656))))
+(fn rword ((rc HRaw)) Nat
+  (+ 1 (+ (* (HRaw.rtag rc) 4294967296) (* (HRaw.rarity rc) 281474976710656))))
+(def hslots_rep ((m Mem) (a Nat) (ws (List Nat))) Prop
+  (measure (struct ws))
+  (match ws
+    (List.nil True)
+    ((List.cons w rest) (And (= (load_le 8 m a) w) (hslots_rep m (+ a 8) rest)))))
+(def hcell_rep ((m Mem) (c HCell)) Prop
+  (And (= (load_le 8 m (HCell.haddr c)) (hword c)) (hslots_rep m (+ (HCell.haddr c) 8) (HCell.hslots c))))
+(def hcells_rep ((m Mem) (cs (List HCell))) Prop
+  (measure (struct cs))
+  (match cs
+    (List.nil True)
+    ((List.cons c rest) (And (hcell_rep m c) (hcells_rep m rest)))))
+(fn hhead ((as (List Nat))) Nat (match as (List.nil 0) ((List.cons a _) a)))
+(def hchain_rep ((m Mem) (as (List Nat))) Prop
+  (measure (struct as))
+  (match as
+    (List.nil True)
+    ((List.cons a rest) (And (= (load_le 8 m a) (hhead rest)) (hchain_rep m rest)))))
+(def hfree_rep ((m Mem) (rb Nat) (k Nat) (fls (List (List Nat)))) Prop
+  (measure (struct fls))
+  (match fls
+    (List.nil True)
+    ((List.cons fl rest)
+     (And (= (load_le 8 m (+ rb (+ 24 (* 8 k)))) (hhead fl))
+          (And (hchain_rep m fl) (hfree_rep m rb (+ k 1) rest))))))
+(def hraw_rep ((m Mem) (r (Option HRaw))) Prop
+  (match r
+    (Option.none True)
+    ((Option.some rc) (And (= (load_le 8 m (HRaw.raddr rc)) (rword rc)) (hslots_rep m (+ (HRaw.raddr rc) 8) (HRaw.rfill rc))))))
+(def heap_rep ((m Mem) (rb Nat) (g GHeap)) Prop
+  (And (= (load_le 8 m rb) (GHeap.gtop g))
+  (And (= (load_le 8 m (+ rb 8)) (GHeap.gend g))
+  (And (= (load_le 8 m (+ rb 16)) 0)
+  (And (= (List.length (GHeap.gfree g)) 16)
+  (And (hfree_rep m rb 0 (GHeap.gfree g))
+  (And (hcells_rep m (GHeap.gcells g)) (hraw_rep m (GHeap.graw g)))))))))
+
+;; --- the invariant: the pure well-formedness --------------------------------------------------
+(fn haddrs ((cs (List HCell))) (List Nat)
+  (measure (struct cs))
+  (match cs (List.nil List.nil) ((List.cons c rest) (List.cons (HCell.haddr c) (haddrs rest)))))
+(fn count_in ((xs (List Nat)) (x Nat)) Nat
+  (measure (struct xs))
+  (match xs
+    (List.nil 0)
+    ((List.cons h t) (if (= h x) (+ 1 (count_in t x)) (count_in t x)))))
+(fn inbound_cells ((cs (List HCell)) (a Nat)) Nat
+  (measure (struct cs))
+  (match cs
+    (List.nil 0)
+    ((List.cons c rest) (+ (count_in (HCell.hslots c) a) (inbound_cells rest a)))))
+(fn raw_refs ((r (Option HRaw)) (a Nat)) Nat
+  (match r (Option.none 0) ((Option.some rc) (count_in (HRaw.rfill rc) a))))
+;; a slot word is an immediate or the address of an older cell
+(def slot_ok ((w Nat) (older (List Nat))) Prop (Or (= (% w 2) 1) (List.Mem w older)))
+(def slots_ok ((ws (List Nat)) (older (List Nat))) Prop
+  (measure (struct ws))
+  (match ws
+    (List.nil True)
+    ((List.cons w rest) (And (slot_ok w older) (slots_ok rest older)))))
+(def cells_ok ((cs (List HCell))) Prop
+  (measure (struct cs))
+  (match cs
+    (List.nil True)
+    ((List.cons c rest)
+     (And (slots_ok (HCell.hslots c) (haddrs rest))
+     (And (= (List.length (HCell.hslots c)) (HCell.harity c))
+     (And (<= 1 (HCell.hcount c))
+     (And (< (HCell.hcount c) 4294967296)
+     (And (< (HCell.htag c) 65536)
+     (And (< (HCell.harity c) 65536) (cells_ok rest))))))))))
+;; an immortal cell's count is free; every other count is the references to the cell
+(def counts_ok ((all (List HCell)) (cs (List HCell)) (r (List Nat)) (raw (Option HRaw))) Prop
+  (measure (struct cs))
+  (match cs
+    (List.nil True)
+    ((List.cons c rest)
+     (And (Or (<= 2147483648 (HCell.hcount c))
+              (= (HCell.hcount c) (+ (count_in r (HCell.haddr c)) (+ (inbound_cells all (HCell.haddr c)) (raw_refs raw (HCell.haddr c))))))
+          (counts_ok all rest r raw)))))
+(def roots_ok ((r (List Nat)) (as (List Nat))) Prop
+  (measure (struct r))
+  (match r
+    (List.nil True)
+    ((List.cons x t) (And (List.Mem x as) (roots_ok t as)))))
+;; the extents: the live cells', the free lists' (at their arity), the raw cell's
+(fn hexts ((cs (List HCell))) (List Ext)
+  (measure (struct cs))
+  (match cs (List.nil List.nil) ((List.cons c rest) (List.cons (Ext (HCell.haddr c) (HCell.harity c)) (hexts rest)))))
+(fn fexts1 ((as (List Nat)) (k Nat)) (List Ext)
+  (measure (struct as))
+  (match as (List.nil List.nil) ((List.cons a rest) (List.cons (Ext a k) (fexts1 rest k)))))
+(fn fexts ((fls (List (List Nat))) (k Nat)) (List Ext)
+  (measure (struct fls))
+  (match fls (List.nil List.nil) ((List.cons fl rest) (List.append (fexts1 fl k) (fexts rest (+ k 1))))))
+(fn rexts ((r (Option HRaw))) (List Ext)
+  (match r (Option.none List.nil) ((Option.some rc) (List.cons (Ext (HRaw.raddr rc) (HRaw.rarity rc)) List.nil))))
+(fn ext_all ((g GHeap)) (List Ext)
+  (List.append (hexts (GHeap.gcells g)) (List.append (fexts (GHeap.gfree g) 0) (rexts (GHeap.graw g)))))
+(def e_disj2 ((a Nat) (n Nat) (b Nat) (k Nat)) Prop
+  (Or (<= (+ a (+ 8 (* 8 n))) b) (<= (+ b (+ 8 (* 8 k))) a)))
+(def e_disj1 ((a Nat) (n Nat) (es (List Ext))) Prop
+  (measure (struct es))
+  (match es
+    (List.nil True)
+    ((List.cons e rest) (match e ((Ext b k) (And (e_disj2 a n b k) (e_disj1 a n rest)))))))
+(def e_disj ((es (List Ext))) Prop
+  (measure (struct es))
+  (match es
+    (List.nil True)
+    ((List.cons e rest) (match e ((Ext a n) (And (e_disj1 a n rest) (e_disj rest)))))))
+(def e_brk ((es (List Ext)) (lo Nat) (top Nat)) Prop
+  (measure (struct es))
+  (match es
+    (List.nil True)
+    ((List.cons e rest)
+     (match e
+       ((Ext a n) (And (<= lo a) (And (<= (+ a (+ 8 (* 8 n))) top) (And (= (% a 8) 0) (e_brk rest lo top)))))))))
+(def raw_ok ((r (Option HRaw)) (cs (List HCell))) Prop
+  (match r
+    (Option.none True)
+    ((Option.some rc)
+     (And (slots_ok (HRaw.rfill rc) (haddrs cs))
+     (And (<= (List.length (HRaw.rfill rc)) (HRaw.rarity rc))
+     (And (< (HRaw.rtag rc) 65536) (< (HRaw.rarity rc) 65536)))))))
+(def hinv ((rb Nat) (g GHeap) (r (List Nat))) Prop
+  (And (<= (+ rb 152) (GHeap.glo g))
+  (And (<= (GHeap.glo g) (GHeap.gtop g))
+  (And (<= (GHeap.gtop g) (GHeap.gend g))
+  (And (<= (GHeap.gend g) 4294967296)
+  (And (= (% (GHeap.glo g) 8) 0)
+  (And (= (% (GHeap.gtop g) 8) 0)
+  (And (e_disj (ext_all g))
+  (And (e_brk (ext_all g) (GHeap.glo g) (GHeap.gtop g))
+  (And (cells_ok (GHeap.gcells g))
+  (And (counts_ok (GHeap.gcells g) (GHeap.gcells g) r (GHeap.graw g))
+  (And (roots_ok r (haddrs (GHeap.gcells g))) (raw_ok (GHeap.graw g) (GHeap.gcells g))))))))))))))
+
+;; --- the vocabulary over cells ------------------------------------------------------------------
+;; a reference joins the roots; an immediate leaves them alone
+(fn rinc ((r (List Nat)) (v Nat)) (List Nat) (if (= (% v 2) 1) r (List.cons v r)))
+(fn hfind ((cs (List HCell)) (a Nat)) (Option HCell)
+  (measure (struct cs))
+  (match cs
+    (List.nil Option.none)
+    ((List.cons c rest) (if (= (HCell.haddr c) a) (Option.some c) (hfind rest a)))))
+;; the cell at a; a dead cell (count 1, no slots) where none is
+(fn hfget ((cs (List HCell)) (a Nat)) HCell
+  (match (hfind cs a)
+    (Option.none (make HCell (haddr 0) (hcount 1) (htag 0) (harity 0) (hslots List.nil)))
+    ((Option.some c) c)))
+(def cbands ((c HCell)) Prop
+  (And (<= 1 (HCell.hcount c))
+  (And (< (HCell.hcount c) 4294967296)
+  (And (< (HCell.htag c) 65536) (< (HCell.harity c) 65536)))))
+(def live_ok ((g GHeap) (v Nat)) Prop
+  (And (<= (GHeap.glo g) v)
+  (And (<= (+ v (+ 8 (* 8 (HCell.harity (hfget (GHeap.gcells g) v))))) (GHeap.gtop g))
+  (And (= (% v 8) 0)
+  (And (<= (count_in (haddrs (GHeap.gcells g)) v) 1)
+  (And (e_disj (hexts (GHeap.gcells g)))
+  (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (fexts (GHeap.gfree g) 0))
+  (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (rexts (GHeap.graw g)))
+       (cbands (hfget (GHeap.gcells g) v))))))))))
+(fn e_addrs ((es (List Ext))) (List Nat)
+  (measure (struct es))
+  (match es (List.nil List.nil) ((List.cons e rest) (match e ((Ext a _) (List.cons a (e_addrs rest)))))))
+(def anodup ((xs (List Nat))) Prop
+  (measure (struct xs))
+  (match xs
+    (List.nil True)
+    ((List.cons x t) (And (= (count_in t x) 0) (anodup t)))))
+(fn faddrs ((fls (List (List Nat)))) (List Nat)
+  (measure (struct fls))
+  (match fls (List.nil List.nil) ((List.cons f rest) (List.append f (faddrs rest)))))
+(def emem ((es (List Ext)) (a Nat) (n Nat)) Prop
+  (measure (struct es))
+  (match es
+    (List.nil False)
+    ((List.cons e t) (match e ((Ext b k) (Or (And (= b a) (= k n)) (emem t a n)))))))
+(def eall ((xs (List Ext)) (ys (List Ext))) Prop
+  (measure (struct xs))
+  (match xs
+    (List.nil True)
+    ((List.cons e t) (match e ((Ext a n) (And (emem ys a n) (eall t ys)))))))

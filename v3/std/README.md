@@ -28,6 +28,8 @@ theorem so the claim is checked rather than asserted.
 | `bytes.shard`, `derive.shard`, `fresh.shard`, `host.shard` | slices 3.17–3.19: bytes and text, the derived views, the fresh-name supply, the host's externs | `define_test.sh`, `derive_test.sh`, `calc_main_test.sh`, `std_test.sh` |
 | `list.shard` | landing 3: Init's list functions realized by supplied bodies with their equations (`List.length`, `append`, `reverseAux`, `reverse`, `take`, `drop`, `get?Internal`, `getD`); slice 3.28 landing 2: `List.map`, `filter`, `foldl`, `foldr`, `any`, `all` as templates — a function-typed binder a static parameter, the equations proven once over it, the programs the instances later bodies take (`filter`'s rows by `List.filter_cons`), `Option.getD` through its matcher's own definition (the derived view), `List.get` under the dependent match with its nil row refuted; the old `std/list`'s requirements as theorems citing Init (`list_*`); what Init lacks — `sum_append` at `Nat`, and the ghost refinement: `insert`, `mem_insert`, `insert_sorted`, `Sorted` = `Subtype (List.Pairwise Nat.le)`, `sorted_insert` | `std_test.sh`; calc's files run `List.append` and `List.length` through it |
 | `bits.shard` | landing 3: the old `std/bits`'s requirements as theorems citing Init at `Nat`, and the width material Init lacks — the powers `pow2_8`, `pow2_32`, `pow2_64` by `Eq.refl`, the instances at 32 and 64 bits (`bor_le32`, `bxor_le32`, `bxor_lt32`, `bxor_lt64`), the masks at 8, 32 and 64, the literal shifts | `std_test.sh` |
+| `map.shard` | slice 4.2 landing 0: the old `std/map`'s finite map as an association list over `Nat` keys — `map_empty`, `map_lookup`, `map_insert` — and the interface's four requirements as theorems; the substrate `mem.shard` stands on | `imp_test.sh` (through the model root); `std_test.sh` |
+| `mem.shard` | slice 4.2 landing 0: the old `std/mem`'s byte memory — `Mem` a record over the map; `mem_empty`, `mem_get`, `mem_set`; `load_le`, `store_le` on a `Nat` measure with their descents discharged — the imp machine's memory; the framing laws arrive with their consumers | `imp_test.sh`; `std_test.sh` |
 
 `kernel/test/std_test.sh` (the 39th entrypoint) loads every file of this
 directory in one process — Init on demand, shared across the files — stores
@@ -223,3 +225,46 @@ The three recurrences the old proofs started from — `band_rec`, `bor_rec`,
 stated at `Nat` and subtraction-free, the product moved to the left: `lor a b
 + (a%2)·(b%2) = 2·lor (a/2) (b/2) + a%2 + b%2` and `xor a b + 2·(a%2)·(b%2) =
 2·xor (a/2) (b/2) + a%2 + b%2`, since `arith` reads `Nat.sub` as an atom.
+
+## `std/map` — three opaque functions and five requirements (`map.shard`, slice 4.2 landing 0)
+
+The old module hid an association list behind `(sig type (Map V))` with
+`Int` keys and stated its algebra extensionally, under `lookup` at a probe
+key. The keys are `Nat` here (an address is a size: typed), the type and its
+two constructors are the file's, and the names carry the module's prefix so
+that `std/list`'s `insert` and this one never share a short name in one load.
+
+| old | V3 | evidence | class |
+|---|---|---|---|
+| `empty`, `lookup k m`, `insert k v m` | `map_empty`, `map_lookup`, `map_insert` | realized (`map.shard`) | name; the key `Nat` (typed) |
+| `int_eq_refl` `(int_eq k k) = True` | `(= k k)` | `Eq.refl` — the enabling lemma is the proposition itself | typed |
+| `lookup_empty` `lookup k empty = None` | `(= (map_lookup k map_empty) Option.none)` | `map_lookup_empty`: `unfold`, `rfl` | name |
+| `lookup_insert_eq` `lookup k (insert k v m) = Some v` | the same | `map_lookup_insert_eq`: `unfold`, `rw (if_pos (Eq.refl k))` | name |
+| `lookup_insert_neq` `(int_eq j k) = False → lookup j (insert k v m) = lookup j m` | `(-> (Not (= j k)) …)` | `map_lookup_insert_neq`: `unfold`, `rw (if_neg h)` | typed |
+| `insert_shadow` `lookup j (insert k v2 (insert k v1 m)) = lookup j (insert k v2 m)` | the same | `map_insert_shadow`: `cases (Nat.decEq j k)`, `if_pos`/`if_neg` | name |
+
+## `std/mem` — one opaque type, six functions and 27 requirements (`mem.shard`, slice 4.2 landing 0: the operations)
+
+The old module (1,534 lines with its lowered twins) is the flat, unbounded,
+default-zero byte memory every byte-addressed model consumes: a read is a
+byte, a store truncates on read, no bounds and no traps. Addresses, bytes and
+words are `Nat` (typed); `Mem` is a record over the map; the width of a word
+operation is a `Nat` measure — `(if (= w 0) …)` with the descent by
+`Nat.sub_one_lt` — where the old file recursed on `S`/`Z`. The operations
+are the rung's; the 27 requirements — `get_empty`, `get_lo`, `get_hi`,
+`get_set`, `get_set_byte`, `get_set_get`, `get_set_other`, the `load_le` and
+`store_le` steps and framing (`load_le_z`, `load_le_s`, `store_le_z`,
+`store_le_s`, `store_le_get_below`, `store_le_get_above`, `ls1_id`,
+`ls2_id`, `ls4_id`, `ls8_id`, `load_le_store_le_below`,
+`load_le_store_le_above`, `load_le_set_below`, `load_le_set_above`,
+`store_le_get_congr`) and the four `mem_read` laws — are theorems to state
+with their consumers (slice 4.2 landing 1 by need; the rest phase 5), and
+`mem_read` with them.
+
+| old | V3 | evidence | class |
+|---|---|---|---|
+| `Mem` (`sig type`) | `(record Mem (rep (Map Nat)))` | realized (`mem.shard`) | typed (bytes and addresses `Nat`) |
+| `mem_empty`, `mem_get m a`, `mem_set m a v` | the same names | realized | name; `Nat` (typed) |
+| `load_le w m a`, `store_le w m a v` (`w : Nat` structural) | the same, `w` a measure | realized; `load_le.dec_1`, `store_le.dec_1` discharged | typed (the width's recursion) |
+| `mem_read w m a` | not ported | with its consumers | — |
+| the 27 requirements | not yet stated | with their consumers (landing 1; phase 5) | — |

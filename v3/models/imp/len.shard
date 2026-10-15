@@ -1,0 +1,86 @@
+;;; v3/models/imp/len.shard — the tb_len rung's object (LANGUAGE.md §8.6 slice 4.2, rules 1 and 3):
+;;; the source function `len` as the old compiler read it (tools/impc/fixtures/micro.shard), its
+;;; product `len_ipfn` as the old compiler wrote it (tools/impc/fixtures/micro_ipc_out.shard,
+;;; constructor for constructor — thirteen extra locals, the match skeleton, the call at the
+;;; table's index 4, the banded add with its overflow check), and the theorem: for a list `av`
+;;; read back at the word `a` in a memory representing the ghost `g` under the invariant at the
+;;; roots `r`, with the table's entry 4 the product and fuel at least 24 + 12·|av|, the call
+;;; satisfies the post-predicate at the same ghost with the immediate of `len av`. Landing 0
+;;; states it with `sorry` (the definition gate); landing 1 proves it.
+(import Init Nat.sub_one_lt)
+(import "../../std/list.shard")
+(import "../../std/mem.shard")
+(import "imp.shard")
+(import "rt.shard")
+(import "heap.shard")
+(import "readback.shard")
+(use std.list)
+(use std.mem)
+(use models.imp.imp)
+(use models.imp.imp.IKind)
+(use models.imp.imp.IOp)
+(use models.imp.imp.IExp)
+(use models.imp.imp.IFam)
+(use models.imp.imp.IpStmt)
+(use models.imp.imp.IpFn)
+(use models.imp.rt)
+(use models.imp.heap)
+(use models.imp.readback)
+
+;; the source: the length of a list, as the old compiler's fixture states it
+(fn len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (List.nil 0)
+    ((List.cons _ t) (+ 1 (len t)))))
+
+;; the product: the old compiler's output for `len`, verbatim in meaning
+(fn len_ipfn () IpFn
+  (MkIpFn (list U64) (list U64 U64 U64 U64 U64 U64 U64 U64 U64 U64 U64 U64 U64)
+         (list
+        (IpSet 3 (IConst 1))
+        (IpIf (IBin U64 IEq (ILoc 0) (IConst 1)) List.nil (list (IpSet 3 (IConst 0))))
+        (IpIf (IBin U64 IEq (ILoc 3) (IConst 1))
+          (list (IpSet 4 (IConst 1)) (IpSet 2 (ILoc 4)))
+          (list
+            (IpSet 5 (IConst 1))
+            (IpIf (IBin U64 IEq (IBin U64 IAnd (ILoc 0) (IConst 1)) (IConst 0))
+              (list
+                (IpLoadW 6 (ITrunc U64 U32 (IBin U64 IAdd (ILoc 0) (IConst 0))))
+                (IpIf (IBin U64 IEq (IBin U64 IAnd (IBin U64 IShr (ILoc 6) (IConst 32)) (IConst 65535)) (IConst 1))
+                  (list
+                    (IpLoadW 7 (ITrunc U64 U32 (IBin U64 IAdd (ILoc 0) (IConst 8))))
+                    (IpIf (IBin U64 IEq (ILoc 5) (IConst 1))
+                      (list
+                        (IpLoadW 8 (ITrunc U64 U32 (IBin U64 IAdd (ILoc 0) (IConst 16))))
+                        (IpIf (IBin U64 IEq (ILoc 5) (IConst 1)) List.nil List.nil))
+                      List.nil))
+                  (list (IpSet 5 (IConst 0)))))
+              (list (IpSet 5 (IConst 0))))
+            (IpIf (IBin U64 IEq (ILoc 5) (IConst 1))
+              (list
+                (IpSet 9 (IConst 3))
+                (IpCall 10 4 (list (ILoc 8)))
+                (IpSet 11 (IBin U64 ISub (ILoc 10) (IConst 1)))
+                (IpSet 12 (IBin U64 IAdd (ILoc 9) (ILoc 11)))
+                (IpSet 13 (IBin U64 IShr (IBin U64 IAnd (IBin U64 IXor (ILoc 9) (ILoc 12)) (IBin U64 IXor (ILoc 11) (ILoc 12))) (IConst 63)))
+                (IpIf (IBin U64 IEq (ILoc 13) (IConst 0)) List.nil (list (IpFail FOverflow)))
+                (IpSet 2 (ILoc 12)))
+              (list IpUnreach))))) (ILoc 2) U64))
+
+;; the theorem (B-1b's statement; the old tb_micro.shard's tb_len)
+(theorem tb_len
+  ((av (List Int)) (fuel Nat) (fs (List IpFn)) (rb Nat) (mlo Nat) (msz Nat) (dmax Nat) (d Nat)
+   (m Mem) (g GHeap) (r (List Nat)) (a Nat)
+   (hrep (heap_rep m rb g))
+   (hinv (hinv rb g r))
+   (hraw (= (GHeap.graw g) Option.none))
+   (hread (rb_list (GHeap.gcells g) a av))
+   (htable (= (ipfn_at (List.append (rt_fns rb) fs) 4) (Option.some (len_ipfn))))
+   (hlo (<= mlo rb))
+   (hend (<= (GHeap.gend g) msz))
+   (hfuel0 (<= 24 fuel))
+   (hfuel (<= (+ 24 (* 12 (List.length av))) fuel)))
+  (tbh (ipcall fuel (List.append (rt_fns rb) fs) mlo msz dmax d 4 (List.cons a List.nil) m)
+       rb msz g (imm (len av)) r (rb_int (imm (len av)) (len av)))
+  sorry)

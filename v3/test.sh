@@ -21,7 +21,7 @@
 # native jobs' runs; the native run's time is the measurement (rule 7).
 #
 # The native toolchain's byte-tie gate (kernel/test/native_tie_test.sh; rule 3)
-# is the 42nd entrypoint under V3_NATIVE=1, after `v3/build.sh --all`: it needs
+# is the last entrypoint under V3_NATIVE=1, after `v3/build.sh --all`: it needs
 # every binary of the inventory present and current and fails otherwise.
 # Without V3_NATIVE it is not run and the last line says so; CI's `native`
 # job runs it beside this suite.

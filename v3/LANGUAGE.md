@@ -348,7 +348,7 @@ common case).
 | `(type (NAME T…) (CTOR FIELD-TYPE…)…)` | today's E data form, sugar for an `inductive` with parameters `T : Type`, result `Type`, non-dependent fields; E-eligible by construction | K (`InductDecl`) **and** E (`EInd`) |
 | `(record NAME (ctor CTOR)? (FIELD TYPE)+)` | named-field products (v2's form, docs/LANGUAGE.md "Records"; slice 3.9, §13 item 42): loader-level sugar expanded before any form is read — the positional `(type NAME (CTOR TYPE…))`, CTOR defaulting to `MkNAME`, an accessor `NAME.FIELD` and an updater `NAME.with_FIELD` (value first) per field in the record's namespace, which the file opens as any type's (item 7): `(FIELD r)` bare where no other opened record has the field, `(NAME.FIELD r)` always; NAME may be `(NAME P…)`, the generated fns then binding `(P Type)` first. `(make NAME (FIELD V)…)` — every field exactly once, order-free — and `(with NAME E (FIELD V)…)` — chained updaters, a later entry outermost — both against the current file's records, rewritten in every form of the file, nested values first (`kernel/record.shard`; the bootstrap's `expand_records` the twin, parity the tie). No law family is generated: since Stage 1 the accessors and updaters are definitions and v2's laws are `Eq.refl` over a local (pin `record_laws`). `make` and `with` also reach a parameterless `(structure NAME () (FIELD TYPE)…)` of the file — `NAME.mk` on the values in field order, on each field's entry or its projection of `E` for `with`; a field kept whose type mentions an updated one is the refusal `dependent_update` (§8.4 slice 3.17 rule 4). Layout: as `type`'s until CANON's phase-6 gate | E: as the forms it expands to |
 | `(structure NAME.{u…} BINDERS (FIELD TYPE)…)` | one constructor `NAME.mk`; projections `NAME.FIELD` generated as `def`s over `proj` (Lean's projections are `Expr.proj` definitions); fields dependent on earlier fields — an earlier field applied in a later one's type too (a package's law over its operation); the parameters implicit in the constructor and the projections and explicit in the type, as Lean declares them (slice 3.28 landing 2) | K |
-| `(def NAME.{u…} BINDERS TYPE VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references | K: `DefnDecl` |
+| `(def NAME.{u…} BINDERS TYPE VALUE)`; `(def NAME BINDERS TYPE (measure (struct x)) VALUE)` | an L definition; hints `regular` at height 1 + the greatest height it references; with a recursion clause a definition that recurses — the fn pipeline's K half, its equations, no program (§8.6 slice 4.2 landing 0) | K: `DefnDecl` |
 | `(abbrev …)` | as `def` with hint `abbrev` | K |
 | `(opaque NAME.{u…} BINDERS TYPE VALUE)` | checked, never unfolded | K: `OpaqueDecl` |
 | `(theorem NAME.{u…} BINDERS PROP PROOF)` | PROOF is `(exact TERM)` or `sorry` at Stage 0; `sorry` is reported loudly, admits nothing, and every citation of the theorem is a pending obligation, never an assumption | K: `ThmDecl` |
@@ -3317,7 +3317,7 @@ it entrenches. The slices, in the order built:
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
-| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described.")** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
+| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count)** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3962,6 +3962,101 @@ representation (phase 5's word line: words here are `Nat` with the
 modulus explicit, recorded); the migration tool's tier 0 (phase 5's
 opener; this port by hand, every re-spelling it needed recorded for the
 tool's design).
+
+**Slice 4.2 as built, landing 0 (2026-10-15) — the definition gate, and
+the count.** Rules 2, 3 and 6, with what the build found.
+
+- **The port.** Seven files, 931 lines: `v3/std/map.shard` (the
+  association-list map over `Nat` keys — `map_empty`, `map_lookup`,
+  `map_insert`, the names prefixed so `std/list`'s `insert` and this
+  one never share a short name — and the old interface's four
+  requirements as theorems, by `unfold`, `rw` with `if_pos`/`if_neg`
+  and `cases` on `Nat.decEq`), `v3/std/mem.shard` (`Mem` a record over
+  the map; `mem_empty`, `mem_get`, `mem_set`; `load_le` and `store_le`
+  on a `Nat` measure, their descents discharged by `Nat.sub_one_lt`;
+  the framing laws with their consumers), and under `v3/models/imp/`
+  `imp.shard` (the call tier: 9 types, 2 records, 18 functions),
+  `rt.shard` (the spelling kit and the four runtime functions' statement
+  lists, 31 functions), `heap.shard` (3 records, `Ext`, 17 functions
+  over data, 23 specifications), `readback.shard` (4 functions, 14
+  specifications), `len.shard` (the source `len`, the product
+  `len_ipfn` constructor for constructor, the theorem with `sorry`).
+  The loader accepts the root in one process: 8 modules, 758
+  declarations, 152 `DEFINE` with their equations, 0 `RUNNABLE`, 0
+  refused, 1 pending — the theorem — and 0 errors;
+  `kernel/test/imp_test.sh` (the 42nd entrypoint; 81 checks) asserts
+  it, with the evaluator's nine descents discharged and every
+  specification's two equations present, and prints the load's
+  seconds: 37 s on the bootstrap, 6 s on the native loader. The kernel
+  change rebuilt the inventory: 29 binaries in 2,377 s on the dev box
+  (six roots in flight, two heavy steps), the loader's chain emit 24 s,
+  lower 80, codegen 280, cc 72 over 8,447 declarations — 9 more than
+  landing 4.1's 8,438, the two findings' functions.
+- **Two findings in Stage 1, each a rule of this landing with its pin.**
+  (1) **A nested inductive had no `casesOn`.** `IpStmt` carries
+  `List IpStmt` in `IpIf` and `IpWhile`; `define.shard`'s bundle skipped
+  every nested type, so no `match` on a statement had an L meaning and
+  the evaluator was `RUNNABLE` with `no_l_identity`. The bundle now
+  generates `T.casesOn` for a nested type from the recursor's own
+  telescope, as Lean does: a motive per auxiliary type set to
+  `λ x. PUnit.{u}`, the auxiliary constructors' minors `λ binders.
+  PUnit.unit.{u}`, the type's own minors carrying a `PUnit` hypothesis
+  per nested field (`rec_app_dep`, `nested_tail`, `open_ihs_dep`); its
+  `noConfusion` and injectivity follow. Structural recursion through the
+  nesting stays outside (`rec_usable`'s refusal, `pj_struct`). Pin
+  `nested_match`. (2) **A `def` could not recurse.** The reader's
+  `def` elaborates its value with no self-local, so a specification over
+  a list — `hslots_rep`, `rb_list`, twelve more — was `unknown_constant`
+  on its own name, and `def` took no measure clause. A `def` with a
+  recursion clause, `(def NAME ((x TYPE)…) TYPE (measure (struct x))
+  BODY)`, is now the fn pipeline's K half alone (`loader.shard`
+  `load_ldef`): read once as a pre-definition with its self-local,
+  defined by K's projection with its equations — `brecOn` for structural
+  recursion, `WellFounded.fix` with its obligations for a measure —, its
+  matchers admitted, no classifier and no program; `DEFINE` with no
+  roots. Its binders are E types, as the pre-definition reads them. Pin
+  `def_struct`. Both pins in the harness's list; the loader's own
+  sources load clean under the V3 loader; the names at the baseline.
+- **The classes applied, every re-spelling recorded** (rule 2; for the
+  tool's design): words, addresses, counts, tags, arities and indices
+  `Nat`, the modulus explicit — the wrapping subtraction `(a + (M − b %
+  M)) % M`; a comparison's value `(if (= a b) 1 0)` (the old `ib2i`
+  absorbed); `ilen`, `iapp`, `ikn`, `fllen`, `hlen` Init's `List.length`
+  and `List.append`; `izeros (ikn ks)` is `izeros_of ks`, structural on
+  the kinds; `iw8` the literal 8; the evaluator one function `ipeval`
+  over `IpTask` with `IpRes` and `out_of`/`ret_of`, the four old names
+  abbreviations of it, its nine descents `(intro p h …)` over the
+  matchers' equations then `Nat.sub_one_lt`; `rt_zero_heads` over a
+  literal index list; a record built by its constructor `MkIpFn` applied
+  in field order (`make` reaches a record of the file only; another
+  module's constructors through `(use M.T)`); the extent pair `Ext`;
+  `memb` Init's `List.Mem`, `inth` Init's `List.getD`; `count_in` kept
+  (Init's `List.count` needs an instance the table does not resolve);
+  `andb` chains `And`, an `if … True …` a disjunction; seven `0 ≤`
+  conjuncts the type (`cells_ok` 2, `e_brk`, `hinv`, `raw_ok` 2,
+  `ldok`); `nS`, `ntl`, `npred` not ported (Nat arithmetic) and
+  `ilen_nonneg` absorbed; `imm` and `dbl` through `Int.toNat` of the
+  `Int` modulus; `in63` and the post-predicate's `ok` propositions;
+  the specifications `def`s with the recursion clause. The author's
+  refusals before success: four (a `Nat.succ` pattern in an E function —
+  a `Nat` is matched by value; the record's constructor; the descents'
+  binder lists; an unbalanced form).
+- **Gates run on the dev box** (load 3–8, the box quiet): the loader
+  pins 271 cases, 0 failed; `define_test` 12/0, `derive_test` 14/0,
+  `std_test` 201/0 over the root's 10 files and 398 declarations
+  (loaded and stored in 94 s, replayed by K alone in 92 s); the full
+  bootstrap suite under `V3_NATIVE=1`, 43 entrypoints, 0 failed, in
+  800 s of wall with six at a time — the tie 76 checks, 0 failed, in
+  350 s, parity byte-identical over 31 closures and 137,121
+  declarations (81 more than landing 4.1's 137,040: the two findings'
+  functions and their equations), `store_test` 572 s, `imp_test` 37;
+  the native suite (`V3_ENGINE=native`) 43 entrypoints, 0 failed, in
+  553 s of wall and 1,718 s of entrypoint time against the
+  bootstrap's 3,314 (`imp_test` 37 → 7, `store_test` 572 → 184,
+  `define_test` 231 → 38, `std_test` 151 → 60, parity 320 → 265);
+  `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ,
+  byte-identical under both engines on every entrypoint. The gates are
+  the landing's; CI's five jobs are the full gate.
 
 ## 9. Assumption policy and entries
 
@@ -5452,4 +5547,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     recorded. (i) The certificate stored and verified by K alone at
     landing 1 (T8's first item). (j) The count of rule 6 with the lean
     stated and no pass bar: the law asks for the count, not a
-    threshold; the user may set one before landing 1.
+    threshold; the user may set one before landing 1. **As built,
+    landing 0 (2026-10-15):** the port, the definition gate and the
+    count as §8.6 "as built, landing 0" states them; two Stage-1 gaps
+    found and closed — a nested inductive's `casesOn`, a `def` that
+    recurses — each a rule with its pin.

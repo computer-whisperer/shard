@@ -1,0 +1,322 @@
+;;; v3/models/imp/imp.shard — the call tier of the neutral imperative machine, ported from the
+;;; old tree's models/imp/imp.shard (LANGUAGE.md §8.6 slice 4.2 landing 0, rule 2; docs/IMP.md
+;;; §2a–§2b and docs/COVERAGE.md C1 for the machine's design). The closure of `tb_len`'s
+;;; statement and nothing more: the kinds, the operators, the expressions, the call-tier
+;;; statements, `IpFn` and `IpProg`, the outcomes and the evaluator; the base tier, the
+;;; well-kinded gates, the lifts and the length-preservation family are phase 5's.
+;;;
+;;; The migration classes applied (law §10.2): a word, an address, a local's index and a
+;;; count are `Nat` — the old `Int` with its `0 ≤` premises; the modulus of a kind is explicit
+;;; as before, and the wrapping subtraction is `(a + (M − b % M)) % M`, which is the old
+;;; `(a − b) mod M` at every a and b. Init's `List.length`, `List.append` and `List.getD` where
+;;; the old file wrote its own; `ilget` and `ilset` stay the machine's — Init's `getElem?` and
+;;; `List.set` do not trap out of range as these do. Init's `Nat.land`, `lor`, `xor`,
+;;; `shiftLeft` and `shiftRight` are E's primitives under their own names (§6.4).
+;;;
+;;; THE EVALUATOR IS ONE FUNCTION. The old file's `ipstmt`, `ipwhile`, `ipstmts` and `ipcall`
+;;; are one fuel-countdown group, mutually recursive; Stage 1 leaves such a group `RUNNABLE`
+;;; without equations (slice 3.15 rule 6), so here `ipeval fuel … task` is one function over
+;;; `IpTask` — a statement, a statement list, a loop, a call — with the four's arms, measured
+;;; on the fuel, and the four names are abbreviations: `ipcall fuel fs mlo msz dmax d k args
+;;; mem` is `ret_of (ipeval fuel fs mlo msz dmax d (TCall k args mem))`, and so for the others.
+;;; A result is `IpRes`: `RStmt` for the three statement tasks, `RCall` for a call; the other
+;;; constructor never arises for a task (unpacked as `none`).
+(import Init Nat.sub_one_lt)
+(import "../../std/list.shard")
+(import "../../std/mem.shard")
+(use std.list)
+(use std.mem)
+
+;; --- the kinds --------------------------------------------------------------------------------
+(type IKind (U8) (U32) (U64))
+(fn ikw ((k IKind)) Nat (match k (U8 8) (U32 32) (U64 64)))
+(fn ikmod ((k IKind)) Nat (match k (U8 256) (U32 4294967296) (U64 18446744073709551616)))
+
+;; --- the language -----------------------------------------------------------------------------
+(type IOp (IAdd) (ISub) (IMul) (IDiv) (IRem) (IAnd) (IOr) (IXor) (IShl) (IShr) (IEq) (ILt) (ILe))
+(type IExp
+  (IConst Nat)
+  (ILoc Nat)
+  (IBin IKind IOp IExp IExp)
+  (IRotr IKind IExp IExp)    ; rotate-right within the kind's width
+  (IExt IKind IKind IExp)    ; zero-extend from-kind → to-kind: the value identity here
+  (ITrunc IKind IKind IExp)  ; mask-narrow from-kind → to-kind
+  (ILoad IExp))
+
+;; --- small total helpers ----------------------------------------------------------------------
+;; the i-th local; none past the end (a trap at the statement)
+(fn ilget ((ls (List Nat)) (i Nat)) (Option Nat)
+  (measure (struct ls))
+  (match ls
+    (List.nil Option.none)
+    ((List.cons h t) (if (= i 0) (Option.some h) (ilget t (- i 1))))))
+;; the locals with the i-th replaced; none past the end
+(fn ilset ((ls (List Nat)) (i Nat) (v Nat)) (Option (List Nat))
+  (measure (struct ls))
+  (match ls
+    (List.nil Option.none)
+    ((List.cons h t)
+     (if (= i 0) (Option.some (List.cons v t))
+       (match (ilset t (- i 1) v)
+         (Option.none Option.none)
+         ((Option.some t2) (Option.some (List.cons h t2))))))))
+;; a zero local per declared extra kind (the old `izeros (ikn ks)`, structural on the kinds)
+(fn izeros_of ((ks (List IKind))) (List Nat)
+  (measure (struct ks))
+  (match ks (List.nil List.nil) ((List.cons _ t) (List.cons 0 (izeros_of t)))))
+;; the arguments banded to their declared kinds on entry
+(fn iband_args ((ks (List IKind)) (vs (List Nat))) (List Nat)
+  (measure (struct ks))
+  (match ks
+    (List.nil List.nil)
+    ((List.cons k kt)
+     (match vs
+       (List.nil List.nil)
+       ((List.cons v vt) (List.cons (% v (ikmod k)) (iband_args kt vt)))))))
+
+;; the operators: wrap to the kind; division and remainder trap on zero; shift counts trap at
+;; or past the width; the comparisons yield 1 and 0
+(fn iop_val ((k IKind) (o IOp) (a Nat) (b Nat)) (Option Nat)
+  (match o
+    (IAdd (Option.some (% (+ a b) (ikmod k))))
+    (ISub (Option.some (% (+ a (- (ikmod k) (% b (ikmod k)))) (ikmod k))))
+    (IMul (Option.some (% (* a b) (ikmod k))))
+    (IDiv (if (<= 1 b) (Option.some (/ a b)) Option.none))
+    (IRem (if (<= 1 b) (Option.some (% a b)) Option.none))
+    (IAnd (Option.some (Nat.land a b)))
+    (IOr (Option.some (Nat.lor a b)))
+    (IXor (Option.some (Nat.xor a b)))
+    (IShl (if (< b (ikw k)) (Option.some (% (Nat.shiftLeft a b) (ikmod k))) Option.none))
+    (IShr (if (< b (ikw k)) (Option.some (Nat.shiftRight a b)) Option.none))
+    (IEq (Option.some (if (= a b) 1 0)))
+    (ILt (Option.some (if (< a b) 1 0)))
+    (ILe (Option.some (if (<= a b) 1 0)))))
+
+;; --- expression evaluation (pure, structural, fuel-free) --------------------------------------
+;; a byte load is bounds-checked against the window [mlo, msz)
+(fn iexp ((e IExp) (lc (List Nat)) (mem Mem) (mlo Nat) (msz Nat)) (Option Nat)
+  (measure (struct e))
+  (match e
+    ((IConst n) (Option.some n))
+    ((ILoc i) (ilget lc i))
+    ((IBin k o a b)
+     (match (iexp a lc mem mlo msz)
+       (Option.none Option.none)
+       ((Option.some va)
+        (match (iexp b lc mem mlo msz)
+          (Option.none Option.none)
+          ((Option.some vb) (iop_val k o va vb))))))
+    ;; rotate-right within the width, the count mod the width, the operand and the result banded
+    ((IRotr k a c)
+     (match (iexp a lc mem mlo msz)
+       (Option.none Option.none)
+       ((Option.some va)
+        (match (iexp c lc mem mlo msz)
+          (Option.none Option.none)
+          ((Option.some vc)
+           (let ((v (Nat.land va (- (ikmod k) 1))))
+             (Option.some
+               (Nat.land
+                 (Nat.lor (Nat.shiftRight v (% vc (ikw k)))
+                          (Nat.shiftLeft v (% (- (ikw k) (% vc (ikw k))) (ikw k))))
+                 (- (ikmod k) 1)))))))))
+    ((IExt _ _ a) (iexp a lc mem mlo msz))
+    ((ITrunc _ kt a)
+     (match (iexp a lc mem mlo msz)
+       (Option.none Option.none)
+       ((Option.some va) (Option.some (Nat.land va (- (ikmod kt) 1))))))
+    ((ILoad a)
+     (match (iexp a lc mem mlo msz)
+       (Option.none Option.none)
+       ((Option.some ad)
+        (if (<= mlo ad) (if (< ad msz) (Option.some (mem_get mem ad)) Option.none) Option.none))))))
+
+;; --- the call tier ----------------------------------------------------------------------------
+(type IFam (FOverflow) (FOom) (FStack))
+(type IpStmt
+  (IpSet Nat IExp)                        ; local[i] := e
+  (IpStore IExp IExp)                     ; mem[addr] := byte
+  (IpIf IExp (List IpStmt) (List IpStmt)) ; 0 = the else branch
+  (IpWhile IExp (List IpStmt))            ; loop while the condition is not 0
+  (IpCall Nat Nat (List IExp))            ; local[i] := fn k (args), the args banded on entry
+  (IpLoadW Nat IExp)                      ; local[i] := the LE64 word at a U32 address
+  (IpStoreW IExp IExp)                    ; the LE64 word at addr := value
+  (IpFail IFam)                           ; the reasoned fail leg
+  (IpUnreach))
+(record IpFn (ipparams (List IKind)) (ipextra (List IKind)) (ipbody (List IpStmt)) (ipresult IExp) (iprkind IKind))
+(record IpProg (ipfns (List IpFn)) (ipbase Nat) (ipmemsize Nat) (ipstack Nat) (ipdepth Nat))
+(type IpOut (IpNorm (List Nat) Mem) (IpTrap) (IpFailed IFam))
+(type IpRet (IpRv Nat Mem) (IpRtrap) (IpRfailed IFam))
+
+(fn ipexps ((es (List IExp)) (lc (List Nat)) (mem Mem) (mlo Nat) (msz Nat)) (Option (List Nat))
+  (measure (struct es))
+  (match es
+    (List.nil (Option.some List.nil))
+    ((List.cons e t)
+     (match (iexp e lc mem mlo msz)
+       (Option.none Option.none)
+       ((Option.some v)
+        (match (ipexps t lc mem mlo msz)
+          (Option.none Option.none)
+          ((Option.some vs) (Option.some (List.cons v vs)))))))))
+(fn ipfn_at ((fs (List IpFn)) (i Nat)) (Option IpFn)
+  (measure (struct fs))
+  (match fs
+    (List.nil Option.none)
+    ((List.cons f t) (if (= i 0) (Option.some f) (ipfn_at t (- i 1))))))
+
+;; a task of the evaluator and its result
+(type IpTask
+  (TStmt IpStmt (List Nat) Mem)
+  (TStmts (List IpStmt) (List Nat) Mem)
+  (TWhile IExp (List IpStmt) (List Nat) Mem)
+  (TCall Nat (List Nat) Mem))
+(type IpRes (RStmt (Option IpOut)) (RCall (Option IpRet)))
+(fn out_of ((r IpRes)) (Option IpOut) (match r ((RStmt o) o) ((RCall _) Option.none)))
+(fn ret_of ((r IpRes)) (Option IpRet) (match r ((RCall o) o) ((RStmt _) Option.none)))
+
+;; the evaluator: one fuel unit per statement, per loop test, per statement-list step and per
+;; call; out of fuel is `none`; a trap is the machine's, a fail the program's
+(fn ipeval ((fuel Nat) (fs (List IpFn)) (mlo Nat) (msz Nat) (dmax Nat) (d Nat) (task IpTask)) IpRes
+  (measure fuel)
+  (if (= fuel 0)
+    (match task ((TCall _ _ _) (RCall Option.none)) (_ (RStmt Option.none)))
+    (let ((f2 (- fuel 1)))
+      (match task
+        ((TStmt s lc mem)
+         (match s
+           ((IpSet i e)
+            (match (iexp e lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some v)
+               (match (ilset lc i v)
+                 (Option.none (RStmt (Option.some IpTrap)))
+                 ((Option.some lc2) (RStmt (Option.some (IpNorm lc2 mem))))))))
+           ((IpStore ae ve)
+            (match (iexp ae lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some ad)
+               (if (<= mlo ad)
+                 (if (< ad msz)
+                   (match (iexp ve lc mem mlo msz)
+                     (Option.none (RStmt (Option.some IpTrap)))
+                     ((Option.some v) (RStmt (Option.some (IpNorm lc (mem_set mem ad v))))))
+                   (RStmt (Option.some IpTrap)))
+                 (RStmt (Option.some IpTrap))))))
+           ((IpIf c tb eb)
+            (match (iexp c lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some cv)
+               (if (= cv 0) (ipeval f2 fs mlo msz dmax d (TStmts eb lc mem))
+                 (ipeval f2 fs mlo msz dmax d (TStmts tb lc mem))))))
+           ((IpWhile c b) (ipeval f2 fs mlo msz dmax d (TWhile c b lc mem)))
+           ;; the call: the arguments are pure reads of the caller's state; the callee runs on
+           ;; the caller's memory and hands it back with the result; its trap or fail is the caller's
+           ((IpCall i k args)
+            (match (ipexps args lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some vs)
+               (match (ret_of (ipeval f2 fs mlo msz dmax d (TCall k vs mem)))
+                 (Option.none (RStmt Option.none))
+                 ((Option.some r)
+                  (match r
+                    ((IpRv v mem2)
+                     (match (ilset lc i v)
+                       (Option.none (RStmt (Option.some IpTrap)))
+                       ((Option.some lc2) (RStmt (Option.some (IpNorm lc2 mem2))))))
+                    (IpRtrap (RStmt (Option.some IpTrap)))
+                    ((IpRfailed fam) (RStmt (Option.some (IpFailed fam))))))))))
+           ;; the word operations: the whole 8-byte span inside the window
+           ((IpLoadW i ae)
+            (match (iexp ae lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some ad)
+               (if (<= mlo ad)
+                 (if (<= (+ ad 8) msz)
+                   (match (ilset lc i (load_le 8 mem ad))
+                     (Option.none (RStmt (Option.some IpTrap)))
+                     ((Option.some lc2) (RStmt (Option.some (IpNorm lc2 mem)))))
+                   (RStmt (Option.some IpTrap)))
+                 (RStmt (Option.some IpTrap))))))
+           ((IpStoreW ae ve)
+            (match (iexp ae lc mem mlo msz)
+              (Option.none (RStmt (Option.some IpTrap)))
+              ((Option.some ad)
+               (if (<= mlo ad)
+                 (if (<= (+ ad 8) msz)
+                   (match (iexp ve lc mem mlo msz)
+                     (Option.none (RStmt (Option.some IpTrap)))
+                     ((Option.some v) (RStmt (Option.some (IpNorm lc (store_le 8 mem ad v))))))
+                   (RStmt (Option.some IpTrap)))
+                 (RStmt (Option.some IpTrap))))))
+           ((IpFail fam) (RStmt (Option.some (IpFailed fam))))
+           (IpUnreach (RStmt (Option.some IpTrap)))))
+        ((TStmts ss lc mem)
+         (match ss
+           (List.nil (RStmt (Option.some (IpNorm lc mem))))
+           ((List.cons s t)
+            (match (out_of (ipeval f2 fs mlo msz dmax d (TStmt s lc mem)))
+              (Option.none (RStmt Option.none))
+              ((Option.some out)
+               (match out
+                 ((IpNorm lc2 mem2) (ipeval f2 fs mlo msz dmax d (TStmts t lc2 mem2)))
+                 (_ (RStmt (Option.some out)))))))))
+        ((TWhile c b lc mem)
+         (match (iexp c lc mem mlo msz)
+           (Option.none (RStmt (Option.some IpTrap)))
+           ((Option.some cv)
+            (if (= cv 0) (RStmt (Option.some (IpNorm lc mem)))
+              (match (out_of (ipeval f2 fs mlo msz dmax d (TStmts b lc mem)))
+                (Option.none (RStmt Option.none))
+                ((Option.some out)
+                 (match out
+                   ((IpNorm lc2 mem2) (ipeval f2 fs mlo msz dmax d (TWhile c b lc2 mem2)))
+                   (_ (RStmt (Option.some out))))))))))
+        ;; the call: the table's entry at k; the arity checked; the depth budget; the callee's
+        ;; locals are its banded arguments then its zeroed extras; the result expression read
+        ;; in the final state
+        ((TCall k args mem)
+         (match (ipfn_at fs k)
+           (Option.none (RCall (Option.some IpRtrap)))
+           ((Option.some f)
+            (if (= (List.length args) (List.length (IpFn.ipparams f)))
+              (if (< d dmax)
+                (match (out_of (ipeval f2 fs mlo msz dmax (+ d 1)
+                                 (TStmts (IpFn.ipbody f)
+                                         (List.append (iband_args (IpFn.ipparams f) args) (izeros_of (IpFn.ipextra f)))
+                                         mem)))
+                  (Option.none (RCall Option.none))
+                  ((Option.some out)
+                   (match out
+                     ((IpNorm lc2 mem2)
+                      (match (iexp (IpFn.ipresult f) lc2 mem2 mlo msz)
+                        (Option.none (RCall (Option.some IpRtrap)))
+                        ((Option.some v) (RCall (Option.some (IpRv v mem2))))))
+                     (IpTrap (RCall (Option.some IpRtrap)))
+                     ((IpFailed fam) (RCall (Option.some (IpRfailed fam)))))))
+                (RCall (Option.some (IpRfailed FStack))))
+              (RCall (Option.some IpRtrap))))))))))
+
+;; the nine recursive calls each descend by one fuel unit
+(fulfills ipeval.dec_1 (by (intro p h s lc mem e1 c tb eb e2 cv e3 e4) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_2 (by (intro p h s lc mem e1 c tb eb e2 cv e3 e4) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_3 (by (intro p h s lc mem e1 c b e2) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_4 (by (intro p h s lc mem e1 i k args e2 vs e3) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_5 (by (intro p h ss lc mem e1 s t e2) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_6 (by (intro p h ss lc mem e1 s t e2 out lc2 mem2 e3) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_7 (by (intro p h c b lc mem e1 cv e2 e3) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_8 (by (intro p h c b lc mem e1 cv e2 e3 out lc2 mem2 e4) (exact (Nat.sub_one_lt h))))
+(fulfills ipeval.dec_9 (by (intro p h k args mem e1 f e2 e3 e4) (exact (Nat.sub_one_lt h))))
+
+;; the four names of the old file, as abbreviations
+(fn ipstmt ((fuel Nat) (fs (List IpFn)) (mlo Nat) (msz Nat) (dmax Nat) (d Nat) (s IpStmt) (lc (List Nat)) (mem Mem)) (Option IpOut)
+  (out_of (ipeval fuel fs mlo msz dmax d (TStmt s lc mem))))
+(fn ipstmts ((fuel Nat) (fs (List IpFn)) (mlo Nat) (msz Nat) (dmax Nat) (d Nat) (ss (List IpStmt)) (lc (List Nat)) (mem Mem)) (Option IpOut)
+  (out_of (ipeval fuel fs mlo msz dmax d (TStmts ss lc mem))))
+(fn ipwhile ((fuel Nat) (fs (List IpFn)) (mlo Nat) (msz Nat) (dmax Nat) (d Nat) (c IExp) (b (List IpStmt)) (lc (List Nat)) (mem Mem)) (Option IpOut)
+  (out_of (ipeval fuel fs mlo msz dmax d (TWhile c b lc mem))))
+(fn ipcall ((fuel Nat) (fs (List IpFn)) (mlo Nat) (msz Nat) (dmax Nat) (d Nat) (k Nat) (args (List Nat)) (mem Mem)) (Option IpRet)
+  (ret_of (ipeval fuel fs mlo msz dmax d (TCall k args mem))))
+;; a program's entry k on its arguments: the window [ipbase, ipstack), the depth budget, depth 0
+(fn iprun ((fuel Nat) (p IpProg) (k Nat) (args (List Nat)) (mem0 Mem)) (Option IpRet)
+  (ipcall fuel (IpProg.ipfns p) (IpProg.ipbase p) (IpProg.ipstack p) (IpProg.ipdepth p) 0 k args mem0))
