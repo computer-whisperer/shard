@@ -753,6 +753,12 @@
 (fn goals_bracketed ((gs (List Goal))) (List Int)
   (measure (struct gs))
   (match gs (Nil "") ((Cons g r) (append " [" (append (goal_of g) (append "]" (goals_bracketed r)))))))
+;; the same, bounded for a record's symbol: the native runtime's symbols hold 4 KB (rt.h's
+;; sym_of_chars), the bootstrap's any length — a pending theorem deep in a case split rendered its
+;; goals past the bound and trapped the binary where the bootstrap ran (slice 4.2 landing 1)
+(fn goals_bounded ((gs (List Goal))) (List Int)
+  (let ((t (goals_bracketed gs)))
+    (if (lt 2000 (len t)) (append (take 2000 t) " …") t)))
 (fn goals_list ((gs (List Goal))) (List Int)
   (measure (struct gs))
   (match gs (Nil "") ((Cons g r) (append "[" (append (goal_of g) (append "] " (goals_list r)))))))
@@ -1411,8 +1417,12 @@
     (Nil t)
     ((Cons (Pair fv s) r) (unmask r (tc_replace t fv s 0)))))
 ;; the first redex among the subterms (pre-order): a `fn` by its equations only, a stuck
-;; eliminator never, anything else by K's whnf where it progresses; `only` restricts to the
-;; named constants (unfold)
+;; eliminator never, a case analysis at a decided scrutinee by its alternative, anything else by
+;; K's whnf or one delta step where it progresses — on a CLOSED subterm only (slice 4.2 landing
+;; 1): on an open term K's unfolding of an imported definition is no computation (`Nat.land a
+;; 1` to its well-founded internals, `a + 8` to eight successors) and buries the term a later
+;; rewrite must match; an open occurrence unfolds by its equations, by a case step, or by name.
+;; `only` restricts to the named constants (unfold), open or closed
 (fn find_redex ((e El) (subs (List Expr)) (only (List Name))) Found
   (measure (struct subs))
   (match subs
@@ -1421,6 +1431,7 @@
      (match (get_app_fn s)
        ((Const _ f _)
         (if (bool_and (bool_not (int_eq (len only) 0)) (bool_not (mem_name f only))) (find_redex e r only)
+        (if (bool_and (int_eq (len only) 0) (int_eq (len (get_app_args s)) 0)) (find_redex e r only)   ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
           (match (equations_of e f)
             (Nil
              (if (bool_and (int_eq (len only) 0) (bool_or (bool_not (reducible_head e f)) (is_proposition e s)))
@@ -1428,16 +1439,17 @@
                (match (alt_step e s)
                  ((Pair e0 (Some t)) (FoundOk e0 (Redex s t None False)))
                  ((Pair e0 None)
+               (if (bool_and (int_eq (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s))) (find_redex e0 r only)   ; the goal's context is bound in the closed target
                (match (whnf_progress e0 s)
                  ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
                  ((Pair e1 None)
                   (match (delta_once e1 s)
                     ((Pair e2 (Some t)) (FoundOk e2 (Redex s t None False)))
-                    ((Pair e2 None) (find_redex e2 r only)))))))))
+                    ((Pair e2 None) (find_redex e2 r only))))))))))
             (eqns
              (match (try_equations e s eqns (bool_not (int_eq (len only) 0)))
                ((FoundOk e1 rd) (FoundOk e1 rd))
-               (_ (find_redex e r only)))))))
+               (_ (find_redex e r only))))))))
        (_
         (if (int_eq (len only) 0)
           (match (whnf_progress e s)
@@ -1455,6 +1467,7 @@
      (match (alt_positions e f (len (get_app_args s)))
        (Nil (Pair e None))
        (ps
+        (if (alt_open_discriminant e f (get_app_args s)) (Pair e None)   ; no K whnf at an open, non-constructor discriminant: its equations first
         (match (alt_mask e (get_app_args s) ps 0 Nil Nil)
           ((Pair e1 (Pair margs masks))
            (match (w_whnf_r (el_w e1) (mk_app_n (get_app_fn s) margs))
@@ -1465,8 +1478,23 @@
                    (match (tac_beta (el_set_w e1 w1) (unmask masks r0)) ((Pair e3 r) (Pair e3 (Some r))))
                    (Pair (el_set_w e1 w1) None)))
                 (_ (Pair (el_set_w e1 w1) None))))
-             ((Pair w1 _) (Pair (el_set_w e1 w1) None))))))))
+             ((Pair w1 _) (Pair (el_set_w e1 w1) None)))))))))
     (_ (Pair e None))))
+;; the case step's discriminant — the instance of an `ite`/`dite`, the scrutinee of a matcher —
+;; when it is open and not constructor-headed (slice 4.2 landing 1): K's whnf there is no
+;; computation but a search through the definitions the discriminant is built from (a
+;; well-founded `fn` over an open list to its accessibility proofs: ten minutes and the box's
+;; memory on `len`'s tag test), so the step waits; the discriminant reduces by its equations as
+;; a subterm, and the case step fires once a constructor stands at its head
+(fn alt_open_discriminant ((e El) (f Name) (args (List Expr))) Bool
+  (match (nth args (alt_discriminant_index e f))
+    ((Some d) (bool_and (bool_or (has_fvar d) (has_loose_bvars d)) (bool_not (ctor_shaped (el_env e) d))))
+    (None False)))
+(fn alt_discriminant_index ((e El) (f Name)) Int
+  (if (bool_or (name_eq f (n1 (quote ite))) (name_eq f (n1 (quote dite)))) 2
+    (match (mt_is_matcher (el_env e) f)
+      ((Some (MtDesc np _ _)) (+ np 1))
+      (_ 0))))
 (fn alt_positions ((e El) (f Name) (nargs Int)) (List Int)
   (if (bool_or (name_eq f (n1 (quote ite))) (name_eq f (n1 (quote dite)))) (if (lt 4 nargs) (list 3 4) Nil)
     (match (mt_is_matcher (el_env e) f)

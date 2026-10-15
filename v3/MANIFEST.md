@@ -25,7 +25,7 @@ family; the rest follow the contract.**
 | `std/sha256/*weld*`, `shani*`, `xchain` | 8 | ~45,000 | ARCHIVE (proposed) | Arc B's hand-authored fast path and dispatch; the flagship binary is re-derived through the generic path or re-authored later; its measured result stays in `STREAM.md` |
 | `models/imp/imp.shard` + core | 4 | 4,697 | PORT | the neutral dialect; the call tier's closure of `tb_len` at slice 4.2 (`v3/models/imp`, the evaluator one function over a task type), the rest phase 5 |
 | `models/imp/probes/vx86_acc_probe`, `fra_kit`, `rth_kit`, `rth_inst` | 4 | ~495,000 | REGENERATE | Theorem A and C2b's laws: the **statements** PORT (records/COVERAGE.md), the certificate kits are tactic-emitted I |
-| `models/imp/probes/tb_kit`, `tb_micro`, `tbh_kit` | 3 | 16,753 | PORT | phase 4's `tb_len` rung inputs — slice 4.2 (designed 2026-10-15): the definitions ported, the laws rewritten by need |
+| `models/imp/probes/tb_kit`, `tb_micro`, `tbh_kit` | 3 | 16,753 | PORT | phase 4's `tb_len` rung inputs — slice 4.2: the definitions ported at landing 0, the laws rewritten by need at landing 1 (`v3/models/imp/{word,cell,step}.shard`, the run lemmas in `len.shard`: 55 theorems against the probes' 155 claims; the rest of the probes stay with phase 5) |
 | `models/imp/probes/*` (rest) | ~16 | ~8,000 | PORT (smoke and de-risk probes) | |
 | `models/x86` | 34 | 40,469 | PORT | the flagship target |
 | `models/linux` | 2 | 306 | PORT | the syscall boundary |

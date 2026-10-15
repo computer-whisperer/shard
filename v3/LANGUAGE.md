@@ -2346,7 +2346,12 @@ conversion; the API is sequential (`goal_of`, `applicable`, `step`,
    step (`delta_once`). A measured function has its equations, each
    leaf's proven by `WellFounded.fix_eq` at the instance (the
    obligations admitted into the walk first); since 3.27 landing 3
-   the reducer reads a realization's equations too.
+   the reducer reads a realization's equations too. Since 4.2 landing
+   1: a bare constant is no redex; K's whnf and the delta step fire on
+   a closed subterm only — an open occurrence unfolds by its equations,
+   by a case step, or by name —; and the case step waits at an open,
+   non-constructor discriminant, which reduces by its equations first
+   (§8.6 "as built, landing 1" item 3).
 7. **`rw`.** `(rw LEMMA)`, `(rw (<- LEMMA))`, LEMMA elaborated
    without an expected type and opened to an equation
    (`rw_not_eq`); the left side matched syntactically
@@ -3317,7 +3322,7 @@ it entrenches. The slices, in the order built:
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
-| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count)** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
+| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count)** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4057,6 +4062,140 @@ the count.** Rules 2, 3 and 6, with what the build found.
   `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ,
   byte-identical under both engines on every entrypoint. The gates are
   the landing's; CI's five jobs are the full gate.
+
+**Slice 4.2 as built, landing 1 (2026-10-15) — the proof of `tb_len`
+through I, and the count.** Rules 4, 5 and 6, with what the proof found.
+
+*The proof.* `tb_len` follows from its general form `tb_len_aux` — for
+every fuel, word and depth, by induction on the list — at the theorem's
+binders. The nil case: the product's three statements run on the locals
+`(1 0 …)` by one run lemma, the call returns 1 = `imm 0`, the
+post-predicate is assembled at the same ghost. The cons case: the facts
+of the cell at `a` — its window from the invariant (`cell_window`:
+rb + 152 ≤ a, a + 24 ≤ gend ≤ 2^32, so the three loads are inside the
+window and the 32-bit band is the identity), its header word's tag from
+`cells_ok` (`hword_tag`), the loads of the header and the two slots
+through `hcells_rep` (`rd_hdr`, `rd_slot`) —; then the body's run through
+the run lemmas, the inner call at fuel `fuel − 24 + 12` by the induction
+hypothesis (its premise 24 + 12·|t| ≤ fuel − 24 + 12 from the theorem's
+24 + 12·(|t| + 1) ≤ fuel), its result split: no result, a statement
+result or a trap contradict the hypothesis (the post-predicate at those is
+`False`); a failed call fails the body and the call, and the predicate
+holds; a returned word is `imm (len t)` = 2|t| + 1 with |t| < 2^62 from
+`in63`, the product's subtract gives 2|t|, its add 3 + 2|t|, its overflow
+bit is 0 (the xor-and-shift below 2^63: `Nat.xor_lt_two_pow`,
+`Nat.and_le_left`, `Nat.shiftRight_eq_div_pow`) when |t| + 1 < 2^62 — the
+return 3 + 2|t| = 2(|t| + 1) + 1 = `imm (len (h :: t))`, `rinc` at an odd
+word the same roots — and 1 when |t| = 2^62 − 1 exactly, the fail. The
+call laws take d < dmax and the theorem has no premise on the depth, so
+both cases split on it: past the depth the call fails with `FStack` and
+the predicate holds. The run lemmas (`len_S1`, `len_S2`, `len_S2_one`,
+`len_E3a`, `len_E3b`, `len_T9_fail`, `len_T9_ov`, `len_T9_ret`,
+`len_body_ret`, `len_body_fail`, `len_body_one`) are the product's
+statements over their locals at a fuel base `n` — the if's branch at
+n, the if at n + 1, a statement list one level above its head —, the
+heap words `hw w0 w1` variables; the theorem instantiates each at
+`fuel − 24 + k` (`hf24 : fuel = (fuel − 24) + 24` by
+`Nat.sub_add_cancel`). Every step is a step law of `step.shard`: one per
+equation of `ipeval` at `FS f` with the sub-runs' results as hypotheses
+(`stmts_nil`, `stmts_cons`, `stmts_cons_fail`, `stmt_set`, `stmt_if_z`,
+`stmt_if_nz`, `stmt_loadw`, `stmt_call_ret`, `stmt_call_fail`,
+`stmt_fail`, `call_ret`, `call_fail`, `call_depth`), each proven by
+`unfold` and `rw` with a matcher at a constructor taken by name
+(`unfold ipeval.match_N`: one case step), and the same over a Nat fuel
+through `fuel_of_succ`. `reduce` is used only on the machine's pure
+functions at concrete locals (`iexp`, `ilset`, `ipexps`, `iband_args`),
+never on the evaluator. The mechanical text — the locals lists, the fuel
+towers, the lemma instantiations — was spelled by a scratch script at
+authoring time, not kept: the file is the proof.
+
+*What the proof found* (Stage-1 gaps and the kernel's facts, each with
+what was done):
+
+1. *Whole-run `reduce`* — the unfolded product normalized in one step —
+   ran past ten minutes and 11 GB on the cons case and was abandoned;
+   the proof is bottom-up by the step laws (`step.shard`'s header).
+2. *A measured `fn` on a Nat has one unconditional equation*, so
+   `reduce` unfolds every inner call it meets. The evaluator is restated
+   over the structural fuel (`Fuel`: `FZ`, `FS`; `fuel_of` the
+   conversion, its one descent discharged by `Nat.sub_one_lt`): `ipeval`
+   matches the task outermost and the fuel per arm, so K defines it by
+   its leaves — seventeen equations, one per task and statement kind, no
+   descent obligation —; the old names are abbreviations through
+   `fuel_of`; the theorem's statement is unchanged.
+3. *The reducer's redex* (`find_redex`, `tactic.shard`): (a) a bare
+   constant is no redex — its unfolding is a lambda that beta-reduces
+   into the application, which was unfolding `Nat.land a 1` to
+   `Nat.bitwise Bool.and a 1`; (b) K's whnf and the delta step fire on a
+   closed subterm only — on an open term K's unfolding of an imported
+   definition is no computation (`a + 8` to eight successors) and buries
+   the term a later rewrite must match; an open occurrence unfolds by
+   its equations, by a case step, or by name (`unfold`); (c) the case
+   step (`alt_step`) waits at an open, non-constructor discriminant —
+   K's whnf there is a search through the definitions the discriminant
+   is built from: the tag test over `hword (hfget cs a)` went into
+   `hfind`'s accessibility proofs for ten minutes and the box's memory
+   (69 GB); with the step waiting, and the word a variable in the lemma,
+   the same fact takes 15 s. `tactic_test` 110/0, `tactic_lib_test`
+   30/0, `calc_test` byte-identical, `std_test` 201/0, `define_test`
+   12/0, `derive_test` 14/0 and the 267 loader pins hold under the
+   three (§5 rule 6).
+4. *K's heartbeat budget.* The whole proof as one theorem ran through I
+   in 365 s on the binary and K refused it `exhausted` (10^8 ticks per
+   declaration, add.shard's `default_limits`; the loader said only
+   `exhausted`). The loader's refusal now names the budget and K's site
+   (`exhausted_heartbeats_at_SITE`); the proof is split into the run
+   lemmas, each a K check of its own — the shape rule 5 asked for
+   anyway. K is untouched.
+5. *A pending theorem's record carries its open goals in a symbol*
+   (`sorry goals=N [GOAL]…`, the `by_sorry` pin's form); the native
+   runtime's symbols hold 4 KB (`tools/codegen/rt.h`, `sym_of_chars`),
+   the bootstrap's any length — a `sorry` deep in the case split trapped
+   the binary where the bootstrap ran, an engine divergence. The text is
+   bounded at 2,000 characters with an ellipsis (`goals_bounded`,
+   `reader.shard`'s two sites); the pin is unchanged.
+6. *A constructor not in scope reads as a variable pattern* (found while
+   writing item 4's message with `kernel.verdict`'s type in scope and
+   not its constructors): the arms after it unreachable, the function
+   accepted by the bootstrap with the first arm's meaning, and the C of
+   the dead arms uncompilable on route 1 (`redefinition of v_6`) — the
+   loud failure only on the native side. Fixed by the `use`; the refusal
+   of an unreachable arm is issue #42.
+7. *`cases` on a term* generalizes the goal and not the earlier
+   hypotheses: a fact about the scrutinee is stated over an arbitrary
+   result with its equation (`∀ R, EV = R → tbh (ret_of R) …`) and
+   instantiated in each arm; `cases` on a variable substitutes
+   everywhere, the arm's equation then already closed. And the tactic
+   facts the proof leaned on: a hypothesis is never rewritten — restate
+   it by `have … (exact h)` or rewrite in the goal before `intro`; a
+   conjunction splits into rows by `And.left`/`And.right` `have`s;
+   `arith` has no parity, no `mod` and no Nat subtraction — the parity
+   facts go through `Nat.and_one_is_mod` and the hypothesis, the
+   wrapped subtract through `Nat.add_mod_right` and
+   `Nat.mod_eq_of_lt`; a negative numeral needs an `Int` context; a
+   theorem binder named like a definition (`hinv`) shadows it in later
+   propositions (renamed `hinvr`).
+
+*The count* (rule 6; the record's numbers before any proof step: 741
+lines of proof in the old file, 80 steps, 37 distinct lemmas cited, 155
+claims in the lemma closure, 93 of them the runtime kit's). The proof
+text: 337 lines — the run lemmas 189, `tb_len_aux` 133, `tb_len` 15 —
+against the old 717; 268 step forms in the general form and 353 in the
+lemmas against the old 80 (the old proof's steps were whole-run
+normalizations; these are one statement each). The kit written by
+need: 55 theorems — the step laws 27 (`step.shard`, 159 lines), the cell
+kit 12 (`cell.shard`, 184), the word kit 4 (`word.shard`, 27), the run
+lemmas and `len_ofNat` 12 — against the 155-claim ceiling; no runtime
+law, `len` allocating nothing. Cited by the proof: 34 of the kit and 24
+of Init's lemmas, against the old 37. Refusals on the way: K's
+`exhausted` (item 4), nothing else; hand-lowering: none; the kernel's
+interventions: the reducer's three rules, the loader's refusal text,
+the reader's bound — no K change, no new syntax, no new form. The root
+loads and checks — Init on demand, 11 modules, 838 declarations, `tb_len`
+on Init's three axioms — in 276 s on the bootstrap and 48 s on the
+binary (landing 0's definition gate was 37 and 7 on the quiet dev box),
+the records identical under both engines; `imp_test.sh` asserts it, the
+root stored and verified by K alone (rule 4). Gates on the quiet dev box: the loader's sources clean under the V3 loader, names at the baseline; the loader pins 267/0; `tactic_test` 110/0, `tactic_lib_test` 30/0, `calc_test` byte-identical over 21 inputs, `std_test` 201/0, `define_test` 12/0, `derive_test` 14/0 on the bootstrap under the reducer's rules; `v3/build.sh --all` 29 roots, 28 built, 1 current, 0 failed, in 2,188 s (two heavy jobs; the loader's chain emit 22 s, lower 69, codegen 221, cc 56 over 8,452 declarations); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 712 s of wall and 3,418 s of entrypoint time (`imp_test` 419 s: the root loaded and stored in 319 s, K's replay of the store 100 s, 143 checks; the tie 76 checks, 0 failed, in 347 s; parity byte-identical over 31 closures and 137,172 declarations in 352 s — the 51 more the landing's kernel growth; `store_test` 573, `tactic_lib_test` 286, `define_test` 239, `path_test` 235, `calc_test` 231); the native suite 43 entrypoints, 0 failed, in 411 s of wall (`imp_test` 89 s: the root loaded and stored in 69 s, K's replay 19 s; the tie 347 s; `calc_test` 193, parity 170, `store_test` 98); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
 
 ## 9. Assumption policy and entries
 
@@ -5551,4 +5690,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     landing 0 (2026-10-15):** the port, the definition gate and the
     count as §8.6 "as built, landing 0" states them; two Stage-1 gaps
     found and closed — a nested inductive's `casesOn`, a `def` that
-    recurses — each a rule with its pin.
+    recurses — each a rule with its pin. **As built, landing 1
+    (2026-10-15):** the proof through I as §8.6 "as built, landing 1"
+    states it — the run lemmas each a K check of its own, the step laws
+    the vocabulary, the count written beside the record's numbers; lean
+    (i) kept (the root stored and verified by K alone in `imp_test.sh`);
+    the kernel's interventions the reducer's three rules, the loader's
+    named exhaustion and the reader's bounded pending record, K
+    untouched; one backlog item (issue #42, the unreachable arm).
