@@ -3317,6 +3317,7 @@ it entrenches. The slices, in the order built:
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
+| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described.")** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3808,6 +3809,159 @@ user files and specialization (§11); `Symbol`'s `String` flip (carried
 with "route 1's chain is V3's own", which this slice does not make it:
 the chain stays v2's, fed by V3's front end); any edit of the old tree
 (rule 5); the migration tool's tier 0 (phase 5's opener).
+
+**Slice 4.2 — the tb_len rung: a per-function certificate in V3**
+(designed 2026-10-15 at slice 4.1's close, on the user's "Agreed, let's
+proceed with the tb_len rung as described"; §13 item 67 — **ratified
+2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described.")**,
+the leans beyond the description stated at item 67 for objection; law
+§12.4 item 4's first item, §4.9, §12.5's count rule; `v3/MANIFEST.md`'s
+row "phase 4's `tb_len` rung inputs"; records §5's provocation). Law
+§12.4 item 4 names "a `tb_len`-class compiler proof". The thing is the
+coverage arc's Theorem B at one function (`docs/COVERAGE.md`, B-1b):
+`tb_len` in `models/imp/probes/tb_micro.shard`, the per-function
+certificate of `len` over the call-tier imp machine
+(`models/imp/imp.shard`) and the counted-heap runtime's table
+(`models/imp/rt.shard`) — for a list `av`, a memory `m` representing a
+ghost heap `g` under the heap invariant at roots `r`, a word `a` reading
+back as `av` in `g`'s cells, the function table holding `impc`'s product
+for `len` at index 4, and fuel of at least 24 + 12·|av|: the call
+returns, the memory represents the same `g` under the invariant, and
+the result word is the immediate of `len av`. Loads only, the ghost
+unchanged — the simplest member of the class; `perim` has the same
+shape; `app` allocates. Records §5 names it the measured provocation
+for V3 — 717 canonical lines by hand, the ghost twins forced by
+equation-only conclusions, the DSL's gotchas — and law §4.9 says what
+V3 changes: Theorems A and B are L theorems with P terms and
+per-function certificates are I emitted by tactics. This slice restates
+`tb_len` as an L theorem in V3 and proves it through I, measured
+against the old proof. It is not a proof about v2's chain (ARCHIVE at
+the flip, `MANIFEST.md`) and not route 1 proven — every K function
+certified by the generator (B-1c), Theorem A, the runtime laws
+discharged — which is phase 7's (law §12.4 item 7); this section's
+opening sentence names that end state. Measured 2026-10-15 at the
+boundary, the closure of `tb_len` across the old tree's files (a script
+over the forms' citations):
+
+| what | measurement |
+|---|---|
+| `tb_len`'s proof | 741 lines in the file (717 canonical); well-founded induction on the length; 80 steps — 45 `have`, 43 `rewrite-with`, 40 `rewrite`, 26 `compute`, 21 `inst` |
+| lemmas it cites | 37 distinct: 23 of the heap kit (`tbh_kit`), 7 of the runtime kit (`rth_kit`), 4 of the word kit (`tb_kit`), its own fuel law, the machine's `ilen_nonneg`, std's `int_eq_refl` |
+| the lemma closure | 155 claims, 10,594 lines: 93 of the runtime kit (6,775), 30 of the word kit (1,993), 27 of the heap kit (1,082), 2 of `tb_micro` (729), 2 of std/order, 1 of the machine; 13 std requirements (bits 10, nat 2, map 1); 8 axioms of `facts.shard` |
+| the definition closure | 133 forms in about 1,000 lines: the machine's call tier (7 types, 2 records, 19 functions — the kinds, the operators, the expressions, the call-tier statements, `IpFn`, `IpProg`, the outcomes, the evaluator), the runtime's spelling kit and table (27), the heap vocabulary (3 records — `HCell`, `HRaw`, `GHeap` — and 49 functions), the word kit (9), the readbacks and the post-predicate (9), `Mem` with four operations over the map, std/nat's `int_of_nat`, std/bits' `pow2` |
+| runtime laws cited | none: `len` allocates nothing, so C2b's allocation, increment and release laws are outside the rung |
+| the product | `len_ipfn` in `tools/impc/fixtures/micro_ipc_out.shard`, 13 locals, compiled from `micro.shard`'s `len : (List Int) → Int` |
+| in `v3/` today | nothing of this: no `v3/models`; `v3/std` has no `map` and no `mem` |
+| Stage 1 today | a mutually recursive group is `RUNNABLE` with `mutual_recursion` (slice 3.15 rule 6; §11's row): the evaluator's four functions — `ipstmt`, `ipwhile`, `ipstmts`, `ipcall`, one fuel-countdown group — would have no equations in K |
+
+The rules:
+
+1. **The object.** `tb_len`'s statement as B-1b states it, a `theorem`
+   in V3 with a `(by …)` proof: the premises the heap representation,
+   the invariant at the roots, no raw cell, the argument's readback,
+   the table's entry, the memory bounds and the fuel bound; the
+   conclusion the post-predicate at the input ghost and the immediate
+   of `len av`. The same product, the same table, the same runtime
+   statement lists: nothing of the certified object changes, only the
+   language it is stated in.
+2. **The port is the closure, by the migration classes (law §10.2),
+   under `v3/models/imp/`.** The 133 definitions of the table and
+   nothing more — not the base tier, the well-kinded gates, the lifts,
+   the length-preservation family, `impc`, the other probes (phase 5's
+   by manifest, their statements then). Five files: `imp.shard` (the
+   machine's call tier), `rt.shard` (the runtime's spelling kit and
+   table), `heap.shard` (the cells, the ghost heap, representation and
+   invariant), `readback.shard` (the word kit, the readback relations,
+   the post-predicate), `len.shard` (the source `len`, the product, the
+   theorem); and under `v3/std`, `map.shard` (the association-list
+   map — `empty`, `lookup`, `insert` — its four requirements as
+   theorems) and `mem.shard` (`Mem` over the map; `mem_get`, `mem_set`,
+   `load_le`, `store_le`), with records in `v3/std/README.md` as
+   3.27's. The classes applied: a word, an address, a size, a count and
+   an index are `Nat` (the typed class — bit patterns and lengths to
+   `Nat`; the modulus 2^64 explicit as today, `hi` and `lo` by `/` and
+   `%` at 2^63); a source value stays `Int` (the product's immediates
+   are the two's-complement i63 of an `Int`), the one bridge
+   `imm : Int → Nat`; a predicate that is a specification — the
+   representation, the invariant and its conjuncts, the readback
+   relations, the post-predicate, `ldok`, `in63`, `graw_none`,
+   `tb_okr` — is a `def` to `Prop` (the typed class: the Bool
+   comparison to the proposition; Init's `∈`, `List.Pairwise` and
+   `List.Forall` where the old file wrote its own), while the machine —
+   the operators, `iexp`, the evaluator, the runtime's statement lists,
+   `hfget`, `inth`, `rinc` and the other functions over data — stays
+   `fn`; a name Init has is cited by Init's (the naming law). **The
+   evaluator re-spelled as one function**: `ipeval fuel task`,
+   structural on the fuel, over `IpTask` (a statement, a statement
+   list, a loop, a call) with the four functions' arms, so that it is a
+   definition with equations in K today; the correspondence —
+   `ipcall fuel …` is `ipeval fuel (TCall …)`, the four names
+   abbreviations — recorded in the file. The alternative, Stage 1
+   defining a mutual group structural on one shared argument by a
+   joint `brecOn`, is a Stage-1 item the toolchain's own port will need
+   (phase 5) and is not this slice's.
+3. **Landing 0 is the definition gate, and the count.** The port
+   loaded by the V3 loader as a root (`v3/models/imp`, Init on
+   demand): every ported function `DEFINE` with its equations, no
+   `RUNNABLE`, no refusal, every `def` accepted, the product loaded,
+   the theorem stated with `sorry` (pending). A suite entrypoint
+   `v3/kernel/test/imp_test.sh` asserts the summary line and the
+   definition lines (as `define_test` does) and prints the load's
+   seconds. A gap found in Stage 1 — a shape the K projection does not
+   define, a form the port needs — is a pin and a finding, a landing's
+   rule if it blocks (as 3.29's path found its three). The count of
+   rule 6 is written in the record at this landing, before any proof
+   step.
+4. **Landing 1 is the proof.** The kit laws `tb_len` needs, as V3
+   theorems, written by need: the closure's 155 old claims are the
+   ceiling, not the plan — an old extraction or peeling law that
+   `cases`, `simp_only` or `arith` absorbs is not written, and the
+   count of those is a result. `tb_len` through I: `induction` on the
+   list (the old well-founded induction on `ilen`), `simp_only` over
+   the machine's and the product's equations, `arith` for the fuel and
+   word bounds, `decide` where a leaf is ground, `auto` where the
+   engine closes a leaf (the engine measured as a closer, as Theorem
+   B's own text says). The theorem accepted by K; the root stored and
+   verified by K alone (`store`, `verify_release`, slice 4.0): the
+   certificate as retained P verified without the elaborator (law
+   §12.5 T8's first item). The entrypoint gains the proof's seconds on
+   both engines.
+5. **Landing 2 is `app`**, the allocating member: the three runtime
+   laws it needs — allocation, increment, release, C2b's — as
+   parameters through 4.0's `PARAM` and `DISCHARGE` records,
+   discharged at phase 7; the output ghost an existential in the
+   conclusion, no ghost twin — the test of whether V3's `Prop`
+   dissolves the twin that B-1b's equation-only conclusions forced;
+   `tb_app`'s 1,148 lines the comparison. Its count written when
+   landing 1's is read. `perim` is not built (the shape of `len`).
+6. **The count, agreed before the run (law §12.5).** (a) The
+   hand-written I lines of `tb_len` against 717 canonical; (b) the
+   theorems written for its closure, and their lines, against 155 and
+   10,594; (c) the distinct lemma citations in `tb_len` against 37;
+   (d) the root's load and check on route 3 (the bootstrap) and route
+   1 (the native loader), and the proof's elaboration within it; (e)
+   the Stage-1 gaps found at the definition gate, each a pin; (f)
+   refusals before success and interventions while authoring, T9's
+   protocol; (g) the forms the port needed that this document lacks,
+   each a §11 or `LEAN.md` row; (h) the old laws absorbed (rule 4). The
+   lean: fewer than half the lines and a fraction of the theorems;
+   whatever the numbers, the record reads them against records §5's
+   premise at the close. No pass bar is set; the user may set one
+   before landing 1.
+7. **Both engines, the bootstrap the authority** (4.1 rule 6): the
+   entrypoint runs under the suite on the bootstrap and on the shim,
+   compared byte for byte as every entrypoint is.
+
+*Not in this slice, stated:* `impc`'s V3 version and the per-function
+generator (B-1c, phase 7); the runtime laws' discharge (C2b; their
+statements PORT as parameters at landing 2); Theorem A; the base tier
+and the ISA legs; `perim`; T8's reflection node (built as a landing if
+landing 1's measure demands it — a `compute` the equations cannot
+replace); the String flip and route 1's chain; `std/word`'s `UInt*`
+representation (phase 5's word line: words here are `Nat` with the
+modulus explicit, recorded); the migration tool's tier 0 (phase 5's
+opener; this port by hand, every re-spelling it needed recorded for the
+tool's design).
 
 ## 9. Assumption policy and entries
 
@@ -5271,3 +5425,31 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     privileged mode), the pin `k_client_admit` and seven client cases;
     the names pinned after the whole transfer (found: `String`
     unpinned when pinned one by one). Slice closed.
+
+67. **Slice 4.2, the tb_len rung (designed 2026-10-15 at slice 4.1's
+    close; §8.6 "Slice 4.2"; law §12.4 item 4, §4.9, §12.5; ratified
+    2026-10-15 as described — the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."):**
+    the leans beyond the description, stated for objection. (a) The
+    item read as Theorem B at one function restated in V3 — not a
+    proof of v2's chain, not route 1 proven (phase 7); the
+    alternative, route 1's own chain first, stated at the boundary
+    and declined: phase 5 and 7's bulk, which `tb_len` does not need.
+    (b) `len` first, `app` second, `perim` not built; the alternative,
+    `app` first for the twin, declined — `len` needs no runtime law
+    and no twin, so its number is the clean one. (c) The closure only,
+    133 definitions, not the manifest's four files; the rest at phase
+    5. (d) The product as data; `impc` not ported. (e) Predicates as
+    `Prop` definitions and words as `Nat` with the modulus explicit;
+    the alternatives — Bool predicates with extraction laws as the old
+    tree has them, words as `Int`, or `UInt64` — stated: the first
+    re-creates the provocation, the second keeps the `0 ≤` premises
+    the typed class removes, the third is phase 5's word line. (f)
+    The evaluator re-spelled as one function over a task type, since
+    Stage 1 leaves a mutual group `RUNNABLE`; the alternative, mutual
+    structural recursion in Stage 1, a Stage-1 item for the
+    toolchain's own port. (g) The kit laws by need, not one for one.
+    (h) The hand port ahead of the migration tool, every re-spelling
+    recorded. (i) The certificate stored and verified by K alone at
+    landing 1 (T8's first item). (j) The count of rule 6 with the lean
+    stated and no pass bar: the law asks for the count, not a
+    threshold; the user may set one before landing 1.

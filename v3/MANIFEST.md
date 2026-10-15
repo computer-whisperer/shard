@@ -23,9 +23,9 @@ family; the rest follow the contract.**
 | `std/sha256/sha256.shard`, `mod.req`, `.imp` | 3 | ~30,000 | PORT (the spec and its imp refinement) | `.imp` is hand-authored lowering-form text: PORT its statements, REGENERATE its certificates |
 | `std/sha256/impgen_wasm_out`, `impgen_x86_out` | 2 | 188,625 | REGENERATE | Theorem A's computed value replaces impgen output (#23) |
 | `std/sha256/*weld*`, `shani*`, `xchain` | 8 | ~45,000 | ARCHIVE (proposed) | Arc B's hand-authored fast path and dispatch; the flagship binary is re-derived through the generic path or re-authored later; its measured result stays in `STREAM.md` |
-| `models/imp/imp.shard` + core | 4 | 4,697 | PORT | the neutral dialect |
+| `models/imp/imp.shard` + core | 4 | 4,697 | PORT | the neutral dialect; the call tier's closure of `tb_len` at slice 4.2 (`v3/models/imp`, the evaluator one function over a task type), the rest phase 5 |
 | `models/imp/probes/vx86_acc_probe`, `fra_kit`, `rth_kit`, `rth_inst` | 4 | ~495,000 | REGENERATE | Theorem A and C2b's laws: the **statements** PORT (records/COVERAGE.md), the certificate kits are tactic-emitted I |
-| `models/imp/probes/tb_kit`, `tb_micro`, `tbh_kit` | 3 | 16,753 | PORT | phase 4's `tb_len` rung inputs |
+| `models/imp/probes/tb_kit`, `tb_micro`, `tbh_kit` | 3 | 16,753 | PORT | phase 4's `tb_len` rung inputs — slice 4.2 (designed 2026-10-15): the definitions ported, the laws rewritten by need |
 | `models/imp/probes/*` (rest) | ~16 | ~8,000 | PORT (smoke and de-risk probes) | |
 | `models/x86` | 34 | 40,469 | PORT | the flagship target |
 | `models/linux` | 2 | 306 | PORT | the syscall boundary |
