@@ -1,0 +1,98 @@
+;;; v3/kernel/inhabit.shard — a default witness of a K type (LANGUAGE.md §8.6 slice 4.3
+;;; landing 1, rule 3; law §4.7). An extern is, in L, an opaque constant of its declared
+;;; type: K's opaque kind checks a value and never unfolds it, so the value is a typing
+;;; witness alone — Lean's `opaque` takes `default` of an `Inhabited` instance; here the
+;;; witness is built structurally. A function type is a lambda over its binder whose body is
+;;; the codomain's witness; an inductive type is its first constructor whose fields all
+;;; close, applied to the type's parameters and to the fields' witnesses in order (a later
+;;; field's type instantiated with the earlier witnesses); anything else — a sort, a
+;;; proposition, a variable's type, a constructor none of whose rows close — has no witness,
+;;; and the extern keeps no L constant (`extern_uninhabited`, reader.shard). Fuel bounds the
+;;; descent through a recursive row, so the first closing constructor wins: `List.nil`,
+;;; `Nat.zero`, `Option.none`, `Prod.mk` of two witnesses, `World.World Nat.zero`.
+
+(import "kw.shard")
+(use kernel.k)
+(use kernel.kw)
+(use kernel.expr)
+(use kernel.level)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.util)
+(use kernel.decl)
+(use kernel.decl.ConstantInfo)
+(use kernel.expr.Expr)
+(use kernel.level.Level)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+;; a witness of the type under the walk's environment, or None
+(fn inhabit ((w W) (ty Expr) (fuel Int)) (Pair W (Option Expr))
+  (measure fuel)
+  (if (lt fuel 1) (Pair w None)
+    (match (w_whnf w ty)
+      ((Pair w1 None) (Pair w1 None))
+      ((Pair w1 (Some t))
+       (match t
+         ((Pi _ n bi dom body)
+          (match (w_local_bi w1 n dom bi)
+            ((Pair w2 fv)
+             (match (w_inst1 w2 body fv)
+               ((Pair w3 body1)
+                (match (inhabit w3 body1 (- fuel 1))
+                  ((Pair w4 None) (Pair w4 None))
+                  ((Pair w4 (Some v)) (match (w_lams w4 (list fv) v) ((Pair w5 lam) (Pair w5 (Some lam)))))))))))
+         (_
+          (match (get_app_fn t)
+            ((Const _ c ls)
+             (match (env_find (w_env w1) c)
+               ((Some (InductInfo _ nparams _ _ ctors _ _ _ _)) (inhabit_ctors w1 ls (take nparams (get_app_args t)) ctors (- fuel 1)))
+               (_ (Pair w1 None))))
+            (_ (Pair w1 None)))))))))
+;; the constructors in order: the first that closes
+(fn inhabit_ctors ((w W) (ls (List Level)) (params (List Expr)) (cs (List Name)) (fuel Int)) (Pair W (Option Expr))
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair w None))
+    ((Cons c r)
+     (match (inhabit_ctor w c ls params fuel)
+       ((Pair w1 (Some v)) (Pair w1 (Some v)))
+       ((Pair w1 None) (inhabit_ctors w1 ls params r fuel))))))
+;; one constructor: its type at the levels, the parameters instantiated, every field witnessed
+(fn inhabit_ctor ((w W) (c Name) (ls (List Level)) (params (List Expr)) (fuel Int)) (Pair W (Option Expr))
+  (match (env_find (w_env w) c)
+    (None (Pair w None))
+    ((Some info)
+     (match (w_inst_lparams w (ci_type info) (ci_lparams info) ls)
+       ((Pair w1 cty)
+        (match (inhabit_params w1 cty params)
+          ((Pair w2 None) (Pair w2 None))
+          ((Pair w2 (Some fty))
+           (match (inhabit_fields w2 fty fuel Nil)
+             ((Pair w3 None) (Pair w3 None))
+             ((Pair w3 (Some fields))
+              (match (w_apps w3 (mk_const c ls) (append params fields))
+                ((Pair w4 v) (Pair w4 (Some v)))))))))))))
+;; the leading binders instantiated with the type's parameters
+(fn inhabit_params ((w W) (ty Expr) (ps (List Expr))) (Pair W (Option Expr))
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair w (Some ty)))
+    ((Cons p r)
+     (match (w_whnf w ty)
+       ((Pair w1 (Some (Pi _ _ _ _ body))) (match (w_inst1 w1 body p) ((Pair w2 b1) (inhabit_params w2 b1 r))))
+       ((Pair w1 _) (Pair w1 None))))))
+;; the fields in order, each witnessed and substituted into the rest; the result type ends them
+(fn inhabit_fields ((w W) (ty Expr) (fuel Int) (acc (List Expr))) (Pair W (Option (List Expr)))
+  (measure fuel)
+  (if (lt fuel 1) (Pair w None)
+    (match (w_whnf w ty)
+      ((Pair w1 None) (Pair w1 None))
+      ((Pair w1 (Some (Pi _ _ _ dom body)))
+       (match (inhabit w1 dom (- fuel 1))
+         ((Pair w2 None) (Pair w2 None))
+         ((Pair w2 (Some v)) (match (w_inst1 w2 body v) ((Pair w3 b1) (inhabit_fields w3 b1 (- fuel 1) (Cons v acc)))))))
+      ((Pair w1 (Some _)) (Pair w1 (Some (rev acc)))))))

@@ -342,11 +342,12 @@ them; each is a candidate for §13.
 The law's §5.3 names `fn def type inductive structure sig theorem
 realize`; this draft adds `axiom` and `opaque` (K's kinds, needed by the
 hostile battery and by views) and carries the shard-only vocabulary
-`import use extern requirement fulfills trusts measure`. Reserved for
-later phases and refused with the phase named: `by` (phase 3), `bin`
-`requires` `app` (phase 4), `instance` `class` (phase 3), `namespace`
-`section` `variable` (undecided; the dotted declared name covers the
-common case).
+`import use extern requirement fulfills trusts measure`, and `bin` since
+slice 4.3 landing 1 (the artifact's form, below). Reserved and refused
+with the reason named: `requires` outside a `bin` (a clause of the
+form), `app` (dropped at slice 4.3, §12.5: a loop in a `bin` is the MVU
+story), `instance` `class` (phase 3, Stage 3), `namespace` `section`
+`variable` (undecided; the dotted declared name covers the common case).
 
 | form | phase-2 meaning | goes to |
 |---|---|---|
@@ -361,12 +362,13 @@ common case).
 | `(theorem NAME.{u…} BINDERS PROP PROOF)` | PROOF is `(exact TERM)` or `sorry` at Stage 0; `sorry` is reported loudly, admits nothing, and every citation of the theorem is a pending obligation, never an assumption | K: `ThmDecl` |
 | `(axiom NAME.{u…} BINDERS TYPE)` | admitted only under `(trusts NAME)` in the same file (§9) | K: `AxiomDecl` |
 | `(fn NAME BINDERS RET (measure M)? BODY)` | an E function: parameters are E-types, BODY is §5.4's E term language; classified (§6.3); **no L declaration at phase 2** (§0); its definition and equations at Stage 1 (§8.4) | E: `EFn`; K: `DefnDecl` + `NAME.eq_N` when eligible (§8.4) |
-| `(extern NAME BINDERS RET)` | a World extern (law §4.7) | E: `EExtern` |
+| `(extern NAME BINDERS RET)` | a World extern (law §4.7); in L an opaque constant of its declared type whose value is the type's default witness (`kernel/inhabit.shard`; slice 4.3 landing 1 rule 3) — never unfolded, no equations, so a function calling it is defined with its equations and a requirement can name the entry; a file without Init, or a signature with no L reading or no witness, keeps it E only with the obstacle on its record | E: `EExtern`; K: `OpaqueDecl` |
 | `(sig fn NAME BINDERS RET)`, `(sig type (NAME T…))` | a view's bodyless signature and opaque type (§6.5) | E: `ESig`, `ESigType`; L: a view parameter |
 | `(requirement NAME BINDERS PROP)`, `(fulfills NAME PROOF)` | a view's promised law and its discharge in the implementation (§6.5) | L |
 | `(realize NAME …)` | an E body for an admitted L constant (§7) | E: `EFn`; L: the equations |
 | `(derive TYPE CAPABILITY…)` | since slice 3.19 (§8.4): equality, an ordering and a rendering for a closed inductive type — `eq`, `(ord structural)`, `render` generated as `fn` forms the loader reads at that point; `(CAPABILITY by NAME)` registers a procedure of the file's. Never in a view | the generated `fn`s as any `fn`; the derivation table (`DERIVE`) |
 | `(trusts AXIOM…)` | widens this file's assumption policy (§9) | policy |
+| `(bin NAME (entry F) (externs E…) (trusts A…) (requires R…))` | the artifact declaration (slice 4.3 landing 1 rule 4; law §4.7, §9.3), checked at its file's end once every fn settled: the entry a fn in scope with the World last and checked parameters before it (§9); the roster every extern the entry's E closure calls, each listed one declared; the trusts the axioms the requirements and the closure's definitions rest on beyond the standard profile and the load's parameters; each requirement an accepted theorem (MET) or one read and pending (UNMET); every function of the closure `THREAD` ok. Recorded `BIN NAME entry F externs N trusts N requires MET/TOTAL`, then `UNMET R`, `UNTHREADED F VERDICT` and `BAD-BIN NAME REASON: DETAIL` lines, each an error that fails the load; the manifest's `bin` line and the release gate's `BIN NAME ok` / `BAD-BIN` (§9). In its own file beside the program (`examples/calc/calc_bin.shard`) | the loader; the store; the gate |
 
 **Binders** are `((x TYPE) …)`; a binder may carry an info marker,
 `(x TYPE implicit)`, `(x TYPE strict)`, `(x TYPE inst)`, recorded as
@@ -3330,7 +3332,7 @@ it entrenches. The slices, in the order built:
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
-| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
+| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, seven pins, `bin_test.sh`)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4705,6 +4707,138 @@ not either imports the other — the check's association lookup shared
 version (a match on an integer with no arm); renamed, and the kernel's
 function names are unique across its files, the drivers' `main`
 excepted. The names check extended to that rule.
+**Slice 4.3 as built, landing 1 (2026-10-16) — the World's L meaning,
+the `bin` form, calc's bin.** Rules 3, 4 and 5, with these refinements
+found at the build. (a) **An extern's L constant is an opaque with a
+witness.** K's opaque kind checks a value and never unfolds it — Lean's
+`opaque` takes `default` of an `Inhabited` instance — so the constant's
+value is the declared type's default witness, built structurally by
+`kernel/inhabit.shard` (98 lines): a function type a lambda whose body
+is the codomain's witness, an inductive its first constructor whose
+fields all close applied to the type's parameters and the fields'
+witnesses in order; a sort, a proposition or a type without a closing
+row has none and the extern stays E only, `extern_uninhabited` on its
+record. The reader's `read_extern` builds the declaration; the loader's
+`load_extern` admits it (an ACCEPT) before the classifier's RUNNABLE, a
+file without Init keeping the extern E only by construction; the
+erasure sends a constant the E table holds as an extern to `EExt`.
+Every extern of `std/host.shard` and of the pins under the naming law
+has its constant, and every function calling one — calc's `perform`,
+`drive_host` and `main`, the derive, path and template mains, the wire
+pins — is defined with its equations where it was `RUNNABLE …
+no_l_meaning`. (b) **A World is a type a module declares.** An extern
+whose last parameter is `Nat` — the pins' stand-in for a foreign
+function — made `Nat` a World type to landing 0's check and every
+function over `Nat` token-handling (`define_runnable`'s `succ` read as
+`world_unsupported: a token at the primitive +`); as built, Init's bare
+names and the prelude's are never Worlds (`world_name`). (c) **Three
+pins supplied their E-first route through an extern** and now take the
+typed route: `row_e_first` and `derive_e_first` call a fn over a
+`Symbol` for it, `str_e_first` expects `ok`, its function defined;
+`define_runnable` and `zero_arity_bare` keep their outcome with their
+headers corrected; `template_main`'s E-first instance — slice 3.28 rule
+3's last sentence's fixture — is pin `template_e_first`'s now, its body
+E-first through a fn over a `Symbol`, `template_test.sh` reading both.
+(d) **The bin's policy admits the load's
+parameters.** Calc's bin rested on calc's three pending descents
+(`show_nat.dec_1`, `parse_tail.dec_1`, `parse_tail.dec_2`) and read as
+`untrusted` on its first load; a measured function's obligation and a
+view's parameter are §9's third and fourth classes, permitted as the
+file's policy permits them (`outside_policy`), the manifest's `param`
+lines carrying them — the bin's `trusts` is the roster of *axioms*. (e)
+**Two findings the bootstrap's bare-name dispatch hid**, found by the
+drivers' measurement and the gate's first run: the program types'
+constructors were not opened in `loader.shard` (four of the bin check's
+functions refused `unknown_head` under the V3 loader, clean under the
+bootstrap — three `use` lines); and `name_of_sym` lies outside
+`verify_release`'s closure, where the bootstrap treats an unknown head
+as an effect ("expected a World as the last argument") — the gate
+resolves the manifest's names through the store's accepted names
+(`vr_find_name`), and a string literal as a match pattern is the
+bootstrap reader's refusal (an `if` instead). (f) **The form as built.**
+`(bin NAME (entry F) (externs E…) (trusts A…) (requires R…))`, read as
+a later form and stashed per file (`Fx.bins`), checked at the file's end
+after the threading verdicts (`rec_bins`): the entry resolved among the
+E values in scope, its shape §9's (the World last — `is_world` by the
+check's kinds —, `Int`, `Nat` or a byte-list codec before it); the
+roster against the heads of the entry's E closure (`bin_closure`,
+`bin_heads`), an extern outside it named with its function; each
+requirement a theorem in scope or a discharged requirement's
+`NAME.proof`, one read and pending UNMET, counted; each trusted name an
+axiom in scope, then every requirement's and every defined function's
+assumption closure (`axioms_of`) within the policy; every function of
+the closure `th_fn` ok. The records `RBin` (`BIN NAME entry F externs N
+trusts N requires MET/TOTAL`) and `RBinErr` (`UNMET R`, `UNTHREADED F
+VERDICT`, `BAD-BIN NAME REASON: DETAIL` — unmet, unthreaded, bad_entry,
+extern_undeclared, extern_outside, unknown_requirement, unknown_trust,
+untrusted), each error failing the load; the manifest's `bin NAME entry
+F externs E… requires R…` (`stored_bins`, `bin_lines`); the gate's
+`vr_bins` — the entry an accepted def, every extern an accepted opaque,
+every requirement an accepted theorem whose closure `vr_undeclared`
+clears — `BIN NAME ok` or `BAD-BIN NAME: REASON`, counted with the
+conditional declarations. The harness's forms `NAME bin ok` and `NAME
+bad-bin REASON` (the latter any record, a PENDING standing before its
+UNMET). (g) **Calc's bin** (`examples/calc/calc_bin.shard`, 142 lines):
+three observables as opaques (`w_output`, `w_reads`, `w_exit`), nine
+bolts — `get_args` in the premise form over the pair it returns, as
+`BOUNDARIES.md`'s pattern had it; `write_line` appending its line,
+`exit` recording its code, each preserving the other two — and the two
+requirements over `main`'s observables only, `main_output` (the lines
+written are the model world's lines for `Prod.fst (get_args w)`, through
+`run_world` and 3.21's `run_eq_spec_world` to `run_world_spec`) and
+`main_reads`, proven in 53 lines through seven lemmas: `out_bytes` over
+an append, the action's lines as a plain function (`action_lines` —
+stated first as `world_lines (apply_action (CalcWorld nil) a)`, a
+rewrite rule whose right side holds its left, which `rw` then nested),
+the model's accumulator `run_world_acc` (induction on the events, `out`
+and the state generalized, `cases` on the emitted action), `perform`
+against the bolts, and `drive_host` against `run_world` (induction on
+the lines, the state and the World generalized; `rw` by the equations
+of `drive_host`, `codes_of_lines`, `run_world`, `emitted` and
+`next_state`, then `cases` on `step s (codes_of (Bytes.toList l))`
+and `reduce`); the requirements by `main.eq_1`, `cases` on `(get_args
+w)` with its equation `hg` for the premise-form bolt, `reduce`, the
+lemmas. The closures: `main_output` rests on Init's two and its three
+bolts, `main_reads` on Init's two and its three — Init's `Quot.sound`
+through the matchers' `casesOn`, `propext` through `if_pos` — and the
+closure's definitions on calc's three descents through the parameters.
+`BIN examples.calc.calc_bin.calc entry examples.calc.calc_main.main
+externs 3 trusts 9 requires 2/2`; the program runs through the driver
+with the bin file as the root file, byte-identical to the model world.
+Against the old contracts' 4/12/11 in 217 lines (shardfmt) and 5/12/7
+in 214 (snake): 3/9/2 in 142, the proofs in it.
+
+**The pins (eight, 276 → 284)** — `thread_proof_ref`, the law's erased
+proof reference (§12.4 item 4): a proof about the token under a typed
+`let`, erased, the token used once (deferred from landing 0, where an
+extern-calling body was read E-first); `bin_ok` (`BIN main.hello entry
+main.main externs 1 trusts 1 requires 1/1`, the requirement through the
+entry's equation and the bolt); `bin_unmet` (`sorry`: `requires 0/1`,
+`UNMET`), `bin_unthreaded` (two writes through one token), `bin_extern_outside`
+(`main.exit is called in main.finish and is not in the roster`),
+`bin_bad_entry` (no World last), `bin_untrusted` (the requirement rests
+on a bolt the bin does not list); `template_e_first` (the E-first
+instance with no equations). **`bin_test.sh`**, the 44th
+entrypoint under `V3_NATIVE=1` (27 checks): the record, the
+closure's verdicts, the nine PARAM records, the externs' constants, the
+two requirements' closures exactly, the manifest's `bin` line, the
+gate's `BIN … ok` and its acceptance of every stored declaration, a
+tampered manifest naming a definition as a requirement `BAD-BIN`, the
+program through the bin tied to the model world over the differential's
+21 inputs, and the two negatives over a scratch root seeing the library
+through a link — `main_reads` left `sorry` (`requires 1/2`, `UNMET`), a
+write duplicated in `perform` (`UNTHREADED … world_twice`). Both
+engines, compared byte for byte by the suite.
+
+**The kernel's own drivers measured** (rule 7 (e), on the bootstrap,
+under the refined World rule): the loader's closure (43 modules, 3,092
+runnable) 87 token-handling functions, 87 ok; `prove` 80 of 80;
+`verify_release` 52 of 52 (`vr_bins` the one more); `initindex` 25 of
+25; `t0` 2 of 2. The growth: `loader.shard` +282 lines, `verify_release`
++110, `reader` +39, `store` +21, `thread` +15, `load` +9, `erasure` +8,
+`inhabit.shard` 98 new; the harness +24. Gates on the quiet dev box:
+the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 284 cases, 0 failed, on both engines; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,516 s (two heavy jobs; the loader's chain emit 24 s, lower 82, codegen 319, cc 71 over 8,565 declarations, 51 modules — 46 more than landing 0's; then the pins harness's and the reader test's roots, edited after the build, rebuilt in 440 s, 2 built, 27 current); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 882 s of wall and 4,368 s of entrypoint time (bin_test 296 s; imp_test 832 s: the two roots loaded and stored in 692 s, K's replay 140 s, 236 checks; the tie 76 checks, 0 failed, in 332 s; parity byte-identical over 31 closures and 138,195 declarations in 344 s — the 414 more the landing's growth across the closures, the externs' constants among them; store_test 544, calc_test 228); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 408 s of wall and 1,361 s of entrypoint time (bin_test 66 s; imp_test 146 s: the two roots loaded and stored in 123 s, K's replay 22 s; the tie 335 s; parity 168 s; calc_test 185, store_test 94; the loader pins' entrypoint 13 s); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -4722,6 +4856,23 @@ against the view, discharged at link, reported if never discharged.
 function's decreasing facts `f.dec_N`, admitted so its definition
 exists, named by `PENDING f measure` and by every dependent's
 `params=`, discharged by a proof when I exists — never by a policy.
+
+**A bin's policy (slice 4.3 landing 1; §4's `bin` row).** A bin's
+`trusts` names the axioms its requirements and its closure's
+definitions may rest on beyond the standard profile; the load's
+parameters — a view's, a measured function's pending descent — are
+permitted as the file's policy permits them (the manifest's `param`
+lines carry them), so calc's bin rests on calc's three pending descents
+through the parameters and on its nine bolts through its trusts. The
+loader's record is `BIN NAME entry F externs N trusts N requires
+MET/TOTAL`; the store's manifest gains `bin NAME entry F externs E…
+requires R…`; the release gate prints `BIN NAME ok` when the entry is an
+accepted def of the store, every extern an accepted opaque (its L
+constant) and every requirement an accepted theorem whose assumption
+closure rests on the export's axioms, the parameters and the verified
+discharges alone, else `BAD-BIN NAME: REASON`, counted with the
+conditional declarations; the threading verdict is the loader's, an E
+property K does not see, re-derived by every load of the file.
 
 **Entries** (law §9.3): every way a value from outside enters an E
 program is **checked** or **preconditioned**. At phase 2 the entries
@@ -4977,7 +5128,7 @@ migration table of law §10.3 owns the name and behavior changes of the
 | `mod.req.shard`, the `mod.req/` dir form, `sig fn`, `sig type` (private constructors), `requirement`/`fulfills`, requirements granted to consumers, structural opacity per closure, mode-aware resolution (check = interface, run = implementation), canonical closure dedup | carried | §6.5 — with one change: a `sig fn`/`sig type`/`requirement` is a **view parameter**, an axiom-kind constant to K and a policy class, so evidence binding is checked on closures rather than by the loader's granted flag |
 | the req-scope gate (an interface file imports only interfaces and the kernel) | carried | §6.5 |
 | back-compat shims (`std/nat.shard` → `(import "nat")`) | dropped | V3's files are new |
-| `(bin …)` (16), `trusts`, `requires` | deferred | phase 4 (§4 reserved forms); `trusts` already carries the axiom policy at phase 2 (§9) |
+| `(bin …)` (16), `trusts`, `requires` | **landed** (slice 4.3 landing 1, 2026-10-16) | `(bin NAME (entry F) (externs E…) (trusts A…) (requires R…))` (§4), the first `examples/calc/calc_bin.shard`; `trusts` the axiom policy since phase 2 (§9) |
 | `(app …)`, `(cli …)` (recognized by the reader; no uses in the tree) | dropped | the MVU driver is phase 4's `bin` story |
 | `(lib …)` (4 uses, `tools/lowcheck` fixtures) | **AT RISK** | the lib-build arc's form; the law names the lowering-side toolchain "new code where toolchain" (MANIFEST) and never mentions `lib`; a phase-5 decision |
 
@@ -6253,3 +6404,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     function, tied four ways. (g) The model test as the bundle
     instantiated at the model world and proven, plus a ground `decide`.
     (h) The count with no pass bar; `bin_test.sh` the 43rd entrypoint.
+    **Landing 1 built 2026-10-16** (§8.6 "as built, landing 1"): (a)
+    as described, the opaque's value the declared type's default
+    witness (`inhabit.shard`, Lean's `default`); (d) as described, the
+    bin's policy admitting the load's parameters as the file's does;
+    (e) as described, the three `get_args` bolts in the premise form;
+    (h) `bin_test.sh` the 44th entrypoint under `V3_NATIVE=1`, the
+    native tie being the 43rd.

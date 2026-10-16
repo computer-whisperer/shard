@@ -47,11 +47,15 @@
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.prog)
+(use kernel.prog.EArm)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
 (use kernel.reader)
 (use kernel.scope)
 (use kernel.spelling)
 (use kernel.realize)
 (use kernel.erasure)
+(use kernel.ev)
 (use kernel.erasure.PdErase)
 (use kernel.erasure.Demand)
 (use kernel.erasure.Lifted)
@@ -235,7 +239,9 @@
   (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
   (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
   (RInstance Name Name (List (List Int)) (List Name))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
-  (RThread Name Symbol (List Int)))         ; the well-threadedness verdict of a token-handling function (slice 4.3 landing 0): ok, or world_twice / world_unsupported / world_forged with its detail
+  (RThread Name Symbol (List Int))          ; the well-threadedness verdict of a token-handling function (slice 4.3 landing 0): ok, or world_twice / world_unsupported / world_forged with its detail
+  (RBin Name Name (List Name) Int (List Name) Int)   ; a bin checked (slice 4.3 landing 1): its name, entry, externs, trusted axioms' count, requirements, requirements met
+  (RBinErr Name Symbol (List Int)))         ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
 
 ;; root, environment, closure memo, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
@@ -400,7 +406,7 @@
 ;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto),
 ;; its own Init import's target (Anon: none), the names of Init under its identity, which
 ;; none of its declarations may take (slice 3.26 rule 5)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))) (above (List (Pair Name Int))) (ecount Int))
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))) (above (List (Pair Name Int))) (ecount Int) (bins (List SExpr)))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
@@ -409,6 +415,7 @@
 (fn fx_see ((f Fx) (mods (List Name)) (init Int)) Fx (with Fx f (vis (names_union (Fx.vis f) mods)) (init (if (lt (Fx.init f) init) init (Fx.init f)))))
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
+(fn fx_add_bin ((f Fx) (s SExpr)) Fx (with Fx f (bins (append (Fx.bins f) (list s)))))
 (fn fx_as_impl ((f Fx)) Fx (with Fx f (view False)))
 (fn fx_scope ((l Load) (f Fx)) Scope
   (Scope (Fx.ident f) (Fx.module f) (Fx.opened f) (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
@@ -605,10 +612,11 @@
     (load_decl_go (if (bool_and (fx_private f) (bool_or (sym_eq h (quote fn)) (sym_eq h (quote type)))) (ld_add_form l (form_name sc s) sc s) l) f s)))
 (fn load_decl_go ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (let ((sc (fx_scope l f)) (h (form_head s)))
-    (if (bool_and (Fx.view f) (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote realize)) (bool_or (sym_eq h (quote derive)) (sym_eq h (quote fulfills)))))))
+    (if (bool_and (Fx.view f) (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote realize)) (bool_or (sym_eq h (quote derive)) (bool_or (sym_eq h (quote fulfills)) (sym_eq h (quote bin))))))))
       (Pair (ld_rec l (RLoadErr (fx_file f) (quote view_form) (append (chars_of_sym h) ": a view holds declarations and parameters, never bodies"))) f)
     (if (bool_and (bool_not (Fx.view f)) (bool_or (sym_eq h (quote sig)) (sym_eq h (quote requirement))))
       (Pair (ld_rec l (RLoadErr (fx_file f) (quote sig_outside_view) (append (chars_of_sym h) ": a parameter belongs in a view (mod.req.shard)"))) f)
+    (if (sym_eq h (quote bin)) (Pair l (fx_add_bin f s))   ; stashed; checked at the file's end, after every fn settled (rec_bins)
     (if (bool_or (sym_eq h (quote fn)) (sym_eq h (quote extern))) (load_e_form l f s)
     (if (bool_and (sym_eq h (quote type)) (type_is_e_only (Load.etab l) sc (Load.env l) s)) (load_e_form l f s)   ; E only (its namespace was opened at pre-registration, as every type's)
     (if (sym_eq h (quote realize)) (Pair (load_realize l f s) f)
@@ -631,7 +639,7 @@
        (match (admit_param l f d kind arity)
          ((Pair l1 f1) (Pair (add_e_twin l1 f1 s) f1))))
       ((RDOk ds) (admit_read l f s ds))
-      (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f)))))))))))))))
+      (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f))))))))))))))))
 
 ;; ---- a derivation (§8.4 slice 3.19; derive.shard) -----------------------------------------------
 ;; the forms a capability generated are loaded as the file's own at this point — the one front
@@ -922,7 +930,22 @@
       (if (sym_eq (form_head s) (quote fn))
         (match (load_fn l1 f s 2)
           ((Pair l2 f2) (if (int_eq (len (Load.parked l2)) (len (Load.parked l1))) (retry_parked l2 f2 (+ 1 (len (Load.parked l2)))) (Pair l2 f2))))
-        (load_e_first l1 f s (quote none) (quote none))))))
+        (load_extern l1 f s)))))
+;; an extern: its L constant first — an opaque of the declared type with the type's default
+;; witness (reader.shard read_extern; §8.6 slice 4.3 landing 1 rule 3), an ACCEPT — then the
+;; classifier's EExtern, RUNNABLE, as before. A file without Init has no L reading by
+;; construction: E only. The L reading refused — a binder's type unknown to L, no witness —
+;; keeps the extern E-only with the obstacle on its record, its callers E-first as before
+(fn load_extern ((l1 Load) (f Fx) (s SExpr)) (Pair Load Fx)
+  (if (bool_not (init_seen (fx_scope l1 f))) (load_e_first l1 f s (quote none) (quote none))
+    (match (read_extern (fx_scope l1 f) (Load.env l1) (form_args s))
+      ((RDOk ds)
+       (match (admit_core l1 f ds)
+         ((Pair l2 None) (load_e_first l2 f s (quote none) (quote none)))
+         ((Pair l2 (Some recs)) (load_e_first l2 (mix_recs f recs) s (quote none) (quote none)))))
+      ((RDErr r _) (load_e_first l1 f s r (quote none)))
+      (_ (load_e_first l1 f s (quote no_l_reading) (quote none))))))
+(fn form_args ((s SExpr)) (List SExpr) (match s ((SList (Cons _ args)) args) (_ Nil)))
 ;; the classifier's program alone
 (fn load_e_first ((l1 Load) (f Fx) (s SExpr) (why Symbol) (route Symbol)) (Pair Load Fx)
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
@@ -1686,7 +1709,7 @@
              ((Pair dirs rest)
               (match (read_sidecar l rel rest w1s)
                ((Pair (Pair l0a autos) w1s2)
-              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil) (ecount 0) (above Nil)) rest)
+              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil) (ecount 0) (above Nil) (bins Nil)) rest)
                 ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1s2))   ; the World after the sidecar's read, not the one sealed_ident consumed (found by the threading check, slice 4.3 landing 0)
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s2)
@@ -1701,7 +1724,7 @@
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f)
+                      (Pair (Pair (ld_rec (rec_bins (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f) f)
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
@@ -1779,6 +1802,242 @@
   (match ds
     (Nil l)
     ((Cons d r) (rt_go es wk r (match (th_fn es wk d) (None l) ((Some (Pair k m)) (ld_rec l (RThread (edecl_name d) k m))))))))
+;; ---- the bin form (§8.6 slice 4.3 landing 1, rule 4) ------------------------------------------
+;; (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)), stashed at its form and checked
+;; at the file's end once every fn settled: the entry a fn in scope with a World last and
+;; checked parameters before it (§9); the roster every extern the entry's E closure calls, each
+;; listed one declared; the trusts the axioms beyond the standard profile that the requirements
+;; and the closure's definitions rest on; each requirement an accepted theorem (or a discharged
+;; requirement's proof), MET, a pending one UNMET; every function of the closure THREAD ok, else
+;; UNTHREADED. The record `BIN NAME entry F externs N trusts N requires MET/TOTAL`, then the
+;; `UNMET`, `UNTHREADED` and `BAD-BIN` lines, each an error: an unmet requirement, an unthreaded
+;; function, an extern outside the roster or an untrusted axiom fails the load (the old form's
+;; rule: pending is never silent). The verdicts are re-derived by every load of the file; the
+;; store's manifest carries the bin line and the release gate its BIN check (verify_release)
+(fn rec_bins ((l Load) (f Fx)) Load (rb_go l f (Fx.bins f)))
+(fn rb_go ((l Load) (f Fx) (ss (List SExpr))) Load
+  (measure (struct ss))
+  (match ss (Nil l) ((Cons s r) (rb_go (check_bin l f s) f r))))
+(type BfRes (BfOk Name Name (List Name) (List Name) (List Name)) (BfErr (List Int)))   ; name, entry, externs, trusts, requires — as written
+(fn check_bin ((l Load) (f Fx) (s SExpr)) Load
+  (let ((sc (fx_scope l f)))
+    (match (bin_form sc s)
+      ((BfErr m) (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) m)))
+      ((BfOk n fw exts trusts reqs)
+       (match (bin_entry l sc fw)
+         ((Pair None m) (ld_rec l (RBinErr n (quote bad_entry) m)))
+         ((Pair (Some fid) _)
+          (let ((es (Load.etab l)))
+            (let ((wk (th_kinds es)))
+              (match (bin_shape es wk fid)
+                ((Some m) (ld_rec l (RBinErr n (quote bad_entry) m)))
+                (None
+                 (match (bin_externs l sc exts Nil Nil)
+                   ((Pair ids ext_errs)
+                    (match (bin_closure es (list fid) Nil 100000)
+                      (fns
+                       (match (bin_requires l sc reqs Nil 0 Nil)
+                         ((Pair (Pair rnames met) req_errs)
+                          (rb_errs (ld_rec l (RBin n fid ids (len trusts) rnames met)) n
+                            (append ext_errs (append (bin_outside es fns ids) (append req_errs
+                              (append (bin_trusts l sc trusts (append rnames fns)) (bin_threads es wk fns))))))))))))))))))))))
+(fn rb_errs ((l Load) (n Name) (errs (List (Pair Symbol (List Int))))) Load
+  (measure (struct errs))
+  (match errs (Nil l) ((Cons (Pair k m) r) (rb_errs (ld_rec l (RBinErr n k m)) n r))))
+;; the form's clauses, each at most once, the entry required
+(fn bin_form ((sc Scope) (s SExpr)) BfRes
+  (match s
+    ((SList (Cons _ (Cons (SSym nm) clauses)))
+     (match (name_of_sym nm)
+       (None (BfErr "(bin NAME …): NAME is a symbol"))
+       ((Some n) (bin_clauses (qualify sc n) clauses None Nil Nil Nil))))
+    (_ (BfErr "(bin NAME (entry F) (externs E…) (trusts A…) (requires R…))"))))
+(fn bin_clauses ((n Name) (cs (List SExpr)) (entry (Option Name)) (exts (List Name)) (trusts (List Name)) (reqs (List Name))) BfRes
+  (measure (struct cs))
+  (match cs
+    (Nil (match entry (None (BfErr (append (show_name n) ": no (entry F) clause"))) ((Some f) (BfOk n f exts trusts reqs))))
+    ((Cons (SList (Cons (SSym k) args)) r)
+     (if (sym_eq k (quote entry))
+       (match (bin_syms args Nil)
+         ((Some (Cons f Nil)) (match entry (None (bin_clauses n r (Some f) exts trusts reqs)) (_ (BfErr (append (show_name n) ": two entry clauses")))))
+         (_ (BfErr (append (show_name n) ": (entry F) names one fn"))))
+     (if (sym_eq k (quote externs))
+       (match (bin_syms args Nil) ((Some xs) (bin_clauses n r entry (append exts xs) trusts reqs)) (None (BfErr (append (show_name n) ": (externs E…) names externs"))))
+     (if (sym_eq k (quote trusts))
+       (match (bin_syms args Nil) ((Some xs) (bin_clauses n r entry exts (append trusts xs) reqs)) (None (BfErr (append (show_name n) ": (trusts A…) names axioms"))))
+     (if (sym_eq k (quote requires))
+       (match (bin_syms args Nil) ((Some xs) (bin_clauses n r entry exts trusts (append reqs xs))) (None (BfErr (append (show_name n) ": (requires R…) names theorems"))))
+       (BfErr (append (show_name n) (append ": unknown clause " (chars_of_sym k)))))))))
+    ((Cons _ _) (BfErr (append (show_name n) ": a clause is (entry F), (externs E…), (trusts A…) or (requires R…)")))))
+(fn bin_syms ((ss (List SExpr)) (acc (List Name))) (Option (List Name))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some (rev acc)))
+    ((Cons (SSym x) r) (match (name_of_sym x) ((Some m) (bin_syms r (Cons m acc))) (None None)))
+    (_ None)))
+;; the entry: one fn the scope resolves the written name to
+(fn bin_entry ((l Load) (sc Scope) (fw Name)) (Pair (Option Name) (List Int))
+  (match (only_values (eresolve (Load.etab l) sc fw))
+    (Nil (Pair None (append (show_name fw) " is not a fn in scope")))
+    ((Cons (EHit id _ (EIFn _)) Nil) (Pair (Some id) Nil))
+    ((Cons (EHit _ _ (EIFn _)) _) (Pair None (append (show_name fw) " is ambiguous: write the qualified name")))
+    ((Cons (EHit id _ _) _) (Pair None (append (show_name id) " is not a fn")))))
+;; the entry's shape (§9): the World last, every parameter before it one a command-line
+;; argument supplies — Int, Nat, a byte-list codec by identity
+(fn bin_shape ((es ESt) (wk Wk) (fid Name)) (Option (List Int))
+  (match (es_find_decl es fid)
+    ((Some (EFn _ _ ps _ _ _))
+     (match (last_ty ps)
+       ((Some (ETCon n _)) (if (mem_name n (wk_worlds wk)) (bin_params ps 1) (Some (append (show_name fid) " does not take a World last"))))
+       (_ (Some (append (show_name fid) " does not take a World last")))))
+    (_ (Some (append (show_name fid) " is not a fn of the closure")))))
+(fn bin_params ((ps (List EType)) (i Int)) (Option (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons _ Nil) None)
+    ((Cons t r)
+     (if (bin_entry_param t) (bin_params r (+ i 1))
+       (Some (append "parameter " (append (show_nat i) (append " has the type " (append (flat_ety t) ", which no command-line argument supplies (§9)")))))))))
+(fn bin_entry_param ((t EType)) Bool
+  (match t
+    ((ETCon n _) (if (name_eq n (n1 (quote Int))) True (if (name_eq n (n1 (quote Nat))) True (match (list_ctors t) ((Some _) True) (None False)))))
+    (_ False)))
+;; the roster: every listed name an extern in scope, by identity
+(fn bin_externs ((l Load) (sc Scope) (xs (List Name)) (ids (List Name)) (errs (List (Pair Symbol (List Int))))) (Pair (List Name) (List (Pair Symbol (List Int))))
+  (measure (struct xs))
+  (match xs
+    (Nil (Pair (rev ids) (rev errs)))
+    ((Cons x r)
+     (match (bin_extern_hit (eresolve (Load.etab l) sc x))
+       ((Some id) (bin_externs l sc r (if (mem_name id ids) ids (Cons id ids)) errs))
+       (None (bin_externs l sc r ids (Cons (Pair (quote extern_undeclared) (append (show_name x) " is not an extern in scope")) errs)))))))
+(fn bin_extern_hit ((hs (List EHit))) (Option Name)
+  (measure (struct hs))
+  (match hs (Nil None) ((Cons (EHit id _ (EIExt _)) _) (Some id)) ((Cons _ r) (bin_extern_hit r))))
+;; the entry's E closure: the fns reached through calls, the entry first
+(fn bin_closure ((es ESt) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 1) (rev seen)
+    (match todo
+      (Nil (rev seen))
+      ((Cons g r)
+       (if (mem_name g seen) (bin_closure es r seen (- fuel 1))
+         (match (es_find_decl es g)
+           ((Some (EFn _ _ _ _ _ body))
+            (match (bin_heads body (Pair Nil Nil))
+              ((Pair cs _) (bin_closure es (append (rev cs) r) (Cons g seen) (- fuel 1)))))
+           (_ (bin_closure es r (Cons g seen) (- fuel 1)))))))))
+;; the heads a body calls: the fns and the externs, each once
+(fn bin_heads ((t ETerm) (acc (Pair (List Name) (List Name)))) (Pair (List Name) (List Name))
+  (measure (struct t))
+  (match t
+    ((EBVar _) acc)
+    ((ELit _) acc)
+    (EAbsurd acc)
+    ((ECtor _ as) (bin_heads_all as acc))
+    ((EPrim _ as) (bin_heads_all as acc))
+    ((ECall g as) (bin_heads_all as (match acc ((Pair cs xs) (Pair (if (mem_name g cs) cs (Cons g cs)) xs)))))
+    ((EExt x as) (bin_heads_all as (match acc ((Pair cs xs) (Pair cs (if (mem_name x xs) xs (Cons x xs)))))))
+    ((EMatch s arms) (bin_heads_arms arms (bin_heads s acc)))
+    ((ELet rs b) (bin_heads b (bin_heads_all rs acc)))
+    ((EIf a b c) (bin_heads c (bin_heads b (bin_heads a acc))))))
+(fn bin_heads_all ((ts (List ETerm)) (acc (Pair (List Name) (List Name)))) (Pair (List Name) (List Name))
+  (measure (struct ts))
+  (match ts (Nil acc) ((Cons t r) (bin_heads_all r (bin_heads t acc)))))
+(fn bin_heads_arms ((arms (List EArm)) (acc (Pair (List Name) (List Name)))) (Pair (List Name) (List Name))
+  (measure (struct arms))
+  (match arms (Nil acc) ((Cons (EArm _ b) r) (bin_heads_arms r (bin_heads b acc)))))
+;; an extern a function of the closure calls outside the roster, named with the function
+(fn bin_outside ((es ESt) (fns (List Name)) (ids (List Name))) (List (Pair Symbol (List Int)))
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons g r)
+     (append (match (es_find_decl es g)
+               ((Some (EFn _ _ _ _ _ body)) (match (bin_heads body (Pair Nil Nil)) ((Pair _ xs) (bin_outside_x g (rev xs) ids))))
+               (_ Nil))
+             (bin_outside es r ids)))))
+(fn bin_outside_x ((g Name) (xs (List Name)) (ids (List Name))) (List (Pair Symbol (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x r)
+     (if (mem_name x ids) (bin_outside_x g r ids)
+       (Cons (Pair (quote extern_outside) (append (show_name x) (append " is called in " (append (show_name g) " and is not in the roster")))) (bin_outside_x g r ids))))))
+;; the requirements: each an accepted theorem in scope — its own name, or a discharged
+;; requirement's proof NAME.proof — MET; one read and pending (sorry) UNMET, counted; else unknown
+(fn bin_requires ((l Load) (sc Scope) (rs (List Name)) (names (List Name)) (met Int) (errs (List (Pair Symbol (List Int))))) (Pair (Pair (List Name) Int) (List (Pair Symbol (List Int))))
+  (measure (struct rs))
+  (match rs
+    (Nil (Pair (Pair (rev names) met) (rev errs)))
+    ((Cons r rest)
+     (match (bin_theorem (Load.env l) (scope_candidates sc r))
+       ((Some c) (bin_requires l sc rest (Cons c names) (+ met 1) errs))
+       (None
+        (match (bin_pending (Load.pending l) (scope_candidates sc r))
+          ((Some c) (bin_requires l sc rest (Cons c names) met (Cons (Pair (quote unmet) (show_name c)) errs)))
+          (None (bin_requires l sc rest names met (Cons (Pair (quote unknown_requirement) (append (show_name r) ": no theorem of that name in scope")) errs)))))))))
+(fn bin_theorem ((env CheckedEnv) (cs (List Name))) (Option Name)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c r)
+     (match (env_find env c)
+       ((Some (ThmInfo _ _ _)) (Some c))
+       (_ (match (env_find env (Str c (quote proof))) ((Some (ThmInfo _ _ _)) (Some c)) (_ (bin_theorem env r))))))))
+(fn bin_pending ((pending (List Name)) (cs (List Name))) (Option Name)
+  (measure (struct cs))
+  (match cs (Nil None) ((Cons c r) (if (mem_name c pending) (Some c) (bin_pending pending r)))))
+;; the trusts: each an axiom in scope; then every named declaration's assumption closure within
+;; the policy the roster states — the standard profile, the load's parameters (a view's, a
+;; measured function's pending descent: §9's third and fourth classes, the manifest's `param`
+;; lines) and the roster's axioms
+(fn bin_trusts ((l Load) (sc Scope) (ts (List Name)) (decls (List Name))) (List (Pair Symbol (List Int)))
+  (match (bin_axioms (Load.env l) sc ts Nil Nil)
+    ((Pair _ errs) (append errs (bin_rests l sc ts decls)))))
+(fn bin_axioms ((env CheckedEnv) (sc Scope) (ts (List Name)) (acc (List Name)) (errs (List (Pair Symbol (List Int))))) (Pair (List Name) (List (Pair Symbol (List Int))))
+  (measure (struct ts))
+  (match ts
+    (Nil (Pair acc (rev errs)))
+    ((Cons t r)
+     (match (bin_axiom env (scope_candidates sc t))
+       ((Some a) (bin_axioms env sc r (Cons a acc) errs))
+       (None (bin_axioms env sc r acc (Cons (Pair (quote unknown_trust) (append (show_name t) " is not an axiom in scope")) errs)))))))
+(fn bin_axiom ((env CheckedEnv) (cs (List Name))) (Option Name)
+  (measure (struct cs))
+  (match cs (Nil None) ((Cons c r) (match (env_find env c) ((Some (AxiomInfo _ _)) (Some c)) (_ (bin_axiom env r))))))
+(fn bin_rests ((l Load) (sc Scope) (ts (List Name)) (ds (List Name))) (List (Pair Symbol (List Int)))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d r)
+     (append (match (env_find (Load.env l) d)
+               (None Nil)   ; no L constant (a program without a definition): nothing rests on anything
+               ((Some _)
+                (match (axioms_of (Load.env l) (Load.memo l) d)
+                  ((Pair _ None) (list (Pair (quote untrusted) (append (show_name d) ": its assumptions could not be walked"))))
+                  ((Pair _ (Some axs)) (bin_rests_axs d (outside_policy sc ts (Load.params l) axs))))))
+             (bin_rests l sc ts r)))))
+(fn bin_rests_axs ((d Name) (axs (List Name))) (List (Pair Symbol (List Int)))
+  (measure (struct axs))
+  (match axs
+    (Nil Nil)
+    ((Cons a r) (Cons (Pair (quote untrusted) (append (show_name d) (append " rests on " (append (show_name a) ", which the bin does not trust")))) (bin_rests_axs d r)))))
+;; the closure's threading: every function's verdict ok
+(fn bin_threads ((es ESt) (wk Wk) (fns (List Name))) (List (Pair Symbol (List Int)))
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons g r)
+     (append (match (es_find_decl es g)
+               ((Some d)
+                (match (th_fn es wk d)
+                  ((Some (Pair k m)) (if (sym_eq k (quote ok)) Nil (list (Pair (quote unthreaded) (append (show_name g) (append " " (append (chars_of_sym k) (append ": " m))))))))
+                  (None Nil)))
+               (None Nil))
+             (bin_threads es wk r)))))
+
 (fn rec_unused ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) Load
   (match (unused_uses l f dirs forms) (Nil l) (ps (ld_rec l (RUnused (Fx.module f) ps)))))
 (fn unused_uses ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) (List Name)
@@ -2306,6 +2565,13 @@
        (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))
     ((RTemplate n statics eqs) (append "TEMPLATE " (append (show_name n) (append " static=" (append (show_names_c statics) (append " equations=" (show_names_c eqs)))))))
     ((RThread n k m) (append "THREAD " (append (show_name n) (append " " (append (chars_of_sym k) (match m (Nil "") (_ (append ": " m))))))))
+    ((RBin n f exts nt reqs met)
+     (append "BIN " (append (show_name n) (append " entry " (append (show_name f) (append " externs " (append (show_nat (len exts))
+       (append " trusts " (append (show_nat nt) (append " requires " (append (show_nat met) (append "/" (show_nat (len reqs))))))))))))))
+    ((RBinErr n k m)
+     (if (sym_eq k (quote unmet)) (append "UNMET " m)
+     (if (sym_eq k (quote unthreaded)) (append "UNTHREADED " m)
+       (append "BAD-BIN " (append (show_name n) (append " " (append (chars_of_sym k) (append ": " m))))))))
     ((RInstance n c shapes eqs) (append "INSTANCE " (append (show_name n) (append " of=" (append (show_name c) (append " shapes=" (append (join_commas shapes) (append " equations=" (show_names_c eqs)))))))))))
 (fn join_commas ((ss (List (List Int)))) (List Int)
   (measure (struct ss))
@@ -2347,6 +2613,8 @@
        ((RDerive _ _ _ _ _) acc)
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
        ((RThread _ _ _) acc)
+       ((RBin _ _ _ _ _ _) acc)
+       ((RBinErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))
     (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)

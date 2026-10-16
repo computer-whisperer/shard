@@ -64,7 +64,8 @@
 
 ;; ---- the manifest (slice 4.0 rule 3) ---------------------------------------------------------
 ;; declarations id → (kind, name); the declared parameters; the discharges (obligation, proof)
-(type Man (Man (List (Pair (List Int) (Pair (List Int) (List Int)))) (List (List Int)) (List (Pair (List Int) (List Int)))))
+(type Man (Man (List (Pair (List Int) (Pair (List Int) (List Int)))) (List (List Int)) (List (Pair (List Int) (List Int))) (List Bin)))
+(type Bin (Bin (List Int) (List Int) (List (List Int)) (List (List Int))))   ; a bin line (slice 4.3 landing 1): name, entry, externs, requirements
 (type ManRes (ManOk Man) (ManErr (List Int)))
 (fn vr_tokens ((ln (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
   (measure (struct ln))
@@ -72,33 +73,57 @@
     (Nil (rev (match cur (Nil acc) (_ (Cons (rev cur) acc)))))
     ((Cons 32 r) (vr_tokens r Nil (match cur (Nil acc) (_ (Cons (rev cur) acc)))))
     ((Cons c r) (vr_tokens r (Cons c cur) acc))))
-(fn man_parse ((bs (List Int)) (ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (ps (List (List Int))) (dc (List (Pair (List Int) (List Int))))) ManRes
+(fn man_parse ((bs (List Int)) (ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (ps (List (List Int))) (dc (List (Pair (List Int) (List Int))))) ManRes (man_parse_b bs ds ps dc Nil))
+(fn man_parse_b ((bs (List Int)) (ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (ps (List (List Int))) (dc (List (Pair (List Int) (List Int)))) (bn (List Bin))) ManRes
   (measure (struct bs))
   (match bs
-    (Nil (ManOk (Man (rev ds) (rev ps) (rev dc))))
+    (Nil (ManOk (Man (rev ds) (rev ps) (rev dc) (rev bn))))
     (_
      (match (take_line bs Nil)
        ((Pair ln rest)
         (match (vr_tokens ln Nil Nil)
-          (Nil (man_parse rest ds ps dc))
+          (Nil (man_parse_b rest ds ps dc bn))
           ((Cons h args)
            (if (int_list_eq h "manifest")
              (match args
-               ((Cons v Nil) (if (int_list_eq v "1") (man_parse rest ds ps dc) (ManErr (append "a manifest of version " (append v ", this gate reads 1")))))
+               ((Cons v Nil) (if (int_list_eq v "1") (man_parse_b rest ds ps dc bn) (ManErr (append "a manifest of version " (append v ", this gate reads 1")))))
                (_ (ManErr "the header is `manifest 1`")))
            (if (int_list_eq h "decl")
              (match args
-               ((Cons id (Cons kind (Cons nm Nil))) (man_parse rest (Cons (Pair id (Pair kind nm)) ds) ps dc))
+               ((Cons id (Cons kind (Cons nm Nil))) (man_parse_b rest (Cons (Pair id (Pair kind nm)) ds) ps dc bn))
                (_ (ManErr (append "a declaration line is `decl ID KIND NAME`: " ln))))
            (if (int_list_eq h "param")
              (match args
-               ((Cons nm Nil) (man_parse rest ds (Cons nm ps) dc))
+               ((Cons nm Nil) (man_parse_b rest ds (Cons nm ps) dc bn))
                (_ (ManErr (append "a parameter line is `param NAME`: " ln))))
            (if (int_list_eq h "discharge")
              (match args
-               ((Cons o (Cons p Nil)) (man_parse rest ds ps (Cons (Pair o p) dc)))
+               ((Cons o (Cons p Nil)) (man_parse_b rest ds ps (Cons (Pair o p) dc) bn))
                (_ (ManErr (append "a discharge line is `discharge OBL PROOF`: " ln))))
-             (ManErr (append "unknown line: " ln)))))))))))))
+           (if (int_list_eq h "bin")
+             (match (bin_line args)
+               ((Some b) (man_parse_b rest ds ps dc (Cons b bn)))
+               (None (ManErr (append "a bin line is `bin NAME entry F externs E… requires R…`: " ln))))
+             (ManErr (append "unknown line: " ln))))))))))))))
+;; `NAME entry F externs E… requires R…`
+(fn bin_line ((args (List (List Int)))) (Option Bin)
+  (match args
+    ((Cons nm (Cons e (Cons f rest)))
+     (if (int_list_eq e "entry")
+       (match (bin_split rest "externs" Nil)
+         ((Some (Pair Nil exts_rest))
+          (match (bin_split exts_rest "requires" Nil)
+            ((Some (Pair exts reqs)) (Some (Bin nm f exts reqs)))
+            (None None)))
+         (_ None))
+       None))
+    (_ None)))
+;; the tokens before the keyword, and those after it
+(fn bin_split ((ts (List (List Int))) (kw (List Int)) (acc (List (List Int)))) (Option (Pair (List (List Int)) (List (List Int))))
+  (measure (struct ts))
+  (match ts
+    (Nil None)
+    ((Cons t r) (if (int_list_eq t kw) (Some (Pair (rev acc) r)) (bin_split r kw (Cons t acc))))))
 (fn man_decl ((ds (List (Pair (List Int) (Pair (List Int) (List Int))))) (id (List Int))) (Option (Pair (List Int) (List Int)))
   (measure (struct ds))
   (match ds
@@ -233,7 +258,7 @@
           (fid
            (match v
              ((VR env counts n bad wrong missing unl mk card ns)
-              (match (match man ((Man ds _ _) (man_decl ds fid)))
+              (match (match man ((Man ds _ _ _) (man_decl ds fid)))
                 (None
                  (vr_store_file (VR env counts n bad wrong missing (+ unl 1) mk card ns) man dir fid (vr_name ln) "" rest verbose
                    (write_line (append "UNLISTED " (append fid (append " " (append (vr_name ln) " (an order line the manifest lacks)")))) w)))
@@ -392,7 +417,7 @@
                    ((Pair (Some order) w4)
                     (match (vr_demand x dir order Nil Nil 0 w4)
                       ((Pair (VD x1 ords taken _) w5)
-                       (match (man_missing (match man ((Man ds _ _) ds)) (vr_order_ids order Nil) w5)
+                       (match (man_missing (match man ((Man ds _ _ _) ds)) (vr_order_ids order Nil) w5)
                          ((Pair missing0 w6)
                           (match (od_load x1 (empty_run False) (odd0) ords w6)
                             ((Pair (OdLoadErr _ e m) w7) (exit 2 (write_line (append "INIT: " (append (chars_of_sym e) (append ": " m))) w7)))
@@ -403,12 +428,14 @@
                                    ((Pair (VR env counts n bad wrong missing unl mk card ns) w9)
                                     (let ((names (rev ns)))
                                       (match man
-                                        ((Man _ params dctexts)
+                                        ((Man _ params dctexts bins)
                                          (match (vr_discharges env names dctexts Nil 0 (vr_print_params params w9))
                                            ((Pair (Pair dcs baddc) w10)
                                             (match (vr_policy env env0 (ax_memo_empty) params dcs names 0 0 w10)
-                                              ((Pair (Pair undeclared conditional0) w11)
-                                               (let ((conditional (+ conditional0 baddc)))
+                                              ((Pair (Pair undeclared conditional0) w11a)
+                                               (match (vr_bins env env0 (ax_memo_empty) params dcs names bins 0 w11a)
+                                               ((Pair badbin w11)
+                                               (let ((conditional (+ (+ conditional0 baddc) badbin)))
                                                  (let ((failures (+ (nth_int counts 1) (+ (nth_int counts 2) (+ (nth_int counts 3) (+ (nth_int counts 4)
                                                                   (+ bad (+ wrong (+ missing (+ (len taken) (+ unl (+ mk (+ card (+ undeclared (+ conditional (vr_failures r0))))))))))))))))
                                                    (exit (if (int_eq failures 0) 0 1)
@@ -419,5 +446,58 @@
                                                                    (append (vr_count "mistied" wrong) (append (vr_count "missing" missing) (append (vr_count "taken" (len taken))
                                                                    (append (vr_count "unlisted" unl) (append (vr_count "miskind" mk) (append (vr_count "cardinality" card)
                                                                    (append (vr_count "undeclared" undeclared) (vr_count "conditional" conditional))))))))))))))))
-                                                       w11))))))))))))))))))))))))))))))
+                                                       w11))))))))))))))))))))))))))))))))
        (_ (exit 2 (write_line "verify_release: [-v] DIR EXPORT INDEX" w1)))))))
+;; ---- the bins (slice 4.3 landing 1, rule 4) ------------------------------------------------
+;; each manifest bin: its entry an accepted def of the store, every extern an accepted opaque
+;; (the extern's L constant), every requirement an accepted theorem whose assumption closure
+;; rests on the export's axioms, the parameters and the verified discharges alone — `BIN NAME
+;; ok`, else `BAD-BIN NAME: REASON`, counted with the conditional declarations. The threading
+;; verdict is the loader's (an E property K does not see), re-derived by every load of the file
+(fn vr_bins ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (ns (List Name)) (bs (List Bin)) (bad Int) (w World)) (Pair Int World)
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair bad w))
+    ((Cons (Bin nm f exts reqs) r)
+     (match (vr_bin_check env env0 m params dcs ns f exts reqs)
+       (Nil (vr_bins env env0 m params dcs ns r bad (write_line (append "BIN " (append nm " ok")) w)))
+       (reason (vr_bins env env0 m params dcs ns r (+ bad 1) (write_line (append "BAD-BIN " (append nm (append ": " reason))) w)))))))
+(fn vr_bin_check ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (ns (List Name)) (f (List Int)) (exts (List (List Int))) (reqs (List (List Int)))) (List Int)
+  (match (vr_const_kind env ns f)
+    ((Some k) (if (int_list_eq k "def") (vr_bin_exts env env0 m params dcs ns exts reqs) (append f (append " is " (append k ", not a def")))))
+    (None (append f " is not an accepted declaration of the store"))))
+(fn vr_bin_exts ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (ns (List Name)) (exts (List (List Int))) (reqs (List (List Int)))) (List Int)
+  (measure (struct exts))
+  (match exts
+    (Nil (vr_bin_reqs env env0 m params dcs ns reqs))
+    ((Cons x r)
+     (match (vr_const_kind env ns x)
+       ((Some k) (if (int_list_eq k "opaque") (vr_bin_exts env env0 m params dcs ns r reqs) (append x (append " is " (append k ", not an opaque (an extern's L constant)")))))
+       (None (append x " is not an accepted declaration of the store"))))))
+(fn vr_bin_reqs ((env CheckedEnv) (env0 CheckedEnv) (m AxMemo) (params (List (List Int))) (dcs (List (Pair Name Name))) (ns (List Name)) (reqs (List (List Int)))) (List Int)
+  (measure (struct reqs))
+  (match reqs
+    (Nil Nil)
+    ((Cons q r)
+     (match (vr_req_name env ns q)
+       (None (append q " is not an accepted theorem of the store"))
+       ((Some n)
+        (match (axioms_of env m n)
+          ((Pair _ None) (append q ": ?depth"))
+          ((Pair m1 (Some axs))
+           (match (vr_undeclared env env0 m1 params dcs axs Nil 100000 Nil)
+             ((Pair _ Nil) (vr_bin_reqs env env0 m params dcs ns r))
+             ((Pair _ bad) (append q (append " rests on" (vr_names_sp bad))))))))))))
+;; a requirement's theorem among the store's accepted names: the name itself, or a discharged
+;; requirement's NAME.proof
+(fn vr_req_name ((env CheckedEnv) (ns (List Name)) (q (List Int))) (Option Name)
+  (match (vr_find_name ns q)
+    ((Some n) (if (int_list_eq (vr_kind_text env n) "thm") (Some n) None))
+    (None
+     (match (vr_find_name ns (append q ".proof"))
+       ((Some n) (if (int_list_eq (vr_kind_text env n) "thm") (Some n) None))
+       (None None)))))
+(fn vr_const_kind ((env CheckedEnv) (ns (List Name)) (t (List Int))) (Option (List Int))
+  (match (vr_find_name ns t)
+    (None None)
+    ((Some n) (Some (vr_kind_text env n)))))

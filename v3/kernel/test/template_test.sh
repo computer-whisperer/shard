@@ -59,9 +59,17 @@ done
 n_wl=$(grep -c "^INSTANCE examples.template.workload.List_[a-z]*_Int[_A-Za-z]*.of.examples_template_workload_[mfal][0-9]*_lam_1_0 " "$OUT/load.txt")
 checks=$((checks+1)); [ "$n_wl" = 64 ] || bad "the workload took $n_wl instances, not 64"
 checks=$((checks+1)); [ "$(grep -c '^DEFINE examples.template.workload.[mfal][0-9]*.lam_1 ' "$OUT/load.txt")" = 64 ] || bad "the workload's lambdas are not 64 lifted fns"
-# the E-first instance (rule 3's last sentence): main takes List.map at digit with no equations
-checks=$((checks+1)); grep -q "^INSTANCE examples.template.template_main.List_map_Int_UInt8.of.examples_template_template_main_digit_0 of=List.map shapes=examples.template.template_main.digit/0 equations=$" "$OUT/load.txt" || bad "missing record: the E-first INSTANCE at digit with no equations"
-checks=$((checks+1)); grep -q "^RUNNABLE fn examples.template.template_main.main" "$OUT/load.txt" || bad "the entry is not RUNNABLE"
+# main takes List.map at digit on the typed route — the instance with its equations, main defined
+# (until slice 4.3 landing 1 gave externs an L meaning, main was E-first for the extern's sake and
+# the instance had no equations: rule 3's last sentence, now the fixture of pin template_e_first)
+checks=$((checks+1)); grep -q "^INSTANCE examples.template.template_main.List_map_Int_UInt8.of.examples_template_template_main_digit_0 of=List.map shapes=examples.template.template_main.digit/0 equations=examples.template.template_main.List_map_Int_UInt8.of.examples_template_template_main_digit_0.eq_1" "$OUT/load.txt" || bad "missing record: the INSTANCE at digit with its equations"
+checks=$((checks+1)); grep -q "^DEFINE examples.template.template_main.main " "$OUT/load.txt" || bad "the entry is not defined"
+# the E-first instance (rule 3's last sentence): a body E-first through a fn over a Symbol takes
+# a template at a named fn — the instance built with no equations, the body RUNNABLE no_l_identity
+R=v3/pins/loader/template_e_first
+"$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard > "$OUT/efirst.txt" 2>&1
+checks=$((checks+1)); grep -q "^INSTANCE main.main_mapi.of.main_digit_0 of=main.mapi shapes=main.digit/0 equations=$" "$OUT/efirst.txt" || { bad "missing record: the E-first INSTANCE at digit with no equations (pin template_e_first)"; grep '^INSTANCE' "$OUT/efirst.txt" | cut -c1-200; }
+checks=$((checks+1)); grep -q "^RUNNABLE fn main.run why=no_l_identity route=e_first" "$OUT/efirst.txt" || { bad "template_e_first's entry is not RUNNABLE no_l_identity"; grep -E '^(RUNNABLE|DEFINE|REFUSE)' "$OUT/efirst.txt" | cut -c1-200; }
 # a package type is never an E type: the structure has no E twin, no program mentions it
 checks=$((checks+1)); grep -q "^RUNNABLE examples.template.package.Monoid" "$OUT/load.txt" && bad "the package type Monoid was taken as an E type"
 

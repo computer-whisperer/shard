@@ -1,0 +1,142 @@
+;;; v3/examples/calc/calc_bin.shard — calc's main as the first bin (LANGUAGE.md §8.6 slice 4.3
+;;; landing 1, rules 4–5; law §4.7, §9.3): the artifact declaration in its own file beside the
+;;; program (`calc_main.shard`), so a consumer of the loop never trips the bin's gates. A
+;;; World's observables — the lines written, the files read, the exit — are opaque constants
+;;; over it (never unfolded: the value a typing witness), given meaning by the bolts: nine
+;;; axioms, each of the three externs calc touches on its own observable and preserving the
+;;; other two, `get_args` preserving all three. The requirements are over main's observables
+;;; only (the old contracts' principle, never an internal function or state): `main_output` —
+;;; the lines main writes are the model world's lines for the arguments, through `run_world`
+;;; and slice 3.21's `run_eq_spec_world` to the spec — and `main_reads`, no file read. Proven
+;;; through I: induction on the lines, `drive_host` against `run_world`, the bolts rewriting
+;;; the observables, the model's accumulator split off.
+;;;
+;;;   load.shard --root v3 --init … v3/examples/calc/calc_bin.shard
+;;;     → BIN examples.calc.calc_bin.calc entry examples.calc.calc_main.main externs 3 trusts 9 requires 2/2
+
+(import "calc_main.shard")
+(import "calc_app_world.shard")
+(trusts get_args_output get_args_reads get_args_exit write_line_output write_line_reads write_line_exit exit_output exit_reads exit_exit)
+(use examples.calc.calc_main)
+(use examples.calc.calc_app)
+(use examples.calc.calc_app_world)
+(use examples.calc.calc_app_trace)
+(use std.bytes)
+(use std.host)
+(use Init.List cons nil)
+(use Init.Option)
+(use examples.calc.calc_app.Action)
+(use examples.calc.calc_app.CalcState)
+(use examples.calc.calc_app.Step)
+(use examples.calc.calc_app_world.CalcWorld)
+
+;; ---- the observables --------------------------------------------------------------------------
+(opaque w_output ((w World)) (List ByteArray) nil)
+(opaque w_reads ((w World)) (List ByteArray) nil)
+(opaque w_exit ((w World)) (Option Int) none)
+
+;; ---- the bolts ----------------------------------------------------------------------------------
+;; get_args: the arguments read, nothing observed changes (the premise form: the pair it returns)
+(axiom get_args_output ((w World) (lines (List ByteArray)) (w1 World)) (-> (= (get_args w) (Prod.mk lines w1)) (= (w_output w1) (w_output w))))
+(axiom get_args_reads ((w World) (lines (List ByteArray)) (w1 World)) (-> (= (get_args w) (Prod.mk lines w1)) (= (w_reads w1) (w_reads w))))
+(axiom get_args_exit ((w World) (lines (List ByteArray)) (w1 World)) (-> (= (get_args w) (Prod.mk lines w1)) (= (w_exit w1) (w_exit w))))
+;; write_line: one more line written, nothing else
+(axiom write_line_output ((bs ByteArray) (w World)) (= (w_output (write_line bs w)) (List.append (w_output w) (cons bs nil))))
+(axiom write_line_reads ((bs ByteArray) (w World)) (= (w_reads (write_line bs w)) (w_reads w)))
+(axiom write_line_exit ((bs ByteArray) (w World)) (= (w_exit (write_line bs w)) (w_exit w)))
+;; exit: the code recorded, nothing else
+(axiom exit_output ((code Int) (w World)) (= (w_output (exit code w)) (w_output w)))
+(axiom exit_reads ((code Int) (w World)) (= (w_reads (exit code w)) (w_reads w)))
+(axiom exit_exit ((code Int) (w World)) (= (w_exit (exit code w)) (some code)))
+
+;; ---- the model's lines as the bytes calc writes --------------------------------------------------
+;; a model line's codes as the bytes `perform` writes for it; the world's lines; the arguments' bytes as codes
+(fn line_bytes ((cs (List Int))) ByteArray (Bytes.ofList (bytes_of cs)))
+(fn out_bytes ((ls (List (List Int)))) (List ByteArray) (measure (struct ls))
+  (match ls
+    (nil nil)
+    ((cons l r) (cons (line_bytes l) (out_bytes r)))))
+(fn world_lines ((w CalcWorld)) (List (List Int)) (match w ((CalcWorld out) out)))
+(fn codes_of_lines ((ls (List ByteArray))) (List (List Int)) (measure (struct ls))
+  (match ls
+    (nil nil)
+    ((cons l r) (cons (codes_of (Bytes.toList l)) (codes_of_lines r)))))
+
+(theorem out_bytes_append ((xs (List (List Int)))) (forall ((ys (List (List Int)))) (= (out_bytes (List.append xs ys)) (List.append (out_bytes xs) (out_bytes ys))))
+  (by (induction xs
+        ((nil () (intro ys) (rw List.nil_append) (rw out_bytes.eq_1) (rw List.nil_append) rfl)
+         (cons (x r ih) (intro ys) (rw List.cons_append) (rw out_bytes.eq_2) (rw out_bytes.eq_2) (rw (ih ys)) (rw List.cons_append) rfl)))))
+
+;; what one action adds to the model world's lines; the action on any world is that, appended
+(fn action_lines ((a Action)) (List (List Int))
+  (match a
+    ((Print cs) (cons cs nil))
+    ((Exit n) nil)
+    (Nop nil)))
+(theorem apply_action_lines ((out (List (List Int))) (a Action)) (= (apply_action (CalcWorld out) a) (CalcWorld (List.append out (action_lines a))))
+  (by (cases a
+        ((Print (cs) (reduce) rfl)
+         (Exit (n) (reduce) (rw List.append_nil) rfl)
+         (Nop () (reduce) (rw List.append_nil) rfl)))))
+
+;; the model's accumulator: the lines written so far stay in front
+(theorem run_world_acc ((events (List (List Int)))) (forall ((out (List (List Int))) (s CalcState)) (= (world_lines (run_world (CalcWorld out) s events)) (List.append out (world_lines (run_world (CalcWorld nil) s events)))))
+  (by (induction events
+        ((nil () (intro out s) (rw run_world.eq_1) (rw run_world.eq_1) (rw world_lines.eq_1) (rw world_lines.eq_1) (rw List.append_nil) rfl)
+         (cons (e r ih) (intro out s) (rw run_world.eq_2) (rw run_world.eq_2)
+           (rw (apply_action_lines out (emitted s e))) (rw (apply_action_lines nil (emitted s e))) (rw List.nil_append)
+           (rw (ih (List.append out (action_lines (emitted s e))) (next_state s e)))
+           (rw (ih (action_lines (emitted s e)) (next_state s e)))
+           (rw List.append_assoc) rfl)))))
+
+;; one action on the host: what it writes is what the model adds
+(theorem perform_output ((a Action) (w World)) (= (w_output (perform a w)) (List.append (w_output w) (out_bytes (action_lines a))))
+  (by (cases a
+        ((Print (cs) (rw perform.eq_1) (rw write_line_output) (reduce rhs) rfl)
+         (Exit (n) (rw perform.eq_2) (rw exit_output) (reduce rhs) (rw List.append_nil) rfl)
+         (Nop () (rw perform.eq_3) (reduce rhs) (rw List.append_nil) rfl)))))
+(theorem perform_reads ((a Action) (w World)) (= (w_reads (perform a w)) (w_reads w))
+  (by (cases a
+        ((Print (cs) (rw perform.eq_1) (rw write_line_reads) rfl)
+         (Exit (n) (rw perform.eq_2) (rw exit_reads) rfl)
+         (Nop () (rw perform.eq_3) rfl)))))
+
+;; the loop against the model: induction on the lines, the state and the World generalized
+(theorem drive_output ((lines (List ByteArray))) (forall ((s CalcState) (w World)) (= (w_output (drive_host s lines w)) (List.append (w_output w) (out_bytes (world_lines (run_world (CalcWorld nil) s (codes_of_lines lines)))))))
+  (by (induction lines
+        ((nil () (intro s w) (rw drive_host.eq_1) (rw codes_of_lines.eq_1) (rw run_world.eq_1) (rw world_lines.eq_1) (rw out_bytes.eq_1) (rw List.append_nil) rfl)
+         (cons (l rest ih) (intro s w) (rw drive_host.eq_2) (rw codes_of_lines.eq_2) (rw run_world.eq_2) (rw emitted.eq_1) (rw next_state.eq_1)
+           (cases (step s (codes_of (Bytes.toList l)))
+             ((Step (s1 a) (reduce)
+               (rw (ih s1 (perform a w))) (rw (perform_output a w))
+               (rw (apply_action_lines nil a)) (rw List.nil_append)
+               (rw (run_world_acc (codes_of_lines rest) (action_lines a) s1))
+               (rw (out_bytes_append (action_lines a) (world_lines (run_world (CalcWorld nil) s1 (codes_of_lines rest)))))
+               (rw List.append_assoc) rfl))))))))
+(theorem drive_reads ((lines (List ByteArray))) (forall ((s CalcState) (w World)) (= (w_reads (drive_host s lines w)) (w_reads w)))
+  (by (induction lines
+        ((nil () (intro s w) (rw drive_host.eq_1) rfl)
+         (cons (l rest ih) (intro s w) (rw drive_host.eq_2)
+           (cases (step s (codes_of (Bytes.toList l)))
+             ((Step (s1 a) (reduce) (rw (ih s1 (perform a w))) (rw (perform_reads a w)) rfl))))))))
+
+;; ---- the requirements ---------------------------------------------------------------------------
+;; main writes the model world's lines for its arguments and nothing else — the spec's lines,
+;; through slice 3.21's run_eq_spec_world
+(theorem main_output ((w World)) (= (w_output (main w)) (List.append (w_output w) (out_bytes (world_lines (run_world_spec (CalcWorld nil) (CalcState none) (codes_of_lines (Prod.fst (get_args w))))))))
+  (by (rw main.eq_1)
+      (cases (get_args w) hg
+        ((Prod.mk (lines w1) (reduce)
+          (rw (drive_output lines (CalcState none) w1)) (rw (get_args_output w lines w1 hg)) (rw (run_eq_spec_world (codes_of_lines lines) (CalcWorld nil) (CalcState none))) rfl)))))
+;; main reads no file
+(theorem main_reads ((w World)) (= (w_reads (main w)) (w_reads w))
+  (by (rw main.eq_1)
+      (cases (get_args w) hg
+        ((Prod.mk (lines w1) (reduce) (rw (drive_reads lines (CalcState none) w1)) (rw (get_args_reads w lines w1 hg)) rfl)))))
+
+;; ---- the artifact -------------------------------------------------------------------------------
+(bin calc
+  (entry main)
+  (externs get_args write_line exit)
+  (trusts get_args_output get_args_reads get_args_exit write_line_output write_line_reads write_line_exit exit_output exit_reads exit_exit)
+  (requires main_output main_reads))

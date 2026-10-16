@@ -39,9 +39,9 @@ t_run=$(secs $s)
 checks=$((checks+1)); [ "$(load --run $ENTRY "$MAIN" -- 7 2>&1 | tail -1)" = "6" ] || bad "read at index 7 is not 6"
 checks=$((checks+1)); [ "$(load --run $ENTRY "$MAIN" -- 8 2>&1 | tail -1)" = "-" ] || bad "read past the end is not -"
 s=$(date +%s); load --store "$STORE" "$MAIN" > "$OUT/store.txt" 2>&1; t_store=$(secs $s)
-checks=$((checks+1)); grep -q "^STORE: $STORE new=56 shared=0$" "$OUT/store.txt" || { bad "the store did not take 56 declarations"; grep '^STORE' "$OUT/store.txt"; }
+checks=$((checks+1)); grep -q "^STORE: $STORE new=64 shared=0$" "$OUT/store.txt" || { bad "the store did not take 64 declarations"; grep '^STORE' "$OUT/store.txt"; }
 s=$(date +%s); "$EVAL" direct v3/kernel/verify_release.shard "$STORE" "$EXPORT" "$INDEX" > "$OUT/verify.txt" 2>&1; rc=$?; t_verify=$(secs $s)
-checks=$((checks+1)); [ "$rc" = 0 ] && grep -q '^RELEASE: declarations 56  accepted 56 ' "$OUT/verify.txt" || { bad "K alone did not accept the 56 declarations (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | tail -3 | cut -c1-300; }
+checks=$((checks+1)); [ "$rc" = 0 ] && grep -q '^RELEASE: declarations 64  accepted 64 ' "$OUT/verify.txt" || { bad "K alone did not accept the 64 declarations (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | tail -3 | cut -c1-300; }
 echo "path_test: the path composes — load $t_load s, run $t_run s, store $t_store s, verify $t_verify s"
 
 # ---- the breaks ------------------------------------------------------------------------------

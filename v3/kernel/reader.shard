@@ -12,10 +12,12 @@
 (import "engine.shard")
 (import "ev.shard")
 (import "etable.shard")
+(import "inhabit.shard")
 (use kernel.k)
 (use kernel.decl)
 (use kernel.elab)
 (use kernel.expr)
+(use kernel.inhabit)
 (use kernel.kw)
 (use kernel.name)
 (use kernel.prelude)
@@ -119,7 +121,7 @@
      (if (bool_or (sym_eq h (quote import)) (bool_or (sym_eq h (quote use)) (sym_eq h (quote trusts)))) (RDDirective s)
      (if (sym_eq h (quote sig)) (read_sig sc env args)
      (if (sym_eq h (quote requirement)) (read_requirement sc env args)
-     (if (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote fulfills)) (sym_eq h (quote realize)))))
+     (if (bool_or (sym_eq h (quote fn)) (bool_or (sym_eq h (quote extern)) (bool_or (sym_eq h (quote fulfills)) (bool_or (sym_eq h (quote realize)) (sym_eq h (quote bin))))))
        (RDLater h)
      (match (reserved_phase h)
        ((Some ph) (RDErr (quote reserved_form) (append (chars_of_sym h) (append ": " ph))))
@@ -130,9 +132,10 @@
     (_ (RDErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
 (fn reserved_phase ((h Symbol)) (Option (List Int))
   (if (bool_or (sym_eq h (quote instance)) (sym_eq h (quote class))) (Some "phase 3 (Stage 3); Init's instances at Nat, Int, Bool and List are the instance table's (§8.4 slice 3.27 rule 3)")
-  (if (bool_or (sym_eq h (quote bin)) (bool_or (sym_eq h (quote requires)) (sym_eq h (quote app)))) (Some "phase 4")
+  (if (sym_eq h (quote requires)) (Some "a clause of the bin form — (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)) (§4, slice 4.3 landing 1)")
+  (if (sym_eq h (quote app)) (Some "dropped (§12.5): a loop in a bin is the MVU story, no second form")
   (if (bool_or (sym_eq h (quote namespace)) (bool_or (sym_eq h (quote section)) (sym_eq h (quote variable)))) (Some "undecided; declare the dotted name")
-  None))))
+  None)))))
 ;; a Lean keyword with no form here is refused `lean_form` with the V3 spelling or the law's
 ;; reason (slice 3.27 landing 4; docs/LEAN.md lists the rows) — `unknown_form` is for the rest
 (fn lean_form ((h Symbol)) (Option (List Int))
@@ -184,6 +187,36 @@
                              (rd_ok e5 (list (OpaqueDecl cv value False (list n))))
                              (rd_ok e5 (list (DefnDecl cv value (if (sym_eq kind (quote abbrev)) HAbbrev (HRegular (def_height (el_env e5) value))) Safe (list n))))))))))))))))))))
     (_ (RDErr (quote bad_shape) (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
+
+;; (extern NAME BINDERS RET): in L an opaque constant of the declared type (§8.6 slice 4.3
+;; landing 1, rule 3; law §4.7). K's opaque kind checks a value and never unfolds it, so the
+;; value is the type's default witness (inhabit.shard) and the constant has no equations: a
+;; function calling the extern is defined with its equations where it was a program without a
+;; definition, and a requirement can name the entry. No witness is `extern_uninhabited`; a
+;; binder or the result the elaborator cannot read is its refusal — the loader then keeps the
+;; extern E-only with the obstacle on its record (loader.shard load_extern)
+(fn read_extern ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
+  (match args
+    ((Cons hd (Cons (SList bs) (Cons ty Nil)))
+     (match (read_head sc hd)
+       ((Pair None m) (RDErr (quote bad_name) m))
+       ((Pair (Some (Head n lps)) _)
+        (match (read_binders (el0 sc env lps Nil n) bs Nil)
+          ((Pair None m) (RDErr (quote bad_binder) m))
+          ((Pair (Some (Pair e1 fvars)) _)
+           (match (elab_type e1 ty)
+             ((EErr r m) (RDErr r m))
+             ((EOk e2 t _)
+              (match (inhabit (el_w e2) t 32)
+                ((Pair _ None) (RDErr (quote extern_uninhabited) (append (show_name n) ": no default value of the declared result type can be built (a sort, a proposition, or a type without a closing constructor)")))
+                ((Pair w (Some v))
+                 (match (close_pis (el_set_w e2 w) fvars t)
+                   ((Pair _ (FinErr r m)) (RDErr r m))
+                   ((Pair e4 (FinOk T))
+                    (match (close_lams e4 fvars v)
+                      ((Pair _ (FinErr r m)) (RDErr r m))
+                      ((Pair e5 (FinOk value)) (rd_ok e5 (list (OpaqueDecl (ConstantVal n lps T) value False (list n)))))))))))))))))
+    (_ (RDErr (quote bad_shape) "(extern NAME ((x TYPE)…) TYPE)"))))
 
 ;; the sidecar's entry for the theorem n: its name as written, qualified as n was
 (fn auto_entry ((sc Scope) (autos (List Auto)) (n Name)) (Option (Pair Int (List SExpr))) (auto_entry_as sc autos n Anon))
