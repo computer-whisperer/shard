@@ -40,12 +40,13 @@ for t in tb_len tb_len_aux len_ofNat len_S1 len_S2 len_S2_one len_E3a len_E3b le
 done
 checks=$((checks+1)); grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | grep -q 'axioms=\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\) ' || { bad "tb_len does not rest on Init's three axioms alone"; grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | cut -c1-200; }
 # tb_app (landing 2): its general form, the two lemmas of the cons case and the run lemmas accepted; the
-# theorem on Init's three axioms and the six declared parameters, nothing else
+# theorem on Init's three axioms and the six declared parameters, nothing else (the closure sorted under
+# the C locale: the runner's collation, not the dev box's)
 for t in tb_app tb_app_aux app_cons_ok app_ghost app_S1 app_S2 app_S2_one app_E1 app_E2 app_E3_fail_app app_E3_fail_alloc app_E3_ret app_body_ret app_body_fail app_body_nil app_body_nil_fail; do
   checks=$((checks+1)); accepted models.imp.app.$t || bad "models.imp.app.$t is not accepted"
 done
-axs=$(grep '^ACCEPT models.imp.app.tb_app ' "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/' | tr ',' '\n' | sort | tr '\n' ' ')
-checks=$((checks+1)); [ "$axs" = "Classical.choice models.imp.rtlaw.hinv_fill models.imp.rtlaw.hinv_seal models.imp.rtlaw.hr_fill models.imp.rtlaw.hr_seal models.imp.rtlaw.rt_alloc_run models.imp.rtlaw.rt_inc_run propext Quot.sound " ] || bad "tb_app does not rest on Init's three axioms and the six parameters alone: $axs"
+axs=$(grep '^ACCEPT models.imp.app.tb_app ' "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
+checks=$((checks+1)); [ "$axs" = "Classical.choice Quot.sound models.imp.rtlaw.hinv_fill models.imp.rtlaw.hinv_seal models.imp.rtlaw.hr_fill models.imp.rtlaw.hr_seal models.imp.rtlaw.rt_alloc_run models.imp.rtlaw.rt_inc_run propext " ] || bad "tb_app does not rest on Init's three axioms and the six parameters alone: $axs"
 # the parameters: the runtime's laws, each a trusted axiom recorded PARAM NAME axiom (rule 5; the loader's record)
 for t in rt_alloc_run hr_fill hinv_fill hr_seal hinv_seal rt_inc_run; do
   checks=$((checks+1)); grep -q "^PARAM models.imp.rtlaw.$t axiom\$" "$OUT/load.txt" || bad "the runtime law models.imp.rtlaw.$t is not a declared parameter"
