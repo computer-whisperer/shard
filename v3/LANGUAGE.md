@@ -3330,7 +3330,7 @@ it entrenches. The slices, in the order built:
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
-| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed.")** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
+| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4624,6 +4624,87 @@ not a handler); tokens through templates, lifted lambdas and list cells
 `examples/sha256sum` and the other bins (phase 5 by manifest).
 
 
+**Slice 4.3 as built, landing 0 (2026-10-16) — the well-threadedness
+check, and the law's fixtures as pins.** Rules 1 and 2.
+`v3/kernel/thread.shard` (331 lines): the check over an E function's
+program as rule 1 states it, with these refinements found at the build.
+(a) **The kinds in scope are a fixpoint, not a walk.** A first version
+decided whether a type carries a token by walking its constructors'
+fields with a depth fuel and answering yes when the fuel ran out; the
+kernel's record types are deeper than eight layers, so every function
+over `W`, `Cx` or `Load` became token-handling and 2,249 of the loader's
+own functions read as `world_twice`. As built, `th_kinds` computes once
+per file end the World types (the last parameter type of every extern of
+the table) and the **carriers** — the least set of inductives one of
+whose constructors has a field whose type names a World or a carrier at
+any head; a parametric field says nothing, its instantiation judged
+where the type is used (`(Prod Int World)` names the World) — and
+`carries` is a linear walk of a type expression over the two lists. (b)
+**A branch yields in its own state.** The arms of a match and the sides
+of an if each consume the value they yield before the join, so a token
+used in one arm and yielded by a sibling is used once on either path;
+the value of the whole is fresh, of the arms' kind, allocated after the
+join, and each arm's identities continue from the join so far so that no
+two arms share one. The first version consumed the arms' values in the
+joined state and started each arm from the previous arm's counter:
+eleven of the loader's functions (`run_loop`, `load_forms`, `print_recs`
+among them) read as `world_twice` on a value no path uses twice. (c)
+**Constructors are boxes, uniformly.** A token boxed in any constructor
+— a pair, a list cell, a user record — is owned by the box, consumed
+when the box is passed on and yielded again by one match on it; the
+design's example of a token in a list cell is supported, not refused.
+The unsupported class is a token at a polymorphic or primitive
+parameter, the World itself matched, and a callee the table lacks; a
+World built by its constructor is `world_forged`. (d) **The verdict's
+detail names the origin and both uses** (`parameter 2 used twice:
+main.write_line, boxed in Prod.mk`; `a Prod.mk used twice: matched,
+matched`). The loader records `THREAD NAME ok` or `THREAD NAME REASON:
+DETAIL` at a file's end for every E function the table gained since the
+file's imports (`Fx.ecount` captured after the imports load — captured
+at the file's start, every importer re-reported its imports' functions)
+that carries a World in its signature or reaches an extern in its body;
+`rec_count` leaves the summary line as it was. The harness's two forms,
+`NAME threaded` and `NAME unthreaded REASON`, the first in the two-word
+branch of `matches` beside `read-error REASON`.
+
+**The pins (nine, 267 → 276).** The law's negative —
+`thread_pair_twice`: one World boxed in a pair, unwrapped twice, written
+twice, `a Prod.mk used twice: matched, matched`; the duplication behind
+a helper boundary — `thread_helper_twice`: a helper that writes through
+the token it was given and also returns it, the fault in the helper's
+own body (`parameter 2 used twice: write_line, boxed in Prod.mk`), its
+caller threaded; `thread_sequential`: two writes on one token. The
+positives — `thread_branches`: the arms of a match on `read_file`'s pair
+and the sides of an if on `write_file`'s flag each consuming the
+incoming token once; `thread_helper_ok`: a helper returning the token
+inside a pair, a recursive `echo` consuming and yielding along one path;
+`thread_unused`: a token dropped (`drop`) and the arguments unused —
+affine. The check's own classes — `thread_poly`: a token passed to a
+polymorphic `wrap`, `world_unsupported`; `thread_forged`: `(World 0)`
+built in a program; `thread_match_world`: the World itself taken apart.
+Not written at this landing: the law's **erased proof reference** — a
+function calling an extern is read E-first today (`no_l_meaning`), so a
+proof term inside it is no E term at all; the fixture lands with the
+World's L meaning (landing 1, rule 3), where the typed route erases the
+proof and the check sees the token once.
+
+**The kernel's own drivers measured** (rule 2's count, on the
+bootstrap): the loader's closure (`load.shard`, 42 modules, 3,046
+runnable) 87 token-handling functions, 87 ok, in 12 s; `prove` 80 of 80;
+`verify_release` 51 of 51; `initindex` 25 of 25; `t0` 2 of 2. **One
+finding against the loader, fixed:** `load_file_module`'s failure branch
+after pre-registration returned the World `sealed_ident` had already
+consumed (`w1`) instead of the one the sidecar's read returned —
+harmless under the interpreter, where the token is a datum, and exactly
+the fault law §4.7 names; the check found it on its first run over the
+kernel. **One finding against the kernel's naming:** the bootstrap
+dispatches a call by its bare name across every module of the process,
+so a function name defined in two kernel files is a collision whether or
+not either imports the other — the check's association lookup shared
+`assoc_int` with `ev.shard` and the loader's run reached the evaluator's
+version (a match on an integer with no arm); renamed, and the kernel's
+function names are unique across its files, the drivers' `main`
+excepted. The names check extended to that rule.
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its

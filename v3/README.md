@@ -1804,6 +1804,20 @@ the model world. Landing 0 the check and the pins; landing 1 the form and
 calc's bin; landing 2 the trace, the model test, the binary, the count. Not
 in it: T6's handle, the `app` driver, the String flip, the other bins.
 
+**Slice 4.3 landing 0 built 2026-10-16 — the well-threadedness check, the
+law's fixtures as pins, the kernel's drivers measured** (`LANGUAGE.md`
+§8.6 "as built, landing 0"; §13 item 68). `kernel/thread.shard`, 331
+lines: the check over an E function's program — the kinds in scope a
+fixpoint over the table, tokens and boxes with identities, each branch
+yielding in its own state before the join; the loader's `THREAD` record
+at a file's end, a report at this landing; the harness's two forms; nine
+pins (267 → 276). The kernel's drivers under the check: the loader's
+closure 87 of 87 ok, `prove` 80/80, `verify_release` 51/51, `initindex`
+25/25, `t0` 2/2 — one stale World in `load_file_module` found and fixed.
+Four findings about the check and the kernel recorded (the carrier walk's
+fuel, the join of branches, the bootstrap's bare-name dispatch, the
+file-start count). Gates on the quiet dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 276 cases, 0 failed, on both engines (56 s on the bootstrap, 11 s on the binary, tied byte-identical); `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,694 s (two heavy jobs; the loader's chain emit 30 s, lower 75, codegen 266, cc 69 over 8,519 declarations, 50 modules); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 955 s of wall and 4,664 s of entrypoint time (imp_test 905 s: the two roots loaded and stored in 763 s, K's replay of the store 141 s, 236 checks; the tie 76 checks, 0 failed, in 358 s; parity byte-identical over 31 closures and 137,781 declarations in 367 s — the 590 more the loader's growth across the closures that import it; store_test 596, tactic_lib_test 290, define_test 275, calc_test 270, path_test 249); the native suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 397 s of wall and 1,303 s of entrypoint time (imp_test 146 s: the two roots loaded and stored in 123 s, K's replay 22 s; the tie 332 s; parity byte-identical over 31 closures and 137,781 declarations in 167 s; calc_test 186, store_test 95; the loader pins' entrypoint 14 s); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
 2026-10-14): `load.shard --emit` projects a driver's closure, as the

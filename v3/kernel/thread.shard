@@ -1,0 +1,331 @@
+;;; v3/kernel/thread.shard — the well-threadedness check (FOUNDATION §4.7 (i); v3/LANGUAGE.md
+;;; §8.6 slice 4.3 rule 1, landing 0). Over an E function's program — the classifier's output,
+;;; the staged erased structure, so a reference used only in an erased proof is already gone —
+;;; every World token is used at most once along every path. A token is a value whose E type is
+;;; a World type: the type an extern in scope takes as its last parameter; a value whose type
+;;; names a World or a carrier (an inductive with a World-naming field) is a box. An extern consumes
+;;; its World argument and yields its result's token (a World, or the World inside the pair it
+;;; returns); a value carrying tokens — a pair, a user constructor with a World field — is a
+;;; box, owned as one: consumed when passed on, matched once to yield its fields' tokens, so one
+;;; box unwrapped twice is one token used twice; a call consumes a token by the callee's
+;;; signature (a World parameter, or one whose type carries a World); the arms of a match and the
+;;; branches of an if are exclusive, each may consume the incoming token once; a let is
+;;; sequential, a let of a variable an alias of the same token; a token left unused is affine
+;;; use. Unsupported ownership — a token at a polymorphic or primitive parameter, the World
+;;; itself matched, a callee the table lacks — is refused conservatively, never passed through a
+;;; wrapper that looks pure; a World built by its constructor is forged. The verdict is a record
+;;; on every token-handling function (loader.shard: `THREAD NAME ok`, `THREAD NAME REASON:
+;;; DETAIL`); the refusal on a bin's closure comes with the bin form (landing 1). Variables are
+;;; the evaluator's: `EBVar i` the i-th entry from the top of the stack, the last parameter at
+;;; 0, a let's bindings pushed in order, a pattern's variables in capture order (ev.shard).
+(import "classify.shard")
+(use kernel.classify)
+(use kernel.etable)
+(use kernel.etable.EInfo)
+(use kernel.etable.ESt)
+(use kernel.name)
+(use kernel.name.Name)
+(use kernel.prelude)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog)
+(use kernel.prog.EArm)
+(use kernel.prog.ECtorDef)
+(use kernel.prog.EDecl)
+(use kernel.prog.EPat)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
+(use kernel.util)
+
+;; ---- the kinds in scope: the World types and the carriers --------------------------------
+;; the World types: the last parameter type of every extern of the table; the carriers: the
+;; inductives one of whose constructors has a field whose type names a World or a carrier at
+;; any head — the least such set, a fixpoint over the table (a parametric field says nothing:
+;; its instantiation is judged where the type is used, `(Prod Int World)` naming the World)
+(type Wk (Wk (List Name) (List Name)))
+(fn wk_worlds ((wk Wk)) (List Name) (match wk ((Wk ws _) ws)))
+(fn wk_carriers ((wk Wk)) (List Name) (match wk ((Wk _ cs) cs)))
+(fn th_kinds ((es ESt)) Wk
+  (let ((ws (world_types es)))
+    (Wk ws (carriers_fix (es_decls es) ws Nil 64))))
+(fn world_types ((es ESt)) (List Name) (wt_go (es_decls es) Nil))
+(fn wt_go ((ds (List EDecl)) (acc (List Name))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (Nil acc)
+    ((Cons (EExtern _ _ ps _) r)
+     (match (last_ty ps)
+       ((Some (ETCon n _)) (wt_go r (if (mem_name n acc) acc (Cons n acc))))
+       (_ (wt_go r acc))))
+    ((Cons _ r) (wt_go r acc))))
+(fn last_ty ((ps (List EType))) (Option EType)
+  (measure (struct ps))
+  (match ps (Nil None) ((Cons t Nil) (Some t)) ((Cons _ r) (last_ty r))))
+(fn carriers_fix ((ds (List EDecl)) (ws (List Name)) (cs (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (lt fuel 1) cs
+    (let ((cs2 (carriers_pass ds ws cs)))
+      (if (int_eq (len cs2) (len cs)) cs (carriers_fix ds ws cs2 (- fuel 1))))))
+(fn carriers_pass ((ds (List EDecl)) (ws (List Name)) (cs (List Name))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (Nil cs)
+    ((Cons (EInd n _ ctors) r)
+     (carriers_pass r ws (if (mem_name n cs) cs (if (ctors_name ctors ws cs) (Cons n cs) cs))))
+    ((Cons _ r) (carriers_pass r ws cs))))
+(fn ctors_name ((ctors (List ECtorDef)) (ws (List Name)) (cs (List Name))) Bool
+  (measure (struct ctors))
+  (match ctors (Nil False) ((Cons (ECtorDef _ fts) r) (if (tys_name fts ws cs) True (ctors_name r ws cs)))))
+(fn tys_name ((ts (List EType)) (ws (List Name)) (cs (List Name))) Bool
+  (measure (struct ts))
+  (match ts (Nil False) ((Cons t r) (if (ty_names t ws cs) True (tys_name r ws cs)))))
+;; a type naming a World or a carrier at any head
+(fn ty_names ((t EType) (ws (List Name)) (cs (List Name))) Bool
+  (measure (struct t))
+  (match t
+    ((ETVar _) False)
+    ((ETCon n args) (if (mem_name n ws) True (if (mem_name n cs) True (tys_name args ws cs))))))
+(fn is_world ((wk Wk) (t EType)) Bool (match t ((ETCon n _) (mem_name n (wk_worlds wk))) (_ False)))
+;; a type carrying a token: naming a World or a carrier at any head
+(fn carries ((wk Wk) (t EType)) Bool (ty_names t (wk_worlds wk) (wk_carriers wk)))
+(fn tys_carry ((wk Wk) (ts (List EType))) Bool (tys_name ts (wk_worlds wk) (wk_carriers wk)))
+
+;; ---- abstract values and the state --------------------------------------------------------
+;; a plain value; a token with its identity; a box (a value carrying tokens) with its identity
+(type Abs (ANone) (ATok Int) (ABox Int))
+;; the next identity; the identities used, each with its first use; each identity's th_origin; the
+;; first fault
+(record Th (next Int) (used (List (Pair Int (List Int)))) (orig (List (Pair Int (List Int)))) (bad (Option (Pair Symbol (List Int)))))
+(fn th0 () Th (make Th (next 0) (used Nil) (orig Nil) (bad None)))
+(fn th_fresh ((st Th) (label (List Int))) (Pair Int Th)
+  (Pair (Th.next st) (with Th st (next (+ (Th.next st) 1)) (orig (Cons (Pair (Th.next st) label) (Th.orig st))))))
+(fn th_bad ((st Th) (r Symbol) (m (List Int))) Th
+  (match (Th.bad st) ((Some _) st) (None (with Th st (bad (Some (Pair r m)))))))
+(fn th_assoc ((xs (List (Pair Int (List Int)))) (k Int)) (Option (List Int))
+  (measure (struct xs))
+  (match xs (Nil None) ((Cons (Pair i v) r) (if (int_eq i k) (Some v) (th_assoc r k)))))
+(fn th_origin ((st Th) (id Int)) (List Int)
+  (match (th_assoc (Th.orig st) id) ((Some o) o) (None "a token")))
+;; a use of a token or a box: the second is the fault, naming the th_origin and both uses
+(fn th_use ((st Th) (id Int) (label (List Int))) Th
+  (match (th_assoc (Th.used st) id)
+    ((Some first) (th_bad st (quote world_twice) (append (th_origin st id) (append " used twice: " (append first (append ", " label))))))
+    (None (with Th st (used (Cons (Pair id label) (Th.used st)))))))
+(fn th_consume ((st Th) (a Abs) (label (List Int))) Th
+  (match a (ANone st) ((ATok i) (th_use st i label)) ((ABox i) (th_use st i label))))
+(fn is_tok ((a Abs)) Bool (match a (ANone False) (_ True)))
+(fn any_tok ((as (List Abs))) Bool
+  (measure (struct as))
+  (match as (Nil False) ((Cons a r) (if (is_tok a) True (any_tok r)))))
+(fn consume_all ((st Th) (as (List Abs)) (label (List Int))) Th
+  (measure (struct as))
+  (match as (Nil st) ((Cons a r) (consume_all (th_consume st a label) r label))))
+;; a fresh value of a type: a token for a World, a box for a carrier, nothing otherwise
+(fn abs_of_type ((es ESt) (wk Wk) (t (Option EType)) (st Th) (label (List Int))) (Pair Abs Th)
+  (match t
+    (None (Pair ANone st))
+    ((Some ty)
+     (if (is_world wk ty) (match (th_fresh st label) ((Pair i st1) (Pair (ATok i) st1)))
+     (if (carries wk ty) (match (th_fresh st label) ((Pair i st1) (Pair (ABox i) st1)))
+       (Pair ANone st))))))
+;; the join of two exclusive branches: a use in either counts after them; the first fault stands
+(fn th_merge ((a Th) (b Th)) Th
+  (make Th (next (if (lt (Th.next a) (Th.next b)) (Th.next b) (Th.next a)))
+           (used (assoc_union (Th.used b) (Th.used a)))
+           (orig (assoc_union (Th.orig b) (Th.orig a)))
+           (bad (match (Th.bad a) ((Some x) (Some x)) (None (Th.bad b))))))
+(fn assoc_union ((xs (List (Pair Int (List Int)))) (acc (List (Pair Int (List Int))))) (List (Pair Int (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons (Pair i v) r) (assoc_union r (match (th_assoc acc i) ((Some _) acc) (None (Cons (Pair i v) acc)))))))
+(fn abs_like ((a Abs) (i Int)) Abs (match a (ANone ANone) ((ATok _) (ATok i)) ((ABox _) (ABox i))))
+;; the branches of a match or an if: each consumes the value it yields in its own state (a
+;; token used in one arm and yielded by a sibling is used once on either path), the states are
+;; joined, and the value of the whole is a fresh one of the arms' kind, allocated after the join
+(fn abs_kind ((a Abs)) Abs (abs_like a 0))
+(fn kind_join ((k Abs) (b Abs)) Abs (match k (ANone (abs_kind b)) (_ k)))
+(fn th_yield ((a Abs) (st Th)) Th (th_consume st a "yielded by a branch"))
+(fn th_result ((k Abs) (st Th)) (Pair Abs Th)
+  (match k
+    (ANone (Pair ANone st))
+    (_ (match (th_fresh st "a value of the branches") ((Pair i st1) (Pair (abs_like k i) st1))))))
+
+;; ---- the walk --------------------------------------------------------------------------------
+;; the stack: each entry's E type (the classifier's, for the types of what is bound) and value
+(fn env_tys ((env (List (Pair (Option EType) Abs)))) (List (Option EType))
+  (measure (struct env))
+  (match env (Nil Nil) ((Cons (Pair t _) r) (Cons t (env_tys r)))))
+(fn th_term ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (t ETerm) (st Th)) (Pair Abs Th)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (match (nth env i) ((Some (Pair _ a)) (Pair a st)) (None (Pair ANone st))))
+    ((ELit _) (Pair ANone st))
+    (EAbsurd (Pair ANone st))
+    ((ECtor c args)
+     (match (es_info es c)
+       ((Some (EICtor ind _ _))
+        (if (mem_name ind (wk_worlds wk))
+          (match (th_fresh st "a World built by its constructor")
+            ((Pair i st1) (Pair (ATok i) (th_bad st1 (quote world_forged) (append (show_name c) " builds a World: the token comes from the entry")))))
+          (th_ctor es wk env c args st)))
+       (_ (th_ctor es wk env c args st))))
+    ((ECall f args)
+     (match (th_args es wk env args st Nil)
+       ((Pair as st1)
+        (match (es_find_decl es f)
+          ((Some (EFn _ _ ps _ _ _)) (th_call es wk env t f ps as st1))
+          ((Some (ESig _ _ ps _)) (th_call es wk env t f ps as st1))
+          (_ (Pair ANone (if (any_tok as) (th_bad st1 (quote world_unsupported) (append "a token passed to " (append (show_name f) ", which the table lacks"))) st1)))))))
+    ((EExt f args)
+     (match (th_args es wk env args st Nil)
+       ((Pair as st1)
+        (match (es_find_decl es f)
+          ((Some (EExtern _ _ ps _)) (th_call es wk env t f ps as st1))
+          (_ (Pair ANone (th_bad st1 (quote world_unsupported) (append "the extern " (append (show_name f) " is not in the table")))))))))
+    ((EPrim n args)
+     (match (th_args es wk env args st Nil)
+       ((Pair as st1) (Pair ANone (if (any_tok as) (th_bad st1 (quote world_unsupported) (append "a token at the primitive " (show_name n))) st1)))))
+    ((EIf a b c)
+     (match (th_term es wk env a st)
+       ((Pair aa st1)
+        (let ((st2 (if (is_tok aa) (th_bad st1 (quote world_unsupported) "a token as a condition") st1)))
+          (match (th_term es wk env b st2)
+            ((Pair ab stb)
+             (let ((stb2 (th_yield ab stb)))
+               (match (th_term es wk env c (with Th st2 (next (Th.next stb2))))
+                 ((Pair ac stc) (th_result (kind_join (abs_kind ab) ac) (th_merge stb2 (th_yield ac stc))))))))))))
+    ((EMatch s arms) (th_match es wk env s arms st))
+    ((ELet rs b) (th_let es wk env rs b st))))
+;; the arguments in order, their values in order
+(fn th_args ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (args (List ETerm)) (st Th) (acc (List Abs))) (Pair (List Abs) Th)
+  (measure (struct args))
+  (match args
+    (Nil (Pair (rev acc) st))
+    ((Cons a r) (match (th_term es wk env a st) ((Pair x st1) (th_args es wk env r st1 (Cons x acc)))))))
+;; a constructor over its arguments: a box when any carries a token
+(fn th_ctor ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (c Name) (args (List ETerm)) (st Th)) (Pair Abs Th)
+  (match (th_args es wk env args st Nil)
+    ((Pair as st1)
+     (if (any_tok as)
+       (match (th_fresh (consume_all st1 as (append "boxed in " (show_name c))) (append "a " (show_name c)))
+         ((Pair i st2) (Pair (ABox i) st2)))
+       (Pair ANone st1)))))
+;; a call or an extern: each argument against the callee's declared parameter type, the result
+;; by the call's type
+(fn th_call ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (t ETerm) (f Name) (ps (List EType)) (as (List Abs)) (st Th)) (Pair Abs Th)
+  (abs_of_type es wk (c_type es (env_tys env) t) (th_params es wk f ps as st) (append "the result of " (show_name f))))
+(fn th_params ((es ESt) (wk Wk) (f Name) (ps (List EType)) (as (List Abs)) (st Th)) Th
+  (measure (struct as))
+  (match as
+    (Nil st)
+    ((Cons a ar)
+     (match ps
+       (Nil (th_params es wk f Nil ar (if (is_tok a) (th_bad st (quote world_unsupported) (append "a token past the parameters of " (show_name f))) st)))
+       ((Cons p pr)
+        (th_params es wk f pr ar
+          (if (is_world wk p)
+            (match a
+              ((ATok i) (th_use st i (show_name f)))
+              ((ABox _) (th_bad st (quote world_unsupported) (append "a box where " (append (show_name f) " takes the World"))))
+              (ANone (th_bad st (quote world_unsupported) (append "no token where " (append (show_name f) " takes the World")))))
+          (if (carries wk p)
+            (th_consume st a (show_name f))
+            (if (is_tok a) (th_bad st (quote world_unsupported) (append "a token passed to " (append (show_name f) " at a parameter that is not a World"))) st)))))))))
+;; a match: the scrutinee's box consumed once, its fields fresh in every arm; a match whose
+;; every arm is a variable is an alias; the World itself matched is unsupported
+(fn th_match ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (s ETerm) (arms (List EArm)) (st Th)) (Pair Abs Th)
+  (let ((sty (c_type es (env_tys env) s)))
+    (match (th_term es wk env s st)
+      ((Pair sa st1)
+       (let ((alias (all_pvar arms)))
+         (let ((st2 (if alias st1
+                      (match sa
+                        (ANone st1)
+                        ((ATok _) (th_bad st1 (quote world_unsupported) "the World itself matched"))
+                        ((ABox i) (th_use st1 i "matched"))))))
+           (th_arms es wk env sty sa alias arms st2 None)))))))
+(fn all_pvar ((arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms (Nil True) ((Cons (EArm p _) r) (match p (PVar (all_pvar r)) (_ False)))))
+;; the arms from the state after the scrutinee, each arm's identities from the join so far so no
+;; two arms share one; the arms' results yielded in their own states; the states joined
+(fn th_arms ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (sty (Option EType)) (sa Abs) (alias Bool) (arms (List EArm)) (st2 Th) (acc (Option (Pair Abs Th)))) (Pair Abs Th)
+  (measure (struct arms))
+  (match arms
+    (Nil (match acc ((Some (Pair k st)) (th_result k st)) (None (Pair ANone st2))))
+    ((Cons (EArm p b) r)
+     (match (th_bind es wk (pat_types es sty p) (if alias (Some sa) None) (with Th st2 (next (match acc ((Some (Pair _ s)) (Th.next s)) (None (Th.next st2))))) Nil)
+       ((Pair binds st3)
+        (match (th_term es wk (rev_onto binds env) b st3)
+          ((Pair ab stb)
+           (th_arms es wk env sty sa alias r st2
+             (Some (match acc
+                     (None (Pair (abs_kind ab) (th_yield ab stb)))
+                     ((Some (Pair k pst)) (Pair (kind_join k ab) (th_merge pst (th_yield ab stb))))))))))))))
+;; a pattern's variables, in capture order: fresh values by their types, or the alias
+(fn th_bind ((es ESt) (wk Wk) (tys (List (Option EType))) (alias (Option Abs)) (st Th) (acc (List (Pair (Option EType) Abs)))) (Pair (List (Pair (Option EType) Abs)) Th)
+  (measure (struct tys))
+  (match tys
+    (Nil (Pair (rev acc) st))
+    ((Cons t r)
+     (match alias
+       ((Some a) (th_bind es wk r None st (Cons (Pair t a) acc)))
+       (None (match (abs_of_type es wk t st "a field of the match") ((Pair a st1) (th_bind es wk r None st1 (Cons (Pair t a) acc)))))))))
+;; a let: each binding in order, a variable an alias of what it names
+(fn th_let ((es ESt) (wk Wk) (env (List (Pair (Option EType) Abs))) (rs (List ETerm)) (b ETerm) (st Th)) (Pair Abs Th)
+  (measure (struct rs))
+  (match rs
+    (Nil (th_term es wk env b st))
+    ((Cons r more)
+     (let ((ty (c_type es (env_tys env) r)))
+       (match r
+         ((EBVar i) (th_let es wk (Cons (Pair ty (match (nth env i) ((Some (Pair _ a)) a) (None ANone))) env) more b st))
+         (_ (match (th_term es wk env r st)
+              ((Pair a st1) (th_let es wk (Cons (Pair ty a) env) more b st1)))))))))
+
+;; ---- a function's verdict --------------------------------------------------------------------
+(fn has_ext ((t ETerm)) Bool
+  (measure (struct t))
+  (match t
+    ((EBVar _) False)
+    ((ELit _) False)
+    (EAbsurd False)
+    ((ECtor _ as) (has_ext_all as))
+    ((ECall _ as) (has_ext_all as))
+    ((EPrim _ as) (has_ext_all as))
+    ((EExt _ _) True)
+    ((EMatch s arms) (if (has_ext s) True (has_ext_arms arms)))
+    ((ELet rs b) (if (has_ext_all rs) True (has_ext b)))
+    ((EIf a b c) (if (has_ext a) True (if (has_ext b) True (has_ext c))))))
+(fn has_ext_all ((ts (List ETerm))) Bool
+  (measure (struct ts))
+  (match ts (Nil False) ((Cons t r) (if (has_ext t) True (has_ext_all r)))))
+(fn has_ext_arms ((arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms (Nil False) ((Cons (EArm _ b) r) (if (has_ext b) True (has_ext_arms r)))))
+;; the parameters as the stack's base: in order, the last at index 0
+(fn th_params_abs ((es ESt) (wk Wk) (ps (List EType)) (i Int) (st Th) (acc (List (Pair (Option EType) Abs)))) (Pair (List (Pair (Option EType) Abs)) Th)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair acc st))
+    ((Cons p r)
+     (match (abs_of_type es wk (Some p) st (append "parameter " (show_nat i)))
+       ((Pair a st1) (th_params_abs es wk r (+ i 1) st1 (Cons (Pair (Some p) a) acc)))))))
+;; a function's verdict: None when it handles no token (no World in its signature, no extern in
+;; its body); else ok, or the fault and its detail
+(fn th_fn ((es ESt) (wk Wk) (d EDecl)) (Option (Pair Symbol (List Int)))
+  (match d
+    ((EFn _ _ ps rt _ body)
+     (if (bool_or (tys_carry wk ps) (bool_or (carries wk rt) (has_ext body)))
+       (match (th_params_abs es wk ps 1 (th0) Nil)
+         ((Pair env st)
+          (match (th_term es wk env body st)
+            ((Pair a st1)
+             (match (Th.bad (th_consume st1 a "returned"))
+               ((Some (Pair r m)) (Some (Pair r m)))
+               (None (Some (Pair (quote ok) Nil))))))))
+       None))
+    (_ None)))

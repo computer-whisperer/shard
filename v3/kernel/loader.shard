@@ -30,9 +30,11 @@
 (import "elab.shard")
 (import "tactic.shard")
 (import "arith.shard")
+(import "thread.shard")
 (use kernel.k)
 (use kernel.kw)
 (use kernel.classify)
+(use kernel.thread)
 (use kernel.decl)
 (use kernel.erase)
 (use kernel.etable)
@@ -232,7 +234,8 @@
   (RTactic Name Name Bool)                    ; mode measure (slice 3.29 rule 2): the tactic the delegation names closes the statement, or not
   (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
   (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
-  (RInstance Name Name (List (List Int)) (List Name)))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
+  (RInstance Name Name (List (List Int)) (List Name))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
+  (RThread Name Symbol (List Int)))         ; the well-threadedness verdict of a token-handling function (slice 4.3 landing 0): ok, or world_twice / world_unsupported / world_forged with its detail
 
 ;; root, environment, closure memo, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
@@ -397,7 +400,7 @@
 ;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto),
 ;; its own Init import's target (Anon: none), the names of Init under its identity, which
 ;; none of its declarations may take (slice 3.26 rule 5)
-(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))) (above (List (Pair Name Int))))
+(record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open)) (vis (List Name)) (init Int) (trusts (List Name)) (hash Int) (view Bool) (autos (List Auto)) (initname Name) (taken (List (List Int))) (above (List (Pair Name Int))) (ecount Int))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
 ;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
@@ -1683,13 +1686,13 @@
              ((Pair dirs rest)
               (match (read_sidecar l rel rest w1s)
                ((Pair (Pair l0a autos) w1s2)
-              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil) (above Nil)) rest)
-                ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1))
+              (match (pre_register_file l0a (make Fx (module mp) (ident ip) (parts rel) (opened Nil) (vis (list mp)) (init -1) (trusts Nil) (hash (hash_name mp)) (view view) (autos autos) (initname Anon) (taken Nil) (ecount 0) (above Nil)) rest)
+                ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1s2))   ; the World after the sidecar's read, not the one sealed_ident consumed (found by the threading check, slice 4.3 landing 0)
                 ((Pair (Some f0) l0)
               (match (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel w1s2)
                 ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) None) w2))
                 ((Pair (Pair l1p (Some f1p)) w2p)
-                 (match (init_prepare l1p f1p rest w2p)   ; the Init demand of the file's forms, its taken names (slice 3.26)
+                 (match (init_prepare l1p (with Fx f1p (ecount (es_count (Load.etab l1p)))) rest w2p)   ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names (slice 3.26)
                 ((Pair (Pair l1 None) w2) (Pair (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) None) w2))
                 ((Pair (Pair l1a (Some f1)) w2)
                  (match (pre_register_late l1a f1 rest)
@@ -1698,7 +1701,7 @@
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest)
+                      (Pair (Pair (ld_rec (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f)
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
@@ -1764,6 +1767,18 @@
 ;; declarations are bucketed by last component once per file; only a prefix neither marks
 ;; pays the token scan against K's environment (`Init`'s bare names under `(use Init.T)`,
 ;; a view's parameters) — nothing in a file whose lines are all needed.
+;; ---- the well-threadedness verdicts (slice 4.3 landing 0; thread.shard) --------------------
+;; the file's own E functions (those the table gained since the file began), each that handles
+;; a token recorded THREAD with its verdict — a report at this landing; the refusal on a bin's
+;; closure comes with the bin form (landing 1)
+(fn rec_threads ((l Load) (f Fx)) Load
+  (let ((es (Load.etab l)))
+    (rt_go es (th_kinds es) (rev (es_newest es (- (es_count es) (Fx.ecount f)))) l)))
+(fn rt_go ((es ESt) (wk Wk) (ds (List EDecl)) (l Load)) Load
+  (measure (struct ds))
+  (match ds
+    (Nil l)
+    ((Cons d r) (rt_go es wk r (match (th_fn es wk d) (None l) ((Some (Pair k m)) (ld_rec l (RThread (edecl_name d) k m))))))))
 (fn rec_unused ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) Load
   (match (unused_uses l f dirs forms) (Nil l) (ps (ld_rec l (RUnused (Fx.module f) ps)))))
 (fn unused_uses ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) (List Name)
@@ -2290,6 +2305,7 @@
      (append "DERIVE " (append (show_name p) (append " type=" (append (dv_show_ty ty) (append " cap=" (append (chars_of_sym cap)
        (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))
     ((RTemplate n statics eqs) (append "TEMPLATE " (append (show_name n) (append " static=" (append (show_names_c statics) (append " equations=" (show_names_c eqs)))))))
+    ((RThread n k m) (append "THREAD " (append (show_name n) (append " " (append (chars_of_sym k) (match m (Nil "") (_ (append ": " m))))))))
     ((RInstance n c shapes eqs) (append "INSTANCE " (append (show_name n) (append " of=" (append (show_name c) (append " shapes=" (append (join_commas shapes) (append " equations=" (show_names_c eqs)))))))))))
 (fn join_commas ((ss (List (List Int)))) (List Int)
   (measure (struct ss))
@@ -2330,6 +2346,7 @@
        ((RTactic _ _ _) acc)
        ((RDerive _ _ _ _ _) acc)
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
+       ((RThread _ _ _) acc)
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))
     (_ acc)))
 (fn show_counts_load ((cs (List Int))) (List Int)
