@@ -3329,7 +3329,7 @@ it entrenches. The slices, in the order built:
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
-| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
+| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4382,6 +4382,20 @@ store 24 and 146 s), the records identical under both engines;
 `imp_test.sh` asserts the gate, the parameters' records, the closure
 and the release's `PARAM` and `DISCHARGE` lines, the store verified by
 K alone (rule 4). Gates on the quiet dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 267/0 on both engines (the sharpened pin among them); `v3/build.sh --all` 29 roots, 27 built, 2 current, 0 failed, in 2,123 s (two heavy jobs; the loader's chain emit 23 s, lower 74, codegen 247, cc 60 over 8,454 declarations); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 963 s of wall and 4,715 s of entrypoint time (`imp_test` 933 s: the two roots loaded and stored in 786 s, K's replay of the store 146 s, 236 checks; the tie 76 checks, 0 failed, in 350 s; parity byte-identical over 31 closures and 137,191 declarations in 409 s — the 19 more the loader's growth; `store_test` 613, `tactic_lib_test` 332, `define_test` 291, `path_test` 281, `calc_test` 272); the native suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 406 s of wall and 1,328 s of entrypoint time (`imp_test` 150 s: the two roots loaded and stored in 126 s, K's replay 24 s; the tie 340 s; `calc_test` 187, parity 171, `store_test` 97); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
+
+**Slice 4.2 closed 2026-10-16** at this landing: the two readings of
+rule 5 ratified as built (the user: "That makes sense. Ratify the two readings, close the slice, and let's open the next one.") —
+the "three runtime laws" read against C2b's slicing, the allocation law
+the raw-cell protocol (the call, the fill, the seal) and the increment,
+no release law since `app` never calls `dec`; a run law whose old
+conclusion named the runtime kit's memory restated with that memory
+existential and its representation and invariant laws folded in, the
+fill and seal laws one to one. The parameters' discharge is C2b's work
+at phase 7 with the per-function generator; the frame conjunct a
+composing caller needs is carried there (§11); the Stage-1 gaps found
+(the existential's witness through `apply`, the mutual group, structural
+recursion through a nesting) are the toolchain port's, phase 5. The
+slice's three landings hold on the full gate (pipelines 616, 617, 620).
 
 ## 9. Assumption policy and entries
 
@@ -5899,4 +5913,6 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     NAME axiom` (the mechanism rule 5 named reached); the count written
     beside the record's numbers; the general form split at K's
     recursion depth, the existential introduced through `apply` (a
-    Stage-1 gap recorded); K untouched.
+    Stage-1 gap recorded); K untouched. **Ratified 2026-10-16 as built,
+    both readings (the user: "That makes sense. Ratify the two readings, close the slice, and let's open the next one.");
+    slice 4.2 closed.**
