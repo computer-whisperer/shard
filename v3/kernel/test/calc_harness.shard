@@ -1,6 +1,6 @@
 ;;; v3/kernel/test/calc_harness.shard — the V3 side of calc's differential
 ;;; (LANGUAGE.md §10 item 2, slice 6; kernel/test/calc_test.sh):
-;;;   eval direct v3/kernel/test/calc_harness.shard EXPORT INDEX INPUTS
+;;;   eval direct v3/kernel/test/calc_harness.shard EXPORT INDEX INPUTS [trace]
 ;;; loads v3/examples/calc/ (root v3) with Init on demand from the pinned
 ;;; EXPORT and its INDEX (slice 3.26), then for each line of INPUTS calls
 ;;; `ev` on every entry of the program half with the line as an Init
@@ -25,6 +25,7 @@
 (use kernel.loader.InitSt)
 (use kernel.name)
 (use kernel.prelude)
+(use kernel.prelude.Bool)
 (use kernel.prog)
 (use kernel.scope)
 (use kernel.test.loader_kit)
@@ -213,8 +214,9 @@
     ((Cons line rest) (lines_loop p (+ i 1) rest (append prev (list line)) (per_line p i line prev w)))))
 
 ;; the folds over all the lines, in calc_test.sh's order (the innermost prints first
-(fn folds ((p Prog) (lines (List (List Int))) (w World)) World
+(fn folds ((p Prog) (lines (List (List Int))) (tr Bool) (w World)) World
   (let ((E (v_lines lines)) (s0 (v_state0)) (w0 (v_world0)))
+    (trace_out p E tr
     (out_g "eval" (call p (fc (quote eval)) (list (v_add (v_num 1) (v_sub (v_num 2) (v_num 3)))))
     (out_g "combine" (match (call_v p (fcs (quote combine)) (list (v_true) (v_num 1) (v_num 2)))
                        ((Some inner) (call p (fcs (quote combine)) (list (v_false) inner (v_num 3))))
@@ -229,7 +231,43 @@
     (out_g "run_state_spec" (call p (fct (quote run_state_spec)) (list s0 E))
     (out_g "drive" (call p (fct (quote drive)) (list s0 E))
     (out_g "run_trace" (call p (fct (quote run_trace)) (list s0 E))
-    (out_g "run_state" (call p (fct (quote run_state)) (list s0 E)) w)))))))))))))))
+    (out_g "run_state" (call p (fct (quote run_state)) (list s0 E)) w))))))))))))))))
+;; the model's trace (slice 4.3 landing 2), on request (the fourth argument `trace`; calc_test's
+;; tie to the old tree reads the output without it): `trace_of` over the lines, each call rendered
+;; as the driver renders the host's (ev.shard tr_quote, tr_args) — `* trace: get_args "1+2" …`,
+;; then `* trace: write_line "3"` per line; bin_test.sh compares these with `--trace FILE`'s lines
+(fn trace_out ((p Prog) (E Val) (tr Bool) (w World)) World
+  (if (bool_not tr) w
+    (match (call_v p (fcw (quote trace_of)) (list E))
+      (None (out 0 "harness" "trace_of got stuck" w))
+      ((Some v) (trace_lines (val_list v) w)))))
+(fn trace_lines ((cs (List Val)) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (Nil w)
+    ((Cons c r) (trace_lines r (write_line (append "* trace: " (trace_line c)) w)))))
+(fn trace_line ((c Val)) (List Int)
+  (match c
+    ((VCtor n (Cons a Nil))
+     (if (name_eq n (nm (quote examples.calc.calc_app_world.Call.CArgs))) (append "get_args" (tr_args (val_lists a)))
+     (if (name_eq n (nm (quote examples.calc.calc_app_world.Call.CWrite))) (append "write_line " (tr_quote (val_bytes a)))
+     (if (name_eq n (nm (quote examples.calc.calc_app_world.Call.CExit))) (append "exit " (match a ((VInt k) (show_int k)) (_ "?")))
+       "?"))))
+    (_ "?")))
+;; Init's List cells as a list of values, a byte list, a list of byte lists
+(fn val_list ((v Val)) (List Val)
+  (measure (struct v))
+  (match v
+    ((VCtor n (Cons x (Cons r Nil))) (if (name_eq n (nm (quote List.cons))) (Cons x (val_list r)) Nil))
+    (_ Nil)))
+(fn val_bytes ((v Val)) (List Int) (val_ints (val_list v)))
+(fn val_ints ((vs (List Val))) (List Int)
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons (VInt k) r) (Cons k (val_ints r))) ((Cons _ r) (val_ints r))))
+(fn val_lists ((v Val)) (List (List Int)) (val_lists_go (val_list v)))
+(fn val_lists_go ((vs (List Val))) (List (List Int))
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons x r) (Cons (val_bytes x) (val_lists_go r)))))
 
 (fn split_lines ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
   (measure (struct bs))
@@ -252,7 +290,7 @@
 
 (fn main ((w World)) World
   (match (get_args w)
-    ((Pair (Cons export (Cons index (Cons inputs Nil))) w1)   ; EXPORT INDEX INPUTS
+    ((Pair (Cons export (Cons index (Cons inputs rest))) w1)   ; EXPORT INDEX INPUTS [trace]
      (match (parts_of "v3")
        (None (exit 2 w1))
        ((Some rootp)
@@ -265,5 +303,5 @@
                  ((Pair None w3) (exit 2 (write_line "calc_harness: cannot read the inputs" w3)))
                  ((Pair (Some bs) w3)
                   (let ((p (es_prog (Load.etab l))) (lines (split_lines bs Nil Nil)))
-                    (folds p lines (lines_loop p 0 lines Nil w3))))))))))))
-    ((Pair _ w1) (exit 2 (write_line "usage: eval direct v3/kernel/test/calc_harness.shard FIXTURE INPUTS CHUNK…" w1)))))
+                    (folds p lines (match rest ((Cons t Nil) (int_list_eq t "trace")) (_ False)) (lines_loop p 0 lines Nil w3))))))))))))
+    ((Pair _ w1) (exit 2 (write_line "usage: eval direct v3/kernel/test/calc_harness.shard EXPORT INDEX INPUTS [trace]" w1)))))

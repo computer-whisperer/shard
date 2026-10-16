@@ -3332,7 +3332,7 @@ it entrenches. The slices, in the order built:
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
-| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, seven pins, `bin_test.sh`)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
+| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4838,6 +4838,96 @@ runnable) 87 token-handling functions, 87 ok; `prove` 80 of 80;
 +110, `reader` +39, `store` +21, `thread` +15, `load` +9, `erasure` +8,
 `inhabit.shard` 98 new; the harness +24. Gates on the quiet dev box:
 the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 284 cases, 0 failed, on both engines; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,516 s (two heavy jobs; the loader's chain emit 24 s, lower 82, codegen 319, cc 71 over 8,565 declarations, 51 modules — 46 more than landing 0's; then the pins harness's and the reader test's roots, edited after the build, rebuilt in 440 s, 2 built, 27 current); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 882 s of wall and 4,368 s of entrypoint time (bin_test 296 s; imp_test 832 s: the two roots loaded and stored in 692 s, K's replay 140 s, 236 checks; the tie 76 checks, 0 failed, in 332 s; parity byte-identical over 31 closures and 138,195 declarations in 344 s — the 414 more the landing's growth across the closures, the externs' constants among them; store_test 544, calc_test 228); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 408 s of wall and 1,361 s of entrypoint time (bin_test 66 s; imp_test 146 s: the two roots loaded and stored in 123 s, K's replay 22 s; the tie 335 s; parity 168 s; calc_test 185, store_test 94; the loader pins' entrypoint 13 s); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
+
+**Slice 4.3 as built, landing 2 (2026-10-16) — the effect trace, the
+model's trace, the model test, the count; route 1's binary blocked at
+the chain, deferred for ratification.** Rule 6 (a), (b), (d), (e) and
+(f); rule 6 (c) not built, stated below. (a) **The trace** (law §4.7
+(iii)): `run_prog_traced` (`kernel/ev.shard`) records every host call
+the run performs, in order, as one line — the extern's short name, its
+arguments as the host saw them, the host's answer where it carries data:
+`get_args "1+2" "10 - 3"`, `read_file "p" -> (some "…")` or `-> none`,
+`write "…"`, `write_line "…"`, `write_file "p" "…" -> true`, `exit 3`;
+bytes quoted with `\"`, `\\`, `\n`, `\t`, `\r` and `\xHH` for any
+other byte outside 32–126 (`tr_quote`). `perform` returns the line
+beside the value; `run_loop` accumulates and writes the file at the
+run's end, and before an `exit` is performed — the host's exit never
+returns, so the trace of a run that exits is written first. The driver's
+`--run … --trace FILE` (`load.shard`); `run_prog` unchanged for its
+other callers. (b) **The model's trace** (`examples/calc/calc_app_world.shard`):
+`Call` — `CArgs`, `CWrite`, `CExit` — and `trace_of`, the arguments then
+the call each action stands for through `emitted` and `next_state`,
+a function of the arguments. `kernel/test/calc_harness.shard` evaluates
+it under `ev` on request (a fourth argument, `trace`; `calc_test`'s tie
+to the old tree reads the output without it) and prints one `* trace:`
+line per call rendered by the driver's own functions, so what the tie
+compares is the two call lists.
+(c) **Route 1's binary of the bin is not built.** The emitter refuses
+calc's closure before the chain sees it, as rule 1 of slice 4.1 has it
+refuse what the chain cannot take: a string literal over Init's
+`List.cons` — the chain builds its closure's `Cons` and `Nil`, the old
+reader's string — and the primitive `Nat.sub`, reached through
+`List.take`, beyond the chain's eighteen and with the integers'
+semantics there. The two are pinned under `v3/pins/emit` as
+`refused_init_list` and `refused_init_prim`, the tie expecting their
+messages (`v3/build.sh` passes the pinned export to the emit when the
+fixtures hold it, so a naming-law root can be emitted at all; the tie
+takes a case at its root beside the `kernel/main.shard` layout, since
+the `kernel` module is the toolchain's scope, where a string literal is
+refused before the emitter). The gap is the chain's representation of
+Init's types — `List`, `Prod`, `Option`, `Bool`, `ByteArray`, `UInt8`,
+`Nat` — against its prelude's cells and primitives, the same ground the
+String flip waits on (§13 item 68, "not in this slice"); mapping Init's
+types onto the old chain's cells is work on the chain phase 5 replaces.
+**The lean, for ratification:** the binary of a naming-law program is
+phase 5's, with the chain's replacement, and the tie of this landing is
+three ways — the bootstrap's driver, the native loader's (`v3/bin/load`,
+the same driver compiled), the model's — not four. (d) **The model
+test** (`examples/calc/calc_bin_model.shard`, 55 lines; law §4.7 (ii)):
+a pure host — the arguments, the lines written, the files read, the
+exit, as data — with the three externs calc touches as functions over
+it and the three observables as projections; the nine bolts the bin
+trusts instantiated at it and proven, each by `cases` on the host and
+computation (the `get_args` three in their premise form: the premise
+restated through a `have` for the elaborator's first-order unifier,
+which does not unfold `h_get_args` to the pair to apply `congrArg
+Prod.snd` — §11's Stage-1 gap again; the constructor cited `Host.Host`
+in a term, T5's rule), and a ground run of three calls computed — a
+user type has no decidable equality for `decide`, so `reduce` and
+`rfl`; the ten accepted on no axioms. The bundle is consistent because
+this model satisfies it. (e) **The tie, in `bin_test.sh`**: the
+program through the bin under `--trace`, the trace one `get_args` and
+one `write_line` per input — 22 calls over the differential's 21 — byte
+for byte the model's; the model host's ten theorems; 42 checks now,
+both engines under the suite. **The count (rule 7).** (a) `thread.shard`
+346 lines, its verdicts over the drivers 87/80/52/25/2 ok, none twice or
+unsupported; the pins 9 at landing 0, 8 at landing 1. (b) The loader's
+growth (landing 1): `loader.shard` +282, `verify_release` +110, `reader`
++39, `store` +21, `thread` +15, `load` +9, `erasure` +8, `inhabit` 98
+new; landing 2: `ev.shard` +104/−59 (the trace), `load.shard` +48/−33
+(`--trace`), `calc_app_world` +19, `calc_harness` +37, `bin_test.sh`
++24, the tie +7, `build.sh` +5. (c) Calc's contract 3/9/2 in 142 lines,
+53 of proof through seven lemmas, against shardfmt's 4/12/11 in 217 and
+snake's 5/12/7 in 214; the model host 55 lines, ten theorems. (d)
+`bin_test.sh` 320 s on the bootstrap, 68 s on the binaries. (e) The `THREAD` verdicts over the kernel's own
+drivers: the loader's closure 87 ok, `prove` 80, `verify_release` 52,
+`initindex` 25, `t0` 2 — no `world_twice`, no `world_unsupported`. (f)
+The trace tie: three traces of 22 lines, identical. (g) Route 1's
+binary: none — the two refusals. (h) The emitter's gaps: two, pinned;
+Stage 1's: the unifier at an unfolded definition (as §11 records). (i)
+Refusals before success: landing 1's proof one (a rewrite rule whose
+right side held its left), the model host's three (the horizon of
+`Prod.mk.inj`, the unifier, the constructor's spelling), `bin_test.sh`'s
+scratch root two (the store directory, the loader's relative paths),
+two build roots stale from edits after the build; at this landing
+`calc_app_world`'s trace twice (the state constructor's and `Option`'s
+namespaces unopened: `CalcState` the type where the constructor was
+meant, `none` unbound) and the harness's `trace` flag once (`False`
+unopened in a kernel-profile root — clean under the bootstrap's
+bare-name dispatch, refused by the emit under the V3 loader, the class
+landing 1 found twice), and `calc_test`'s tie to the old tree once (the
+trace lines made opt-in). Gates on the quiet
+dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 284 cases, 0 failed, on both engines; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,426 s (two heavy jobs; the loader's chain emit 27 s, lower 78, codegen 312, cc 74 over 8,575 declarations; then the harness's root, edited after the build, rebuilt in 401 s); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 866 s of wall and 4,336 s of entrypoint time (bin_test 320 s; imp_test 817 s: the two roots loaded and stored in 677 s, K's replay 140 s, 236 checks; the tie 76 checks, 0 failed, in 349 s, the two refusal pins among its cases; parity byte-identical over 31 closures and 138,333 declarations in 337 s — the 138 more this landing's growth across the closures, calc's five leaves 485 declarations against 467; store_test 537, calc_test 224); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 416 s of wall and 1,343 s of entrypoint time (bin_test 68 s; imp_test 142 s: the two roots loaded and stored in 120 s, K's replay 22 s; the tie 348 s; parity 165 s; calc_test 182, store_test 90; the loader pins' entrypoint 13 s); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
 
 ## 9. Assumption policy and entries
 
@@ -6410,4 +6500,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     bin's policy admitting the load's parameters as the file's does;
     (e) as described, the three `get_args` bolts in the premise form;
     (h) `bin_test.sh` the 44th entrypoint under `V3_NATIVE=1`, the
-    native tie being the 43rd.
+    native tie being the 43rd. **Landing 2 built 2026-10-16** (§8.6 "as
+    built, landing 2"): (b) **not as leaned** — route 1's binary of the
+    bin is not built: the emitter refuses calc's closure (a string
+    literal over Init's `List.cons`, the primitive `Nat.sub`), the
+    chain's representation of Init's types the gap; the lean now, for
+    ratification, is phase 5's with the chain's replacement, the tie
+    three ways (the bootstrap's driver, the native loader's, the
+    model's); (f) and (g) as described, the ground case computed rather
+    than decided (no decidable equality at a user type).

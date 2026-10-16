@@ -135,15 +135,16 @@ echo "native_tie_test: the shim runs a current binary and refuses a missing bina
 # ---- (2) the discriminating cases: each built fresh through route 1, run under both engines
 for d in v3/pins/emit/*/; do
   c=$(basename "$d"); extra=""; [ -d "$d/kernel/lib" ] && extra="$d/kernel/lib"
+  f="$d/kernel/main.shard"; [ -e "$f" ] || f="$d/main.shard"   # a naming-law case lives at the root (slice 4.3 landing 2): the kernel module is the toolchain's scope
   checks=$((checks+1))
-  if v3/build.sh "$d/kernel/main.shard" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
+  if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
-    run_into "$OUT/pin_$c/a" "$BOOT" direct "$d/kernel/main.shard"
+    run_into "$OUT/pin_$c/a" "$BOOT" direct "$f"
     run_into "$OUT/pin_$c/b" "$OUT/bin_$c"
     compare "pin $c" "$OUT/pin_$c/a" "$OUT/pin_$c/b" || bad "pin $c differs"
   else
     case $c in
-      refused_*) msg=$(sed -n '1s/^;; emit refused: //p' "$d/kernel/main.shard"); grep -qF "EMIT: $msg" "$OUT/build_$c.txt" || { bad "$c: not refused with its message"; grep -E 'EMIT|FAIL' "$OUT/build_$c.txt" | head -2 | cut -c1-200; };;
+      refused_*) msg=$(sed -n '1s/^;; emit refused: //p' "$f"); grep -qF "EMIT: $msg" "$OUT/build_$c.txt" || { bad "$c: not refused with its message"; grep -E 'EMIT|FAIL' "$OUT/build_$c.txt" | head -2 | cut -c1-200; };;
       *) bad "$c: the build failed"; grep -E 'EMIT|FAIL|REFUSE' "$OUT/build_$c.txt" | head -2 | cut -c1-200;;
     esac
   fi

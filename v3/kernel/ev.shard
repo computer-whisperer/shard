@@ -586,6 +586,12 @@
 ;; entry (§9) — each command-line argument validated against its parameter's E type before ev
 ;; runs — the World the last parameter's first constructor; every extern performed by the host's
 (fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
+  (run_prog_traced p f argv fuel Nil w))
+;; the same with the effect trace (§8.6 slice 4.3 landing 2; law §4.7 (iii)): every host call
+;; the run performs, in order, as one line — the extern's name, its arguments and the host's
+;; answer by the wire (tr_line) — written to PATH when PATH is not empty: at the run's end, and
+;; before an `exit` is performed, since the host's exit never returns
+(fn run_prog_traced ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (path (List Int)) (w World)) (Pair RunRes World)
   (match (link p)
     ((LkErr e m) (Pair (RunLink e m) w))
     ((LkOk lk)
@@ -597,7 +603,7 @@
           ((Some (Pair params token))   ; the machine takes its arguments last first
            (match (if (int_eq (len params) 0) (ArgsOk Nil) (args_in lk p f params argv 1 Nil))   ; a World-only entry takes the raw list through get_args (§9)
              ((ArgsBad r) (Pair r w))
-             ((ArgsOk ivs) (run_loop lk (ev_apply lk 1 id (rev (append ivs (list token))) KHalt id fuel) argv w))))))))))
+             ((ArgsOk ivs) (run_loop lk (ev_apply lk 1 id (rev (append ivs (list token))) KHalt id fuel) argv path Nil w))))))))))
 ;; the entry's parameters before its last, and the World: the last parameter's type, its first
 ;; constructor with its fields zero
 (fn entry_shape ((lk Linked) (p Prog) (f Name)) (Option (Pair (List EType) IVal))
@@ -701,19 +707,56 @@
 (fn arg_digits ((bs (List Int)) (acc Int)) Int
   (measure (struct bs))
   (match bs (Nil acc) ((Cons b r) (arg_digits r (+ (* acc 10) (- b 48))))))
-(fn run_loop ((lk Linked) (h Halt) (argv (List (List Int))) (w World)) (Pair RunRes World)
+(fn run_loop ((lk Linked) (h Halt) (argv (List (List Int))) (path (List Int)) (tr (List (List Int))) (w World)) (Pair RunRes World)
   (match h
-    ((HVal _) (Pair RunOk w))
-    ((HOut id) (Pair (RunOut (fn_name lk id)) w))
-    ((HStuck r id) (Pair (RunStuck r (fn_name lk id)) w))
-    ((HExhausted r id) (Pair (RunExhausted r (fn_name lk id)) w))
+    ((HVal _) (Pair RunOk (tr_flush path tr w)))
+    ((HOut id) (Pair (RunOut (fn_name lk id)) (tr_flush path tr w)))
+    ((HStuck r id) (Pair (RunStuck r (fn_name lk id)) (tr_flush path tr w)))
+    ((HExhausted r id) (Pair (RunExhausted r (fn_name lk id)) (tr_flush path tr w)))
     ((HExt id args k cur fuel)
      (match (im_find (lk_fns lk) id)
        ((Some (LExtern _ short _ ps rt))
-        (match (perform lk short ps rt args argv w)
-          ((Pair (Some v) w1) (run_loop lk (ev_ret lk v k cur fuel) argv w1))
-          ((Pair None w1) (Pair (RunStuck (quote extern) (fn_name lk id)) w1))))
-       (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) w))))))
+        (match (perform lk short ps rt args argv (if (sym_eq short (quote exit)) (tr_flush path (Cons (tr_exit_line args) tr) w) w))
+          ((Pair (Pair (Some v) line) w1) (run_loop lk (ev_ret lk v k cur fuel) argv path (Cons line tr) w1))
+          ((Pair (Pair None _) w1) (Pair (RunStuck (quote extern) (fn_name lk id)) (tr_flush path tr w1)))))
+       (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) (tr_flush path tr w)))))))
+;; ---- the effect trace (§8.6 slice 4.3 landing 2) ----------------------------------------------
+;; one line per host call: the extern's short name, its arguments as the host saw them and the
+;; host's answer where it carries data — `get_args "a" "b"`, `read_file "p" -> none` or
+;; `-> (some "…")`, `write "…"`, `write_line "…"`, `write_file "p" "…" -> true`, `exit 3`; bytes
+;; quoted with `\"`, `\\`, `\n`, `\t`, `\r` and `\xHH` for any other byte outside 32–126. The
+;; model's trace (examples/calc/calc_app_world.shard) is rendered by the same functions
+;; (kernel/test/calc_harness.shard), so the tie is the call lists', not a renderer's
+(fn tr_flush ((path (List Int)) (tr (List (List Int))) (w World)) World
+  (match path
+    (Nil w)
+    (_ (match (write_file path (tr_join (rev tr)) w) ((Pair _ w1) w1)))))
+(fn tr_join ((ls (List (List Int)))) (List Int)
+  (measure (struct ls))
+  (match ls (Nil Nil) ((Cons x r) (append x (Cons 10 (tr_join r))))))
+(fn tr_exit_line ((args (List IVal))) (List Int)
+  (match args ((Cons (IVInt code) _) (append "exit " (show_int code))) (_ "exit ?")))
+(fn tr_quote ((bs (List Int))) (List Int) (Cons 34 (tr_quote_go bs)))
+(fn tr_quote_go ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil (list 34))
+    ((Cons b r)
+     (append (if (int_eq b 34) "\\\""
+             (if (int_eq b 92) "\\\\"
+             (if (int_eq b 10) "\\n"
+             (if (int_eq b 9) "\\t"
+             (if (int_eq b 13) "\\r"
+             (if (bool_and (le 32 b) (le b 126)) (list b)
+               (append "\\x" (tr_hex2 b))))))))
+             (tr_quote_go r)))))
+(fn tr_hex2 ((b Int)) (List Int) (list (tr_hex_digit (/ (mod b 256) 16)) (tr_hex_digit (mod b 16))))
+(fn tr_hex_digit ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+(fn tr_args ((as (List (List Int)))) (List Int)
+  (measure (struct as))
+  (match as (Nil Nil) ((Cons a r) (append " " (append (tr_quote a) (tr_args r))))))
+(fn tr_opt ((o (Option (List Int)))) (List Int)
+  (match o (None "none") ((Some bs) (append "(some " (append (tr_quote bs) ")")))))
 ;; ---- the wire by declared type (§6.7; §8.4 slice 3.18 rule 4) --------------------------------
 ;; each value of an extern is built and read by the E type the program declared — a codec by
 ;; identity, as the entry's is: the prelude's cells under the toolchain's signatures
@@ -803,47 +846,48 @@
   (match ps (Nil None) ((Cons t Nil) (Some t)) ((Cons _ r) (ext_world r))))
 ;; the six host externs by short name, each value by its declared type; the program's World
 ;; value passes through, at its own type
-(fn perform ((lk Linked) (short Symbol) (ps (List EType)) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
+(fn perform ((lk Linked) (short Symbol) (ps (List EType)) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Pair (Option IVal) (List Int)) World)
   (match (ext_world ps)
-    (None (Pair None w))
+    (None (Pair (Pair None Nil) w))
     ((Some wt) (perform_at lk short ps wt rt args argv w))))
-(fn perform_at ((lk Linked) (short Symbol) (ps (List EType)) (wt EType) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Option IVal) World)
+;; the value, with the trace line of the call (empty where the extern is stuck)
+(fn perform_at ((lk Linked) (short Symbol) (ps (List EType)) (wt EType) (rt EType) (args (List IVal)) (argv (List (List Int))) (w World)) (Pair (Pair (Option IVal) (List Int)) World)
   (if (sym_eq short (quote get_args))
     (match args
-      ((Cons tok Nil) (Pair (w_paired lk rt wt (match (w_first_type lk rt wt) ((Some at) (w_argv lk at argv)) (None None)) tok) w))
-      (_ (Pair None w)))
+      ((Cons tok Nil) (Pair (Pair (w_paired lk rt wt (match (w_first_type lk rt wt) ((Some at) (w_argv lk at argv)) (None None)) tok) (append "get_args" (tr_args argv))) w))
+      (_ (Pair (Pair None Nil) w)))
   (if (sym_eq short (quote read_file))
     (match args
       ((Cons path (Cons tok Nil))
        (match (Pair (r_bytes_at lk ps 0 path) (w_first_type lk rt wt))
          ((Pair (Some bs) (Some ot))
           (match (w_opt_bytes lk ot None)
-            (None (Pair None w))
-            ((Some _) (match (read_file bs w) ((Pair content w1) (Pair (w_paired lk rt wt (w_opt_bytes lk ot content) tok) w1))))))
-         (_ (Pair None w))))
-      (_ (Pair None w)))
+            (None (Pair (Pair None Nil) w))
+            ((Some _) (match (read_file bs w) ((Pair content w1) (Pair (Pair (w_paired lk rt wt (w_opt_bytes lk ot content) tok) (append "read_file " (append (tr_quote bs) (append " -> " (tr_opt content))))) w1))))))
+         (_ (Pair (Pair None Nil) w))))
+      (_ (Pair (Pair None Nil) w)))
   (if (sym_eq short (quote write))
     (match args
       ((Cons bytes (Cons tok Nil))
-       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write bs w)))))
-      (_ (Pair None w)))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair (Pair None Nil) w)) ((Some bs) (Pair (Pair (Some tok) (append "write " (tr_quote bs))) (write bs w)))))
+      (_ (Pair (Pair None Nil) w)))
   (if (sym_eq short (quote write_line))
     (match args
       ((Cons bytes (Cons tok Nil))
-       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair None w)) ((Some bs) (Pair (Some tok) (write_line bs w)))))
-      (_ (Pair None w)))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None) (None (Pair (Pair None Nil) w)) ((Some bs) (Pair (Pair (Some tok) (append "write_line " (tr_quote bs))) (write_line bs w)))))
+      (_ (Pair (Pair None Nil) w)))
   (if (sym_eq short (quote write_file))
     (match args
       ((Cons path (Cons bytes (Cons tok Nil)))
        (match (Pair (r_bytes_at lk ps 0 path) (Pair (r_bytes_at lk ps 1 bytes) (w_first_type lk rt wt)))
          ((Pair (Some pbs) (Pair (Some bs) (Some ft)))
           (match (w_flag lk ft False)
-            (None (Pair None w))
-            ((Some _) (match (write_file pbs bs w) ((Pair ok w1) (Pair (w_paired lk rt wt (w_flag lk ft ok) tok) w1))))))
-         (_ (Pair None w))))
-      (_ (Pair None w)))
+            (None (Pair (Pair None Nil) w))
+            ((Some _) (match (write_file pbs bs w) ((Pair ok w1) (Pair (Pair (w_paired lk rt wt (w_flag lk ft ok) tok) (append "write_file " (append (tr_quote pbs) (append " " (append (tr_quote bs) (if ok " -> true" " -> false")))))) w1))))))
+         (_ (Pair (Pair None Nil) w))))
+      (_ (Pair (Pair None Nil) w)))
   (if (sym_eq short (quote exit))
     (match args
-      ((Cons (IVInt code) (Cons tok Nil)) (if (etype_eq rt wt) (Pair (Some tok) (exit code w)) (Pair None w)))
-      (_ (Pair None w)))
-    (Pair None w))))))))
+      ((Cons (IVInt code) (Cons tok Nil)) (if (etype_eq rt wt) (Pair (Pair (Some tok) (tr_exit_line args)) (exit code w)) (Pair (Pair None Nil) w)))
+      (_ (Pair (Pair None Nil) w)))
+    (Pair (Pair None Nil) w))))))))

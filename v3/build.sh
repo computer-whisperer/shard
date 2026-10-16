@@ -131,8 +131,11 @@ build_one() {
   local name=$1 src=$2 out=$3 root=$4; shift 4
   local emit=v3/bin/emit/$name log=v3/bin/$name.build.log low=v3/bin/$name.low.shard s t_emit t_lower t_codegen t_cc entry rc
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
+  # Init on demand for a root under the naming law (slice 4.3 landing 2): the pinned export and
+  # its index when the fixtures hold them; the kernel's roots import no Init and are unchanged
+  local init=""; read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
   s=$(date +%s)
-  "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" --emit "$emit" "$src" "$@" > "$log" 2>&1; rc=$?
+  "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" $init --emit "$emit" "$src" "$@" > "$log" 2>&1; rc=$?
   if [ "$rc" != 0 ]; then
     echo "FAIL: $name: the emit (exit $rc); $(grep -m1 '^EMIT: \|^LOAD: ' "$log" | cut -c1-200)"; grep -E '^(REFUSE|ERROR|EMIT)' "$log" | head -3 | cut -c1-300; return 1
   fi

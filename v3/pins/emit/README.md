@@ -23,6 +23,8 @@ in place of a binary (the bootstrap runs such a program; the chain never receive
 | `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: re-escaped for the old reader |
 | `refused_symbol_pattern` | a symbol the old reader cannot lex, in a pattern: the emit refused with its message (the first line's `;; emit refused:`), nothing built — the refusal path of rule 1 |
 | `refused_mangle_collision` | a record's accessor `A.x` beside a plain fn `A_x`: the mangling's collision refused, nothing built |
+| `refused_init_list` | a program under the naming law (slice 4.3 landing 2): a string literal over Init's `List.cons` — the chain builds its closure's `Cons` and `Nil`, the old reader's string — refused, nothing built; route 1 over a naming-law program is phase 5's, with the chain's replacement (§8.6 slice 4.3 "as built, landing 2") |
+| `refused_init_prim` | a naming-law program reaching `Nat.sub` (Init's realized primitive, beyond the chain's eighteen): refused with the primitive and the function named |
 | `prims` | the profile's integer and symbol primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the chain's runtime against the bootstrap's |
 
 The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a

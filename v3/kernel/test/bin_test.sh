@@ -68,10 +68,10 @@ checks=$((checks+1)); grep -q "^BAD-BIN $BIN: examples.calc.calc_bin.line_bytes 
 lines=()
 while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < "$INPUTS"
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --run examples.calc.calc_main.main v3/examples/calc/calc_bin.shard -- "${lines[@]}" > "$OUT/got" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --run examples.calc.calc_main.main --trace "$OUT/trace.txt" v3/examples/calc/calc_bin.shard -- "${lines[@]}" > "$OUT/got" 2>&1; rc=$?
 e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the program failed through the bin (exit $rc)"; head -3 "$OUT/got" | cut -c1-300; }
-"$EVAL" direct v3/kernel/test/calc_harness.shard "$EXPORT" "$INDEX" "$INPUTS" > "$OUT/model" 2>&1 || { bad "the harness failed"; head -3 "$OUT/model"; }
+"$EVAL" direct v3/kernel/test/calc_harness.shard "$EXPORT" "$INDEX" "$INPUTS" trace > "$OUT/model" 2>&1 || { bad "the harness failed"; head -3 "$OUT/model"; }
 grep '^\* run_world: ' "$OUT/model" | tr '()' '  ' | awk '
   { st = 0
     for (i = 4; i <= NF; i++) {
@@ -81,6 +81,28 @@ grep '^\* run_world: ' "$OUT/model" | tr '()' '  ' | awk '
 checks=$((checks+1)); [ "$(wc -l < "$OUT/want")" -eq "${#lines[@]}" ] || bad "the model has $(wc -l < "$OUT/want") lines for ${#lines[@]} inputs"
 checks=$((checks+1)); cmp -s "$OUT/got" "$OUT/want" || { bad "the program's output through the bin is not the model world's"; diff "$OUT/got" "$OUT/want" | head -6; }
 echo "bin_test: the program through the bin in $((e-s)) s, byte-identical to the model world over ${#lines[@]} inputs"
+
+# ---- (3b) the effect trace (slice 4.3 landing 2; law §4.7 (iii)): the driver's --trace FILE —
+# one host call per line, the arguments read then one write_line per input — against the
+# model's trace (calc_app_world.shard trace_of, rendered by the harness as `* trace:` lines
+# with the driver's own renderer): the call lists identical, byte for byte
+checks=$((checks+1)); [ -s "$OUT/trace.txt" ] || bad "the driver wrote no trace"
+sed -n 's/^\* trace: //p' "$OUT/model" > "$OUT/model_trace.txt"
+checks=$((checks+1)); [ "$(wc -l < "$OUT/trace.txt")" -eq $((${#lines[@]} + 1)) ] || bad "the trace has $(wc -l < "$OUT/trace.txt") calls for ${#lines[@]} inputs (one get_args and one write_line each)"
+checks=$((checks+1)); head -1 "$OUT/trace.txt" | grep -q '^get_args "' || { bad "the trace does not open with get_args"; head -1 "$OUT/trace.txt" | cut -c1-200; }
+checks=$((checks+1)); cmp -s "$OUT/trace.txt" "$OUT/model_trace.txt" || { bad "the driver's trace is not the model's"; diff "$OUT/trace.txt" "$OUT/model_trace.txt" | head -6 | cut -c1-200; }
+echo "bin_test: the trace — $(wc -l < "$OUT/trace.txt") host calls — is the model's, byte for byte"
+
+# ---- (3c) the bolt bundle on the model host (rule 6 (e); law §4.7 (ii)): the nine axioms the
+# bin trusts, instantiated at calc_bin_model.shard's Host and proven, and a ground run computed
+s=$(date +%s)
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_bin_model.shard > "$OUT/model_load.txt" 2>&1; rc=$?
+e=$(date +%s)
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the model host's file failed to load (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/model_load.txt" | head -3 | cut -c1-300; }
+for t in get_args_output get_args_reads get_args_exit write_line_output write_line_reads write_line_exit exit_output exit_reads exit_exit ground; do
+  checks=$((checks+1)); grep -q "^ACCEPT examples.calc.calc_bin_model.m_$t .* axioms= " "$OUT/model_load.txt" || bad "the model host's m_$t is not accepted on no axioms"
+done
+echo "bin_test: the nine bolts hold on the model host, with the ground run, in $((e-s)) s"
 
 # ---- (4) the negatives, over a scratch root that sees the library through a link
 mkdir -p "$ROOT/examples"; ln -s ../std "$ROOT/std"; cp -r v3/examples/calc "$ROOT/examples/calc"
