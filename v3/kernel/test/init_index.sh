@@ -8,6 +8,9 @@
 # text, not of K: a kernel edit does not stale it; another export does, and the
 # loader refuses an index whose header names another byte count.
 #   read EXPORT INDEX < <(v3/kernel/test/init_index.sh)
+#   v3/kernel/test/init_index.sh --current   the paths when the index is current, exit 1 otherwise;
+#       never a build (v3/build.sh's per-root lookup: CI builds the driver before the index, and the
+#       bootstrap's build of the index is 14× the native one — pipeline 629 paid ~1,950 s in each job)
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -17,6 +20,7 @@ EXPORT=$DIR/init.ndjson
 IDX=v3/.cache/init.index; STAMP=v3/.cache/init.index.stamp
 x=$( { cat "$DIR/init.ndjson.pin" 2>/dev/null; stat -c %s "$EXPORT"; cat v3/kernel/index.shard v3/kernel/initindex.shard; } | sha256sum | cut -c1-16)
 if [ -s "$IDX" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$x" ]; then echo "$EXPORT $IDX"; exit 0; fi
+[ "${1:-}" != "--current" ] || { echo "init_index.sh: the index is not current, and --current never builds it" >&2; exit 1; }
 mkdir -p v3/.cache
 tmp=$(mktemp "v3/.cache/init.index.XXXXXX")
 # the driver compiled by route 1 (v3/build.sh v3/kernel/initindex.shard v3/bin/initindex) when it

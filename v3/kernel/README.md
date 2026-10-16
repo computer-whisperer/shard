@@ -179,7 +179,9 @@ id, the ordinal of the record declaring it, so a cited constant is one
 read. `initindex.shard` builds it and reads it back (`--verify`);
 `test/init_index.sh` keeps `v3/.cache/init.index` current, stamped by
 the export and the index's sources, not by K, and prints the export's
-and the index's paths. Compiled by route 1 (`v3/build.sh
+and the index's paths; `--current` prints them only when the index is
+current and never builds it (`v3/build.sh`'s per-root lookup, slice 4.3's
+close). Compiled by route 1 (`v3/build.sh
 v3/kernel/initindex.shard v3/bin/initindex`) the driver indexes the
 export in 36 s and verifies it in 36 s. `initload.shard` is the load:
 the closure of what a file cites walked by range reads and fed to K in

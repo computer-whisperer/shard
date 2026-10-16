@@ -3332,7 +3332,7 @@ it entrenches. The slices, in the order built:
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
-| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification)** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
+| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4929,6 +4929,38 @@ landing 1 found twice), and `calc_test`'s tie to the old tree once (the
 trace lines made opt-in). Gates on the quiet
 dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 284 cases, 0 failed, on both engines; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,426 s (two heavy jobs; the loader's chain emit 27 s, lower 78, codegen 312, cc 74 over 8,575 declarations; then the harness's root, edited after the build, rebuilt in 401 s); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 866 s of wall and 4,336 s of entrypoint time (bin_test 320 s; imp_test 817 s: the two roots loaded and stored in 677 s, K's replay 140 s, 236 checks; the tie 76 checks, 0 failed, in 349 s, the two refusal pins among its cases; parity byte-identical over 31 closures and 138,333 declarations in 337 s — the 138 more this landing's growth across the closures, calc's five leaves 485 declarations against 467; store_test 537, calc_test 224); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 416 s of wall and 1,343 s of entrypoint time (bin_test 68 s; imp_test 142 s: the two roots loaded and stored in 120 s, K's replay 22 s; the tie 348 s; parity 165 s; calc_test 182, store_test 90; the loader pins' entrypoint 13 s); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
 
+**Slice 4.3 closed 2026-10-16** at this landing: the deferral ratified
+(the user: "Option 1 sounds like the way to go.") — the binary of a
+naming-law program is phase 5's, with the chain's replacement (law
+§12.4 item 5; `v3/MANIFEST.md`'s row for `tools/lower` and
+`tools/codegen`: ARCHIVE at the flip, route 1 replacing it), and the tie
+of this landing is three ways — the bootstrap's driver, the native
+loader's, the model's. Rejected: extending the old chain now — Init's
+`List`, `Prod`, `Option`, `Bool`, `ByteArray`, `UInt8` and `Nat` mapped
+onto its prelude's cells, a truncating helper for `Nat.sub`, a trace in
+its C runtime — days of work on the chain phase 5 replaces. Carried to
+"route 1's chain is V3's own" (phase 5), a list of five now: the
+kernel's string literals as byte lists (§13 item 51), the comparison
+primitives' old spellings under `v3/kernel/**` (§8.4 slice 3.17 rule 5),
+`Symbol`'s `String` flip (item 64), `derive` and `by` in the toolchain's
+sources, and the binary of a naming-law program (this slice); the trace
+relation as a theorem about the lowering is phase 7's, with route 1's
+proof. Noted at the close, for the boundary: the replacement itself has
+no designed slice — the manifest names it by row (the lowering-side
+toolchain as new code, its certificates I), slice 4.2's "not in this
+slice" puts `impc`'s V3 version beside the generator, and the imp path
+has compiled the probes' functions and `sha256` only, never a closure of
+the loader's size with its GC, bignum and symbols; the sizing is the
+question the deferral leans on. The slice's three landings hold on the
+full gate (pipelines 625, 628, 629 — the last about 1,950 s longer in
+each heavy job for this landing's `build.sh` index lookup, which built
+the index on the bootstrap before the native driver existed; found in
+the traces and fixed at the close: `init_index.sh --current`, never a
+build inside a root's build). What the slice built, in one line: law
+§4.7's faithful effectful program in V3 — the check, the `bin` with its
+contract proven through I, calc's main the first bin, the trace tied
+three ways and the bolts tested on a model host.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -6508,4 +6540,6 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     ratification, is phase 5's with the chain's replacement, the tie
     three ways (the bootstrap's driver, the native loader's, the
     model's); (f) and (g) as described, the ground case computed rather
-    than decided (no decidable equality at a user type).
+    than decided (no decidable equality at a user type). **Ratified
+    2026-10-16 as built, the deferral at (b) (the user: "Option 1 sounds
+    like the way to go."); slice 4.3 closed.**
