@@ -3330,6 +3330,7 @@ it entrenches. The slices, in the order built:
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
+| 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed.")** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4397,6 +4398,232 @@ composing caller needs is carried there (§11); the Stage-1 gaps found
 recursion through a nesting) are the toolchain port's, phase 5. The
 slice's three landings hold on the full gate (pipelines 616, 617, 620).
 
+**Slice 4.3 — the program side: `bin`, `requires`, the well-threadedness
+check, effect traces** (designed 2026-10-16 at slice 4.2's close, on the
+user's "let's open the next one"; §13 item 68 — **ratified 2026-10-16 as
+described (the user: "The program side sounds good as described --
+proceed.")**, the leans beyond the description stated at item 68 for
+objection; law §4.7, §9.3, §12.4 item 4's last item, §12.5's count rule;
+§11's row "`bin`, `requires`, the World-use check, effect traces";
+§12.5's deferred `(bin …)` row). Law §4.7 says what a faithful effectful
+program is: effects are externs that thread a World token, uninterpreted
+in proofs, given by bolt axioms and performed by the host; threading
+alone is not the faithfulness argument — it takes (i) a
+**well-threadedness check** on every `bin` closure, affine use of each
+World token along every branch, mutually exclusive branches sharing an
+incoming token, two sequential uses refused, ownership tracked through
+supported aggregates, projections, helper calls and branches so that
+distinct names establish nothing (a World boxed once and unwrapped twice
+is one token used twice), the check following the staged, erased
+executable structure so that a reference used only in an erased proof
+consumes nothing, unsupported patterns refused conservatively and never
+bypassed through a supposedly pure wrapper, a conservative local
+discipline with explicit function summaries the initial fragment; (ii) a
+coherent pure model of state, histories and observations from which the
+effect laws are derived where possible, assumed law bundles tested on
+small concrete models; (iii) a trace relation as the effect semantics,
+so that no transformation duplicates, eliminates, memoizes or reorders a
+host call because it looks pure — lowering preserves the ownership
+discipline and the trace. Law §12.4 item 4 names the fixture: the
+negative hides duplication behind structure (one World boxed, unwrapped
+twice, written twice) and a helper boundary; exclusive branches each
+consuming the incoming token once are accepted, as are erased proof
+references; the World-alias fixture lands before any effectful
+certificate counts as ported — phase 5's bulk port has the toolchain's
+own drivers in it, so this slice gates it. It is also the goal's shape:
+"shardfmt as a proven native bin" is a `bin` with a `requires`. Measured
+2026-10-16 at the boundary, what V3 has:
+
+| what | today |
+|---|---|
+| the forms | `bin`, `requires` and `app` are reserved and refused with the phase named (§4); the old tree's `(bin NAME (entry F) (externs …) (trusts …) (requires …))` has 16 uses; its driver reports `BIN name: met/total`, an UNMET requirement failing the run, `entry`/`externs`/`trusts` parsed and not enforced |
+| the World | `kernel/host.shard`: `(type World (World Int))` and seven externs over the prelude's cells; `v3/std/host.shard`: `(type World (World Nat))` and six over `ByteArray` and Init's `List`, `Option`, `Prod`, `Bool` (slice 3.18) |
+| an extern's L meaning | none: a function that calls one is `RUNNABLE … no_l_meaning` (`loader.shard`, the callee state), its equations never formed; `ev` stops at `EExt` (`EvStuck extern`); `run_prog` performs the extern through the host by the declared types' codec, the World returned at the type it was passed at |
+| the entry | `run_prog` (slice 7, §9): the World last, every parameter before it a checked entry; `--run MODULE.FN FILE… -- ARG…` |
+| requirements | `(requirement NAME …)` in a view, `(fulfills NAME PROOF)` in its implementation, discharged or pending (slices 3.14, 3.30); `trusts` the per-file policy, a trusted axiom a `PARAM NAME axiom` (4.2 landing 2); the release gate's `PARAM`, `DISCHARGE`, `CONDITIONAL`, `UNDECLARED` lines against the manifest (4.0) |
+| the check, the trace | neither exists; the driver's output is the host's; `calc_main_test.sh` ties the program's output bytes to the model world's lines |
+| the program | `examples/calc/calc_main.shard`: `main (w World)` reads the arguments, drives `step` over the lines, performs each `Action` (`write_line`, `exit`, nothing); the model `calc_app_world.shard`: `CalcWorld` (the lines written), `apply_action`, `run_world`, the claim `run_eq_spec_world` (slice 3.21) |
+| the old contracts | `tools/shardfmt/mod.req/mod.req.shard`: 4 `sig fn` (the observables `w_reads`, `w_output`, `w_exit`, and `main`), 12 bolt axioms (one per effect × observable), 11 requirements, 217 lines; `examples/snake_game_3/mod.req/mod.req.shard`: 5, 12, 7, 214 lines (`BOUNDARIES.md`'s pattern) |
+| route 1 | the kernel's drivers and harnesses (slice 4.1); no user program compiled to a binary yet (§11: specialization over user files is route 1's at phase 4) |
+
+The rules:
+
+1. **The check (law §4.7 (i)): well-threadedness over the E program.** A
+   function `kernel/thread.shard` over `Prog` — the classifier's output,
+   the staged erased structure, so a proof reference has already
+   consumed nothing — for every E function that reaches an extern
+   (directly or through a callee), in the closure's dependency order. A
+   **token** is a value of a World type: the type an extern in scope
+   takes as its last parameter, by identity (`kernel/host.shard`'s or
+   `std/host.shard`'s, or a program's own). Along every path each token
+   is used at most once: an `EExt` consumes its World argument and binds
+   the result's token — the World result, or the World component of the
+   `Prod`/`Pair` an extern returns, read by `EMatch` on the pair's
+   constructor; a token boxed in a constructor is owned by the box, and
+   a projection of the box yields the token again, so one box unwrapped
+   twice is one token used twice; a call `ECall f` passing a token
+   consumes it by `f`'s **summary** — computed from `f`'s own body
+   first: a function that takes a token and returns one (or a pair
+   carrying one) consumes and yields; one that takes a token and returns
+   none consumes; a recursive call reads the function's own signature;
+   `EMatch`/`EIf` branches are mutually exclusive, each may consume the
+   incoming token once, and the branches' yields agree; `ELet` is
+   sequential; a token left unused on a path is affine use. Unsupported
+   ownership — a token in a list cell, under a template's or a lifted
+   lambda's argument, passed to a primitive, in a constructor the check
+   cannot follow — is refused conservatively, never passed through a
+   pure-looking wrapper. The verdict is a record: `THREAD f ok`, or
+   `THREAD f REASON DETAIL` with `world_twice` (the token and its two
+   uses named by position), `world_unsupported` (the pattern named),
+   `world_leak` (a token yielded twice). At this landing the record is a
+   report on every extern-reaching function of a load, the kernel's own
+   drivers among them (a measurement: how much of the toolchain's
+   threading the initial fragment accepts, for phase 5's port); the
+   refusal comes with the `bin` form (rule 4) on the bin's closure.
+
+2. **Landing 0 is the check with the law's fixtures as pins.** Under
+   `v3/pins/loader`, the harness's two new expect forms `NAME threaded`
+   and `NAME unthreaded REASON`: the law's negative — one World boxed in
+   a pair, unwrapped twice, written twice (`world_twice`); the same
+   duplication behind a helper boundary (a helper that writes through
+   the token it was given and also returns it, its caller writing again
+   — the summary catches it); two sequential writes on one token; the
+   positives — exclusive branches each consuming the incoming token
+   once; an erased proof reference (a `theorem` over the World beside
+   the program, consuming nothing); a helper threading correctly through
+   a pair result; a token returned unused; and one conservative refusal
+   (a token in a list, `world_unsupported`). Pins 267 → about 275. The
+   kernel-side files under the V3 loader report their `THREAD` lines,
+   the count written in the record.
+
+3. **The World's L meaning.** `(extern NAME BINDERS RET)` is, in L, an
+   **opaque constant** of its declared type at its identity (K's
+   `opaque` kind, §4: a constant with a type and no equations), admitted
+   beside its E declaration; a function that calls one is then `DEFINE`
+   with its equations where today it is `RUNNABLE … no_l_meaning` — the
+   externs' E side unchanged: `ev` still stops at an extern (pure
+   evaluation refuses reachable externs, law §4.7) and `run_prog`
+   performs it. The effect laws — the bolt axioms, one per effect ×
+   observable pair as `BOUNDARIES.md`'s pattern and the old contracts
+   have them — are `axiom`s a `bin` trusts; an observable (`w_output`,
+   `w_reads`, `w_exit`) is an opaque constant over the World in the
+   program's own file. The World type is the program's declared one (the
+   driver builds its first constructor, 3.18), the extern's last
+   parameter. This is what `std/host.shard`'s header calls phase 4's
+   World: it is the prerequisite of a `requires` that names the entry at
+   all.
+
+4. **The `bin` form (landing 1).** `(bin NAME (entry F) (externs E…)
+   (trusts A…) (requires R…))`, the old form's clauses, read by the V3
+   reader (the reserved word released) and handled by the loader after
+   the file's declarations: **entry** — `F` a `fn` of the file's closure
+   with the World last and checked parameters before it (3.18's shape;
+   `bad_entry` otherwise); **externs** — the roster: every `EExt` head
+   in `F`'s E closure is in the list (`extern_outside` names the extern
+   and the function) and every listed extern is declared; **trusts** —
+   the closure's policy (§9): every axiom the closure's declarations
+   rest on is Init's three or a trusted one, the trusted ones `PARAM`;
+   **requires** — names in the closure, each an accepted `theorem` (or a
+   discharged `requirement`) MET, else UNMET; and the check of rule 1
+   over the closure, every function `THREAD … ok`. The record: `BIN NAME
+   entry F externs N trusts N requires MET/TOTAL`, then `UNMET NAME` and
+   `UNTHREADED F REASON` lines; an UNMET requirement, an unthreaded
+   function, an extern outside the roster or an untrusted axiom **fails
+   the load** (the old form's rule: pending is never silent). The
+   store's manifest gains a `bin NAME F E… R…` line (4.0 rule 3); the
+   release gate verifies that every required name is an accepted theorem
+   of the store and that the closure's assumptions are the manifest's
+   parameters — `BIN NAME ok` or `BAD-BIN NAME REASON` — the threading
+   verdict the loader's (an E property K does not see), re-derived by
+   every load of the file, so by `v3/build.sh` before any emit. The bin
+   lives in its own file beside the program
+   (`examples/calc/calc_bin.shard`, as
+   `snake_game_3/mod.req/bin.shard`): a consumer of the loop never trips
+   the artifact's gates.
+
+5. **Landing 1's consumer: calc's main as the first bin.**
+   `calc_bin.shard`: `(bin calc (entry main) (externs get_args
+   write_line exit) (trusts …) (requires main_output main_reads))` over
+   `calc_main.shard`; the observables `w_output` (the chunks written so
+   far, `(List ByteArray)`), `w_reads`, `w_exit` as opaque constants;
+   the bolts for the three externs calc touches (nine axioms: each
+   effect's action on its own observable, preservation of the other two;
+   `get_args` preserving all three); the requirements over `main`'s
+   observables only (the old principle: never an internal function or
+   state field) — `main_output`: for every `w`, `w_output (main w)` is
+   `w_output w` followed by the model world's lines for the arguments,
+   through `run_world` and slice 3.21's `run_eq_spec_world` to the spec;
+   `main_reads`: `w_reads (main w) = w_reads w`. Proven through I by
+   symbolic execution: induction on the lines, `drive_host` against
+   `run_world`, the bolts rewriting the observables. The load reports
+   `BIN calc … requires 2/2`; `bin_test.sh` (the 43rd entrypoint)
+   asserts the record, the store's `bin` line, the gate's `BIN calc ok`,
+   the two `PARAM`-free requirements' closures (Init's three and the
+   nine bolts), the program run on both engines through the driver and
+   tied to the model world as `calc_main_test.sh` does, and a negative:
+   the same bin with a requirement left `sorry` fails the load with
+   `UNMET`, with a write duplicated fails with `UNTHREADED`.
+
+6. **Landing 2 is the effect trace, the model test, route 1's binary,
+   the count.** (a) **The trace** (law §4.7 (iii)): `run_prog` records
+   every host call in order — the extern's identity, its arguments and
+   its result by the wire's codec — and returns it with the result;
+   `--run … --trace FILE` writes it, one line per call. (b) **The
+   model's trace**: the pure model computes the same list — calc's
+   `apply_action` extended to emit the call a `Print` and an `Exit`
+   stand for — so the trace is a function of the arguments. (c) **Route
+   1's binary of the bin**: `v3/build.sh v3/examples/calc/calc_bin.shard
+   v3/bin/calc` over the user root (the emitter's first user program:
+   Init's `List`, `Prod`, `ByteArray` and `UInt8` representations and
+   `std/host.shard`'s externs through the wire by declared type — a gap
+   here is a finding with its pin, a landing's rule if it blocks), its
+   `--trace` the same file. (d) **The tie, four ways, byte-identical**:
+   the bootstrap's host trace, the native loader's, the model's trace
+   under `ev`, and the binary's — the law's "no transformation
+   duplicates, eliminates, memoizes or reorders a host call" measured at
+   one program. (e) **The model test** (law §4.7 (ii)): the bolt bundle
+   calc trusts, instantiated at the model world (`CalcWorld` with its
+   observables as functions), proven as theorems — the assumed laws
+   derived where possible — and the ground case of each run under `ev`
+   on a three-call world (`decide`): assumed law bundles tested on a
+   small concrete model. (f) The count of rule 7 read against the old
+   contracts.
+
+7. **The count, agreed before the run (law §12.5).** (a)
+   `thread.shard`'s lines and its records; the pins written; (b) the
+   loader's growth — the opaque extern, the `bin` form, its record, the
+   manifest line, the gate's check — in lines; (c) calc's contract:
+   observables, bolts, requirements, proof lines, against shardfmt's
+   4/12/11 in 217 lines and snake's 5/12/7 in 214; (d) `bin_test.sh`'s
+   seconds on both engines, the proof's within them; (e) the `THREAD`
+   verdicts over the kernel's own drivers (ok, twice, unsupported, by
+   count) — phase 5's port reads them; (f) the trace tie: four traces,
+   their length, identical; (g) route 1's binary: the chain's seconds,
+   the binary's run against the interpreter's; (h) the emitter's and
+   Stage 1's gaps found, each a pin; (i) refusals before success and
+   interventions, T9's protocol. No pass bar; the user may set one
+   before landing 1.
+
+8. **Both engines, the bootstrap the authority** (4.1 rule 6):
+   `bin_test.sh` under the suite on the bootstrap and on the shim,
+   compared byte for byte as every entrypoint is; the native tie gains
+   the binary's trace.
+
+*Not in this slice, stated:* T6's prepared handle and the long-lived
+environment (R82's three identities first, its own slice); the MVU `app`
+driver (§12.5's dropped row: a loop in a `bin` is the story, no second
+form); the String flip (route 1's chain, phase 5); bolts for
+`read_file`, `read_range` and `write_file` (a roster is per bin; the
+toolchain's own bins write theirs at phase 5); the transitive
+trust-ledger tool (`BOUNDARIES.md`'s audit ledger — the release gate's
+`PARAM` lines are V3's); the trace relation as a theorem about route 1's
+lowering (phase 7, with route 1's proof: here it is a measured tie);
+effect handlers other than the host (a model world is the pure model,
+not a handler); tokens through templates, lifted lambdas and list cells
+(refused conservatively; a §11 row when a port needs one);
+`examples/sha256sum` and the other bins (phase 5 by manifest).
+
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -4601,7 +4828,7 @@ never compared as verdicts.
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 — instance arguments at the library's types from a fixed table at slice 3.27 landing 1 (§8.4 rule 3, designed 2026-10-09), the `Nat → Int` coercion at 3.15; search stays the door — the phase-3 form by item 61's ruling (slice 3.30's ledger) |
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
 | lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
-| `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 |
+| `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 — **slice 4.3 (designed 2026-10-16, §8.6)**: the check over `Prog` with the law's fixtures as pins, the extern an opaque L constant, the `bin` form and its record, the trace tied four ways |
 | prepared handles, long-lived environments | §9.3, T6 | 4 |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
@@ -5916,3 +6143,32 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     Stage-1 gap recorded); K untouched. **Ratified 2026-10-16 as built,
     both readings (the user: "That makes sense. Ratify the two readings, close the slice, and let's open the next one.");
     slice 4.2 closed.**
+
+68. **Slice 4.3, the program side (designed 2026-10-16 at slice
+    4.2's close; §8.6 "Slice 4.3"; law §4.7, §9.3, §12.4 item 4;
+    ratified 2026-10-16 as described — the user: "The program side
+    sounds good as described -- proceed."):** the leans beyond the
+    description, stated for objection. (a) The World's L meaning as
+    landing 1's first item — an extern an opaque constant of its
+    declared type, so that a function calling one has equations and a
+    requirement can name the entry; the alternative, requirements over a
+    `sig` twin of `main` as the old contracts had, declined: the entry
+    itself is the subject. (b) Route 1's binary of the bin at landing 2
+    beside the trace, not at landing 1 as described: the trace relation
+    is the binary's gate, so the two land together; landing 1 runs the
+    bin on both engines through the driver. (c) The check over `Prog`
+    after erasure with per-function summaries in dependency order, the
+    pair of an extern's result the one supported aggregate beside a user
+    constructor, everything else refused conservatively; the verdict a
+    record on every extern-reaching function at landing 0 (the kernel's
+    drivers measured), a refusal on a bin's closure from landing 1. (d)
+    The `bin` in its own file beside the program; its record, the
+    manifest's `bin` line, the gate's `BIN`/`BAD-BIN`; the threading
+    verdict the loader's, re-derived at every load. (e) Calc's contract:
+    three observables, nine bolts, two requirements (`main_output`
+    through the model and 3.21's claim, `main_reads`), the old principle
+    kept — requirements over the entry's observables only. (f) The trace
+    as the driver's record (`--trace FILE`) and the model's as a
+    function, tied four ways. (g) The model test as the bundle
+    instantiated at the model world and proven, plus a ground `decide`.
+    (h) The count with no pass bar; `bin_test.sh` the 43rd entrypoint.

@@ -1788,6 +1788,22 @@ Landing 2 holds on the full gate: **2026-10-16 — pipeline 620 green on `7ef685
 
 **Slice 4.2 closed 2026-10-16** — the landing-2 readings ratified as built (the user: "That makes sense. Ratify the two readings, close the slice, and let's open the next one."); the next slice designed at the boundary.
 
+**Slice 4.3 designed 2026-10-16 — the program side: `bin`, `requires`, the
+well-threadedness check, effect traces** (`LANGUAGE.md` §8.6; §13 item 68,
+ratified 2026-10-16 as described): law §4.7's faithful effectful program in
+V3 — the well-threadedness check over the erased E program with the law's
+fixtures as pins (one World boxed, unwrapped twice, written twice refused;
+exclusive branches and erased proof references accepted); an extern an
+opaque L constant so that a requirement can name the entry; the `bin` form
+with `entry`, `externs`, `trusts` and `requires`, its record and manifest
+line, an unmet requirement failing the load; calc's main the first bin, two
+requirements over its observables through nine bolts, proven through I; the
+effect trace recorded by the driver and tied four ways — both engines, the
+model's trace, route 1's binary of the bin — and the bolt bundle tested on
+the model world. Landing 0 the check and the pins; landing 1 the form and
+calc's bin; landing 2 the trace, the model test, the binary, the count. Not
+in it: T6's handle, the `app` driver, the String flip, the other bins.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
 2026-10-14): `load.shard --emit` projects a driver's closure, as the
