@@ -25,6 +25,8 @@ record that is not a module, an Init load or an acceptance:
 ;;                                     NAME.realize_N refused conversion
 ;; expect: NAME pending measure        a realization attached under a measure other than struct (§7.2): the obligation reported
 ;; expect: NAME runnable REASON       every record accepted, and the fn NAME is RUNNABLE with that obstacle to L meaning
+;; expect: NAME param KIND            every record accepted, and NAME is a declared parameter of KIND (axiom: a trusted
+;;                                     axiom, slice 4.2 landing 2)
 ;; expect: NAME refuses REASON         some record refuses NAME for REASON, not necessarily the first bad one (slice 3.16: a refused discharge after a PENDING measure)
 ;;                                     named (§8.4 rule 1, slice 3.13): e_only_type, no_l_meaning, no_l_identity, unknown_constant,
 ;;                                     measure_pending, numeral_pattern, recursion_depth

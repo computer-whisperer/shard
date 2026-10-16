@@ -213,6 +213,7 @@ MODULE M file=F hash=H sees=M1,M2                  ; the module done: its hash o
 RUNNABLE fn M.f why=OBSTACLE | RUNNABLE extern M.e | RUNNABLE type M.T   ; an E declaration classified (§6.7; R45's status kind: runnable, no L meaning); a fn's obstacle to a definition named (§8.4 rule 1)
 DEFINE M.f equations=M.f.eq_1,… [pending=ROOT,…]   ; a fn defined (§8.4, slice 3.13): its definition and equations ACCEPT lines, its E body attached
 PARAM M.f.dec_1 obligation   ; a measured fn's decreasing fact admitted as a parameter of the fourth class (§8.4 slice 3.14, §9); the fn's DEFINE carries pending=M.f and PENDING M.f measure follows
+PARAM M.ax axiom             ; an axiom the file trusts, a declared parameter (§8.6 slice 4.2 landing 2): the manifest's `param` line, the release gate's PARAM, dischargeable by a fulfills
 REALIZE NAME supplied equations=M.NAME.realize_1,… | REALIZE NAME view equations=   ; a realization attached under NAME's identity (§7.5)
 REFUSE M.x REASON | REFUSE M.f REASON: …           ; K's refusal; the classifier's, with its message
 POLICY M.x outside the policy: a | PENDING M.x sorry | PENDING NAME measure
@@ -269,6 +270,12 @@ them; each is a candidate for §13.
   through the file's scope when a closure is checked, so `(trusts ax)`
   in the declaring file covers `M.ax`. A theorem in another file that
   rests on `M.ax` without trusting it is outside that file's policy.
+  **A trusted axiom is a declared parameter** (slice 4.2 landing 2):
+  admitted as `PARAM M.ax axiom`, listed by the store's manifest, named
+  by the release gate's `PARAM` lines, every theorem resting on it
+  verified as conditional on it; it enters no load-wide parameter list,
+  so the per-file policy above stands (pins `policy_trusts`,
+  `policy_cross`).
 - **A `sorry` name is pending**: citing it is refused with
   `pending_obligation`, never resolved to an assumption.
 - **A file whose loading failed is loaded once** (slice 6): its
@@ -3322,7 +3329,7 @@ it entrenches. The slices, in the order built:
 |---|---|---|
 | 4.0 | the checkpoint memo answered (R78–R85, records §4.12): the document corrections; the release gate's exit, kind and assumption-closure checks against a manifest; the seal's checked transfer and generator run — **ratified 2026-10-14 as designed; landing 0 built 2026-10-14 (the documents); landing 1 built 2026-10-14 (the release gate), green on pipeline 602; landing 2 built 2026-10-14 (the seal), green on pipeline 603 — slice closed** | the ledger; the release; K's clients |
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
-| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
+| 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67)** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -4197,6 +4204,185 @@ binary (landing 0's definition gate was 37 and 7 on the quiet dev box),
 the records identical under both engines; `imp_test.sh` asserts it, the
 root stored and verified by K alone (rule 4). Gates on the quiet dev box: the loader's sources clean under the V3 loader, names at the baseline; the loader pins 267/0; `tactic_test` 110/0, `tactic_lib_test` 30/0, `calc_test` byte-identical over 21 inputs, `std_test` 201/0, `define_test` 12/0, `derive_test` 14/0 on the bootstrap under the reducer's rules; `v3/build.sh --all` 29 roots, 28 built, 1 current, 0 failed, in 2,188 s (two heavy jobs; the loader's chain emit 22 s, lower 69, codegen 221, cc 56 over 8,452 declarations); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 712 s of wall and 3,418 s of entrypoint time (`imp_test` 419 s: the root loaded and stored in 319 s, K's replay of the store 100 s, 143 checks; the tie 76 checks, 0 failed, in 347 s; parity byte-identical over 31 closures and 137,172 declarations in 352 s — the 51 more the landing's kernel growth; `store_test` 573, `tactic_lib_test` 286, `define_test` 239, `path_test` 235, `calc_test` 231); the native suite 43 entrypoints, 0 failed, in 411 s of wall (`imp_test` 89 s: the root loaded and stored in 69 s, K's replay 19 s; the tie 347 s; `calc_test` 193, parity 170, `store_test` 98); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
 
+**Slice 4.2 as built, landing 2 (2026-10-16) — `app`, the allocating
+member: the runtime's laws as parameters, the output ghost existential,
+and the count.** Rule 5, with what the proof found.
+
+*The object.* `tb_app` (`v3/models/imp/app.shard`): for lists `av` and
+`bv` read back at the words `a` and `b` in a memory representing the
+ghost `g` under the invariant at the roots `r`, no raw cell, the
+table's entry 5 the product `app_ipfn` (the old compiler's output,
+constructor for constructor: the match skeleton, the recursive call at
+5, the allocation at 1, the increment at 2, the two slot stores), the
+window bounds and fuel at least 25 + 12·|av| — there exist a ghost `g2`
+and a word `w` such that the call satisfies the post-predicate at `g2`
+and `w` with the roots `r`, and `w` reads back as `app av bv` in `g2`'s
+cells. No ghost twin: the old `app_tw` with `pg`, `pw` and
+`app_tw_cons` (four forms) is dissolved into the existential, as rule 5
+asked. The fuel is this evaluator's accounting (the old statement's 30
++ 12·|av| was the old evaluator's).
+
+*The parameters* (`v3/models/imp/rtlaw.shard`, six `axiom` forms under
+`trusts`). Rule 5 names "the three runtime laws — allocation,
+increment, release"; read against C2b's own slicing
+(`docs/records/COVERAGE.md`: C2b-3 "rt_alloc + fill/seal/read", C2b-4
+rt_inc), the allocation law is the raw-cell protocol — the call, the
+fill, the seal — and the release law is not needed, since `app` never
+calls `dec`: two of C2b's three, as six statements. The restatement
+rule, recorded for the tool: a run law whose old conclusion named a
+memory the runtime kit constructs (`alloc_out`'s `m_alloc`, `m_inc`) is
+stated with that memory existential and its representation and
+invariant laws folded in — `rt_alloc_run` (the call fails for want of
+memory, or returns the address of an empty raw cell of the tag and
+arity over a memory representing a ghost — existential too, its cells,
+end and raw cell stated — under the invariant at the same roots;
+`rth_alloc_run`, `hr_alloc`, `hinv_alloc`, `gh_alloc_raw`, `gcells_alloc`,
+`gend_alloc` in one), `rt_inc_run` (the call returns 0 over a memory
+representing `gh_inc g v` under the invariant at the roots plus the
+word; `rth_inc_run`, `hr_inc`, `hinv_inc`); a law over the model's own
+functions ports one to one — `hr_fill`, `hinv_fill` (the old
+`hr_fill_k`, `hinv_fill`), `hr_seal`, `hinv_seal` (`hinv_seal_r`); every
+parameter holds for any fuel of at least 12, the runtime function's
+own cost, and the certificate instantiates it at the level its call
+runs. The typed class throughout. The mechanism: an `axiom` the file
+trusts is now recorded `PARAM NAME axiom` (`loader.shard` `admit_read`,
+`admit_axiom_param`) — the store's manifest lists it as a parameter,
+the release gate prints it as `PARAM` and verifies every theorem
+resting on it as conditional on a named parameter, a `fulfills` at
+phase 7 discharges it as an obligation — and is not entered in the
+load's parameters, so the policy stays per file (pin `policy_cross`
+unchanged; pin `policy_trusts` sharpened to `expect: main.ax param
+axiom`, the harness's new form `NAME param KIND`). Before this a
+trusted axiom was `ACCEPT`, the manifest listed no parameter, and a
+store with one would have verified `UNDECLARED` and every consumer
+`CONDITIONAL` with exit 1: 4.0's records had no producer of a declared
+parameter but a view's and a measured fn's. `tb_app`'s closure is
+Init's three axioms and the six parameters, nothing else; the release
+prints six `PARAM` lines and the three measured descents' `DISCHARGE`
+lines, no `CONDITIONAL`, no `UNDECLARED`.
+
+*The proof.* `tb_app` follows from `tb_app_aux` — for every fuel, word
+and depth, by induction on the first list, the second list's word and
+readback fixed. The nil case: the increment on `b` by `rt_inc_run` at
+fuel − 7 (`b` an immediate or a live address by `rbl_slot_ok`, below
+2^32 by `rbl_bound`), the body by `app_body_nil`, the post-predicate at
+`gh_inc g b` and `b` with the readback carried by `rbl_inc` and the end
+and raw cell by `gend_inc`, `graw_inc`; past the depth the call fails
+`FStack` and the predicate holds with any witnesses. The cons case:
+the cell facts as `len`'s; the recursive call at fuel − 11 by the
+induction hypothesis, its existential opened over the result record
+(`∀ R, EV = R → ∃ g1 w1, …`, landing 1's trick) and split four ways —
+no result, a statement result and a trap contradict it, a failure fails
+the body and the call; a returned word `w1` with its ghost `g1`, then
+the depth split, the allocation by `rt_alloc_run` at fuel − 12 and its
+two outcomes — `FOom` fails the body —, and the success leaf
+`app_cons_ok`: the raw cell's place from the invariant (`raw_window`:
+rb + 152 ≤ p, p + 24 ≤ gend, 8-aligned, so even and the two stores
+inside the window), the increment on the head word by `rt_inc_run` at
+fuel − 13 with the word's parity and bound from the word kit
+(`imm_odd`, `imm_lt`: the immediate is 2v + 1 less a multiple of 2^64,
+so odd and below 2^64), which leaves the ghost (`gh_inc_odd`) and the
+roots (`rinc_odd`); the ghost chain `app_ghost` — the first fill by
+`hr_fill` and `hinv_fill` at an immediate, the second at `w1` with the
+root it moves from the roots into the slot (`root_rinc`, `rdec_rinc`),
+the seal by `hr_seal` and `hinv_seal` with the new cell a root, the
+cells, end and raw cell after each step by the ghost kit, the address
+fresh by `raw_fresh` —; the body's run by `app_E3_ret` and
+`app_body_ret` through the step laws with the store (`stmt_storew`);
+the new cell's readback (`hfget_mk`, `haddrs_mk`, the two slots, the
+tail by `rbl_seal`); the post-predicate at the sealed ghost and `p`,
+`rinc r p = p :: r` since `p` is even. The twelve run lemmas are the
+product's statements over their locals at a fuel base, as `len`'s, the
+calls' results variables (`app_E3_ret` takes the three calls' results
+and the two stores' address facts as hypotheses). The mechanical text
+was spelled by a scratch script at authoring time, not kept.
+
+*What the proof found* (each with what was done):
+
+1. *K's recursion depth.* The general form with the success leaf
+   inline — about 190 `have`s on the deepest path — was refused
+   `exhausted_rec_depth_at_infer` (`budget_depth` 8,192 in
+   `k/inductive.shard`); landing 1 met the other budget. The leaf is
+   `app_cons_ok` and its ghost chain `app_ghost`, each a K check of its
+   own; the general form keeps the cell facts and the case splits (193
+   lines). K untouched.
+2. *The existential's introduction.* `(exact (Exists.intro w h))` with
+   `h` a hypothesis whose type is known is refused `unify_stuck …
+   blocked on p`: the elaborator checks `h` against the predicate
+   applied to the witness before the result type meets the goal, a
+   higher-order problem its first-order unifier cannot solve; the `@`
+   form with the predicate written out is refused the same way when
+   the proof argument is a local (it is accepted when the argument is
+   itself an application, `probe_ex2`'s `Eq.refl`). The form that
+   works: `(apply (Exists.intro w) ((show P) …))` — `apply` unifies the
+   result with the goal first and opens the predicate at the witness
+   unreduced, `show` converts it. Recorded as a Stage-1 gap of the
+   elaborator (§11's row): the witness introduction of an existential
+   goes through `apply`.
+3. *Init's casts.* `↑n` in Init is `Nat.cast` at `instNatCastInt`, not
+   `Int.ofNat`; V3 spells it `(@Nat.cast Int instNatCastInt n)` (law
+   §5.1's `@` form), and the unifier takes `Int.ofNat n` for it by
+   definitional unfolding only where no metavariable is in play — so
+   the cast lemmas (`Int.toNat_of_nonneg`, `Int.natCast_emod`,
+   `Int.ofNat_inj`, `Int.ofNat_lt`) are used through `exact` with the
+   intermediate facts stated by `have`, never through `rw`. The
+   parity of the immediate goes through `Int.emod_def` and linear
+   arithmetic, not divisibility (`Int.instDvdInt` is no name of the
+   export). Two implicit-argument changes of the pinned Lean:
+   `Nat.succ_ne_zero`'s `n` and `List.mem_cons_self`'s both arguments.
+4. *The reducer at an `if` over an open condition* leaves the
+   projections of a constructor in the condition alone, so a rewrite
+   by `if_pos` finds no `(= ad a)`; the constructor forms are stated
+   as a small rewriting kit (`hincc_mk`, `hfget_mk`, `haddrs_mk`,
+   `hsig_mk`, `haddr_mk`) and the inductions rewrite by them. And
+   `unfold` of a definition that occurs inside the ghost term too
+   (`rb_slot` inside `gh_fill g2 (rb_slot …)`) unfolds every
+   occurrence and breaks the later match: `show` with the one
+   occurrence spelled, as for the post-predicate.
+5. *The existential's frame.* The twin named the output ghost; the
+   existential says nothing of the input's cells surviving. `app`'s
+   own proof needed no frame — every word it reasons about is the
+   fresh call's result or an immediate whose parity the word kit
+   proves, and the one place a frame would have served (the increment
+   on the head word at the induction hypothesis's ghost) closes by
+   parity — so rule 5's test is answered for the per-function
+   certificate: `Prop` dissolves the twin. A caller composing
+   certificates will need a stated frame (the old cells' addresses, or
+   their readbacks, survive): phase 7's composition question, noted
+   for B-1c.
+6. *The loader's parameter record* (above): the one kernel-side change,
+   with its pin and the harness's form; `ret_of_some` (`step.shard`)
+   bridges a parameter stated over `ipcall` to the step laws stated
+   over the result record.
+
+*The count* (rule 6, read against landing 1's as rule 5 asked; the old
+file: `tb_app` 1,148 lines, 774 step forms — 100 `have`, 90
+`rewrite-with`, 287 `rewrite`, 106 `compute`, 191 `inst` —, 86 distinct
+lemmas; its closure 364 claims in 35,547 lines, 278 of them the runtime
+kit's in 30,514; the twin's four forms). The proof text: 489 lines —
+the run lemmas 174, `app_ghost` 31, `app_cons_ok` 75, `tb_app_aux` 193,
+`tb_app` 16 — against 1,148; 906 step forms, one statement each,
+against 774. The kit written by need: 55 theorems and 6 parameters —
+the ghost kit 49 (`ghost.shard`, 298 lines), the word kit 3 (`imm_word`,
+`imm_odd`, `imm_lt`), the step laws 3 (`stmt_storew`, `stmt_storew_n`,
+`ret_of_some`), the runtime's laws 6 (`rtlaw.shard`, 83 lines, standing
+for the runtime kit's 278 claims until phase 7) — and seven definitions
+(`hincc`, `gh_inc`, `gh_fill`, `gh_seal`, `hsig`, `irem`, `rdec`) beside
+the source and the product. Cited by the proof: 55 of the kit (the
+ghost kit 27, the step laws 14, the cell kit 6, the parameters 6, the
+word kit 2), 15 of its own lemmas and 8 of Init's, against the old 86.
+Refusals on the way: K's `exhausted_rec_depth_at_infer` (item 1) and
+the elaborator's `unify_stuck` (item 2); hand-lowering: none; the
+kernel's interventions: the loader's parameter record and the harness
+form — no K change, no new syntax, no new form. The root — Init on
+demand, 14 modules, the two roots `len.shard` and `app.shard` — loads
+and checks with `tb_app` on Init's three axioms and the six parameters
+in 126 s on the binary and 786 s on the bootstrap (K's replay of the
+store 24 and 146 s), the records identical under both engines;
+`imp_test.sh` asserts the gate, the parameters' records, the closure
+and the release's `PARAM` and `DISCHARGE` lines, the store verified by
+K alone (rule 4). Gates on the quiet dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 267/0 on both engines (the sharpened pin among them); `v3/build.sh --all` 29 roots, 27 built, 2 current, 0 failed, in 2,123 s (two heavy jobs; the loader's chain emit 23 s, lower 74, codegen 247, cc 60 over 8,454 declarations); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 963 s of wall and 4,715 s of entrypoint time (`imp_test` 933 s: the two roots loaded and stored in 786 s, K's replay of the store 146 s, 236 checks; the tie 76 checks, 0 failed, in 350 s; parity byte-identical over 31 closures and 137,191 declarations in 409 s — the 19 more the loader's growth; `store_test` 613, `tactic_lib_test` 332, `define_test` 291, `path_test` 281, `calc_test` 272); the native suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 406 s of wall and 1,328 s of entrypoint time (`imp_test` 150 s: the two roots loaded and stored in 126 s, K's replay 24 s; the tie 340 s; `calc_test` 187, parity 171, `store_test` 97); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -4417,6 +4603,7 @@ never compared as verdicts.
 | the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; today the sidecar's key is the statement fingerprint and the store's sharing compares binder names | §8.4 3.22 rule 2 | 4, its own slice before T6's prepared handles and before phase 5's tools police frozen requirements |
 | occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | 4, before the incremental goal-state slice; slice 4.1's emitter keeps the map |
 | user notation | §5.3 departure 6 | never in v1 |
+| an existential's witness introduction through `exact` — `(exact (Exists.intro w h))` with `h` a hypothesis of known type, or the `@` form with the predicate written, is `unify_stuck … blocked on p`: the first-order unifier meets the predicate applied to the witness before the result type meets the goal (slice 4.2 landing 2, §8.6 item 2); the form that works is `(apply (Exists.intro w) ((show P) …))` | §5.1 Stage 1 | 5 — a Stage-1 item: the goal's result type unified first, or a pattern case for a metavariable applied to a witness |
 
 ## 12. Changes from v2 — the compatibility ledger
 
@@ -5697,4 +5884,19 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     (i) kept (the root stored and verified by K alone in `imp_test.sh`);
     the kernel's interventions the reducer's three rules, the loader's
     named exhaustion and the reader's bounded pending record, K
-    untouched; one backlog item (issue #42, the unreachable arm).
+    untouched; one backlog item (issue #42, the unreachable arm). **As
+    built, landing 2 (2026-10-16):** `app` as §8.6 "as built, landing
+    2" states it — the output ghost and word existential, no twin (rule
+    5's test answered for the per-function certificate; the frame a
+    caller needs noted for phase 7); the runtime's laws as six
+    parameters, read against C2b's slicing (the allocation law the
+    raw-cell protocol — the call, the fill, the seal; the increment; no
+    release, `app` never calling `dec`), the run laws restated with
+    their memories existential and their representation and invariant
+    laws folded in, the fill and seal laws one to one — *for
+    ratification*: that reading of rule 5's "three laws", and the
+    restatement rule; the loader's record of a trusted axiom as `PARAM
+    NAME axiom` (the mechanism rule 5 named reached); the count written
+    beside the record's numbers; the general form split at K's
+    recursion depth, the existential introduced through `apply` (a
+    Stage-1 gap recorded); K untouched.

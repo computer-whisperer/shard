@@ -212,7 +212,7 @@
   (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
   (RInit Name Int Int)                        ; the Init load (slice 3.26): the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
   (RAccept Name Name Int (List Name) Int (List Name))   ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on
-  (RParam Name Symbol Int)                    ; a view parameter admitted: kind (type / fn / requirement), a sig type's arity
+  (RParam Name Symbol Int)                    ; a parameter admitted: a view's (kind type / fn / requirement; a sig type's arity), a measured fn's obligation, a trusted axiom (kind axiom; slice 4.2 landing 2)
   (RRefuse Name Symbol)                       ; K refused
   (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
   (RPending Name Symbol)                      ; sorry: read, admits nothing
@@ -627,7 +627,7 @@
       ((RDParam d kind arity)
        (match (admit_param l f d kind arity)
          ((Pair l1 f1) (Pair (add_e_twin l1 f1 s) f1))))
-      ((RDOk ds) (admit_forms l f s ds))
+      ((RDOk ds) (admit_read l f s ds))
       (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f)))))))))))))))
 
 ;; ---- a derivation (§8.4 slice 3.19; derive.shard) -----------------------------------------------
@@ -767,6 +767,27 @@
 (fn pm_without ((pm (List (Pair Name (List Name)))) (g Name)) (List (Pair Name (List Name)))
   (measure (struct pm))
   (match pm (Nil Nil) ((Cons (Pair n roots) r) (Cons (Pair n (names_without roots g)) (pm_without r g)))))
+;; an axiom the file trusts is a declared parameter (§8.6 slice 4.2 landing 2; the release gate's
+;; policy, slice 4.0 rule 3): recorded PARAM NAME axiom — the manifest's `param` line, every theorem
+;; resting on it verified conditional on a named parameter, its discharge an obligation's — and not
+;; entered in the load's parameters, so the policy stays per file (pin policy_cross: a file that
+;; rests on it trusts it). An axiom the file does not trust takes the ordinary path and is refused
+;; by the policy (pin policy_axiom).
+(fn admit_read ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load Fx)
+  (match ds
+    ((Cons (AxiomDecl cv u) Nil)
+     (if (trusted (fx_scope l f) (Fx.trusts f) (decl_name (AxiomDecl cv u)))
+       (admit_axiom_param l f (AxiomDecl cv u))
+       (admit_forms l f s ds)))
+    (_ (admit_forms l f s ds))))
+(fn admit_axiom_param ((l Load) (f Fx) (d Declaration)) (Pair Load Fx)
+  (let ((n (decl_name d)))
+    (match (check (Load.env l) (st_init) d)
+      ((Accepted env1)
+       (Pair (ld_rec (ld_with_tbl (ld_with_env l env1 (Load.memo l)) (tbl_add (Load.tbl l) n (Fx.module f))) (RParam n (quote axiom) 0))
+             (fx_mix f (match (identity_hash env1 n) ((Some h) h) (None 0)))))
+      ((Rejected reason subject) (Pair (ld_rec l (RRefuse subject (reason_of reason))) f))
+      ((Exhausted res site) (Pair (ld_rec l (RRefuse n (exhausted_sym res site))) f)))))
 ;; L declarations admitted, checked against the policy, recorded; a type's or a sig's E twin
 (fn admit_forms ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load Fx)
   (match (admit_core l f ds)

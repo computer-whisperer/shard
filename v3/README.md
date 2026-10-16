@@ -1760,6 +1760,30 @@ by K alone. Gates on the quiet dev box: the loader's sources clean under the V3 
 
 Landing 1 holds on the full gate: **2026-10-16 — pipeline 617 green on `c295954`, slice 4.2 landing 1 on the full gate: engine 56 s; corpus 2,036 s against 2,024, the old tree's sources untouched; v3 5,432 s of a 3 h limit against pipeline 616's 5,441 (the export 88 s; the index driver and the index 132 s; 42 entrypoints with 0 failed in 2,167 s against 2,183 — `imp_test` 1,493 s against 111 with the proof in it: the root loaded and stored in 1,233 s, K's replay of the store 258 s, 143 checks against 81; `store_test` 1,712 against 1,763 (calc's five leaves stored 528 against 581, K's replay 100 against 101), parity byte-identical over 31 closures and 137,172 declarations in 1,098 s against 137,121 in 1,095 — the 51 more the landing's kernel growth —, `tactic_lib_test` 935 against 944, `path_test` 826 against 836, `define_test` 804 against 839, `calc_test` 743 against 826, `std_test` 575 against 571 (the root stored 297 against 306, K's replay 274 against 261), `wire_test` 486 against 495, `engine_test` 426 against 598, `template_test` 381 against 366, `derive_test` 362 against 366, `calc_main_test` 287 against 353, `k_clients_test` 246 against 255, the loader pins' entrypoint 175 against 164 for 267 cases, `tactic_test` 159 against 198, `rows_test` 147, `route2_test` 86 against 85, `matcher_test` 78; route 1's build 509 s against 486; the replay 2,464 s at 32.3 GB against 2,473 at 32.1, K's sealed module untouched by the landing); T0 accepted 57,977, 20 pinned, closures identical. The native job 4,120 s against 4,159: the export 86 s; `v3/build.sh --all` over the 29 roots with sixteen in flight in 2,538 s against 2,506 — 29 built, 0 failed, the loader's chain emit 61 s, lower 629, codegen 1,692, cc 155 against 60, 598, 1,685 and 154; `prove` 63, 615, 1,613, 149; `verify_release` 31, 368, 706, 104; `t0` 26, 339, 558, 97 —; the index 96 s; the tie 76 checks, 0 failed, in 843 s against 909 (the pins' harness 132 → 32), byte-identical under both engines on every workload; the suite on the binaries 42 entrypoints, 0 failed, in 485 s of wall against 487 — `imp_test` 219 s against 19 (the root loaded and stored 173 s, K's replay 45), parity 452 against 455, `calc_test` 447 against 476, `store_test` 269 against 306, `tactic_lib_test` 123 against 125, `define_test` 103 against 107, `k_clients_test` 102 against 103, `path_test` 97 against 100, `engine_test` 90 against 178, `std_test` 75 against 77, `wire_test` 65 against 64, `calc_main_test` 62 against 81, `derive_test` 52, `template_test` 46 against 48, the loader pins' entrypoint 33 against 34. The `suite_tie` job 14 s: 42 entrypoints, 0 differ — byte-identical under both engines on every entrypoint, `imp_test` with the proof among them. Landing 1 of slice 4.2 holds on the full gate.**
 
+**Slice 4.2 landing 2 built 2026-10-16 — `app`, the allocating member: the
+runtime's laws as parameters, the output ghost existential, and the count**
+(`LANGUAGE.md` §8.6 "as built, landing 2"; records §9): `tb_app` accepted on
+Init's three axioms and six declared parameters from its general form by
+induction on the first list — the recursive call's existential opened and
+split, the allocation's two outcomes, the success leaf `app_cons_ok` with its
+ghost chain `app_ghost` (two fills and the seal), each a K check of its own
+since K's recursion depth refused the form inline — with the output ghost and
+word existential and no ghost twin (rule 5's test answered; the frame a
+caller needs noted for phase 7). The parameters (`models/imp/rtlaw.shard`):
+C2b's allocation law as the raw-cell protocol (the call, the fill, the seal)
+and its increment law, no release — `app` never calls `dec` —, the run laws
+restated with their memories existential; the loader now records an axiom
+the file trusts as `PARAM NAME axiom`, so the store's manifest lists it and
+the release gate verifies every consumer as conditional on it (six `PARAM`
+lines, the measured descents `DISCHARGE`, no `CONDITIONAL`). The kit by need: the ghost kit of 49 theorems, the
+immediate's parity and bound, the store law; 489 lines of proof against the
+old 1,148, 55 theorems and 6 parameters against the old closure's 364 claims.
+Found and recorded: the elaborator's first-order unifier at an existential's
+introduction (`apply` with `show` is the form), Init's `Nat.cast` spelling,
+the reducer at an `if` over an open condition. The root's two roots load
+with both theorems in 126 s on the binary and 786 s on the bootstrap;
+`imp_test.sh` asserts 236 checks with the store verified by K alone. Gates on the quiet dev box: the kernel-side files clean under the V3 loader, names at the baseline; the loader pins 267/0 on both engines (the sharpened pin among them); `v3/build.sh --all` 29 roots, 27 built, 2 current, 0 failed, in 2,123 s (two heavy jobs; the loader's chain emit 23 s, lower 74, codegen 247, cc 60 over 8,454 declarations); the bootstrap suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 963 s of wall and 4,715 s of entrypoint time (`imp_test` 933 s: the two roots loaded and stored in 786 s, K's replay of the store 146 s, 236 checks; the tie 76 checks, 0 failed, in 350 s; parity byte-identical over 31 closures and 137,191 declarations in 409 s — the 19 more the loader's growth; `store_test` 613, `tactic_lib_test` 332, `define_test` 291, `path_test` 281, `calc_test` 272); the native suite under `V3_NATIVE=1` 43 entrypoints, 0 failed, in 406 s of wall and 1,328 s of entrypoint time (`imp_test` 150 s: the two roots loaded and stored in 126 s, K's replay 24 s; the tie 340 s; `calc_test` 187, parity 171, `store_test` 97); `suite_tie.sh` over the two kept runs 43 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
+
 **Slice 4.1 designed 2026-10-13 — the native toolchain: route 1 over
 the kernel's drivers** (`LANGUAGE.md` §8.6; §13 item 65, ratified
 2026-10-14): `load.shard --emit` projects a driver's closure, as the

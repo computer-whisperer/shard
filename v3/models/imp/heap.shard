@@ -213,3 +213,41 @@
   (match xs
     (List.nil True)
     ((List.cons e t) (match e ((Ext a n) (And (emem ys a n) (eall t ys)))))))
+
+;; --- the ghost operations of the runtime's protocol (landing 2: the increment, the fill, the seal) ---
+;; the count of the cell at a raised by one (the old hincc); an address no cell has changes nothing
+(fn hincc ((cs (List HCell)) (a Nat)) (List HCell)
+  (measure (struct cs))
+  (match cs
+    (List.nil List.nil)
+    ((List.cons c rest)
+     (if (= (HCell.haddr c) a) (List.cons (HCell.with_hcount (+ (HCell.hcount c) 1) c) rest) (List.cons c (hincc rest a))))))
+;; the ghost increment: an immediate, an address no cell has, or an immortal cell leaves the ghost
+(fn gh_inc ((g GHeap) (v Nat)) GHeap
+  (if (= (% v 2) 1) g
+    (match (hfind (GHeap.gcells g) v)
+      (Option.none g)
+      ((Option.some c) (if (<= 2147483648 (HCell.hcount c)) g (GHeap.with_gcells (hincc (GHeap.gcells g) v) g))))))
+;; the raw cell's next slot filled with w; nothing where no raw cell is
+(fn gh_fill ((g GHeap) (w Nat)) GHeap
+  (match (GHeap.graw g)
+    (Option.none g)
+    ((Option.some rc) (GHeap.with_graw (Option.some (HRaw.with_rfill (List.append (HRaw.rfill rc) (List.cons w List.nil)) rc)) g))))
+;; the raw cell sealed: a live cell of count 1 at the head of the cells, no raw cell
+(fn gh_seal ((g GHeap)) GHeap
+  (match (GHeap.graw g)
+    (Option.none g)
+    ((Option.some rc)
+     (GHeap.with_graw Option.none
+       (GHeap.with_gcells (List.cons (make HCell (haddr (HRaw.raddr rc)) (hcount 1) (htag (HRaw.rtag rc)) (harity (HRaw.rarity rc)) (hslots (HRaw.rfill rc))) (GHeap.gcells g)) g)))))
+;; a cell up to its count: what an increment leaves of it
+(fn hsig ((c HCell)) HCell
+  (make HCell (haddr (HCell.haddr c)) (hcount 0) (htag (HCell.htag c)) (harity (HCell.harity c)) (hslots (HCell.hslots c))))
+;; one occurrence removed (the old irem); a stored reference leaves the roots, an immediate leaves
+;; them alone (the old rdec) — rinc's inverse at the word the fill consumed
+(fn irem ((xs (List Nat)) (x Nat)) (List Nat)
+  (measure (struct xs))
+  (match xs
+    (List.nil List.nil)
+    ((List.cons h t) (if (= h x) t (List.cons h (irem t x))))))
+(fn rdec ((r (List Nat)) (v Nat)) (List Nat) (if (= (% v 2) 1) r (irem r v)))
