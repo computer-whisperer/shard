@@ -34,8 +34,8 @@ family; the rest follow the contract.**
 | `models/pio` | 6 | 5,592 | ARCHIVE (proposed) | consumerless |
 | `tools/wasmgen`, `tools/x86gen` | 3 | 12,585 | ARCHIVE (proposed) | FROZEN generators; superseded by the generic path |
 | `tools/impgen` (`blueprints/`, `fixtures/`) | 28 | 65,892 | ARCHIVE (proposed) | the frozen oracles; a handful of blueprints retained as PORT fixtures for the generic compiler's tests |
-| `tools/impc`, `lowbuild`, `lowcheck`, `bytetie`, `build`, `low`, `reach`, `invoke`, `image` | ~80 | ~30,000 | new code where toolchain; their theorems and fixtures PORT | the lowering-side toolchain; certificates become I |
-| `tools/lower`, `tools/codegen` | 2 | 2,013 | ARCHIVE at the flip | the temporary chain; route 1 replaces it (§9.1) |
+| `tools/impc`, `lowbuild`, `lowcheck`, `bytetie`, `build`, `low`, `reach`, `invoke`, `image` | ~80 | ~30,000 | new code where toolchain — phase 7, with the per-function generator (amended 2026-10-16, `v3/LANGUAGE.md` §13 item 69), its first generation compiled through slice 4.4's bridge; their theorems and fixtures PORT | the lowering-side toolchain; certificates become I |
+| `tools/lower`, `tools/codegen` | 2 | 2,013 | ARCHIVE when V3's own chain compiles itself — phase 7, with its proof; carried through the flip as route 1's engine behind the V3 emitter (amended 2026-10-16, `v3/LANGUAGE.md` §13 item 69; was "ARCHIVE at the flip") | the temporary chain; route 1's proven chain replaces it (§9.1) |
 | `tools/search` | 117 | 40,569 | new code onto §7.3–7.4; the LS-law fixtures PORT | the engine |
 | `tools/prove`, `tools/explain`, `tools/canon`, `tools/digest` | 14 | 10,685 | new code (I producer; goal-state renderer; the S rule set; the map instrument) | |
 | `tools/shardfmt` | 3 | 989 | PORT | the goal's flagship (#23) |

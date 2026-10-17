@@ -1070,7 +1070,7 @@ here keeps its unresolved capability attached to the replacement gate.
 | `BUILD.md` | carried | phase 5 | products and profiles unchanged |
 | `COVERAGE.md`, `records/COVERAGE.md` | carried, parked | phase 0 | the unpark pointer (phase 7; B-1c as an I-emitting tactic) |
 | `REVISIT.md` | frozen | phase 0 | banner → `records/FOUNDATION.md`; no new entries |
-| `tools/lower/DESIGN.md` | superseded by route 1 (§9.1) | phase 1 banner; deleted at the flip | — |
+| `tools/lower/DESIGN.md` | superseded by route 1 (§9.1) | phase 1 banner; deleted with the chain, when V3's own compiles itself (§12.4 as amended 2026-10-16) | — |
 | `tools/zed-shard`, `shard-viewer/README.md` | carried | phase 2 | the V3 surface keywords and forms |
 | `examples/*/README.md` | manifest | phase 5 | — |
 | `docs/archive/` | grows | phase 6 | the superseded ledgers move under one lineage directory |
@@ -1200,6 +1200,24 @@ phase 3.
 7. **Resume.** The coverage arc unparks with B-1c as an I-emitting
    tactic; Mathlib export at scale as a measured performance goal;
    optional kernel experiments stay off the critical path.
+
+> **AMENDED 2026-10-16 (ruled by the user at slice 4.3's close;
+> `v3/LANGUAGE.md` §13 item 69).** Item 5's bulk port does not build
+> the chain's replacement and item 6's flip does not archive the
+> temporary chain. V3's own lowering is item 7's, built with its proof
+> (the per-function generator) and bootstrapped through the temporary
+> chain behind the V3 emitter — slice 4.4's bridge, which maps `Init`'s
+> types onto the chain's cells at the emitter and edits nothing in the
+> old tree; the temporary chain is route 1's engine through the flip
+> and is archived when V3's own chain compiles itself. Item 5 opens
+> with two designs beside the migration tool: `Init`'s types in the
+> toolchain's closure (the string flip, `derive` and `Symbol` for the
+> toolchain's own sources; the index driver's closure stays
+> `Init`-free, since it builds the index that makes `Init` loadable)
+> and the sizing of V3's own chain. Reason: the replacement is a
+> naming-law program, the only compiler of naming-law programs is the
+> chain being replaced, and the flip is a tree move that was serialized
+> behind the arc's largest build.
 
 Serial on main, one gate per phase, CI green behind each, generated
 files never hand-patched, kernel sources frozen during corpus runs.

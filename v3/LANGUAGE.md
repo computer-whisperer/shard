@@ -1,13 +1,14 @@
 # The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-10-13): S, L, E and I as phase 3 built them — phase 3
-> closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–64 all ruled:
+> **STATUS (2026-10-16): S, L, E and I as phase 3 built them — phase 3
+> closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–69 all ruled:
 > 1–38 ratified 2026-09-15; 43, 47 and 49–53 at their slices; 54–64
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
 > 60 as amended there, 61–64 as built); 39–42, 44–46 and 48, and item
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
-> open; its first slice, 4.1 the native toolchain, designed 2026-10-13 at
-> this boundary (§8.6; §13 item 65 for ratification).** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> open: slices 4.0–4.3 closed 2026-10-14 to 2026-10-16 (§13 items 65–68
+> ruled at their slices); 4.4 the bridge designed 2026-10-16 at slice
+> 4.3's close with three law changes (§8.6; §13 item 69, ratified).** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -1428,7 +1429,7 @@ carried (§8.2).
    3; §13 item 37 as amended): outside the toolchain's own sources
    `"…"` is a `String` in every position, its E value its UTF-8 bytes
    as `Init`'s `List` cells; the rule above holds in a module whose
-   identity begins with `kernel` until route 1's chain is V3's own. `(quote x)` and `'x` are `Symbol` literals; `(list a b
+   identity begins with `kernel` until route 1's chain is V3's own (re-attributed 2026-10-16, §13 item 69: until Init's types are in the toolchain's closure — phase 5's opener design; the chain reads the emitter's output). `(quote x)` and `'x` are `Symbol` literals; `(list a b
    c)` is the same `List`'s constructor chain (R60's list literal: by
    the scope at Stage 0, by the expected type at Stage 1). In L
    positions nothing changes: a numeral is `LitNat` and a negative one
@@ -2136,7 +2137,7 @@ parity over 27 closures; fixtures G1 `one_meaning`, G4
    `renamed_primitive` with the new spelling; the Rust bootstrap reads
    both and dumps the V3 spelling; `v3/tools/rename_cmp.py` migrates
    and checks. `v3/kernel/**` migrates when route 1's chain is V3's
-   own (665 sites in 52 files by the tool's count).
+   own (665 sites in 52 files by the tool's count). **Re-attributed 2026-10-16 (§13 item 69): unblocked since slice 4.1 — the emitter prints the chain's spellings from the program (`em_prim`) and the Rust bootstrap reads both; slice 4.4 landing 2, by the tool.**
 6. **The fresh-name convention is a library**: `v3/std/fresh.shard` —
    `FreshName`, `Fresh`, `Minted`, `Fresh.start`, `Fresh.next`,
    `Fresh.next_ne` (two successive names differ, no axiom); the prefix
@@ -2180,7 +2181,7 @@ rename; deriving its own slice.
    an E-first body (`no_string` without `String` in the environment);
    bytes that are not UTF-8 are `bad_string` at the elaborator
    (`utf8_ok`); in a module whose identity begins with `kernel` the
-   byte list of the `List` in scope until route 1's chain is V3's own.
+   byte list of the `List` in scope until route 1's chain is V3's own. **Re-attributed 2026-10-16 (§13 item 69): until Init's types are in the toolchain's closure, phase 5's opener design; not the chain's.**
 4. **The wire by declared type.** The driver builds and reads each
    value of an extern by the E type the program declared — a codec by
    identity (bytes at `(List Int)` or `ByteArray`, a list, an option,
@@ -2291,7 +2292,7 @@ signature's cause; the second reader's findings a–h. Not built:
 Lean's instance constants (Stage 3), the ordering's laws, types with
 parameters and two or more constructors, nested and mutual types,
 operator spellings for `compare`/`render`; the toolchain's sources
-cannot derive until route 1's chain is V3's own.
+cannot derive until route 1's chain is V3's own. **Re-attributed 2026-10-16 (§13 item 69): until Init's types are in the toolchain's closure, phase 5's opener design; not the chain's.**
 
 **I, the proof IR — slices 3.20, 3.21 and 3.21b** (records §9.1
 "Slice 3.20" to "Slice 3.21b"; §13 items 53, 54, 55; law §7). I is a
@@ -2392,7 +2393,8 @@ conversion; the API is sequential (`goal_of`, `applicable`, `step`,
     where the motive would capture (`rw_motive`); `by` inside a
     term; the bootstrap reads `by` as `UnknownForm`, so a theorem
     under `v3/kernel/**` stays on `exact` until route 1's chain is
-    V3's own.
+    V3's own (re-attributed 2026-10-16, §13 item 69: the Rust reader's,
+    enduring — a reader rule if a port needs it; not the chain's).
 
 As built, the consumer: 44 of calc's 100 claims as blocks in five
 files (`tactic_test.sh`), the rest 3.21's. Found by the probes: the
@@ -3320,7 +3322,9 @@ incremental goal states; prepared invocation, stale handles, buffer
 rules and reclamation (T6); evaluation reflection and its cost
 comparison (T8); the World-use and model tests before any effectful
 certificate is called ported. Carried in by ruling: `Symbol`'s
-`String` flip with route 1's chain (slice 3.30 rule 3b, item 64).
+`String` flip with route 1's chain (slice 3.30 rule 3b, item 64) —
+re-attributed 2026-10-16 (§13 item 69) to Init's types in the
+toolchain's closure, phase 5's opener design.
 Route 1 — K compiled by shard's own lowering (law §9.1) — is the
 engine the compiler proof is about, and today it compiles two of the
 kernel's drivers; the phase opens by compiling the rest, so that
@@ -3333,6 +3337,7 @@ it entrenches. The slices, in the order built:
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
+| 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs.")** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3679,7 +3684,11 @@ The rules:
 6. **The binaries are engines, not proven artifacts.** Route 1's
    status in the law is unchanged: "its proof is still to come"
    (`v3/build.sh`'s header; law §9.1 route 1); the compiler proof is a
-   later slice of this phase, over this chain or V3's own. Nothing a
+   later slice of this phase, over this chain or V3's own. **Amended
+   2026-10-16 (§13 item 69): the proof is phase 7's, over V3's own
+   chain with the per-function generator, and the chain's replacement
+   is phase 7's with it, bootstrapped through slice 4.4's bridge; this
+   chain, behind the emitter, is route 1's engine through the flip.** Nothing a
    binary computes is admitted on its own word: K's verdicts, the
    store's records and the release's verification stand on route 3
    until that proof, and every pipeline's bootstrap run says so.
@@ -4961,6 +4970,97 @@ build inside a root's build). What the slice built, in one line: law
 contract proven through I, calc's main the first bin, the trace tied
 three ways and the bolts tested on a model host.
 
+**Reopened the same day at the boundary (§13 item 69, ratified):**
+the deferral stands for the proven binary only — phase 7's, with V3's
+own chain; the binary of a naming-law program comes at slice 4.4
+through the bridge, because V3's own chain is itself a naming-law
+program and nothing else compiles one. The flip no longer waits for the
+chain's replacement, and of the five debts listed above one was the
+chain's.
+
+**Slice 4.4 — the bridge: Init's types onto the chain at the emitter;
+the kernel's comparison spellings renamed** (designed 2026-10-16 at
+slice 4.3's close, on the user's question at the boundary — "Is there
+any of this ordering you think we should rearrange or reprioritize?
+Anything likely to become a chicken-and-egg problem?" — and the three
+changes answered; §13 item 69 — **ratified 2026-10-16 as outlined (the
+user: "Agreed with the plan changes as outlined; update the docs.")**;
+law §9.1 route 1, §12.4 as amended 2026-10-16, §12.1's "generated
+files never hand-patched"; slice 4.1 rules 1, 5 and 6). The finding:
+V3's own chain is a naming-law program — its AST and machine types are
+the ported models' under `v3/models/imp`, on Init's `Nat` and
+`std/list` — and the only compiler of naming-law programs is the chain
+being replaced, which refuses them (4.3 landing 2); the bootstrap
+interprets, at hours per generation of the loader's closure. So the
+replacement is phase 7's with its proof, bootstrapped through this
+bridge, and the temporary chain is route 1's engine through the flip.
+Measured at the boundary against `kernel/emit.shard` (418 lines): the
+two refusals are emitter-side — `em_check_lit` refuses a string literal
+over any list but one spelled `Cons`/`Nil` (the chain's reader builds
+its prelude's for `"…"`), `em_check_term` refuses every primitive whose
+name carries a dot (Init's realized primitives; `Nat.sub` the first
+calc reaches, through `List.take`) —; every inductive of the closure is
+emitted as a `(type …)` (`em_decl`'s `EInd` arm: Init's `List`,
+`Option`, `Prod` and `Bool` among them, under their short names); the
+primitives print under the chain's spellings from the program whatever
+the source spelled (`em_prim`: `=` → `int_eq`). The rules:
+
+1. **Landing 0, the probe — the kill-test, documents and a
+   measurement.** On a scratch copy of the emitter (never the tree's:
+   §12.1), the literal printed as the closure's constructors and
+   `Nat.sub` as a truncating expression, calc's closure lowered until
+   the chain accepts it or the next refusal names itself; the list of
+   every dotted primitive calc's closure and the std libraries'
+   realizations reach, each with its chain spelling where the semantics
+   agree on the values E reaches or its expression where they differ
+   (`Nat.sub` truncating at zero; a division by zero per the migration
+   table, `x / 0 = 0` and `x % 0 = x`, where the chain is stuck or
+   traps); the chain's seconds on calc's closure. Recorded before
+   landing 1 is built. A primitive with no expression (a width's
+   arithmetic, a character) re-designs the slice here rather than
+   pushing through.
+2. **Landing 1, the bridge.** `kernel/emit.shard` prints a string
+   literal as nested applications of the closure's own list
+   constructors under their emitted names (Init's `List.cons`/`List.nil`
+   or the prelude's, whichever the literal's type is), and maps each
+   dotted primitive by landing 0's table — by name to one of the
+   chain's, or to an expression over them. No edit of the old tree
+   (4.1 rule 5 stands); the stamp covers the emitter, so every binary
+   rebuilds. The two refusal pins become ties (`init_list`,
+   `init_prim`, a `Nat.sub` underflow among the cases); calc's main
+   built by route 1 (`calc_main.shard` the root, as the drivers are
+   built, its bin's contract beside it) and tied on its observables —
+   stdout and exit status over the differential's inputs against the
+   bootstrap driver's run and the native loader's; the drivers tied to
+   the model on the trace as 4.3 has it. The chain's runtime gets no
+   trace: the binary's trace relation is phase 7's, with route 1's
+   proof. `bin_test.sh` and the native tie gain the binary; the pins'
+   README's refused rows become tied rows.
+3. **Landing 2, the rename.** `v3/tools/rename_cmp.py` over
+   `v3/kernel/**` (665 sites in 52 files at 3.17's count): `lt le
+   int_eq` → `< <= =`, then `scope.shard`'s `toolchain_scope` exception
+   retired so the old spellings are `renamed_primitive` everywhere.
+   The Rust bootstrap reads both spellings already (3.17 rule 5) and
+   the emitter prints the chain's; no semantic change. The gate:
+   parity (both readers project the same), the loader pins, the suite
+   on both engines and the tie. One commit.
+4. **Not in this slice, stated:** Init's types in the toolchain's
+   closure — the string flip for the kernel's 1,649 sites (item 51),
+   `derive` there (3.19), `Symbol` as `String` (item 64) — phase 5's
+   opener design beside the migration tool, with one constraint: the
+   index driver's closure stays Init-free, since it builds the index
+   that makes Init loadable; the `by` form in the kernel's theorems
+   (the Rust reader's, enduring; a reader rule if a port needs it);
+   V3's own chain and its sizing (phase 7 with its proof; the sizing
+   memo at phase 5's opener); T6, the next of law §12.4 item 4's list,
+   after this slice.
+5. **The count, agreed before the run, no pass bar:** `emit.shard`'s
+   growth in lines; the dotted primitives mapped, by name and by
+   expression; the chain's seconds on calc's closure and the binary's
+   run against the interpreter's over the differential; the rename's
+   sites and files; refusals before success and interventions, T9's
+   protocol.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -5642,7 +5742,10 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     flip landed at slice 3.18 for every file but the toolchain's own
     sources — `v3/kernel/**` is compiled on route 1 by the v2 chain,
     which reads `"…"` as a byte list and is not changed —, which flip
-    when route 1's chain is V3's own.
+    when route 1's chain is V3's own. **Re-attributed 2026-10-16 (item
+    69): the chain reads the emitter's output since slice 4.1; the flip
+    for the toolchain's sources waits on Init's types in the toolchain's
+    closure, phase 5's opener design.**
     Alternative: keep S's refusals (`string_literal`, `symbol_literal`,
     `list_sugar`) and give the kernel its own rules — the dialect
     again.
@@ -6330,7 +6433,8 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     carried to phase 5, built when the port's first consumer needs two
     implementations of one view; the alternative, built now as a
     landing, stated. (c) `Symbol`'s `String` flip carried to phase 4
-    with route 1's chain. (d) T9 again as nine tasks — rule 11's six,
+    with route 1's chain (re-attributed 2026-10-16, item 69: Init's
+    types in the toolchain's closure, phase 5's opener design). (d) T9 again as nine tasks — rule 11's six,
     a static package, a one-tactic library, the T9 row's two
     diagnostics — with the count written before the run (rule 5).
     (e) The consolidation by moving each slice's design and as-built
@@ -6542,4 +6646,61 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     model's); (f) and (g) as described, the ground case computed rather
     than decided (no decidable equality at a user type). **Ratified
     2026-10-16 as built, the deferral at (b) (the user: "Option 1 sounds
-    like the way to go."); slice 4.3 closed.**
+    like the way to go."); slice 4.3 closed.** **Reopened 2026-10-16 at
+    the close (item 69, ratified): the deferral stands for the proven
+    binary only — the binary of a naming-law program comes at slice 4.4
+    through the bridge, since V3's own chain is itself a naming-law
+    program and nothing else compiles one.**
+
+69. **Slice 4.4, the bridge (designed 2026-10-16 at slice 4.3's close;
+    §8.6 "Slice 4.4"; law §9.1 route 1, §12.4 as amended 2026-10-16;
+    ratified as outlined — the user, on the three changes: "Agreed with
+    the plan changes as outlined; update the docs."):** the three law
+    changes and the leans. The occasion: the user's question at the
+    boundary, "Is there any of this ordering you think we should
+    rearrange or reprioritize? Anything likely to become a
+    chicken-and-egg problem?" (a) **Item 68's deferral reopened the day
+    it was ruled, on evidence.** V3's own chain is a naming-law program
+    — its AST and machine types are the ported models' under
+    `v3/models/imp`, on Init's `Nat` and `std/list` — and the only
+    compiler of naming-law programs is the chain being replaced, which
+    refuses them (slice 4.3 landing 2); the bootstrap interprets, at
+    hours per generation of the loader's closure. Chose: the bridge now
+    — Init's types onto the chain at the emitter, no edit of the old
+    tree — so that calc's binary, phase 5's effectful ports and the new
+    chain's first generation compile; the deferral stands for the
+    proven binary (phase 7, with V3's own chain). Rejected-because, of
+    the day's option 1 as ruled: it priced the mapping as days on the
+    old tree, where the two refusals are emitter-side (`em_check_lit`,
+    `em_check_term`) and every inductive of the closure is emitted
+    already (`em_decl`'s `EInd` arm). (b) **The flip decoupled from the
+    chain's replacement.** Law §12.4 items 5 and 6 and the manifest's
+    row archived the temporary chain at the flip with "route 1
+    replaces it", which serialized a tree move behind the arc's
+    largest build; now the temporary chain, behind the V3 emitter, is
+    route 1's engine through the flip and is archived when V3's own
+    chain compiles itself — phase 7, with the per-function generator
+    (4.1 rule 6 and 4.2's "not in this slice" read the same way now).
+    (c) **The five "until route 1's chain is V3's own" debts
+    re-attributed.** Since slice 4.1 the chain reads the emitter's
+    output, never the kernel's sources: the comparison spellings'
+    rename across `v3/kernel/**` (3.17 rule 5) is blocked by nothing —
+    the emitter prints the chain's spellings from the program and the
+    Rust bootstrap reads both — and is this slice's landing 2, by the
+    tool; the `by` form in the kernel's theorems is the Rust reader's,
+    enduring; the string flip for the toolchain's sources (item 51),
+    `derive` there (3.19) and `Symbol`'s `String` flip (item 64) need
+    Init's types in the toolchain's closure — phase 5's opener design
+    beside the migration tool, with one constraint: the index driver's
+    closure stays Init-free, since it builds the index that makes Init
+    loadable —; the binary of a naming-law program is the one debt
+    that was the chain's, and the bridge pays it. The leans of the
+    design (§8.6): landing 0 a probe as the kill-test before any build,
+    the slice re-designed there if a primitive has no expression;
+    landing 1 the bridge, the pins flipped, calc's binary tied on its
+    observables (stdout and exit status against both drivers; the
+    drivers tied to the model on the trace as at 4.3 — the chain's
+    runtime gets no trace, the binary's trace relation being phase
+    7's); landing 2 the rename; T6 after this slice; the sizing of
+    V3's own chain a memo at phase 5's opener. The count agreed before
+    the run, no pass bar (§8.6 rule 5).
