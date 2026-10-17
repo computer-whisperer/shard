@@ -3337,7 +3337,7 @@ it entrenches. The slices, in the order built:
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
-| 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude)** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
+| 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie)** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5119,6 +5119,52 @@ helper functions only if a closure reaches them (none does today);
 `BitVec` in the type map; the tie's reference for a naming-law pin the
 V3 driver's `--run`, never the bootstrap's flat read.
 
+**As built, landing 1 (2026-10-16): the bridge.** `kernel/emit.shard`
+(+106/−19 lines), not a line of the old tree: the identification
+(`em_cname`, nine constructors — Init's `List.cons`/`nil`, `Prod.mk`,
+`Option.some`/`none`, `Bool.true`/`false`, `Decidable.isTrue`/`isFalse` as
+`Cons`/`Nil`, `Pair`, `Some`/`None`, `True`/`False` — in terms, patterns
+and the type declarations, the four wire types declared from Init's
+inductives under those spellings in the `Init` module and `Decidable`,
+`Nat` and `Int` not declared, `em_init_skip`); the type map (`em_type`:
+the nine names the chain holds as its integer — `Nat`, `UInt8`–`UInt64`,
+`USize`, `Fin`, `Char`, `BitVec` —, `String` and `ByteArray` as `(List
+Int)`, `Decidable` as `Bool`, `Subtype` as its base, `Prod` as `Pair`
+through `em_tname`); the primitives (`em_prim`: seven rows by name —
+the bitwise five, `beq`, `ble`; `em_prim_expr`: seven rows as an
+expression, both operands bound once at two fresh depths, the bodies
+`em_prim_body`'s — `Nat.sub` truncating, the six divisions through
+`em_div_body`'s zero guard, `Nat.div`/`Int.tdiv`/`Int.ediv` zero and
+`Nat.mod`/`Int.emod`/`Int.tmod` the dividend at a zero divisor —);
+`absurd` as `(match 0)`. The checks: a dotted primitive without a row
+refused as before with the message naming the bridge's rows (`Nat.gcd`,
+`Nat.pow`: no closure reaches them, so no helper is emitted), `absurd`
+allowed, the literal check through the identification. The two pins
+flipped: `init_list` (the refused case as it was, tied now: `hello`) and
+`init_prim` (new, 21 rows — `Nat.sub` at an underflow and plain,
+`Nat.div` and `Nat.mod` by zero and plain, the four `Int` divisions on
+negative operands and by zero, the bitwise five, `beq`, `ble` — each
+row silent when the naming law's result holds and its name printed
+otherwise, `rows done` last; the driver under `ev` prints the last line
+only, its entries being K's, and the binary the same). The tie: a case
+at the root is loaded with Init and its reference is the driver's
+`--run`, the flat read staying the kernel-profile cases'; step (2b)
+builds calc's main through `v3/build.sh` and ties it to the driver's
+run over the differential's 21 inputs on stdout, stderr and the exit
+status. `bin_test.sh` (3d) builds the same binary and ties it to the
+program's run through the bin, four checks more (46). The pins' README
+rows, the kernel README's emitter row, the two scripts' headers.
+*Departures from the design, stated:* rule 2's literal rewrite replaced
+by the identification (landing 0's finding); the `Nat.gcd`/`Nat.pow`
+helpers not built; the type map one row longer (`BitVec`); rule 3's "run
+under both engines" read, for a naming-law case, as the driver's run and
+the binary. *Found on the way:* one `)` too many in the emitter's new
+text, caught by the escape-aware paren scan before any run;
+`(import Init NAME)` takes one name per form (`bad_import` otherwise);
+the driver's `--run` writes the program's output alone to stdout and
+nothing to stderr, so the tie's compare needs no normalization for it.
+Gates on the quiet dev box: the kernel-side files clean under the V3 loader (the emitter's module 90 accepted, 0 refused), names at the baseline; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,765 s (two heavy jobs; the loader's chain emit 29 s, lower 79, codegen 285, cc 84 over 8,586 declarations — 11 more, the bridge's); `bin_test.sh` alone 46 checks, 0 failed, in 395 s (calc's binary 35,264 bytes, built in 35 s, run over the 21 inputs in under a second); the tie alone 79 checks, 0 failed, in 535 s (`init_list` and `init_prim` tied; calc's binary against the driver's run, 36 s against 0); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 1,129 s of wall and 6,055 s of entrypoint time (`imp_test` 1,078 s: the two roots loaded and stored in 935 s, K's replay 141 s; `store_test` 768, calc's five leaves 261 and K's replay 38; the tie 615 s with 79 checks; parity byte-identical over 31 closures and 138,344 declarations in 490 s — the 11 more the bridge's; `bin_test` 484, the binary built in 61 s; `tactic_lib_test` 416; `calc_test` 261); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 632 s of wall and 1,640 s of entrypoint time (the tie 543 s; `calc_test` 191; parity 178; `imp_test` 153: the roots loaded and stored in 127 s, K's replay 26; `bin_test` 107, the binary built in 37 s; `store_test` 96); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. CI's five jobs are the full gate.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -6770,3 +6816,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     needed; the dotted primitives reached are `Nat.sub`, `Nat.div`,
     `Nat.mod`, `Int.ediv` and `Int.emod`, each with an expression; the
     bootstrap's flat read is not a naming-law program's reference.
+    **Landing 1 built 2026-10-16** (§8.6 "as built, landing 1"): the
+    bridge in the emitter as the probe found it — the identification,
+    the type map, the seven expression rows and seven by name, `absurd`
+    the no-match sink —, the two pins flipped (`init_prim` 21 rows), calc's
+    binary in `bin_test.sh` and the tie against the driver's run; rule
+    2's literal rewrite not needed, the `gcd`/`pow` helpers not built.

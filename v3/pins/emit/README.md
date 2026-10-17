@@ -9,7 +9,7 @@ records §4.12). A case is what the emitter must get right where the two dialect
 or what the chain's runtime must agree with the bootstrap on; no case carries an expected
 text — the bootstrap is the authority, the comparison is the verdict — except a `refused_*`
 case, whose first line `;; emit refused: MESSAGE` is the emitter's refusal the tie expects
-in place of a binary (the bootstrap runs such a program; the chain never receives it).
+in place of a binary (the bootstrap runs such a program; the chain never receives it). A case at the root with no `kernel/` directory is a naming-law program (slice 4.4 landing 1): the tie loads it with Init and takes the V3 driver's `--run` as its reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an effect, `-` at `Nat` the integer's.
 
 | case | discriminates |
 |---|---|
@@ -23,8 +23,8 @@ in place of a binary (the bootstrap runs such a program; the chain never receive
 | `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: re-escaped for the old reader |
 | `refused_symbol_pattern` | a symbol the old reader cannot lex, in a pattern: the emit refused with its message (the first line's `;; emit refused:`), nothing built — the refusal path of rule 1 |
 | `refused_mangle_collision` | a record's accessor `A.x` beside a plain fn `A_x`: the mangling's collision refused, nothing built |
-| `refused_init_list` | a program under the naming law (slice 4.3 landing 2): a string literal over Init's `List.cons` — the chain builds its closure's `Cons` and `Nil`, the old reader's string — refused, nothing built; route 1 over a naming-law program is phase 5's, with the chain's replacement (§8.6 slice 4.3 "as built, landing 2") |
-| `refused_init_prim` | a naming-law program reaching `Nat.sub` (Init's realized primitive, beyond the chain's eighteen): refused with the primitive and the function named |
+| `init_list` | a program under the naming law through the bridge (slice 4.4 landing 1; refused until then as `refused_init_list`): its World, an extern over `ByteArray`, a string literal over Init's `List` — Init's four wire types identified with the chain's prelude by the emitter, so the literal needs no rewrite; the reference the V3 driver's `--run` |
+| `init_prim` | the bridge's primitive rows at their edges (refused until slice 4.4 as `refused_init_prim`): `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble` — each row silent when the naming law's result holds, its name printed otherwise, the last line always; the driver under `ev` the authority (its entries K's), the binary agreeing byte for byte |
 | `prims` | the profile's integer and symbol primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the chain's runtime against the bootstrap's |
 
 The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a

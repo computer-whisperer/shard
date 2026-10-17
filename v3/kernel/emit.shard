@@ -26,11 +26,30 @@
 ;;; both readers decode (`\" \\ \n \t \r`; any other byte raw); the primitives print
 ;;; under the chain's spellings (`int_eq lt le` for `= < <=`); a symbol literal the old
 ;;; reader cannot lex as one atom (`t'`: its quote macro) is built by `sym_of_chars` over
-;;; its text. What the chain cannot
-;;; take is refused here, not approximated: a sig fn or sig type left unlinked (the
-;;; implementation's directory not given as a root), `absurd`, a primitive beyond the
-;;; profile's eighteen (the naming law's `Int.tdiv`…), a string literal over any list
-;;; but one spelled Cons and Nil (the old reader's string), a string pattern. The emitted text is a derivation, never an
+;;; its text.
+;;;
+;;; THE BRIDGE (§8.6 slice 4.4 landing 1): a program under the naming law reaches the chain
+;;; through an identification, not a rewrite. Init's four wire types are the chain's prelude:
+;;; `List.cons`/`nil`, `Prod.mk`, `Option.some`/`none`, `Bool.true`/`false` (and `Decidable`'s
+;;; `isTrue`/`isFalse`) print as `Cons`/`Nil`, `Pair`, `Some`/`None`, `True`/`False` in terms,
+;;; patterns and the four type declarations (`em_cname`; `Decidable`, `Nat` and `Int` are not
+;;; declared, their constructors never reaching E) — forced, not chosen: the runtime's extern
+;;; shims build those cells by name (rt.h's rt_pair, rt_some, rt_cons) and the old reader binds
+;;; a non-capitalised pattern name as a variable; a string literal then needs no change, the
+;;; chain's reader building Cons/Nil for it. The types map (`em_type`): `Nat`, the `UInt`
+;;; widths, `USize`, `Fin`, `Char` and `BitVec` → `Int`; `String` and `ByteArray` → `(List Int)`;
+;;; `Decidable` → `Bool`; `Subtype T p` → `T`; `Prod` → `Pair`. The naming law's primitives
+;;; (prog.shard's rows 18 and up) print by name where the chain's operation agrees on the
+;;; values E reaches (`Nat.land lor xor shiftLeft shiftRight` → `band bor bxor bshl bshr`,
+;;; `Nat.beq`/`ble` → `int_eq`/`le`) and as an expression over let-bound operands where it
+;;; differs (`em_prim_expr`): `Nat.sub` truncating at zero; `Nat.div`, `Int.tdiv`, `Int.ediv`
+;;; zero at a zero divisor; `Nat.mod`, `Int.emod`, `Int.tmod` the dividend there (the migration
+;;; table, law §10.3; the chain is stuck or traps at zero). `absurd` prints as `(match 0)`, the
+;;; chain's no-match sink — a loud trap that never fires, K having proved the branch
+;;; unreachable. What the chain cannot take is still refused here, not approximated: a sig fn
+;;; or sig type left unlinked (the implementation's directory not given as a root), a primitive
+;;; with no row (`Nat.gcd`, `Nat.pow`), a string literal over any list but the identified one, a
+;;; string pattern, a mangling collision. The emitted text is a derivation, never an
 ;;; origin (R85): DIR/map lists every emitted declaration against its identity and its
 ;;; module's source file, and the emitted file names the source it came from.
 
@@ -179,7 +198,7 @@
   (match ds (Nil Nil) ((Cons d r) (append (em_decl es d) (append "\n" (em_decls es r))))))
 (fn em_decl ((es ESt) (d EDecl)) (List Int)
   (match d
-    ((EInd n np ctors) (append "(type " (append (em_tyhead (dm_short n) np) (append (em_ctors ctors) ")"))))
+    ((EInd n np ctors) (if (em_init_skip (show_name n)) (append ";; identified with the chain's: " (dm_short n)) (append "(type " (append (em_tyhead (em_tname (show_name n)) np) (append (em_ctors ctors) ")")))))
     ((EFn n nt ps rt _ body)
      (append "(fn " (append (em_head es n) (append " (" (append (em_binders nt ps) (append ") " (append (em_type rt) (append "\n  " (append (em_term es (len ps) body) ")")))))))))
     ((EExtern n nt ps rt)
@@ -196,7 +215,34 @@
   (measure (struct cs))
   (match cs
     (Nil Nil)
-    ((Cons (ECtorDef c fs) r) (append " (" (append (dm_short c) (append (em_types fs) (append ")" (em_ctors r))))))))
+    ((Cons (ECtorDef c fs) r) (append " (" (append (em_cname c) (append (em_types fs) (append ")" (em_ctors r))))))))
+;; ---- the bridge: Init's wire types identified with the chain's prelude (slice 4.4 landing 1) ----
+;; a constructor's emitted name: Init's wire constructors as the chain's, any other its last component
+(fn em_cname ((n Name)) (List Int)
+  (let ((s (show_name n)))
+    (if (int_list_eq s "List.cons") "Cons"
+    (if (int_list_eq s "List.nil") "Nil"
+    (if (int_list_eq s "Prod.mk") "Pair"
+    (if (int_list_eq s "Option.some") "Some"
+    (if (int_list_eq s "Option.none") "None"
+    (if (int_list_eq s "Bool.true") "True"
+    (if (int_list_eq s "Bool.false") "False"
+    (if (int_list_eq s "Decidable.isTrue") "True"
+    (if (int_list_eq s "Decidable.isFalse") "False"
+      (dm_short n))))))))))))
+;; the inductives not declared to the chain: Decidable is Bool there, Nat and Int its integer
+(fn em_init_skip ((s (List Int))) Bool
+  (bool_or (int_list_eq s "Decidable") (bool_or (int_list_eq s "Nat") (int_list_eq s "Int"))))
+;; a type constructor's emitted name
+(fn em_tname ((s (List Int))) (List Int) (if (int_list_eq s "Prod") "Pair" (em_last s Nil)))
+;; the last dotted component of a shown name
+(fn em_last ((s (List Int)) (acc (List Int))) (List Int)
+  (measure (struct s))
+  (match s (Nil (rev acc)) ((Cons c r) (if (int_eq c 46) (em_last r Nil) (em_last r (Cons c acc))))))
+;; the types the chain holds as its integer
+(fn em_int_tname ((s (List Int))) Bool
+  (bool_or (int_list_eq s "Nat") (bool_or (int_list_eq s "UInt8") (bool_or (int_list_eq s "UInt16") (bool_or (int_list_eq s "UInt32")
+  (bool_or (int_list_eq s "UInt64") (bool_or (int_list_eq s "USize") (bool_or (int_list_eq s "Fin") (bool_or (int_list_eq s "Char") (int_list_eq s "BitVec"))))))))))
 ;; "(T0 Type) … (v0 T) (v1 T)"
 (fn em_binders ((nt Int) (ps (List EType))) (List Int)
   (em_join_sp (append (em_tbinders 0 nt) (em_pbinders 0 ps))))
@@ -221,8 +267,13 @@
   (measure (struct t))
   (match t
     ((ETVar i) (Cons 84 (show_int i)))
-    ((ETCon n Nil) (dm_short n))
-    ((ETCon n args) (append "(" (append (dm_short n) (append (em_types args) ")"))))))
+    ((ETCon n args)
+     (let ((s (show_name n)))
+       (if (em_int_tname s) "Int"
+       (if (bool_or (int_list_eq s "String") (int_list_eq s "ByteArray")) "(List Int)"
+       (if (int_list_eq s "Decidable") "Bool"
+       (if (int_list_eq s "Subtype") (match args ((Cons t _) (em_type t)) (Nil "Int"))
+         (match args (Nil (em_tname s)) (_ (append "(" (append (em_tname s) (append (em_types args) ")")))))))))))))
 (fn em_types ((ts (List EType))) (List Int)
   (measure (struct ts))
   (match ts (Nil Nil) ((Cons t r) (append " " (append (em_type t) (em_types r))))))
@@ -233,15 +284,15 @@
   (match t
     ((EBVar i) (em_var (- (- d 1) i)))
     ((ELit l) (em_lit l))
-    ((ECtor n Nil) (dm_short n))
-    ((ECtor n args) (em_app es d (dm_short n) args))
+    ((ECtor n Nil) (em_cname n))
+    ((ECtor n args) (em_app es d (em_cname n) args))
     ((ECall n args) (em_app es d (em_head es n) args))
-    ((EPrim n args) (em_app es d (em_prim n) args))
+    ((EPrim n args) (if (em_prim_expr_row (show_name n)) (em_prim_expr es d (show_name n) args) (em_app es d (em_prim n) args)))
     ((EExt n args) (em_app es d (dm_short n) args))
     ((EMatch s arms) (append "(match " (append (em_term es d s) (append (em_arms es d arms) ")"))))
     ((ELet rs body) (em_let es d rs body))
     ((EIf c a b) (append "(if " (append (em_term es d c) (append " " (append (em_term es d a) (append " " (append (em_term es d b) ")")))))))
-    (EAbsurd "(absurd)")))   ; refused by em_check before any file is written
+    (EAbsurd "(match 0)")))   ; the chain's no-match sink: K proved the branch unreachable
 (fn em_app ((es ESt) (d Int) (head (List Int)) (args (List ETerm))) (List Int)
   (append "(" (append head (append (em_terms es d args) ")"))))
 (fn em_terms ((es ESt) (d Int) (ts (List ETerm))) (List Int)
@@ -266,8 +317,8 @@
   (measure (struct p))
   (match p
     (PVar (Pair (em_var d) (+ d 1)))
-    ((PCtor n Nil) (Pair (dm_short n) d))
-    ((PCtor n subs) (match (em_pats d subs) ((Pair ts d2) (Pair (append "(" (append (dm_short n) (append ts ")"))) d2))))
+    ((PCtor n Nil) (Pair (em_cname n) d))
+    ((PCtor n subs) (match (em_pats d subs) ((Pair ts d2) (Pair (append "(" (append (em_cname n) (append ts ")"))) d2))))
     ((PLit l) (Pair (em_lit l) d))))
 (fn em_pats ((d Int) (ps (List EPat))) (Pair (List Int) Int)
   (measure (struct ps))
@@ -318,7 +369,43 @@
     (if (int_list_eq s "=") "int_eq"
     (if (int_list_eq s "<") "lt"
     (if (int_list_eq s "<=") "le"
-      s)))))
+    (if (int_list_eq s "Nat.land") "band"
+    (if (int_list_eq s "Nat.lor") "bor"
+    (if (int_list_eq s "Nat.xor") "bxor"
+    (if (int_list_eq s "Nat.shiftLeft") "bshl"
+    (if (int_list_eq s "Nat.shiftRight") "bshr"
+    (if (int_list_eq s "Nat.beq") "int_eq"
+    (if (int_list_eq s "Nat.ble") "le"
+      s))))))))))))
+;; the naming law's primitives the chain's operation agrees with on the values E reaches, by name
+(fn em_prim_named ((s (List Int))) Bool
+  (bool_or (int_list_eq s "Nat.land") (bool_or (int_list_eq s "Nat.lor") (bool_or (int_list_eq s "Nat.xor")
+  (bool_or (int_list_eq s "Nat.shiftLeft") (bool_or (int_list_eq s "Nat.shiftRight") (bool_or (int_list_eq s "Nat.beq") (int_list_eq s "Nat.ble"))))))))
+;; the ones that differ — printed as an expression (em_prim_expr)
+(fn em_prim_expr_row ((s (List Int))) Bool
+  (bool_or (int_list_eq s "Nat.sub") (bool_or (int_list_eq s "Nat.div") (bool_or (int_list_eq s "Nat.mod")
+  (bool_or (int_list_eq s "Int.tdiv") (bool_or (int_list_eq s "Int.tmod") (bool_or (int_list_eq s "Int.ediv") (int_list_eq s "Int.emod"))))))))
+;; a dotted primitive the bridge has a row for
+(fn em_prim_known ((s (List Int))) Bool (bool_or (em_prim_named s) (em_prim_expr_row s)))
+;; the expression rows: both operands bound once (two fresh depths), then the naming law's
+;; result where the chain's operation differs — Nat.sub truncating at zero; a division by zero
+;; per the migration table (law §10.3): x / 0 = 0, x % 0 = x, the chain stuck or trapping there
+(fn em_prim_expr ((es ESt) (d Int) (s (List Int)) (args (List ETerm))) (List Int)
+  (match args
+    ((Cons a (Cons b Nil))
+     (let ((va (em_var d)) (vb (em_var (+ d 1))))
+       (append "(let ((" (append va (append " " (append (em_term es d a) (append ")) (let ((" (append vb (append " " (append (em_term es d b) (append ")) " (append (em_prim_body s va vb) "))"))))))))))))
+    (_ (em_app es d s args))))
+(fn em_prim_body ((s (List Int)) (a (List Int)) (b (List Int))) (List Int)
+  (if (int_list_eq s "Nat.sub") (append "(if (lt " (append a (append " " (append b (append ") 0 (- " (append a (append " " (append b "))"))))))))
+  (if (bool_or (int_list_eq s "Nat.div") (int_list_eq s "Int.tdiv")) (em_div_body "/" a b "0")
+  (if (int_list_eq s "Int.ediv") (em_div_body "ediv" a b "0")
+  (if (bool_or (int_list_eq s "Nat.mod") (int_list_eq s "Int.emod")) (em_div_body "mod" a b a)
+  (if (int_list_eq s "Int.tmod") (em_div_body "tmod" a b a)
+    (append "(" (append s (append " " (append a (append " " (append b ")"))))))))))))
+;; (if (int_eq B 0) AT_ZERO (OP A B))
+(fn em_div_body ((op (List Int)) (a (List Int)) (b (List Int)) (at_zero (List Int))) (List Int)
+  (append "(if (int_eq " (append b (append " 0) " (append at_zero (append " (" (append op (append " " (append a (append " " (append b "))")))))))))))
 
 ;; ---- what the chain cannot take, refused before any file is written ------------------------
 (fn em_check ((es ESt) (ds (List EDecl))) (Option (List Int))
@@ -347,12 +434,12 @@
     ((ELit l) (em_check_lit l))
     ((ECtor _ as) (em_check_terms as))
     ((ECall _ as) (em_check_terms as))
-    ((EPrim n as) (em_or (if (mem_int 46 (show_name n)) (Some (append "the primitive " (append (show_name n) " has no spelling in the chain (the profile's eighteen only)"))) None) (em_check_terms as)))
+    ((EPrim n as) (em_or (if (bool_and (mem_int 46 (show_name n)) (bool_not (em_prim_known (show_name n)))) (Some (append "the primitive " (append (show_name n) " has no row in the chain (the profile's eighteen and the bridge's rows only)"))) None) (em_check_terms as)))
     ((EExt _ as) (em_check_terms as))
     ((EMatch s arms) (em_or (em_check_term s) (em_check_arms arms)))
     ((ELet rs b) (em_or (em_check_terms rs) (em_check_term b)))
     ((EIf a b c) (em_or (em_check_term a) (em_or (em_check_term b) (em_check_term c))))
-    (EAbsurd (Some "absurd has no form in the chain"))))
+    (EAbsurd None)))   ; the no-match sink (em_term)
 (fn em_check_terms ((ts (List ETerm))) (Option (List Int))
   (measure (struct ts))
   (match ts (Nil None) ((Cons t r) (em_or (em_check_term t) (em_check_terms r)))))
@@ -373,7 +460,7 @@
 (fn em_check_lit ((l ELit)) (Option (List Int))
   (match l
     ((LStr nl cs _)
-     (if (bool_and (int_list_eq (dm_short nl) "Nil") (int_list_eq (dm_short cs) "Cons")) None
+     (if (bool_and (int_list_eq (em_cname nl) "Nil") (int_list_eq (em_cname cs) "Cons")) None
        (Some (append "a string literal over " (append (show_name cs) ": the chain builds its closure's Cons and Nil")))))
     (_ None)))
 

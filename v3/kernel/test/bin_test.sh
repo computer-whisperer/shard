@@ -8,7 +8,10 @@
 # and the bolts they use; the program runs through the driver with the bin file as the
 # root file, byte-identical to the model world as calc_main_test.sh ties it; and two
 # negatives — the bin with a requirement left `sorry` fails the load with UNMET, and a
-# program with a write duplicated fails it with UNTHREADED — each a nonzero exit.
+# program with a write duplicated fails it with UNTHREADED — each a nonzero exit. Since
+# slice 4.4 landing 1, route 1's binary of calc's main (v3/build.sh over the naming-law
+# root, through the emitter's bridge) runs over the same inputs and is the driver's byte for
+# byte.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.
 set -u
@@ -103,6 +106,21 @@ for t in get_args_output get_args_reads get_args_exit write_line_output write_li
   checks=$((checks+1)); grep -q "^ACCEPT examples.calc.calc_bin_model.m_$t .* axioms= " "$OUT/model_load.txt" || bad "the model host's m_$t is not accepted on no axioms"
 done
 echo "bin_test: the nine bolts hold on the model host, with the ground run, in $((e-s)) s"
+
+# ---- (3d) route 1's binary of the program (slice 4.4 landing 1): calc's main through the bridge
+# (v3/build.sh over the naming-law root), run over the same inputs — stdout byte for byte the
+# driver's run through the bin, exit 0, nothing on stderr
+s=$(date +%s)
+v3/build.sh v3/examples/calc/calc_main.shard "$OUT/calc_native" --root v3 > "$OUT/build.txt" 2>&1; rc=$?
+e=$(date +%s)
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "calc's main did not build through the bridge (exit $rc)"; grep -E 'EMIT|FAIL' "$OUT/build.txt" | head -2 | cut -c1-200; }
+if [ "$rc" = 0 ]; then
+  s2=$(date +%s); "$OUT/calc_native" "${lines[@]}" > "$OUT/native_out" 2> "$OUT/native_err"; rc=$?; e2=$(date +%s)
+  checks=$((checks+1)); [ "$rc" = 0 ] || bad "the binary failed (exit $rc)"
+  checks=$((checks+1)); cmp -s "$OUT/native_out" "$OUT/got" || { bad "the binary's output is not the driver's"; diff "$OUT/native_out" "$OUT/got" | head -6; }
+  checks=$((checks+1)); [ ! -s "$OUT/native_err" ] || { bad "the binary wrote to stderr"; head -2 "$OUT/native_err" | cut -c1-200; }
+  echo "bin_test: route 1's binary of calc's main ($(stat -c %s "$OUT/calc_native") bytes, built in $((e-s)) s) is the driver's byte for byte over ${#lines[@]} inputs, in $((e2-s2)) s"
+fi
 
 # ---- (4) the negatives, over a scratch root that sees the library through a link
 mkdir -p "$ROOT/examples"; ln -s ../std "$ROOT/std"; cp -r v3/examples/calc "$ROOT/examples/calc"
