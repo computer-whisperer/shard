@@ -258,8 +258,9 @@ row), `literal_type` (`pattern_type`: a numeral row at a `Bool`),
 under a constructor: E-first, `no_l_identity`); `match_literal` is
 narrowed to that nested case in a `def`. `rename_ok` (`< <= =` on both
 routes), `rename_refused` and `rename_refused_e` (`renamed_primitive`
-from the elaborator and from the classifier: `lt le int_eq` outside the
-toolchain's own sources). `record_laws` (v2's law family as `Eq.refl`),
+from the elaborator and from the classifier: `lt le int_eq`; slice 4.4
+landing 2 adds `rename_refused_kernel`, the same refusal in a module under
+`kernel`, the toolchain's exception retired). `record_laws` (v2's law family as `Eq.refl`),
 `struct_make` (`make` and `with` over a structure, the dependent field
 supplied), `dependent_update` (it is not: a read error naming the field),
 `struct_params` (a structure with parameters: `record_make`).

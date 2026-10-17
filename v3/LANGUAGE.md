@@ -2137,7 +2137,7 @@ parity over 27 closures; fixtures G1 `one_meaning`, G4
    `renamed_primitive` with the new spelling; the Rust bootstrap reads
    both and dumps the V3 spelling; `v3/tools/rename_cmp.py` migrates
    and checks. `v3/kernel/**` migrates when route 1's chain is V3's
-   own (665 sites in 52 files by the tool's count). **Re-attributed 2026-10-16 (§13 item 69): unblocked since slice 4.1 — the emitter prints the chain's spellings from the program (`em_prim`) and the Rust bootstrap reads both; slice 4.4 landing 2, by the tool.**
+   own (665 sites in 52 files by the tool's count). **Re-attributed 2026-10-16 (§13 item 69): unblocked since slice 4.1 — the emitter prints the chain's spellings from the program (`em_prim`) and the Rust bootstrap reads both; slice 4.4 landing 2, by the tool.** **Migrated 2026-10-17 (slice 4.4 landing 2, §8.6 "as built, landing 2"): `v3/kernel/**` by the tool — 1,041 sites in 66 files, the kernel grown since the count — and the emit pins' kernel-scope programs (14 sites, 8 files); `scope.shard`'s exception retired, the old spellings `renamed_primitive` everywhere (pin `rename_refused_kernel`); `toolchain_scope` stays for the string literal (3.18 rule 5, item 51).**
 6. **The fresh-name convention is a library**: `v3/std/fresh.shard` —
    `FreshName`, `Fresh`, `Minted`, `Fresh.start`, `Fresh.next`,
    `Fresh.next_ne` (two successive names differ, no axiom); the prefix
@@ -3337,7 +3337,7 @@ it entrenches. The slices, in the order built:
 | 4.1 | the native toolchain: route 1 over the kernel's drivers and harnesses through the V3 loader's projection; the byte-tie gate; the suite on the binaries — **ratified 2026-10-14 as amended by R84; landing 1 built 2026-10-14 (the emitter, the build, the tie), green on pipeline 608; landing 2 built 2026-10-14 (the shim, the suite on the binaries, CI's comparison), green on pipeline 610 — slice closed** | every author's load; the suite; the compiler proof |
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
-| 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
+| 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`)** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3795,7 +3795,7 @@ shared tree, so parallel builds never race on a module two roots share;
 suite — the build is 29 closures through the chain and the bootstrap
 suite is the authority whose time the job records; (3) the pins'
 programs live at `CASE/kernel/main.shard`: the toolchain profile (the
-bare comparison spellings, the prelude's string) is a property of the
+prelude's string; the bare comparison spellings too, until slice 4.4 landing 2) is a property of the
 module path's first component `kernel` (`scope.shard` `toolchain_scope`),
 so a self-contained program in that dialect is a module under `kernel`
 — a limit on where such a program may live, carried as is; (4) `t0` and
@@ -5119,6 +5119,37 @@ helper functions only if a closure reaches them (none does today);
 `BitVec` in the type map; the tie's reference for a naming-law pin the
 V3 driver's `--run`, never the bootstrap's flat read.
 
+**As built, landing 2 (2026-10-17): the rename.** `v3/tools/rename_cmp.py`
+over `v3/kernel/**` and the emit pins' kernel-scope programs: 1,055 sites in
+74 files — 1,041 in 66 kernel files (3.17's count of 665 in 52 was the kernel
+of its day; it grew through phase 3's second half and phase 4) and 14 in 8
+pins at `v3/pins/emit/*/kernel/main.shard`, the toolchain-profile programs.
+Sixteen of the kernel's sites sit below `k/accel_pins.shard`'s generated
+marker — the bucket dispatch `(if (int_eq b K) …)` that `k/refgen.shard`
+prints — and the generator's template string changed with them: §12.1's
+"generated files never hand-patched" holds as the regen contract, the tool's
+rewrite being the generator's output, checked by regenerating from the 36
+pinned chunks on the native `t0` (the committed file reproduced byte for byte
+but for the STATUS line's date, before the rename as after it). The exception
+retired: `classify.shard`'s `prim_head` resolves the table's entry among the
+scope's candidates and nothing else (its symbol parameter gone), `elab.shard`
+checks `renamed_prim` before the operator rows in every scope (the old
+spellings out of `is_operator`, `elab_op_at` and the comparison rows —
+`scope.shard`'s `renamed_prim` is the one place that knows them,
+`renamed_spelling` its predicate); `toolchain_scope` stays, for the string
+literal (3.18 rule 5; item 51's flip). Pin `rename_refused_kernel`: a module
+under `kernel`, a file without Init, `(lt n k)` refused `renamed_primitive` by
+the classifier — the loader pins 285 cases. The chain's spellings are
+untouched: the emitter prints `lt le int_eq` from `< <= =` (`em_prim`) and the
+emitted files under `v3/bin` carry them, so the tool's `--check` over the
+tracked tree reports the three refusal pins' sites and nothing else. Rule 3's
+"no semantic change" is parity's finding: both readers project the same
+closures byte for byte, and the suites tie. The count (rule 5): the rename's
+sites and files 1,055 in 74; the hand edits `scope.shard` +2 lines net,
+`classify.shard` −6, `elab.shard`, `prog.shard` and `refgen.shard` rewritten
+in place, the tool's docstring; refusals before success none — the tool ran once, the paren
+scan and the names check passed first time, no intervention. Gates on the quiet dev box: the paren scan over the 76 changed source files clean, names at the baseline; the loader pins 285 cases, 0 failed, on the bootstrap in 65 s; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,392 s (two heavy jobs; the loader's chain emit 28 s, lower 87, codegen 312, cc 71 over 8,587 declarations); the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 849 s of wall and 4,427 s of entrypoint time (parity byte-identical over 31 closures and 138,355 declarations in 332 s; the tie 79 checks in 467 s; `imp_test` 801, `store_test` 532, `bin_test` 348); the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 540 s of wall and 1,460 s of entrypoint time (the tie 459 s; parity 161; `imp_test` 137; `bin_test` 100); `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. The accelerator pins regenerated on the native `t0` from the 36 pinned chunks after the build (59 s): the renamed file byte for byte but for the STATUS line's date. CI's five jobs are the full gate.
+
 **As built, landing 1 (2026-10-16): the bridge.** `kernel/emit.shard`
 (+106/−19 lines), not a line of the old tree: the identification
 (`em_cname`, nine constructors — Init's `List.cons`/`nil`, `Prod.mk`,
@@ -5493,7 +5524,7 @@ row.
 | division by zero stuck | **changed** under the naming law: `x / 0 = 0`, `x % 0 = x` | law §10.4; the profile's `/` stays stuck (§6.4) |
 | bitwise ops on `Int` premised `0 ≤` | re-spelled | `Nat.land` … (law §10.3) |
 | sizes and indices `Int` | **changed** | `Nat` where a size, saturating subtraction — the migration tool's typed class, reviewed per use (law §10.2) |
-| `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values. E's names are `= < <=` since slice 3.17: the old spellings are `renamed_primitive` outside the toolchain's own sources, which migrate with route 1's chain (`v3/tools/rename_cmp.py`) |
+| `int_eq`/`lt`/`le` return `Bool` | re-spelled | `Decidable` propositions with `decide` bridges; `==` for `Bool` values. E's names are `= < <=` since slice 3.17: the old spellings are `renamed_primitive` everywhere since slice 4.4 landing 2 (2026-10-17), the toolchain's own sources migrated by `v3/tools/rename_cmp.py` |
 | World threading with no use check | **changed at phase 4** | the well-threadedness check (law §4.7): a v2 program that uses one World token twice will be refused; the World-alias fixture lands before any effectful port |
 | the extern roster `get_args read_file read_dir read_key write write_file write_line exit` | partly carried | `kernel/host.shard` declares six; `read_dir` (the old loader, codegen) and `read_key` (snake) return when a V3 consumer needs them. the wire under the naming law is `v3/std/host.shard`'s, over `ByteArray` (slice 3.18; decided 2026-10-01) |
 | evaluator errors `NoMatchArm`, `IfNonBool`, `UnknownCall`; no fuel | **changed** — landed slice 5 | `EvStuck` with a reason (`no_arm`, `if_tag`, `guard`, `extern`, `unlinked`) and the function; `EvOut` is new — v2 relied on the totality gate instead of fuel (§6.2); `EvExhausted` (`nat_size`, `nat_count`) since slice 9 — a primitive's resource, distinct from a guard (R51); an unknown call is refused at load, never reached |
@@ -6822,3 +6853,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     the no-match sink —, the two pins flipped (`init_prim` 21 rows), calc's
     binary in `bin_test.sh` and the tie against the driver's run; rule
     2's literal rewrite not needed, the `gcd`/`pow` helpers not built.
+    **Landing 2 built 2026-10-17** (§8.6 "as built, landing 2"): the
+    rename by the tool — 1,055 sites in 74 files (1,041 in the kernel's
+    66, 14 in the emit pins' 8; sixteen below the accelerator pins'
+    generated marker, the generator's template with them, the
+    regeneration reproducing the file) —, the exception retired
+    (`prim_head`, the elaborator's check in every scope;
+    `toolchain_scope` kept for the string literal), pin
+    `rename_refused_kernel`; parity byte-identical, the suites tied
+    on both engines.

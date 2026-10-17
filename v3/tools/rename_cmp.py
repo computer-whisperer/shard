@@ -11,10 +11,11 @@ comment or a `(quote …)` form: a binder, a field or a quoted symbol named
 `lt` is data and stays. `--check` rewrites nothing and exits 1 when a file
 would change (the gate for a tree that has migrated).
 
-Slice 3.17 ran it over v3/std, v3/examples and v3/pins (the pins
-rename_refused and rename_refused_e hold the old spellings on purpose, so
-`--check` reports those two sites). v3/kernel migrates with it when route
-1's chain is V3's own.
+Slice 3.17 ran it over v3/std, v3/examples and v3/pins; slice 4.4 landing 2
+over v3/kernel and the emit pins (1,055 sites in 74 files), the loader's
+exception for the toolchain's own sources retired. The loader pins
+rename_refused, rename_refused_e and rename_refused_kernel hold the old
+spellings on purpose, so `--check` reports those three sites.
 """
 import os
 import sys

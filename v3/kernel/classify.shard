@@ -268,7 +268,7 @@
 (fn read_et ((r Rd) (s SExpr)) TRes
   (measure (struct s))
   (match s
-    ((SNum k) (TOk (ELit (if (lt k 0) (LInt k) (LNat k)))))   ; the kind is the sign (§8.1 rule 2)
+    ((SNum k) (TOk (ELit (if (< k 0) (LInt k) (LNat k)))))   ; the kind is the sign (§8.1 rule 2)
     ((SStr bs) (read_estr r bs))
     ((SSymU _ _) (TErr (quote bad_universe_suffix) "an E term takes no universe arguments"))
     ((SSym x) (read_esym r x))
@@ -306,9 +306,9 @@
        (None
         (match (only_values (eresolve (rd_es r) (rd_sc r) n))
           ((Cons (EHit id _ (EICtor _ _ k)) Nil)
-           (if (int_eq k 0) (TOk (ECtor id Nil)) (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat k) " arguments"))))))
-          ((Cons (EHit id _ (EIFn k)) Nil) (if (int_eq k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
-          ((Cons (EHit id _ (EISig k)) Nil) (if (int_eq k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
+           (if (= k 0) (TOk (ECtor id Nil)) (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat k) " arguments"))))))
+          ((Cons (EHit id _ (EIFn k)) Nil) (if (= k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
+          ((Cons (EHit id _ (EISig k)) Nil) (if (= k 0) (TOk (ECall id Nil)) (TErr (quote function_value) (fn_value_msg id k))))
           ((Cons (EHit id _ (EIExt k)) Nil) (TErr (quote function_value) (fn_value_msg id k)))
           ((Cons (EHit id _ (EITemplate _ _ _ _)) Nil) (TErr (quote function_value) (template_e_first_msg id)))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
@@ -340,24 +340,18 @@
           ((Cons (EHit id _ (EITemplate _ ebs _ _)) Nil) (read_template_app r id ebs args))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
           (Nil
-           (match (prim_head (rd_sc r) h n)
+           (match (prim_head (rd_sc r) n)
              ((Some (Pair id (Prim _ k))) (read_head_args r id k args (quote prim)))
              (None (if (nat_ctor r n) (TErr (quote nat_constructor) (append (show_name n) ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub (§7.5)"))
                      (match (renamed_prim h)
                        ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
                        (None (TErr (quote unknown_head) (show_name n))))))))
           ((Cons (EHit id _ _) Nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
-;; a primitive head: the table's entry among the scope's candidates; in the toolchain's own
-;; sources a spelling from before the rename names the renamed entry (scope.shard)
-(fn prim_head ((sc Scope) (h Symbol) (n Name)) (Option (Pair Name Prim))
-  (match (prim_of (scope_candidates sc n))
-    ((Some p) (Some p))
-    (None
-     (if (toolchain_scope sc)
-       (match (renamed_prim h) ((Some new) (prim_of (list (n1 new)))) (None None))
-       None))))
+;; a primitive head: the table's entry among the scope's candidates (a spelling from before
+;; the rename is refused by the caller, `renamed_primitive`)
+(fn prim_head ((sc Scope) (n Name)) (Option (Pair Name Prim)) (prim_of (scope_candidates sc n)))
 (fn read_head_args ((r Rd) (id Name) (k Int) (args (List SExpr)) (kind Symbol)) TRes
-  (if (bool_not (int_eq k (len args)))
+  (if (bool_not (= k (len args)))
     (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat k) (append " arguments, given " (show_nat (len args)))))))
     (match (read_ets_list r args Nil)
       ((Pair (Some (Pair e m)) _) (TErr e m))
@@ -381,7 +375,7 @@
 ;; position as a shape (read_static_arg), transiently the name applied to its captured terms;
 ;; the instance is taken by take_instances once the body is read and its types are known
 (fn read_template_app ((r Rd) (id Name) (ebs (List EBind)) (args (List SExpr))) TRes
-  (if (bool_not (int_eq (len ebs) (len args)))
+  (if (bool_not (= (len ebs) (len args)))
     (TErr (quote unsaturated) (append (show_name id) (append " takes " (append (show_nat (len ebs)) (append " arguments, given " (show_nat (len args)))))))
     (match (read_tm_args r id ebs args Nil)
       ((Pair (Some (Pair e m)) _) (TErr e m))
@@ -432,9 +426,9 @@
              (None (TErr (quote unbound_name) (show_name n)))))
           ((Cons (EHit id _ _) Nil) (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
 (fn read_static_fn ((r Rd) (id Name) (k Int) (gargs (List SExpr))) TRes
-  (if (bool_not (int_eq (e_tparams (rd_es r) id) 0))
+  (if (bool_not (= (e_tparams (rd_es r) id) 0))
     (TErr (quote function_value) (append (show_name id) ": a polymorphic fn as a static argument in a body with no L reading — its type arguments are not written here; give the body an L reading (§8.4 slice 3.28 rule 3, landing 3)"))
-  (if (le k (len gargs))
+  (if (<= k (len gargs))
     (TErr (quote function_value) (append (show_name id) (append " applied to " (append (show_nat (len gargs)) (append " arguments leaves none of its " (append (show_nat k) " for the static parameter — a static argument is a function (§8.4 slice 3.28 rule 3)"))))))
     (match (read_ets_list r gargs Nil)
       ((Pair (Some (Pair e m)) _) (TErr e m))
@@ -474,7 +468,7 @@
 (fn read_epat ((r Rd) (s SExpr)) PRes
   (measure (struct s))
   (match s
-    ((SNum k) (POk (PLit (if (lt k 0) (LInt k) (LNat k))) Nil))
+    ((SNum k) (POk (PLit (if (< k 0) (LInt k) (LNat k))) Nil))
     ((SStr _) (PErr (quote pattern_literal) "a string is not a pattern: match its Cons and Nil"))
     ((SSymU _ _) (PErr (quote bad_universe_suffix) "a pattern takes no universe arguments"))
     ((SSym x)
@@ -487,7 +481,7 @@
              (Nil (POk PVar (list n)))
              ((Cons (EHit id _ _) _) (PErr (quote pattern_name) (append (show_name id) " is a function: a pattern variable may not shadow one (it would match anything)")))))
           ((Cons (EHit id _ (EICtor _ _ k)) Nil)
-           (if (int_eq k 0) (POk (PCtor id Nil) Nil) (PErr (quote pattern_arity) (append (show_name id) (append " has " (append (show_nat k) " fields"))))))
+           (if (= k 0) (POk (PCtor id Nil) Nil) (PErr (quote pattern_arity) (append (show_name id) (append " has " (append (show_nat k) " fields"))))))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _)) (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
           (_ (PErr (quote bad_pattern) (show_name n)))))))
     ((SList (Cons (SSym h) subs))
@@ -499,7 +493,7 @@
           (match (only_ctors (eresolve (rd_es r) (rd_sc r) n))
             (Nil (PErr (quote unknown_head) (append (show_name n) " is not a constructor")))
             ((Cons (EHit id _ (EICtor _ _ k)) Nil)
-             (if (bool_not (int_eq k (len subs)))
+             (if (bool_not (= k (len subs)))
                (PErr (quote pattern_arity) (append (show_name id) (append " has " (append (show_nat k) (append " fields, the pattern " (show_nat (len subs)))))))
                (match (read_epats r subs Nil Nil)
                  ((Pair (Some (Pair e m)) _) (PErr e m))
@@ -738,7 +732,7 @@
         (match (read_etys es sc env params fields Nil)
           ((Pair (TyErr e m) _) (Pair (Some (Pair e m)) Nil))
           ((Pair (TyOk _ tps1) fts)
-           (if (bool_not (int_eq (len tps1) (len params)))
+           (if (bool_not (= (len tps1) (len params)))
              (Pair (Some (Pair (quote unknown_type) (append "in " (append (show_name (name_append ind short)) ": a field names a type this file cannot see")))) Nil)
              (read_ectors es sc env params ind r (Cons (ECtorDef (name_append ind short) fts) acc))))))))
     (_ (Pair (Some (Pair (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)")) Nil))))
@@ -752,7 +746,7 @@
       ((Some (Mismatch st c)) (Some (Pair (quote pattern_type) (append (show_name id) (append " matches a value of type " (append (show_name st) (append " against the constructor " (show_name c))))))))
       ((Some (IfPrivate st)) (Some (Pair (quote private_if) (append (show_name id) (append " branches on a value of the sig type " (append (show_name st) " (§6.2: the observation is the type's, not the cell's)"))))))
       ((Some (PrimType st op)) (Some (Pair (quote prim_type) (append (show_name id) (append " compares a value of type " (append (show_name st) (append " with " (append (show_name op) ": the comparison primitives are the integers' — an E-first body calls the type's derived decision by name, (T.decEq a b) (§8.4 slice 3.19 rule 7)"))))))))
-      ((Some (IfType st k)) (Some (Pair (quote if_type) (append (show_name id) (append " branches on a value of type " (append (show_name st) (if (int_eq k 0) ", which is not an inductive (§6.2)" (append ", which has " (append (show_nat k) " constructors (§6.2: two)")))))))))
+      ((Some (IfType st k)) (Some (Pair (quote if_type) (append (show_name id) (append " branches on a value of type " (append (show_name st) (if (= k 0) ", which is not an inductive (§6.2)" (append ", which has " (append (show_nat k) " constructors (§6.2: two)")))))))))
       (None None))))
 ;; ---- the instances an E-first body takes (§8.4 slice 3.28 rule 3, landing 3) ----------------
 ;; a static argument's shape as the E-first reader takes it — a named fn of the E table with no
@@ -839,7 +833,7 @@
     ((TaE e m) (TkErr e m))
     ((TaS sub shapes caps data)
      (let ((tye (params_from sub nt 0)))
-       (if (lt 0 (tvar_count_all tye))
+       (if (< 0 (tvar_count_all tye))
          (TkErr (quote function_value) (append (show_name c) ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body (§8.4 slice 3.28 rule 3; a polymorphic taker is the typed route's)"))
          (let ((name (instance_name_of sc c tye (eshape_keys shapes))))
            (TkOk (ECall name (append caps data)) (add_edemand acc (EDemand name c tye shapes)))))))))
@@ -864,7 +858,7 @@
                 (None (TaE (quote function_value) (append (show_name g) ": a static argument with no program of the E table")))
                 ((Some (Pair ps grt))
                  (let ((n (len cs)))
-                   (if (bool_not (int_eq (len (drop n ps)) (len doms)))
+                   (if (bool_not (= (len (drop n ps)) (len doms)))
                      (TaE (quote function_value) (append (show_name g) (append " leaves " (append (show_nat (len (drop n ps))) (append " parameters where the static parameter's arity is " (show_nat (len doms)))))))
                      (match (captured_ok es tys cs (take n ps))
                        ((Some m) (TaE (quote type_mismatch) (append (show_name g) m)))
@@ -932,11 +926,11 @@
 ;; rows of n patterns: exhaustive iff some row matches every vector of values
 (fn matrix_exh ((es ESt) (rows (List (List EPat))) (n Int) (fuel Int)) Bool
   (measure fuel)
-  (if (lt fuel 0) False
+  (if (< fuel 0) False
   (match rows
     (Nil False)
     (_
-     (if (int_eq n 0) True
+     (if (= n 0) True
        (match (column_ctor rows)
          (None (matrix_exh es (default_rows rows) (- n 1) (- fuel 1)))
          ((Some c)
@@ -1023,7 +1017,7 @@
     ((Some (ETCon n _))
      (match (es_info es n)
        ((Some (EISigType _)) (Some (IfPrivate n)))
-       ((Some (EIInd _ ctors)) (if (int_eq (len ctors) 2) None (Some (IfType n (len ctors)))))
+       ((Some (EIInd _ ctors)) (if (= (len ctors) 2) None (Some (IfType n (len ctors)))))
        (_ (if (bool_or (builtin_type n) (rep_row n)) (Some (IfType n 0)) None))))   ; a row of the registry's types has no tag an E-first body may read (slice 3.18 rule 1)
     (_ None)))
 ;; `= < <=` compare integers: an operand whose static type is an inductive or one of the
@@ -1107,7 +1101,7 @@
      (match fts
        ((Cons ft fr) (append (pat_types es ft p) (pat_types_all es fr r)))
        (Nil (append (pat_types es None p) (pat_types_all es Nil r)))))))
-(fn nones ((k Int)) (List (Option EType)) (measure k) (if (lt k 1) Nil (Cons None (nones (- k 1)))))
+(fn nones ((k Int)) (List (Option EType)) (measure k) (if (< k 1) Nil (Cons None (nones (- k 1)))))
 ;; constructor c's field types under the scrutinee's type arguments, when its inductive is known
 (fn ctor_field_types ((es ESt) (st (Option EType)) (c Name)) (Option (List EType))
   (match st
@@ -1171,7 +1165,7 @@
 ;; a primitive's static result: + - * at two Nat operands is Nat (§8.1 rule 2: a numeral's E type is
 ;; the binder's; §8.4 rule 3 resolves the identity by this type), else the table's result type
 (fn prim_static ((es ESt) (tys (List (Option EType))) (code Int) (args (List ETerm))) EType
-  (if (bool_or (int_eq code 1) (bool_or (int_eq code 2) (int_eq code 8)))
+  (if (bool_or (= code 1) (bool_or (= code 2) (= code 8)))
     (match args
       ((Cons a (Cons b Nil))
        (if (bool_and (is_nat_type (c_type es tys a)) (is_nat_type (c_type es tys b))) (ETCon (nm_nat) Nil) (prim_result code)))
@@ -1202,11 +1196,11 @@
     ((Cons d dr) (match as (Nil acc) ((Cons a ar) (unify_tys dr ar (unify_ty d a acc)))))))
 (fn assoc_tvar ((i Int) (acc (List (Pair Int EType)))) (Option EType)
   (measure (struct acc))
-  (match acc (Nil None) ((Cons (Pair j t) r) (if (int_eq i j) (Some t) (assoc_tvar i r)))))
+  (match acc (Nil None) ((Cons (Pair j t) r) (if (= i j) (Some t) (assoc_tvar i r)))))
 ;; the parameter list 0..n-1 from the bindings, an unbound one left as itself
 (fn params_from ((acc (List (Pair Int EType))) (n Int) (i Int)) (List EType)
   (measure (- n i))
-  (if (le n i) Nil (Cons (match (assoc_tvar i acc) ((Some t) t) (None (ETVar i))) (params_from acc n (+ i 1)))))
+  (if (<= n i) Nil (Cons (match (assoc_tvar i acc) ((Some t) t) (None (ETVar i))) (params_from acc n (+ i 1)))))
 ;; one more than the greatest type parameter a type names (the count a substitution needs)
 (fn tvar_count ((t EType)) Int
   (measure (struct t))
