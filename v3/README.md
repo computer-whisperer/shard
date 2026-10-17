@@ -1902,6 +1902,20 @@ and tied on stdout and exit status against both drivers; landing 2 the
 rename by tool. Not in it: Init's types in the toolchain's closure, V3's own
 chain and its sizing, T6 (next).
 
+**Slice 4.4 landing 0 built 2026-10-16 — the probe** (`LANGUAGE.md` §8.6 "as
+built, landing 0"; §13 item 69): on a scratch copy of the emitter, calc's
+closure through the chain after three refusals — 61 declarations, 7 modules,
+119 lines; the lowerer, the generator and `cc` under two seconds — and its
+binary (31,160 bytes) tied to the bootstrap driver byte for byte over the
+differential's 21 inputs, 1 ms against 32 s. The bridge's mechanism, which
+the design did not foresee: Init's four wire types identified with the
+chain's prelude (the runtime's shims build `Pair`, `Cons`, `Some` and `True`
+by name; the old reader binds a lowercase pattern name as a variable), a
+type map, and the dotted primitives — `Nat.sub`, `Nat.div`, `Nat.mod`,
+`Int.ediv`, `Int.emod`, nothing else in calc's or std's realizations — as
+expressions; the string literal needs no change. The two refusal pins through the scratch bridge: `refused_init_list` emits (2 modules, 4 declarations) and its binary prints `hello` as the V3 driver's `--run` does — while the bootstrap's flat read of the file fails (`String.toByteArray: expected a World as the last argument`, the bare-name dispatch's reading of an unknown head), so a naming-law pin's reference is the driver's run, never the flat read, which the tie uses for the kernel-profile pins; `refused_init_prim` emits and ties (exit 0 on both). An underflow case beside them — `(- n 1)` at `Nat` with `n = 0` as the exit code — shows the name map's gap: the V3 driver exits 0 (`Nat.sub` truncates), the probe's binary 255 (the chain's integer `-`), the flat read 255 too; landing 1's expression closes it and the case joins the pins.
+The tree untouched; landing 1 next.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
