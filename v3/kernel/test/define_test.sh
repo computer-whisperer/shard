@@ -46,7 +46,7 @@ if [ -z "$a" ] || [ "$a" != "$b" ]; then echo "define_test: route_callee: b's pr
 # G4 (GPT-6 R65, R69): the discharged measure's account — three DISCHARGE records, nothing PENDING,
 # and the theorem that rested on count.dec_1 rests on nothing after
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/loader/discharge_measure/main.shard 2>&1)
-if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | grep -q '^PENDING' || ! echo "$out" | grep -q '^ACCEPT .*main.count_self .* params=$'; then
+if [ "$(echo "$out" | grep -c '^DISCHARGE .* proved')" -ne 3 ] || echo "$out" | grep -q '^PENDING' || ! echo "$out" | grep -q '^ACCEPT .*main.count_self .* params= req='; then
   echo "define_test: discharge_measure: the account is not empty after the discharges"; echo "$out" | grep -E '^(DISCHARGE|PENDING|REFUSE|READ-ERROR)|count_self' | head -8; fail=$((fail+1))
 fi
 # calc's app file (slice 3.17 rule 7): show_nat defined by its Nat measure through Int.natAbs — the

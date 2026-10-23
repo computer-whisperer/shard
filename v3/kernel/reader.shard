@@ -23,6 +23,9 @@
 (use kernel.prelude)
 (use kernel.scope)
 (use kernel.sexpr)
+(use kernel.intmap)
+(use kernel.intmap.IntMap)
+(use kernel.scope.Vis)
 (use kernel.util)
 (use kernel.decl.ConstantVal)
 (use kernel.decl.Constructor)
@@ -63,7 +66,7 @@
   (RDDirective SExpr)           ; import / use / trusts: the loader's
   (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
   (RDLater Symbol)              ; an E form the loader owns (fn, extern, realize: classify.shard, realize.shard; fulfills: §6.6) — the loader intercepts them before read_decl
-  (RDSolved Name Int (List SExpr) (List Declaration))   ; an `auto` proof the engine produced under mode `solve` (slice 3.22 rule 6): the theorem, the fingerprint, the block, what it declares
+  (RDSolved Name Req (List SExpr) (List Declaration))   ; an `auto` proof the engine produced under mode `solve` (slice 3.22 rule 6), or a schema-2 entry re-keyed (4.5 rule 1): the theorem, the key, the block, what it declares
   (RDMeasured Name Bool (Option (Pair Name Bool)) (List Declaration))   ; mode `measure`: a hand-written proof read as usual, and whether the engine closes the statement unaided
   (RDErr Symbol (List Int)))    ; reason, message
 
@@ -94,15 +97,80 @@
 (fn rd_err ((r FinRes)) RDecl (match r ((FinErr s m) (RDErr s m)) ((FinOk _) (RDErr (quote bad_shape) "finished"))))
 
 ;; ---- the forms (§4) -----------------------------------------------------------------------
-;; a sidecar entry (slice 3.22 rule 1): the theorem's name as its source writes it, the
-;; fingerprint of the statement the entry was made for, the block's steps
-(type Auto (Auto Name Int (List SExpr)))
+;; the resolved requirement's key (§8.6 slice 4.5 rule 1; law §5.2): four fingerprints —
+;; the closed statement's, the referenced declarations' (the identity closure through the
+;; load's own declarations), the policy's (the file's trusts resolved, the load's parameters),
+;; the environment's (the module's Init horizon, the export's identity) — or, from a sidecar
+;; of schema 2, the statement's alone. Fingerprints, never authorities (R42): the key detects
+;; a changed task; K's replay accepts.
+(type Req (ReqFull Int Int Int Int) (ReqStmt Int))
+(fn req_stmt ((k Req)) Int (match k ((ReqFull s _ _ _) s) ((ReqStmt s) s)))
+;; a sidecar entry (slice 3.22 rule 1; 4.5 rule 1): the theorem's name as its source writes
+;; it, the key of the requirement the entry was made for, the block's steps
+(type Auto (Auto Name Req (List SExpr)))
+;; the file's parts of the key (4.5 rule 1), computed once by the loader: the scope (the
+;; declaration table tells the load's own names from Init's), the policy's and the
+;; environment's fingerprints
+(type ReqCtx (ReqCtx Scope Int Int))
 ;; the producers' inputs for a file (slice 3.29 rule 2): the sidecar's entries, the loaded
 ;; programs (a tactic named by `(auto (tactic M.FN))` runs under `ev` on them, mode `solve`),
-;; and the driver's fuel for such a run
-(type Producers (Producers (List Auto) ESt Int))
-(fn pr_autos ((pr Producers)) (List Auto) (match pr ((Producers as _ _) as)))
-(fn no_producers () Producers (Producers Nil (es0) 0))
+;; the driver's fuel for such a run, and the file's parts of the key
+(type Producers (Producers (List Auto) ESt Int ReqCtx))
+(fn pr_autos ((pr Producers)) (List Auto) (match pr ((Producers as _ _ _) as)))
+(fn pr_req ((pr Producers)) ReqCtx (match pr ((Producers _ _ _ rc) rc)))
+(fn no_producers () Producers (Producers Nil (es0) 0 (ReqCtx (Scope Anon Anon Nil VisAll) 0 0)))
+
+;; ---- the key (4.5 rule 1) -------------------------------------------------------------------
+;; the key of the closed statement T under the file's parts: S its structural hash (binder
+;; names outside it), D the identity closure, P and E the file's
+(fn req_key ((env CheckedEnv) (rc ReqCtx) (T Expr)) Req
+  (match rc ((ReqCtx sc p e) (ReqFull (hash_expr T) (req_deps env sc (expr_consts T)) p e))))
+;; the referenced declarations' identities: from the constants T cites, every declaration of
+;; the load's own that is reachable through K's edge relation (ci_used, the axiom walk's),
+;; each mixed with its name — a sum, so the order of the walk is no part of the key; Init's
+;; names stop the walk (their identity is the export's pin and the horizon, E's)
+(fn req_deps ((env CheckedEnv) (sc Scope) (ns (List Name))) Int
+  (match (req_walk env sc ns IMEmpty 0 (req_fuel)) ((Pair _ d) d)))
+(fn req_fuel () Int 1000000)
+(fn req_walk ((env CheckedEnv) (sc Scope) (ns (List Name)) (seen (IntMap (List (Pair Name Int)))) (acc Int) (fuel Int)) (Pair (IntMap (List (Pair Name Int))) Int)
+  (measure fuel)
+  (if (< fuel 1) (Pair seen acc)
+    (match ns
+      (Nil (Pair seen acc))
+      ((Cons n r)
+       (if (bool_or (bool_not (native_decl sc n)) (match (ords_find seen n) ((Some _) True) (None False)))
+         (req_walk env sc r seen acc (- fuel 1))
+         (match (env_find env n)
+           (None (req_walk env sc r (ords_add seen n 1) acc (- fuel 1)))
+           ((Some info)
+            (match (req_walk env sc (ci_used info) (ords_add seen n 1) (mod (+ acc (mix (hash_name n) (match (identity_hash env n) ((Some h) h) (None 0)))) (hash_m)) (- fuel 1))
+              ((Pair seen1 acc1) (req_walk env sc r seen1 acc1 (- fuel 1)))))))))))
+;; the sum of the names' hashes — the policy's part (the trusts' candidates, the parameters)
+(fn req_names ((ns (List Name)) (acc Int)) Int
+  (measure (struct ns))
+  (match ns (Nil acc) ((Cons n r) (req_names r (mod (+ acc (hash_name n)) (hash_m))))))
+(fn req_show ((k Req)) (List Int)
+  (match k
+    ((ReqFull s d p e) (append (show_int s) (Cons 46 (append (show_int d) (Cons 46 (append (show_int p) (Cons 46 (show_int e))))))))
+    ((ReqStmt s) (show_int s))))
+;; an entry against the statement's key: the block when every part agrees (a schema-2 entry by
+;; the statement alone), else the parts that differ, in the key's order
+(type AutoFit (AutoFits (List SExpr)) (AutoStale (List (List Int))) (AutoNone))
+(fn auto_fit ((entry (Option (Pair Req (List SExpr)))) (k Req)) AutoFit
+  (match entry
+    (None AutoNone)
+    ((Some (Pair ek steps))
+     (match k
+       ((ReqFull s d p e)
+        (match ek
+          ((ReqStmt es) (if (= es s) (AutoFits steps) (AutoStale (list "statement"))))
+          ((ReqFull es ed ep ee)
+           (let ((bad (append (if (= es s) Nil (list "statement")) (append (if (= ed d) Nil (list "deps")) (append (if (= ep p) Nil (list "policy")) (if (= ee e) Nil (list "env")))))))
+             (match bad (Nil (AutoFits steps)) (_ (AutoStale bad)))))))
+       ((ReqStmt s) (if (= (req_stmt ek) s) (AutoFits steps) (AutoStale (list "statement"))))))))
+(fn join_sp ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs (Nil Nil) ((Cons x Nil) x) ((Cons x r) (append x (Cons 44 (join_sp r))))))
 ;; the load's mode for proofs (slice 3.22 rule 6): `off` — the build, nothing searches; `solve` — an
 ;; `auto` without a valid entry is the engine's, RDSolved; `measure` — every hand-written proof is
 ;; read as usual and the engine is also run on the statement, RDMeasured (the count over calc)
@@ -219,9 +287,9 @@
     (_ (RDErr (quote bad_shape) "(extern NAME ((x TYPE)…) TYPE)"))))
 
 ;; the sidecar's entry for the theorem n: its name as written, qualified as n was
-(fn auto_entry ((sc Scope) (autos (List Auto)) (n Name)) (Option (Pair Int (List SExpr))) (auto_entry_as sc autos n Anon))
+(fn auto_entry ((sc Scope) (autos (List Auto)) (n Name)) (Option (Pair Req (List SExpr))) (auto_entry_as sc autos n Anon))
 ;; a discharge's theorem is OBLIGATION.proof: the entry names the obligation (f.dec_1)
-(fn auto_entry_as ((sc Scope) (autos (List Auto)) (n Name) (suffix Name)) (Option (Pair Int (List SExpr)))
+(fn auto_entry_as ((sc Scope) (autos (List Auto)) (n Name) (suffix Name)) (Option (Pair Req (List SExpr)))
   (measure (struct autos))
   (match autos
     (Nil None)
@@ -229,11 +297,12 @@
 ;; a proof: (exact TERM) — TERM at the statement, over the binders; sorry; (by STEP…) — I's
 ;; block on the statement closed over the binders (tactic.shard, slice 3.20); auto or
 ;; (auto HINT…) — the sidecar's block for the theorem, replayed as (by …) when the entry's
-;; fingerprint is the statement's (slice 3.22 rules 1–2): no entry is pending auto_missing,
-;; another statement's entry pending auto_stale; the hints are the producer's, unread here
-(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
+;; key is the statement's (slice 3.22 rules 1–2; 4.5 rule 1): no entry is pending
+;; auto_missing, another requirement's entry pending auto_stale with the parts that differ
+;; named; the hints are the producer's, unread here
+(fn read_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Req (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
   (if (sym_eq mode (quote measure)) (read_measured e n lps fvars t p entry pr) (read_proof_go e n lps fvars t p entry mode pr)))
-(fn read_proof_go ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
+(fn read_proof_go ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Req (List SExpr)))) (mode Symbol) (pr Producers)) RDecl
   (match p
     ((SSym s)
      (if (sym_eq s (quote sorry)) (RDPending n (quote sorry))
@@ -262,36 +331,46 @@
             ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))
        (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))))
     (_ (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
-(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Int (List SExpr)))) (hints (List SExpr)) (mode Symbol) (pr Producers)) RDecl
+(fn read_auto ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (entry (Option (Pair Req (List SExpr)))) (hints (List SExpr)) (mode Symbol) (pr Producers)) RDecl
   (match (close_pis e fvars t)
     ((Pair _ (FinErr r m)) (RDErr r m))
     ((Pair e1 (FinOk T))
-     (match (auto_valid entry (hash_expr T))
-       ((Some steps) (read_block_proof e1 n lps fvars T steps))
-       (None
+     (let ((key (req_key (el_env e1) (pr_req pr) T)))
+     (match (auto_fit entry key)
+       ((AutoFits steps)
+        (match entry
+          ;; a schema-2 entry fits by its statement; under solve it is re-keyed whole (4.5 rule 1: the restamp, no search)
+          ((Some (Pair (ReqStmt _) _))
+           (if (sym_eq mode (quote solve))
+             (match (read_block_proof e1 n lps fvars T steps) ((RDOk ds) (RDSolved n key steps ds)) (other other))
+             (read_block_proof e1 n lps fvars T steps)))
+          (_ (read_block_proof e1 n lps fvars T steps))))
+       (fit
         (if (sym_eq mode (quote solve))
           (match (tactic_named hints)
-            ((TacticErr m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
+            ((TacticErr m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " " m))))))
             ((TacticNamed tfn rest)
              ;; the library's block (slice 3.29 rule 2), replayed as an entry's would be before it is one
              (match (run_tactic e1 T (len fvars) tfn rest pr)
-               ((TacNo m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " m))))))))
+               ((TacNo m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " tactic=" (append (show_name tfn) (append ": " m))))))))
                ((TacSteps steps)
                 (match (read_block_proof e1 n lps fvars T steps)
-                  ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
-                  ((RDErr r m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " (append (chars_of_sym r) (append ": " m))))))))))
-                  ((RDPending _ why) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " tactic=" (append (show_name tfn) (append ": " (chars_of_sym why)))))))))
+                  ((RDOk ds) (RDSolved n key steps ds))
+                  ((RDErr r m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " tactic=" (append (show_name tfn) (append ": " (append (chars_of_sym r) (append ": " m))))))))))
+                  ((RDPending _ why) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " tactic=" (append (show_name tfn) (append ": " (chars_of_sym why)))))))))
                   (other other)))))
             (TacticNone
              ;; the engine's block, replayed as an entry's would be before it is one
              (match (engine_prove e1 T (len fvars) hints)
-               ((NotProduced m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (hash_expr T)) (append " " m))))))
+               ((NotProduced m) (RDPending n (sym_of_chars (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " " m))))))
                ((Produced nodes)
                 (let ((steps (nodes_sx nodes)))
                   (match (read_block_proof e1 n lps fvars T steps)
-                    ((RDOk ds) (RDSolved n (hash_expr T) steps ds))
+                    ((RDOk ds) (RDSolved n key steps ds))
                     (other other)))))))
-          (RDPending n (sym_of_chars (append (match entry (None "auto_missing fp=") (_ "auto_stale fp=")) (show_int (hash_expr T)))))))))))
+          (RDPending n (sym_of_chars (match fit
+                                       ((AutoStale bad) (append "auto_stale " (append (join_sp bad) (append " fp=" (show_int (req_stmt key))))))
+                                       (_ (append "auto_missing fp=" (show_int (req_stmt key))))))))))))))
 ;; the producer a delegation names (slice 3.29 rule 2): `(tactic M.FN)` among the hints, once;
 ;; the hints after it are the library's
 (type TacticHint (TacticNamed Name (List SExpr)) (TacticNone) (TacticErr (List Int)))
@@ -319,7 +398,7 @@
 (type TacRun (TacSteps (List SExpr)) (TacNo (List Int)))
 (fn run_tactic ((e El) (T Expr) (nctx Int) (tfn Name) (hints (List SExpr)) (pr Producers)) TacRun
   (match pr
-    ((Producers _ est fuel)
+    ((Producers _ est fuel _)
      (let ((prog (es_prog est)))
      (match (prog_find prog tfn)
        ((Some (EFn _ ntp (Cons gt (Cons ht Nil)) rt _ _))
@@ -350,11 +429,6 @@
             ((Pair _ _) (TacNo "no metavariable")))))
        ((Some _) (TacNo (append (show_name tfn) " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT): a fn of two parameters, no type parameter")))
        (None (TacNo (append (show_name tfn) " is not a fn of the load (the library is imported as any module; the name is module-qualified)"))))))))
-;; the entry's block when its fingerprint is the statement's
-(fn auto_valid ((entry (Option (Pair Int (List SExpr)))) (fp Int)) (Option (List SExpr))
-  (match entry
-    (None None)
-    ((Some (Pair efp steps)) (if (= efp fp) (Some steps) None))))
 ;; a block on the closed statement: the theorem, pending with its goals, or the refusal
 (fn read_block_proof ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (T Expr) (steps (List SExpr))) RDecl
   (match (tac_prove e T (len fvars) steps)
@@ -363,7 +437,7 @@
     ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n)))))))
 ;; mode `measure`: the proof as written, and whether the engine closes the statement unaided —
 ;; the engine's count (slice 3.22's third ruling); an `auto` here is read as the build reads it
-(fn read_measured ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Int (List SExpr)))) (pr Producers)) RDecl
+(fn read_measured ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (t Expr) (p SExpr) (entry (Option (Pair Req (List SExpr)))) (pr Producers)) RDecl
   (match (read_proof_go e n lps fvars t p entry (quote off) pr)
     ((RDOk ds)
      (match (close_pis e fvars t)

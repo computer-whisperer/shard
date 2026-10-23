@@ -10,8 +10,9 @@
 ;;; and the block it finds is replayed before it is accepted. Then the sidecar of every
 ;;; file that gained a block is rewritten whole — FILE.auto.shard, machine-owned: the
 ;;; entries it held that were not superseded, then the new ones in the file's order, one
-;;; `(proof-for NAME FINGERPRINT (by STEP…))` per theorem, under a header naming the
-;;; engine's version. The records are printed as the loader's are (PROVED NAME fp=N (by
+;;; `(proof-for NAME (req S D P E) (by STEP…))` per theorem — the key the resolved
+;;; requirement's (§8.6 slice 4.5 rule 1) —, under a header naming the engine's version; a
+;;; schema-2 entry that replays is re-keyed so (the restamp, no search). The records are printed as the loader's are (PROVED NAME fp=N (by
 ;;; …) for each solved theorem; an unsolved one stays PENDING auto_unsolved with its goal),
 ;;; then the counts; the exit code is refused + errors + the theorems left unsolved. No
 ;;; source file is written (law §7.5).
@@ -39,6 +40,7 @@
 (use kernel.name.Name)
 (use kernel.sexpr.RAll)
 (use kernel.reader.Auto)
+(use kernel.reader.Req)
 
 (type PArgs (PArgs (List Int) (List Int) (List Int) (List (List Int)) Bool Int))   ; root, the export, its index, files, measure, the fuel for a tactic's run (slice 3.29 rule 2)
 (fn parse_pargs ((args (List (List Int))) (a PArgs)) PArgs
@@ -105,9 +107,9 @@
   (measure (struct rs))
   (match rs
     (Nil (rev_groups acc Nil))
-    ((Cons (RProved n fp steps) r)
+    ((Cons (RProved n k steps) r)
      (match (file_of_decl l n)
-       ((Some file) (proved_by_file l r (group_add acc file (Auto (decl_short n) fp steps))))
+       ((Some file) (proved_by_file l r (group_add acc file (Auto (decl_short n) k steps))))
        (None (proved_by_file l r acc))))
     ((Cons _ r) (proved_by_file l r acc))))
 (fn group_add ((acc (List (Pair (List Int) (List Auto)))) (file (List Int)) (a Auto)) (List (Pair (List Int) (List Auto)))
@@ -148,7 +150,7 @@
   (measure (struct olds))
   (match olds
     (Nil Nil)
-    ((Cons (Auto n fp steps) r) (if (names_has news n) (not_superseded r news) (Cons (Auto n fp steps) (not_superseded r news))))))
+    ((Cons (Auto n k steps) r) (if (names_has news n) (not_superseded r news) (Cons (Auto n k steps) (not_superseded r news))))))
 (fn names_has ((as (List Auto)) (n Name)) Bool
   (measure (struct as))
   (match as (Nil False) ((Cons (Auto m _ _) r) (if (name_eq m n) True (names_has r n)))))
@@ -156,13 +158,18 @@
 ;; (I's schema the entries are written in — slice 3.29 rule 4; the loader refuses a newer one),
 ;; then the entries
 (fn render_sidecar ((as (List Auto))) (List Int)
-  (append ";; machine-owned: written by v3/kernel/prove.shard (engine version " (append (show_nat (engine_version)) (append "); one entry per theorem, the fingerprint of the statement it proves\n(sidecar " (append (show_nat (sidecar_schema)) (append ")\n" (render_entries as)))))))
+  (append ";; machine-owned: written by v3/kernel/prove.shard (engine version " (append (show_nat (engine_version)) (append "); one entry per theorem, keyed by the resolved requirement it proves (req STATEMENT DEPS POLICY ENV)\n(sidecar " (append (show_nat (sidecar_schema)) (append ")\n" (render_entries as)))))))
 (fn render_entries ((as (List Auto))) (List Int)
   (measure (struct as))
   (match as
     (Nil Nil)
-    ((Cons (Auto n fp steps) r)
-     (append "(proof-for " (append (show_name n) (append " " (append (show_int fp) (append " (by " (append (show_sexprs steps) (append "))\n" (render_entries r)))))))))))
+    ((Cons (Auto n k steps) r)
+     (append "(proof-for " (append (show_name n) (append " " (append (render_key k) (append " (by " (append (show_sexprs steps) (append "))\n" (render_entries r)))))))))))
+;; (req S D P E); a statement-only key (an entry kept from an older schema) as it was
+(fn render_key ((k Req)) (List Int)
+  (match k
+    ((ReqFull s d p e) (append "(req " (append (show_int s) (Cons 32 (append (show_int d) (Cons 32 (append (show_int p) (Cons 32 (append (show_int e) ")")))))))))
+    ((ReqStmt s) (show_int s))))
 
 ;; ---- measure -----------------------------------------------------------------------------------
 (fn main_measure ((l0 Load) (files (List (List Int))) (w World)) World

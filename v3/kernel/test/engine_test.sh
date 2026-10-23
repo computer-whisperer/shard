@@ -36,9 +36,9 @@ checks=$((checks+1)); grep -q "^PROVED" "$OUT/load.txt" && bad "the build search
 cp v3/examples/auto/auto.shard "$SCRATCH/auto.shard"
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/auto.shard" > "$OUT/prove.txt" 2>&1
 checks=$((checks+1)); grep -q 'proved 11  unsolved 1  sidecars written 1$' "$OUT/prove.txt" || { bad "prove did not solve 11 of 12"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/prove.txt" | head -5 | cut -c1-300; }
-# the fingerprints masked: a statement's fingerprint carries the module's name (the copy's is
+# the keys masked: a statement's fingerprint and its dependencies' carry the module's name (the copy's is
 # another module), and the committed one's fingerprints are checked by the replay above
-mask() { sed -E 's/^\(proof-for ([^ ]+) [0-9]+ /(proof-for \1 FP /' "$1"; }
+mask() { sed -E 's/^\(proof-for ([^ ]+) \(req [0-9 ]+\) /(proof-for \1 KEY /' "$1"; }
 checks=$((checks+1)); cmp -s <(mask "$SCRATCH/auto.auto.shard") <(mask v3/examples/auto/auto.auto.shard) || { bad "the regenerated sidecar differs from the committed one"; diff <(mask "$SCRATCH/auto.auto.shard") <(mask v3/examples/auto/auto.auto.shard) | head -6 | cut -c1-300; }
 checks=$((checks+1)); cmp -s "$SCRATCH/auto.shard" v3/examples/auto/auto.shard || bad "prove wrote into the source"
 echo "engine_test: the example replays 11 theorems from its sidecar and prove regenerates it byte-identical"

@@ -88,6 +88,7 @@
 (use kernel.classify.CRes)
 (use kernel.classify.PreRes)
 (use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
 (use kernel.decl.Declaration)
 (use kernel.verdict.Outcome)
 (use kernel.verdict)
@@ -104,6 +105,8 @@
 (use kernel.scope.Open)
 (use kernel.reader.RDecl)
 (use kernel.reader.Auto)
+(use kernel.reader.Req)
+(use kernel.reader.ReqCtx)
 (use kernel.reader.Producers)
 (use kernel.scope.Resolved)
 (use kernel.scope.Scope)
@@ -217,7 +220,7 @@
 (type Rec
   (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
   (RInit Name Int Int)                        ; the Init load (slice 3.26): the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
-  (RAccept Name Name Int (List Name) Int (List Name))   ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on
+  (RAccept Name Name Int (List Name) Int (List Name) (Option Req))   ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on, a theorem's resolved requirement (4.5 rule 1)
   (RParam Name Symbol Int)                    ; a parameter admitted: a view's (kind type / fn / requirement; a sig type's arity), a measured fn's obligation, a trusted axiom (kind axiom; slice 4.2 landing 2)
   (RRefuse Name Symbol)                       ; K refused
   (RPolicy Name (List Name))                  ; outside the file's policy: the axioms it reaches that the policy lacks
@@ -232,7 +235,7 @@
   (RReadErr (List Int) Symbol (List Int))     ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))     ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))                  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
-  (RProved Name Int (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the statement's fingerprint — what the sidecar's entry holds
+  (RProved Name Req (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the requirement's key (4.5 rule 1) — what the sidecar's entry holds
   (RSidecar (List Int) Int Int)               ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
   (RTactic Name Name Bool)                    ; mode measure (slice 3.29 rule 2): the tactic the delegation names closes the statement, or not
@@ -292,12 +295,29 @@
 ;; an RDSolved or RDMeasured read: its record, and the plain RDOk
 (fn rd_plain ((l Load) (rd RDecl)) (Pair Load RDecl)
   (match rd
-    ((RDSolved n fp steps ds) (Pair (ld_rec l (RProved n fp steps)) (RDOk ds)))
+    ((RDSolved n k steps ds) (Pair (ld_rec l (RProved n k steps)) (RDOk ds)))
     ((RDMeasured n ok tac ds) (Pair (match tac ((Some (Pair tfn tok)) (ld_rec (ld_rec l (REngine n ok)) (RTactic n tfn tok))) (None (ld_rec l (REngine n ok)))) (RDOk ds)))
     (_ (Pair l rd))))
 ;; the producers' inputs for a file's proofs (slice 3.29 rule 2): its sidecar's entries, the
-;; programs loaded so far (a named tactic runs on them under prove), the fuel
-(fn producers_of ((l Load) (autos (List Auto))) Producers (Producers autos (Load.etab l) (Load.fuel l)))
+;; programs loaded so far (a named tactic runs on them under prove), the fuel, and the file's
+;; parts of the requirement's key (4.5 rule 1)
+(fn producers_of ((l Load) (f Fx)) Producers (Producers (Fx.autos f) (Load.etab l) (Load.fuel l) (req_ctx l f)))
+;; the file's parts of the key: its scope, the policy's fingerprint — the trusts' candidates
+;; through the scope and the load's parameters, what `permitted` consults beyond the standard
+;; axioms —, the environment's — the module's Init horizon and the export's identity as the
+;; index's header states it (its record count and byte length); 0 for a module without Init,
+;; whose requirement rests on no export
+(fn req_ctx ((l Load) (f Fx)) ReqCtx
+  (let ((sc (fx_scope l f)))
+    (ReqCtx sc
+            (req_names (append (trust_candidates sc (Fx.trusts f)) (Load.params l)) 0)
+            (if (< (Fx.init f) 0) 0
+              (match (Load.init l)
+                ((InitSt _ x _) (mix (mix (+ 1 (Fx.init f)) (ix_hdr_records (odx_hdr x))) (ix_hdr_bytes (odx_hdr x))))
+                (_ (mix (mix (+ 1 (Fx.init f)) 0) 0)))))))
+(fn trust_candidates ((sc Scope) (ts (List Name))) (List Name)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (append (scope_candidates sc t) (trust_candidates sc r)))))
 (fn ld_add_inits ((l Load) (cs (List (Pair Name Int)))) Load
   (measure (struct cs))
   (match cs (Nil l) ((Cons (Pair n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
@@ -306,8 +326,10 @@
 ;; that does not read, or a form of another shape, is the file's load error and no entries.
 ;; Its first form may be the schema (sidecar N) — I's schema the entries are written in (slice
 ;; 3.29 rule 4; no form = schema 1, the form before the slice): an older schema is replayed and
-;; reported SIDECAR; a newer one is the load error sidecar_schema (this loader cannot read it)
-(fn sidecar_schema () Int 2)
+;; reported SIDECAR; a newer one is the load error sidecar_schema (this loader cannot read it).
+;; Schema 3 (4.5 rule 1): an entry's key is (req S D P E), the resolved requirement's; a bare
+;; FINGERPRINT (schemas 1 and 2) is the statement's alone and still stands on replay
+(fn sidecar_schema () Int 3)
 (fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World)) (Pair (Pair Load (List Auto)) World)
   (if (bool_not (forms_want_auto forms)) (Pair (Pair l Nil) w)
     (let ((path (append (drop_shard_suffix (join_path (append (Load.root l) rel))) ".auto.shard")))
@@ -358,13 +380,23 @@
   (measure (struct es))
   (match es
     (Nil (Pair (Some (rev acc)) Nil))
-    ((Cons (SList (Cons (SSym h) (Cons (SSym nm) (Cons (SNum fp) (Cons (SList (Cons (SSym by) steps)) Nil))))) r)
+    ((Cons (SList (Cons (SSym h) (Cons (SSym nm) (Cons key (Cons (SList (Cons (SSym by) steps)) Nil))))) r)
      (if (bool_and (sym_eq h (quote proof-for)) (sym_eq by (quote by)))
        (match (name_of_sym nm)
-         ((Some n) (sidecar_entries r (Cons (Auto n fp steps) acc)))
+         ((Some n)
+          (match (sidecar_key key)
+            ((Some k) (sidecar_entries r (Cons (Auto n k steps) acc)))
+            (None (Pair None "an entry's key is (req S D P E) or a FINGERPRINT"))))
          (None (Pair None (append "not a name: " (chars_of_sym nm)))))
-       (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))")))
-    ((Cons _ r) (Pair None "an entry is (proof-for NAME FINGERPRINT (by STEP…))"))))
+       (Pair None "an entry is (proof-for NAME (req S D P E) (by STEP…))")))
+    ((Cons _ r) (Pair None "an entry is (proof-for NAME (req S D P E) (by STEP…))"))))
+;; an entry's key: (req S D P E), or a bare fingerprint (the statement's; schemas 1 and 2)
+(fn sidecar_key ((s SExpr)) (Option Req)
+  (match s
+    ((SNum fp) (Some (ReqStmt fp)))
+    ((SList (Cons (SSym h) (Cons (SNum a) (Cons (SNum b) (Cons (SNum c) (Cons (SNum d) Nil))))))
+     (if (sym_eq h (quote req)) (Some (ReqFull a b c d)) None))
+    (_ None)))
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (Cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
 (fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
@@ -541,7 +573,8 @@
           (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
           (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
             (Nil (policy_pass l f env memo1 r
-                   (Cons (RAccept n (Fx.module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (Fx.init f) (params_of (Load.params l) axs)) acc)))
+                   (Cons (RAccept n (Fx.module f) (match (identity_hash env n) ((Some h) h) (None 0)) axs (Fx.init f) (params_of (Load.params l) axs)
+                                  (match (env_find env n) ((Some (ThmInfo (ConstantVal _ _ ty) _ _)) (Some (req_key env (req_ctx l f) ty))) (_ None))) acc)))
             (out (PolOut n out))))))))))
 ;; a closure with each discharged obligation replaced by what its proof rests on (to a
 ;; fixpoint: a proof may rest on another discharged obligation)
@@ -564,7 +597,7 @@
   (measure (struct rs))
   (match rs
     (Nil f)
-    ((Cons (RAccept _ _ h _ _ _) r) (mix_recs (fx_mix f h) r))
+    ((Cons (RAccept _ _ h _ _ _ _) r) (mix_recs (fx_mix f h) r))
     ((Cons _ r) (mix_recs f r))))
 (fn recs_add ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
@@ -626,7 +659,7 @@
         ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
         (None (Pair (fulfills_misnamed l f sc s) f)))
     (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)   ; a def that recurses: the fn pipeline's K half (slice 4.2 landing 0)
-    (match (rd_plain l (read_decl_autos sc (Load.env l) s (producers_of l (Fx.autos f)) (Load.mode l)))
+    (match (rd_plain l (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
      ((Pair l rd)
     (match rd
       ((RDErr e m)
@@ -716,7 +749,7 @@
     (None l)
     ((Some info)
      (let ((thm (name_append k (n1 (quote proof)))))
-       (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (producers_of l (Fx.autos f)) (Load.mode l)))
+       (match (rd_plain l (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (producers_of l f) (Load.mode l)))
         ((Pair l rd)
        (match rd
          ((RDErr e m) (ld_rec l (horizon_refusal f e m)))
@@ -742,7 +775,7 @@
   (measure (struct recs))
   (match recs
     (Nil Nil)
-    ((Cons (RAccept m _ _ axs _ _) r) (if (name_eq m n) axs (thm_closure_of r n)))
+    ((Cons (RAccept m _ _ axs _ _ _) r) (if (name_eq m n) axs (thm_closure_of r n)))
     ((Cons _ r) (thm_closure_of r n))))
 ;; the account recomputed: k replaced in every ACCEPT record's closure and parameters; its
 ;; function, once none of its obligations is open, out of every pending= and no longer PENDING
@@ -755,8 +788,8 @@
   (measure (struct rs))
   (match rs
     (Nil Nil)
-    ((Cons (RAccept n m h axs i ps) r)
-     (Cons (if (mem_name k axs) (let ((axs1 (names_union (names_without axs k) rests))) (RAccept n m h axs1 i (params_of params axs1))) (RAccept n m h axs i ps))
+    ((Cons (RAccept n m h axs i ps q) r)
+     (Cons (if (mem_name k axs) (let ((axs1 (names_union (names_without axs k) rests))) (RAccept n m h axs1 i (params_of params axs1) q)) (RAccept n m h axs i ps q))
            (rewrite_closures r k rests params)))
     ((Cons x r) (Cons x (rewrite_closures r k rests params)))))
 ;; an obligation of g — a parameter g.dec_N — not yet discharged
@@ -1302,7 +1335,7 @@
           (Nil (flush_each l1 f r))
           (_ (match (load_e_first (ld_with_parked l1 Nil) f s why (quote e_first)) ((Pair l2 _) (flush_each l2 f r))))))))))
 (fn ld_last_accepted ((l Load)) Bool
-  (match (ld_recs_head l) ((Some (RAccept _ _ _ _ _ _)) True) (_ False)))
+  (match (ld_recs_head l) ((Some (RAccept _ _ _ _ _ _ _)) True) (_ False)))
 ;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters of the
 ;; fourth class, the definition admitted and checked against the policy, then its equations
 ;; the same way, the program (the erasure, already in the E table) its realization; DEFINE
@@ -1387,7 +1420,7 @@
   (let ((h (form_head s)))
     (if (bool_or (sym_eq h (quote type)) (sym_eq h (quote sig)))
       (match (ld_recs_head l)
-        ((Some (RAccept _ _ _ _ _ _)) (add_e_twin_now l f s))
+        ((Some (RAccept _ _ _ _ _ _ _)) (add_e_twin_now l f s))
         ((Some (RParam _ _ _)) (add_e_twin_now l f s))
         (_ l))
       l)))
@@ -2407,7 +2440,7 @@
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))
-    (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (producers_of l (Fx.autos (Im.fx im))) (Load.mode l)))
+    (match (rd_plain l (read_fulfills sc (Load.env l) rargs proof (producers_of l (Im.fx im)) (Load.mode l)))
      ((Pair l rd)
     (match rd
       ((RDErr e m) (Pair (ld_rec l (horizon_refusal (Im.fx im) e m)) im))
@@ -2540,9 +2573,10 @@
     ((RModule m file h cl) (append "MODULE " (append (show_name m) (append " file=" (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
     ((RUnused m ps) (append "UNUSED " (append (show_name m) (append " use=" (show_names_c ps)))))
     ((RInit n h k) (append "INIT " (append (match n (Anon "-") (_ (show_name n))) (append ": horizon " (append (show_nat h) (append ", " (append (show_nat k) " declarations admitted")))))))
-    ((RAccept n m h axs pfx ps)
+    ((RAccept n m h axs pfx ps q)
      (append "ACCEPT " (append (show_name n) (append " module=" (append (show_name m) (append " hash=" (append (show_nat h)
-       (append " axioms=" (append (show_names_c axs) (append " init=" (append (if (< pfx 0) "-" (show_nat pfx)) (append " params=" (show_names_c ps)))))))))))))
+       (append " axioms=" (append (show_names_c axs) (append " init=" (append (if (< pfx 0) "-" (show_nat pfx)) (append " params=" (append (show_names_c ps)
+         (match q ((Some k) (append " req=" (req_show k))) (None Nil)))))))))))))))
     ((RParam n k a) (append "PARAM " (append (show_name n) (append " " (append (chars_of_sym k) (if (sym_eq k (quote type)) (append " arity=" (show_nat a)) Nil))))))
     ((RDischarge n k) (append "DISCHARGE " (append (show_name n) (append " " (chars_of_sym k)))))
     ((RImplErr n e m) (append "IMPL-ERROR " (append (show_name n) (append " " (append (chars_of_sym e) (append ": " m))))))
@@ -2556,7 +2590,7 @@
     ((RRealize n k eqs roots) (append "REALIZE " (append (show_name n) (append " " (append (chars_of_sym k) (append " equations=" (append (show_names_c eqs) (match roots (Nil "") (_ (append " pending=" (show_names_c roots)))))))))))
     ((RReadErr file e m) (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
-    ((RProved n fp steps) (append "PROVED " (append (show_name n) (append " fp=" (append (show_int fp) (append " (by " (append (show_sexprs steps) ")")))))))
+    ((RProved n k steps) (append "PROVED " (append (show_name n) (append " req=" (append (req_show k) (append " (by " (append (show_sexprs steps) ")")))))))
     ((RSidecar file schema cur) (append "SIDECAR " (append file (append " schema=" (append (show_nat schema) (append " current=" (show_nat cur)))))))
     ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
     ((RTactic n tfn ok) (append "TACTIC " (append (show_name n) (append " " (append (show_name tfn) (if ok " solved" " unsolved"))))))
@@ -2590,7 +2624,7 @@
     ((Cons a (Cons b (Cons u (Cons c (Cons d (Cons e (Cons f (Cons g Nil))))))))
      (match x
        ((RModule _ _ _ _) (list (+ a 1) b u c d e f g))
-       ((RAccept _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
+       ((RAccept _ _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
        ((RParam _ _ _) (list a (+ b 1) u c d e f g))
        ((RRun _ _ _ _) (list a b (+ u 1) c d e f g))
        ((RClassify _ _ _) (list a b u (+ c 1) d e f g))

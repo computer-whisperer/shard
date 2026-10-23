@@ -2505,8 +2505,13 @@ artifact, never committed; the engine's reach is measured over calc's
    STEP…))` forms after `(sidecar N)` (3.29 rule 4), the file
    machine-owned and rewritten whole by `prove` — and replays the
    entry's block as a hand-written one; `PENDING NAME auto_missing
-   fp=N`, `auto_stale fp=N`, `sidecar_malformed`.
-2. **The key is the statement fingerprint**: `hash_expr` of the closed
+   fp=N`, `auto_stale fp=N`, `sidecar_malformed`. *Since slice 4.5
+   landing 1 (2026-10-23) the entry is `(proof-for NAME (req S D P E)
+   (by STEP…))` under `(sidecar 3)` and a stale entry names the parts
+   that differ — §8.6 slice 4.5 rule 1.*
+2. **The key is the statement fingerprint** — *superseded 2026-10-23 by
+   slice 4.5 landing 1: the key is the resolved requirement, the
+   statement fingerprint its first part (§8.6 slice 4.5 rule 1)*: `hash_expr` of the closed
    statement, what the `ACCEPT` record carries, so a changed reading of
    the statement is a different key and a changed strategy is not. It
    is not law §5.2's resolved requirement (R82, records §4.12): a
@@ -3338,7 +3343,7 @@ it entrenches. The slices, in the order built:
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
-| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design.")** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
+| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5380,6 +5385,77 @@ The rules:
    bundle (one, measured); the gate's verdict counts unchanged; refusals
    before success and interventions, T9's protocol.
 
+**As built, landing 1 (2026-10-23): the key.** `kernel/reader.shard`
+(+107/−33 lines): `Req` — `(ReqFull S D P E)`, or `(ReqStmt S)` for an
+entry of schema 1 or 2 —; `req_key` over the closed statement: S its
+`hash_expr`, D `req_deps`' walk from the statement's constants through
+the load's own declarations (`native_decl` tells them from Init's) by
+K's edge relation `ci_used` — exported through the view for it (one
+definition of the relation, the axiom walk's) —, each name mixed with
+its `identity_hash` and summed, so the walk's order is no part of the
+key, memoized by name and bounded by a fuel; P and E the file's, carried
+in by `ReqCtx` through `Producers`; `auto_fit` — the block when every
+part agrees, else the parts that differ in the key's order, the record
+`PENDING NAME auto_stale statement,deps,policy,env fp=S` (the
+statement's part shown as before); a statement-only entry that fits
+under `solve` is `RDSolved` with the full key, the restamp; `auto_valid`
+gone. `kernel/loader.shard` (+59/−25): `sidecar_schema` 3, `sidecar_key`
+— `(req S D P E)` or a bare fingerprint —, `req_ctx` (the policy's part
+`req_names` over `trust_candidates` through the scope and the load's
+parameters; the environment's `mix` of the module's horizon with the
+index header's record count and byte length, **0 for a module without
+Init** — found at the loader test: with `--init` given, an Init-free
+file's requirement would have carried the export's identity, which it
+rests on by nothing, so the same file keyed differently with and without
+the export), `producers_of` from the `Fx`; `RAccept`'s seventh field, a
+theorem's key, printed `req=S.D.P.E` after `params=` — every theorem,
+hand-proven too, `fulfills` and discharges included —; `RProved` carries
+the key. `kernel/prove.shard` (+15/−8): `render_key`, the header
+comment, the restamp through the ordinary rewrite (an entry re-keyed is
+a `PROVED` record, its file rewritten whole). `k/mod.req.shard` +1 (the
+sig). The sidecars: `prove` run over the tree's — `auto_core`,
+`auto_hints_changed` and `auto_tactic`, `examples/auto`,
+`examples/tactic` — at schema 3, 21 entries re-keyed without a search
+(the example's `beyond` pending as before; `tactic_lib_test` finds the
+library's regeneration byte-identical, so a theorem over Init's names
+alone keys the same in any module); the four fixtures kept by design
+(`auto_stale`'s hand-written schema-1 entry, `auto_schema_old` at schema
+1, `auto_schema_future` bumped to `(sidecar 4)`, `auto_malformed`).
+Pins, six new cases — `auto_stale_deps` (`f`'s body changed under its
+name, the statement's fingerprint unchanged: `pending auto_stale deps`,
+the old `rfl` never replayed though it would succeed on the new body —
+R82's "worse, succeeds"), `auto_stale_policy` (`(trusts propext)`
+added), `auto_stale_env` (the Init import's target moved: `env`),
+`auto_strategy_free` (binders renamed and hints changed: fits),
+`auto_schema_2` (slice 3.22's `auto_core` sidecar as it was: replays by
+the statement, `SIDECAR … schema=2 current=3`) — their stale sidecars
+generated by `prove` on scratch copies of the programs as they were when
+the entry was made (under `v3/models`, deleted after), never
+hand-written; `auto_stale`'s expectation names the part. The tests'
+masks follow the form (`engine_test`'s `KEY`, `tactic_lib_test`'s
+`(sidecar 3)` and `current=3`, `define_test`'s `params= req=`,
+`loader_test`'s two pinned records with their keys). Refusals before
+success: four at the first load, all `use` lines (the reader's `VisAll`,
+`IMEmpty`, `IntMap`; the loader's `ConstantVal`), then the two pinned
+records of `loader_test` as expected, then the Init-free finding;
+interventions none. Gates on the quiet dev box: the loader pins 290
+cases, 0 failed, on the bootstrap in 64 s; `engine_test` 24 checks in
+131 s, `tactic_lib_test` 30 in 289 s, `define_test` 12 in 247 s,
+`store_test` 29 in 798 s and `loader_test` with 0 failures, each on the
+bootstrap; `v3/build.sh --all` 29 roots, 29 built, 0 failed, in 3,180 s
+(two heavy jobs; the loader's chain emit 34 s, lower 100, codegen 378,
+cc 79 over 8,602 declarations — 15 more than 8,587, the key's); the
+bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 905 s
+of wall and 4,750 s of entrypoint time (parity byte-identical over 31
+closures and 138,515 declarations — 160 more — in 359 s; the tie 79
+checks in 492 s; `imp_test`'s root loaded and stored in 716 s;
+`store_test`'s bundle stored in 192 s; the loader pins' harness 63 s);
+the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 581 s
+of wall and 1,552 s of entrypoint time (parity 165 s; the tie 494 s;
+`imp_test` 123 s); `suite_tie.sh` over the two kept runs 44 entrypoints,
+0 differ, byte-identical under both engines on every entrypoint. CI's
+five jobs are the full gate.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -7096,3 +7172,13 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     binders — measured at the boundary: one record of calc's 63,482
     merges name-blind, so the landing is the law's identity, not size.
     The count agreed before the run, no pass bar (§8.6 rule 5).
+    **Landing 1 built 2026-10-23** (§8.6 "as built, landing 1"): the key
+    as designed — `(proof-for NAME (req S D P E) (by …))` under
+    `(sidecar 3)`, a stale entry naming its parts, a schema-2 entry
+    standing on its statement and restamped by `prove`, `req=` on every
+    theorem's `ACCEPT` record, K's `ci_used` exported for the walk —;
+    one reading settled at the build: an Init-free module's environment
+    part is 0 (its requirement rests on no export), found when the
+    loader test's Init-free theorem keyed differently with and without
+    `--init`; the tree's sidecars regenerated by tool, 21 entries
+    re-keyed without a search; six pins.
