@@ -2011,6 +2011,29 @@ entrypoint time (parity 165 s; the tie 494 s; `imp_test` 123 s);
 `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical
 under both engines on every entrypoint. CI's five jobs are the full gate.
 
+Landing 1 holds on the full gate: **2026-10-23 — pipeline 642 green on
+`9690462`, slice 4.5 landing 1 on the full gate — the key's first CI run,
+pipeline 643 (landing 2) on the runner beside it from 18:04, its second hour,
+every job the slower for it: engine 52 s; corpus 3,650 s against pipeline
+638's 1,987; v3 9,264 s against 6,039 (the index driver's build 30 s; 43
+entrypoints with 0 failed in 4,222 s of wall and 19,564 s of entrypoint time
+against 2,786 and 13,318 — the loader pins' harness 316 s over its 290 cases;
+`bin_test` 1,844 s with its 46 checks, route 1's binary of calc's main 35,200
+bytes built in 200 s and the driver's byte for byte over the 21 inputs;
+`imp_test` 3,942, `store_test` 2,384, `tactic_lib_test` 1,266, parity 1,527
+over 138,515 declarations against 138,355, the 160 more the key's —; route 1's
+build of t0 759 s; the replay 3,604 s at 32.1 GB; T0 accepted 57,977, closures
+identical). The native job 7,456 s against 4,605: `v3/build.sh --all` over the
+29 roots in 4,542 s against 2,587 — 29 built, 0 failed, the loader's chain
+emit 104 s, lower 1,324, codegen 2,830, cc 241 over 8,602 declarations —; the
+tie 79 checks, 0 failed, in 1,764 s against 1,233 (calc's binary built in 120
+s and tied to the driver's run over the 21 inputs; the loader pins' harness
+tied, the bootstrap's 242 s against the binary's 63); the suite on the
+binaries 43 entrypoints, 0 failed, in 747 s of wall and 4,572 of entrypoint
+time (`imp_test` 648 s, parity 622, `bin_test` 479, `store_test` 417, the
+loader pins' harness 70). The `suite_tie` job 79 s: 43 entrypoints, 0 differ.
+Landing 1 of slice 4.5 holds on the full gate.**
+
 **Slice 4.5 landing 2 built 2026-10-23 — the reconstruction contract**
 (`LANGUAGE.md` §8.6 "as built, landing 2"; §13 item 70; the slice table; the
 kernel and loader pins READMEs): `tactic.shard`'s `reconstruction_version` (1)
@@ -2042,6 +2065,37 @@ entrypoints, 0 failed, in 578 s of wall and 1,598 s of entrypoint time (parity
 167 s; the tie 489 s; `imp_test` 149 s; `store_test` 111); `suite_tie.sh` over
 the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines
 on every entrypoint. CI's five jobs are the full gate.
+
+**Slice 4.5 landing 3 built 2026-10-23 — the display map** (`LANGUAGE.md` §8.6
+"as built, landing 3"; §13 item 70; the slice table; the kernel README):
+`store.shard` writes every binder's `name` field 0 and the binder's display
+name as a line `IE NAME` of `DIR/ID.names` beside the records, and shares
+table nodes modulo binder names (`sw_same_core` without its `name_eq` arms,
+the infos still compared), so the records of one file are P under the
+canonical encoding — two elaborations of one proof modulo binder names write
+one text, and the store's name-blind ID and its text agree; the ndjson format
+3.1.0 field for field, the import and the gate unchanged. `store_test`
+(+15/−1): a names file beside each record file, no binder record carrying a
+name, every names line a binder record, the pins `auto_core` and
+`auto_strategy_free` (one proof under two namings) stored as one text under
+one ID with differing names files. Measured over calc's bundle: 63,481
+expression records against 63,482, the one merge measured at the boundary; the
+gate's 485 accepted as before. The law's three identities are built (§7.5):
+the resolved requirement, the reconstruction contract, P by canonical
+serialization. Gates on the quiet dev box: `store_test` 39 checks, 0 failed,
+on the bootstrap in 701 s; `v3/build.sh --all` 29 roots, 25 built, 4 current,
+0 failed, in 2,386 s (two heavy jobs; the loader's chain emit 26 s, lower 79,
+codegen 290, cc 72 over 8,615 declarations — 2 more than 8,613, the map's);
+the bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 946 s of
+wall and 5,052 s of entrypoint time (parity byte-identical over 31 closures
+and 138,550 declarations — 2 more — in 366 s; the tie 79 checks in 509 s;
+`imp_test`'s root loaded and stored in 747 s; `store_test` 742 s with its 39
+checks, calc's five leaves stored in 194 s; the loader pins' harness 63 s);
+the native suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 601 s of
+wall and 1,680 s of entrypoint time (parity 173 s; the tie 503 s; `imp_test`
+158 s; `store_test` 123); `suite_tie.sh` over the two kept runs 44
+entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
+CI's five jobs are the full gate.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

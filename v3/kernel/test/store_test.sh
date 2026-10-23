@@ -77,6 +77,20 @@ verify "$OUT/r0" > "$OUT/r5.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the gate refuses a manifest with a recon line (exit $rc)"; grep -v '^ACCEPT' "$OUT/r5.txt" | head -3 | cut -c1-200; }
 echo "store_test: the reconstruction contract — the example reconstructs the same P, a differing P is an evidence change, another version is named on every line and never written into"
 
+# ---- display names outside the records (slice 4.5 rule 3; law §7.5): every binder anonymous in the
+# records, DIR/ID.names beside each file naming the binder records that had a name, and one text for one
+# proof under two namings — the pins auto_core and auto_strategy_free, theorem t's binders x y against a b:
+# one ID, byte-identical records, differing names files
+checks=$((checks+1)); [ "$(ls "$OUT/auto" | grep -c '\.names$')" = 23 ] || bad "the store does not hold a names file beside each of its 23 record files"
+checks=$((checks+1)); ! grep -qE '"(lam|forallE|letE)":\{[^}]*"name":[1-9]' "$OUT/auto"/*.ndjson || bad "a binder record carries a name"
+nb=$(cat "$OUT/auto"/*.ndjson | grep -cE '"(lam|forallE|letE)":'); nn=$(cat "$OUT/auto"/*.names | wc -l); ok=1
+for nf in "$OUT/auto"/*.names; do rf="${nf%.names}.ndjson"; while read -r ie nm; do grep -qE "^\{\"ie\":$ie,\"(lam|forallE|letE)\":" "$rf" || ok=0; done < "$nf"; done
+checks=$((checks+1)); [ "$ok" = 1 ] && [ "$nn" -gt 0 ] && [ "$nn" -le "$nb" ] || bad "the names files do not name binder records of their files ($nn lines over $nb binder records; every line a binder: $ok)"
+for p in auto_core auto_strategy_free; do mkdir -p "$OUT/$p"; "$EVAL" direct v3/kernel/load.shard --root v3/pins/loader/$p $INIT --store "$OUT/$p" v3/pins/loader/$p/main.shard > "$OUT/$p.txt" 2>&1; done
+ta=$(grep ' main.t$' "$OUT/auto_core/order" | cut -d' ' -f1); tb=$(grep ' main.t$' "$OUT/auto_strategy_free/order" | cut -d' ' -f1)
+checks=$((checks+1)); [ -n "$ta" ] && [ "$ta" = "$tb" ] && cmp -s "$OUT/auto_core/$ta.ndjson" "$OUT/auto_strategy_free/$tb.ndjson" && ! cmp -s "$OUT/auto_core/$ta.names" "$OUT/auto_strategy_free/$tb.names" || { bad "one proof under two namings did not write one text with differing names files ($ta, $tb)"; grep -E '^STORE:|ERROR|REFUSE' "$OUT/auto_core.txt" "$OUT/auto_strategy_free.txt" | head -3 | cut -c1-200; }
+echo "store_test: display names outside the records — every binder anonymous, a names file beside each record file, one text for one proof under two namings ($nn names over $nb binder records)"
+
 # ---- the release gate's exit and target (slice 4.0 rules 2–3; R79, R80)
 F="$OUT/auto/$id.ndjson"; decl=$(tail -1 "$F")
 kin=$(grep -o '"in":[0-9]*' "$F" | tail -1 | tr -dc 0-9); kie=$(grep -o '"ie":[0-9]*' "$F" | tail -1 | tr -dc 0-9)
@@ -128,7 +142,7 @@ for f in calc_app_world calc_show_run calc_ndigit calc_spec_tests calc_reconcile
 done
 e=$(date +%s)
 n=$(wc -l < "$REL/order")
-echo "store_test: calc's five leaves stored in $((e-s)) s: $n declarations, $(du -sk "$REL" | cut -f1) kB"
+echo "store_test: calc's five leaves stored in $((e-s)) s: $n declarations, $(cat "$REL"/*.ndjson | grep -c '"ie":') expression records, $(du -sk "$REL" | cut -f1) kB"
 s=$(date +%s)
 verify "$REL" > "$OUT/vc.txt" 2>&1; rc=$?
 e=$(date +%s)

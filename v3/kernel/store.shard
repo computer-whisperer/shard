@@ -7,10 +7,14 @@
 ;;; declaration record. A file stands alone before an environment that holds
 ;;; what it cites: the tables restart in every file, so a stream of files
 ;;; replays in order, each file's tables overwriting the last's (the import's
-;;; tables are maps by index). Table nodes are shared by STRICT structural
-;;; identity — binder names and infos included, which expr_eq ignores —, so a
-;;; record carries the term as elaborated, and two runs over one elaboration
-;;; write one text. An inductive type is written as its block: every type,
+;;; tables are maps by index). Table nodes are shared by structural identity
+;;; modulo binder names — the binder infos compared, which expr_eq ignores too —,
+;;; every binder's `name` field written 0 (anonymous) and its display name in
+;;; DIR/ID.names beside the records, one line `IE NAME` per binder record that had
+;;; one, the first elaborated name of a shared node (law §7.5; §8.6 slice 4.5 rule
+;;; 3): the records of one file are P under the canonical encoding, two
+;;; elaborations of one proof modulo binder names writing one text, and the
+;;; store's ID (identity_hash, name-blind) and its text agree. An inductive type is written as its block: every type,
 ;;; constructor and recursor K generated for it, the fields the import validates
 ;;; against K's own regeneration (T0's validation, a second time). Nothing here
 ;;; is trusted: K re-checks every record the store holds (verify_release.shard),
@@ -92,11 +96,20 @@
 
 ;; ---- the tables of one file ----------------------------------------------------------------
 ;; names, levels and expressions by structural hash to a bucket of (node, index),
-;; the next index of each, and the lines so far (newest first)
-(type SW (SW (IntMap (List (Pair Name Int))) Int (IntMap (List (Pair Level Int))) Int (IntMap (List (Pair Expr Int))) Int (List (List Int))))
-(fn sw_empty () SW (SW IMEmpty 1 IMEmpty 1 IMEmpty 1 Nil))
-(fn sw_lines ((s SW)) (List (List Int)) (match s ((SW _ _ _ _ _ _ ls) (rev ls))))
-(fn sw_line ((s SW) (ln (List Int))) SW (match s ((SW a b c d e f ls) (SW a b c d e f (Cons ln ls)))))
+;; the next index of each, the lines so far (newest first), and the display lines
+;; `IE NAME` of DIR/ID.names (newest first)
+(type SW (SW (IntMap (List (Pair Name Int))) Int (IntMap (List (Pair Level Int))) Int (IntMap (List (Pair Expr Int))) Int (List (List Int)) (List (List Int))))
+(fn sw_empty () SW (SW IMEmpty 1 IMEmpty 1 IMEmpty 1 Nil Nil))
+(fn sw_lines ((s SW)) (List (List Int)) (match s ((SW _ _ _ _ _ _ ls _) (rev ls))))
+(fn sw_names_lines ((s SW)) (List (List Int)) (match s ((SW _ _ _ _ _ _ _ ns) (rev ns))))
+;; the display name of the binder record just added (its index the pair's): a line
+;; `IE NAME`, NAME the rest of the line; an anonymous binder writes none
+(fn sw_display ((r (Pair SW Int)) (n Name)) (Pair SW Int)
+  (match n
+    (Anon r)
+    (_ (match r
+         ((Pair (SW a b c d f g ls ns) ei)
+          (Pair (SW a b c d f g ls (Cons (append (show_nat ei) (Cons 32 (show_name n))) ns)) ei))))))
 
 ;; -- names: {"in":I,"str":{"pre":P,"str":"S"}} / {"in":I,"num":{"i":N,"pre":P}}
 (fn sw_name ((s SW) (n Name)) (Pair SW Int)
@@ -116,7 +129,7 @@
         (match (sw_name s p)
           ((Pair s1 pi) (sw_name_add s1 n (sw_f "num" (sw_obj (list (sw_f "i" (show_nat k)) (sw_f "pre" (show_nat pi)))))))))))))
 (fn sw_name_find ((s SW) (n Name)) (Option Int)
-  (match s ((SW nm _ _ _ _ _ _) (sw_name_in (sw_bucket_n nm (hash_name n)) n))))
+  (match s ((SW nm _ _ _ _ _ _ _) (sw_name_in (sw_bucket_n nm (hash_name n)) n))))
 (fn sw_bucket_n ((m (IntMap (List (Pair Name Int)))) (h Int)) (List (Pair Name Int))
   (match (im_find m h) ((Some b) b) (None Nil)))
 (fn sw_name_in ((b (List (Pair Name Int))) (n Name)) (Option Int)
@@ -124,10 +137,10 @@
   (match b (Nil None) ((Cons (Pair m i) r) (if (name_eq m n) (Some i) (sw_name_in r n)))))
 (fn sw_name_add ((s SW) (n Name) (body (List Int))) (Pair SW Int)
   (match s
-    ((SW nm ni lv li ex ei ls)
+    ((SW nm ni lv li ex ei ls ns)
      (let ((h (hash_name n)))
        (Pair (SW (im_insert nm h (Cons (Pair n ni) (sw_bucket_n nm h))) (+ ni 1) lv li ex ei
-                 (Cons (sw_obj (list (sw_f "in" (show_nat ni)) body)) ls))
+                 (Cons (sw_obj (list (sw_f "in" (show_nat ni)) body)) ls) ns)
              ni)))))
 (fn sw_names ((s SW) (ns (List Name)) (acc (List Int))) (Pair SW (List Int))
   (measure (struct ns))
@@ -157,7 +170,7 @@
           ((LMVar i) (sw_level_add s l (sw_f "mvar" (show_nat i))))
           (LZero (Pair s 0))))))))
 (fn sw_level_find ((s SW) (l Level)) (Option Int)
-  (match s ((SW _ _ lv _ _ _ _) (sw_level_in (sw_bucket_l lv (hash_level l)) l))))
+  (match s ((SW _ _ lv _ _ _ _ _) (sw_level_in (sw_bucket_l lv (hash_level l)) l))))
 (fn sw_bucket_l ((m (IntMap (List (Pair Level Int)))) (h Int)) (List (Pair Level Int))
   (match (im_find m h) ((Some b) b) (None Nil)))
 (fn sw_level_in ((b (List (Pair Level Int))) (l Level)) (Option Int)
@@ -165,10 +178,10 @@
   (match b (Nil None) ((Cons (Pair m i) r) (if (level_eq m l) (Some i) (sw_level_in r l)))))
 (fn sw_level_add ((s SW) (l Level) (body (List Int))) (Pair SW Int)
   (match s
-    ((SW nm ni lv li ex ei ls)
+    ((SW nm ni lv li ex ei ls ns)
      (let ((h (hash_level l)))
        (Pair (SW nm ni (im_insert lv h (Cons (Pair l li) (sw_bucket_l lv h))) (+ li 1) ex ei
-                 (Cons (sw_obj (list (sw_f "il" (show_nat li)) body)) ls))
+                 (Cons (sw_obj (list (sw_f "il" (show_nat li)) body)) ls) ns)
              li)))))
 (fn sw_levels ((s SW) (ls (List Level)) (acc (List Int))) (Pair SW (List Int))
   (measure (struct ls))
@@ -195,31 +208,27 @@
           ((Pair s1 fi)
            (match (sw_expr s1 a)
              ((Pair s2 ai) (sw_expr_add s2 e (sw_f "app" (sw_obj (list (sw_f "arg" (show_nat ai)) (sw_f "fn" (show_nat fi)))))))))))
+       ;; a binder's name is display: 0 in the record, the line of DIR/ID.names
        ((Lam _ n bi d b)
-        (match (sw_name s n)
-          ((Pair s1 ni)
-           (match (sw_expr s1 d)
-             ((Pair s2 di)
-              (match (sw_expr s2 b)
-                ((Pair s3 bo) (sw_expr_add s3 e (sw_binder "lam" ni bi di bo)))))))))
+        (match (sw_expr s d)
+          ((Pair s1 di)
+           (match (sw_expr s1 b)
+             ((Pair s2 bo) (sw_display (sw_expr_add s2 e (sw_binder "lam" bi di bo)) n))))))
        ((Pi _ n bi d b)
-        (match (sw_name s n)
-          ((Pair s1 ni)
-           (match (sw_expr s1 d)
-             ((Pair s2 di)
-              (match (sw_expr s2 b)
-                ((Pair s3 bo) (sw_expr_add s3 e (sw_binder "forallE" ni bi di bo)))))))))
+        (match (sw_expr s d)
+          ((Pair s1 di)
+           (match (sw_expr s1 b)
+             ((Pair s2 bo) (sw_display (sw_expr_add s2 e (sw_binder "forallE" bi di bo)) n))))))
        ((Let _ n t v b)
-        (match (sw_name s n)
-          ((Pair s1 ni)
-           (match (sw_expr s1 t)
-             ((Pair s2 ti)
-              (match (sw_expr s2 v)
-                ((Pair s3 vi)
-                 (match (sw_expr s3 b)
-                   ((Pair s4 bo)
-                    (sw_expr_add s4 e (sw_f "letE" (sw_obj (list (sw_f "body" (show_nat bo)) (sw_f "name" (show_nat ni)) (sw_f "nondep" "false")
-                                                                (sw_f "type" (show_nat ti)) (sw_f "value" (show_nat vi)))))))))))))))
+        (match (sw_expr s t)
+          ((Pair s1 ti)
+           (match (sw_expr s1 v)
+             ((Pair s2 vi)
+              (match (sw_expr s2 b)
+                ((Pair s3 bo)
+                 (sw_display (sw_expr_add s3 e (sw_f "letE" (sw_obj (list (sw_f "body" (show_nat bo)) (sw_f "name" "0") (sw_f "nondep" "false")
+                                                                         (sw_f "type" (show_nat ti)) (sw_f "value" (show_nat vi))))))
+                             n))))))))
        ((Lit _ (LitNat k)) (sw_expr_add s e (sw_f "natVal" (sw_str (show_nat k)))))
        ((Lit _ (LitStr bs)) (sw_expr_add s e (sw_f "strVal" (sw_str bs))))
        ((Proj _ tn i x)
@@ -231,12 +240,12 @@
        ;; never in a checked constant; written as the import refuses them
        ((FVar _ i) (sw_expr_add s e (sw_f "fvar" (show_nat i))))
        ((MVar _ i) (sw_expr_add s e (sw_f "mvar" (show_nat i))))))))
-(fn sw_binder ((kind (List Int)) (ni Int) (bi BinderInfo) (di Int) (bo Int)) (List Int)
-  (sw_f kind (sw_obj (list (sw_f "binderInfo" (sw_str (sw_binfo bi))) (sw_f "body" (show_nat bo)) (sw_f "name" (show_nat ni)) (sw_f "type" (show_nat di))))))
+(fn sw_binder ((kind (List Int)) (bi BinderInfo) (di Int) (bo Int)) (List Int)
+  (sw_f kind (sw_obj (list (sw_f "binderInfo" (sw_str (sw_binfo bi))) (sw_f "body" (show_nat bo)) (sw_f "name" "0") (sw_f "type" (show_nat di))))))
 (fn sw_binfo ((bi BinderInfo)) (List Int)
   (match bi (BDefault "default") (BImplicit "implicit") (BStrictImplicit "strictImplicit") (BInstImplicit "instImplicit")))
 (fn sw_expr_find ((s SW) (e Expr)) (Option Int)
-  (match s ((SW _ _ _ _ ex _ _) (sw_expr_in (sw_bucket_e ex (hash_expr e)) e))))
+  (match s ((SW _ _ _ _ ex _ _ _) (sw_expr_in (sw_bucket_e ex (hash_expr e)) e))))
 (fn sw_bucket_e ((m (IntMap (List (Pair Expr Int)))) (h Int)) (List (Pair Expr Int))
   (match (im_find m h) ((Some b) b) (None Nil)))
 (fn sw_expr_in ((b (List (Pair Expr Int))) (e Expr)) (Option Int)
@@ -244,14 +253,16 @@
   (match b (Nil None) ((Cons (Pair x i) r) (if (sw_same x e) (Some i) (sw_expr_in r e)))))
 (fn sw_expr_add ((s SW) (e Expr) (body (List Int))) (Pair SW Int)
   (match s
-    ((SW nm ni lv li ex ei ls)
+    ((SW nm ni lv li ex ei ls ns)
      (let ((h (hash_expr e)))
        (Pair (SW nm ni lv li (im_insert ex h (Cons (Pair e ei) (sw_bucket_e ex h))) (+ ei 1)
-                 (Cons (sw_obj (list (sw_f "ie" (show_nat ei)) body)) ls))
+                 (Cons (sw_obj (list (sw_f "ie" (show_nat ei)) body)) ls) ns)
              ei)))))
 
-;; strict structural identity: expr_eq with the binder names and infos compared
-;; (the pin's order kept: one identified node is itself; a hash mismatch is no)
+;; structural identity modulo binder names: expr_eq with the binder infos compared, the
+;; names not (4.5 rule 3: a record's binder is anonymous, its name display) — the hash
+;; (d_bind, d_let) is blind to both already (the pin's order kept: one identified node is
+;; itself; a hash mismatch is no)
 (fn sw_same ((a Expr) (b Expr)) Bool
   (match (expr_d a)
     ((D ia ha _ _ _ _)
@@ -267,12 +278,12 @@
     ((Sort _ u) (match b ((Sort _ v) (level_eq u v)) (_ False)))
     ((Const _ n ls) (match b ((Const _ m ms) (if (name_eq n m) (levels_eq ls ms) False)) (_ False)))
     ((App _ f x) (match b ((App _ g y) (if (sw_same f g) (sw_same x y) False)) (_ False)))
-    ((Lam _ na i1 d1 b1)
-     (match b ((Lam _ nb i2 d2 b2) (if (name_eq na nb) (if (sw_binfo_eq i1 i2) (if (sw_same d1 d2) (sw_same b1 b2) False) False) False)) (_ False)))
-    ((Pi _ na i1 d1 b1)
-     (match b ((Pi _ nb i2 d2 b2) (if (name_eq na nb) (if (sw_binfo_eq i1 i2) (if (sw_same d1 d2) (sw_same b1 b2) False) False) False)) (_ False)))
-    ((Let _ na t1 v1 b1)
-     (match b ((Let _ nb t2 v2 b2) (if (name_eq na nb) (if (sw_same t1 t2) (if (sw_same v1 v2) (sw_same b1 b2) False) False) False)) (_ False)))
+    ((Lam _ _ i1 d1 b1)
+     (match b ((Lam _ _ i2 d2 b2) (if (sw_binfo_eq i1 i2) (if (sw_same d1 d2) (sw_same b1 b2) False) False)) (_ False)))
+    ((Pi _ _ i1 d1 b1)
+     (match b ((Pi _ _ i2 d2 b2) (if (sw_binfo_eq i1 i2) (if (sw_same d1 d2) (sw_same b1 b2) False) False)) (_ False)))
+    ((Let _ _ t1 v1 b1)
+     (match b ((Let _ _ t2 v2 b2) (if (sw_same t1 t2) (if (sw_same v1 v2) (sw_same b1 b2) False) False)) (_ False)))
     ((Lit _ l1) (match b ((Lit _ l2) (lit_eq l1 l2)) (_ False)))
     ((Proj _ s1 i1 x1) (match b ((Proj _ s2 i2 x2) (if (name_eq s1 s2) (if (= i1 i2) (sw_same x1 x2) False) False)) (_ False)))
     ((MVar _ i) (match b ((MVar _ j) (= i j)) (_ False)))))
@@ -280,9 +291,10 @@
 
 ;; ---- declaration records --------------------------------------------------------------------
 ;; the records of the constant N of ENV as one declaration — its tables, then the
-;; declaration record —, or None: N is not a constant of ENV, or is one K generated
-;; with its block (a constructor, a recursor) or admitted as a quotient primitive
-(fn store_records ((env CheckedEnv) (n Name)) (Option (List (List Int)))
+;; declaration record — with the display lines of its binders, or None: N is not a
+;; constant of ENV, or is one K generated with its block (a constructor, a recursor)
+;; or admitted as a quotient primitive
+(fn store_rendered ((env CheckedEnv) (n Name)) (Option (Pair (List (List Int)) (List (List Int))))
   (match (env_find env n)
     (None None)
     ((Some info)
@@ -345,7 +357,11 @@
                 ((Pair s3 rjs)
                  (Some (sw_done s3 (sw_f "inductive" (sw_obj (list (sw_f "ctors" (sw_arr cjs)) (sw_f "recs" (sw_arr rjs)) (sw_f "types" (sw_arr tjs))))))))))))))
        (_ None)))))
-(fn sw_done ((s SW) (decl (List Int))) (List (List Int)) (append (sw_lines s) (list (sw_obj (list decl)))))
+(fn sw_done ((s SW) (decl (List Int))) (Pair (List (List Int)) (List (List Int)))
+  (Pair (append (sw_lines s) (list (sw_obj (list decl)))) (sw_names_lines s)))
+;; the records alone — the text the reconstruction compares (load.shard --reconstruct)
+(fn store_records ((env CheckedEnv) (n Name)) (Option (List (List Int)))
+  (match (store_rendered env n) (None None) ((Some (Pair lines _)) (Some lines))))
 (fn sw_hints ((h ReducibilityHints)) (List Int)
   (match h (HOpaque (sw_str "opaque")) (HAbbrev (sw_str "abbrev")) ((HRegular k) (sw_obj (list (sw_f "regular" (show_nat k)))))))
 (fn sw_safety ((s DefinitionSafety)) (List Int) (match s (Safe "safe") (Unsafe "unsafe") (Partial "partial")))
@@ -453,7 +469,8 @@
 
 ;; ---- the store on disk ------------------------------------------------------------------------
 ;; DIR/order: one line per declaration, `ID NAME`, in admission order; DIR/ID.ndjson the
-;; declaration's records. ID is the content fingerprint (identity_hash — a report's
+;; declaration's records, DIR/ID.names its binders' display names, `IE NAME` per named
+;; binder record (written with the records, never compared). ID is the content fingerprint (identity_hash — a report's
 ;; fingerprint, never an authority: add.shard) or, when a file of that name holds another
 ;; text, FP-K for the first free K. A file already holding the text is shared and listed
 ;; once; order is appended, never rewritten, so several loads fill one store in sequence
@@ -571,14 +588,15 @@
   (match ns
     (Nil (Pair (Some st) w))
     ((Cons n r)
-     (match (store_records env n)
+     (match (store_rendered env n)
        (None (store_decls env dir r st w))
-       ((Some lines)
-        (match (store_place dir (show_nat (match (identity_hash env n) ((Some h) h) (None 0))) 0 n (sw_kind env n) (store_bytes lines) st 100 w)
+       ((Some (Pair lines names))
+        (match (store_place dir (show_nat (match (identity_hash env n) ((Some h) h) (None 0))) 0 n (sw_kind env n) (store_bytes lines) (store_bytes names) st 100 w)
           ((Pair (Some st1) w1) (store_decls env dir r st1 w1))
           ((Pair None w1) (Pair None w1))))))))
-;; the file for one declaration: FP, else FP-K
-(fn store_place ((dir (List Int)) (fp (List Int)) (k Int) (n Name) (kind (List Int)) (bytes (List Int)) (st StoreSt) (fuel Int) (w World)) (Pair (Option StoreSt) World)
+;; the file for one declaration: FP, else FP-K; its names file written beside it when
+;; the records are new (a shared file keeps the first load's names)
+(fn store_place ((dir (List Int)) (fp (List Int)) (k Int) (n Name) (kind (List Int)) (bytes (List Int)) (names (List Int)) (st StoreSt) (fuel Int) (w World)) (Pair (Option StoreSt) World)
   (measure fuel)
   (if (< fuel 1) (Pair None w)
     (let ((id (if (= k 0) fp (append fp (Cons 45 (show_nat k))))))
@@ -586,12 +604,15 @@
         (match (read_file path w)
           ((Pair None w1)
            (match (write_file path bytes w1)
-             ((Pair True w2) (Pair (Some (store_listed st id n kind True)) w2))
+             ((Pair True w2)
+              (match (write_file (store_path dir (append id ".names")) names w2)
+                ((Pair True w3) (Pair (Some (store_listed st id n kind True)) w3))
+                ((Pair False w3) (Pair None w3))))
              ((Pair False w2) (Pair None w2))))
           ((Pair (Some have) w1)
            (if (int_list_eq have bytes)
              (Pair (Some (store_listed st id n kind False)) w1)
-             (store_place dir fp (+ k 1) n kind bytes st (- fuel 1) w1))))))))
+             (store_place dir fp (+ k 1) n kind bytes names st (- fuel 1) w1))))))))
 (fn store_listed ((st StoreSt) (id (List Int)) (n Name) (kind (List Int)) (new Bool)) StoreSt
   (match st
     ((StoreSt ids lines mlines nw sh)

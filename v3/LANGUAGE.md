@@ -2559,7 +2559,11 @@ artifact, never committed; the engine's reach is measured over calc's
 7. **The store is K's export format** (`kernel/store.shard`): `load.shard
    --store DIR` writes each accepted declaration and each `PARAM` as
    lean4export's NDJSON records (format 3.1.0, tables numbered from 1
-   in first-use order, strict structural sharing, an inductive as its
+   in first-use order, strict structural sharing (*since slice 4.5
+   landing 3, sharing modulo binder names — the binder infos compared
+   —, every binder's `name` field 0 and its display name in
+   `DIR/ID.names` beside the records, `IE NAME` per named binder
+   record; §8.6 slice 4.5 rule 3, law §7.5*), an inductive as its
    block), `DIR/ID.ndjson` per declaration with ID the content
    fingerprint (`FP-K` on a collision of texts), `DIR/order`
    appended, never rewritten; a failed load writes nothing.
@@ -3348,7 +3352,7 @@ it entrenches. The slices, in the order built:
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
-| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
+| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5523,6 +5527,50 @@ the tie 489 s; `imp_test` 149 s; `store_test` 111); `suite_tie.sh` over
 the two kept runs 44 entrypoints, 0 differ, byte-identical under both
 engines on every entrypoint. CI's five jobs are the full gate.
 
+**As built, landing 3 (2026-10-23): the display map.**
+`kernel/store.shard` (+83/−62 lines): `SW` with an eighth field, the
+display lines; `sw_expr`'s binder arms write the `name` field 0 — a
+binder's name no longer enters the name table — and `sw_display` records
+`IE NAME` for the node just added, so a shared node keeps its first
+elaborated name; `sw_same_core` without its `name_eq` arms on `Lam`,
+`Pi` and `Let` (the binder infos still compared: the record carries
+`binderInfo`, and two nodes differing in it are two records), the hash
+gate (`d_bind`, `d_let`) blind to both already; `store_rendered` the
+records with the display lines, `store_records` the records alone — the
+reconstruction's compare, `load.shard` unchanged —; `store_place` writes
+`DIR/ID.names` after a new `DIR/ID.ndjson` and leaves a shared file's
+names as the first load wrote them (NAME the rest of the line; an
+anonymous binder writes none). The ndjson format 3.1.0 field for field,
+`k/import.shard` and `verify_release` unchanged (index 0 the exporter's
+`anonymous`). `store_test` (+15/−1): a names file beside each of the
+example's 23 record files; no binder record carrying a name; every names
+line a binder record of its file (302 lines over 303 binder records, one
+binder anonymous); the pins `auto_core` and `auto_strategy_free` —
+theorem `t`'s binders `x y` against `a b`, the same replay — stored into
+two stores: one ID, byte-identical records, differing names files;
+calc's expression records counted. Measured over calc's bundle,
+re-stored: 485 declarations, 63,481 expression records against 63,482 —
+the one merge measured at the boundary —, the gate's verdict 485
+accepted as before. Cleanup beside the change: `sw_line`, unused since
+the writer's first landing, deleted. Refusals before success none — the
+scan clean, the first load stored, the gate and the reconstruction green
+on the scratch store —, interventions none. Gates on the quiet dev box:
+`store_test` 39 checks, 0 failed, on the bootstrap in 701 s;
+`v3/build.sh --all` 29 roots, 25 built, 4 current, 0 failed, in 2,386 s
+(two heavy jobs; the loader's chain emit 26 s, lower 79, codegen 290, cc
+72 over 8,615 declarations — 2 more than 8,613, the map's); the
+bootstrap suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 946 s
+of wall and 5,052 s of entrypoint time (parity byte-identical over 31
+closures and 138,550 declarations — 2 more — in 366 s; the tie 79 checks
+in 509 s; `imp_test`'s root loaded and stored in 747 s; `store_test` 742
+s with its 39 checks, calc's five leaves stored in 194 s; the loader
+pins' harness 63 s); the native suite under `V3_NATIVE=1` 44
+entrypoints, 0 failed, in 601 s of wall and 1,680 s of entrypoint time
+(parity 173 s; the tie 503 s; `imp_test` 158 s; `store_test` 123);
+`suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ,
+byte-identical under both engines on every entrypoint. CI's five jobs
+are the full gate.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -7258,3 +7306,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     making it name-blind, `expr_eq` not needed —; one finding: the
     restamp rule 1 gave the key must also cover the form, since a file
     whose entries all fit gained no block.
+    **Landing 3 built 2026-10-23** (§8.6 "as built, landing 3"): the
+    display map — every binder anonymous in the records, `DIR/ID.names`
+    beside them, table nodes shared modulo binder names —; the one merge
+    over calc's bundle measured at the boundary found (63,481 expression
+    records against 63,482), the gate's verdicts unchanged. The law's
+    three identities built; the close next.
