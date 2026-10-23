@@ -1,6 +1,6 @@
 # The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-10-17): S, L, E and I as phase 3 built them — phase 3
+> **STATUS (2026-10-23): S, L, E and I as phase 3 built them — phase 3
 > closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–69 all ruled:
 > 1–38 ratified 2026-09-15; 43, 47 and 49–53 at their slices; 54–64
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
 > open: slices 4.0–4.4 closed 2026-10-14 to 2026-10-17 (§13 items 65–69
 > ruled at their slices; 4.4 the bridge with three law changes ratified
-> 2026-10-16); 4.5, T6 the embedding, next at the boundary.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16); 4.5, the three persisted identities (R82), designed and ratified 2026-10-23 — item 70, §11's row's ordering over 4.4 rule 4 —, T6 the embedding 4.6 after it.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -3338,6 +3338,7 @@ it entrenches. The slices, in the order built:
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
+| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design.")** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5223,9 +5224,161 @@ states: Init's types in the toolchain's closure (items 51 and 64,
 `derive` there) at phase 5's opener beside the migration tool, the index
 driver's closure Init-free; the `by` form in the kernel's theorems, the
 Rust reader's; V3's own chain and its sizing (phase 7 with its proof,
-the memo at phase 5's opener). Next: T6, the embedding — the next of law
-§12.4 item 4's list — as slice 4.5, designed at this boundary for
-ratification.
+the memo at phase 5's opener). Next, as written at the close: T6 as slice
+4.5 — **reordered 2026-10-23 at the boundary (item 70): slice 4.5 is R82's
+three identities, as §11's row ruled at slice 4.0 landing 0; T6 is slice
+4.6.**
+
+**Slice 4.5 — the three persisted identities: the resolved requirement
+as the sidecar's key, the reconstruction version and its compare,
+retained P with its display names outside** (designed 2026-10-23 at
+slice 4.4's close, on the user's "Good. Go ahead with the close, then we
+can continue to 4.5" and, the ordering put at the boundary with its
+options, "Agreed, let's write slice 4.5 into the design."; §13 item 70 —
+**ratified 2026-10-23 as proposed**; law §5.2 the resolved requirement,
+§7.2 the replay contract and its four versionings, §7.5 pins and release
+evidence; §11's row "the three persisted identities", placed at slice
+4.0 landing 0 before T6's prepared handles; §8.4 3.22 rule 2; R82,
+records §4.12). The ordering: slice 4.4 rule 4 named T6 next and §11's
+row names this slice before T6; both were ratified, the row is the older
+ruling, and its reason holds — a prepared handle binds an entry, its
+environment revision and its policy (law §9.3), and the only identities
+the kernel has today are a declaration's content fingerprint and a
+statement's, so a handle built now would carry a revision identity
+invented for the occasion and rebuilt here. T6 is slice 4.6. What the
+law is owed (3.22 rule 2): the sidecar's key is `hash_expr` of the
+closed statement — a changed reading of the statement is a different
+key, a changed strategy is not — and it is not law §5.2's resolved
+requirement: a referenced declaration's body changes under its name (a
+`Const` node hashes its name and levels), a policy change never enters,
+the environment never enters; an older sidecar schema is replayed by the
+current implementation with no version dispatch and no comparison of its
+P against retained P (law §7.2's "reported as an evidence change and
+migrated explicitly" has no mechanism; `reconstruct` of §7.5 does not
+exist); the store's records share by strict identity with binder names
+(`sw_same_core`), which the law keeps outside proof identity (§7.5:
+display names in a separate map). Nothing invalid is accepted by any of
+this — replay re-elaborates and K checks —; what is absent is the
+detection of a changed task, the versioned contract, and P's identity by
+canonical serialization. Measured 2026-10-23 at the boundary:
+
+| what | today |
+|---|---|
+| the key | `auto_valid` (`kernel/reader.shard`): `hash_expr` of the closed statement — binder-name-blind, 61-bit, a report's fingerprint and never an authority (R42) —; the theorem's `ACCEPT` hash is the same number (`identity_hash` hashes a theorem's type alone) |
+| what it misses | the referenced declarations' identities (a `Const` node hashes its name and levels: `len_app`'s entry survives any change to `len`'s or `app`'s body until the replay fails — or succeeds); the policy (`Fx.trusts`, resolved by `trusted`, never enters); the environment (the module's Init horizon `Fx.init`, the export the load runs on) |
+| the sidecar | `(sidecar 2)` then `(proof-for NAME FP (by STEP…))`; nine sidecars with 26 entries in the tree (seven loader pins, `examples/auto`, `examples/tactic`); `prove` rewrites a file whole when it gained a block (`not_superseded` keeps the rest); schema 1 replayed with `SIDECAR` reported, a schema past the loader's refused (3.29 rule 4) |
+| the versions | K's rules pinned by T0; I's schema 2 in the form; P's encoding lean4export 3.1.0; the producer's `engine_version` 1 in the sidecar's comment; no reconstruction version anywhere, no compare of a replay's P against retained P |
+| the store | `DIR/ID.ndjson` with ID the content fingerprint; the records of a file shared by strict identity, binder names and infos compared (`sw_same`, `sw_same_core`); calc's bundle on the dev box 485 files, 63,482 expression records, 9,729 of them binders — under name-blind identity one record merges (a scratch walk over the bundle), so the display map serves identity, not size |
+| the gate | `verify_release` replays P by K and ties name, fingerprint and kind to the manifest; binder names never consulted; `manifest 1` names no version but its own |
+| the tests | `engine_test` (the example replayed; the regeneration byte-identical with the fingerprint masked), `tactic_lib_test` (two producers' sidecars replay to the same `ACCEPT` records; the schema-1 replay), `store_test` (the store, the tampers, calc's bundle), `native_tie_test` (`prove` tied over two regenerated sidecars) |
+
+The rules:
+
+1. **Landing 1, the key: the resolved requirement.** A sidecar entry is
+   keyed by four numbers, each the fingerprint of one part of law §5.2's
+   resolved requirement. **S**, the closed statement's `hash_expr` —
+   today's key: the proposition with its bound parameters, selected
+   instances and coercions, all of them in the elaborated term. **D**,
+   the referenced declarations' identities: over the constants the
+   closed statement cites, the identity closure through the load's own
+   declarations — `identity_hash` of each, the walk through `ci_used` as
+   `axioms_of` walks, memoized per name, mixed in a canonical order —,
+   stopping at Init's names, whose identity is the export's pin (T0) and
+   the horizon. **P**, the policy: the file's `trusts` resolved through
+   the scope to names, and the load's parameters — what `permitted`
+   consults beyond the standard axioms —, sorted. **E**, the
+   environment: the module's Init horizon and the identity of the export
+   the load runs on as the index's header states it (its record count
+   and byte length). The entry is `(proof-for NAME (req S D P E) (by
+   STEP…))` under `(sidecar 3 RECON)` (rule 2). Replay: every part
+   equal, the block replays as today; else `PENDING NAME auto_stale
+   CAUSE… fp=S` with the differing parts named (`statement`, `deps`,
+   `policy`, `env`) — a changed task reported as such, never re-searched
+   at build. A schema-2 entry (a bare fingerprint) replays by S alone
+   and is reported `SIDECAR … schema=2 current=3` once per file (3.29
+   rule 4: an older sidecar still stands on replay); `prove` rewrites
+   such a file whole at schema 3 with the full keys computed at replay —
+   a migration by tool, no search —, and the tree's nine sidecars are
+   regenerated so on the dev box and committed. Every theorem's `ACCEPT`
+   record gains `req=S.D.P.E` after `params=`, hand-proven theorems too
+   (phase 5's migration tool reads the frozen requirement from the load;
+   the `LOAD:` line unchanged; the tests' greps anchor on a record's
+   head). The file's parts (D's table, P, E) are computed once in the
+   loader and reach the reader through `Producers`, which already
+   carries the file's sidecar entries; S and D's walk are the reader's,
+   at `read_auto` and at the `ACCEPT` record. Pins: `auto_stale_deps` (a
+   cited definition's body changed, the statement not: pending
+   `auto_stale deps`), `auto_stale_policy` (a `trusts` line added),
+   `auto_stale_env` (the Init import's target moved),
+   `auto_strategy_free` (a binder renamed in the statement and the hints
+   changed: the entry replays unchanged — `auto_hints_changed`
+   extended), `auto_schema_old` extended with a schema-2 copy;
+   `auto_stale`'s and `auto_missing`'s expected lines as the new form
+   prints them; `engine_test`'s mask and `tactic_lib_test`'s schema
+   check follow the form.
+2. **Landing 2, the reconstruction contract.** `kernel/tactic.shard`
+   declares `reconstruction_version`, 1 at this landing: the version of
+   the I → P elaboration — law §7.2's "I schema and reconstruction
+   version", split as the law splits them (the schema is the forms'
+   syntax, 3.29 rule 4; the reconstruction is what `tac_prove` makes of
+   them). The sidecar's first form is `(sidecar SCHEMA RECON)`, RECON
+   the version its entries were last replayed under; a sidecar at
+   another RECON is replayed and reported `RECON FILE version=A
+   current=B` once per file, as the schema is — a report, not a refusal.
+   The store's manifest gains `recon N` after `manifest 1`, the version
+   its P was produced under. `load.shard --reconstruct DIR`: after a
+   clean load, for every stored theorem the load elaborated (by name
+   through DIR's manifest, the retained P read as `verify_release` reads
+   it), the load's P against the retained P under name-blind structural
+   identity (`expr_eq`): equal, `RECONSTRUCT NAME same`; different,
+   `EVIDENCE-CHANGE NAME recon=A→B` — `recon=same` when the versions
+   agree and the sidecar's I changed — , law §7.2's report, the exit
+   code their count; the store is rewritten by `--store` alone, the
+   explicit migration. `store_test`: the example stored and
+   reconstructed `same` for all 23; the existing tamper (a theorem's
+   value replaced by its statement) an `EVIDENCE-CHANGE` and a non-zero
+   exit; the manifest's `recon` edited to 0, every theorem `recon=0→1`
+   with `same` where P agrees. Pin `auto_recon_old`: a sidecar `(sidecar
+   3 0)` replayed and `RECON` reported. The T10 record's note — "the
+   schema test a schema-1 replay, not a reconstruction-version migration
+   (R82)" — is answered here.
+3. **Landing 3, retained P with its display names outside.**
+   `kernel/store.shard` writes every binder's `name` field as 0 —
+   `anonymous`, the exporter's own index for it — and the file
+   `DIR/ID.names` beside the records: one line `IE NAME` per binder
+   record that had a name, the first elaborated name of a shared node
+   (display, never identity). `sw_same_core` drops its `name_eq` arms —
+   `sw_same` is the hash and `expr_eq` —, so the records of one file are
+   P under the canonical encoding: two elaborations of one proof modulo
+   binder names write one text, and the store's ID (`identity_hash`,
+   name-blind already) and its text agree. The ndjson stays format 3.1.0
+   field for field; `k/import.shard` and `verify_release` unchanged, the
+   gate's verdicts the same over calc's bundle (re-stored; the one merge
+   measured above). `store_test` checks the names file's lines against
+   the records and that two loads of one module write one text. The
+   law's three identities are then built: the resolved requirement
+   (landing 1), the reconstruction contract (landing 2), P by canonical
+   serialization (landing 3).
+4. **Not in this slice, stated:** T6 — slice 4.6: the prepared handle
+   over these identities, the long-lived environment, programmatic
+   validation (R61); R85's origin map (before the incremental goal-state
+   slice); the frozen-requirement checks of phase 5's migration tool,
+   the consumer of `req=`; any hash as an authority — R42 stands: the
+   key detects a changed task and K's replay accepts; `identity_hash` is
+   61-bit and affine, the key's parts the same kind, and a collision is
+   a missed staleness report, never an acceptance; a walk into Init (the
+   export's pin and the horizon stand for it); the manifest's `decl`
+   line (phase 5 decides what its tools persist); a requirement on a
+   non-theorem's `ACCEPT` record.
+5. **The count, agreed before the run, no pass bar:** the key's four
+   parts and the lines of their computation; the lines per file
+   (`reader.shard`, `loader.shard`, `prove.shard`, `store.shard`,
+   `load.shard`, `tactic.shard`); pins added and extended; the sidecars
+   regenerated (nine, 26 entries) and whether every entry re-keyed
+   without a search; `--reconstruct`'s seconds over calc's bundle
+   against `verify_release`'s; the records merged name-blind over calc's
+   bundle (one, measured); the gate's verdict counts unchanged; refusals
+   before success and interventions, T9's protocol.
 
 ## 9. Assumption policy and entries
 
@@ -5449,7 +5602,7 @@ never compared as verdicts.
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
 | lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 — **slice 4.3 (designed 2026-10-16, §8.6)**: the check over `Prog` with the law's fixtures as pins, the extern an opaque L constant, the `bin` form and its record, the trace tied four ways |
-| prepared handles, long-lived environments | §9.3, T6 | 4 |
+| prepared handles, long-lived environments | §9.3, T6 | 4 — slice 4.6, after 4.5's identities (ruled 2026-10-23, item 70) |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
 | T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3 — **landed slice 3.24** (`(dif h C T F)`, the `Fin.mk` field under its hypothesis; pins `dif_ok`, `dif_type`, `dif_needs_init`, `dif_scope`; `examples/path`, `path_test.sh`) |
@@ -5458,10 +5611,10 @@ never compared as verdicts.
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
 | the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3 — **landed**: list literals and the negative numeral (3.15–3.16), `make`/`with` and the fresh-name supply (3.17), the byte and text adapters (3.18); `Name` literals and symbols **deferred** to the toolchain's port (item 51; 3.18 rule 5: `(quote x)` keeps `no_l_identity route=e_first`; corrected at slice 4.0 landing 0, R81) |
 | the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | **carried to phase 5** with the two-instance gate (ruled 2026-10-13, slice 3.30 rule 3a) |
-| programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 |
+| programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 — slice 4.6, with T6 (ruled 2026-10-23, item 70) |
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
 | `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
-| the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; today the sidecar's key is the statement fingerprint and the store's sharing compares binder names | §8.4 3.22 rule 2 | 4, its own slice before T6's prepared handles and before phase 5's tools police frozen requirements |
+| the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; today the sidecar's key is the statement fingerprint and the store's sharing compares binder names | §8.4 3.22 rule 2 | 4 — **slice 4.5 (designed 2026-10-23, §8.6; item 70)**: the resolved requirement as the sidecar's key (the statement, the referenced declarations' identity closure, the policy, the environment), the reconstruction version with `--reconstruct`'s compare, the store's display map — its own slice before T6 (4.6) and before phase 5's tools police frozen requirements |
 | occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | 4, before the incremental goal-state slice; slice 4.1's emitter keeps the map |
 | user notation | §5.3 departure 6 | never in v1 |
 | an existential's witness introduction through `exact` — `(exact (Exists.intro w h))` with `h` a hypothesis of known type, or the `@` form with the predicate written, is `unify_stuck … blocked on p`: the first-order unifier meets the predicate applied to the witness before the result type meets the goal (slice 4.2 landing 2, §8.6 item 2); the form that works is `(apply (Exists.intro w) ((show P) …))` | §5.1 Stage 1 | 5 — a Stage-1 item: the goal's result type unified first, or a pattern case for a metavariable applied to a witness |
@@ -6902,5 +7055,44 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     item 51's flip; the chain's runtime has no trace, the binary's trace
     relation phase 7's. Carried (§8.6 rule 4): Init's types in the
     toolchain's closure at phase 5's opener, the `by` form the Rust
-    reader's, V3's own chain and its sizing memo. Next: T6, the
-    embedding, as slice 4.5, designed at this boundary.
+    reader's, V3's own chain and its sizing memo. Next, as written at the
+    close: T6 as slice 4.5 — reordered 2026-10-23 (item 70): the three
+    identities are 4.5, T6 is 4.6.
+70. **Slice 4.5, the three persisted identities (designed 2026-10-23 at
+    slice 4.4's close; §8.6 "Slice 4.5"; law §5.2, §7.2, §7.5; §11's
+    row; R82; ratified 2026-10-23 as proposed — the user: "Agreed, let's
+    write slice 4.5 into the design."):** the ordering and the leans.
+    (a) **The ordering.** Slice 4.4 rule 4 named T6 next; §11's row,
+    placed at slice 4.0 landing 0, names the identities "its own slice
+    before T6's prepared handles and before phase 5's tools police
+    frozen requirements". Chose the row: a prepared handle binds the
+    entry, its environment revision and its policy (law §9.3), and
+    without these identities a handle would carry a revision identity
+    invented for the occasion and rebuilt one slice later; the
+    identities serve phase 5's migration tool on their own.
+    Rejected-because: T6 first (4.4 rule 4's reading) took "the next of
+    law §12.4 item 4's list" without the row, and the row is the older
+    ruling; one slice, T6 with the identities as its landing 0, is the
+    same work under one close, but a contract change to the proof keys
+    and a new library would share one boundary report. T6 is slice 4.6.
+    (b) **The key has four parts** — the statement, the referenced
+    declarations' identity closure, the policy, the environment — so a
+    stale entry names its cause; a changed strategy, a renamed binder
+    and changed hints leave the key alone. (c) **D stops at Init**: the
+    identity closure walks the load's own declarations and takes Init's
+    by the export's pin and the horizon — Init is immutable under T0 and
+    its closures are large. (d) **A schema-2 entry stands on replay by
+    its statement**, reported once per file, and `prove` restamps it
+    with the full key — never refused, never searched (3.29 rule 4's
+    policy); the tree's nine sidecars regenerated by tool. (e) **No hash
+    is an authority** (R42): the key detects a changed task, K's replay
+    accepts. (f) **`req=` on every theorem's `ACCEPT` record** — the
+    lean beyond the row: phase 5's tools read the frozen requirement
+    from the load rather than recompute it. (g) **The reconstruction
+    version** is the sidecar's second number and the manifest's `recon`
+    line, `--reconstruct` the compare that law §7.2 and §7.5 name,
+    `--store` the migration. (h) **The display map is a file beside the
+    records**, the ndjson format 3.1.0 field for field with anonymous
+    binders — measured at the boundary: one record of calc's 63,482
+    merges name-blind, so the landing is the law's identity, not size.
+    The count agreed before the run, no pass bar (§8.6 rule 5).
