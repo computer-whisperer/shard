@@ -77,7 +77,7 @@ checks=$((checks+1)); [ "$(grep -c '^ACCEPT' "$OUT/vA.txt")" = "$(grep -c '^ACCE
 echo "tactic_lib_test: the engine's and the library's sidecars differ, replay to the same ACCEPT records, and both stores verify by K alone"
 
 # ---- (4) rule 4: the schema-1 copy reported
-sed -i '/^(sidecar 3)$/d' "$A/use_split.auto.shard"
+sed -i '/^(sidecar 3 1)$/d' "$A/use_split.auto.shard"
 load "$A/use_split.shard" > "$OUT/replayA1.txt" 2>&1
 checks=$((checks+1)); grep -q "^SIDECAR .*use_split.shard schema=1 current=3$" "$OUT/replayA1.txt" || bad "the schema-1 sidecar is not reported"
 checks=$((checks+1)); [ "$(acc "$OUT/replayA1.txt" "$MA" | wc -l)" = 6 ] || bad "the schema-1 sidecar does not replay 6 theorems"

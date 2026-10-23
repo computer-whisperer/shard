@@ -17,7 +17,8 @@
 ;;; and a record this writer gets wrong is that run's verdict, never an
 ;;; acceptance.
 ;;; Beside `order`, `manifest` (slice 4.0 rule 3; R79) is the release's fixed target:
-;;; `manifest 1`, then `decl ID KIND NAME` per stored declaration, `param NAME` per
+;;; `manifest 1`, `recon N` (the reconstruction version, 4.5 rule 2), then `decl ID KIND
+;;; NAME` per stored declaration, `param NAME` per
 ;;; declared parameter the store holds as an axiom (a view parameter, an undischarged
 ;;; obligation), `discharge OBL PROOF` per obligation the load discharged; appended,
 ;;; never rewritten, as `order` is.
@@ -458,9 +459,10 @@
 ;; once; order is appended, never rewritten, so several loads fill one store in sequence
 ;; (a shared module's declarations come from the first load that admitted them).
 (type StoreSt (StoreSt (List (List Int)) (List (List Int)) (List (List Int)) Int Int))   ; ids listed, new order lines (newest first), new manifest lines (newest first), new, shared
-(type StoreRes (StoreOk Int Int) (StoreFail (List Int)))                 ; new shared; the path that could not be written
+(type StoreRes (StoreOk Int Int) (StoreFail (List Int)) (StoreRefused (List Int)))   ; new shared; the path that could not be written; the store refused (its reconstruction version is another, 4.5 rule 2)
+(type StoreMan (ManWritten) (ManUnwritable) (ManRefused (List Int)))
 
-(fn store_write ((env CheckedEnv) (dir (List Int)) (ns (List Name)) (params (List Name)) (discharges (List (Pair Name Name))) (bins (List (Pair Name (Pair Name (Pair (List Name) (List Name)))))) (w World)) (Pair StoreRes World)
+(fn store_write ((env CheckedEnv) (dir (List Int)) (ns (List Name)) (params (List Name)) (discharges (List (Pair Name Name))) (bins (List (Pair Name (Pair Name (Pair (List Name) (List Name)))))) (recon Int) (w World)) (Pair StoreRes World)
   (match (read_file (store_path dir "order") w)
     ((Pair old w1)
      (let ((olds (match old ((Some bs) bs) (None Nil))))
@@ -469,22 +471,43 @@
           (match (if (= new 0) (Pair True w2) (write_file (store_path dir "order") (append olds (store_bytes (rev lines))) w2))
             ((Pair False w3) (Pair (StoreFail (store_path dir "order")) w3))
             ((Pair True w3)
-             (match (store_manifest env dir (rev mlines) params discharges bins w3)
-               ((Pair True w4) (Pair (StoreOk new shared) w4))
-               ((Pair False w4) (Pair (StoreFail (store_path dir "manifest")) w4))))))
+             (match (store_manifest env dir (rev mlines) params discharges bins recon w3)
+               ((Pair ManWritten w4) (Pair (StoreOk new shared) w4))
+               ((Pair ManUnwritable w4) (Pair (StoreFail (store_path dir "manifest")) w4))
+               ((Pair (ManRefused m) w4) (Pair (StoreRefused m) w4))))))
          ((Pair None w2) (Pair (StoreFail dir) w2)))))))
 ;; the manifest (slice 4.0 rule 3): the header when the file is new, then the lines the
 ;; store does not hold yet — the new declarations' `decl` lines, a `param` line per parameter
 ;; the environment holds as an axiom, a `discharge` line per discharged obligation, a `bin` line
-;; per bin checked (slice 4.3 landing 1): `bin NAME entry F externs E… requires R…`
-(fn store_manifest ((env CheckedEnv) (dir (List Int)) (decls (List (List Int))) (params (List Name)) (discharges (List (Pair Name Name))) (bins (List (Pair Name (Pair Name (Pair (List Name) (List Name)))))) (w World)) (Pair Bool World)
+;; per bin checked (slice 4.3 landing 1): `bin NAME entry F externs E… requires R…`. The
+;; header's second line is `recon N`, the reconstruction version the store's P was produced
+;; under (4.5 rule 2): a store holds one version — a manifest at another, or without the line,
+;; is refused, the migration being a new store written by --store
+(fn store_manifest ((env CheckedEnv) (dir (List Int)) (decls (List (List Int))) (params (List Name)) (discharges (List (Pair Name Name))) (bins (List (Pair Name (Pair Name (Pair (List Name) (List Name)))))) (recon Int) (w World)) (Pair StoreMan World)
   (match (read_file (store_path dir "manifest") w)
     ((Pair old w1)
      (let ((have (match old ((Some bs) (manifest_lines bs Nil)) (None Nil))))
        (let ((add (append (lines_not_in decls have) (append (param_lines env params have) (append (discharge_lines discharges have) (bin_lines bins have))))))
          (match old
-           (None (write_file (store_path dir "manifest") (store_bytes (Cons "manifest 1" add)) w1))
-           ((Some bs) (if (= (len add) 0) (Pair True w1) (write_file (store_path dir "manifest") (append bs (store_bytes add)) w1)))))))))
+           (None (man_written (write_file (store_path dir "manifest") (store_bytes (Cons "manifest 1" (Cons (append "recon " (show_nat recon)) add))) w1)))
+           ((Some bs)
+            (match (manifest_recon have)
+              (None (Pair (ManRefused (append (store_path dir "manifest") ": no recon line — a store from before the reconstruction version; the migration is a new store")) w1))
+              ((Some v)
+               (if (bool_not (= v recon))
+                 (Pair (ManRefused (append (store_path dir "manifest") (append ": recon " (append (show_nat v) (append " is not this loader's " (append (show_nat recon) " — a store holds one reconstruction version; the migration is a new store")))))) w1)
+                 (if (= (len add) 0) (Pair ManWritten w1) (man_written (write_file (store_path dir "manifest") (append bs (store_bytes add)) w1)))))))))))))
+(fn man_written ((r (Pair Bool World))) (Pair StoreMan World)
+  (match r ((Pair True w) (Pair ManWritten w)) ((Pair False w) (Pair ManUnwritable w))))
+;; the manifest's `recon N` line
+(fn manifest_recon ((lines (List (List Int)))) (Option Int)
+  (measure (struct lines))
+  (match lines
+    (Nil None)
+    ((Cons ln r) (if (int_list_eq (take 6 ln) "recon ") (Some (man_digits (drop 6 ln) 0)) (manifest_recon r)))))
+(fn man_digits ((bs (List Int)) (acc Int)) Int
+  (measure (struct bs))
+  (match bs (Nil acc) ((Cons c r) (if (bool_and (<= 48 c) (<= c 57)) (man_digits r (+ (* acc 10) (- c 48))) acc))))
 (fn manifest_lines ((bs (List Int)) (acc (List (List Int)))) (List (List Int))
   (measure (struct bs))
   (match bs

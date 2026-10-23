@@ -2011,6 +2011,38 @@ entrypoint time (parity 165 s; the tie 494 s; `imp_test` 123 s);
 `suite_tie.sh` over the two kept runs 44 entrypoints, 0 differ, byte-identical
 under both engines on every entrypoint. CI's five jobs are the full gate.
 
+**Slice 4.5 landing 2 built 2026-10-23 — the reconstruction contract**
+(`LANGUAGE.md` §8.6 "as built, landing 2"; §13 item 70; the slice table; the
+kernel and loader pins READMEs): `tactic.shard`'s `reconstruction_version` (1)
+is a sidecar's second number, `(sidecar 3 1)`, and a store manifest's `recon
+N` line; a sidecar at another version is replayed and reported `RECON FILE
+version=A current=B`, and `prove` restamps its form (a file read at an older
+schema or version is rewritten whole, its entries as they stand — the restamp
+covers the form, found when the in-place regeneration wrote nothing); a store
+holds one version, a manifest at another refused (`STORE: refused …`), the
+migration a new store; `load.shard --reconstruct DIR` renders every stored
+theorem the load elaborated as the store would write it and compares byte for
+byte with the retained record — P's identity by its canonical serialization,
+name-blind after landing 3 — reporting `RECONSTRUCT NAME same` or
+`EVIDENCE-CHANGE NAME` with `recon=A→B` across versions, nothing written, the
+exit the changes. Pin `auto_recon_old`; `store_test`'s five checks of the
+contract; the gate reads the line past. Refusals before success three (a
+paren, two names), interventions none. the loader pins 291 cases, 0 failed, on
+the bootstrap in 60 s; `store_test` 35 checks in 654 s, `engine_test` 24 in
+124 s, `tactic_lib_test` 30 in 257 s, each on the bootstrap; `v3/build.sh
+--all` 29 roots, 29 built, 0 failed, in 2,372 s (two heavy jobs; the loader's
+chain emit 27 s, lower 83, codegen 283, cc 75 over 8,613 declarations — 11
+more than 8,602, the contract's); the bootstrap suite under `V3_NATIVE=1` 44
+entrypoints, 0 failed, in 886 s of wall and 4,766 s of entrypoint time (parity
+byte-identical over 31 closures and 138,548 declarations — 33 more — in 354 s;
+the tie 79 checks in 489 s; `imp_test`'s root loaded and stored in 697 s;
+`store_test` 669 s with its 35 checks, calc's five leaves stored in 188 s; the
+loader pins' harness 59 s); the native suite under `V3_NATIVE=1` 44
+entrypoints, 0 failed, in 578 s of wall and 1,598 s of entrypoint time (parity
+167 s; the tie 489 s; `imp_test` 149 s; `store_test` 111); `suite_tie.sh` over
+the two kept runs 44 entrypoints, 0 differ, byte-identical under both engines
+on every entrypoint. CI's five jobs are the full gate.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

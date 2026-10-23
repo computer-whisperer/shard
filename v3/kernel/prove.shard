@@ -8,11 +8,13 @@
 ;;; or, delegated `(auto (tactic M.FN) HINT…)`, the named library fn's, run under ev on the
 ;;; loaded programs with the goal and the hints as text (slice 3.29 rules 1–2) —
 ;;; and the block it finds is replayed before it is accepted. Then the sidecar of every
-;;; file that gained a block is rewritten whole — FILE.auto.shard, machine-owned: the
+;;; file that gained a block, or whose sidecar was read at an older schema or another
+;;; reconstruction version (the restamp, 4.5 rules 1–2), is rewritten whole — FILE.auto.shard, machine-owned: the
 ;;; entries it held that were not superseded, then the new ones in the file's order, one
 ;;; `(proof-for NAME (req S D P E) (by STEP…))` per theorem — the key the resolved
 ;;; requirement's (§8.6 slice 4.5 rule 1) —, under a header naming the engine's version; a
-;;; schema-2 entry that replays is re-keyed so (the restamp, no search). The records are printed as the loader's are (PROVED NAME fp=N (by
+;;; schema-2 entry that replays is re-keyed so (the restamp, no search). The file's form is
+;;; `(sidecar SCHEMA RECON)`, RECON the reconstruction version (tactic.shard; 4.5 rule 2). The records are printed as the loader's are (PROVED NAME fp=N (by
 ;;; …) for each solved theorem; an unsolved one stays PENDING auto_unsolved with its goal),
 ;;; then the counts; the exit code is refused + errors + the theorems left unsolved. No
 ;;; source file is written (law §7.5).
@@ -30,6 +32,7 @@
 (use kernel.reader)
 (use kernel.scope)
 (use kernel.sexpr)
+(use kernel.tactic)
 (use kernel.util)
 (use kernel.host.World)
 (use kernel.prelude.Bool)
@@ -85,7 +88,7 @@
   (match (prove_files (ld_with_mode l0 (quote solve)) files (write_line (append "PROVE root=" (append (join_path (Load.root l0)) (append " engine_version=" (show_nat (engine_version))))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
-       (match (write_sidecars l (proved_by_file l (ld_recs l) Nil) w2)
+       (match (write_sidecars l (with_restamps (proved_by_file l (ld_recs l) Nil) (restamp_files (ld_recs l) Nil)) w2)
          ((Pair written w3)
           (exit (+ (load_failures cs) (unsolved (ld_recs l)))
             (write_line (append "PROVE: " (append (show_counts_load cs) (append "  proved " (append (show_nat (proved (ld_recs l))) (append "  unsolved " (append (show_nat (unsolved (ld_recs l))) (append "  sidecars written " (show_nat written))))))))
@@ -102,6 +105,28 @@
     ((Cons _ r) (unsolved r))))
 (fn starts_with ((s (List Int)) (p (List Int))) Bool (int_list_eq (take (len p) s) p))
 
+;; the files whose sidecar was read at an older schema or another reconstruction version
+;; (SIDECAR, RECON): rewritten whole at the current form with their entries as they stand —
+;; the restamp (4.5 rules 1–2), no search
+(fn restamp_files ((rs (List Rec)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct rs))
+  (match rs
+    (Nil (rev acc))
+    ((Cons (RSidecar file _ _) r) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
+    ((Cons (RRecon file _ _) r) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
+    ((Cons _ r) (restamp_files r acc))))
+(fn mem_bytes_p ((x (List Int)) (xs (List (List Int)))) Bool
+  (measure (struct xs))
+  (match xs (Nil False) ((Cons y r) (if (int_list_eq x y) True (mem_bytes_p x r)))))
+;; the groups with a (file, no new entries) group per restamped file not already in them
+(fn with_restamps ((gs (List (Pair (List Int) (List Auto)))) (files (List (List Int)))) (List (Pair (List Int) (List Auto)))
+  (measure (struct files))
+  (match files
+    (Nil gs)
+    ((Cons f r) (with_restamps (if (group_has gs f) gs (append gs (list (Pair f Nil)))) r))))
+(fn group_has ((gs (List (Pair (List Int) (List Auto)))) (f (List Int))) Bool
+  (measure (struct gs))
+  (match gs (Nil False) ((Cons (Pair g _) r) (if (int_list_eq g f) True (group_has r f)))))
 ;; the PROVED records grouped by the file their theorem's module was loaded from: (file, entries)
 (fn proved_by_file ((l Load) (rs (List Rec)) (acc (List (Pair (List Int) (List Auto))))) (List (Pair (List Int) (List Auto)))
   (measure (struct rs))
@@ -141,7 +166,7 @@
      (let ((path (append (drop_shard_suffix (join_path (append (Load.root l) (match (parts_of file) ((Some ps) ps) (None Nil))))) ".auto.shard")))
        (match (read_file path w)
          ((Pair bytes w1)
-          (let ((olds (match bytes ((Some src) (match (read_all src) ((RAOk es) (match (sidecar_split es) ((Pair (Some (Pair _ rest)) _) (match (sidecar_entries rest Nil) ((Pair (Some as) _) as) (_ Nil))) (_ Nil))) (_ Nil))) (None Nil))))
+          (let ((olds (match bytes ((Some src) (match (read_all src) ((RAOk es) (match (sidecar_split es) ((Pair (Some (Pair (Pair _ _) rest)) _) (match (sidecar_entries rest Nil) ((Pair (Some as) _) as) (_ Nil))) (_ Nil))) (_ Nil))) (None Nil))))
             (match (write_file path (render_sidecar (append (not_superseded olds news) news)) w1)
               ((Pair ok w2)
                (match (write_sidecars l r w2)
@@ -155,10 +180,10 @@
   (measure (struct as))
   (match as (Nil False) ((Cons (Auto m _ _) r) (if (name_eq m n) True (names_has r n)))))
 ;; the file whole: the header comment (the engine's version, the producer's), the schema form
-;; (I's schema the entries are written in — slice 3.29 rule 4; the loader refuses a newer one),
-;; then the entries
+;; (I's schema the entries are written in — slice 3.29 rule 4; the loader refuses a newer one —
+;; and the reconstruction version, 4.5 rule 2), then the entries
 (fn render_sidecar ((as (List Auto))) (List Int)
-  (append ";; machine-owned: written by v3/kernel/prove.shard (engine version " (append (show_nat (engine_version)) (append "); one entry per theorem, keyed by the resolved requirement it proves (req STATEMENT DEPS POLICY ENV)\n(sidecar " (append (show_nat (sidecar_schema)) (append ")\n" (render_entries as)))))))
+  (append ";; machine-owned: written by v3/kernel/prove.shard (engine version " (append (show_nat (engine_version)) (append "); one entry per theorem, keyed by the resolved requirement it proves (req STATEMENT DEPS POLICY ENV)\n(sidecar " (append (show_nat (sidecar_schema)) (append " " (append (show_nat (reconstruction_version)) (append ")\n" (render_entries as)))))))))
 (fn render_entries ((as (List Auto))) (List Int)
   (measure (struct as))
   (match as

@@ -237,6 +237,7 @@
   (RUnused Name (List Name))                  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
   (RProved Name Req (List SExpr))              ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the requirement's key (4.5 rule 1) — what the sidecar's entry holds
   (RSidecar (List Int) Int Int)               ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
+  (RRecon (List Int) Int Int)                 ; a sidecar replayed under another reconstruction version (4.5 rule 2): the file, its version (-1: none stated), the current one
   (REngine Name Bool)                         ; mode measure: the engine closes the statement unaided, or not
   (RTactic Name Name Bool)                    ; mode measure (slice 3.29 rule 2): the tactic the delegation names closes the statement, or not
   (RDerive Name Expr Symbol Symbol (List Name))   ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
@@ -328,7 +329,9 @@
 ;; 3.29 rule 4; no form = schema 1, the form before the slice): an older schema is replayed and
 ;; reported SIDECAR; a newer one is the load error sidecar_schema (this loader cannot read it).
 ;; Schema 3 (4.5 rule 1): an entry's key is (req S D P E), the resolved requirement's; a bare
-;; FINGERPRINT (schemas 1 and 2) is the statement's alone and still stands on replay
+;; FINGERPRINT (schemas 1 and 2) is the statement's alone and still stands on replay. The form's
+;; second number, (sidecar N RECON), is the reconstruction version the entries were last replayed
+;; under (4.5 rule 2; tactic.shard): another one is replayed and reported RECON
 (fn sidecar_schema () Int 3)
 (fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World)) (Pair (Pair Load (List Auto)) World)
   (if (bool_not (forms_want_auto forms)) (Pair (Pair l Nil) w)
@@ -341,22 +344,30 @@
            ((RAOk es)
             (match (sidecar_split es)
               ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1))
-              ((Pair (Some (Pair schema rest)) _)
+              ((Pair (Some (Pair (Pair schema recon) rest)) _)
                (if (< (sidecar_schema) schema)
                  (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_schema) (append path (append ": schema " (append (show_nat schema) (append " is past this loader's " (append (show_nat (sidecar_schema)) " — regenerate the sidecar with prove.shard"))))))) Nil) w1)
                  (match (sidecar_entries rest Nil)
-                   ((Pair (Some autos) _) (Pair (Pair (if (< schema (sidecar_schema)) (ld_rec l (RSidecar (join_path rel) schema (sidecar_schema))) l) autos) w1))
+                   ((Pair (Some autos) _) (Pair (Pair (sidecar_reports l (join_path rel) schema recon) autos) w1))
                    ((Pair None m) (Pair (Pair (ld_rec l (RLoadErr (join_path rel) (quote sidecar_malformed) (append path (append ": " m)))) Nil) w1)))))))))))))
-;; the schema form at the head of a sidecar, and the forms after it; no form = schema 1
-(fn sidecar_split ((es (List SExpr))) (Pair (Option (Pair Int (List SExpr))) (List Int))
+;; the reports of a sidecar read — an older schema (3.29 rule 4); at the current schema, another
+;; reconstruction version (4.5 rule 2) —: reports, never refusals, the entries standing on replay
+(fn sidecar_reports ((l Load) (file (List Int)) (schema Int) (recon Int)) Load
+  (if (< schema (sidecar_schema)) (ld_rec l (RSidecar file schema (sidecar_schema)))
+    (if (= recon (reconstruction_version)) l (ld_rec l (RRecon file recon (reconstruction_version))))))
+;; the schema form at the head of a sidecar — (sidecar N), or (sidecar N RECON) with the
+;; reconstruction version its entries were last replayed under (-1 when not stated) —, and the
+;; forms after it; no form = schema 1
+(fn sidecar_split ((es (List SExpr))) (Pair (Option (Pair (Pair Int Int) (List SExpr))) (List Int))
   (match es
     ((Cons (SList (Cons (SSym h) more)) r)
      (if (sym_eq h (quote sidecar))
        (match more
-         ((Cons (SNum n) Nil) (if (< n 1) (Pair None "(sidecar N): N counts from 1") (Pair (Some (Pair n r)) Nil)))
-         (_ (Pair None "the schema form is (sidecar N)")))
-       (Pair (Some (Pair 1 es)) Nil)))
-    (_ (Pair (Some (Pair 1 es)) Nil))))
+         ((Cons (SNum n) Nil) (if (< n 1) (Pair None "(sidecar N): N counts from 1") (Pair (Some (Pair (Pair n -1) r)) Nil)))
+         ((Cons (SNum n) (Cons (SNum v) Nil)) (if (< n 1) (Pair None "(sidecar N RECON): N counts from 1") (Pair (Some (Pair (Pair n v) r)) Nil)))
+         (_ (Pair None "the schema form is (sidecar N) or (sidecar N RECON)")))
+       (Pair (Some (Pair (Pair 1 -1) es)) Nil)))
+    (_ (Pair (Some (Pair (Pair 1 -1) es)) Nil))))
 ;; FILE.shard → FILE (the sidecar is FILE.auto.shard); another suffix is kept
 (fn drop_shard_suffix ((path (List Int))) (List Int)
   (let ((n (len path)))
@@ -2592,6 +2603,7 @@
     ((RLoadErr file e m) (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RProved n k steps) (append "PROVED " (append (show_name n) (append " req=" (append (req_show k) (append " (by " (append (show_sexprs steps) ")")))))))
     ((RSidecar file schema cur) (append "SIDECAR " (append file (append " schema=" (append (show_nat schema) (append " current=" (show_nat cur)))))))
+    ((RRecon file v cur) (append "RECON " (append file (append " version=" (append (if (< v 0) "-" (show_nat v)) (append " current=" (show_nat cur)))))))
     ((REngine n ok) (append "ENGINE " (append (show_name n) (if ok " solved" " unsolved"))))
     ((RTactic n tfn ok) (append "TACTIC " (append (show_name n) (append " " (append (show_name tfn) (if ok " solved" " unsolved"))))))
     ((RDerive p ty cap policy procs)
@@ -2642,6 +2654,7 @@
        ((RUnused _ _) acc)
        ((RProved _ _ _) acc)
        ((RSidecar _ _ _) acc)
+       ((RRecon _ _ _) acc)
        ((REngine _ _) acc)
        ((RTactic _ _ _) acc)
        ((RDerive _ _ _ _ _) acc)

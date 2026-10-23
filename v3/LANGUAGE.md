@@ -2564,7 +2564,9 @@ artifact, never committed; the engine's reach is measured over calc's
    fingerprint (`FP-K` on a collision of texts), `DIR/order`
    appended, never rewritten; a failed load writes nothing.
    Beside `order`, `DIR/manifest` is the release's fixed target
-   (slice 4.0 rule 3, R79): `manifest 1`, then `decl ID KIND NAME` per
+   (slice 4.0 rule 3, R79): `manifest 1`, then (*since slice 4.5
+   landing 2, `recon N` — the reconstruction version, one per store;
+   §8.6 slice 4.5 rule 2*) `decl ID KIND NAME` per
    declaration, `param NAME` per parameter the store holds as an axiom
    (a view parameter, an undischarged obligation), `discharge OBL
    PROOF` per obligation the load discharged — appended as `order` is.
@@ -2955,7 +2957,10 @@ schema; the guarded occurrence carries its expected subterm.
    replayed and reported once per file (`SIDECAR FILE schema=1
    current=2`); one above the current is the load error
    `sidecar_schema`; `prove` writes the current whenever it rewrites a
-   file whole (an entry still valid is never rewritten). Law §7.2's
+   file whole (an entry still valid is never rewritten). *Since slice
+   4.5 landing 2 (2026-10-23) the form is `(sidecar N RECON)`, RECON the
+   reconstruction version of `kernel/tactic.shard`, another one reported
+   `RECON` and restamped by `prove` — §8.6 slice 4.5 rule 2.* Law §7.2's
    four versions in V3: K's rules (pinned by T0), I's schema (this
    form), P's encoding (the store's format 3.1.0), the producer's
    implementation (the sidecar's comment). Pins `auto_schema_old`,
@@ -3343,7 +3348,7 @@ it entrenches. The slices, in the order built:
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
-| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
+| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5456,6 +5461,68 @@ of wall and 1,552 s of entrypoint time (parity 165 s; the tie 494 s;
 0 differ, byte-identical under both engines on every entrypoint. CI's
 five jobs are the full gate.
 
+**As built, landing 2 (2026-10-23): the reconstruction contract.**
+`kernel/tactic.shard` (+8 lines): `reconstruction_version`, 1.
+`kernel/loader.shard` (+22/−9): `sidecar_split` reads `(sidecar N)` or
+`(sidecar N RECON)` (−1 when not stated), `sidecar_reports` records an
+older schema and, at the current schema, another reconstruction version
+— `RRecon`, printed `RECON FILE version=A current=B` (`-` for none), a
+report and never a refusal, the entries standing on replay.
+`kernel/prove.shard` (+32/−7): the form written `(sidecar 3 1)`; a file
+whose sidecar was read at an older schema or another version is
+rewritten whole with its entries as they stand (`restamp_files`,
+`with_restamps`) — the restamp rule 1 gave the key now covers the form,
+found when the in-place regeneration of the four tree sidecars at rule
+1's form wrote nothing (every entry fitted, so no file "gained a
+block"). `kernel/store.shard` (+33/−10): the manifest's second line
+`recon N` (`store_manifest`, `manifest_recon`), a store holding one
+version — a manifest at another, or without the line, refused
+(`StoreRefused`, `STORE: refused …`; the migration a new store) —,
+`store_write` taking the version from the driver so the store's closure
+stays K, the host and the JSON reader. `kernel/verify_release.shard`
+(+8/−2): the line read past. `kernel/load.shard` (+96/−28;
+`main_reconstruct`, `reconstruct_all`): `--reconstruct DIR` after a
+clean load renders every theorem the manifest lists and the load
+elaborated as the store would write it (`store_records`, `store_bytes`)
+and compares it byte for byte with `DIR/ID.ndjson` — **P's identity by
+its canonical serialization, which landing 3 makes name-blind; the
+design's `expr_eq` not needed, since a record text is the encoding the
+law names** —: `RECONSTRUCT NAME same`, `EVIDENCE-CHANGE NAME`
+(`missing` for a file gone), `recon=A→B` when the versions differ and
+`recon=A` when they agree, `not-loaded` for a manifest theorem outside
+the load; nothing written, the exit the changes, 2 for an unreadable
+manifest. The tree's sidecars regenerated at `(sidecar 3 1)` by `prove`
+(the fixtures from scratch copies again; `auto_schema_2`, `auto_stale`
+and `auto_schema_old` at their schemas by design); pin `auto_recon_old`
+(`(sidecar 3 0)`: `RECON main.shard version=0 current=1`, the theorem
+accepted), the harness taking `RRecon` as a report. `store_test`: the
+manifest's `recon 1`, the example's theorems reconstructed `same`, the
+tampered record of `le_step` an `EVIDENCE-CHANGE` with exit 1, a
+manifest edited to `recon 0` named on every line and refused by
+`--store` (exit 2), the gate accepting it; `tactic_lib_test`'s schema
+check follows the form. The T10 record's note is answered: the schema-1
+replay is `SIDECAR`, the version migration `RECON` with
+`--reconstruct`'s compare. Refusals before success: one `)` short in
+`main_records` caught by the scan, two at the first load (`digits_val`
+outside the store's closure — its own digit reader instead; the `--emit`
+branch's `Args` one field short); the restamp finding; interventions
+none. Gates on the quiet dev box: the loader pins 291 cases, 0 failed,
+on the bootstrap in 60 s; `store_test` 35 checks in 654 s, `engine_test`
+24 in 124 s, `tactic_lib_test` 30 in 257 s, each on the bootstrap;
+`v3/build.sh --all` 29 roots, 29 built, 0 failed, in 2,372 s (two heavy
+jobs; the loader's chain emit 27 s, lower 83, codegen 283, cc 75 over
+8,613 declarations — 11 more than 8,602, the contract's); the bootstrap
+suite under `V3_NATIVE=1` 44 entrypoints, 0 failed, in 886 s of wall and
+4,766 s of entrypoint time (parity byte-identical over 31 closures and
+138,548 declarations — 33 more — in 354 s; the tie 79 checks in 489 s;
+`imp_test`'s root loaded and stored in 697 s; `store_test` 669 s with
+its 35 checks, calc's five leaves stored in 188 s; the loader pins'
+harness 59 s); the native suite under `V3_NATIVE=1` 44 entrypoints, 0
+failed, in 578 s of wall and 1,598 s of entrypoint time (parity 167 s;
+the tie 489 s; `imp_test` 149 s; `store_test` 111); `suite_tie.sh` over
+the two kept runs 44 entrypoints, 0 differ, byte-identical under both
+engines on every entrypoint. CI's five jobs are the full gate.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -7182,3 +7249,12 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     loader test's Init-free theorem keyed differently with and without
     `--init`; the tree's sidecars regenerated by tool, 21 entries
     re-keyed without a search; six pins.
+    **Landing 2 built 2026-10-23** (§8.6 "as built, landing 2"): the
+    reconstruction version in `tactic.shard`, the sidecar's second
+    number reported `RECON` and restamped by `prove`, the manifest's
+    `recon` line with the store refusing another version, `load.shard
+    --reconstruct` comparing a replay's P against the retained record
+    byte for byte — the canonical serialization the law names, landing 3
+    making it name-blind, `expr_eq` not needed —; one finding: the
+    restamp rule 1 gave the key must also cover the form, since a file
+    whose entries all fit gained no block.

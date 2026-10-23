@@ -1,5 +1,5 @@
 ;;; v3/kernel/load.shard — the loader's driver:
-;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--route N] [--engine S] [--store DIR] [--instance-budget N] FILE…
+;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--route N] [--engine S] [--store DIR | --reconstruct DIR] [--instance-budget N] FILE…
 ;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--fuel N] [--trace FILE] --run MODULE.FN FILE… [-- ARG…]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (LANGUAGE.md §3.2) —
@@ -36,7 +36,12 @@
 ;;; `STORE: cannot write PATH`, exit 2. A failed load writes nothing. The
 ;;; implementation forks of views (§6.6) are checked, recorded under IMPL and
 ;;; not stored (their constants live in the fork, not the load's environment).
-;;; verify_release.shard replays a store with K alone.
+;;; verify_release.shard replays a store with K alone. The manifest's `recon N` is the
+;;; reconstruction version (tactic.shard) the store's P was produced under; a store at another
+;;; version is refused (STORE: refused).
+;;; `--reconstruct DIR` (§8.6 slice 4.5 rule 2): after a clean load, the load's P of every
+;;; theorem DIR holds against the retained record, byte for byte — RECONSTRUCT NAME same or
+;;; EVIDENCE-CHANGE NAME, recon=A→B across versions; nothing written; the exit the changes.
 ;;; `--emit DIR` (§8.6 slice 4.1 rule 1): after a clean load, the program the load
 ;;; yielded is written under DIR as the files route 1's chain reads (emit.shard) —
 ;;; one per module, DIR/map (each emitted declaration against its identity and source)
@@ -56,6 +61,9 @@
 (use kernel.ev)
 (use kernel.host)
 (use kernel.loader)
+(use kernel.k)
+(use kernel.tactic)
+(use kernel.decl.ConstantInfo)
 (use kernel.name)
 (use kernel.name.Name)
 (use kernel.prelude)
@@ -73,28 +81,29 @@
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int (List Int) (List Int)))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory
+(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int (List Int) (List Int) (List Int)))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory, the trace file, the reconstruct directory (4.5 rule 2)
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
-    ((Args root export index route engine files run fuel argv dump store budget emit trace)
+    ((Args root export index route engine files run fuel argv dump store budget emit trace recon)
      (match args
-       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget emit trace))
+       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget emit trace recon))
        ((Cons x r)
-        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget emit trace)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget emit trace))
-        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--emit") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget v trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0) emit trace))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--trace") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit v))) (Nil (parse_args Nil a)))
-          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget emit trace))))))))))))))))))))
+        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget emit trace recon)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget emit trace recon))
+        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--emit") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget v trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0) emit trace recon))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--reconstruct") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit trace v))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--trace") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit v recon))) (Nil (parse_args Nil a)))
+          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget emit trace recon)))))))))))))))))))))
 
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
@@ -109,8 +118,8 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget) Nil Nil))
-       ((Args root export index route engine files run fuel argv dump store budget emit trace)
+     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget) Nil Nil Nil))
+       ((Args root export index route engine files run fuel argv dump store budget emit trace recon)
         (match (parts_of root)
           (None (exit 2 (write_line "load: --root DIR is required" w1)))
           ((Some rootp)
@@ -120,7 +129,7 @@
                (if dump (main_dump l0 files w1)
                (if (< 0 (len emit)) (main_emit l0 files emit w1)
                (match run
-                 (None (main_records l0 route engine files store w1))
+                 (None (main_records l0 route engine files store recon w1))
                  ((Some entry) (main_run l0 files entry argv fuel trace w1))))))))))))))
 
 ;; a clean load, then the canonical text of the program it yielded (§10 item 1)
@@ -185,18 +194,77 @@
        (match (write_file path text w)
          ((Pair True w2) (write_under dir r w2))
          ((Pair False w2) (Pair (Some path) w2)))))))
-;; the records and the counts; the exit code is refused + errors; then the store, after a clean load
-(fn main_records ((l0 Load) (route (List Int)) (engine (List Int)) (files (List (List Int))) (store (List Int)) (w World)) World
+;; the records and the counts; the exit code is refused + errors; then, after a clean load, the
+;; store (--store DIR) or the reconstruction (--reconstruct DIR)
+(fn main_records ((l0 Load) (route (List Int)) (engine (List Int)) (files (List (List Int))) (store (List Int)) (recon (List Int)) (w World)) World
   (match (load_files l0 files (write_line (append "LOAD root=" (append (join_path (Load.root l0)) (append " route=" (append route (append " engine=" engine))))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (let ((w3 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2))))
-         (if (bool_or (< 0 (load_failures cs)) (= (len store) 0))
-           (exit (load_failures cs) w3)
-           (match (store_write (Load.env l) store (stored_names (ld_recs l)) (stored_params (ld_recs l) (stored_discharges (ld_recs l))) (stored_discharges (ld_recs l)) (stored_bins (ld_recs l)) w3)
+         (if (< 0 (load_failures cs)) (exit (load_failures cs) w3)
+         (if (< 0 (len recon)) (main_reconstruct l recon w3)
+         (if (= (len store) 0) (exit 0 w3)
+           (match (store_write (Load.env l) store (stored_names (ld_recs l)) (stored_params (ld_recs l) (stored_discharges (ld_recs l))) (stored_discharges (ld_recs l)) (stored_bins (ld_recs l)) (reconstruction_version) w3)
              ((Pair (StoreOk new shared) w4)
               (exit 0 (write_line (append "STORE: " (append store (append " new=" (append (show_nat new) (append " shared=" (show_nat shared)))))) w4)))
-             ((Pair (StoreFail path) w4) (exit 2 (write_line (append "STORE: cannot write " path) w4))))))))))
+             ((Pair (StoreFail path) w4) (exit 2 (write_line (append "STORE: cannot write " path) w4)))
+             ((Pair (StoreRefused m) w4) (exit 2 (write_line (append "STORE: refused " m) w4))))))))))))
+;; `--reconstruct DIR` (§8.6 slice 4.5 rule 2; law §7.2, §7.5 `reconstruct`): every theorem DIR's
+;; manifest lists that this load elaborated is rendered as the store would write it
+;; (store_records) and compared byte for byte with the retained record DIR/ID.ndjson — P's
+;; identity by its canonical serialization —: RECONSTRUCT NAME same, or EVIDENCE-CHANGE NAME (a
+;; different valid P; `missing` when the file is gone); recon=A→B names the manifest's
+;; reconstruction version against this loader's when they differ, recon=A when they agree; a
+;; theorem of the manifest the load did not elaborate is not-loaded. Nothing is written: the
+;; store is rewritten by --store alone, the explicit migration. The exit is the number of
+;; changes; 2 when the manifest cannot be read.
+(fn main_reconstruct ((l Load) (dir (List Int)) (w World)) World
+  (match (read_file (store_path dir "manifest") w)
+    ((Pair None w1) (exit 2 (write_line (append "RECONSTRUCT: cannot read " (store_path dir "manifest")) w1)))
+    ((Pair (Some bs) w1)
+     (let ((lines (manifest_lines bs Nil)))
+       (let ((a (manifest_version lines)))
+         (let ((tag (if (= a (reconstruction_version)) (append " recon=" (show_nat a))
+                      (append " recon=" (append (if (< a 0) "-" (show_nat a)) (append "→" (show_nat (reconstruction_version))))))))
+           (match (reconstruct_all l dir (manifest_thms lines Nil) tag 0 0 0 w1)
+             ((Pair (Pair same (Pair changed absent)) w2)
+              (exit changed (write_line (append "RECONSTRUCT: theorems " (append (show_nat (+ same (+ changed absent))) (append "  same " (append (show_nat same) (append "  changed " (append (show_nat changed) (append "  not-loaded " (append (show_nat absent) tag)))))))) w2))))))))))
+;; the manifest's `recon N` line (-1 when none)
+(fn manifest_version ((lines (List (List Int)))) Int
+  (measure (struct lines))
+  (match lines
+    (Nil -1)
+    ((Cons ln r) (match (rc_words ln Nil Nil) ((Cons h (Cons v Nil)) (if (int_list_eq h "recon") (digits_val v 0) (manifest_version r))) (_ (manifest_version r))))))
+;; the manifest's theorems: (ID, NAME) per `decl ID thm NAME`
+(fn manifest_thms ((lines (List (List Int))) (acc (List (Pair (List Int) (List Int))))) (List (Pair (List Int) (List Int)))
+  (measure (struct lines))
+  (match lines
+    (Nil (rev acc))
+    ((Cons ln r)
+     (match (rc_words ln Nil Nil)
+       ((Cons h (Cons id (Cons kind (Cons nm Nil)))) (if (bool_and (int_list_eq h "decl") (int_list_eq kind "thm")) (manifest_thms r (Cons (Pair id nm) acc)) (manifest_thms r acc)))
+       (_ (manifest_thms r acc))))))
+;; a line's words, split on spaces
+(fn rc_words ((ln (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ln))
+  (match ln
+    (Nil (rev (if (= (len cur) 0) acc (Cons (rev cur) acc))))
+    ((Cons c r) (if (= c 32) (rc_words r Nil (if (= (len cur) 0) acc (Cons (rev cur) acc))) (rc_words r (Cons c cur) acc)))))
+;; each theorem compared: same, changed, not-loaded
+(fn reconstruct_all ((l Load) (dir (List Int)) (ts (List (Pair (List Int) (List Int)))) (tag (List Int)) (same Int) (changed Int) (absent Int) (w World)) (Pair (Pair Int (Pair Int Int)) World)
+  (measure (struct ts))
+  (match ts
+    (Nil (Pair (Pair same (Pair changed absent)) w))
+    ((Cons (Pair id nm) r)
+     (match (match (name_of_sym (sym_of_chars nm)) (None None) ((Some n) (match (env_find (Load.env l) n) ((Some (ThmInfo _ _ _)) (store_records (Load.env l) n)) (_ None))))
+       (None (reconstruct_all l dir r tag same changed (+ absent 1) (write_line (append "RECONSTRUCT " (append nm " not-loaded")) w)))
+       ((Some lines)
+        (match (read_file (store_path dir (append id ".ndjson")) w)
+          ((Pair None w1) (reconstruct_all l dir r tag same (+ changed 1) absent (write_line (append "EVIDENCE-CHANGE " (append nm (append " missing" tag))) w1)))
+          ((Pair (Some have) w1)
+           (if (int_list_eq have (store_bytes lines))
+             (reconstruct_all l dir r tag (+ same 1) changed absent (write_line (append "RECONSTRUCT " (append nm (append " same" tag))) w1))
+             (reconstruct_all l dir r tag same (+ changed 1) absent (write_line (append "EVIDENCE-CHANGE " (append nm tag)) w1))))))))))
 ;; the constants the load admitted, in admission order: every ACCEPT and PARAM record's
 (fn stored_names ((rs (List Rec))) (List Name)
   (measure (struct rs))

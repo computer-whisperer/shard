@@ -58,6 +58,25 @@ verify "$OUT/t4" > "$OUT/t4.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^MISTIED examples.auto.auto.le_step accepted as ' "$OUT/t4.txt" && grep -q 'mistied 1  missing 0  taken 0 ' "$OUT/t4.txt" || { bad "a name record removed was not mistied (exit $rc)"; tail -2 "$OUT/t4.txt" | cut -c1-300; }
 echo "store_test: the gate rejects a forged proof, a broken record, a missing file and a renamed declaration"
 
+# ---- the reconstruction contract (slice 4.5 rule 2; law §7.2, §7.5): the example's P reconstructed
+# the same, a differing retained P an evidence change, another reconstruction version named on
+# every line and never written into; the gate reads the recon line past
+reconstruct() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --reconstruct "$1" "$2"; }
+checks=$((checks+1)); [ "$(sed -n 2p "$OUT/auto/manifest")" = "recon 1" ] || bad "the manifest's second line is not the reconstruction version (recon 1)"
+nthm=$(grep -c '^decl [0-9-]* thm ' "$OUT/auto/manifest")
+reconstruct "$OUT/auto" v3/examples/auto/auto.shard > "$OUT/r1.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] && [ "$(grep -c '^RECONSTRUCT examples.auto.auto.* same recon=1$' "$OUT/r1.txt")" = "$nthm" ] && grep -q "^RECONSTRUCT: theorems $nthm  same $nthm  changed 0  not-loaded 0 recon=1$" "$OUT/r1.txt" || { bad "the example does not reconstruct the same P for its $nthm theorems (exit $rc)"; grep -E '^(RECONSTRUCT|EVIDENCE)' "$OUT/r1.txt" | tail -3 | cut -c1-200; }
+reconstruct "$OUT/t1" v3/examples/auto/auto.shard > "$OUT/r2.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 1 ] && grep -q '^EVIDENCE-CHANGE examples.auto.auto.le_step recon=1$' "$OUT/r2.txt" && grep -q "changed 1  not-loaded 0 recon=1$" "$OUT/r2.txt" || { bad "a retained P that differs is not an evidence change (exit $rc)"; grep -E '^(EVIDENCE|RECONSTRUCT:)' "$OUT/r2.txt" | head -3 | cut -c1-200; }
+cp -r "$OUT/auto" "$OUT/r0"; sed -i 's/^recon 1$/recon 0/' "$OUT/r0/manifest"
+reconstruct "$OUT/r0" v3/examples/auto/auto.shard > "$OUT/r3.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] && [ "$(grep -c '^RECONSTRUCT examples.auto.auto.* same recon=0→1$' "$OUT/r3.txt")" = "$nthm" ] || { bad "a store at another reconstruction version does not name the versions (exit $rc)"; grep -E '^(RECONSTRUCT|EVIDENCE)' "$OUT/r3.txt" | tail -2 | cut -c1-200; }
+load_store "$OUT/r0" v3/examples/auto/auto.shard > "$OUT/r4.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 2 ] && grep -q "^STORE: refused .*recon 0 is not this loader's 1" "$OUT/r4.txt" || { bad "a store at another reconstruction version accepted a write (exit $rc)"; tail -1 "$OUT/r4.txt" | cut -c1-200; }
+verify "$OUT/r0" > "$OUT/r5.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the gate refuses a manifest with a recon line (exit $rc)"; grep -v '^ACCEPT' "$OUT/r5.txt" | head -3 | cut -c1-200; }
+echo "store_test: the reconstruction contract — the example reconstructs the same P, a differing P is an evidence change, another version is named on every line and never written into"
+
 # ---- the release gate's exit and target (slice 4.0 rules 2–3; R79, R80)
 F="$OUT/auto/$id.ndjson"; decl=$(tail -1 "$F")
 kin=$(grep -o '"in":[0-9]*' "$F" | tail -1 | tr -dc 0-9); kie=$(grep -o '"ie":[0-9]*' "$F" | tail -1 | tr -dc 0-9)
