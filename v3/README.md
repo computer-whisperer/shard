@@ -2103,11 +2103,11 @@ on the runner beside pipeline 642 until 19:12 and beside pipeline 644 (landing
 3) from 19:57; the v3 job run twice: the first run's script green to its last
 line — 43 entrypoints with 0 failed in 3,319 s of wall, the replay 2,670 s at
 32.2 GB, T0 accepted 57,977 — and the job failed after it at the artifact
-upload (the uploader rate-limited three times, then the coordinator's 400
-"another artifact of the same type already exists" three times; the runner's,
-nothing of the tree's), the retry green and the v3 figures here its: engine 35
-s; corpus 2,295 s against pipeline 642's 3,650; v3 8,537 s against 9,264 (the
-index driver's build 29 s; 43 entrypoints with 0 failed in 4,122 s of wall and
+upload (the coordinator's 500 three times, then its 400 "another artifact of
+the same type already exists" three times; the runner's, nothing of the
+tree's), the retry green and the v3 figures here its: engine 35 s; corpus
+2,295 s against pipeline 642's 3,650; v3 8,537 s against 9,264 (the index
+driver's build 29 s; 43 entrypoints with 0 failed in 4,122 s of wall and
 18,409 s of entrypoint time against 4,222 and 19,564 — the loader pins'
 harness 252 s over its 291 cases; `bin_test` 1,626 s with its 46 checks, route
 1's binary of calc's main 35,200 bytes built in 154 s and the driver's byte
