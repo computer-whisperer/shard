@@ -6,9 +6,9 @@
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
 > 60 as amended there, 61–64 as built); 39–42, 44–46 and 48, and item
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
-> open: slices 4.0–4.4 closed 2026-10-14 to 2026-10-17 (§13 items 65–69
+> open: slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices; 4.4 the bridge with three law changes ratified
-> 2026-10-16); 4.5, the three persisted identities (R82), designed and ratified 2026-10-23 — item 70, §11's row's ordering over 4.4 rule 4 —, T6 the embedding 4.6 after it.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, next — designed at this boundary for ratification.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -3352,7 +3352,7 @@ it entrenches. The slices, in the order built:
 | 4.2 | the tb_len rung: the per-function certificate of `len` over the call-tier imp machine and the counted-heap runtime (the coverage arc's Theorem B at one function; records §5's provocation), ported by the migration classes under `v3/models/imp` with `std/map` and `std/mem`, stated as an L theorem and proven through I; the count against the old proof's 717 lines and 155-claim closure; then `app` — **designed 2026-10-15; ratified 2026-10-15 as described (the user: "That all makes sense -- agreed. Let's proceed with the tb_len rung as described."); landing 0 built 2026-10-15 (the port, the definition gate, the count), green on pipeline 616; landing 1 built 2026-10-15 (the proof through I, the kit by need, the count), green on pipeline 617; landing 2 built 2026-10-16 (`app`: the runtime's laws as six parameters, the output ghost existential, the count — the as-built readings for ratification at item 67), green on pipeline 620 after the harness fix `7ef6855`; the landing-2 readings ratified 2026-10-16 as built — slice closed** | the per-function certificate family (B-1c, phase 7); the manifest's first model file (phase 5) |
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
-| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on the local gate — the loader pins 291 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, its pipeline pending** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
+| 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -5571,6 +5571,48 @@ entrypoints, 0 failed, in 601 s of wall and 1,680 s of entrypoint time
 byte-identical under both engines on every entrypoint. CI's five jobs
 are the full gate.
 
+**Slice 4.5 closed 2026-11-06** at this landing (the user's standing
+instruction for the slice: "Good work. Let's continue with
+implementation."; the pipelines green 2026-10-23, recorded and the close
+written at the session's resumption): the three landings hold on the
+full gate — landing 1 the key on pipeline 642, landing 2 the
+reconstruction contract on pipeline 643, landing 3 the display map on
+pipeline 644. What the slice built, in one line: the law's three
+persisted identities (§5.2, §7.2, §7.5) — a sidecar's entry keyed by the
+resolved requirement `(req S D P E)` and stale by cause, a
+reconstruction version carried by the sidecar's form and the store's
+manifest with `--reconstruct` reporting a changed retained P as an
+evidence change, and P by its canonical serialization with the binders'
+display names outside the records —; no hash an authority (R42): the key
+detects a changed task and K's replay accepts. The count (rule 5): the
+key's four parts in `reader.shard` (+107/−33 lines), `loader.shard`
++80/−33 over the two landings, `prove.shard` +45/−13, `store.shard`
++116/−72, `load.shard` +97/−29, `tactic.shard` +8,
+`verify_release.shard` +10/−3, `k/mod.req.shard` +1; pins added six
+(`auto_stale_deps`, `auto_stale_policy`, `auto_stale_env`,
+`auto_strategy_free`, `auto_schema_2`, `auto_recon_old`) and
+`auto_stale` extended, the loader pins 291 cases; the sidecars
+regenerated nine with 26 entries — 21 re-keyed at landing 1 without a
+search, the form restamped at landing 2 —; `--reconstruct` over calc's
+bundle 311 theorems, every one the same, in 58 s on the bootstrap — the
+five leaves loaded once — against `verify_release`'s 41 s over the same
+store; the records merged name-blind over calc's bundle one, as
+measured; the gate's verdicts unchanged (485 of 485, the example's 23 of
+23); refusals before success four use lines and the two pinned records
+at landing 1, three at landing 2, none at landing 3; interventions none.
+Law settled here: the reconstruction's compare is the canonical text,
+not `expr_eq` — a record's text is the encoding the law names, and
+landing 3 made it name-blind; a store from before the display map is
+re-stored, its text an older encoding of the same P, and the contract's
+version stays the tactic engine's (the encoding is not a
+reconstruction); the environment part of an Init-free module's key is 0;
+the restamp covers the form. Carried, as rule 4 states: T6, the prepared
+handle over these identities, as slice 4.6; R85's origin map; phase 5's
+migration tool's frozen-requirement checks, the consumer of `req=`; the
+manifest's `decl` line's future; a requirement on a non-theorem's
+record. Next: slice 4.6, T6 the embedding, designed at this boundary for
+ratification.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -5805,7 +5847,7 @@ never compared as verdicts.
 | programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 — slice 4.6, with T6 (ruled 2026-10-23, item 70) |
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
 | `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
-| the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; today the sidecar's key is the statement fingerprint and the store's sharing compares binder names | §8.4 3.22 rule 2 | 4 — **slice 4.5 (designed 2026-10-23, §8.6; item 70)**: the resolved requirement as the sidecar's key (the statement, the referenced declarations' identity closure, the policy, the environment), the reconstruction version with `--reconstruct`'s compare, the store's display map — its own slice before T6 (4.6) and before phase 5's tools police frozen requirements |
+| the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; until slice 4.5 the sidecar's key was the statement fingerprint and the store's sharing compared binder names | §8.4 3.22 rule 2 | 4 — **slice 4.5 (designed 2026-10-23, built on pipelines 642–644, closed 2026-11-06, §8.6; item 70)**: the resolved requirement as the sidecar's key (the statement, the referenced declarations' identity closure, the policy, the environment), the reconstruction version with `--reconstruct`'s compare, the store's display map — its own slice before T6 (4.6) and before phase 5's tools police frozen requirements |
 | occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | 4, before the incremental goal-state slice; slice 4.1's emitter keeps the map |
 | user notation | §5.3 departure 6 | never in v1 |
 | an existential's witness introduction through `exact` — `(exact (Exists.intro w h))` with `h` a hypothesis of known type, or the `@` form with the predicate written, is `unify_stuck … blocked on p`: the first-order unifier meets the predicate applied to the witness before the result type meets the goal (slice 4.2 landing 2, §8.6 item 2); the form that works is `(apply (Exists.intro w) ((show P) …))` | §5.1 Stage 1 | 5 — a Stage-1 item: the goal's result type unified first, or a pattern case for a metavariable applied to a witness |
@@ -7311,4 +7353,9 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     beside them, table nodes shared modulo binder names —; the one merge
     over calc's bundle measured at the boundary found (63,481 expression
     records against 63,482), the gate's verdicts unchanged. The law's
-    three identities built; the close next.
+    three identities built. **Slice 4.5 closed 2026-11-06** (§8.6 "Slice
+    4.5 closed"): the three landings hold on the full gate — pipelines
+    642, 643 and 644 —; the law settled at the build: the reconstruction's
+    compare the canonical text, an older store re-stored, the version the
+    engine's; carried: T6 as slice 4.6, R85's origin map, the migration
+    tool's frozen-requirement checks. Next: slice 4.6, T6.

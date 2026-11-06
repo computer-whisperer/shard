@@ -2097,6 +2097,73 @@ wall and 1,680 s of entrypoint time (parity 173 s; the tie 503 s; `imp_test`
 entrypoints, 0 differ, byte-identical under both engines on every entrypoint.
 CI's five jobs are the full gate.
 
+Landing 2 holds on the full gate: **2026-10-23 — pipeline 643 green on
+`eae9d40`, slice 4.5 landing 2 on the full gate — the contract's first CI run,
+on the runner beside pipeline 642 until 19:12 and beside pipeline 644 (landing
+3) from 19:57; the v3 job run twice: the first run's script green to its last
+line — 43 entrypoints with 0 failed in 3,319 s of wall, the replay 2,670 s at
+32.2 GB, T0 accepted 57,977 — and the job failed after it at the artifact
+upload (the uploader rate-limited three times, then the coordinator's 400
+"another artifact of the same type already exists" three times; the runner's,
+nothing of the tree's), the retry green and the v3 figures here its: engine 35
+s; corpus 2,295 s against pipeline 642's 3,650; v3 8,537 s against 9,264 (the
+index driver's build 29 s; 43 entrypoints with 0 failed in 4,122 s of wall and
+18,409 s of entrypoint time against 4,222 and 19,564 — the loader pins'
+harness 252 s over its 291 cases; `bin_test` 1,626 s with its 46 checks, route
+1's binary of calc's main 35,200 bytes built in 154 s and the driver's byte
+for byte over the 21 inputs; `imp_test` 3,914, `store_test` 2,828 with its 35
+checks and calc's five leaves stored in 817 s, `tactic_lib_test` 1,112, parity
+1,398 over 138,548 declarations against 138,515, the 33 more the contract's —;
+route 1's build of t0 804 s; the replay 3,011 s at 32.2 GB; T0 accepted
+57,977, closures identical). The native job 5,438 s against 7,456:
+`v3/build.sh --all` over the 29 roots in 3,014 s against 4,542 — 29 built, 0
+failed, the loader's chain emit 76 s, lower 480, codegen 2,160, cc 250 over
+8,613 declarations —; the tie 79 checks, 0 failed, in 1,251 s against 1,764
+(calc's binary tied to the driver's run over the 21 inputs; the loader pins'
+harness tied, the bootstrap's 139 s against the binary's 35); the suite on the
+binaries 43 entrypoints, 0 failed, in 570 s of wall and 3,105 of entrypoint
+time (parity 492 s, `imp_test` 425, `store_test` 340, `bin_test` 317, the
+loader pins' harness 39). The `suite_tie` job 28 s, over the retry's suite: 43
+entrypoints, 0 differ. Landing 2 of slice 4.5 holds on the full gate.**
+
+Landing 3 holds on the full gate: **2026-10-23 — pipeline 644 green on
+`e1bedd3`, slice 4.5 landing 3 on the full gate — the display map's first CI
+run, pipeline 643's jobs on the runner beside it throughout (its native job to
+20:11, its retried v3 job from 20:19): engine 56 s; corpus 2,017 s against
+pipeline 643's 2,295; v3 8,678 s against 8,537 (the index driver's build 15 s;
+43 entrypoints with 0 failed in 3,935 s of wall and 15,278 s of entrypoint
+time against 4,122 and 18,409 — the loader pins' harness 158 s over its 291
+cases; `bin_test` 1,142 s with its 46 checks, route 1's binary of calc's main
+35,200 bytes built in 105 s and the driver's byte for byte over the 21 inputs;
+`imp_test` 3,798, `store_test` 2,986 with its 39 checks — calc's five leaves
+stored in 880 s, 485 declarations and 63,481 expression records, 5,900 kB with
+the names files against 4,152 —, `tactic_lib_test` 1,031, parity 1,070 over
+138,550 declarations against 138,548, the 2 more the map's —; route 1's build
+of t0 1,230 s; the replay 3,111 s at 32.2 GB; T0 accepted 57,977, closures
+identical). The native job 7,127 s against 5,438, the two v3 jobs beside it
+for its whole run: `v3/build.sh --all` over the 29 roots in 4,432 s against
+3,014 — 29 built, 0 failed, the loader's chain emit 79 s, lower 867, codegen
+3,185, cc 250 over 8,615 declarations —; the tie 79 checks, 0 failed, in 1,633
+s against 1,251 (calc's binary tied to the driver's run over the 21 inputs;
+the loader pins' harness tied, the bootstrap's 186 s against the binary's 47);
+the suite on the binaries 43 entrypoints, 0 failed, in 636 s of wall and 3,619
+of entrypoint time (parity 544 s, `imp_test` 507, `store_test` 443 with calc's
+leaves stored in 132 s, `bin_test` 362, the loader pins' harness 51). The
+`suite_tie` job 44 s: 43 entrypoints, 0 differ. Landing 3 of slice 4.5 holds
+on the full gate.**
+
+**Slice 4.5 closed 2026-11-06** — the three landings hold on the full gate
+(landing 1 pipeline 642; landing 2 pipeline 643; landing 3 pipeline 644, all
+green 2026-10-23): the law's three persisted identities are built — a
+sidecar's entry keyed by the resolved requirement and stale by cause, the
+reconstruction version in the sidecar's form and the store's manifest with
+`--reconstruct` reporting a changed retained P as an evidence change, P by its
+canonical serialization with the display names outside the records —; no hash
+an authority. Settled at the build: the compare is the canonical text, an
+older store is re-stored, the version stays the engine's. Carried: T6 as slice
+4.6, R85's origin map, the migration tool's frozen-requirement checks. Next:
+slice 4.6, T6 the embedding, designed at this boundary for ratification.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
