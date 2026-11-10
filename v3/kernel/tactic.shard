@@ -71,8 +71,10 @@
 ;; manifest line `recon N` name the version their evidence was produced under; a sidecar at
 ;; another version is replayed and reported (loader.shard RECON), and `load.shard --reconstruct`
 ;; compares a replay's P against the retained P across versions — law §7.2's evidence change,
-;; migrated by `--store` alone, never a silent overwrite.
-(fn reconstruction_version () Int 1)
+;; migrated by `--store` alone, never a silent overwrite. Version 2 (2026-11-10): `reduce`,
+;; `unfold` and `simp_only` compose their steps' equations under one Eq.mpr per step of I, where
+;; version 1 left K-convertible steps to conversion and nested an Eq.mpr per rewrite.
+(fn reconstruction_version () Int 2)
 
 ;; ---- I's data (rule 10) ------------------------------------------------------------------
 ;; a goal: its metavariable, its statement closed over the named context, the context's size
@@ -1180,12 +1182,12 @@
        ((Some e1) (Some e1))
        (None (first_match e pat r))))))
 
-;; one rewrite of the target by heq : a = b (instantiated, closed over the step's locals):
-;; the continuation goal at target[b] and the term Eq.mpr (congrArg motive heq) (its occurrence)
-(type Rewritten (TRwOk El Goal Expr Expr) (TRwErr Symbol (List Int)))
-(fn rewrite_by ((e El) (ctx (List Expr)) (target Expr) (ty Expr) (a Expr) (b Expr) (heq Expr) (sel Int)) Rewritten
+;; the equation of one rewrite of the target by heq : a = b (instantiated, closed over the
+;; step's locals): target[b] and congrArg motive heq : target = target[b]
+(type RwEq (RwEqOk El Expr Expr) (RwEqErr Symbol (List Int)))
+(fn rewrite_eq ((e El) (ctx (List Expr)) (target Expr) (ty Expr) (a Expr) (b Expr) (heq Expr) (sel Int)) RwEq
   (match (tac_sort_level e ty)
-    ((Pair e1 None) (TRwErr (quote rw_motive) "the equation's type is not a type"))
+    ((Pair e1 None) (RwEqErr (quote rw_motive) "the equation's type is not a type"))
     ((Pair e1 (Some u))
      (match (el_local e1 (n1 (quote x)) ty BDefault)
        ((Pair e2 d)
@@ -1193,16 +1195,20 @@
           (match (el_lams e2 (list d) body)
             ((Pair e3 motive)
              (match (el_infer e3 motive)
-               ((Pair e4 None) (TRwErr (quote rw_motive) (append "the motive is not type correct (the occurrence is under a dependency): " (tc_show_closed e3 ctx body))))
+               ((Pair e4 None) (RwEqErr (quote rw_motive) (append "the motive is not type correct (the occurrence is under a dependency): " (tc_show_closed e3 ctx body))))
                ((Pair e4 (Some _))
-                (let ((target1 (tc_replace target a b sel)))
-                  (match (tac_goal e4 ctx target1)
-                    ((Made e5 g occ)
-                     (TRwOk e5 g target1
-                       (mk_app_n (mk_const (n2 (quote Eq) (quote mpr)) (list LZero))
-                         (list target target1
-                               (mk_app_n (mk_const (n1 (quote congrArg)) (list u (LSucc LZero))) (list ty (mk_sort LZero) a b motive heq))
-                               occ))))))))))))))))
+                (RwEqOk e4 (tc_replace target a b sel)
+                  (mk_app_n (mk_const (n1 (quote congrArg)) (list u (LSucc LZero))) (list ty (mk_sort LZero) a b motive heq)))))))))))))
+;; one rewrite of the target by such an equation: the continuation goal at target[b] and the
+;; term Eq.mpr (congrArg motive heq) (its occurrence)
+(type Rewritten (TRwOk El Goal Expr Expr) (TRwErr Symbol (List Int)))
+(fn rewrite_by ((e El) (ctx (List Expr)) (target Expr) (ty Expr) (a Expr) (b Expr) (heq Expr) (sel Int)) Rewritten
+  (match (rewrite_eq e ctx target ty a b heq sel)
+    ((RwEqErr x m) (TRwErr x m))
+    ((RwEqOk e4 target1 eqn)
+     (match (tac_goal e4 ctx target1)
+       ((Made e5 g occ)
+        (TRwOk e5 g target1 (mk_app_n (mk_const (n2 (quote Eq) (quote mpr)) (list LZero)) (list target target1 eqn occ))))))))
 
 ;; (rw LEMMA (occ K EXPECT?)? BLOCK…): the lemma's left side matched against the target's subterms,
 ;; every occurrence of the instance rewritten (the K-th alone under occ); the premises left open
@@ -1255,9 +1261,12 @@
               (None (Pair e1 (Some (Pair (quote rw_occ_changed) (append "(occ K EXPECT): the occurrence found is " (append (tc_show_closed e1 ctx found) (append ", not the expected " (append (tc_show_closed e1 ctx vz) " — the source moved under the guard, or the expectation is wrong"))))))))))))))))
 
 ;; ---- unfold and reduce (rule 6) --------------------------------------------------------------
-;; a redex found in the target: the subterm, its replacement, and the equation that justifies it
-;; when the replacement is not K-convertible (None: by conversion)
-(type Redex (Redex Expr Expr (Option (Pair Expr (Pair Expr Expr))) Bool))   ; subterm, replacement, (ty, heq, —) when propositional, whether an unfolding at a closed occurrence
+;; a redex found in the target: the subterm, its replacement, what shows K the step, and
+;; whether it is an unfolding at a closed occurrence
+(type Evid
+  (EvEq Expr Expr Bool)   ; an equation: its carrier, its proof instantiated, whether that proof is Eq.refl (the step K-convertible)
+  (EvConv))               ; K's own step on the subterm — a case step, a whnf step, a delta step: K-convertible
+(type Redex (Redex Expr Expr Evid Bool))
 (type Found (FoundOk El Redex) (FoundNone El) (FoundErr Symbol (List Int)))
 
 ;; the equations of a constant, in order, until one is missing: a fn's `f.eq_k`; else a
@@ -1284,8 +1293,8 @@
       (match (env_find (el_env e) n)
         ((Some _) (equations_go e f kind (+ k 1) (Cons n acc)))
         (None (rev acc))))))
-;; an equation applied to a subterm: its instantiated right side, and whether the equation's
-;; proof is Eq.refl (then the replacement is by conversion)
+;; an equation applied to a subterm: its instantiated right side and proof, and whether that
+;; proof is Eq.refl (then the replacement is also K-convertible: redex_apply's fallback under a binder)
 (fn try_equation ((e El) (s Expr) (eqn Name)) Found
   (match (env_find (el_env e) eqn)
     (None (FoundNone e))
@@ -1302,8 +1311,7 @@
                  (let ((rz (el_zonk e4 r)))
                    (if (has_mvar rz) (FoundNone e)
                      (let ((unf (bool_not (computes e eqn))))
-                       (if (eqn_definitional info) (FoundOk e4 (Redex s rz None unf))
-                         (FoundOk e4 (Redex s rz (Some (Pair (el_zonk e4 a) (Pair (el_zonk e4 v1) rz))) unf)))))))
+                       (FoundOk e4 (Redex s rz (EvEq (el_zonk e4 a) (el_zonk e4 v1) (eqn_definitional info)) unf))))))
                 (_ (FoundNone e))))))))))))
 (fn eqn_definitional ((info ConstantInfo)) Bool
   (match (ci_value info)
@@ -1385,40 +1393,58 @@
     ((Num p _) (stuck_name p))
     (Anon False)))
 (fn starts_match ((s (List Int)) (p (List Int))) Bool (match (starts_with_lit p s) ((Some _) True) (None False)))
+;; a head constant's facts the scan asks at every subterm, found once and kept for the loop:
+;; its equations and whether K's whnf may unfold it. Unkept, equations_of built and looked up
+;; `f.eq_k` — and for a head with none, every constructor, `M.f.realize_k` for the module and
+;; each one it opens — at each of a goal's subterms on every step, each lookup a hash of the
+;; name's bytes: most of a whole-run reduction's time (measured 2026-11-10)
+(type HeadFacts (HeadFacts Name (List Name) Bool))
+(fn head_find ((hs (List HeadFacts)) (f Name)) (Option HeadFacts)
+  (measure (struct hs))
+  (match hs
+    (Nil None)
+    ((Cons (HeadFacts g q u) r) (if (name_eq g f) (Some (HeadFacts g q u)) (head_find r f)))))
+(fn head_of ((e El) (hs (List HeadFacts)) (f Name)) (Pair (List HeadFacts) HeadFacts)
+  (match (head_find hs f)
+    ((Some h) (Pair hs h))
+    (None (head_new hs (HeadFacts f (equations_of e f) (reducible_head e f))))))
+(fn head_new ((hs (List HeadFacts)) (h HeadFacts)) (Pair (List HeadFacts) HeadFacts) (Pair (Cons h hs) h))
 ;; a whnf step that makes progress: the result (its head beta-reduced) differs and its head is
 ;; neither a stuck eliminator nor a lambda (a function constant's value is no reduction of it).
 ;; K's whnf reduces the head as far as it goes, past the one step wanted — an `ite` on a
 ;; decided condition to its branch, then that branch's `fn` unfolded to its recursor form —
 ;; so every application of a constant with equations inside `s` is masked by a local first (K
 ;; cannot unfold a local) and restored after
-(fn whnf_progress ((e El) (s Expr)) (Pair El (Option Expr))
-  (match (mask_fns e (rev (tc_subterms s Nil)) s Nil)
-    ((Pair e1 (Pair sm masks))
+(fn whnf_progress ((e El) (hs (List HeadFacts)) (s Expr)) (Pair (List HeadFacts) (Pair El (Option Expr)))
+  (match (mask_fns e hs (rev (tc_subterms s Nil)) s Nil)
+    ((Pair hs1 (Pair e1 (Pair sm masks)))
      (match (w_whnf_r (el_w e1) sm)
        ((Pair w1 (WVal r0))
         (match (tac_beta (el_set_w e1 w1) r0)
           ((Pair e2 rm)
            (let ((r (unmask masks rm)))
-             (if (bool_or (expr_eq r s) (bool_or (stuck_head r) (is_lambda (get_app_fn r)))) (Pair e2 None) (Pair e2 (Some r)))))))
-       ((Pair w1 _) (Pair (el_set_w e1 w1) None))))))
+             (if (bool_or (expr_eq r s) (bool_or (stuck_head r) (is_lambda (get_app_fn r)))) (Pair hs1 (Pair e2 None)) (Pair hs1 (Pair e2 (Some r))))))))
+       ((Pair w1 _) (Pair hs1 (Pair (el_set_w e1 w1) None)))))))
 ;; the applications (whole spines) of constants with equations among the subterms, each
 ;; replaced by a fresh local of its type: the masked term and the (local, subterm) pairs
-(fn mask_fns ((e El) (subs (List Expr)) (t Expr) (acc (List (Pair Expr Expr)))) (Pair El (Pair Expr (List (Pair Expr Expr))))
+(fn mask_fns ((e El) (hs (List HeadFacts)) (subs (List Expr)) (t Expr) (acc (List (Pair Expr Expr)))) (Pair (List HeadFacts) (Pair El (Pair Expr (List (Pair Expr Expr)))))
   (measure (struct subs))
   (match subs
-    (Nil (Pair e (Pair t acc)))
+    (Nil (Pair hs (Pair e (Pair t acc))))
     ((Cons s r)
-     (if (bool_not (is_app s)) (mask_fns e r t acc)
+     (if (bool_not (is_app s)) (mask_fns e hs r t acc)
        (match (get_app_fn s)
          ((Const _ f _)
-          (if (bool_or (= (len (equations_of e f)) 0) (= (tc_count t s) 0))
-            (mask_fns e r t acc)
-            (match (el_infer e s)
-              ((Pair e1 None) (mask_fns e1 r t acc))
-              ((Pair e1 (Some ty))
-               (match (el_local e1 (n1 (quote fn)) ty BDefault)
-                 ((Pair e2 fv) (mask_fns e2 r (tc_replace t s fv 0) (Cons (Pair fv s) acc))))))))
-         (_ (mask_fns e r t acc)))))))
+          (match (head_of e hs f)
+            ((Pair hs1 (HeadFacts _ Nil _)) (mask_fns e hs1 r t acc))
+            ((Pair hs1 _)
+             (if (= (tc_count t s) 0) (mask_fns e hs1 r t acc)
+               (match (el_infer e s)
+                 ((Pair e1 None) (mask_fns e1 hs1 r t acc))
+                 ((Pair e1 (Some ty))
+                  (match (el_local e1 (n1 (quote fn)) ty BDefault)
+                    ((Pair e2 fv) (mask_fns e2 hs1 r (tc_replace t s fv 0) (Cons (Pair fv s) acc))))))))))
+         (_ (mask_fns e hs r t acc)))))))
 (fn unmask ((masks (List (Pair Expr Expr))) (t Expr)) Expr
   (measure (struct masks))
   (match masks
@@ -1431,39 +1457,39 @@
 ;; 1` to its well-founded internals, `a + 8` to eight successors) and buries the term a later
 ;; rewrite must match; an open occurrence unfolds by its equations, by a case step, or by name.
 ;; `only` restricts to the named constants (unfold), open or closed
-(fn find_redex ((e El) (subs (List Expr)) (only (List Name))) Found
+(fn find_redex ((e El) (hs (List HeadFacts)) (subs (List Expr)) (only (List Name))) (Pair (List HeadFacts) Found)
   (measure (struct subs))
   (match subs
-    (Nil (FoundNone e))
+    (Nil (Pair hs (FoundNone e)))
     ((Cons s r)
      (match (get_app_fn s)
        ((Const _ f _)
-        (if (bool_and (bool_not (= (len only) 0)) (bool_not (mem_name f only))) (find_redex e r only)
-        (if (bool_and (= (len only) 0) (= (len (get_app_args s)) 0)) (find_redex e r only)   ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
-          (match (equations_of e f)
-            (Nil
-             (if (bool_and (= (len only) 0) (bool_or (bool_not (reducible_head e f)) (is_proposition e s)))
-               (find_redex e r only)
+        (if (bool_and (bool_not (= (len only) 0)) (bool_not (mem_name f only))) (find_redex e hs r only)
+        (if (bool_and (= (len only) 0) (= (len (get_app_args s)) 0)) (find_redex e hs r only)   ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
+          (match (head_of e hs f)
+            ((Pair hs1 (HeadFacts _ Nil red))
+             (if (if (= (len only) 0) (if red (is_proposition e s) True) False)   ; asked in this order: the type of a constructor's application is never inferred
+               (find_redex e hs1 r only)
                (match (alt_step e s)
-                 ((Pair e0 (Some t)) (FoundOk e0 (Redex s t None False)))
+                 ((Pair e0 (Some t)) (Pair hs1 (FoundOk e0 (Redex s t EvConv False))))
                  ((Pair e0 None)
-               (if (bool_and (= (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s))) (find_redex e0 r only)   ; the goal's context is bound in the closed target
-               (match (whnf_progress e0 s)
-                 ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
-                 ((Pair e1 None)
+               (if (bool_and (= (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s))) (find_redex e0 hs1 r only)   ; the goal's context is bound in the closed target
+               (match (whnf_progress e0 hs1 s)
+                 ((Pair hs2 (Pair e1 (Some t))) (Pair hs2 (FoundOk e1 (Redex s t EvConv False))))
+                 ((Pair hs2 (Pair e1 None))
                   (match (delta_once e1 s)
-                    ((Pair e2 (Some t)) (FoundOk e2 (Redex s t None False)))
-                    ((Pair e2 None) (find_redex e2 r only))))))))))
-            (eqns
+                    ((Pair e2 (Some t)) (Pair hs2 (FoundOk e2 (Redex s t EvConv False))))
+                    ((Pair e2 None) (find_redex e2 hs2 r only))))))))))
+            ((Pair hs1 (HeadFacts _ eqns _))
              (match (try_equations e s eqns (bool_not (= (len only) 0)))
-               ((FoundOk e1 rd) (FoundOk e1 rd))
-               (_ (find_redex e r only))))))))
+               ((FoundOk e1 rd) (Pair hs1 (FoundOk e1 rd)))
+               (_ (find_redex e hs1 r only))))))))
        (_
         (if (= (len only) 0)
-          (match (whnf_progress e s)
-            ((Pair e1 (Some t)) (FoundOk e1 (Redex s t None False)))
-            ((Pair e1 None) (find_redex e1 r only)))
-          (find_redex e r only)))))))
+          (match (whnf_progress e hs s)
+            ((Pair hs1 (Pair e1 (Some t))) (Pair hs1 (FoundOk e1 (Redex s t EvConv False))))
+            ((Pair hs1 (Pair e1 None)) (find_redex e1 hs1 r only)))
+          (find_redex e hs r only)))))))
 ;; a case analysis at a decided scrutinee takes one step, to its alternative (slice 3.21). K's
 ;; whnf goes on into the alternative's body — an `ite` on an open condition there is a stuck
 ;; Decidable.rec, which whnf_progress reads as no progress — so the alternatives (an `ite`'s
@@ -1559,60 +1585,107 @@
     ((Some (QuotInfo _ _)) True)
     (_ False)))
 
-;; one redex applied: by conversion where it is definitional (the target changes, no term), by
-;; rule 5 where it is an equation (a continuation goal made, the current one assigned)
-(type RdApp (RaOk El Goal Expr) (RaErr Symbol (List Int)))
-(fn redex_apply ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rd Redex)) RdApp
+;; one redex applied: the next target and the step's equation target = next — a rewrite of the
+;; occurrence by the equation's own proof where an equation justifies the step, by Eq.refl at
+;; the subterm where the step is K's — so K checks each step where it happened. A step left to
+;; conversion changes the target and has no equation (None): K then compares two whole targets
+;; by its own reduction, which does not wait at an open discriminant as the reducer does (a
+;; branch on wide-word arithmetic over a local: no end). Conversion stays for an occurrence no
+;; motive abstracts — under a binder, or under a dependency — where the step is K-convertible
+(type RdApp (RaOk El Expr (Option Expr)) (RaErr Symbol (List Int)))
+(fn redex_apply ((e El) (ctx (List Expr)) (target Expr) (rd Redex)) RdApp
   (match rd
-    ((Redex s t None _) (RaOk e cur (tc_replace target s t 0)))
-    ((Redex s t (Some (Pair ty (Pair heq _))) _)
-     (match (rewrite_by e ctx target ty s t heq 0)
-       ((TRwErr x m) (RaErr x m))
-       ((TRwOk e2 g target1 term)
-        (match (tac_close e2 ctx term)
-          ((Pair e3 filling) (RaOk (el_set_mc e3 (mc_set (el_mc e3) (goal_id cur) filling)) g target1))))))))
-;; the loop's end: the current goal assigned its continuation at the final target
+    ((Redex s t ev _)
+     (match (redex_evidence e s t ev)
+       ((Pair e1 None) (RaOk e1 (tc_replace target s t 0) None))
+       ((Pair e1 (Some (Pair ty heq)))
+        (match (rewrite_eq e1 ctx target ty s t heq 0)
+          ((RwEqErr x m) (if (evid_convertible ev) (RaOk e1 (tc_replace target s t 0) None) (RaErr x m)))
+          ((RwEqOk e2 target1 eqn) (RaOk e2 target1 (Some eqn)))))))))
+;; the carrier and the proof of s = t for the rewrite; None where the occurrence is under a
+;; binder (or has no type of its own) and the step is K-convertible
+(fn redex_evidence ((e El) (s Expr) (t Expr) (ev Evid)) (Pair El (Option (Pair Expr Expr)))
+  (match ev
+    ((EvEq ty heq conv) (if (bool_and conv (has_loose_bvars s)) (Pair e None) (Pair e (Some (Pair ty heq)))))
+    (EvConv
+     (if (has_loose_bvars s) (Pair e None)
+       (match (el_infer e s)
+         ((Pair e1 None) (Pair e1 None))
+         ((Pair e1 (Some ty))
+          (match (tac_sort_level e1 ty)
+            ((Pair e2 None) (Pair e2 None))
+            ((Pair e2 (Some u)) (Pair e2 (Some (Pair ty (mk_app (mk_app (mk_const (nm_eq_refl) (list u)) ty) t))))))))))))
+(fn evid_convertible ((ev Evid)) Bool (match ev ((EvEq _ _ conv) conv) (EvConv True)))
+;; a loop's certified steps: from, to, the equation from = to; kept latest first
+(type Leg (Leg Expr Expr Expr))
+(fn legs_add ((legs (List Leg)) (from Expr) (to Expr) (eqn (Option Expr))) (List Leg)
+  (match eqn (None legs) ((Some h) (Cons (Leg from to h) legs))))
+;; the legs' equations composed in order, as a balanced tree of Eq.trans: K's recursion is
+;; bounded in depth, and a chain of one Eq.mpr per step is as deep as the steps are many
+;; (exhausted_rec_depth_at_infer on a run of a few statements). Where a conversion step stood
+;; between two legs the left one's end and the right one's start differ and K converts there
+(fn legs_join ((legs (List Leg)) (fuel Int)) (Option Leg)
+  (measure fuel)
+  (if (< fuel 1) None
+    (match legs
+      (Nil None)
+      ((Cons l Nil) (Some l))
+      (_ (legs_join (legs_pairs legs Nil) (- fuel 1))))))
+(fn legs_pairs ((legs (List Leg)) (acc (List Leg))) (List Leg)
+  (measure (struct legs))
+  (match legs
+    (Nil (rev acc))
+    ((Cons l Nil) (rev (Cons l acc)))
+    ((Cons (Leg a b h1) (Cons (Leg _ c h2) r))
+     (legs_pairs r (Cons (Leg a c (mk_app_n (mk_const (n2 (quote Eq) (quote trans)) (list (LSucc LZero))) (list (mk_sort LZero) a b c h1 h2))) acc)))))
+;; the term at the loop's start for the continuation's occurrence at its end: Eq.mpr of the
+;; composed equation, or the occurrence itself where every step was by conversion
+(fn legs_term ((start Expr) (target Expr) (legs (List Leg)) (occ Expr)) Expr
+  (match (legs_join (rev legs) 32)
+    (None occ)
+    ((Some (Leg _ _ h)) (mk_app_n (mk_const (n2 (quote Eq) (quote mpr)) (list LZero)) (list start target h occ)))))
+;; the loop's end: the current goal (its target `start`) assigned its continuation at the final target
 (type Loop (LoopOk El Goal) (LoopErr Symbol (List Int)))
-(fn loop_end ((e El) (ctx (List Expr)) (cur Goal) (target Expr)) Loop
+(fn loop_end ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg))) Loop
   (match (tac_goal e ctx target)
     ((Made e2 g occ)
-     (match (tac_close e2 ctx occ)
+     (match (tac_close e2 ctx (legs_term start target legs occ))
        ((Pair e3 filling) (LoopOk (el_set_mc e3 (mc_set (el_mc e3) (goal_id cur) filling)) g))))))
 ;; reduce: the first redex of the target (or of one side), to a fixpoint under a budget of 2000
 ;; rewrites and 64 unfoldings of a function at closed arguments (a ground computation deeper
 ;; than that — a condition no reduction decides, a long recursion — is the author's to unfold,
 ;; until evaluation reflection)
-(fn reduce_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (side Symbol) (budget Int) (unfolds Int)) Loop
+(fn reduce_loop ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (hs (List HeadFacts)) (side Symbol) (budget Int) (unfolds Int)) Loop
   (measure budget)
   (if (< budget 1) (LoopErr (quote reduce_budget) "the normalization ran out of budget (2000 rewrites)")
   (if (< 64 unfolds) (LoopErr (quote reduce_budget) (append "64 unfoldings of a function at closed arguments did not end the computation: " (tc_show_closed e ctx target)))
-    (match (find_redex e (rev (tc_subterms (side_of target side) Nil)) Nil)
-      ((FoundErr x m) (LoopErr x m))
-      ((FoundNone e1) (loop_end e1 ctx cur target))   ; a normalization: nothing to do is done (slice 3.21b rule 3; reduce_stuck before)
-      ((FoundOk e1 rd)
-       (match (redex_apply e1 ctx cur target rd)
+    (match (find_redex e hs (rev (tc_subterms (side_of target side) Nil)) Nil)
+      ((Pair _ (FoundErr x m)) (LoopErr x m))
+      ((Pair _ (FoundNone e1)) (loop_end e1 ctx cur start target legs))   ; a normalization: nothing to do is done (slice 3.21b rule 3; reduce_stuck before)
+      ((Pair hs1 (FoundOk e1 rd))
+       (match (redex_apply e1 ctx target rd)
          ((RaErr x m) (LoopErr x m))
-         ((RaOk e2 cur1 target1) (reduce_loop e2 ctx cur1 target1 side (- budget 1) (if (redex_unfolds rd) (+ unfolds 1) unfolds)))))))))
+         ((RaOk e2 target1 eqn) (reduce_loop e2 ctx cur start target1 (legs_add legs target target1 eqn) hs1 side (- budget 1) (if (redex_unfolds rd) (+ unfolds 1) unfolds)))))))))
 (fn redex_unfolds ((rd Redex)) Bool (match rd ((Redex _ _ _ u) u)))
 ;; unfold: the occurrences of the named constants present when the step starts, each
 ;; rewritten once by the first of its equations that matches (an unfolding equation among
 ;; them), or delta-reduced; never the occurrences a rewrite introduces
-(fn unfold_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (only (List Name)) (occs (List Expr)) (made Int)) Loop
+(fn unfold_loop ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (hs (List HeadFacts)) (only (List Name)) (occs (List Expr)) (made Int)) Loop
   (measure (struct occs))
   (match occs
     (Nil
      (if (= made 0)
        (LoopErr (quote unfold_stuck) (append "no occurrence of the named constant unfolds — no equation of it matches (cases on its argument first), or its one delta step is a stuck recursor: " (tc_show_closed e ctx target)))
-       (loop_end e ctx cur target)))
+       (loop_end e ctx cur start target legs)))
     ((Cons s r)
-     (if (= (tc_count target s) 0) (unfold_loop e ctx cur target only r made)
-       (match (find_redex e (list s) only)
-         ((FoundErr x m) (LoopErr x m))
-         ((FoundNone e1) (unfold_loop e1 ctx cur target only r made))
-         ((FoundOk e1 rd)
-          (match (redex_apply e1 ctx cur target rd)
+     (if (= (tc_count target s) 0) (unfold_loop e ctx cur start target legs hs only r made)
+       (match (find_redex e hs (list s) only)
+         ((Pair _ (FoundErr x m)) (LoopErr x m))
+         ((Pair hs1 (FoundNone e1)) (unfold_loop e1 ctx cur start target legs hs1 only r made))
+         ((Pair hs1 (FoundOk e1 rd))
+          (match (redex_apply e1 ctx target rd)
             ((RaErr x m) (LoopErr x m))
-            ((RaOk e2 cur1 target1) (unfold_loop e2 ctx cur1 target1 only r (+ made 1))))))))))
+            ((RaOk e2 target1 eqn) (unfold_loop e2 ctx cur start target1 (legs_add legs target target1 eqn) hs1 only r (+ made 1))))))))))
 ;; the subterms headed by one of the names, pre-order, each once
 (fn headed_by ((subs (List Expr)) (only (List Name)) (acc (List Expr))) (List Expr)
   (measure (struct subs))
@@ -1638,7 +1711,7 @@
       ((Made e1 g0 occ0)
        (match (tac_close e1 ctx occ0)
          ((Pair e2 filling0)
-          (match (reduce_loop e2 ctx g0 target side 2000 0)
+          (match (reduce_loop e2 ctx g0 target target Nil Nil side 2000 0)
             ((LoopErr x m) (StepErr x m))
             ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))
 ;; (unfold NAME…): the names resolved as constants of the scope
@@ -1651,7 +1724,7 @@
          ((Made e2 g0 occ0)
           (match (tac_close e2 ctx occ0)
             ((Pair e3 filling0)
-             (match (unfold_loop e3 ctx g0 target cs (headed_by (rev (tc_subterms target Nil)) cs Nil) 0)
+             (match (unfold_loop e3 ctx g0 target target Nil Nil cs (headed_by (rev (tc_subterms target Nil)) cs Nil) 0)
                ((LoopErr x m) (StepErr x m))
                ((LoopOk e4 g) (StepOk e4 filling0 Nil Nil (Some g))))))))))))
 (fn resolve_consts ((e El) (ns (List Name)) (acc (List Name))) (Pair El (Pair (Option (List Name)) (List Int)))
@@ -1735,26 +1808,26 @@
       ((Made e1 g0 occ0)
        (match (tac_close e1 ctx occ0)
          ((Pair e2 filling0)
-          (match (simp_loop e2 ctx g0 target rules 256 0)
+          (match (simp_loop e2 ctx g0 target target Nil rules 256 0)
             ((LoopErr x m) (StepErr x m))
             ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))
-(fn simp_loop ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rules (List (Pair Bool SExpr))) (budget Int) (made Int)) Loop
+(fn simp_loop ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (rules (List (Pair Bool SExpr))) (budget Int) (made Int)) Loop
   (measure budget)
   (if (< budget 1) (LoopErr (quote simp_budget) (append "256 rewrites did not reach a fixpoint (a rule rewrites its own result): " (tc_show_closed e ctx target)))
-    (match (simp_rules e ctx cur target rules 1)
+    (match (simp_rules e ctx target rules 1)
       ((RaErr x m) (LoopErr x m))
-      ((RaOk e1 cur1 target1)
+      ((RaOk e1 target1 eqn)
        (if (expr_eq target1 target)
          (if (= made 0)
            (LoopErr (quote simp_no_progress) (append "no rule rewrites the target (a rule with a premise applies where a hypothesis states it): " (tc_show_closed e1 ctx target)))
-           (loop_end e1 ctx cur target))
-         (simp_loop e1 ctx cur1 target1 rules (- budget 1) (+ made 1)))))))
-;; the first rule that applies, applied: the continuation goal and its target; the target
-;; unchanged where none does
-(fn simp_rules ((e El) (ctx (List Expr)) (cur Goal) (target Expr) (rules (List (Pair Bool SExpr))) (idx Int)) RdApp
+           (loop_end e1 ctx cur start target legs))
+         (simp_loop e1 ctx cur start target1 (legs_add legs target target1 eqn) rules (- budget 1) (+ made 1)))))))
+;; the first rule that applies, applied: the next target and the rewrite's equation; the
+;; target unchanged (and no equation) where none does
+(fn simp_rules ((e El) (ctx (List Expr)) (target Expr) (rules (List (Pair Bool SExpr))) (idx Int)) RdApp
   (measure (struct rules))
   (match rules
-    (Nil (RaOk e cur target))
+    (Nil (RaOk e target None))
     ((Cons (Pair rv lem) r)
      (match (elab e lem None)
        ((EErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " m)))))
@@ -1764,22 +1837,20 @@
           ((EqOk e2 v1 u a l rr ms)
            (let ((pat (if rv rr l)) (rhs (if rv l rr)))
              (match (simp_match e2 ctx pat ms (rev (tc_subterms target Nil)))
-               (None (simp_rules e ctx cur target r (+ idx 1)))
+               (None (simp_rules e ctx target r (+ idx 1)))
                ((Some e3)
                 (let ((pz (el_zonk e3 pat)) (rz (el_zonk e3 rhs)) (az (el_zonk e3 a)) (hz (el_zonk e3 v1)))
                   (if (bool_or (expr_eq pz rz) (match (tac_unsolved e3 hz) ((Some _) True) (None False)))
-                    (simp_rules e ctx cur target r (+ idx 1))
+                    (simp_rules e ctx target r (+ idx 1))
                   ;; a rule whose right side holds its left at this instance rewrites its own result,
                   ;; twice over where it holds it twice (the target doubles and no budget of rewrites
                   ;; is reached): `r = mk (fst r) (snd r)` given without its argument
                   (if (< 0 (tc_count rz pz))
                     (RaErr (quote simp_self) (append "rule " (append (show_nat idx) (append " rewrites " (append (tc_show_closed e3 ctx pz) (append " to a term that holds it, " (append (tc_show_closed e3 ctx rz) ": no fixpoint — give the rule its arguments, or use rw for one step")))))))
                     (let ((heq (if rv (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list u)) (list az (el_zonk e3 l) (el_zonk e3 rr) hz)) hz)))
-                      (match (rewrite_by e3 ctx target az pz rz heq 0)
-                        ((TRwErr _ _) (simp_rules e ctx cur target r (+ idx 1)))
-                        ((TRwOk e5 g target1 term)
-                         (match (tac_close e5 ctx term)
-                           ((Pair e6 filling) (RaOk (el_set_mc e6 (mc_set (el_mc e6) (goal_id cur) filling)) g target1)))))))))))))))))))
+                      (match (rewrite_eq e3 ctx target az pz rz heq 0)
+                        ((RwEqErr _ _) (simp_rules e ctx target r (+ idx 1)))
+                        ((RwEqOk e5 target1 eqn) (RaOk e5 target1 (Some eqn))))))))))))))))))
 ;; the first subterm the pattern matches with every premise stated by the context
 (fn simp_match ((e El) (ctx (List Expr)) (pat Expr) (ms (List Expr)) (subs (List Expr))) (Option El)
   (measure (struct subs))
