@@ -121,7 +121,7 @@ this to its full depth.
 > **FOUNDATION (2026-09-06):** the V3 foundation — a kernel implementing Lean 4's rules exactly, written in first-order shard, with a proof IR and the naming law — is **ratified** ([docs/FOUNDATION.md](docs/FOUNDATION.md)) and is being built under [`v3/`](v3/README.md) beside this tree. This section describes the tree as it runs today; the Rust bootstrap is now the *enduring* bootstrap facility (FOUNDATION §9.1), not a disposable one.
 
 **The tower.** A deliberately small **Rust bootstrap**
-(`rust_bootstrap/`, ~3k lines, trusted by review)
+(`rust_bootstrap/`, ~4k lines, trusted by review)
 evaluates *narrow* shard — a minimal subset. Everything else is shard:
 the engine (`kernel/eval.shard`, an environment machine with TCO), the
 reader, the elaborator, and the proof checker
@@ -277,8 +277,8 @@ pins/            ; corpus-law pins: proof/ (proof-layer regressions),
 bin/             ; local fast engines (shard_check / shard_eval) built by
                  ;   bin/rebuild.sh; stamp files guard source drift
 docs/            ; the documentation map below
-rust_bootstrap/  ; the disposable Rust host (evaluate-only); deleted the
-                 ;   day shard self-compiles
+rust_bootstrap/  ; the Rust host (evaluate-only): the enduring bootstrap
+                 ;   facility, never architecture (FOUNDATION §9.1)
 shard-viewer/    ; a graphical navigator for shard source (Rust; its own
                  ;   README)
 ```
@@ -324,8 +324,9 @@ authority for its area:
 
 ## Live arcs
 
-- **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06; phases 0–2 closed
-  (phase 2 at slice 8, 2026-09-13; its ratification pass pending)**:
+- **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06; phases 0–3 closed
+  (phase 3 on 2026-10-13); phase 4 open, slices 4.0–4.5 closed (status
+  and evidence in [`v3/README.md`](v3/README.md))**:
   [docs/FOUNDATION.md](docs/FOUNDATION.md) is the law; the tree is built
   under [`v3/`](v3/README.md) (Lean v4.33.1 pinned; `v3/LANGUAGE.md` the
   V3 surface). Phases 0–7 in FOUNDATION §12.4; the coverage arc below is
@@ -338,9 +339,9 @@ authority for its area:
   uniform-representation compiler → x86 as Theorem A's computed
   `ixf_prog` value; tools/impgen emits nothing for that leg), with the
   repo's own fmt gate running that binary; `examples/calc` is rung 1.
-  **Opener ledger drafted 2026-08-22 — [docs/COVERAGE.md](docs/COVERAGE.md)**
-  (pins, rung ladder C0–C6, the author-residue gate); awaiting
-  ratification. [docs/IMP.md](docs/IMP.md) §6 is its charter and
+  **Its ledger, ratified 2026-08-22 — [docs/COVERAGE.md](docs/COVERAGE.md)**
+  (pins, rung ladder C0–C6, the author-residue gate).
+  [docs/IMP.md](docs/IMP.md) §6 is its charter and
   [docs/OVERVIEW.md](docs/OVERVIEW.md) §10 the ruling.
 - **Closed, for orientation**: Arc A — the certificate architecture
   ([CERT.md](docs/CERT.md)); Arc B — the streaming bin
@@ -380,7 +381,7 @@ authority for its area:
 
 ≈1.22M lines of tracked shard (kernel: ~35k; well over half of the
 total is generated certificate text and validation articles — see
-`v3/MANIFEST.md`) over a ~3146-line Rust bootstrap. The proof corpus, the std
+`v3/MANIFEST.md`) over a ~3,970-line Rust bootstrap. The proof corpus, the std
 interfaces, the wasm / x86 / RISC-V models and lowering pipelines, the
 trust-ledger machinery, the proof-search engine, and the streaming-bin
 flagship are live and CI-gated; the prune arc closed 2026-08-22, the coverage arc is parked at B-1b,
