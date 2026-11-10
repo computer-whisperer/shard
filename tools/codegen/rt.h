@@ -281,7 +281,11 @@ static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(
  * its small-int fast path and falls through on overflow or a big operand.
  * Semantics authority = prim.rs (num-bigint): truncating `/`+`tmod`,
  * euclidean `mod`+`ediv`, two's-complement bitwise, floor shifts. Division
- * is bit-serial (simple over fast; division is rare in cert checking). */
+ * is bit-serial (simple over fast) past 128 bits; a dividend within 128 bits
+ * over a divisor within 64 takes the machine's division (rt_idiv2): V3's
+ * structural hash is a multiply and a `mod` by 2^61 - 1 per node and per
+ * name byte, each one a division of that size — half of a loader run's time
+ * on the bit-serial path (measured 2026-11-10). */
 #define RT_TAG_BIG_ 0x7ffffffeu
 #define RT_BIG_MAXLIMB 120  /* ~2^3840; stays inside the GC size classes */
 
@@ -486,7 +490,19 @@ static value_t rt_idiv2(int op, value_t a, value_t b) {
   uint32_t *Q = (uint32_t *)malloc(((size_t)na + 1) * 4);
   uint32_t *REM = (uint32_t *)malloc(((size_t)nb + 1) * 4);
   uint32_t nq = 0, nrem = 0;
-  if (sa) rt_mag_divmod(A, na, B, nb, Q, &nq, REM, &nrem);
+  if (sa && na <= 4 && nb <= 2) {
+    /* the magnitudes' quotient and remainder by the machine's division; the
+       signs are applied below exactly as for the bit-serial path */
+    unsigned __int128 x = 0;
+    for (uint32_t i = na; i-- > 0;) x = (x << 32) | A[i];
+    uint64_t d = (uint64_t)B[0] | (nb > 1 ? (uint64_t)B[1] << 32 : 0);
+    unsigned __int128 q = x / d;
+    uint64_t r = (uint64_t)(x % d);
+    memset(Q, 0, ((size_t)na + 1) * 4); memset(REM, 0, ((size_t)nb + 1) * 4);
+    for (uint32_t i = 0; i < na; i++) Q[i] = (uint32_t)(q >> (32 * i));
+    REM[0] = (uint32_t)r; REM[1] = (uint32_t)(r >> 32);
+    nq = rt_mag_norm(Q, na); nrem = rt_mag_norm(REM, nb + 1);
+  } else if (sa) rt_mag_divmod(A, na, B, nb, Q, &nq, REM, &nrem);
   else { memset(Q, 0, ((size_t)na + 1) * 4); memset(REM, 0, ((size_t)nb + 1) * 4); }
   value_t out;
   switch (op) {
