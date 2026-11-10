@@ -35,7 +35,7 @@ checks=$((checks+1)); [ "$(grep -c '^PENDING ' "$OUT/load.txt")" = 0 ] || { bad 
 checks=$((checks+1)); [ "$(grep -c '^RUNNABLE ' "$OUT/load.txt")" = 0 ] || { bad "a function is RUNNABLE without a definition"; grep '^RUNNABLE ' "$OUT/load.txt" | head -5 | cut -c1-200; }
 # the theorem, its general form and the run lemmas: accepted, on Init's three axioms and nothing else
 accepted() { grep -q "^ACCEPT $1 " "$OUT/load.txt"; }
-for t in tb_len tb_len_aux len_ofNat len_S1 len_S2 len_S2_one len_E3a len_E3b len_T9_fail len_T9_ov len_T9_ret len_body_ret len_body_fail len_body_one; do
+for t in tb_len tb_len_aux len_ofNat len_E3b len_T9_fail len_T9_ov len_T9_ret len_body_ret len_body_fail len_body_one; do
   checks=$((checks+1)); accepted models.imp.len.$t || bad "models.imp.len.$t is not accepted"
 done
 checks=$((checks+1)); grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | grep -q 'axioms=\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\) ' || { bad "tb_len does not rest on Init's three axioms alone"; grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | cut -c1-200; }

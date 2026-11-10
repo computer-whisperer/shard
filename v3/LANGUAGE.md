@@ -4149,6 +4149,10 @@ what was done):
 1. *Whole-run `reduce`* — the unfolded product normalized in one step —
    ran past ten minutes and 11 GB on the cons case and was abandoned;
    the proof is bottom-up by the step laws (`step.shard`'s header).
+   *Amended 2026-11-10* (`docs/records/REDUCE-2026-11-10.md`): the cause
+   was K re-deriving `reduce`'s conversion steps over the whole goal;
+   `reduce` shows K each step since, and `len.shard`'s run lemmas run
+   the evaluator.
 2. *A measured `fn` on a Nat has one unconditional equation*, so
    `reduce` unfolds every inner call it meets. The evaluator is restated
    over the structural fuel (`Fuel`: `FZ`, `FS`; `fuel_of` the
@@ -5331,7 +5335,9 @@ The rules:
    prints them; `engine_test`'s mask and `tactic_lib_test`'s schema
    check follow the form.
 2. **Landing 2, the reconstruction contract.** `kernel/tactic.shard`
-   declares `reconstruction_version`, 1 at this landing: the version of
+   declares `reconstruction_version`, 1 at this landing (2 since
+   2026-11-10: `reduce`, `unfold` and `simp_only` compose their steps'
+   equations, `docs/records/REDUCE-2026-11-10.md`): the version of
    the I → P elaboration — law §7.2's "I schema and reconstruction
    version", split as the law splits them (the schema is the forms'
    syntax, 3.29 rule 4; the reconstruction is what `tac_prove` makes of

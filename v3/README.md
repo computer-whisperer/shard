@@ -2164,6 +2164,26 @@ older store is re-stored, the version stays the engine's. Carried: T6 as slice
 4.6, R85's origin map, the migration tool's frozen-requirement checks. Next:
 slice 4.6, T6 the embedding, designed at this boundary for ratification.
 
+**2026-11-10, outside the slice sequence — the reducer's certificate, the
+scan, the runtime's division, `len.shard` compact**
+(`docs/records/REDUCE-2026-11-10.md`; the user: "Agreed, let's land this. We
+should also replace len.shard with the compact version and fix the reducer's
+rescan first."). A measurement of slice 4.2's `len.shard` found 82% of its
+proof bytes the evaluator's trace and the cause of that style in how `reduce`
+showed K its steps: a K-convertible step changed the target and made no term,
+and K, re-deriving the loop by its own reduction, does not wait at an open
+discriminant as the reducer does. `reduce`, `unfold` and `simp_only` now carry
+an equation per step, composed as a balanced `Eq.trans` tree
+(`reconstruction_version` 2; 40 of the 421 theorems in `len`'s closure an
+evidence change, the sidecars at `(sidecar 3 2)`); the scan keeps a head
+constant's facts for the loop; the compiled runtime divides a dividend within
+128 bits by the machine's division, where every hash `mix` had been a
+bit-serial one — half of any load. `len.shard`'s run lemmas run the evaluator:
+148,227 bytes to 56,452, the run lemmas' proofs 93,999 to 3,018, every
+statement's hash kept, `tb_len` on Init's three axioms; its closure loads in
+26.8 s on the compiled loader against 53.8 s before any of it. Slice 4.6
+stands as proposed, not ratified.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
@@ -2272,10 +2292,9 @@ each against v4.33.1 and records any bump here.
 v3/README.md      this file: root, pins, phase status
 v3/MANIFEST.md    the port manifest — PORT / ARCHIVE / REGENERATE per family
 v3/INVENTORY.md   the shared-type inventory — imported identity, fields, view, realization
-v3/LANGUAGE.md    the V3 language — S, L and E at Stage 0 (phase 2 draft; I in phase 3)
+v3/LANGUAGE.md    the V3 language — S, L, E and I as phase 3 built them, with the slices' as-built records through phase 4
 v3/CANON.md       the canonical form of S — layout, the term tier over E, the L layer (phase 2, slice 8; the gate at phase 6)
-v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K; phase 2: prog, the reader tower, ev, realize
-v3/meta/          phase 3: the elaborators, I, the goal graph, tactics
+v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K (sealed in k/ since slice 3.8); phase 2: prog, the reader tower, ev, realize; phase 3: the elaborators, I, the goal graph, tactics, the store (planned as v3/meta/, built here; kernel/README.md is the file map)
 v3/std/           phase 3: the library under the naming law — Init is the library; std/README.md holds the records of the old modules (slice 3.27)
 v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use); template/ (slice 3.28: templates, lifted lambdas and a package in use)
 v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
