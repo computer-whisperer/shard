@@ -5790,7 +5790,8 @@ branch of `len`'s body and stops there.
 2026-11-11, outside the slice sequence, at the user's direction** (on
 the two ways to close the defect below — remove the operations that
 join two environments, or make them sound inside K — "Agreed with A --
-proceed."). It reopens slice 4.0 rule 4 (R78's checked transfer) and
+proceed."). **LANDED 2026-11-11** as designed, rule 7 measured. It
+reopens slice 4.0 rule 4 (R78's checked transfer) and
 the two environments of slices 3.25 and 3.26; the record is
 `docs/records/FOUNDATION.md` §5 ("Two environments joined").
 
@@ -5865,20 +5866,33 @@ the second line.
    fresh run over the first's environment mint above it — `h` is
    admitted and `h c1` refused; the citation case's `cp` and `c` are
    refused as already declared and `d` on its statement. Inside the
-   directory, `k/test`: after records, a raw inductive, a fresh run with
-   more records and a raw theorem, no id of the environment stands on
-   two different nodes and none exceeds the watermark. The pin
-   `k_client_transfer` (a client naming `env_transfer`, refused
-   `unknown_head`); `k_client_test`'s seven transfer cases go with the
-   operation.
-7. **Cost, stated before it is measured.** A feed re-reads the node
-   lines its records share with earlier feeds' records; nodes shared
-   between two feeds' records are two copies in the environment; a
-   re-rooted load re-checks what an earlier root demanded after its
-   first declaration.
+   directory, `k/test/add_test`: after records, a raw inductive, a fresh
+   run with more records, a raw inductive and a raw theorem, no id of
+   the environment stands on two different nodes and none exceeds the
+   watermark (a census of the environment's ids; its control an
+   environment only the directory can spell, two runs' first nodes as
+   two axioms' types: one id on two nodes). The pin `k_client_transfer`
+   (a client naming `env_transfer`, refused `unknown_head`);
+   `k_client_test`'s seven transfer cases went with the operation. The
+   same census over a loader's final environment (a scratch service of
+   the view, not kept): the load that had 8 ids on two nodes has none,
+   `models/imp/imp.shard` none.
+7. **Cost, measured** (each pair alternated; the record's fifth round).
+   A feed re-reads the node lines its records share with earlier feeds'
+   records; nodes shared between two feeds' records are two copies in
+   the environment; a re-rooted load re-checks what an earlier root
+   demanded after its first declaration. On the bootstrap:
+   `models/imp/imp.shard` (four demands) 36.9 s to 34.3 — the transfer
+   is gone —; the std root's ten files loaded and stored 86 s to 96,
+   `std_test` 154 s to 163; `calc_test` 225 s to 222; `loader_pins_test`,
+   which re-roots at every case, 63 s to 75 between two days' suites.
+   Compiled, the std root 5.0 s to 5.2 with the change below in it. Not
+   built: a feed's node lines kept between feeds (the lines are text;
+   kept as the loader holds text they are a multiple of the export's
+   part read).
 
-**The raw entry builds each structure once. DESIGNED 2026-11-11,
-outside the slice sequence, at the user's direction** (on the proposal
+**The raw entry builds each structure once. DESIGNED and LANDED
+2026-11-11, outside the slice sequence, at the user's direction** (on the proposal
 of 2026-11-10 — the cheap hash, then admission with its sharing, then
 the matcher's memo — "Good work. Let's continue with step 2"; with the
 defect above found on the way, "Agreed with A -- proceed.": the removal
@@ -5912,7 +5926,14 @@ a run lemma of 4.05 million nodes for 50 thousand distinct.
    that differ in name or info stay two nodes, so what is admitted is
    the submitted term, its display data where the author wrote it. Not
    a change of any verdict: `expr_eq` answers on the minted ids what it
-   answered by structure.
+   answered by structure. One thing a record shows does change: the
+   order in which it lists a closure's axioms is the collection's
+   (`axioms.shard`: `expr_consts`, each identified node read once), and
+   the collection now passes a shared subterm once where it passed a
+   tree — `Quot.sound,propext` reads `propext,Quot.sound` on one theorem
+   of the std root and one of calc's (nine of the 29 example roots load
+   it); the sets, the hashes and the requirement keys are the same, and
+   the model root's output is byte-identical.
 4. **The counter.** The nodes are minted above the environment's
    watermark by the state the check goes on with, and stand in the
    environment afterwards — which is why this follows "One environment,
@@ -5924,7 +5945,14 @@ a run lemma of 4.05 million nodes for 50 thousand distinct.
    nodes, each with its name, equal terms all the same. Case 16's eight
    stand as they were. `k/test`'s one-counter census covers what the
    entry mints.
-6. **Not built.** The walk itself: to spare it the producer must state
+6. **Measured** (the compiled loader before the two changes and after,
+   alternated twice; the record's fifth round has the table):
+   `len.shard` 16.7 s to 14.3, `app.shard` 19.9 s to 17.4, the model
+   root 33.2 s to 26.8 and its peak resident set 8.3 GB to 3.3. The
+   walk remains — 11.2 million node visits in `len.shard`'s load — and
+   with it most of what the proposal of 2026-11-10 expected of this
+   step.
+7. **Not built.** The walk itself: to spare it the producer must state
    its sharing — the tactic layer minting an id for what it builds, the
    entry reading a theorem's proof by those ids while its statement is
    read in full (a proof's identity carries no meaning: any term K

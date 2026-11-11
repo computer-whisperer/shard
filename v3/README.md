@@ -2221,8 +2221,28 @@ the change and needed 2.51 GB after it. The fourth round (2026-11-11; the
 user: "Agreed with fixing the evaluator's stack growth next."): no
 function of `ev.shard`'s machine takes more than six parameters now, so
 its tail calls are jumps once compiled — that test's stack 12 MB, its run
-1.8 s against 5.4, `rt.h`'s limit 2 GB as it was. Slice 4.6 stands as
-proposed, not ratified.
+1.8 s against 5.4, `rt.h`'s limit 2 GB as it was. The fifth round
+(2026-11-11; the user: "Good work. Let's continue with step 2", then,
+on the defect found on the way, "Agreed with A -- proceed."): **K's
+view had joined two environments** — a node's id is unique within the
+counter that minted it, and through `env_transfer` and `run_with_env` a
+client of the view had `(p : Prop) → p` accepted three ways; in the
+loader the Init run's counter and the environment's were independent (8
+ids each on two different nodes after one two-file load; no wrong
+verdict from source files was produced). Fixed by removal: no operation
+of the view takes two environments, Init's records are checked into the
+loader's own environment, a re-rooted load starts from a base of Init
+alone (`LANGUAGE.md` §8.6 "One environment, one counter";
+`docs/records/FOUNDATION.md` §5). On top of it **the raw entry builds
+each distinct structure once**, reading no claim (§8.6 of that name):
+`len.shard` 16.7 s to 14.3, the model root 33.2 s to 26.8 and its peak
+resident set 8.3 GB to 3.3, the model root's output byte-identical; a
+record on the std root and one on calc's list the same two axioms in
+the other order. The removal's cost: a demand reads again the node
+lines it shares with earlier ones (the std root's load 86 s to 96 on
+the bootstrap). Gates on the dev box: 29 roots built, both suites 44
+entrypoints with 0 failed, the tie 0 differ, T0 FULL == PINNED. Slice
+4.6 stands as proposed, not ratified.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -2265,6 +2285,15 @@ each closes on its named gate:
   the seal. **Met 2026-09-17:** the fixtures are `hostile_test` (a
   client) and `k_client_test` with `k_client_reach`; the consumer half
   the sealed-directory rule enforces for every file outside `k/`.
+  **Found open again 2026-11-11 and closed that day:** the seal kept
+  `CheckedEnv`'s constructor from a client and R43's branch discipline
+  did not hold of the view's own operations — `env_transfer` (slice
+  4.0's answer to R78) and `run_with_env` put two counters' nodes in
+  one environment, and a client had `(p : Prop) → p` accepted
+  (`docs/records/FOUNDATION.md` §5). Both operations are removed; the
+  raw entry mints what it rebuilds, each distinct structure once
+  (`LANGUAGE.md` §8.6; hostile battery 18 and 19, `add_test`'s
+  one-counter census, the pin `k_client_transfer`).
 - **R49, the matcher's kind check** — a theorem under a candidate's
   name was pinned (an authorization hole, no false theorem: K types a
   head before it reduces it); **fixed at slice 9 (2026-09-13)**,
