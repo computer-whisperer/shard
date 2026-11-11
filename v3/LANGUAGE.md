@@ -5968,6 +5968,99 @@ a run lemma of 4.05 million nodes for 50 thousand distinct.
    set theorems' values aside on that ground). Unmeasured; not
    ratified.
 
+**An id confirmed by its hash; the state's threading checked. DESIGNED
+2026-11-11, outside the slice sequence, at the user's direction** (on
+the audit's two questions — whether the readers of a node's id should
+compare its hash as well, and whether the audit's check of the state's
+threading should stand as a test — "1: A, 2: yes."). The record is
+`docs/records/FOUNDATION.md` §5, "The state's threading audited".
+
+*What the audit found.* Inside one check K never advances a state
+twice: read over every path of its 354 state-handling functions, three
+places apart that go on from an older state by design. The layers above
+K — elaborator, unifier, tactics, loader — do, by design untrusted, and
+a term of theirs can carry one id on two nodes; `expr_consts`, which
+passes a node whose id it has seen, read such terms for a definition's
+height (`def_height`) and a requirement's key (`req_key`) — five times
+in the suite, the heights right in all five.
+
+1. **The readers.** A node's id is read with its hash: `expr_eq`
+   answers false on unequal hashes whatever the ids, and true on equal
+   positive ids only under equal hashes; `same_node` and `ing_same`
+   likewise; the seen set of `used_consts` holds each id's hash, and a
+   node whose id stands there under another hash is read, not passed.
+   On a term whose ids are unique — every term K mints — no answer
+   changes. A term with one id on two nodes is read right unless the
+   two nodes' hashes are equal too: the hash is a fingerprint here as
+   everywhere (R42), and no reader leans on it more than before — the
+   id used to be believed alone.
+2. **The rebuild mints after it looks.** `ingest_expr` looks a compound
+   node up by its anonymous spelling — the hash and the shape, which no
+   id is part of — and mints only what the table lacks. The rule above
+   ("minted … and the minted one dropped with its id") is superseded:
+   no id is minted twice, and the rebuild is no longer one of the
+   three.
+3. **A run's resumption is named.** A record run that goes on after a
+   refused declaration, or after a table line that does not read, goes
+   on from the state it had: `run_resume` (`k/import.shard`), the
+   identity on a run, written at each such place. What the refused step
+   built is gone with its state — a `Failure` holds no term.
+4. **The check** (`thread.shard`, beside the World's and sharing its
+   walk's parts; the World's check is unchanged). Over an E function's
+   program, the token the checker's state `kernel.expr.St`; a box is a
+   value of a type one of whose fields names the state. An identity is
+   a *version* of the state:
+   (a) a box around one version is that version; a match on a box, a
+   variable bound to it, a constructor around it and a reader of it are
+   no use;
+   (b) a use is an argument at a parameter the callee *advances*; a
+   join of two branches that carry different versions (each yields its
+   own, the value after them is fresh); a box built around two
+   versions; the return of a version already used;
+   (c) a function's parameters are *advanced* (the version is used in
+   its body), *returned* (the result is that parameter's own version,
+   unused) or read — found with the verdicts, to a fixpoint over a
+   file's functions, the files in load order;
+   (d) a *primitive* is a function that matches the state itself or
+   builds one: its verdict is `primitive` and nothing else, its state
+   parameters advanced when its result carries a state and read when it
+   carries none;
+   (e) `run_resume`: its argument is read and its result a fresh
+   version, and a function's verdict counts the resumptions it makes;
+   (f) refused conservatively (`unsupported`): a state at a polymorphic
+   parameter or a primitive operation, a callee the table lacks, a box
+   of two states matched.
+   The fault: a version used twice along a path — `STATE NAME reused:`
+   with the version's origin and its two uses.
+5. **Where it runs.** On request (`load.shard --state`): at each
+   file's end a `STATE NAME VERDICT` record for every function of the
+   file that takes or returns the state. A plain load does not run it:
+   outside the kernel's own sources no function names the state, and
+   the layers above K reuse states (205 of their 937 such functions, by
+   the audit) — what they build is accepted only as the raw entry
+   rebuilds it, and rule 1 makes K's services answer rightly about it.
+6. **The gate.** `state_test.sh`, in the suite on both engines and
+   tied: the kernel's implementation loaded under `--state`
+   (`kernel/t0.shard` with `kernel/k`) — no `reused`, no `unsupported`;
+   the primitives exactly the twelve of the audit; the resumptions
+   exactly `check_into` 3 and `process_record` 1; no fewer than 300
+   functions judged. The controls, the root `v3/pins/state`: a fork, a
+   rewind, a mint dropped and its caller, each again through a record,
+   a branch that rewinds and a local minted twice are `reused`; the
+   four linear spellings beside them are `ok`.
+7. **The regression for rule 1.** Hostile battery 21: two nodes forged
+   under one id — `expr_eq` and `same_node` say different; the
+   constants of a term that holds both are both collected.
+8. **The accelerators' cases** (the audit's survey). `tc_test` gains a
+   result case for `mul`, `land`, `lor` and `shiftRight` (with the
+   shift past the operand's width), an operand or a result past the
+   machine word for each of the fourteen operations — both engines, tied
+   —, the size limit at `shiftLeft`, and a wrong result refused for
+   each operation.
+9. **Not in this.** The layers above K made linear; the id's writers as
+   a check (a positive id is written by the five `new_*` constructors
+   alone, each from `st_fresh_node` — read in the audit, not gated).
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
