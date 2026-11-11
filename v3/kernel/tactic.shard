@@ -97,7 +97,7 @@
   (NWf SExpr SExpr Name (List Node))          ; (wf LOCAL MEASURE IH STEP…)
   (NDecide)                                   ; decide
   (NUnfold (List Name))                       ; (unfold NAME…)
-  (NReduce Symbol)                            ; (reduce), (reduce lhs), (reduce rhs)
+  (NReduce Symbol (List (Pair Bool SExpr)))   ; (reduce SIDE? (using RULE…)?): the side (both, lhs, rhs); the rules, each a lemma and whether it is reversed
   (NRw Bool SExpr Int (Option SExpr) (List Node))   ; (rw LEMMA | (<- LEMMA)) (occ K EXPECT?)? (STEP…)…: K = 0 is every occurrence; EXPECT the instance expected at the occurrence (slice 3.29 rule 5: refused rw_occ_changed when another is found)
   (NSorry)                                    ; sorry
   (NArith Bool (List SExpr) (List (List Int))) ; (arith only? FACT… (farkas K…)?): only (no context row; slice 3.22 rule 3), the facts, the certificates given (two for an equation)
@@ -123,7 +123,7 @@
      (if (sym_eq x (quote rfl)) (NROk (NRfl))
      (if (sym_eq x (quote sorry)) (NROk (NSorry))
      (if (sym_eq x (quote decide)) (NROk (NDecide))
-     (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both)))
+     (if (sym_eq x (quote reduce)) (NROk (NReduce (quote both) Nil))
      (if (sym_eq x (quote arith)) (NROk (NArith False Nil Nil))
        (NRErr (quote unknown_step) (append (chars_of_sym x) ": not a form of I (rfl, sorry, decide, reduce, arith, or a list); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)"))))))))
     ((SList (Cons (SSym h) args))
@@ -240,11 +240,23 @@
     (_ (NRErr (quote bad_step) "(wf LOCAL MEASURE IH STEP…)"))))
 (fn read_reduce ((args (List SExpr))) NodeRes
   (match args
-    (Nil (NROk (NReduce (quote both))))
-    ((Cons (SSym side) Nil)
-     (if (bool_or (sym_eq side (quote lhs)) (sym_eq side (quote rhs))) (NROk (NReduce side))
-       (NRErr (quote bad_step) "(reduce), (reduce lhs) or (reduce rhs)")))
-    (_ (NRErr (quote bad_step) "(reduce), (reduce lhs) or (reduce rhs)"))))
+    ((Cons (SSym side) r)
+     (if (bool_or (sym_eq side (quote lhs)) (sym_eq side (quote rhs))) (read_reduce_with side r)
+       (NRErr (quote bad_step) "(reduce SIDE? (using RULE…)?): SIDE is lhs or rhs")))
+    (_ (read_reduce_with (quote both) args))))
+(fn read_reduce_with ((side Symbol) (args (List SExpr))) NodeRes
+  (match args
+    (Nil (NROk (NReduce side Nil)))
+    ((Cons (SList (Cons (SSym w) rules)) Nil)
+     (if (sym_eq w (quote using))
+       (match rules
+         (Nil (NRErr (quote bad_step) "(using RULE…) names at least one rule"))
+         (_ (NROk (NReduce side (read_rules rules Nil)))))
+       (NRErr (quote bad_step) "(reduce SIDE? (using RULE…)?): after the side, (using RULE…) and nothing else")))
+    (_ (NRErr (quote bad_step) "(reduce SIDE? (using RULE…)?): after the side, (using RULE…) and nothing else"))))
+(fn read_rules ((ss (List SExpr)) (acc (List (Pair Bool SExpr)))) (List (Pair Bool SExpr))
+  (measure (struct ss))
+  (match ss (Nil (rev acc)) ((Cons t r) (read_rules r (Cons (rw_lemma t) acc)))))
 (fn read_rw ((args (List SExpr))) NodeRes
   (match args
     ((Cons lem rest)
@@ -529,7 +541,7 @@
        ((NWf x m ih b) (step_wf e1 ctx target x m ih b))
        ((NDecide) (step_decide e1 ctx target))
        ((NUnfold ns) (step_unfold e1 ctx target ns))
-       ((NReduce side) (step_reduce e1 ctx target side))
+       ((NReduce side rules) (step_reduce e1 ctx target side rules))
        ((NRw rv lem occ ex bs) (step_rw e1 ctx target rv lem occ ex bs))
        ((NArith only facts certs) (step_arith e1 ctx target only facts certs))
        ((NSimp rules) (step_simp e1 ctx target rules))
@@ -609,7 +621,7 @@
           ((EUOk e2) (step_close e2 ctx (mk_app (mk_app (mk_const (nm_eq_refl) (list u)) ty) a) Nil Nil))
           ((EUStuck i) (match (eu_refusal e1 (EUStuck i) (EErr (quote rfl_failed) "")) ((EErr x m) (StepErr x m)) (_ (StepErr (quote rfl_failed) ""))))
           ((EUExhausted s) (StepErr (quote unify_exhausted) (append "unification ran out at " (chars_of_sym s))))
-          (EUNo (StepErr (quote rfl_failed) (append "the sides are not convertible: " (append (tc_show_closed e1 ctx a) (append " and " (tc_show_closed e1 ctx b))))))))))))
+          (EUNo (StepErr (quote rfl_failed) (append "the sides are not convertible" (append (waits_note e1 ctx tw) (append ": " (append (tc_show_closed e1 ctx a) (append " and " (tc_show_closed e1 ctx b))))))))))))))
 ;; `@Eq.{u} ty a b` taken apart
 (fn eq_sides ((t Expr)) (Option (Pair Level (Pair Expr (Pair Expr Expr))))
   (match (get_app_fn t)
@@ -1265,6 +1277,7 @@
 ;; whether it is an unfolding at a closed occurrence
 (type Evid
   (EvEq Expr Expr Bool)   ; an equation: its carrier, its proof instantiated, whether that proof is Eq.refl (the step K-convertible)
+  (EvRule Int Expr Expr)  ; a rule of (using …): its place in the list, its carrier, its proof instantiated
   (EvConv))               ; K's own step on the subterm — a case step, a whnf step, a delta step: K-convertible
 (type Redex (Redex Expr Expr Evid Bool))
 (type Found (FoundOk El Redex) (FoundNone El) (FoundErr Symbol (List Int)))
@@ -1450,6 +1463,167 @@
   (match masks
     (Nil t)
     ((Cons (Pair fv s) r) (unmask r (tc_replace t fv s 0)))))
+;; ---- reduce's rules: (reduce SIDE? (using RULE…)) -------------------------------------------
+;; A rule is a fact the run rewrites by where its left side stands: a hypothesis, a lemma
+;; applied to its premises ((if_pos h)), a lemma whose data arguments the match finds. It
+;; carries its place in the list (from 1), the head of its left side — a constant, a local, or
+;; neither —, the functions that left side applies (the run holds them: rules_hold), that left
+;; side as first elaborated (an argument left open a metavariable: the scan's test before a rule
+;; is elaborated at a subterm) and as shown then (its metavariables are that elaboration's: a
+;; later state would read them as its own), whether it is reversed, its term. A rule is
+;; elaborated anew where it is tried: what the elaborator left open is the match's to assign,
+;; per use. Nothing is looked for: a rule with an argument its left side does not fix
+;; — a premise, a value only a premise fixes — is refused before the run
+(type RuleHead (RhConst Name) (RhLocal Expr) (RhAny))
+(type Rule (Rule Int RuleHead (List Name) Expr (List Int) Bool SExpr))
+(type RulesRes (RulesOk (List Rule)) (RulesErr Symbol (List Int)))
+(fn rules_prepare ((e El) (ctx (List Expr)) (rules (List (Pair Bool SExpr))) (idx Int) (acc (List Rule))) RulesRes
+  (measure (struct rules))
+  (match rules
+    (Nil (RulesOk (rev acc)))
+    ((Cons (Pair rv lem) r)
+     (match (elab e lem None)
+       ((EErr x m) (RulesErr x (append "rule " (append (show_nat idx) (append ": " m)))))
+       ((EOk e1 v ty)
+        (match (eq_of_lemma e1 v ty)
+          ((EqErr x m) (RulesErr x (append "rule " (append (show_nat idx) (append ": " (append m (fn_not_rule e1 v " — reduce applies a function's equations unnamed: leave it out (a constant without arguments unfolds by (unfold NAME), or by its NAME.eq_1 as the rule)")))))))
+          ((EqOk e2 _ _ _ l rr ms)
+           (let ((pat (el_zonk e2 (if rv rr l))))
+             (match (open_arg e2 ms (mvars_of pat Nil))
+               ((Some ty) (RulesErr (quote reduce_rule_open) (append "rule " (append (show_nat idx) (append " has an argument its left side does not fix, of type " (append (tc_show_closed e2 ctx ty) ": a rule is given its premises, as (if_pos h) — reduce looks for none"))))))
+               (None (rules_prepare e ctx r (+ idx 1) (Cons (Rule idx (rule_head pat) (pat_fns e2 (tc_subterms pat Nil) Nil) pat (tc_show_closed e2 ctx pat) rv lem) acc))))))))))))
+;; the first binder left open that the left side does not hold: its type
+(fn open_arg ((e El) (ms (List Expr)) (inpat (List Int))) (Option Expr)
+  (measure (struct ms))
+  (match ms
+    (Nil None)
+    ((Cons (MVar _ i) r)
+     (match (mc_assigned (el_mc e) i)
+       ((Some _) (open_arg e r inpat))
+       (None
+        (if (has_int inpat i) (open_arg e r inpat)
+          (match (mc_decl (el_mc e) i)
+            (None (open_arg e r inpat))
+            ((Some d) (Some (el_zonk e (md_type d)))))))))
+    ((Cons _ r) (open_arg e r inpat))))
+;; the pointer where a function's name stands for a rule
+(fn fn_not_rule ((e El) (v Expr) (pointer (List Int))) (List Int)
+  (match (get_app_fn v)
+    ((Const _ f _) (match (equations_of e f) (Nil "") (_ pointer)))
+    (_ "")))
+(fn rule_head ((pat Expr)) RuleHead
+  (match (get_app_fn pat)
+    ((Const _ f _) (RhConst f))
+    ((FVar n i) (RhLocal (FVar n i)))
+    (_ (RhAny))))
+(fn rule_head_fits ((h RuleHead) (s Expr)) Bool
+  (match h
+    ((RhConst f) (match (get_app_fn s) ((Const _ g _) (name_eq f g)) (_ False)))
+    ((RhLocal x) (expr_eq (get_app_fn s) x))
+    (RhAny True)))
+;; the functions a rule's left side applies: the constants with equations that head an
+;; application among its subterms, its own head among them
+(fn pat_fns ((e El) (subs (List Expr)) (acc (List Name))) (List Name)
+  (measure (struct subs))
+  (match subs
+    (Nil acc)
+    ((Cons s r)
+     (if (bool_not (is_app s)) (pat_fns e r acc)
+       (match (get_app_fn s)
+         ((Const _ f _)
+          (if (mem_name f acc) (pat_fns e r acc)
+            (match (equations_of e f) (Nil (pat_fns e r acc)) (_ (pat_fns e r (Cons f acc))))))
+         (_ (pat_fns e r acc)))))))
+;; the hold: an application of a function some rule's left side applies — at its head or
+;; anywhere inside — has its equations wait while a rule or another redex is found. The run
+;; does not take apart what a fact is made of: a call a fact speaks of keeps its form while its
+;; arguments reach the form the fact states, and the fact's own arguments keep theirs (a call's
+;; result rewritten in, not the call run). A case step is never held: an `ite` kept from its
+;; step has its instance reduced in place, and the rewrite of a subterm a proof inside it is
+;; typed by makes a motive K refuses
+(fn rules_hold ((rules (List Rule)) (f Name)) Bool
+  (measure (struct rules))
+  (match rules
+    (Nil False)
+    ((Cons (Rule _ _ fs _ _ _ _) r) (if (mem_name f fs) True (rules_hold r f)))))
+;; whether the left side as first elaborated can match the subterm: a metavariable fits
+;; anything, the rest by structure (no state: the scan asks it at every subterm a head fits)
+(fn pat_fits ((p Expr) (t Expr) (d Int)) Bool
+  (measure d)
+  (if (< d 1) True
+    (match p
+      ((MVar _ _) True)
+      ((App _ pf pa) (match t ((App _ tf ta) (if (pat_fits pf tf (- d 1)) (pat_fits pa ta (- d 1)) False)) (_ False)))
+      ((Const _ n _) (match t ((Const _ m _) (name_eq n m)) (_ False)))
+      (_ (expr_eq p t)))))
+;; the first rule that rewrites the subterm: its left side matches, nothing of it is left
+;; open, and the right side neither is the subterm nor holds it. A subterm under a binder is
+;; left to the reduction (no motive abstracts it)
+(fn try_rules ((e El) (s Expr) (rules (List Rule))) Found
+  (measure (struct rules))
+  (match rules
+    (Nil (FoundNone e))
+    ((Cons (Rule i h _ pat _ rv lem) r)
+     (if (bool_or (bool_not (rule_head_fits h s)) (bool_or (has_loose_bvars s) (bool_not (pat_fits pat s 64)))) (try_rules e s r)
+       (match (try_rule e s i rv lem)
+         ((FoundOk e1 rd) (FoundOk e1 rd))
+         (_ (try_rules e s r)))))))
+(fn try_rule ((e El) (s Expr) (i Int) (rv Bool) (lem SExpr)) Found
+  (match (elab e lem None)
+    ((EErr _ _) (FoundNone e))
+    ((EOk e1 v ty)
+     (match (eq_of_lemma e1 v ty)
+       ((EqErr _ _) (FoundNone e))
+       ((EqOk e2 v1 u a l rr _)
+        (match (tac_match e2 (if rv rr l) s)
+          (None (FoundNone e))
+          ((Some e3)
+           (let ((rz (el_zonk e3 (if rv l rr))) (az (el_zonk e3 a)) (hz (el_zonk e3 v1)))
+             (if (bool_or (has_mvar rz) (bool_or (< 0 (tc_count rz s)) (match (tac_unsolved e3 hz) ((Some _) True) (None False)))) (FoundNone e)
+               (FoundOk e3 (Redex s rz (EvRule i az (if rv (mk_app_n (mk_const (n2 (quote Eq) (quote symm)) (list u)) (list az (el_zonk e3 l) (el_zonk e3 rr) hz)) hz)) False)))))))))))
+;; the rules that rewrote: a rule that never did is refused at the run's end (the list is what
+;; the run used, no more)
+(fn has_int ((is (List Int)) (i Int)) Bool
+  (measure (struct is))
+  (match is (Nil False) ((Cons j r) (if (= i j) True (has_int r i)))))
+(fn fired_add ((fired (List Int)) (rd Redex)) (List Int)
+  (match rd ((Redex _ _ (EvRule i _ _) _) (if (has_int fired i) fired (Cons i fired))) (_ fired)))
+(fn rule_unused ((rules (List Rule)) (fired (List Int))) (Option Rule)
+  (measure (struct rules))
+  (match rules
+    (Nil None)
+    ((Cons (Rule i h fs pat sh rv lem) r) (if (has_int fired i) (rule_unused r fired) (Some (Rule i h fs pat sh rv lem))))))
+;; ---- where a run waits ------------------------------------------------------------------------
+;; a case analysis waiting at an open discriminant (alt_open_discriminant): that discriminant
+(fn wait_disc ((e El) (s Expr)) (Option Expr)
+  (match (get_app_fn s)
+    ((Const _ f _)
+     (if (has_loose_bvars s) None
+       (match (alt_positions e f (len (get_app_args s)))
+         (Nil None)
+         (_ (if (alt_open_discriminant e f (get_app_args s)) (nth (get_app_args s) (alt_discriminant_index e f)) None)))))
+    (_ None)))
+(fn waits_any ((e El) (subs (List Expr))) Bool
+  (measure (struct subs))
+  (match subs (Nil False) ((Cons s r) (match (wait_disc e s) ((Some _) True) (None (waits_any e r))))))
+;; the first waiting case analysis with none waiting inside its discriminant — where the run
+;; stands, not what stands on it: an `ite`'s condition, a matcher's scrutinee
+(fn waits_leaf ((e El) (subs (List Expr))) (Option Expr)
+  (measure (struct subs))
+  (match subs
+    (Nil None)
+    ((Cons s r)
+     (match (wait_disc e s)
+       (None (waits_leaf e r))
+       ((Some d) (if (waits_any e (rev (tc_subterms d Nil))) (waits_leaf e r) (Some (wait_shown s d))))))))
+(fn wait_shown ((s Expr) (d Expr)) Expr
+  (match (get_app_fn s)
+    ((Const _ f _) (if (bool_or (name_eq f (n1 (quote ite))) (name_eq f (n1 (quote dite)))) (match (nth (get_app_args s) 1) ((Some c) c) (None d)) d))
+    (_ d)))
+(fn waits_note ((e El) (ctx (List Expr)) (t Expr)) (List Int)
+  (match (waits_leaf e (rev (tc_subterms t Nil)))
+    (None "")
+    ((Some d) (append " — a case analysis waits at " (take 600 (tc_show_closed e ctx d))))))
 ;; the first redex among the subterms (pre-order): a `fn` by its equations only, a stuck
 ;; eliminator never, a case analysis at a decided scrutinee by its alternative, anything else by
 ;; K's whnf or one delta step where it progresses — on a CLOSED subterm only (slice 4.2 landing
@@ -1457,39 +1631,43 @@
 ;; 1` to its well-founded internals, `a + 8` to eight successors) and buries the term a later
 ;; rewrite must match; an open occurrence unfolds by its equations, by a case step, or by name.
 ;; `only` restricts to the named constants (unfold), open or closed
-(fn find_redex ((e El) (hs (List HeadFacts)) (subs (List Expr)) (only (List Name))) (Pair (List HeadFacts) Found)
+(fn find_redex ((e El) (rules (List Rule)) (hs (List HeadFacts)) (subs (List Expr)) (only (List Name))) (Pair (List HeadFacts) Found)
   (measure (struct subs))
   (match subs
     (Nil (Pair hs (FoundNone e)))
     ((Cons s r)
+     (match (try_rules e s rules)
+       ((FoundOk e9 rd) (Pair hs (FoundOk e9 rd)))
+       (_
      (match (get_app_fn s)
        ((Const _ f _)
-        (if (bool_and (bool_not (= (len only) 0)) (bool_not (mem_name f only))) (find_redex e hs r only)
-        (if (bool_and (= (len only) 0) (= (len (get_app_args s)) 0)) (find_redex e hs r only)   ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
+        (if (bool_and (bool_not (= (len only) 0)) (bool_not (mem_name f only))) (find_redex e rules hs r only)
+        (if (bool_and (= (len only) 0) (= (len (get_app_args s)) 0)) (find_redex e rules hs r only)   ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
           (match (head_of e hs f)
             ((Pair hs1 (HeadFacts _ Nil red))
              (if (if (= (len only) 0) (if red (is_proposition e s) True) False)   ; asked in this order: the type of a constructor's application is never inferred
-               (find_redex e hs1 r only)
+               (find_redex e rules hs1 r only)
                (match (alt_step e s)
                  ((Pair e0 (Some t)) (Pair hs1 (FoundOk e0 (Redex s t EvConv False))))
                  ((Pair e0 None)
-               (if (bool_and (= (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s))) (find_redex e0 hs1 r only)   ; the goal's context is bound in the closed target
+               (if (bool_and (= (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s))) (find_redex e0 rules hs1 r only)   ; the goal's context is bound in the closed target
                (match (whnf_progress e0 hs1 s)
                  ((Pair hs2 (Pair e1 (Some t))) (Pair hs2 (FoundOk e1 (Redex s t EvConv False))))
                  ((Pair hs2 (Pair e1 None))
                   (match (delta_once e1 s)
                     ((Pair e2 (Some t)) (Pair hs2 (FoundOk e2 (Redex s t EvConv False))))
-                    ((Pair e2 None) (find_redex e2 hs2 r only))))))))))
+                    ((Pair e2 None) (find_redex e2 rules hs2 r only))))))))))
             ((Pair hs1 (HeadFacts _ eqns _))
+             (if (rules_hold rules f) (find_redex e rules hs1 r only)   ; a function a rule's left side applies: its equations wait while anything else steps (reduce_loop)
              (match (try_equations e s eqns (bool_not (= (len only) 0)))
                ((FoundOk e1 rd) (Pair hs1 (FoundOk e1 rd)))
-               (_ (find_redex e hs1 r only))))))))
+               (_ (find_redex e rules hs1 r only)))))))))
        (_
         (if (= (len only) 0)
           (match (whnf_progress e hs s)
             ((Pair hs1 (Pair e1 (Some t))) (Pair hs1 (FoundOk e1 (Redex s t EvConv False))))
-            ((Pair hs1 (Pair e1 None)) (find_redex e1 hs1 r only)))
-          (find_redex e hs r only)))))))
+            ((Pair hs1 (Pair e1 None)) (find_redex e1 rules hs1 r only)))
+          (find_redex e rules hs r only)))))))))
 ;; a case analysis at a decided scrutinee takes one step, to its alternative (slice 3.21). K's
 ;; whnf goes on into the alternative's body — an `ite` on an open condition there is a stuck
 ;; Decidable.rec, which whnf_progress reads as no progress — so the alternatives (an `ite`'s
@@ -1607,6 +1785,7 @@
 (fn redex_evidence ((e El) (s Expr) (t Expr) (ev Evid)) (Pair El (Option (Pair Expr Expr)))
   (match ev
     ((EvEq ty heq conv) (if (bool_and conv (has_loose_bvars s)) (Pair e None) (Pair e (Some (Pair ty heq)))))
+    ((EvRule _ ty heq) (Pair e (Some (Pair ty heq))))
     (EvConv
      (if (has_loose_bvars s) (Pair e None)
        (match (el_infer e s)
@@ -1615,7 +1794,7 @@
           (match (tac_sort_level e1 ty)
             ((Pair e2 None) (Pair e2 None))
             ((Pair e2 (Some u)) (Pair e2 (Some (Pair ty (mk_app (mk_app (mk_const (nm_eq_refl) (list u)) ty) t))))))))))))
-(fn evid_convertible ((ev Evid)) Bool (match ev ((EvEq _ _ conv) conv) (EvConv True)))
+(fn evid_convertible ((ev Evid)) Bool (match ev ((EvEq _ _ conv) conv) ((EvRule _ _ _) False) (EvConv True)))
 ;; a loop's certified steps: from, to, the equation from = to; kept latest first
 (type Leg (Leg Expr Expr Expr))
 (fn legs_add ((legs (List Leg)) (from Expr) (to Expr) (eqn (Option Expr))) (List Leg)
@@ -1655,17 +1834,26 @@
 ;; rewrites and 64 unfoldings of a function at closed arguments (a ground computation deeper
 ;; than that — a condition no reduction decides, a long recursion — is the author's to unfold,
 ;; until evaluation reflection)
-(fn reduce_loop ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (hs (List HeadFacts)) (side Symbol) (budget Int) (unfolds Int)) Loop
+(fn reduce_loop ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (hs (List HeadFacts)) (rules (List Rule)) (fired (List Int)) (side Symbol) (budget Int) (unfolds Int)) Loop
   (measure budget)
   (if (< budget 1) (LoopErr (quote reduce_budget) "the normalization ran out of budget (2000 rewrites)")
   (if (< 64 unfolds) (LoopErr (quote reduce_budget) (append "64 unfoldings of a function at closed arguments did not end the computation: " (tc_show_closed e ctx target)))
-    (match (find_redex e hs (rev (tc_subterms (side_of target side) Nil)) Nil)
+    (match (find_redex e rules hs (rev (tc_subterms (side_of target side) Nil)) Nil)
       ((Pair _ (FoundErr x m)) (LoopErr x m))
-      ((Pair _ (FoundNone e1)) (loop_end e1 ctx cur start target legs))   ; a normalization: nothing to do is done (slice 3.21b rule 3; reduce_stuck before)
-      ((Pair hs1 (FoundOk e1 rd))
-       (match (redex_apply e1 ctx target rd)
-         ((RaErr x m) (LoopErr x m))
-         ((RaOk e2 target1 eqn) (reduce_loop e2 ctx cur start target1 (legs_add legs target target1 eqn) hs1 side (- budget 1) (if (redex_unfolds rd) (+ unfolds 1) unfolds)))))))))
+      ((Pair hs0 (FoundNone e0))
+       (match (match rules (Nil (Pair hs0 (FoundNone e0))) (_ (find_redex e0 Nil hs0 (rev (tc_subterms (side_of target side) Nil)) Nil)))   ; no rule and nothing beside what the rules hold: that steps
+         ((Pair _ (FoundErr x m)) (LoopErr x m))
+         ((Pair _ (FoundNone e1))   ; a normalization: nothing to do is done (slice 3.21b rule 3; reduce_stuck before) — and every rule given was used
+          (match (rule_unused rules fired)
+            (None (loop_end e1 ctx cur start target legs))
+            ((Some (Rule i _ _ _ sh _ _))
+             (LoopErr (quote reduce_rule_unused) (append "rule " (append (show_nat i) (append " rewrote nothing: no subterm of the run matched its left side, " (append sh (append ", in " (append (show_nat (- 2000 budget)) (append " rewrites" (waits_note e1 ctx (side_of target side)))))))))))))
+         ((Pair hs1 (FoundOk e1 rd)) (reduce_step e1 ctx cur start target legs hs1 rules fired side budget unfolds rd))))
+      ((Pair hs1 (FoundOk e1 rd)) (reduce_step e1 ctx cur start target legs hs1 rules fired side budget unfolds rd))))))
+(fn reduce_step ((e El) (ctx (List Expr)) (cur Goal) (start Expr) (target Expr) (legs (List Leg)) (hs (List HeadFacts)) (rules (List Rule)) (fired (List Int)) (side Symbol) (budget Int) (unfolds Int) (rd Redex)) Loop
+  (match (redex_apply e ctx target rd)
+    ((RaErr x m) (LoopErr x m))
+    ((RaOk e2 target1 eqn) (reduce_loop e2 ctx cur start target1 (legs_add legs target target1 eqn) hs rules (fired_add fired rd) side (- budget 1) (if (redex_unfolds rd) (+ unfolds 1) unfolds)))))
 (fn redex_unfolds ((rd Redex)) Bool (match rd ((Redex _ _ _ u) u)))
 ;; unfold: the occurrences of the named constants present when the step starts, each
 ;; rewritten once by the first of its equations that matches (an unfolding equation among
@@ -1679,7 +1867,7 @@
        (loop_end e ctx cur start target legs)))
     ((Cons s r)
      (if (= (tc_count target s) 0) (unfold_loop e ctx cur start target legs hs only r made)
-       (match (find_redex e hs (list s) only)
+       (match (find_redex e Nil hs (list s) only)
          ((Pair _ (FoundErr x m)) (LoopErr x m))
          ((Pair hs1 (FoundNone e1)) (unfold_loop e1 ctx cur start target legs hs1 only r made))
          ((Pair hs1 (FoundOk e1 rd))
@@ -1705,15 +1893,18 @@
       ((Some (Pair _ (Pair _ (Pair l r)))) (if (sym_eq side (quote lhs)) l r))
       (None target))))
 ;; each loop starts on a goal of its own, so the step's goal is assigned like any other
-(fn step_reduce ((e El) (ctx (List Expr)) (target0 Expr) (side Symbol)) TStep
+(fn step_reduce ((e El) (ctx (List Expr)) (target0 Expr) (side Symbol) (rules0 (List (Pair Bool SExpr)))) TStep
   (let ((target (el_zonk e target0)))
-    (match (tac_goal e ctx target)
-      ((Made e1 g0 occ0)
-       (match (tac_close e1 ctx occ0)
-         ((Pair e2 filling0)
-          (match (reduce_loop e2 ctx g0 target target Nil Nil side 2000 0)
-            ((LoopErr x m) (StepErr x m))
-            ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))
+    (match (rules_prepare e ctx rules0 1 Nil)
+      ((RulesErr x m) (StepErr x m))
+      ((RulesOk rules)
+       (match (tac_goal e ctx target)
+         ((Made e1 g0 occ0)
+          (match (tac_close e1 ctx occ0)
+            ((Pair e2 filling0)
+             (match (reduce_loop e2 ctx g0 target target Nil Nil rules Nil side 2000 0)
+               ((LoopErr x m) (StepErr x m))
+               ((LoopOk e3 g) (StepOk e3 filling0 Nil Nil (Some g))))))))))))
 ;; (unfold NAME…): the names resolved as constants of the scope
 (fn step_unfold ((e El) (ctx (List Expr)) (target0 Expr) (ns (List Name))) TStep
   (let ((target (el_zonk e target0)))
@@ -1833,7 +2024,7 @@
        ((EErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " m)))))
        ((EOk e1 v ty)
         (match (eq_of_lemma e1 v ty)
-          ((EqErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " m)))))
+          ((EqErr x m) (RaErr x (append "rule " (append (show_nat idx) (append ": " (append m (fn_not_rule e1 v " — a function is not a rule of simp_only: its equations are reduce's; (reduce (using FACT…)) runs it with the facts")))))))
           ((EqOk e2 v1 u a l rr ms)
            (let ((pat (if rv rr l)) (rhs (if rv l rr)))
              (match (simp_match e2 ctx pat ms (rev (tc_subterms target Nil)))

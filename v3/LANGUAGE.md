@@ -2350,10 +2350,14 @@ conversion; the API is sequential (`goal_of`, `applicable`, `step`,
    stuck eliminator, a lambda, an inductive's, a constructor's or a
    proposition's application; a computation rule (a constructor or
    literal in its left side) applies anywhere, an unfolding only to a
-   ground occurrence under a budget of 64; a definitional equation
-   contributes no term, a propositional one is a rewrite of rule 5
-   with a continuation goal; a `def` with no equations by one delta
-   step (`delta_once`). A measured function has its equations, each
+   ground occurrence under a budget of 64; an equation's step —
+   definitional or propositional — is a rewrite of rule 5 shown to K,
+   the loop's rewrites composed under one `Eq.mpr` (reconstruction
+   version 2, 2026-11-10, `docs/records/REDUCE-2026-11-10.md`; version 1
+   left a definitional equation to conversion, with no term); a `def`
+   with no equations by one delta step (`delta_once`). With
+   `(using RULE…)` the run rewrites by the given facts as it goes
+   (§8.6, "The run with its facts", 2026-11-10). A measured function has its equations, each
    leaf's proven by `WellFounded.fix_eq` at the instance (the
    obligations admitted into the walk first); since 3.27 landing 3
    the reducer reads a realization's equations too. Since 4.2 landing
@@ -5618,6 +5622,147 @@ migration tool's frozen-requirement checks, the consumer of `req=`; the
 manifest's `decl` line's future; a requirement on a non-theorem's
 record. Next: slice 4.6, T6 the embedding, designed at this boundary for
 ratification.
+
+**The run with its facts — `(reduce SIDE? (using RULE…))`. DESIGNED
+2026-11-10, outside the slice sequence, at the user's direction
+("Assuming you agree this is reasonable, let's continue with the
+automation project."; on the review against law §7 and the Lean
+paradigm, "Agreed, proceed with items 1-6 and the app.shard result"; on
+the hold's limit that `app.shard` showed, "Let's generalize the rule --
+proceed."). LANDED 2026-11-10** with `len.shard` and `app.shard`
+rewritten on it (`docs/records/REDUCE-2026-11-10.md`, the second round).
+It amends §8.4's rule 6 (`reduce`); slice 4.6 stands as proposed.
+
+*The gap, measured* (the record's first round). After `reduce` showed K
+its steps, `len.shard`'s run lemmas ran the evaluator, and were still cut
+in pieces — a statement fragment in each statement, the main theorem
+restating each piece's conclusion to assemble a call. The cut was forced
+at one place: a lemma over a whole call cannot use the hypothesis about
+the call inside it. `reduce` runs on into that call before a `rw` can put
+its result in; the device that kept a sub-run folded (its `fuel_of` not
+yet turned to `FS`) does not hold where an earlier statement of the same
+list needs fuel below the sub-run's level. Tried and found: the
+whole-call proof by the forms of that day goes through every load and
+branch of `len`'s body and stops there.
+
+1. **The form.** `(reduce (using RULE…))`, `(reduce lhs (using RULE…))`,
+   `(reduce rhs (using RULE…))`; a rule is a term, or `(<- TERM)` for
+   the equation reversed, as `rw`'s lemma is. `using`, since the reader
+   takes `(with …)` for a record's update. I's `reduce` node carries
+   the side and the rules in order; the engine's printer writes them
+   (the engine produces none: that branch of the printer no test runs).
+2. **A rule** is a term whose type, its binders opened, is an equation
+   (`rw`'s reading): a hypothesis; a lemma applied to its premises,
+   `(if_pos h)`; a lemma whose data arguments the match assigns,
+   `fuel_of_succ`; a `fn`'s equation by name — `len_ipfn.eq_1`, a
+   constant without arguments being no redex of `reduce`'s. Refused
+   before the run: a term that does not elaborate; a term that is no
+   equation (`rw_not_eq`, with the pointer where it is a function's
+   name: its equations are applied unnamed); a rule with an argument
+   its left side does not fix — a premise, a value only a premise fixes
+   (`reduce_rule_open`). Nothing is looked for: no premise among the
+   hypotheses (`simp_only`'s item 54 f is not this form's), no database,
+   no lemma found.
+3. **The run.** Each step takes the side's subterms in pre-order. At a
+   subterm, first the rules in the order given: the first whose left
+   side matches it by structure (`rw`'s matching) rewrites every
+   occurrence of it, as `rw` does. A subterm under a binder is no
+   rule's; a rule whose right side is that subterm or holds it does not
+   apply there. Where no rule applies, rule 6's step, with one
+   exception — **the hold**: an application of a function that some
+   rule's left side applies, at its head or anywhere inside it, is not
+   unfolded by its equations in this pass. A pass that finds neither a
+   rule nor a step is followed by one without the hold, which takes the
+   first step in the same order; when that finds none the run ends. The
+   budget is rule 6's 2000 rewrites: `len`'s four whole-call runs take
+   62, 444, 762 and 906, `app`'s five at most 796.
+4. **Why the hold, and its limits.** The run does not take apart what a
+   fact is made of. A hypothesis about a call states the call at its
+   arguments' normal forms; the call must reach them before its own
+   equation takes it apart, and nothing else may; and what the fact
+   states around the call or inside its arguments must keep its form
+   too. The first form held the function at the head of a left side
+   alone. `app.shard` showed its limit: a fact that states a call under
+   another function — `ret_of (ipeval … (TCall …))`, the form the
+   runtime's laws and the induction hypothesis arrive in — held the
+   wrapper, ran the call before its arguments were rewritten, and never
+   fired (ten lines reproduce it: the pin `reduce_using`, its theorem
+   `wrapped`). Held now: every function with equations that heads an
+   application among the left side's subterms. A case step is never
+   held: the first form of the hold kept an `ite` from its step, the
+   run reduced the instance in place, and the rewrite of a subterm that
+   a proof inside the instance is typed by made a motive K refused
+   (`app_type_mismatch`: K's refusal, as it should be). The hold is the
+   arguments-first order of Lean's `simp` at the functions the facts
+   speak of alone, inside a reduction that is otherwise outside-in and
+   waits at an undecided branch. Its limit as landed: when nothing else
+   steps, the held applications step outermost first, so a held call
+   whose argument is another held call that no fact rewrites is taken
+   apart before the inner one has run, and the fact about it is refused
+   as unused. Neither file meets it (the evaluator's sub-run stands in a
+   scrutinee, not in a call's argument); the author's way through is a
+   fact for the inner call. Innermost first among the held would lift
+   it — not built, not ratified.
+5. **The end.** A rule that rewrote nothing is refused,
+   `reduce_rule_unused`: the rule's place, its left side, the run's
+   length, where the run waits. The list is what the run used. Without
+   rules `reduce` stays a normalization (slice 3.21b rule 3).
+6. **Where a run waits.** `rfl_failed` and `reduce_rule_unused` name,
+   before the terms, the innermost case analysis that waits at an open
+   discriminant — an `ite`'s condition, a matcher's scrutinee.
+   `simp_only` given a function's name answers with the pointer here.
+7. **Evidence.** A rule's step is `congrArg motive h`, composed with the
+   loop's other equations as version 2 composes them; K checks each.
+   A `reduce` without rules elaborates as before: a store of the model
+   root written by the loader before this form, reconstructed by the
+   loader with it — 485 theorems, 485 the same, 0 changed — so the
+   reconstruction version stays 2. The sidecar's schema stays 3: the
+   form gains an optional argument and every sidecar written reads as
+   before. (The schema's number and the keyword `using` are my reading,
+   landed under "proceed": the user has ruled on neither by name.)
+8. **Against law §7** (the review asked for). A step is a function of
+   the node and the goal: the node carries the facts in order, nothing
+   is discovered, no choice is revisited. It is no certificate of the
+   steps: the node stands for the rewrites replay derives, so the
+   proof's meaning rests on rule 3's strategy — a change to it is a
+   reconstruction-version event and can leave a source proof that no
+   longer replays. The explicit certificate is the store's P, which K
+   verifies with no tactic run. Finding the facts is the author's work
+   or the engine's; the node records what was found.
+9. **Against Lean.** The idiom is Lean's `simp only [f, h₁, h₂]`. V3
+   had already divided it — `simp_only` rewrites by named lemmas,
+   `reduce` runs every `fn` by its equations, there being no simp set —
+   and the facts go to `reduce`, where the functions need no naming (an
+   evaluator's run touches dozens). `docs/LEAN.md` carries the row.
+10. **Measured** (the compiled loader, the dev box; the record's second
+   round has the tables). `len.shard`: 56,452 bytes to 25,921 (148,227
+   before 2026-11-10); the run lemmas four, each over a whole call and
+   each proof one step, 6.2 kB of statements and proofs against 14.7
+   for the seven pieces; `tb_len_aux` 35.9 kB to 14.5; the compiled
+   function's text nowhere but its definition. `app.shard`: 181,204
+   bytes to 55,387; five run lemmas, one per outcome of a call, 7.1 kB
+   against 100.6 for the twelve pieces; `app_cons_ok` 21.9 kB to 13.4,
+   `tb_app_aux` 48.6 to 24.2. Both theorems' and both general forms'
+   statements as they were, `tb_len`'s hash 121500882353908086 and
+   `tb_app`'s 985422671952147505 as landed, the axioms the same.
+   **The files are the slower to check**, runs alternated on the one
+   box: `len`'s closure 29.3 s against 23.6 (a quarter more), `app`'s
+   34.5 against 30.9, the model root 59.7 against 48.6 — and the landed
+   files as fast under this loader as under the one before it, so the
+   cost is the files', not the form's. The runs themselves are under
+   two seconds; the time is K's: each step's motive is over the whole
+   target, the nine runs are 4,171 rewrites, and the prefix that the
+   outcomes of one call share (`len`'s cons path up to the inner call,
+   in runs of 444, 762 and 906) is checked once per outcome. What would
+   remove it is law
+   §7.3's incremental state, as the first round found, or one run
+   branched where it waits (rule 11). `step.shard` kept three of its
+   thirty laws: the rest nothing cites.
+11. **Not this form's.** The seventeen bound and heap-cell hypotheses a
+   run lemma of `len` takes, and the main theorem's haves that prove
+   them; a `have` whose statement is inferred; a hypothesis rewritten in
+   place; one run branched at a waiting case analysis, its outcomes
+   sharing the prefix; the run's length reported on success.
 
 ## 9. Assumption policy and entries
 

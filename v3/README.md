@@ -2184,6 +2184,31 @@ statement's hash kept, `tb_len` on Init's three axioms; its closure loads in
 26.8 s on the compiled loader against 53.8 s before any of it. Slice 4.6
 stands as proposed, not ratified.
 
+**2026-11-10, outside the slice sequence, the second round — the run with its
+facts, `(reduce SIDE? (using RULE…))`; `len.shard` and `app.shard` over whole
+calls** (`v3/LANGUAGE.md` §8.6 "The run with its facts"; the record's second
+round; the user, on the review against law §7 and the Lean paradigm: "Agreed,
+proceed with items 1-6 and the app.shard result", and on the limit `app.shard`
+showed: "Let's generalize the rule -- proceed."). The first round left the run
+lemmas cut in pieces at one place: a lemma over a whole call could not use the
+hypothesis about the call inside it — `reduce` ran on into that call before a
+`rw` could put its result in. `reduce` now takes the facts of a run, in order,
+and rewrites by them as it goes, a rule before a step at each subterm; a
+function a fact's left side applies is held — its equations wait while
+anything else steps — so the fact finds its left side. It is Lean's
+`simp only [f, h₁, h₂]` with the functions unnamed, and it looks for nothing:
+a rule is given its premises, a rule with an open argument or one that rewrote
+nothing is refused, a refusal names the case analysis the run waits at. No
+`reduce` without rules elaborates otherwise (485 of 485 theorems reconstructed
+the same; the reconstruction version stays 2). `len.shard`: 56,452 bytes to
+25,921, seven pieces to four whole-call lemmas of one step each; `app.shard`:
+181,204 to 55,387, twelve pieces to five; both theorems' statements, hashes
+and axioms as they were; `step.shard` cut from thirty laws to the three still
+cited. The price is K's time: the model root loads in 59.7 s against 48.6 —
+each step's motive is over the whole target, and the outcomes of one call
+re-check the prefix they share (law §7.3's incremental state is what would
+remove it). Slice 4.6 stands as proposed, not ratified.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
