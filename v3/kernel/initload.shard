@@ -10,9 +10,12 @@
 ;;; declaring it, which is pushed. What was extracted comes out newest first — export
 ;;; order reversed when no push went upward, sorted by offset otherwise — and goes
 ;;; through K's process_record: node lines into K's tables (sparse: the ids stay the
-;;; export's), records checked. K's
-;;; tables and the environment persist across loads in a process (the loader's
-;;; InitSt), as does the record of what was fed (OdDone), so a line is fed once.
+;;; export's), records checked — on a fresh run over the environment the caller gives
+;;; (K's run_on; LANGUAGE.md §8.6 "One environment, one counter"): the environment is
+;;; the caller's own, extended, and no second one stands beside it. The tables are a
+;;; feed's: what persists is the record of the records an environment holds (OdDone's
+;;; ordinals), so a record is checked once into an environment and a node line is fed
+;;; again to every feed whose records need it.
 ;;; The export's meta line is checked against the pin before anything is read; an
 ;;; index whose header names another byte count is refused.
 
@@ -91,7 +94,8 @@
 (fn odx_set_pmemo ((x OdIx) (v (IntMap (List (Pair Name Bool))))) OdIx (match x ((OdIx f0 f1 f2 f3 f4 f5 _) (OdIx f0 f1 f2 f3 f4 f5 v))))
 (fn odx0 ((export (List Int)) (index (List Int)) (h IxHdr)) OdIx (OdIx export index h IMEmpty IMEmpty IMEmpty IMEmpty))
 (fn odx_records ((x OdIx)) Int (ix_hdr_records (odx_hdr x)))
-;; what K has been fed: the name, level and expression ids and the record ordinals
+;; what K has been fed: the name, level and expression ids of the feed under way (a feed's
+;; tables are its own run's) and the record ordinals the environment holds
 (type OdDone (OdDone (IntMap Bool) (IntMap Bool) (IntMap Bool) (IntMap Bool)))
 (fn odd_names ((x OdDone)) (IntMap Bool) (match x ((OdDone a _ _ _) a)))
 (fn odd_levels ((x OdDone)) (IntMap Bool) (match x ((OdDone _ a _ _) a)))
@@ -102,6 +106,8 @@
 (fn odd_set_exprs ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone f0 f1 _ f3) (OdDone f0 f1 v f3))))
 (fn odd_set_recs ((x OdDone) (v (IntMap Bool))) OdDone (match x ((OdDone f0 f1 f2 _) (OdDone f0 f1 f2 v))))
 (fn odd0 () OdDone (OdDone IMEmpty IMEmpty IMEmpty IMEmpty))
+;; the records held, a feed's node ids forgotten: what a feed starts from and what it leaves
+(fn odd_records ((d OdDone)) OdDone (OdDone IMEmpty IMEmpty IMEmpty (odd_recs d)))
 (fn odd_has ((d OdDone) (kind Int) (id Int)) Bool
   (if (= kind 0) (im_has (odd_names d) id)
   (if (= kind 1) (im_has (odd_levels d) id)
@@ -481,30 +487,21 @@
   (measure (struct ns))
   (match ns (Nil acc) ((Cons nm r) (od_with_ordinal r o (Cons (Pair nm o) acc)))))
 
-;; the load: the records' closure walked and fed to the run — the constants admitted with
-;; their ordinals, the records fed, and the lines, for a second environment to admit (the
-;; loader's, which holds native declarations beside Init's: od_admit, the checked transfer). On a failure the run
-;; and the record of what was fed are the ones given — nothing of a partial feed persists
-(type OdLoad (OdLoaded OdIx Run OdDone (List (Pair Name Int)) Int (List OdLine)) (OdLoadErr OdIx Symbol (List Int)))
-(fn od_load ((x OdIx) (run Run) (done OdDone) (ords (List Int)) (w World)) (Pair OdLoad World)
-  (match (od_walk x (od_push_recs (odw0) done ords) done 10000000 w)
-    ((Pair (Pair x1 (Pair wk done1)) w1)
-     (match (odw_bad wk)
-       ((Cons _ _) (Pair (OdLoadErr x1 (quote init_malformed) (odw_bad wk)) w1))
-       (Nil
-        (let ((ls (od_ordered wk)))
-          (match (od_feed run ls Nil 0)
-            ((OdFed run1 cs n) (Pair (OdLoaded x1 run1 done1 cs n ls) w1))
+;; the load: the records' closure walked and fed to a fresh run over ENV — the run after the
+;; feed (its environment ENV with the records admitted, its counts the feed's), the records the
+;; environment now holds, the constants admitted with their ordinals, the records fed. On a
+;; failure nothing of a partial feed persists: the environment and the record given stand
+(type OdLoad (OdLoaded OdIx Run OdDone (List (Pair Name Int)) Int) (OdLoadErr OdIx Symbol (List Int)))
+(fn od_load ((x OdIx) (env CheckedEnv) (done OdDone) (ords (List Int)) (w World)) (Pair OdLoad World)
+  (let ((held (odd_records done)))
+    (match (od_walk x (od_push_recs (odw0) held ords) held 10000000 w)
+      ((Pair (Pair x1 (Pair wk done1)) w1)
+       (match (odw_bad wk)
+         ((Cons _ _) (Pair (OdLoadErr x1 (quote init_malformed) (odw_bad wk)) w1))
+         (Nil
+          (match (od_feed (run_on env) (od_ordered wk) Nil 0)
+            ((OdFed run1 cs n) (Pair (OdLoaded x1 run1 (odd_records done1) cs n) w1))
             ((OdFedErr msg) (Pair (OdLoadErr x1 (quote init_refused) msg) w1)))))))))
-;; the constants a load fed into Init's run, transferred into another environment under
-;; identity (k/add.shard env_transfer; slice 4.0 rule 4, R78): the loader's, which holds
-;; native declarations beside Init's. None: a constant refused the transfer — present under
-;; another identity, or citing what the destination lacks — and nothing of it persists
-(fn od_admit ((run Run) (env CheckedEnv) (cs (List (Pair Name Int)))) (Option CheckedEnv)
-  (env_transfer (run_env run) env (od_names cs)))
-(fn od_names ((cs (List (Pair Name Int)))) (List Name)
-  (measure (struct cs))
-  (match cs (Nil Nil) ((Cons (Pair n _) r) (Cons n (od_names r)))))
 
 ;; ---- a stream's citations (the release gate's demand) ------------------------------------------
 ;; the constants a stream's expression lines cite, by name: its own name lines resolve them

@@ -212,10 +212,14 @@
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
   (ld_add_mod l (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init False) (fork None) (ok False))))
 
-;; the Init load (§8.4 slice 3.26): none given; the export and its index the driver
-;; named, opened at the first need; opened — K's run (its tables and environment persist
-;; across loads in the process), the export and index handle, what K has been fed
-(type InitSt (InitNone) (InitPaths (List Int) (List Int)) (InitSt Run OdIx OdDone))
+;; Init alone: an environment no native declaration entered, the records it holds, its ordinal
+;; table. While a load has declared nothing its environment IS the base, and a demand enters
+;; both; after the first declaration a demand enters the load's environment alone
+(type InitBase (InitBase CheckedEnv OdDone (IntMap (List (Pair Name Int)))))
+;; the Init load (§8.4 slice 3.26; §8.6 "One environment, one counter"): none given; the export
+;; and its index the driver named, opened at the first need; opened — the export and index
+;; handle, the records the load's environment holds, and the base a re-rooted load starts from
+(type InitSt (InitNone) (InitPaths (List Int) (List Int)) (InitSt OdIx OdDone InitBase))
 
 (type Rec
   (RModule Name (List Int) Int (List Name))   ; a module loaded: path, file, hash, its closure
@@ -279,11 +283,19 @@
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
              (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget)) (fuel (default_fuel))))
-;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — K's
-;; environment of Init alone (the run's), the ordinals, the export and index handle;
-;; everything of the old root reset to load0's, the old root's own declarations gone
+;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — the
+;; base's environment of Init alone, its records and ordinals, the export and index handle;
+;; everything of the old root reset to load0's, the old root's own declarations gone, and with
+;; them what the old root demanded of Init after its first declaration (demanded again, it is
+;; checked again). A load that never opened Init re-roots to an empty one
 (fn ld_reroot ((l Load) (root (List (List Int)))) Load
-  (with Load (load0 root) (env (match (Load.init l) ((InitSt run _ _) (run_env run)) (_ (Load.env l)))) (init (Load.init l)) (inits (Load.inits l)) (budget (Load.budget l))))
+  (match (Load.init l)
+    ((InitSt x _ (InitBase env done inits))
+     (with Load (load0 root) (env env) (init (InitSt x done (InitBase env done inits))) (inits inits) (budget (Load.budget l))))
+    (i (with Load (load0 root) (init i) (budget (Load.budget l))))))
+;; has the load declared nothing? Every admission of a native declaration enters the
+;; declaration table (tbl) with the environment it extends
+(fn ld_undeclared ((l Load)) Bool (match (Load.tbl l) (IMEmpty True) (_ False)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
 (fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Mod)) Load (with Load l (mods (Cons md (Load.mods l)))))
@@ -314,7 +326,7 @@
             (req_names (append (trust_candidates sc (Fx.trusts f)) (Load.params l)) 0)
             (if (< (Fx.init f) 0) 0
               (match (Load.init l)
-                ((InitSt _ x _) (mix (mix (+ 1 (Fx.init f)) (ix_hdr_records (odx_hdr x))) (ix_hdr_bytes (odx_hdr x))))
+                ((InitSt x _ _) (mix (mix (+ 1 (Fx.init f)) (ix_hdr_records (odx_hdr x))) (ix_hdr_bytes (odx_hdr x))))
                 (_ (mix (mix (+ 1 (Fx.init f)) 0) 0)))))))
 (fn trust_candidates ((sc Scope) (ts (List Name))) (List Name)
   (measure (struct ts))
@@ -1466,9 +1478,9 @@
 ;; ---- the Init load on demand (§3.1; §8.4 slice 3.26) --------------------------------------
 ;; The export and its index are opened at the first need from the paths the driver gave
 ;; (initload.shard od_open: the meta line against the pin, the index's header, the export's
-;; size the header's). K's run holds Init alone — its environment never a native
+;; size the header's). The base holds Init alone — its environment never a native
 ;; declaration's — so a process loading many roots carries it (ld_reroot); the loader's own
-;; environment holds Init beside the natives, and every demand enters both (init_load)
+;; environment holds Init beside the natives, and a demand enters it (init_load)
 (fn init_opened ((l Load) (w World)) (Pair (Pair Load (Option (Pair Symbol (List Int)))) World)
   (match (Load.init l)
     ((InitSt _ _ _) (Pair (Pair l None) w))
@@ -1477,7 +1489,7 @@
      (match (od_open export index w)
        ((Pair (OdOpenErr e m) w1) (Pair (Pair l (Some (Pair e m))) w1))
        ((Pair (OdOpened x) w1)
-        (Pair (Pair (ld_with_init l (InitSt (empty_run False) x (odd0))) None) w1))))))
+        (Pair (Pair (ld_with_init l (InitSt x (odd0) (InitBase (env_empty) (odd0) IMEmpty))) None) w1))))))
 ;; a reading error as the file's record; `unknown_constant` on a name the name table places at
 ;; or above the module's horizon (one of the file's tokens, resolved at init_prepare: Fx.above)
 ;; is `above_horizon` with the ordinal, the horizon and the import to write (slice 3.27 rule
@@ -1573,10 +1585,10 @@
     ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 "Init" e m) None) w1))
     ((Pair (Pair l1 None) w1)
      (match (Load.init l1)
-       ((InitSt run x done)
+       ((InitSt x done base)
         (match (od_lookup x target w1)
-          ((Pair (Pair x1 None) w2) (Pair (Pair (init_err (ld_with_init l1 (InitSt run x1 done)) "Init" (quote init_name_not_found) (append (show_name target) " is not a declaration of the export")) None) w2))
-          ((Pair (Pair x1 (Some o)) w2) (Pair (Pair (ld_with_init l1 (InitSt run x1 done)) (Some (+ o 1))) w2))))
+          ((Pair (Pair x1 None) w2) (Pair (Pair (init_err (ld_with_init l1 (InitSt x1 done base)) "Init" (quote init_name_not_found) (append (show_name target) " is not a declaration of the export")) None) w2))
+          ((Pair (Pair x1 (Some o)) w2) (Pair (Pair (ld_with_init l1 (InitSt x1 done base)) (Some (+ o 1))) w2))))
        (_ (Pair (Pair l1 None) w1))))))
 ;; a file prepared after its directives (slice 3.26 rules 3 and 5): the names of Init under
 ;; its identity, which none of its declarations may take; then, where it sees Init, its
@@ -1597,13 +1609,13 @@
              (init_demand l1 f2 forms w2)))))))))
 (fn init_taken ((l Load) (f Fx) (w World)) (Pair Fx World)
   (match (Load.init l)
-    ((InitSt _ x _)
+    ((InitSt x _ _)
      (match (od_names_under x (append (show_name (Fx.ident f)) ".") w)
        ((Pair ns w1) (Pair (with Fx f (taken ns)) w1))))
     (_ (Pair f w))))
 (fn init_demand ((l Load) (f Fx) (forms (List SExpr)) (w World)) (Pair (Pair Load (Option Fx)) World)
   (match (Load.init l)
-    ((InitSt run x done)
+    ((InitSt x done base)
      (let ((horizon (Fx.init f)))
        (match (init_empty x (init_prefixes f) Nil w)
          ((Pair (Pair xe empty) we)
@@ -1611,7 +1623,7 @@
          ((Pair (Pair x1 (Pair (Pair ords inds) above)) w1)
           (match (init_resolve x1 (init_satellites inds Nil) horizon ords Nil above w1)
             ((Pair (Pair x2 (Pair (Pair ords2 _) above2)) w2)
-             (match (init_load (ld_with_init l (InitSt run x2 done)) ords2 w2)
+             (match (init_load (ld_with_init l (InitSt x2 done base)) ords2 w2)
                ((Pair (Pair l1 (Some n)) w3) (Pair (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n)) (Some (with Fx f (above above2)))) w3))
                ((Pair (Pair l1 None) w3) (Pair (Pair l1 None) w3)))))))))))
     (_ (Pair (Pair l (Some f)) w))))
@@ -1679,20 +1691,19 @@
           (n2 (quote Lean) (quote reduceBool)) (n2 (quote Lean) (quote reduceNat)) (nm_list) (nm_list_cons) (nm_list_nil)
           (nm_eq) (nm_eq_refl) (n1 (quote Quot)) (nm_quot_mk) (nm_quot_lift) (nm_quot_ind) (n2 (quote Quot) (quote sound))
           (nm_int_ty) (nm_int_of_nat) (nm_int_neg_succ))))
-;; the demanded records' closure through K (initload.shard od_load): into the Init run,
-;; checked; then into the loader's environment, transferred under identity (od_admit:
-;; the same constants, checked a moment ago; k/add.shard env_transfer); every constant
-;; admitted entered in the ordinal table with its ordinal
+;; the demanded records' closure through K (initload.shard od_load): checked into the load's own
+;; environment on a fresh run over it (§8.6 "One environment, one counter": no second
+;; environment, nothing transferred); every constant admitted entered in the ordinal table with
+;; its ordinal. While the load has declared nothing, what it holds is Init alone and becomes the
+;; base (ld_reroot)
 (fn init_load ((l Load) (ords (List Int)) (w World)) (Pair (Pair Load (Option Int)) World)
   (match (Load.init l)
-    ((InitSt run x done)
-     (match (od_load x run done ords w)
-       ((Pair (OdLoadErr x1 e m) w1) (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" e m) None) w1))
-       ((Pair (OdLoaded x1 run1 done1 cs n ls) w1)
-        (match (od_admit run1 (Load.env l) cs)
-          (None (Pair (Pair (init_err (ld_with_init l (InitSt run x1 done)) "Init" (quote init_refused) "a record checked into Init's environment was not admitted into the loader's") None) w1))
-          ((Some env1)
-           (Pair (Pair (ld_add_inits (ld_with_init (ld_with_env l env1 (Load.memo l)) (InitSt run1 x1 done1)) cs) (Some n)) w1))))))
+    ((InitSt x done base)
+     (match (od_load x (Load.env l) done ords w)
+       ((Pair (OdLoadErr x1 e m) w1) (Pair (Pair (init_err (ld_with_init l (InitSt x1 done base)) "Init" e m) None) w1))
+       ((Pair (OdLoaded x1 run1 done1 cs n) w1)
+        (let ((l1 (ld_add_inits (ld_with_env l (run_env run1) (Load.memo l)) cs)))
+          (Pair (Pair (ld_with_init l1 (InitSt x1 done1 (if (ld_undeclared l) (InitBase (Load.env l1) done1 (Load.inits l1)) base))) (Some n)) w1)))))
     (_ (Pair (Pair l (Some 0)) w))))
 
 ;; the load a driver starts from: the export and its index named (`--init EXPORT --init-index

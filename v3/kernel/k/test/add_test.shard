@@ -1,18 +1,31 @@
-;;; v3/kernel/k/test/add_test.shard — environment-level admission and quotients.
+;;; v3/kernel/k/test/add_test.shard — environment-level admission and quotients; and the
+;;; environment's one counter (LANGUAGE.md §8.6 "One environment, one counter"): after record
+;;; runs and raw checks in turn, no id of the environment stands on two different nodes.
 
 (import "../../host.shard")
+(import "../../json.shard")
 (import "../add.shard")
+(import "../import.shard")
 (import "../../test/case_kit.shard")
 (import "../../test/decls_kit.shard")
 (use kernel.k)
 (use kernel.decl)
 (use kernel.expr)
 (use kernel.host)
+(use kernel.intmap)
+(use kernel.json)
+(use kernel.name)
 (use kernel.prelude)
 (use kernel.util)
+(use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
 (use kernel.decl.Declaration)
 (use kernel.decl.DefinitionSafety)
+(use kernel.decl.RecursorRule)
 (use kernel.decl.ReducibilityHints)
+(use kernel.expr.D)
+(use kernel.expr.Expr)
+(use kernel.json.JRes)
 (use kernel.k.CheckedEnv)
 (use kernel.verdict)
 (use kernel.verdict.Outcome)
@@ -24,6 +37,7 @@
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
+(use kernel.prelude.Pair)
 (use kernel.k.Ctx)
 (use kernel.verdict.KRes)
 (use kernel.k.LDecl)
@@ -78,6 +92,90 @@
        (mk_app (mk_app (mk_app (mk_const (nm_quot_mk) (list (LSucc LZero))) (nat)) (mk_fvar 1000)) (lit 3))))
 (fn ok_is ((r (KRes Expr)) (e Expr)) Bool (match r ((KOk _ x) (expr_eq x e)) (_ False)))
 
+;; ---- one environment, one counter ---------------------------------------------------------
+;; the census of an environment: every identified node reachable from its constants, its id to
+;; its hash — the nodes counted, the ids met again under another hash (two different nodes
+;; wearing one id: what expr_eq's shortcut would equate), the greatest id
+(type Census (Census (IntMap Int) Int Int Int))
+(fn cen_two ((c Census)) Int (match c ((Census _ _ t _) t)))
+(fn cen_nodes ((c Census)) Int (match c ((Census _ n _ _) n)))
+(fn cen_top ((c Census)) Int (match c ((Census _ _ _ m) m)))
+;; the census after a node, and whether its children are still to be read
+(fn cen_node ((c Census) (d D)) (Pair Census Bool)
+  (match d
+    ((D id h _ _ _ _)
+     (if (< 0 id)
+       (match c
+         ((Census m n t top)
+          (match (im_find m id)
+            ((Some h0) (if (= h0 h) (Pair c False) (Pair (Census m n (+ t 1) top) True)))
+            (None (Pair (Census (im_insert m id h) (+ n 1) t (max_int top id)) True)))))
+       (Pair c True)))))
+(fn cen_expr ((c Census) (e Expr)) Census
+  (measure (struct e))
+  (match (cen_node c (expr_d e))
+    ((Pair c1 False) c1)
+    ((Pair c1 True)
+     (match e
+       ((App _ f a) (cen_expr (cen_expr c1 f) a))
+       ((Lam _ _ _ t b) (cen_expr (cen_expr c1 t) b))
+       ((Pi _ _ _ t b) (cen_expr (cen_expr c1 t) b))
+       ((Let _ _ t v b) (cen_expr (cen_expr (cen_expr c1 t) v) b))
+       ((Proj _ _ _ x) (cen_expr c1 x))
+       (_ c1)))))
+(fn cen_rules ((c Census) (rs (List RecursorRule))) Census
+  (measure (struct rs))
+  (match rs (Nil c) ((Cons (RecursorRule _ _ rhs) r) (cen_rules (cen_expr c rhs) r))))
+(fn cen_info ((c Census) (i ConstantInfo)) Census
+  (let ((c1 (cen_expr c (ci_type i))))
+    (match i
+      ((DefnInfo _ v _ _ _) (cen_expr c1 v))
+      ((ThmInfo _ v _) (cen_expr c1 v))
+      ((OpaqueInfo _ v _ _) (cen_expr c1 v))
+      ((RecInfo _ _ _ _ _ _ rules _ _) (cen_rules c1 rules))
+      (_ c1))))
+(fn cen_all ((c Census) (xs (List (Pair Name ConstantInfo)))) Census
+  (measure (struct xs))
+  (match xs (Nil c) ((Cons (Pair _ i) r) (cen_all (cen_info c i) r))))
+(fn census ((env CheckedEnv)) Census (cen_all (Census IMEmpty 0 0 0) (env_entries env)))
+
+(fn feed ((r Run) (lines (List (List Int)))) Run
+  (measure (struct lines))
+  (match lines
+    (Nil r)
+    ((Cons l rest) (match (json_parse l) ((JRes j _) (match (process_record r j) ((Pair r1 _) (feed r1 rest)))) (JErr r)))))
+;; c1 : Prop → Prop := fun p => p
+(fn recs_c1 () (List (List Int))
+  (list "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"c1\"}}"
+        "{\"ie\":1,\"sort\":0}"
+        "{\"ie\":2,\"forallE\":{\"binderInfo\":\"default\",\"body\":1,\"name\":0,\"type\":1}}"
+        "{\"ie\":3,\"bvar\":0}"
+        "{\"ie\":4,\"lam\":{\"binderInfo\":\"default\",\"body\":3,\"name\":0,\"type\":1}}"
+        "{\"def\":{\"all\":[1],\"hints\":{\"regular\":1},\"levelParams\":[],\"name\":1,\"safety\":\"safe\",\"type\":2,\"value\":4}}"))
+;; h : F → F := fun x => x, F = (p : Prop) → p
+(fn recs_h () (List (List Int))
+  (list "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"h\"}}"
+        "{\"ie\":11,\"sort\":0}"
+        "{\"ie\":12,\"bvar\":0}"
+        "{\"ie\":13,\"forallE\":{\"binderInfo\":\"default\",\"body\":12,\"name\":0,\"type\":11}}"
+        "{\"ie\":14,\"forallE\":{\"binderInfo\":\"default\",\"body\":13,\"name\":0,\"type\":13}}"
+        "{\"ie\":15,\"lam\":{\"binderInfo\":\"default\",\"body\":12,\"name\":0,\"type\":13}}"
+        "{\"def\":{\"all\":[2],\"hints\":{\"regular\":1},\"levelParams\":[],\"name\":2,\"safety\":\"safe\",\"type\":14,\"value\":15}}"))
+(fn e_c1 () CheckedEnv (run_env (feed (empty_run False) (recs_c1))))
+(fn e_h () CheckedEnv (run_env (feed (empty_run False) (recs_h))))
+;; the turns a load takes: records; a raw inductive (K generates its constructors' and its
+;; recursor's terms); a fresh run over what stands, more records; a raw inductive; a raw theorem
+(fn e_turns () CheckedEnv
+  (env_after (check (env_after (check (run_env (feed (run_on (env_after (check (e_c1) (st0) (nat_decl)) (e0))) (recs_h))) (st0) (eq_decl)) (e0)) (st0) (thm_decl)) (e0)))
+(fn has ((e CheckedEnv) (n Name)) Bool (match (env_find e n) ((Some _) True) (None False)))
+(fn type_of ((e CheckedEnv) (n Name)) Expr (match (env_find e n) ((Some i) (ci_type i)) (None (nat))))
+(fn dom_of ((x Expr)) Expr (match x ((Pi _ _ _ dm _) dm) (_ x)))
+;; the census's control, an environment only this directory can spell: c1's type from one run
+;; and the domain of h's type from another — one id, two nodes — as two axioms' types
+(fn e_forged () CheckedEnv
+  (env_add (env_add (e0) (n1 (quote fa)) (AxiomInfo (ConstantVal (n1 (quote fa)) Nil (type_of (e_c1) (n1 (quote c1)))) False))
+           (n1 (quote fb)) (AxiomInfo (ConstantVal (n1 (quote fb)) Nil (dom_of (type_of (e_h) (n1 (quote h))))) False)))
+
 (fn cases () (List Case)
   (list
     (Case "Nat accepted" (accepted (check (e0) (st0) (nat_decl))))
@@ -111,7 +209,13 @@
     (Case "undefined universe in a type refused" (rejected (check (e_nat) (st0) (univ_decl)) (quote undefined_universe)))
     (Case "duplicate universe parameter refused" (rejected (check (e_nat) (st0) (dup_univ)) (quote duplicate_univ_param)))
     (Case "redeclaration refused" (rejected (check (e_nat) (st0) (nat_decl)) (quote already_declared)))
-    (Case "mutual block unsupported" (rejected (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))))
+    (Case "mutual block unsupported" (rejected (check (e_nat) (st0) (MutualDefnDecl Nil)) (quote mutual_unsafe_block)))
+    (Case "one counter: records, a raw inductive, a fresh run's records, a raw inductive, a raw theorem — all held"
+      (bool_and (has (e_turns) (n1 (quote c1))) (bool_and (has (e_turns) (nat_n)) (bool_and (has (e_turns) (n1 (quote h))) (bool_and (has (e_turns) (eq_n)) (has (e_turns) (n1 (quote rfl0))))))))
+    (Case "one counter: the census reads its identified nodes" (< 8 (cen_nodes (census (e_turns)))))
+    (Case "one counter: no id of it stands on two different nodes" (= (cen_two (census (e_turns))) 0))
+    (Case "one counter: no id of it exceeds the watermark" (<= (cen_top (census (e_turns))) (env_watermark (e_turns))))
+    (Case "one counter: the census's control — two runs' first nodes as one environment's — reads one id on two nodes" (= (cen_two (census (e_forged))) 1))))
 
 
 (fn main ((w World)) World (run_cases "add_test" (cases) 0 w))
