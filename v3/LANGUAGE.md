@@ -293,7 +293,9 @@ them; each is a candidate for §13.
   wrote reaches a shortcut. Before this, two literals wearing one
   positive id made `0 = 1` a theorem through the raw entry (hostile
   battery 16). The import's records enter through K's own lineage and
-  never pay the rebuild. What remains open is the profile's exposure of
+  never pay the rebuild. Since 2026-11-11 the rebuild makes each distinct
+  structure once, its nodes minted by the check (§8.6 "The raw entry
+  builds each structure once"). What remains open is the profile's exposure of
   `CheckedEnv`'s constructor, sealed when K is one directory module
   behind a view and its first `meta/` client loads against it (§6.6,
   §13 item 26).
@@ -2714,7 +2716,11 @@ cites; no fixture, no receipt.
    typing judgments are the Init run's — before 4.0 the records were
    re-fed in an admit mode that skipped them on the caller's word);
    what K has been fed persists in the process (`OdDone`);
-   `ld_reroot` starts a root on that run.
+   `ld_reroot` starts a root on that run. (Since 2026-11-11 there is
+   no run of Init alone and no transfer: a demand is checked into the
+   loader's own environment on a fresh run over it, and a re-rooted
+   load starts from a base of Init alone — §8.6 "One environment, one
+   counter".)
    `INIT NAME: horizon H, N declarations admitted`.
 4. **The law unchanged**: visibility is the ordinal below the horizon
    (`init_within` on the true ordinals; `ACCEPT … init=H`); a name no
@@ -3431,7 +3437,12 @@ the defects. The rules:
    are removed (`MISSING`); a discharge entry removed from the manifest
    while the obligation axiom and its consumers stay (the consumers'
    closures reach the obligation: `CONDITIONAL`, exit 1).
-4. **The seal (landing 2; R78).** `run_admitting` leaves the public
+4. **The seal (landing 2; R78).** (The transfer this rule put in the
+   admit mode's place was removed on 2026-11-11 — two counters' nodes in
+   one environment, and identity compared one citation deep where this
+   rule says the closure: §8.6 "One environment, one counter". What
+   stands of the rule: no client of the view manufactures a
+   `CheckedEnv`.) `run_admitting` leaves the public
    view. In its place K exports a checked transfer, `run_transfer src
    dst names`: the constants `names` of `src`'s environment (the run
    that checked them) enter `dst`'s, each required present in `src`,
@@ -3534,7 +3545,8 @@ Rules 2 and 3.
 
 **Slice 4.0 as built, landing 2 (2026-10-14) — the seal.** Rule 4.
 
-- **The transfer.** `k/add.shard` `env_transfer src dst names`: each
+- **The transfer** (removed 2026-11-11, §8.6 "One environment, one
+  counter"; as it was built). `k/add.shard` `env_transfer src dst names`: each
   name present in `src`; identical to any constant of that name `dst`
   holds (`ci_identical`: the kind, the level parameters, the type and
   the value by `expr_eq`, an inductive's, a constructor's and a
@@ -5848,7 +5860,7 @@ the second line.
 5. **`verify_release`** loads the store's Init closure into the empty
    environment and reads each store file in a fresh run on what stands
    (`run_on`), as it did through `run_with_env` at the empty run.
-6. **The regression.** The hostile battery's case 17, the three routes
+6. **The regression.** The hostile battery's case 18, the three routes
    as far as the view still spells them: a second source's records on a
    fresh run over the first's environment mint above it — `h` is
    admitted and `h c1` refused; the citation case's `cp` and `c` are
@@ -5864,6 +5876,61 @@ the second line.
    between two feeds' records are two copies in the environment; a
    re-rooted load re-checks what an earlier root demanded after its
    first declaration.
+
+**The raw entry builds each structure once. DESIGNED 2026-11-11,
+outside the slice sequence, at the user's direction** (on the proposal
+of 2026-11-10 — the cheap hash, then admission with its sharing, then
+the matcher's memo — "Good work. Let's continue with step 2"; with the
+defect above found on the way, "Agreed with A -- proceed.": the removal
+first, this on top). It amends law §3.5's reading in `expr.shard`
+(ingestion; GPT-6 R43) — what is rebuilt, not what is trusted; the
+record is `docs/records/REDUCE-2026-11-10.md`, the fifth round.
+
+*The cost, measured* (the record's third round). The proofs the tactic
+layer leaves are graphs; K's raw entry rebuilt each as an anonymous
+tree, and K's check, the axiom pass and the store then read the tree —
+a run lemma of 4.05 million nodes for 50 thousand distinct.
+
+1. **Not by the ids.** Tried first: the entry reading a proof's sharing
+   from the ids its nodes wear, each id read once. Of the 5.54 million
+   compound nodes `len.shard`'s load submits, 62% wear none and an id is
+   met a second time 975 times — the sharing is between anonymous nodes,
+   which a pure language cannot see — and the load was slower (17.0 s to
+   23.6). Nothing of it is kept.
+2. **The form.** Ingestion (`expr.shard` `ingest_expr`) rebuilds every
+   node from its structure, as before, and reads no claim, as before.
+   A compound node is minted from the check's own state and looked for,
+   by K's structural hash, in a table of the nodes the declaration has
+   built: it is found when its children are the same nodes — compound
+   children by the ids minted here, leaves by value — under the same
+   binder name and binder info; the node found is kept and the minted
+   one dropped with its id. One table to a declaration: a theorem's
+   statement and proof, a definition's type and value, an inductive
+   block's types and constructors.
+3. **What it is not.** Not a trust in anything submitted: the walk is
+   the tree's, every node read. Not a merge modulo names: two binders
+   that differ in name or info stay two nodes, so what is admitted is
+   the submitted term, its display data where the author wrote it. Not
+   a change of any verdict: `expr_eq` answers on the minted ids what it
+   answered by structure.
+4. **The counter.** The nodes are minted above the environment's
+   watermark by the state the check goes on with, and stand in the
+   environment afterwards — which is why this follows "One environment,
+   one counter": with a second counter beside the loader's, the same
+   load that had 8 ids on two nodes had 43.
+5. **The regression.** Hostile battery 19: a type holding `Nat → Nat`
+   twice, built apart, is admitted with one node for both, minted; the
+   value's is the type's; two binders that differ in name stay two
+   nodes, each with its name, equal terms all the same. Case 16's eight
+   stand as they were. `k/test`'s one-counter census covers what the
+   entry mints.
+6. **Not built.** The walk itself: to spare it the producer must state
+   its sharing — the tactic layer minting an id for what it builds, the
+   entry reading a theorem's proof by those ids while its statement is
+   read in full (a proof's identity carries no meaning: any term K
+   checks against the statement will do, and law §3.2's pins already
+   set theorems' values aside on that ground). Unmeasured; not
+   ratified.
 
 ## 9. Assumption policy and entries
 

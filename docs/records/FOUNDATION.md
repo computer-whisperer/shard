@@ -578,7 +578,7 @@ ratification of slice 4.0 (§13 item 66).
   executed). The fix is the removal of the operations — no service of
   the view takes two environments — with Init's records checked into
   the loader's own environment: `v3/LANGUAGE.md` §8.6 "One environment,
-  one counter"; the regression is hostile battery 17 and `k/test`'s
+  one counter"; the regression is hostile battery 18 and `k/test`'s
   counter cases. GPT-6's R43 had named the condition on 2026-09-12 ("a
   numeric watermark alone does not prove that two independently created
   branches or environments cannot reuse the same number"); slice 4.0

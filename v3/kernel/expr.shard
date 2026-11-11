@@ -384,33 +384,6 @@
 (fn mk_let ((n Name) (t Expr) (v Expr) (b Expr)) Expr (Let (d_let 0 t v b) n t v b))
 (fn mk_proj ((s Name) (i Int) (x Expr)) Expr (Proj (d_proj 0 s i x) s i x))
 
-;; ---- ingestion (FOUNDATION §3.5; GPT-6 R43, 2026-09-12) ----------------------------
-;; A raw term from outside K wears whatever node data its author wrote: its
-;; ids, hashes, ranges and flags are CLAIMS. Every shortcut above — expr_eq's
-;; positive-id test, the memo tables keyed on the hash, the range- and
-;; flag-pruned traversals — consumes them, so two different literals wearing
-;; one positive id made `0 = 1` a theorem through the raw entry (the hostile
-;; battery, case 16). Ingestion rebuilds every node anonymously from its
-;; structure; the raw entry `check` (add.shard) applies it to a submitted
-;; declaration before anything reads a claim. A tree walk: sharing cannot be
-;; recovered without trusting the ids, so a submitted DAG costs its tree
-;; size — the price of the raw entry, which the import (K's own lineage,
-;; minting through St) never pays.
-(fn ingest_expr ((e Expr)) Expr
-  (measure (struct e))
-  (match e
-    ((BVar _ i) (mk_bvar i))
-    ((FVar _ i) (mk_fvar i))
-    ((Sort _ u) (mk_sort u))
-    ((Const _ n ls) (mk_const n ls))
-    ((Lit _ l) (mk_lit l))
-    ((MVar _ i) (mk_mvar i))
-    ((App _ f a) (mk_app (ingest_expr f) (ingest_expr a)))
-    ((Lam _ n bi dm b) (mk_lam n bi (ingest_expr dm) (ingest_expr b)))
-    ((Pi _ n bi dm b) (mk_pi n bi (ingest_expr dm) (ingest_expr b)))
-    ((Let _ n t v b) (mk_let n (ingest_expr t) (ingest_expr v) (ingest_expr b)))
-    ((Proj _ s i x) (mk_proj s i (ingest_expr x)))))
-
 ;; identified compound nodes (an id minted from St)
 (fn new_app ((st St) (f Expr) (a Expr)) (Pair St Expr)
   (match (st_fresh_node st) ((Pair st1 id) (Pair st1 (App (d_app id f a) f a)))))
@@ -422,6 +395,85 @@
   (match (st_fresh_node st) ((Pair st1 id) (Pair st1 (Let (d_let id t v b) n t v b)))))
 (fn new_proj ((st St) (s Name) (i Int) (x Expr)) (Pair St Expr)
   (match (st_fresh_node st) ((Pair st1 id) (Pair st1 (Proj (d_proj id s i x) s i x)))))
+
+;; ---- ingestion (FOUNDATION §3.5; GPT-6 R43, 2026-09-12; each structure once, 2026-11-11) ----
+;; A raw term from outside K wears whatever node data its author wrote: its ids, hashes,
+;; ranges and flags are CLAIMS. Every shortcut above — expr_eq's positive-id test, the memo
+;; tables keyed on the hash, the range- and flag-pruned traversals — consumes them, so two
+;; different literals wearing one positive id made `0 = 1` a theorem through the raw entry
+;; (the hostile battery, case 16). Ingestion rebuilds every node from its structure and reads
+;; no claim; the raw entry `check` (add.shard) applies it to a submitted declaration before
+;; anything reads one. And it builds each distinct structure ONCE (LANGUAGE.md §8.6 "The raw
+;; entry builds each structure once"): a compound node is minted from the check's own state
+;; and looked for, by its structural hash, in the table of the nodes this declaration has
+;; built — found when its children are the same nodes (compound children by the ids minted
+;; here, leaves by value) under the same binder name and binder info, so what the author
+;; wrote for display stands — and the node already built is the one kept. A submitted graph
+;; leaves ingestion a graph whatever ids it wore, and K's check, the axiom pass and the store
+;; cost its size; the anonymous tree this walk left before cost them the tree's (a run lemma
+;; of 4.05 million nodes for 50 thousand distinct). The walk itself is still the tree's: the
+;; sharing of what is submitted cannot be seen without trusting its ids.
+(type Ingest (Ingest St (IntMap (List Expr))))
+(fn ingest_new ((st St)) Ingest (Ingest st IMEmpty))
+(fn ingest_st ((g Ingest)) St (match g ((Ingest st _) st)))
+;; two children the same: one node minted here, or two leaves equal (a leaf is never minted)
+(fn ing_same ((x Expr) (y Expr)) Bool
+  (let ((ix (expr_id x))) (if (< 0 ix) (= ix (expr_id y)) (if (< 0 (expr_id y)) False (expr_eq x y)))))
+(fn binfo_eq ((a BinderInfo) (b BinderInfo)) Bool
+  (match a
+    (BDefault (match b (BDefault True) (_ False)))
+    (BImplicit (match b (BImplicit True) (_ False)))
+    (BStrictImplicit (match b (BStrictImplicit True) (_ False)))
+    (BInstImplicit (match b (BInstImplicit True) (_ False)))))
+;; two compound nodes the same in everything: the kind, the children, the binder's name and info
+(fn ing_is ((x Expr) (y Expr)) Bool
+  (match x
+    ((App _ f a) (match y ((App _ g b) (if (ing_same f g) (ing_same a b) False)) (_ False)))
+    ((Lam _ n bi d b) (match y ((Lam _ m bj e c) (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) False) False) False)) (_ False)))
+    ((Pi _ n bi d b) (match y ((Pi _ m bj e c) (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) False) False) False)) (_ False)))
+    ((Let _ n t v b) (match y ((Let _ m u w c) (if (ing_same t u) (if (ing_same v w) (if (ing_same b c) (name_eq n m) False) False) False)) (_ False)))
+    ((Proj _ s i z) (match y ((Proj _ r j w) (if (= i j) (if (ing_same z w) (name_eq s r) False) False)) (_ False)))
+    (_ False)))
+(fn ing_find ((b (List Expr)) (x Expr)) (Option Expr)
+  (measure (struct b))
+  (match b (Nil None) ((Cons y r) (if (ing_is x y) (Some y) (ing_find r x)))))
+;; the node just minted (with the state after it) kept and entered, or the one already built —
+;; the state then the one before the minting: the id goes to the next node
+(fn ing_keep ((g Ingest) (r (Pair St Expr))) (Pair Ingest Expr)
+  (match g
+    ((Ingest _ m)
+     (match r
+       ((Pair st1 x)
+        (let ((h (hash_expr x)))
+          (let ((b (match (im_find m h) ((Some xs) xs) (None Nil))))
+            (match (ing_find b x)
+              ((Some y) (Pair g y))
+              (None (Pair (Ingest st1 (im_insert m h (Cons x b))) x))))))))))
+(fn ingest_expr ((g Ingest) (e Expr)) (Pair Ingest Expr)
+  (measure (struct e))
+  (match e
+    ((BVar _ i) (Pair g (mk_bvar i)))
+    ((FVar _ i) (Pair g (mk_fvar i)))
+    ((Sort _ u) (Pair g (mk_sort u)))
+    ((Const _ n ls) (Pair g (mk_const n ls)))
+    ((Lit _ l) (Pair g (mk_lit l)))
+    ((MVar _ i) (Pair g (mk_mvar i)))
+    ((App _ f a)
+     (match (ingest_expr g f)
+       ((Pair g1 f1) (match (ingest_expr g1 a) ((Pair g2 a1) (ing_keep g2 (new_app (ingest_st g2) f1 a1)))))))
+    ((Lam _ n bi dm b)
+     (match (ingest_expr g dm)
+       ((Pair g1 dm1) (match (ingest_expr g1 b) ((Pair g2 b1) (ing_keep g2 (new_lam (ingest_st g2) n bi dm1 b1)))))))
+    ((Pi _ n bi dm b)
+     (match (ingest_expr g dm)
+       ((Pair g1 dm1) (match (ingest_expr g1 b) ((Pair g2 b1) (ing_keep g2 (new_pi (ingest_st g2) n bi dm1 b1)))))))
+    ((Let _ n t v b)
+     (match (ingest_expr g t)
+       ((Pair g1 t1)
+        (match (ingest_expr g1 v)
+          ((Pair g2 v1) (match (ingest_expr g2 b) ((Pair g3 b1) (ing_keep g3 (new_let (ingest_st g3) n t1 v1 b1)))))))))
+    ((Proj _ s i x)
+     (match (ingest_expr g x) ((Pair g1 x1) (ing_keep g1 (new_proj (ingest_st g1) s i x1)))))))
 
 ;; ---- predicates ----------------------------------------------------------
 

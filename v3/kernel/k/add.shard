@@ -31,6 +31,7 @@
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
+(use kernel.prelude.Pair)
 (use kernel.k.Ctx)
 (use kernel.verdict.Failure)
 (use kernel.verdict.KRes)
@@ -369,33 +370,46 @@
     (_ (Cons (decl_name d) Nil))))
 
 ;; ---- the raw entry (§3.5; GPT-6 R43) ------------------------------------------------
-;; `check` is where a declaration built OUTSIDE K enters: the reader's, a
-;; test's, an embedding's. Its node data is a claim (expr.shard: ingestion),
-;; so every term is rebuilt anonymously before the procedure reads it. The
-;; import's records enter through `check_decl_pinning` directly — K's own
-;; lineage, its ids minted through St — and never pay the rebuild.
-(fn ingest_cval ((v ConstantVal)) ConstantVal
-  (match v ((ConstantVal n ps t) (ConstantVal n ps (ingest_expr t)))))
-(fn ingest_ctors ((cs (List Constructor))) (List Constructor)
+;; `check` is where a declaration built OUTSIDE K enters: the reader's, a test's, an
+;; embedding's. Its node data is a claim (expr.shard: ingestion), so every term is rebuilt
+;; from its structure before the procedure reads it — each distinct structure once, across
+;; the declaration's type and value (an inductive block's types and constructors), the nodes
+;; minted from the check's own state above the environment's watermark. The import's records
+;; enter through `check_decl_pinning` directly — their tables minted by the run's state — and
+;; never pay the walk.
+(fn ingest_cval ((g Ingest) (v ConstantVal)) (Pair Ingest ConstantVal)
+  (match v ((ConstantVal n ps t) (match (ingest_expr g t) ((Pair g1 t1) (Pair g1 (ConstantVal n ps t1)))))))
+;; a constant's type and its value
+(fn ingest_valued ((g Ingest) (v ConstantVal) (x Expr)) (Pair Ingest (Pair ConstantVal Expr))
+  (match (ingest_cval g v) ((Pair g1 v1) (match (ingest_expr g1 x) ((Pair g2 x1) (Pair g2 (Pair v1 x1)))))))
+(fn ingest_ctors ((g Ingest) (cs (List Constructor)) (acc (List Constructor))) (Pair Ingest (List Constructor))
   (measure (struct cs))
-  (match cs (Nil Nil) ((Cons (Constructor n t) r) (Cons (Constructor n (ingest_expr t)) (ingest_ctors r)))))
-(fn ingest_types ((ts (List InductiveType))) (List InductiveType)
+  (match cs
+    (Nil (Pair g (rev acc)))
+    ((Cons (Constructor n t) r) (match (ingest_expr g t) ((Pair g1 t1) (ingest_ctors g1 r (Cons (Constructor n t1) acc)))))))
+(fn ingest_types ((g Ingest) (ts (List InductiveType)) (acc (List InductiveType))) (Pair Ingest (List InductiveType))
   (measure (struct ts))
-  (match ts (Nil Nil) ((Cons (InductiveType n t cs) r) (Cons (InductiveType n (ingest_expr t) (ingest_ctors cs)) (ingest_types r)))))
-(fn ingest_decl ((d Declaration)) Declaration
+  (match ts
+    (Nil (Pair g (rev acc)))
+    ((Cons (InductiveType n t cs) r)
+     (match (ingest_expr g t)
+       ((Pair g1 t1) (match (ingest_ctors g1 cs Nil) ((Pair g2 cs1) (ingest_types g2 r (Cons (InductiveType n t1 cs1) acc)))))))))
+(fn ingest_decl ((g Ingest) (d Declaration)) (Pair Ingest Declaration)
   (match d
-    ((AxiomDecl v u) (AxiomDecl (ingest_cval v) u))
-    ((DefnDecl v x h s a) (DefnDecl (ingest_cval v) (ingest_expr x) h s a))
-    ((ThmDecl v x a) (ThmDecl (ingest_cval v) (ingest_expr x) a))
-    ((OpaqueDecl v x u a) (OpaqueDecl (ingest_cval v) (ingest_expr x) u a))
-    (QuotDecl QuotDecl)
-    ((MutualDefnDecl ds) (MutualDefnDecl ds))            ; refused unread (mutual_unsafe_block)
-    ((InductDecl lps np ts u) (InductDecl lps np (ingest_types ts) u))))
+    ((AxiomDecl v u) (match (ingest_cval g v) ((Pair g1 v1) (Pair g1 (AxiomDecl v1 u)))))
+    ((DefnDecl v x h s a) (match (ingest_valued g v x) ((Pair g1 (Pair v1 x1)) (Pair g1 (DefnDecl v1 x1 h s a)))))
+    ((ThmDecl v x a) (match (ingest_valued g v x) ((Pair g1 (Pair v1 x1)) (Pair g1 (ThmDecl v1 x1 a)))))
+    ((OpaqueDecl v x u a) (match (ingest_valued g v x) ((Pair g1 (Pair v1 x1)) (Pair g1 (OpaqueDecl v1 x1 u a)))))
+    (QuotDecl (Pair g QuotDecl))
+    ((MutualDefnDecl ds) (Pair g (MutualDefnDecl ds)))            ; refused unread (mutual_unsafe_block)
+    ((InductDecl lps np ts u) (match (ingest_types g ts Nil) ((Pair g1 ts1) (Pair g1 (InductDecl lps np ts1 u)))))))
 
 (fn check ((env CheckedEnv) (st St) (d Declaration)) (Outcome CheckedEnv)
   (check_with env st (default_limits) d))
 
-;; check(env, decl, limits) — §3.3's signature
+;; check(env, decl, limits) — §3.3's signature. The ingestion mints from the state the check
+;; would start from (st_seed: above the environment's watermark and the caller's counter); the
+;; check goes on from the state it leaves
 (fn check_with ((env CheckedEnv) (st St) (lim Limits) (d0 Declaration)) (Outcome CheckedEnv)
-  (let ((d (ingest_decl d0)))
-    (outcome_of (check_decl_pinning_lim env st lim d) (decl_name d))))
+  (match (ingest_decl (ingest_new (st_seed env st)) d0)
+    ((Pair g d) (outcome_of (check_decl_pinning_lim env (ingest_st g) lim d) (decl_name d)))))

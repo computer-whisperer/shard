@@ -95,8 +95,14 @@ governs `v3/` now:
    subject), Exhausted(resource, site) — exhaustion is never a verdict.
    Its raw entry `check` rebuilds every node it is handed before the
    procedure reads it (§3.5; 2026-09-12, GPT-6 R43): a caller's node
-   data is a claim, never consumed by a shortcut. The import's records
-   enter through K's own lineage.
+   data is a claim, never consumed by a shortcut — each distinct
+   structure built once, the nodes minted by the check (2026-11-11).
+   The import's records enter by their own run's tables. No operation
+   of K's view joins two environments (2026-11-11, after a client of
+   the view had `(p : Prop) → p` accepted through three that did:
+   `docs/records/FOUNDATION.md` §5; `v3/LANGUAGE.md` §8.6 "One
+   environment, one counter"): a node's id is unique within the counter
+   that minted it, and an environment's nodes are its own checks'.
 2. **The Rust host** (`rust_bootstrap`, `eval direct`): route 3 of §9.1
    — implements E's operational semantics, defines no rule, executes K
    only, trusted by review as it always was. It is the execution
