@@ -39,10 +39,11 @@ for t in tb_len tb_len_aux len_ofNat len_call_one len_call_fail len_call_ov len_
   checks=$((checks+1)); accepted models.imp.len.$t || bad "models.imp.len.$t is not accepted"
 done
 checks=$((checks+1)); grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | grep -q 'axioms=\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\) ' || { bad "tb_len does not rest on Init's three axioms alone"; grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | cut -c1-200; }
-# tb_app (landing 2): its general form, the two lemmas of the cons case and the run lemmas accepted; the
+# tb_app (landing 2): its general form, the two lemmas of the cons case and the run lemmas (one per
+# outcome of a call) accepted; the
 # theorem on Init's three axioms and the six declared parameters, nothing else (the closure sorted under
 # the C locale: the runner's collation, not the dev box's)
-for t in tb_app tb_app_aux app_cons_ok app_ghost app_S1 app_S2 app_S2_one app_E1 app_E2 app_E3_fail_app app_E3_fail_alloc app_E3_ret app_body_ret app_body_fail app_body_nil app_body_nil_fail; do
+for t in tb_app tb_app_aux app_cons_ok app_ghost app_call_nil app_call_nil_fail app_call_fail_app app_call_fail_alloc app_call_ret; do
   checks=$((checks+1)); accepted models.imp.app.$t || bad "models.imp.app.$t is not accepted"
 done
 axs=$(grep '^ACCEPT models.imp.app.tb_app ' "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
