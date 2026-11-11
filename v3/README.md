@@ -2217,9 +2217,12 @@ the same value, no bignum — and the model root loads in 34.7 s against
 the compiled evaluator's stack, which grows from one extern to the next
 (`ev.shard`'s tail calls are not all jumps once compiled): K's
 `nested_test` under the loader stood at 1.97 GB of `rt.h`'s 2 GB before
-the change and needs 2.51 GB after it; the limit is 4 GB now, and the
-evaluator's fix is proposed, not built. Slice 4.6 stands as proposed, not
-ratified.
+the change and needed 2.51 GB after it. The fourth round (2026-11-11; the
+user: "Agreed with fixing the evaluator's stack growth next."): no
+function of `ev.shard`'s machine takes more than six parameters now, so
+its tail calls are jumps once compiled — that test's stack 12 MB, its run
+1.8 s against 5.4, `rt.h`'s limit 2 GB as it was. Slice 4.6 stands as
+proposed, not ratified.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
