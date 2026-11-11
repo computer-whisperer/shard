@@ -103,6 +103,15 @@ governs `v3/` now:
    `docs/records/FOUNDATION.md` §5; `v3/LANGUAGE.md` §8.6 "One
    environment, one counter"): a node's id is unique within the counter
    that minted it, and an environment's nodes are its own checks'.
+   Within a check no state is advanced twice on any path of K, apart
+   from three rewinds by design that keep nothing — a scratch
+   instrument's verdict over K's 354 state-handling functions and a
+   run-time count over the Init replay and the suite (2026-11-11, the
+   same record, "The state's threading audited"); it is not a standing
+   gate. The layers above K do reuse states, and a term of theirs may
+   carry one id on two nodes: it is accepted only as the raw entry
+   rebuilds it, and K's services answer the elaborator about it as it
+   stands.
 2. **The Rust host** (`rust_bootstrap`, `eval direct`): route 3 of §9.1
    — implements E's operational semantics, defines no rule, executes K
    only, trusted by review as it always was. It is the execution

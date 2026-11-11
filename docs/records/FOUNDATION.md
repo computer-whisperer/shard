@@ -583,6 +583,72 @@ ratification of slice 4.0 (§13 item 66).
   numeric watermark alone does not prove that two independently created
   branches or environments cannot reuse the same number"); slice 4.0
   built the transfer without it.
+- **The state's threading audited (2026-11-11; the one thing the review
+  of the removal had named as covered by nothing).** The question:
+  whether K, inside one check, ever continues from an older copy of its
+  state while it keeps a term built under the newer — one id on two
+  nodes with no caller involved. Two instruments, both the session's
+  scratch, neither in the tree. *Over every path:* `thread.shard`'s
+  affine check pointed at `kernel.expr.St`, the identity a state's
+  version — a record around one version, a match on that record, a copy
+  and a read share it; a use is the state opened by pattern, an
+  argument at a parameter the callee advances (the least fixpoint over
+  the call graph, from the primitives up, six rounds), a join of two
+  different versions, or the return of a version already used; a
+  version used twice along a path is the fault. Twelve functions
+  written into a scratch `k/add.shard` as its controls — a fork, a
+  rewind, a mint-and-drop with its caller, each again through a record,
+  a branch that rewinds, a memo written into an old state, a local
+  minted twice from one state; the linear spellings beside them — eight
+  flagged and four clean, as meant. Over K (`v3/kernel/k/` and
+  `expr.shard`, the 354 functions that take or return a state): 339
+  clean, all of `tc.shard`, `inductive.shard` and `nested.shard` among
+  them; 12 the primitives that open or build a state (`st_init`,
+  `st_anon`, `st_node`, `st_fresh_node`, `st_for`, `st_seed`,
+  `st_clear_memo`, `st_memo`, `st_set_memo`, `st_ticks`, `guard`,
+  `mk_local`), read by hand; 3 that continue from an older state, each
+  by design and each keeping nothing built under the one it drops —
+  `ingest_expr` through `ing_keep` (a structure found in the table: the
+  node just minted for it goes, and its id is minted again),
+  `check_into` (a refused declaration: the run as it stood) and
+  `process_record` (a table line that does not read: the same); a
+  `Failure` and a `Verdict` hold symbols and names, never a term. A
+  positive id is written by the five `new_*` constructors alone, each
+  from `st_fresh_node`; a state is made in `empty_run` and `run_on`
+  alone. *At run time:* a build whose four readers of ids (`expr_eq`'s
+  shortcut, `same_node`, `ing_same`, the seen set of `used_consts`)
+  report equal ids on unequal hashes — first a trap, fired by a
+  compiled control, then a count by call chain. The full Init replay:
+  no event (T0 FULL == PINNED, 57,977 accepted). The compiled suite, 44
+  entrypoints: no event at `expr_eq`, `same_node` or `ing_same`; five
+  at `used_consts`, every one under `def_height` (`scope.shard`), in
+  `matcher_test` (2) and `loader_pins_test` (3: the pins
+  `ev_nested_exhaustive` and `match_def`, a `fn` and a `def` whose
+  bodies match on nested patterns); none in a load of `std`, the
+  models, calc or the examples. *What the five are — outside K.* The layers above K reuse
+  states freely (the same static check over the loader's closure: 205
+  of the 937 state-handling functions outside K; untrusted by design,
+  their terms rebuilt at the raw entry), so a term they build can carry
+  one id on two nodes; `def_height` (its callers `reader`, `define`,
+  `erasure`, `template`) and slice 4.5's `req_key` read such a term
+  through `expr_consts`, which passes any node whose id it has seen. In
+  all five the height by a plain tree walk equals the height computed
+  (a second scratch build comparing the two): no wrong value was
+  produced anywhere in the suite, and one can be. It is no hole in K —
+  K takes a height as a hint, as the pin does, and every acceptance is
+  through the raw entry's rebuild — but a definition's declared height
+  and a requirement's key rest on ids no one made unique. Put to the
+  user, not built: the readers comparing the hash beside the id; the
+  static check as a standing gate over K. Surveyed beside it, the
+  literal and accelerator rules (the review's other gap), read not
+  run: `tc_test` has a result case for ten of `reduce_nat`'s fourteen
+  operations and for `succ` and the offset rule — none for `mul`,
+  `land`, `lor`, `shiftRight`; no case with an operand or a result past
+  the machine word under either engine; the size limit tested at `pow`
+  alone; a wrong result refused only as `2 ≢ 3`, `Nat.ble 3 2 ≢ true`
+  and hostile 7's `Nat.add` under a user's definition. The gating is
+  covered (hostile 7, 7b, 7e, 8, 8b; `accel_test` 7c–7e), and the
+  accept side by the Init replay under both engines.
 
 - The measured provocation: B-1b's per-function certificates (tb_len
   717, tb_perim 957, tb_app 1,148 canonical lines), the ghost twins
