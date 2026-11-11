@@ -955,8 +955,14 @@ static void rt_init(int argc, char **argv) {
   rt_argc = argc; rt_argv = argv;
   if (getenv("SHARD_STATS")) atexit(rt_stats_dump);
   rt_stack_base = (char *)argv;
-  struct rlimit rl = { 2ul << 30, 2ul << 30 };
-  setrlimit(RLIMIT_STACK, &rl);  /* best effort; deep non-self recursion */
+  /* Best effort; deep non-self recursion. 4 GB since 2026-11-10 (2 GB before): the V3
+     loader's evaluator (v3/kernel/ev.shard), compiled, takes C stack with every step it
+     runs between two externs — its mutual tail calls are not all compiled to jumps — and
+     K's nested_test under it (k_clients_test) peaked at 1.97 GB of the 2 GB, then at
+     2.51 GB once kernel/name.shard's `mix` took more steps a call. The limit is not the
+     fix: the evaluator's stack should not grow at all. */
+  struct rlimit rl = { 4ul << 30, 4ul << 30 };
+  setrlimit(RLIMIT_STACK, &rl);
   size_t cap = 64ul << 30;       /* 64 GB reserve, NORESERVE — pay as used */
   rt_heap = mmap(0, cap, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
