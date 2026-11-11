@@ -12,6 +12,13 @@
 ;;; value to a continuation), so the host's stack does not grow with the
 ;;; program's recursion and the machine can stop at an extern with its
 ;;; arguments and continuation in hand. Fuel is spent on function entry.
+;;; No function of the machine takes more than six parameters: compiled
+;;; through C, a call in tail position is a jump only where the callee's
+;;; arguments fit where the caller's came in — in registers, six of them.
+;;; With functions of seven and nine among them the compiled machine took
+;;; host stack at every application, from one extern to the next: 2.5 GB
+;;; on K's nested_test, 12 MB with six (measured 2026-11-10,
+;;; docs/records/REDUCE-2026-11-10.md).
 ;;; `run_prog` performs each extern through the host's own extern of the
 ;;; same short name (kernel/host.shard's six) and resumes: §6.2's frontier
 ;;; loop without a search. No other file sees the linked representation.
@@ -360,10 +367,25 @@
   (match t
     ((LBVar i) (match (nth env i) ((Some v) (ev_ret lk v k cur fuel)) (None (HStuck (quote unbound) cur))))
     ((LLit v) (ev_ret lk v k cur fuel))
-    ((LCtor tag args) (ev_args lk 0 tag Nil args env k cur fuel))
-    ((LCall id args) (ev_args lk 1 id Nil args env k cur fuel))
-    ((LPrim op args) (ev_args lk 2 op Nil args env k cur fuel))
-    ((LExt id args) (ev_args lk 3 id Nil args env k cur fuel))
+    ;; an application: its first argument under the frame that holds the rest (kind 0 a cell,
+    ;; 1 a call, 2 a primitive, 3 an extern), or the head applied where it has none; the
+    ;; arguments after the first are ev_ret's (KArg)
+    ((LCtor tag args)
+     (match args
+       (Nil (ev_ret lk (IVCtor tag Nil) k cur fuel))
+       ((Cons a more) (ev_term lk env a (KArg 0 tag Nil more env cur k) cur fuel))))
+    ((LCall id args)
+     (match args
+       (Nil (ev_call lk id Nil k cur fuel))
+       ((Cons a more) (ev_term lk env a (KArg 1 id Nil more env cur k) cur fuel))))
+    ((LPrim op args)
+     (match args
+       (Nil (ev_prim lk op Nil k cur fuel))
+       ((Cons a more) (ev_term lk env a (KArg 2 op Nil more env cur k) cur fuel))))
+    ((LExt id args)
+     (match args
+       (Nil (HExt id Nil k cur fuel))
+       ((Cons a more) (ev_term lk env a (KArg 3 id Nil more env cur k) cur fuel))))
     ((LMatch s arms) (ev_term lk env s (KMatch arms env cur k) cur fuel))
     ((LLet rhss body)
      (match rhss
@@ -371,16 +393,23 @@
        ((Cons r1 rest) (ev_term lk env r1 (KLet rest body env cur k) cur fuel))))
     ((LIf c a b) (ev_term lk env c (KIf a b env cur k) cur fuel))
     (LAbsurd (HStuck (quote unreachable) cur))))
-;; the arguments left to right, then the head applied
-(fn ev_args ((lk Linked) (kind Int) (head Int) (done (List IVal)) (rest (List LTerm)) (env (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
-  (match rest
-    (Nil (ev_apply lk kind head done k cur fuel))
-    ((Cons a more) (ev_term lk env a (KArg kind head done more env cur k) cur fuel))))
 (fn ev_ret ((lk Linked) (v IVal) (k Kont) (cur Int) (fuel Int)) Halt
   (match k
     (KHalt (HVal v))
-    ((KArg kind head done rest env cur1 next) (ev_args lk kind head (Cons v done) rest env next cur1 fuel))
-    ((KMatch arms env cur1 next) (ev_match lk v arms env next cur1 fuel))
+    ;; an argument's value: the next argument, left to right, or the saturated head over its
+    ;; values (last first) — a cell, a call, a primitive, an extern
+    ((KArg kind head done rest env cur1 next)
+     (match rest
+       ((Cons a more) (ev_term lk env a (KArg kind head (Cons v done) more env cur1 next) cur1 fuel))
+       (Nil
+        (if (= kind 0) (ev_ret lk (IVCtor head (rev (Cons v done))) next cur1 fuel)
+        (if (= kind 1) (ev_call lk head (Cons v done) next cur1 fuel)
+        (if (= kind 2) (ev_prim lk head (Cons v done) next cur1 fuel)
+          (HExt head (rev (Cons v done)) next cur1 fuel)))))))
+    ((KMatch arms env cur1 next)
+     (match (pick_arm v arms env)
+       ((ArmAt env1 body) (ev_term lk env1 body next cur1 fuel))
+       (ArmNone (HStuck (quote no_arm) cur1))))
     ((KLet rest body env cur1 next)
      (let ((env1 (Cons v env)))
        (match rest
@@ -390,28 +419,28 @@
      (match v
        ((IVCtor tag _) (ev_term lk env (if (= (band tag 1) 1) a b) next cur1 fuel))
        (_ (HStuck (quote if_tag) cur1))))))
-;; a saturated head over its values (last first): a cell, a call (one unit of fuel), a primitive, an extern
-(fn ev_apply ((lk Linked) (kind Int) (head Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
-  (if (= kind 0) (ev_ret lk (IVCtor head (rev done)) k cur fuel)
-  (if (= kind 1)
-    (match (im_find (lk_fns lk) head)
-      ((Some (LBody _ _ body)) (if (< fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
-      ((Some (LUnlinked _)) (HStuck (quote unlinked) head))
-      (_ (HStuck (quote unknown_head) cur)))
-  (if (= kind 2)
-    (match (prim_apply lk head (rev done))
-      ((PrimVal v) (ev_ret lk v k cur fuel))
-      (PrimGuard (HStuck (quote guard) cur))
-      ((PrimOut r) (HExhausted r cur)))
-    (HExt head (rev done) k cur fuel)))))
-(fn ev_match ((lk Linked) (v IVal) (arms (List LArm)) (env (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+;; a function over its arguments' values (last first: the body's frame): one unit of fuel
+(fn ev_call ((lk Linked) (head Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (match (im_find (lk_fns lk) head)
+    ((Some (LBody _ _ body)) (if (< fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
+    ((Some (LUnlinked _)) (HStuck (quote unlinked) head))
+    (_ (HStuck (quote unknown_head) cur))))
+;; a primitive over its arguments' values (last first)
+(fn ev_prim ((lk Linked) (op Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (match (prim_apply lk op (rev done))
+    ((PrimVal v) (ev_ret lk v k cur fuel))
+    (PrimGuard (HStuck (quote guard) cur))
+    ((PrimOut r) (HExhausted r cur))))
+;; the first arm whose pattern takes the value: the frame with the pattern's variables, the body
+(type Arm (ArmNone) (ArmAt (List IVal) LTerm))
+(fn pick_arm ((v IVal) (arms (List LArm)) (env (List IVal))) Arm
   (measure (struct arms))
   (match arms
-    (Nil (HStuck (quote no_arm) cur))
+    (Nil ArmNone)
     ((Cons (LArm p body) rest)
      (match (match_pat p v env)
-       ((Some env1) (ev_term lk env1 body k cur fuel))
-       (None (ev_match lk v rest env k cur fuel))))))
+       ((Some env1) (ArmAt env1 body))
+       (None (pick_arm v rest env))))))
 ;; the pattern's variables pushed in capture order: the last one bound is index 0
 (fn match_pat ((p LPat) (v IVal) (env (List IVal))) (Option (List IVal))
   (measure (struct p))
@@ -578,7 +607,7 @@
        ((Some id)
         (match (vals_in lk args Nil)
           (None (EvStuck (quote bad_value) f))
-          ((Some ivs) (halt_res lk (ev_apply lk 1 id (rev ivs) KHalt id fuel)))))))))
+          ((Some ivs) (halt_res lk (ev_call lk id (rev ivs) KHalt id fuel)))))))))
 
 ;; ---- `run_prog`: the effectful driver (§6.2, §6.7; the checked entry, §9) --------------------
 (type RunRes (RunOk) (RunOut Name) (RunExhausted Symbol Name) (RunStuck Symbol Name) (RunLink Symbol (List Int)) (RunArg Int Symbol (List Int)))   ; RunExhausted: a primitive's resource; RunArg: the argument's position, the reason, its text
@@ -603,7 +632,7 @@
           ((Some (Pair params token))   ; the machine takes its arguments last first
            (match (if (= (len params) 0) (ArgsOk Nil) (args_in lk p f params argv 1 Nil))   ; a World-only entry takes the raw list through get_args (§9)
              ((ArgsBad r) (Pair r w))
-             ((ArgsOk ivs) (run_loop lk (ev_apply lk 1 id (rev (append ivs (list token))) KHalt id fuel) argv path Nil w))))))))))
+             ((ArgsOk ivs) (run_loop lk (ev_call lk id (rev (append ivs (list token))) KHalt id fuel) argv path Nil w))))))))))
 ;; the entry's parameters before its last, and the World: the last parameter's type, its first
 ;; constructor with its fields zero
 (fn entry_shape ((lk Linked) (p Prog) (f Name)) (Option (Pair (List EType) IVal))

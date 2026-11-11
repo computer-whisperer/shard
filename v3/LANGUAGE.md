@@ -991,7 +991,13 @@ return a value to a continuation) with the frames for pending
 arguments, a `match`, a sequential `let` and an `if`, so the host's
 stack does not grow with the program's recursion depth and the machine
 can stop **at an extern** and hand its arguments and continuation to
-the driver. `ev` (§6.2's signature, pure) reports that state as
+the driver. (Compiled through C that holds only while no function of
+the machine takes more than six parameters — a call in tail position is
+a jump only where the callee's arguments fit where the caller's came
+in. Until 2026-11-10 three of the machine's functions took seven and
+nine, and the compiled machine took host stack at every application
+from one extern to the next: 2.5 GB on K's `nested_test`, 12 MB since;
+`docs/records/REDUCE-2026-11-10.md`, the fourth round.) `ev` (§6.2's signature, pure) reports that state as
 `EvStuck extern`; `run` performs the extern through the host's own
 extern of the same short name — `get_args read_file write write_line
 write_file exit`, the six of `kernel/host.shard` — and resumes the
