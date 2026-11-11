@@ -5759,8 +5759,9 @@ branch of `len`'s body and stops there.
    longest, 906 rewrites, 4.05 million nodes for 50 thousand with their
    sharing, 5.3 s there against 1 s for the same proof admitted from
    its store records; and every name is hashed from its bytes at each
-   use. `step.shard` kept three of its thirty laws: the rest nothing
-   cites.
+   use. (Since, the record's third round: the hash's step made cheap at
+   the same value, the model root 34.7 s.) `step.shard` kept three of
+   its thirty laws: the rest nothing cites.
 11. **Not this form's.** The seventeen bound and heap-cell hypotheses a
    run lemma of `len` takes, and the main theorem's haves that prove
    them; a `have` whose statement is inferred; a hypothesis rewritten in

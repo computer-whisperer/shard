@@ -33,7 +33,21 @@
 ;; ---- hashing (expr.shard's structural hash starts here; the environment's key) ----
 ;; bounded by the prime M = 2^61 − 1; not a security hash (LANGUAGE.md §3: never an authority)
 (fn hash_m () Int 2305843009213693951)
-(fn mix ((a Int) (b Int)) Int (mod (+ (* a 1000003) (+ b 1)) (hash_m)))
+;; mix a b = (a·1000003 + b + 1) mod M (mix_whole). For a in [0, 2^61) — a hash or a tag: every
+;; caller's — the product is taken in pieces that stay under 63 bits, and the value is the
+;; same: with a = a1·2^31 + a0 and a1·1000003 = u1·2^30 + u0,
+;;   a·1000003 = u1·2^61 + u0·2^31 + a0·1000003,   and 2^61 is 1 modulo M
+;; (`mod` is the Euclidean one, so any b). Written whole, the product passes 63 bits and each
+;; call makes two bignums, and a name's hash is a call per byte: the compiled loader spent a
+;; third of a load there (measured 2026-11-10, docs/records/REDUCE-2026-11-10.md). The bootstrap
+;; pays for the pieces — nine more operations a call, M spelled out to spare it one
+(fn mix ((a Int) (b Int)) Int
+  (if (< a 0) (mix_whole a b)
+    (if (< a 2305843009213693952)
+      (let ((u (* (bshr a 31) 1000003)))
+        (mod (+ (+ (+ (bshr u 30) (* (band u 1073741823) 2147483648)) (* (band a 2147483647) 1000003)) (+ b 1)) 2305843009213693951))
+      (mix_whole a b))))
+(fn mix_whole ((a Int) (b Int)) Int (mod (+ (* a 1000003) (+ b 1)) (hash_m)))
 (fn hash_bytes ((bs (List Int)) (acc Int)) Int
   (measure (struct bs))
   (match bs (Nil acc) ((Cons b r) (hash_bytes r (mix acc b)))))

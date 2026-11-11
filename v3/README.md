@@ -2210,7 +2210,16 @@ is not K's checking of the steps but the proof read as a tree — 4.05
 million nodes for 50 thousand with their sharing, on the longest run — by
 K's raw entry and the axiom pass after it, and every name hashed from its
 bytes; law §7.3's incremental state, named here at first, is not its
-remedy. Slice 4.6 stands as proposed, not ratified.
+remedy. The third round, the same day (the user: "go ahead with step 1"):
+`mix`, the hash's one step, takes its product in pieces under 63 bits —
+the same value, no bignum — and the model root loads in 34.7 s against
+57.4, the Init replay in 340 s against 521, every hash as it was. It met
+the compiled evaluator's stack, which grows from one extern to the next
+(`ev.shard`'s tail calls are not all jumps once compiled): K's
+`nested_test` under the loader stood at 1.97 GB of `rt.h`'s 2 GB before
+the change and needs 2.51 GB after it; the limit is 4 GB now, and the
+evaluator's fix is proposed, not built. Slice 4.6 stands as proposed, not
+ratified.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
