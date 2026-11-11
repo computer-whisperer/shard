@@ -38,6 +38,12 @@
 (use kernel.expr.D)
 (use kernel.expr.Expr)
 (use kernel.expr.Literal)
+(use kernel.expr.Memo)
+(use kernel.expr.St)
+(use kernel.intmap)
+(use kernel.intmap.IntMap)
+(use kernel.name.Name)
+(use kernel.verdict.KRes)
 (use kernel.host.World)
 (use kernel.json.JRes)
 (use kernel.level.Level)
@@ -324,6 +330,28 @@
 (fn value_in ((e CheckedEnv)) Expr (value_of e (n1 (quote twice))))
 (fn binder_is ((x Expr) (n Symbol)) Bool (match x ((Pi _ m _ _ _) (name_eq m (n1 n))) (_ False)))
 (fn above ((e CheckedEnv) (x Expr)) Bool (< 0 (expr_id x)))
+;; 19b. The rebuild itself (expr.shard ingest_expr, public) under a state that mints no id: two
+;;      binders that differ in name under equal structure keep their names there too — two
+;;      compound nodes without an id are never taken for one (found by review, 2026-11-11:
+;;      they were compared by expr_eq, which is blind to the name).
+(fn k_of ((n Symbol)) Expr (mk_app (mk_const (n1 (quote k)) Nil) (arrow_as n)))
+(fn two_ks () Expr (mk_app (mk_app (mk_const (n1 (quote pair)) Nil) (k_of (quote x))) (k_of (quote y))))
+(fn rebuilt ((st St)) Expr (match (ingest_expr (ingest_new st) (two_ks)) ((Pair _ e) e)))
+(fn first_binder ((e Expr)) Name (match e ((App _ (App _ _ (App _ _ (Pi _ n _ _ _))) _) n) (_ Anon)))
+(fn second_binder ((e Expr)) Name (match e ((App _ _ (App _ _ (Pi _ n _ _ _))) n) (_ Anon)))
+;; 20. A caller's state carries memo tables (found by review, 2026-11-11): St and Memo are
+;;     public data, and the view's advisory `infer` answers from a table its caller wrote —
+;;     here, that `fun (p : Prop) (x : p) => x` has the type `(p : Prop) → p`. `check` starts
+;;     from its own tables whatever it is handed (st_seed), at any counter.
+(fn forged_key ((e Expr)) Int (band (hash_expr e) 16777215))
+(fn forged_one ((k Expr) (v Expr)) (IntMap (List (Pair Expr Expr))) (im_insert IMEmpty (forged_key k) (list (Pair k v))))
+(fn forged_st ((k Int)) St
+  (St 0 0 k (Memo (forged_one (id_true) (false_type)) (forged_one (id_true) (false_type)) IMEmpty IMEmpty IMEmpty IMEmpty IMEmpty)))
+(fn infers_false ((st St)) Bool
+  (match (infer (ctx_new (e_nat) Nil (Some Nil) Safe False 1000000) st 1000 (id_true) False)
+    ((KOk _ t) (expr_eq t (false_type)))
+    (_ False)))
+(fn boom_memo () Declaration (ThmDecl (cv (n1 (quote boom)) Nil (false_type)) (id_true) (list (n1 (quote boom)))))
 ;; 15. a wrong universe arity on a constant
 (fn c_arity () Declaration (DefnDecl (cv (n1 (quote ar)) Nil (mk_sort (LSucc LZero))) (mk_const (nm_nat) (list LZero)) (HRegular 1) Safe (list (n1 (quote ar)))))
 (fn cases () (List Case)
@@ -394,5 +422,12 @@
     (Case "19 and the value's is the type's: one table to a declaration" (= (expr_id (dom1 (value_in (e_twice (quote x) (quote x))))) (expr_id (dom1 (type_in (e_twice (quote x) (quote x)))))))
     (Case "19 two binders that differ in name stay two nodes" (bool_not (= (expr_id (dom1 (type_in (e_twice (quote x) (quote y))))) (expr_id (dom2 (type_in (e_twice (quote x) (quote y))))))))
     (Case "19 each with the name it was written with" (bool_and (binder_is (dom1 (type_in (e_twice (quote x) (quote y)))) (quote x)) (binder_is (dom2 (type_in (e_twice (quote x) (quote y)))) (quote y))))
-    (Case "19 and are equal terms all the same" (expr_eq (dom1 (type_in (e_twice (quote x) (quote y)))) (dom2 (type_in (e_twice (quote x) (quote y))))))))
+    (Case "19 and are equal terms all the same" (expr_eq (dom1 (type_in (e_twice (quote x) (quote y)))) (dom2 (type_in (e_twice (quote x) (quote y))))))
+    (Case "19b the rebuild under a minting state keeps both binders' names" (bool_and (name_eq (first_binder (rebuilt (st_init))) (n1 (quote x))) (name_eq (second_binder (rebuilt (st_init))) (n1 (quote y)))))
+    (Case "19b and under a state that mints no id" (bool_and (name_eq (first_binder (rebuilt (st_anon))) (n1 (quote x))) (name_eq (second_binder (rebuilt (st_anon))) (n1 (quote y)))))
+    (Case "19b where what it leaves is the submitted term" (expr_eq (rebuilt (st_anon)) (two_ks)))
+    (Case "20 the control: an honest state does not type `fun p x => x` at (p : Prop) → p; a forged table makes the view's infer do so" (bool_and (bool_not (infers_false (st0))) (infers_false (forged_st 0))))
+    (Case "20 check under the forged tables refuses boom : (p : Prop) → p := fun p x => x" (refused (check (e_nat) (forged_st 0) (boom_memo)) (quote conversion)))
+    (Case "20 at a counter far above the watermark" (refused (check (e_nat) (forged_st 1000000) (boom_memo)) (quote conversion)))
+    (Case "20 and at a counter that mints no id" (refused (check (e_nat) (forged_st (- 0 3)) (boom_memo)) (quote conversion)))))
 (fn main ((w World)) World (run_cases "hostile_test" (cases) 0 w))

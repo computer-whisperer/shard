@@ -5944,7 +5944,15 @@ a run lemma of 4.05 million nodes for 50 thousand distinct.
    value's is the type's; two binders that differ in name stay two
    nodes, each with its name, equal terms all the same. Case 16's eight
    stand as they were. `k/test`'s one-counter census covers what the
-   entry mints.
+   entry mints. From the review of the landing (a second reader set to
+   break it, the same day; nothing broke): 19b — the rebuild called on
+   a state that mints no id, as `check`'s never is, took two compound
+   children without ids for one node by `expr_eq`, which is blind to a
+   binder's name; such children are no longer called the same —; and
+   20 — a caller's `St` carries memo tables, public data, which the
+   view's advisory `infer` answers from: `check` refuses
+   `(p : Prop) → p := fun p x => x` under a table that says otherwise,
+   at any counter (`st_seed`).
 6. **Measured** (the compiled loader before the two changes and after,
    alternated twice; the record's fifth round has the table):
    `len.shard` 16.7 s to 14.3, `app.shard` 19.9 s to 17.4, the model
