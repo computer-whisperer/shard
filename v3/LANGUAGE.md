@@ -5774,6 +5774,97 @@ branch of `len`'s body and stops there.
    place; one run branched at a waiting case analysis, its outcomes
    sharing the prefix; the run's length reported on success.
 
+**One environment, one counter — the merge removed. DESIGNED
+2026-11-11, outside the slice sequence, at the user's direction** (on
+the two ways to close the defect below — remove the operations that
+join two environments, or make them sound inside K — "Agreed with A --
+proceed."). It reopens slice 4.0 rule 4 (R78's checked transfer) and
+the two environments of slices 3.25 and 3.26; the record is
+`docs/records/FOUNDATION.md` §5 ("Two environments joined").
+
+*The defect, executed 2026-11-11 on the tree of that day.* A node's id
+is unique within the counter that minted it and `expr_eq` answers true
+on two equal positive ids (`expr.shard`); K's view had operations that
+put the nodes of two counters, or the constants of two sources, in one
+environment. Through each a client of the view had
+`boom : (p : Prop) → p` Accepted with an empty axiom closure, the
+control (one run fed everything) refusing it:
+
+- `env_transfer`, the ids: two record runs, each from `empty_run`, each
+  minting id 1 for its first compound node — `c1 : Prop → Prop` in one,
+  `h : F → F` with `F = (p : Prop) → p` in the other; both transferred
+  into one environment, `h c1` checks, `Prop → Prop` and `F` being one
+  id.
+- `env_transfer`, the citations: identity was compared one citation
+  deep (`cited_ok` over `ci_cited`; rule 4 below had said the closure).
+  `c := cp` in both runs, `cp` true in one and `F` in the other,
+  `d : c → F` proven where `c` is `F`, transferred to where `c` is true.
+  No id is involved.
+- `run_with_env`: a run holding record tables moved onto another run's
+  environment with a caller's `St`; the first case without a transfer.
+
+In the loader, which has one source: the Init run's counter and the
+loader's environment's were independent, the nodes K generates for a
+native inductive (constructor types, recursors) being the identified
+native ones; a load of a native inductive type and then `std/list.shard`
+ended with 8 ids each on two different nodes. No wrong verdict was
+produced from source files. `t0` and `verify_release` keep one counter
+to an environment (read, not executed) — a store verified by K alone was
+the second line.
+
+1. **The invariant.** Every node reachable from an environment was
+   minted by the checks that built that environment, each from a counter
+   seeded at its watermark; no operation of K's view takes two
+   environments, and none attaches a run's tables to an environment the
+   run did not build. Two environments that fork from one share ids for
+   different nodes, and nothing can bring them together again: a term
+   crosses only as a raw declaration, rebuilt (law §3.5), or as record
+   text.
+2. **The view.** `env_transfer` and `run_with_env` leave it, with the
+   transfer's implementation (`k/add.shard`, 103 lines) deleted. In
+   their place `run_on env`: a fresh run over an environment — empty
+   tables, the counter at the environment's watermark, the counts zero.
+   A client naming either old service is refused `unknown_head`, as one
+   naming `run_admitting` is.
+3. **Init on demand.** There is no Init run. A demand's lines go to a
+   fresh run on the loader's own environment (`run_on`), which becomes
+   the loader's when every record is accepted and is dropped otherwise;
+   a name Init declares and the environment already holds natively is
+   K's refusal (`already_declared`), as it was the transfer's. The
+   tables restart with each feed: `OdDone`'s record ordinals — what the
+   environment holds — persist, its name, level and expression ids are a
+   feed's own, and the walk extracts again the node lines a new record
+   needs (`od_scan` passes a fed record's line and reads its block's
+   node lines). `od_load` takes and returns an environment.
+4. **The base.** A process that loads many roots carries Init between
+   them (slice 3.25 rule 1): the Init state holds a base — an
+   environment of Init alone, the record ordinals it holds, its ordinal
+   table. A demand made while the load has declared nothing (its
+   declaration table empty: the load's environment is the base) enters
+   the base; a later one enters the load's environment alone, and a
+   re-rooted load that demands the same records checks them again.
+   `ld_reroot` starts from the base. The loader's records are unchanged:
+   an `INIT` record counts what the demand admitted into the load.
+5. **`verify_release`** loads the store's Init closure into the empty
+   environment and reads each store file in a fresh run on what stands
+   (`run_on`), as it did through `run_with_env` at the empty run.
+6. **The regression.** The hostile battery's case 17, the three routes
+   as far as the view still spells them: a second source's records on a
+   fresh run over the first's environment mint above it — `h` is
+   admitted and `h c1` refused; the citation case's `cp` and `c` are
+   refused as already declared and `d` on its statement. Inside the
+   directory, `k/test`: after records, a raw inductive, a fresh run with
+   more records and a raw theorem, no id of the environment stands on
+   two different nodes and none exceeds the watermark. The pin
+   `k_client_transfer` (a client naming `env_transfer`, refused
+   `unknown_head`); `k_client_test`'s seven transfer cases go with the
+   operation.
+7. **Cost, stated before it is measured.** A feed re-reads the node
+   lines its records share with earlier feeds' records; nodes shared
+   between two feeds' records are two copies in the environment; a
+   re-rooted load re-checks what an earlier root demanded after its
+   first declaration.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its

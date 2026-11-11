@@ -553,6 +553,36 @@ ratification of slice 4.0 (§13 item 66).
   pays; the regression is hostile battery 16 (forged ids, a claimed
   range, a claimed flag, a stale hash, snapshot forks, independent
   construction, no trace after a failure).
+- **Two environments joined (2026-11-11; found while measuring what the
+  raw entry's rebuild costs, `records/REDUCE-2026-11-10.md`).** A node's
+  id is unique within the counter that minted it, and `expr_eq` answers
+  true on two equal positive ids. Slice 4.0's checked transfer
+  (`env_transfer`, R78's answer) and the view's `run_with_env` put the
+  nodes of two counters in one environment, and the transfer compared a
+  constant's identity one citation deep. Executed through K's view
+  before the fix, each on the bootstrap in under a second:
+  `boom : (p : Prop) → p` ACCEPTED with an empty axiom closure — by two
+  record runs whose first nodes both wear id 1 (`Prop → Prop` in one,
+  `(p : Prop) → p` in the other) transferred into one environment; by a
+  constant `d : c → F` proven where `c` unfolds to `F` and transferred
+  to where a same-spelled `c` unfolds to a true proposition; by a run's
+  tables moved onto another run's environment. Each control refused it.
+  The eighth `0 = 1` hole, three routes, reached by a client of the
+  view as the hostile battery is. In the loader, whose one source is
+  Init, the two counters were independent and a native inductive's
+  K-generated nodes are identified: a load of a native inductive type
+  and then `std/list.shard` ended with 8 ids each on two different
+  nodes (a probe over the final environment); no wrong verdict was
+  produced from source files, and none was looked for further. `t0` and
+  `verify_release` keep one counter to an environment (read, not
+  executed). The fix is the removal of the operations — no service of
+  the view takes two environments — with Init's records checked into
+  the loader's own environment: `v3/LANGUAGE.md` §8.6 "One environment,
+  one counter"; the regression is hostile battery 17 and `k/test`'s
+  counter cases. GPT-6's R43 had named the condition on 2026-09-12 ("a
+  numeric watermark alone does not prove that two independently created
+  branches or environments cannot reuse the same number"); slice 4.0
+  built the transfer without it.
 
 - The measured provocation: B-1b's per-function certificates (tb_len
   717, tb_perim 957, tb_app 1,148 canonical lines), the ghost twins
