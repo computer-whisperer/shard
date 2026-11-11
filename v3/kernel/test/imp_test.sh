@@ -9,8 +9,8 @@
 # evaluator one function over the task type on the structural fuel, its fuel's descent discharged;
 # `tb_len` ACCEPTED through I on Init's three axioms (landing 1); `tb_app` ACCEPTED through I on
 # Init's three and the six declared parameters — the runtime's allocation, fill, seal and increment
-# laws, each PARAM NAME axiom (landing 2) — the run lemmas, the step, cell, word and ghost laws with
-# them. The root is then stored and the store verified by K alone (verify_release, rule 4), the
+# laws, each PARAM NAME axiom (landing 2) — the run lemmas, the cell, word and ghost laws and
+# step.shard's three with them. The root is then stored and the store verified by K alone (verify_release, rule 4), the
 # parameters its six PARAM lines, the three measured descents its DISCHARGE lines. The two library
 # files the rung added, std/map and std/mem, load with
 # it. The load's seconds are printed on the engine that runs it.
@@ -66,13 +66,9 @@ done
 for t in imm_word imm_odd imm_lt; do
   checks=$((checks+1)); accepted models.imp.word.$t || bad "the word law models.imp.word.$t is not accepted"
 done
-for t in stmt_storew stmt_storew_n ret_of_some; do
-  checks=$((checks+1)); accepted models.imp.step.$t || bad "the step law models.imp.step.$t is not accepted"
-done
-# the step laws (the evaluator's equations as laws over the structural fuel and over a Nat fuel),
-# the cell kit and the word kit
-for t in stmts_nil stmts_cons stmts_cons_fail stmt_set stmt_if_z stmt_if_nz stmt_loadw stmt_call_ret stmt_call_fail stmt_fail call_ret call_fail call_depth fuel_of_succ \
-         stmts_nil_n stmts_cons_n stmts_cons_fail_n stmt_set_n stmt_if_z_n stmt_if_nz_n stmt_loadw_n stmt_call_ret_n stmt_call_fail_n stmt_fail_n call_ret_n call_fail_n call_depth_n; do
+# what the proofs cite of the evaluator beside its run (step.shard: the call refused at the depth
+# bound, the Nat fuel's successor, the call's result record), the cell kit and the word kit
+for t in call_depth fuel_of_succ ret_of_some; do
   checks=$((checks+1)); accepted models.imp.step.$t || bad "the step law models.imp.step.$t is not accepted"
 done
 for t in hfget_head hfget_tail haddrs_mem rd_hdr rd_slots rd_slot cells_ok_at e_brk_app_l e_brk_hexts cell_window band32 hword_tag; do
