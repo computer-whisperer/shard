@@ -2204,10 +2204,13 @@ the same; the reconstruction version stays 2). `len.shard`: 56,452 bytes to
 25,921, seven pieces to four whole-call lemmas of one step each; `app.shard`:
 181,204 to 55,387, twelve pieces to five; both theorems' statements, hashes
 and axioms as they were; `step.shard` cut from thirty laws to the three still
-cited. The price is K's time: the model root loads in 59.7 s against 48.6 —
-each step's motive is over the whole target, and the outcomes of one call
-re-check the prefix they share (law §7.3's incremental state is what would
-remove it). Slice 4.6 stands as proposed, not ratified.
+cited. The price is time: the model root loads in 59.7 s against 48.6.
+Measured after the landing (the record's "Where the time goes"): the cost
+is not K's checking of the steps but the proof read as a tree — 4.05
+million nodes for 50 thousand with their sharing, on the longest run — by
+K's raw entry and the axiom pass after it, and every name hashed from its
+bytes; law §7.3's incremental state, named here at first, is not its
+remedy. Slice 4.6 stands as proposed, not ratified.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

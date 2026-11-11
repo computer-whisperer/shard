@@ -5749,15 +5749,18 @@ branch of `len`'s body and stops there.
    box: `len`'s closure 29.3 s against 23.6 (a quarter more), `app`'s
    34.5 against 30.9, the model root 59.7 against 48.6 — and the landed
    files as fast under this loader as under the one before it, so the
-   cost is the files', not the form's. The runs themselves are under
-   two seconds; the time is K's: each step's motive is over the whole
-   target, the nine runs are 4,171 rewrites, and the prefix that the
-   outcomes of one call share (`len`'s cons path up to the inner call,
-   in runs of 444, 762 and 906) is checked once per outcome. What would
-   remove it is law
-   §7.3's incremental state, as the first round found, or one run
-   branched where it waits (rule 11). `step.shard` kept three of its
-   thirty laws: the rest nothing cites.
+   cost is the files', not the form's. Where it goes, measured after
+   the landing (the record's "Where the time goes"; this rule first gave
+   K's check of each step's motive, and law §7.3's incremental state as
+   the remedy — unmeasured, and wrong): the nine runs are 4,171
+   rewrites and take 8.8 s to run, a step costing the same at a run's
+   end as at its start; the proofs they leave are graphs that K's raw
+   entry (law §3.5) and the axiom pass after it read as trees — the
+   longest, 906 rewrites, 4.05 million nodes for 50 thousand with their
+   sharing, 5.3 s there against 1 s for the same proof admitted from
+   its store records; and every name is hashed from its bytes at each
+   use. `step.shard` kept three of its thirty laws: the rest nothing
+   cites.
 11. **Not this form's.** The seventeen bound and heap-cell hypotheses a
    run lemma of `len` takes, and the main theorem's haves that prove
    them; a `have` whose statement is inferred; a hypothesis rewritten in
