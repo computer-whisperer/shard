@@ -1219,6 +1219,18 @@ phase 3.
 > chain being replaced, and the flip is a tree move that was serialized
 > behind the arc's largest build.
 
+> **AMENDED 2026-11-11 (ruled by the user at slice 4.6's design;
+> `v3/LANGUAGE.md` §13 item 71).** Item 4's "buffer rules" and the two
+> buffer fixtures of T6's row (§12.5) — a buffer shorter than its
+> shape, mutation after validation — are carried to the slice that
+> builds packed buffers, with V3's own lowering (item 7's by the
+> amendment above). T6 closes in phase 4 on the rest of its row, and
+> its close states the two it lacks; §9.3's buffer rules stand as
+> written. Reason: E's bytes are immutable lists and the packed
+> representation is the lowering's, so in phase 4 no buffer can be
+> shorter than its shape or mutated after validation, and a view type
+> designed before its representation would be designed twice.
+
 Serial on main, one gate per phase, CI green behind each, generated
 files never hand-patched, kernel sources frozen during corpus runs.
 

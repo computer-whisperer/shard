@@ -2272,9 +2272,26 @@ Gates on the dev box, before the review and again on the tree as
 committed: 29 roots built, both suites 45 entrypoints with 0 failed,
 the tie 0 differ, T0 FULL == PINNED; old against new in alternated
 runs the replay's first 80 chunks 38 s on each, `len.shard` 15.2 s to
-14.9 and the model root 28.8 s to 27.8, every output byte-identical. Slice 4.6 ruled the same day (an in-process shard
-driver; the buffer fixtures carried with a law amendment), to be
-written in next.
+14.9 and the model root 28.8 s to 27.8, every output byte-identical.
+
+**Slice 4.6 designed 2026-11-11 — T6, the embedding** (`LANGUAGE.md` §8.6
+"Slice 4.6", §13 item 71; law §9.3, §9.4, the T6 row; proposed 2026-11-06,
+amended for "One environment, one counter", its two decisions ruled — the
+user: "On 4.6: shard driver in-process, and yes to the law amendment.").
+Three landings: prepared invocation — `prepare` links once and answers a
+handle, `invoke` runs it on arguments built as data and validated against
+the entry's types, `ev` and `run_prog` clients of the one path, where today
+every call links —; revisions and stale handles — a session that owns the
+Init-only base, a table of revisions, each its own load with its own
+environment and counter and an ordinal the session mints, and a table of
+live handles; the T6 row sentence by sentence; one declaration built as data
+through the whole path (R61) —; budgets and reclamation — fuel and a host
+limit as separate records, exhaustion leaving the session as it was,
+resident memory over fork/fail/release cycles. The host is a shard driver
+in-process, on both engines and tied; no foreign-language host is exercised
+in phase 4. The buffer rules and the row's two buffer fixtures are carried
+to the slice that builds packed buffers (law §12.4 amended; `LANGUAGE.md`
+§11): T6 will close in phase 4 short of the two. Nothing built.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
