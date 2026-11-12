@@ -275,7 +275,9 @@ pins/            ; corpus-law pins: proof/ (proof-layer regressions),
                  ;   boundary refusals) — kernel behavior may not drift
                  ;   from these silently
 bin/             ; local fast engines (shard_check / shard_eval) built by
-                 ;   bin/rebuild.sh; stamp files guard source drift
+                 ;   bin/rebuild.sh; stamp files guard source drift;
+                 ;   bin/ci_docs_only.sh is CI's question whether a push
+                 ;   changed documentation only (.gitlab-ci.yml's header)
 docs/            ; the documentation map below
 rust_bootstrap/  ; the Rust host (evaluate-only): the enduring bootstrap
                  ;   facility, never architecture (FOUNDATION §9.1)
