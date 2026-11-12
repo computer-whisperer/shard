@@ -2296,8 +2296,12 @@ to the slice that builds packed buffers (law §12.4 amended; `LANGUAGE.md`
 §11): T6 will close in phase 4 short of the two. Nothing built.
 
 **Slice 4.6 landing 1 built 2026-11-11 — prepared invocation; its leans
-await ratification** (`LANGUAGE.md` §8.6 "As built, landing 1"; law
-§9.3; the user: "Good. Let's continue with slice 4.6").
+ruled 2026-11-12** (`LANGUAGE.md` §8.6 "As built, landing 1"; law
+§9.3; the user: "Good. Let's continue with slice 4.6", then on the
+four decisions put at its boundary "1: keep it as built, 2: A, 3: A,
+4: no handle. Let's proceed with landing 2." — `ev` stays the assumed
+door, the checked door's limit is closed in landing 2, the handle stays
+private by convention, the reader keeps no handle).
 `kernel/ev.shard` gained `prepare` — the file's one call of the linker,
 answering a handle or a refusal by name — and `invoke` / `invoke_run`,
 which run a handle's entry on arguments built as data as often as the
@@ -2340,7 +2344,10 @@ s; both suites 47 entrypoints with 0 failed (the bootstrap 919 s, the
 binaries 544 s — the binaries' second run: the first failed the native
 tie's check that no authored file changes under it, two documents having
 been edited while it ran); the tie 0 differ; parity 32 closures, 149,425
-declarations, 0 differ; T0 FULL == PINNED.
+declarations, 0 differ; T0 FULL == PINNED. CI: pipeline 665 green on
+`b0b5a02` — engine 29 s, corpus 2,104 s, v3 4,654 s, native 4,639 s, the
+suite's tie 18 s; the engine job a retry, its first attempt failing at
+the clone before anything of the tree ran.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

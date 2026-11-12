@@ -1,6 +1,6 @@
 # The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-11-11): S, L, E and I as phase 3 built them — phase 3
+> **STATUS (2026-11-12): S, L, E and I as phase 3 built them — phase 3
 > closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–69 all ruled:
 > 1–38 ratified 2026-09-15; 43, 47 and 49–53 at their slices; 54–64
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
 > open: slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11 with the landing's leans awaiting ratification (§8.6 "As built, landing 1"), landings 2 and 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"), landing 2 next, landing 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -3372,7 +3372,7 @@ it entrenches. The slices, in the order built:
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 | 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
-| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, its leans awaiting ratification; landings 2 and 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
+| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 next, landing 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -6307,7 +6307,7 @@ The rules:
    R85's origin map, each its own slice (§11).
 
 **As built, landing 1 (2026-11-11): prepared invocation — the leans
-below await ratification.**
+below ruled 2026-11-12, the ruling after the gates' paragraph.**
 `kernel/ev.shard` (+378/−70 lines): `prepare`, the one place of the
 file that links — `link` is called once, where `ev` and
 `run_prog_traced` each called it —, answering a `Handle` or a refusal
@@ -6331,7 +6331,8 @@ policy's path. `ev`, `run_prog` and `run_prog_traced` are one
 preparation and one invocation each. An invocation does not change
 its handle: an exhausted one is followed by one that answers.
 
-**The leans of rule 1, as built — for ratification.**
+**The leans of rule 1, as built — put for ratification 2026-11-11,
+ruled 2026-11-12 (below).**
 
 (a) *The two doors.* Law §9.3's two kinds of entry are the handle's
 policy. **Checked**: every argument is validated against the E type
@@ -6538,6 +6539,30 @@ declarations, 0 differ); on the binaries 47 entrypoints, 0 failed, in
 edited while it ran, and the suite was run again on the untouched
 tree —; the tie 47 entrypoints, 0 differ; the full replay T0 FULL ==
 PINNED, accepted 57,977, in 435 s at 28.7 GB.
+CI: pipeline 665 green on `b0b5a02` — engine 29 s, corpus 2,104 s,
+v3 4,654 s, native 4,639 s, the suite's tie 18 s; the engine job a
+retry, its first attempt having failed at the clone before anything
+of the tree ran (the runner could not resolve the GitLab host).
+
+**Ruled 2026-11-12.** Four decisions were put at the landing's
+boundary, each with its options and a lean, and the user answered by
+label: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed
+with landing 2." — no reasons given on any, so each is a checkpoint
+and cheap to reopen. (1) **`ev` stays the assumed door** ((a)); what
+was put against it: one validated path for every client, which
+changes what `ev` answers on the out-of-type values its tests hand
+it. (2) **The checked door's limit ((c)) is closed in landing 2**,
+from the revision's environment, and until then "checked" means
+checked against the erased types; rejected: a marker carried in the
+erased program now, which changes the format the dump, the parity
+check and the emitter read. (3) **The handle stays `ev.shard`'s by
+convention under the grep ((d))**, a client of landing 2 holding an
+ordinal into the session's table and never the handle; rejected: a
+view over `ev.shard` now, which changes how every client imports it.
+(4) **The reader keeps no handle ((g)).** Put as changes the user
+could veto and not answered — standing, not ratified by a word:
+(b)'s and (h)'s refusals decided at `prepare`, (e)'s token, the
+tie's `N ms`. (f) asks nothing.
 
 ## 9. Assumption policy and entries
 
@@ -8371,4 +8396,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     session's question; the World's token is a value of its type or
     the entry is `bad_entry`; E has no function-typed parameter; the
     reader keeps no handle, on the measurement; what a run refuses
-    differently. Landings 2 and 3 not started.
+    differently. (h) **Landing 1's leans ruled 2026-11-12** — the
+    user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's
+    proceed with landing 2.", by label and without reasons, so
+    checkpoints: `ev` stays the assumed door; the checked door's
+    limit is closed in landing 2 from the revision's environment and
+    not by a marker in the erased program; the handle stays
+    `ev.shard`'s by convention, landing 2's client holding an
+    ordinal; the reader keeps no handle. The smaller changes — the
+    refusals decided at `prepare`, the World's token, the tie's `N
+    ms` — were put as vetoable and not answered. Landing 2 next,
+    landing 3 not started.
