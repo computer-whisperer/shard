@@ -7,6 +7,8 @@
 #      own fields, and none makes or restates a handle (the record's constructor MkHandle and
 #      its updaters Handle.with_FIELD are ordinary declarations any file could call: this
 #      check is what holds the convention, no view seals ev.shard).
+#      The same for the session (rule 2): a client holds a handle's ordinal, and nothing outside
+#      session.shard takes the prepared value out of a slot or restates the tables.
 #   2. the link-once ratio, printed: N invocations of one entry through `ev` — N links of a
 #      program of D functions — against one `prepare` and N `invoke`s; the two sums of the
 #      answers must agree and be the sum the entry's definition gives.
@@ -24,6 +26,12 @@ leak=$(grep -lE '\b(Linked|IVal|LinkRes|LkOk|LkErr|MkHandle|Handle\.(lk|id|token
          v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/test/*.shard v3/kernel/k/test/*.shard v3/std/*.shard 2>/dev/null \
        | grep -v '^v3/kernel/ev\.shard$' | tr '\n' ' ')
 checks=$((checks+1)); [ -z "$leak" ] || bad "the linked representation or the handle's making is named outside ev.shard: $leak"
+# the session's client holds an ordinal, never the prepared value (rule 2): what hands one out —
+# the slot's contents, ses_got — is session.shard's own, and so is making or restating its tables
+held=$(grep -lE '\b(ses_got|GotHandle|SlotLive|Held\.handle|MkSession|MkHeld|MkRev|(Session|Held|Rev)\.with_[a-z]+)\b' \
+         v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/test/*.shard v3/kernel/k/test/*.shard v3/std/*.shard 2>/dev/null \
+       | grep -v '^v3/kernel/session\.shard$' | tr '\n' ' ')
+checks=$((checks+1)); [ -z "$held" ] || bad "a prepared value is taken out of the session's table, or its tables restated, outside session.shard: $held"
 
 N=${HANDLE_COST_N:-100}; D=${HANDLE_COST_D:-1000}
 want=$(( N * (N + 1) / 2 + 6 * N ))   # total n [1 2 3] = n + 6, for n = 1..N

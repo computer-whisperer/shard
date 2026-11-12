@@ -19,8 +19,8 @@
 #                        command line over the binaries — `direct FILE` runs v3/bin/STEM when its
 #                        stamp is current and fails loudly otherwise; `dump` and `run` the bootstrap's
 #
-# THE INVENTORY (rule 8): the five drivers, calc_harness, the 19 public harnesses of
-# kernel/test/ and the 5 of k/test/ — 30 roots, parity's list (kernel/test/parity_test.sh).
+# THE INVENTORY (rule 8): the five drivers, calc_harness, the 20 public harnesses of
+# kernel/test/ and the 5 of k/test/ — 31 roots, parity's list (kernel/test/parity_test.sh).
 # A root outside K's directory whose closure consumes K's view is loaded with v3/kernel/k as a
 # second root, so the directory's own check links the implementation into the program (as
 # parity and k_clients_test do; the bootstrap's dump shows env_empty when K is in the closure).

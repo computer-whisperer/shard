@@ -2349,6 +2349,72 @@ declarations, 0 differ; T0 FULL == PINNED. CI: pipeline 665 green on
 suite's tie 18 s; the engine job a retry, its first attempt failing at
 the clone before anything of the tree ran.
 
+**Slice 4.6 landing 2 built 2026-11-12 — revisions and stale handles;
+its leans await ratification; two defects of the loader its review found
+are closed in it** (`LANGUAGE.md` §8.6 "As built, landing 2"; law §9.3;
+the T6 row). `kernel/session.shard` is the long-lived value an embedding
+holds: a base, a table of revisions and a table of handles, each by an
+ordinal the session mints. A revision is one load from the base
+(`ses_introduce`) or an earlier revision extended by declarations built
+as data (`ses_extend`) — a new ordinal, the parent what it was. A client
+holds a handle's ordinal and never the prepared value, so release
+(`released`), revocation (`revoked`, its reason kept) and a policy's
+withdrawal of a revision (`ses_withdraw`: every handle bound to it or to
+a revision extending it revoked, none prepared after) are the table's.
+The T6 row's sentences are `kernel/test/session_test.shard`'s cases, on
+two pins that differ in one entry's body: the A handle keeps running A
+after B is introduced, never runs B, is refused by an invocation that
+requires B (`revision`), a new B handle runs B, a released handle is
+refused. **The checked door's limit is closed** where the environment is
+held: the session's `prepare_on` reads the entry's evidence binders and
+the proposition fields of the constructors its parameter types reach
+from the revision's environment, and refuses such an entry
+`preconditioned` at the checked door, the binder or field named; at the
+assumed door it is prepared and what the caller assumes is recorded with
+the handle. `load.shard --run` is the same door now (`run_load`), so the
+command line refuses such an entry too. **Declarations built as data**
+(R61) enter through two new loader entries that read no source —
+`load_data` (K's raw entry, the standard policy, an `ACCEPT` record) and
+`load_data_view` (the derived view) —: two built as terms of K are
+admitted, prepared, invoked, emitted and lowered by route 1's chain, the
+binary's output the handle's (`session_emit_test.sh`). The law's first
+connected path gains its last link, repeated execution through a
+prepared handle, and two of its breaks as the session shows them: the
+invalid raw argument and the mismatched revision. **What departs from
+the design's text: the session's base does not grow.** As first built it
+kept what earlier loads demanded of Init, and the review found one root
+introduced twice to be two different revisions — the loader states a
+fn's equations where Init's `Eq` is in the environment, whoever demanded
+it —, so every revision checks its own closure of Init, as a fresh
+process does. Measured on the quiet dev box, a revision costs what its
+load costs in a fresh process — on the bootstrap the pins' A 1.2 s,
+`data` 20.3 s, the path 24.4 s — where the base as first built
+introduced the path in 0.6 s. **The review** (a second reader told to
+break the diff by running) reproduced five defects; the loader's two and the
+base's and the withdrawal's were run again here before their fixes, the
+data path's three stand on the review's runs. Two were the loader's and older than the landing —
+on a clean checkout of `482b991`: a `def` could take the name of a fn
+with no L meaning, so a typed fn citing it was proved against the def
+and ran the fn (K's `h 2 = 5`, the run's `0`); and a file named
+`Classical.shard` could declare an axiom `choice`, which the policy —
+knowing the standard axioms by name — recorded as standard (the release
+gate refused the same store). Both are refused `name_taken` now, and a
+standard axiom is one the load imported (pins `def_takes_fn`,
+`init_name_taken_l`). The others were the landing's own: a declaration
+built as data under a program's name or outside its module, the base
+above, and a withdrawal that stopped short of the revisions extending
+the withdrawn one. The door from the environment held on some thirty
+signatures. Gates on the dev box, the tree as committed: `v3/build.sh
+--all` 31 roots, 31 built, 0 failed, in 2,826 s; the suite on the
+binaries 49 entrypoints, 0 failed, beside the full replay in 523 s of
+wall — T0 FULL == PINNED, accepted 57,977, the replay 391 s at 28.8 GB
+—; on the bootstrap 49 entrypoints, 0 failed, in 901 s of wall (parity
+33 closures, 158,654 declarations, 0 differ); the tie 49 entrypoints, 0
+differ; no authored file changed under the round. Before it the
+bootstrap suite ran twice as a pre-check, 48 entrypoints each: the first
+with parity failing on the type's name, the second, after the review's
+fixes, with 0 failed in 912 s.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

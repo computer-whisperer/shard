@@ -89,6 +89,7 @@
 (use kernel.classify.PreRes)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
+(use kernel.decl.Constructor)
 (use kernel.decl.Declaration)
 (use kernel.verdict.Outcome)
 (use kernel.verdict)
@@ -205,12 +206,14 @@
 ;; visible in it, itself included), whether the Init prefix is visible in it
 ;; a view's module also keeps its fork point (§6.6) for the implementation
 ;; check, which may come after a consumer loaded the view
-(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int) (fork (Option ForkPt)) (ok Bool))
+(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int) (fork (Option ForkPt)) (ok Bool) (taken (List (List Int))))
   ;; ok False: its loading failed — a later import fails the same way, never re-reads it
+  ;; taken: the names of Init under the file's identity (Fx.taken), kept for a declaration built
+  ;; as data that enters the module after its file is done (load_data)
 ;; a file whose loading failed after its heads were pre-registered: recorded so that a
 ;; later import of it reports import_failed instead of re-reading it into duplicate_name
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
-  (ld_add_mod l (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init False) (fork None) (ok False))))
+  (ld_add_mod l (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init False) (fork None) (ok False) (taken Nil))))
 
 ;; Init alone: an environment no native declaration entered, the records it holds, its ordinal
 ;; table. While a load has declared nothing its environment IS the base, and a demand enters
@@ -540,8 +543,14 @@
   (match axs
     (Nil Nil)
     ((Cons a r) (if (permitted sc trusts params a) (outside_policy sc trusts params r) (Cons a (outside_policy sc trusts params r))))))
+;; a standard axiom is Init's own: the constant under that name is one the load imported (its
+;; ordinal table holds it), never a declaration of the load's — a name is no warrant
 (fn permitted ((sc Scope) (trusts (List Name)) (params (List Name)) (a Name)) Bool
-  (if (mem_name a (std_axioms)) True (if (mem_name a params) True (trusted sc trusts a))))
+  (if (bool_and (mem_name a (std_axioms)) (imported_decl sc a)) True (if (mem_name a params) True (trusted sc trusts a))))
+(fn imported_decl ((sc Scope) (a Name)) Bool
+  (match (sc_vis sc)
+    (VisAll True)
+    ((VisOnly _ _ _ _ _ inits) (match (ords_find inits a) ((Some _) True) (None False)))))
 (fn params_of ((params (List Name)) (axs (List Name))) (List Name)
   (measure (struct axs))
   (match axs (Nil Nil) ((Cons a r) (if (mem_name a params) (Cons a (params_of params r)) (params_of params r)))))
@@ -584,6 +593,23 @@
        ((Accepted e2) (admit_decls e2 r))
        ((Rejected reason subject) (AdRefused subject (reason_of reason)))
        ((Exhausted res site) (AdRefused (decl_name d) (exhausted_sym res site)))))))
+;; K's admission of a file's declarations into the load's environment, then slice 3.26 rule 5
+;; for every name they declare — a constructor's and a recursor's with the rest: none is a
+;; name of Init under the file's identity (Fx.taken), whether or not the load holds Init's
+;; constant yet. A `fn`, an `extern` and a derivation are refused by their form's name before
+;; (name_taken); this is every other declaration's, and until 2026-11-12 nothing was: a file
+;; `Classical.shard` declaring `(axiom choice …)` below the horizon of Init's took the standard
+;; axiom's identity and passed the policy by its name (pin init_name_taken_l)
+(fn admit_under ((l Load) (f Fx) (ds (List Declaration))) Admit
+  (match (admit_decls (Load.env l) ds)
+    ((AdRefused subj reason) (AdRefused subj reason))
+    ((AdOk env1)
+     (match (first_taken (Fx.taken f) (decls_declare env1 ds))
+       ((Some n) (AdRefused n (quote name_taken)))
+       (None (AdOk env1))))))
+(fn first_taken ((ts (List (List Int))) (ns (List Name))) (Option Name)
+  (measure (struct ns))
+  (match ns (Nil None) ((Cons n r) (if (taken_has ts (show_name n)) (Some n) (first_taken ts r)))))
 
 ;; the closures of the declared names against the policy: the first
 ;; declaration outside it, or the records to add
@@ -685,6 +711,8 @@
       (match (obligation_named l sc s)
         ((Some (Pair k proof)) (Pair (load_discharge l f k proof) f))
         (None (Pair (fulfills_misnamed l f sc s) f)))
+    (if (program_named l (form_name sc s))
+      (Pair (ld_rec l (RClassify (form_name sc s) (quote name_taken) (append (show_name (form_name sc s)) " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have (§7.5) — declare another name"))) f)
     (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)   ; a def that recurses: the fn pipeline's K half (slice 4.2 landing 0)
     (match (rd_plain l (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
      ((Pair l rd)
@@ -699,7 +727,17 @@
        (match (admit_param l f d kind arity)
          ((Pair l1 f1) (Pair (add_e_twin l1 f1 s) f1))))
       ((RDOk ds) (admit_read l f s ds))
-      (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f))))))))))))))))
+      (_ (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading")) f)))))))))))))))))
+;; a name the E table holds a program for — a fn, an extern — while K holds no constant of it:
+;; a fn with no L meaning (§8.4 rule 1). The other direction is name_taken's: a fn or an extern
+;; may not take an admitted constant's name. Until 2026-11-12 a `def` after such a fn took its
+;; name, and a typed fn citing it was defined against the def and ran the fn (pin def_takes_fn)
+(fn program_named ((l Load) (n Name)) Bool
+  (if (env_has (Load.env l) n) False
+    (match (es_find_decl (Load.etab l) n)
+      ((Some (EFn _ _ _ _ _ _)) True)
+      ((Some (EExtern _ _ _ _)) True)
+      (_ False))))
 
 ;; ---- a derivation (§8.4 slice 3.19; derive.shard) -----------------------------------------------
 ;; the forms a capability generated are loaded as the file's own at this point — the one front
@@ -782,7 +820,7 @@
          ((RDErr e m) (ld_rec l (horizon_refusal f e m)))
          ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
          ((RDOk ds)
-          (match (admit_decls (Load.env l) ds)
+          (match (admit_under l f ds)
             ((AdRefused subj reason) (ld_rec l (RRefuse subj reason)))
             ((AdOk env1)
              (match (policy_pass l f env1 (Load.memo l) ds Nil)
@@ -865,7 +903,7 @@
     ((Pair l1 None) (Pair l1 f))
     ((Pair l1 (Some recs)) (bundle_after (add_e_twin l1 f s) (mix_recs f recs) ds))))
 (fn admit_core ((l Load) (f Fx) (ds (List Declaration))) (Pair Load (Option (List Rec)))
-  (match (admit_decls (Load.env l) ds)
+  (match (admit_under l f ds)
     ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) None))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) ds Nil)
@@ -910,7 +948,7 @@
 ;; with the environment, or the loader with the refusal recorded
 (type AtRes (AtOk Load CheckedEnv) (AtDone Load))
 (fn admit_theorems ((l Load) (f Fx) (thms (List Declaration))) AtRes
-  (match (admit_decls (Load.env l) thms)
+  (match (admit_under l f thms)
     ((AdRefused subj reason) (AtDone (ld_rec l (RRefuse subj reason))))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) thms Nil)
@@ -978,6 +1016,79 @@
   (match s
     ((SList (Cons _ (Cons _ (Cons (SList (Cons (SSym v) Nil)) Nil)))) (if (sym_eq v (quote view)) (quote view) (quote supplied)))
     (_ (quote supplied))))
+;; ---- declarations built as data (§8.6 slice 4.6 rule 2; law §9.3; GPT-6 R61) -----------------
+;; A client that holds a load hands K a declaration it built as data — no source, no reader, no
+;; elaborator. `load_data` admits it through the raw entry (`check`) as a file's own are
+;; admitted: into a module `m` the load holds, under the standard policy — no trust clause —
+;; with its ACCEPT record, or the refusal's (REFUSE, POLICY). The naming law holds as for a
+;; file's: every name it declares — an inductive block's types and constructors each — extends
+;; the module's (`outside_module`), none is a name of Init under the module's identity (the
+;; file's taken names, kept with the module) and none is the name of a program with no
+;; constant behind it (`name_taken`, both). A quotient and a mutual block are no declaration of
+;; a module (`data_kind`). Nothing is generated beside it: an inductive's auxiliaries are the
+;; reader's, not K's. `load_data_view` then gives an admitted definition its program by the
+;; derived view (§7.1), as a file's `(realize NAME (view))` does — REALIZE, or the classifier's
+;; refusal. What the declaration cites is in the load's environment or K refuses it
+;; (`unknown_constant`): no demand is made of Init on its behalf.
+(fn fx_plain ((m Name) (init Int) (taken (List (List Int)))) Fx
+  (make Fx (module m) (ident m) (parts (list "(data)")) (opened Nil) (vis (list m)) (init init) (trusts Nil) (hash (hash_name m)) (view False) (autos Nil) (initname Anon) (taken taken) (ecount 0) (above Nil) (bins Nil)))
+(fn fx_data ((l Load) (m Name)) Fx
+  (match (ld_find_mod (Load.mods l) m)
+    ((Some md) (fx_plain m (Mod.init md) (Mod.taken md)))
+    (None (fx_plain m -1 Nil))))
+(fn load_data ((l Load) (m Name) (d Declaration)) Load
+  (match (ld_find_mod (Load.mods l) m)
+    (None (ld_rec l (RLoadErr "(data)" (quote unknown_module) (append (show_name m) " is no module of this load"))))
+    ((Some _)
+     (match (data_names d)
+       (None (ld_rec l (RLoadErr "(data)" (quote data_kind) "a quotient or a mutual block is no declaration of a module")))
+       ((Some ns)
+        (match (first_outside m ns)
+          ((Some n) (ld_rec l (RLoadErr "(data)" (quote outside_module) (append (show_name n) (append " is not a name of the module " (show_name m))))))
+          (None
+           (match (first_program l ns)
+             ((Some n) (ld_rec l (RClassify n (quote name_taken) (append (show_name n) " is a fn or an extern of the program with no constant of K behind it (§7.5)"))))
+             (None (match (admit_core l (fx_data l m) (list d)) ((Pair l1 _) l1)))))))))))
+;; the names a declaration states: its own, an inductive block's types and their constructors
+;; (the recursors K adds are under the types')
+(fn data_names ((d Declaration)) (Option (List Name))
+  (match d
+    ((AxiomDecl (ConstantVal n _ _) _) (Some (list n)))
+    ((DefnDecl (ConstantVal n _ _) _ _ _ _) (Some (list n)))
+    ((ThmDecl (ConstantVal n _ _) _ _) (Some (list n)))
+    ((OpaqueDecl (ConstantVal n _ _) _ _ _) (Some (list n)))
+    ((InductDecl _ _ ts _) (Some (data_block_names ts)))
+    (_ None)))
+(fn data_block_names ((ts (List InductiveType))) (List Name)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons (InductiveType n _ cs) r) (Cons n (append (data_ctor_names cs) (data_block_names r))))))
+(fn data_ctor_names ((cs (List Constructor))) (List Name)
+  (measure (struct cs))
+  (match cs (Nil Nil) ((Cons (Constructor n _) r) (Cons n (data_ctor_names r)))))
+(fn first_outside ((m Name) (ns (List Name))) (Option Name)
+  (measure (struct ns))
+  (match ns (Nil None) ((Cons n r) (if (name_within m n) (first_outside m r) (Some n)))))
+(fn first_program ((l Load) (ns (List Name))) (Option Name)
+  (measure (struct ns))
+  (match ns (Nil None) ((Cons n r) (if (program_named l n) (Some n) (first_program l r)))))
+(fn load_data_view ((l Load) (m Name) (k Name)) Load
+  (if (match (ld_find_mod (Load.mods l) m) ((Some _) False) (None True)) (ld_rec l (RLoadErr "(data)" (quote unknown_module) (append (show_name m) " is no module of this load")))
+  (if (match (es_find_decl (Load.etab l) k) ((Some _) True) (None False)) (ld_rec l (RClassify k (quote duplicate_name) (append (show_name k) " has a program already")))
+    (match (realize_view_of (Load.etab l) (fx_scope l (fx_data l m)) (Load.env l) k)
+      ((RzOk es1 d _ _ _ _ _) (ld_rec (ld_with_e l (es_add_decl (es_register_all es1 m (decl_infos d)) d)) (RRealize k (quote view) Nil Nil)))
+      ((RzErr e msg) (ld_rec l (RClassify k e msg)))
+      (_ (ld_rec l (RClassify k (quote realize_signature) (append (show_name k) ": a template has no derived view"))))))))
+;; the parts of slice 4.5's key for a declaration of the module m, read after the load (a
+;; session's key for an entry): the scope by the declaration table, the policy's part without a
+;; trust clause, the environment's under the module's Init horizon
+(fn data_ctx ((l Load) (m Name)) ReqCtx (req_ctx l (fx_data l m)))
+;; n = m.x… : m a proper prefix of n
+(fn name_within ((m Name) (n Name)) Bool
+  (measure (struct n))
+  (match n
+    (Anon False)
+    ((Str p _) (if (name_eq p m) True (name_within m p)))
+    ((Num p _) (if (name_eq p m) True (name_within m p)))))
 ;; an E declaration. An extern or an E-only type is classified and RUNNABLE. A `fn` is read
 ;; once as a pre-definition (predef.shard; §8.4 slice 3.16): its program is the erasure, its
 ;; definition K's projection — DEFINE with its equations, RUNNABLE `route=typed` with the
@@ -1783,7 +1894,7 @@
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (rec_bins (rec_states (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f) f) f)
+                      (Pair (Pair (ld_rec (rec_bins (rec_states (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True) (taken (Fx.taken f)))) f dirs rest) f) f) f)
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
@@ -2486,7 +2597,7 @@
       ((RDErr e m) (Pair (ld_rec l (horizon_refusal (Im.fx im) e m)) im))
       ((RDPending nn r) (Pair (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending))) (im_mark im (quote requirement) n)))
       ((RDOk ds)
-       (match (admit_decls (Load.env l) ds)
+       (match (admit_under l (Im.fx im) ds)
          ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) (im_mark im (quote requirement) n)))
          ((AdOk env1)
           (match (policy_pass l (Im.fx im) env1 (Load.memo l) ds Nil)

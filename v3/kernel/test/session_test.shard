@@ -1,0 +1,447 @@
+;;; v3/kernel/test/session_test.shard — the session's driver (v3/LANGUAGE.md §8.6 slice 4.6
+;;; rule 2; law §9.3; the T6 row of §12.5): the host of rule 4, a root that calls the session
+;;; in-process, no command line between two steps. The row's sentences are cases by name —
+;;; revisions A and B (v3/pins/session/a, b: one module, one entry, two bodies, so which one a
+;;; handle ran is read from its answer), a handle bound to A that keeps running A, is refused
+;;; for B, is released, is revoked; the checked door closed from the environment (rule 1's
+;;; limit: the evidence binder and the proposition field of pin `handle_door`, refused here);
+;;; a declaration built as data admitted through the raw entry, prepared, invoked and emitted
+;;; under one name (R61); and the law's first connected path (v3/examples/path) with its last
+;;; link, repeated execution through a prepared handle, and two of its breaks — the mismatched
+;;; revision, the invalid raw argument. The runs with effects print before the cases: `4`, `6`
+;;; (the path's entry twice on one handle), `6`, `9`, `6` (the two declarations built as
+;;; data), `4` (the command line's door); then the count's lines, one per revision.
+;;;   session_test                 the cases
+;;;   session_test emit DIR        the revision holding the declarations built as data, emitted
+;;;                                under DIR as route 1's chain reads it, then its `main`
+;;;                                invoked through a handle (session_emit_test.sh compiles the
+;;;                                closure and compares the binary's output with that run)
+;;;   session_test loads K         the first K of the cases' five roots introduced, a line each:
+;;;                                the count's instrument
+
+(import "loader_kit.shard")
+(import "case_kit.shard")
+(import "../session.shard")
+(import "../emit.shard")
+(import "../decl.shard")
+(import "../expr.shard")
+(import "../level.shard")
+(use kernel.decl)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Constructor)
+(use kernel.decl.Declaration)
+(use kernel.decl.InductiveType)
+(use kernel.decl.DefinitionSafety)
+(use kernel.decl.ReducibilityHints)
+(use kernel.emit)
+(use kernel.emit.EmitRes)
+(use kernel.etable)
+(use kernel.ev)
+(use kernel.ev.Door)
+(use kernel.ev.InvRes)
+(use kernel.ev.RunRes)
+(use kernel.expr)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Literal)
+(use kernel.host)
+(use kernel.host.World)
+(use kernel.level)
+(use kernel.level.Level)
+(use kernel.loader)
+(use kernel.loader.Rec)
+(use kernel.name)
+(use kernel.name.Name)
+(use kernel.prelude)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog)
+(use kernel.prog.EvRes)
+(use kernel.prog.Val)
+(use kernel.session)
+(use kernel.session.Intro)
+(use kernel.session.Prepared)
+(use kernel.session.Session)
+(use kernel.test.case_kit)
+(use kernel.test.case_kit.Case)
+(use kernel.test.loader_kit)
+(use kernel.util)
+
+;; ---- names and small readers ---------------------------------------------------------------
+(fn st_fuel () Int 100000)
+(fn st_main ((s Symbol)) Name (n2 (quote main) s))
+(fn st_data ((s Symbol)) Name (Str (Str (n2 (quote pins) (quote session)) (quote data)) s))
+(fn st_data_mod () Name (Str (n2 (quote pins) (quote session)) (quote data)))
+(fn st_host ((s Symbol)) Name (Str (n2 (quote std) (quote host)) s))
+(fn st_path_main () Name (Str (Str (n2 (quote examples) (quote path)) (quote path_main)) (quote main)))
+(fn st_checked () Policy (policy_of Checked False Nil (st_fuel)))
+(fn st_assumed () Policy (policy_of Assumed False Nil (st_fuel)))
+(fn st_effects () Policy (policy_of Checked True Nil (st_fuel)))
+(fn st_ord ((i Intro)) Int (match i ((IntroOk n) n) ((IntroNo _) 0)))
+(fn st_refused ((i Intro)) Bool (match i ((IntroOk _) False) ((IntroNo rs) (< 0 (len rs)))))
+(fn st_h ((p (Pair Session Prepared))) Int (match p ((Pair _ (PreparedOk h)) h) (_ 0)))
+(fn st_s ((p (Pair Session Prepared))) Session (match p ((Pair s _) s)))
+(fn st_no ((p (Pair Session Prepared)) (e Symbol)) Bool (match p ((Pair _ (PreparedNo f _)) (sym_eq e f)) (_ False)))
+(fn st_no_text ((p (Pair Session Prepared)) (e Symbol) (m (List Int))) Bool
+  (match p ((Pair _ (PreparedNo f t)) (bool_and (sym_eq e f) (int_list_eq t m))) (_ False)))
+;; an invocation's integer answer (-1: none); its refusal by the table
+(fn st_is ((r InvRes) (j Int)) Bool (match r ((InvRan (EvOk (VInt k))) (= k j)) (_ False)))
+(fn st_inv_no ((r InvRes) (e Symbol)) Bool (match r ((InvNo f _) (sym_eq e f)) (_ False)))
+(fn st_inv_text ((r InvRes) (e Symbol) (m (List Int))) Bool
+  (match r ((InvNo f t) (bool_and (sym_eq e f) (int_list_eq t m))) (_ False)))
+(fn st_arg ((r InvRes) (i Int) (e Symbol)) Bool (match r ((InvArg j f _) (bool_and (= i j) (sym_eq e f))) (_ False)))
+(fn st_ran ((r RunRes)) Bool (match r (RunOk True) (_ False)))
+(fn st_run_arg ((r RunRes) (i Int) (e Symbol)) Bool (match r ((RunArg j f _) (bool_and (= i j) (sym_eq e f))) (_ False)))
+(fn st_run_no ((r RunRes) (e Symbol)) Bool (match r ((RunLink f _) (sym_eq e f)) (_ False)))
+(fn st_run_text ((r RunRes) (e Symbol) (m (List Int))) Bool
+  (match r ((RunLink f t) (bool_and (sym_eq e f) (int_list_eq t m))) (_ False)))
+(fn st_n ((v Int)) (List Val) (list (VInt v)))
+;; a refused extension's records: a LOAD-ERROR of the reason, a POLICY record for the name, the
+;; classifier's refusal of the name
+(fn st_load_err ((p (Pair Session Intro)) (e Symbol)) Bool (match p ((Pair _ (IntroNo rs)) (has_load_err rs e)) (_ False)))
+(fn st_policy ((rs (List Rec)) (name (List Int))) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons (RPolicy n _) r) (if (int_list_eq (show_name n) name) True (st_policy r name))) ((Cons _ r) (st_policy r name))))
+(fn st_classified ((rs (List Rec)) (name (List Int)) (e Symbol)) Bool
+  (measure (struct rs))
+  (match rs (Nil False) ((Cons (RClassify n f _) r) (if (bool_and (int_list_eq (show_name n) name) (sym_eq e f)) True (st_classified r name e))) ((Cons _ r) (st_classified r name e))))
+;; an invocation with effects cannot be asked of a pure case: the table's answer for a handle,
+;; read through an invocation that requires no revision and supplies no argument
+(fn ses_got_reason ((s Session) (h Int)) InvRes (ses_invoke s h Nil))
+(fn st_run_no_pure ((r InvRes) (e Symbol)) Bool (st_inv_no r e))
+;; a key's parts: the text split at its dots
+(fn st_parts ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev (Cons (rev cur) acc)))
+    ((Cons c r) (if (= c 46) (st_parts r Nil (Cons (rev cur) acc)) (st_parts r (Cons c cur) acc)))))
+(fn st_part ((key (List Int)) (i Int)) (List Int) (match (nth (st_parts key Nil Nil) i) ((Some p) p) (None "?")))
+;; a line's last word: the key of `REVISION n key=K live` is found by its prefix
+(fn st_after ((bs (List Int)) (pre (List Int))) (List Int)
+  (measure (struct bs))
+  (if (st_starts bs pre) (st_word (drop_bytes (len pre) bs))
+    (match bs (Nil Nil) ((Cons _ r) (st_after r pre)))))
+(fn st_starts ((bs (List Int)) (pre (List Int))) Bool
+  (measure (struct pre))
+  (match pre (Nil True) ((Cons p r) (match bs ((Cons b br) (if (= b p) (st_starts br r) False)) (Nil False)))))
+(fn drop_bytes ((n Int) (bs (List Int))) (List Int)
+  (measure (struct bs))
+  (if (< n 1) bs (match bs (Nil Nil) ((Cons _ r) (drop_bytes (- n 1) r)))))
+(fn st_word ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs (Nil Nil) ((Cons c r) (if (= c 32) Nil (Cons c (st_word r))))))
+(fn st_rev_key ((s Session) (rev Int)) (List Int) (st_after (ses_show_rev s rev) "key="))
+(fn st_handle_key ((s Session) (h Int)) (List Int) (st_after (ses_show_handle s h) "key="))
+(fn st_has_line ((ls (List (List Int))) (want (List Int))) Bool
+  (measure (struct ls))
+  (match ls (Nil False) ((Cons l r) (if (int_list_eq l want) True (st_has_line r want)))))
+
+;; ---- the declarations built as data (R61) ---------------------------------------------------
+;; show3 : Nat → World → World := fun n w => write_line (show_digit (thrice n)) w
+;; main  : World → World       := fun w => show3 2 w          (route 1's entry takes the World alone)
+;; two terms of K over the module's own fns; the second cites the first
+(fn st_nat () Expr (mk_const (n1 (quote Nat)) Nil))
+(fn st_world () Expr (mk_const (st_host (quote World)) Nil))
+(fn st_show3_type () Expr (mk_pi (n1 (quote n)) BDefault (st_nat) (mk_pi (n1 (quote w)) BDefault (st_world) (st_world))))
+(fn st_shown ((x Expr)) Expr
+  (mk_lam (n1 (quote n)) BDefault (st_nat)
+    (mk_lam (n1 (quote w)) BDefault (st_world)
+      (mk_app (mk_app (mk_const (st_host (quote write_line)) Nil) (mk_app (mk_const (st_data (quote show_digit)) Nil) x)) (mk_bvar 0)))))
+(fn st_thrice ((x Expr)) Expr (mk_app (mk_const (st_data (quote thrice)) Nil) x))
+(fn st_decl ((name Name) (ty Expr) (v Expr)) Declaration (DefnDecl (ConstantVal name Nil ty) v (HRegular 1) Safe (list name)))
+(fn st_show3 () Declaration (st_decl (st_data (quote show3)) (st_show3_type) (st_shown (st_thrice (mk_bvar 1)))))
+(fn st_main_decl () Declaration
+  (st_decl (st_data (quote main)) (mk_pi (n1 (quote w)) BDefault (st_world) (st_world))
+    (mk_lam (n1 (quote w)) BDefault (st_world) (mk_app (mk_app (mk_const (st_data (quote show3)) Nil) (mk_lit (LitNat 2))) (mk_bvar 0)))))
+;; show3 under another body: thrice applied twice
+(fn st_show3_other () Declaration (st_decl (st_data (quote show3)) (st_show3_type) (st_shown (st_thrice (st_thrice (mk_bvar 1))))))
+;; ill-typed as data: the body applies thrice to the World
+(fn st_show3_bad () Declaration (st_decl (st_data (quote show3)) (st_show3_type) (st_shown (st_thrice (mk_bvar 0)))))
+;; a declaration that cites a constant the revision does not hold
+(fn st_show3_cites () Declaration (st_decl (st_data (quote show3)) (st_show3_type) (st_shown (mk_app (mk_const (st_data (quote nowhere)) Nil) (mk_bvar 1)))))
+;; an axiom built as data: NAME : (n : Nat) → Nat.lt n 10
+(fn st_axiom ((name Name)) Declaration
+  (AxiomDecl (ConstantVal name Nil (mk_pi (n1 (quote n)) BDefault (st_nat) (mk_app (mk_app (mk_const (n2 (quote Nat) (quote lt)) Nil) (mk_bvar 0)) (mk_lit (LitNat 10))))) False))
+;; a block whose first type is the module's and whose second is not: data.T, and Nat.Stray with a
+;; constructor named lib.twice
+(fn st_block () Declaration
+  (InductDecl Nil 0 (list (InductiveType (st_data (quote T)) (mk_sort (LSucc LZero)) (list (Constructor (Str (st_data (quote T)) (quote mk)) (mk_const (st_data (quote T)) Nil))))
+                          (InductiveType (n2 (quote Nat) (quote Stray)) (mk_sort (LSucc LZero)) (list (Constructor (n2 (quote lib) (quote twice)) (mk_const (n2 (quote Nat) (quote Stray)) Nil))))) False))
+;; a name outside the module it is handed to
+(fn st_stray () Declaration (st_decl (n2 (quote elsewhere) (quote show3)) (st_show3_type) (st_shown (st_thrice (mk_bvar 1)))))
+
+;; ---- the loads and the runs with effects -------------------------------------------------------
+(record Setup
+  (s Session)                 ; after every load
+  (s1 Session)                ; after A's alone
+  (a Int) (b Int) (a2 Int) (data Int) (path Int)
+  (failed Intro) (before Int) (after Int)   ; the failed load, and the ordinals minted before and after it
+  (noinit Intro)              ; a root loaded in a session with no export
+  (runs (List RunRes)))       ; the runs with effects, in order
+(fn st_loads ((w World)) (Pair Setup World)
+  (match (ses_introduce (ses_start (export_path) (index_path)) "v3/pins/session/a" (list "v3/pins/session/a/main.shard") w)
+    ((Pair (Pair s1 ia) w1)
+     (match (ses_introduce s1 "v3/pins/session/b" (list "v3/pins/session/b/main.shard") w1)
+       ((Pair (Pair s2 ib) w2)
+        (match (ses_introduce s2 "v3/pins/session/a" (list "v3/pins/session/a/nowhere.shard") w2)
+          ((Pair (Pair s3 ifail) w3)
+           (match (ses_introduce s3 "v3" (list "v3/pins/session/data.shard") w3)
+             ((Pair (Pair s4 idata) w4)
+              (match (ses_introduce s4 "v3/pins/session/a" (list "v3/pins/session/a/main.shard") w4)
+                ((Pair (Pair s5 ia2) w5)
+                 (match (ses_introduce s5 "v3" (list "v3/examples/path/path_main.shard") w5)
+                   ((Pair (Pair s6 ipath) w6)
+                    (match (ses_introduce (ses_start Nil Nil) "v3/pins/session/noinit" (list "v3/pins/session/noinit/Quot.shard") w6)
+                      ((Pair (Pair _ ino) w7)
+                       (Pair (make Setup (s s6) (s1 s1) (a (st_ord ia)) (b (st_ord ib)) (a2 (st_ord ia2)) (data (st_ord idata)) (path (st_ord ipath))
+                                         (failed ifail) (before (ses_revisions s2)) (after (ses_revisions s3)) (noinit ino) (runs Nil))
+                             w7))))))))))))))))
+;; the revision of `data` extended by the two declarations built as data
+(fn st_built ((u Setup)) (Pair Session Intro)
+  (ses_extend (Setup.s u) (Setup.data u) (st_data_mod) (list (st_show3) (st_main_decl)) (list (st_data (quote show3)) (st_data (quote main)))))
+(fn st_effect_runs ((u Setup) (w World)) (Pair (List RunRes) World)
+  (let ((pp (ses_prepare (Setup.s u) (Setup.path u) (st_path_main) (st_effects))))
+    (match (ses_run (st_s pp) (st_h pp) (st_n 2) Nil w)
+      ((Pair r1 w1)
+       (match (ses_run (st_s pp) (st_h pp) (st_n 7) Nil w1)
+         ((Pair r2 w2)
+          (match (ses_run (st_s pp) (st_h pp) (st_n -1) Nil w2)
+            ((Pair r3 w3)
+             (match (ses_run_at (st_s pp) (st_h pp) (Setup.a u) (st_n 2) Nil w3)
+               ((Pair r4 w4)
+                (match (st_built u)
+                  ((Pair sb ib)
+                   (let ((pb (ses_prepare sb (st_ord ib) (st_data (quote show3)) (st_effects))))
+                   (let ((pe (ses_prepare (st_s pb) (st_ord ib) (st_data (quote main)) (st_effects))))
+                     (match (ses_run (st_s pb) (st_h pb) (st_n 2) Nil w4)
+                       ((Pair r5 w5)
+                        (match (ses_run (st_s pb) (st_h pb) (st_n 3) Nil w5)
+                          ((Pair r6 w6)
+                           (match (ses_run (st_s pe) (st_h pe) Nil Nil w6)
+                             ((Pair r7 w7)
+                              (match (st_cli u (quote shown) "4" w7)
+                                ((Pair r8 w8)
+                                 (match (st_cli u (quote guarded) "4" w8)
+                                   ((Pair r9 w9) (Pair (list r1 r2 r3 r4 r5 r6 r7 r8 r9) w9)))))))))))))))))))))))))
+;; the command line's door on the `data` revision's load
+(fn st_cli ((u Setup) (f Symbol) (arg (List Int)) (w World)) (Pair RunRes World)
+  (match (ses_load (Setup.s u) (Setup.data u))
+    (None (Pair (RunLink (quote unknown_revision) Nil) w))
+    ((Some l) (run_load l (st_data f) (list arg) (st_fuel) Nil w))))
+(fn st_run ((u Setup) (i Int)) RunRes (match (nth (Setup.runs u) i) ((Some r) r) (None (RunLink (quote missing) Nil))))
+
+;; ---- the cases ---------------------------------------------------------------------------------
+(fn cases ((u Setup)) (List Case)
+  (let ((s (Setup.s u)) (a (Setup.a u)) (b (Setup.b u)))
+  (let ((pa (ses_prepare s a (st_main (quote answer)) (st_checked))))
+  (let ((ha (st_h pa)))
+  (let ((pb (ses_prepare (st_s pa) b (st_main (quote answer)) (st_checked))))
+  (let ((hb (st_h pb)))
+  (let ((pa2 (ses_prepare (st_s pb) a (st_main (quote answer)) (st_checked))))
+  (let ((ha2 (st_h pa2)) (t (st_s pa2)))
+  (let ((released (ses_release t ha)))
+  (let ((revoked (ses_revoke t ha "the host's own reason")))
+  (let ((withdrawn (ses_withdraw t a "the policy no longer permits it")))
+  (let ((solo (ses_prepare (Setup.s1 u) a (st_main (quote answer)) (st_checked))))
+  (let ((built (st_built u)))
+  (let ((sb (match built ((Pair x _) x))) (e (st_ord (match built ((Pair _ i) i)))))
+  (let ((pm (ses_prepare sb e (st_data (quote show3)) (st_effects))))
+  (let ((built2 (ses_extend (Setup.s u) (Setup.data u) (st_data_mod) (list (st_show3_other)) (list (st_data (quote show3))))))
+  (let ((pm2 (ses_prepare (match built2 ((Pair x _) x)) (st_ord (match built2 ((Pair _ i) i))) (st_data (quote show3)) (st_effects))))
+  (list
+    ;; ---- revisions ----
+    (Case "a revision introduced: the first load from the base is ordinal 1" (= a 1))
+    (Case "a second root holding the same module and entry is ordinal 2" (= b 2))
+    (Case "a load that fails answers its records and mints nothing: the ordinals before and after it are the same"
+      (bool_and (st_refused (Setup.failed u)) (bool_and (= (Setup.before u) 2) (= (Setup.after u) 2))))
+    (Case "the ordinal is the identity, the key a fingerprint: A introduced again, after a root that cites far more of Init, is a fourth ordinal under A's key — a revision is its sources', not the session's history"
+      (bool_and (= (Setup.a2 u) 4) (int_list_eq (st_rev_key s a) (st_rev_key s (Setup.a2 u)))))
+    (Case "B's key differs from A's in its declarations' part alone (D), not in the policy's or the environment's"
+      (bool_and (bool_not (int_list_eq (st_part (st_rev_key s a) 0) (st_part (st_rev_key s b) 0)))
+        (bool_and (int_list_eq (st_part (st_rev_key s a) 1) (st_part (st_rev_key s b) 1)) (int_list_eq (st_part (st_rev_key s a) 2) (st_part (st_rev_key s b) 2)))))
+    (Case "the count: a load from the base checks the constants of Init its files cite and starts with none"
+      (match (ses_init_cost s a) ((Pair checked held) (bool_and (< 0 checked) (= held 0)))))
+    (Case "the count: introducing B re-checks every constant of Init it cites — A's count, the two citing the same — and so does A a second time"
+      (match (ses_init_cost s a)
+        ((Pair ca _) (match (ses_init_cost s b) ((Pair cb hb0) (match (ses_init_cost s (Setup.a2 u)) ((Pair c2 h2) (bool_and (= cb ca) (bool_and (= hb0 0) (bool_and (= c2 ca) (= h2 0)))))))))))
+    (Case "the count: an extension checks nothing of Init — it starts with what its parent holds"
+      (match (ses_init_cost s (Setup.data u)) ((Pair cd _) (match (ses_init_cost sb e) ((Pair ce he) (bool_and (= ce 0) (= he cd)))))))
+    (Case "an unknown ordinal is no revision: prepare is unknown_revision, the ordinal named as it was asked"
+      (bool_and (st_no_text (ses_prepare s 99 (st_main (quote answer)) (st_checked)) (quote unknown_revision) "99")
+                (st_no_text (ses_prepare s -100 (st_main (quote answer)) (st_checked)) (quote unknown_revision) "-100")))
+    ;; ---- the T6 row, sentence by sentence ----
+    (Case "prepare once, invoke repeatedly: one handle on A's answer, three arguments (2n+1)"
+      (bool_and (st_is (ses_invoke t ha (st_n 1)) 3) (bool_and (st_is (ses_invoke t ha (st_n 5)) 11) (st_is (ses_invoke t ha (st_n 0)) 1))))
+    (Case "B introduced: the A handle still executes A" (st_is (ses_invoke t ha (st_n 5)) 11))
+    (Case "it never executes B: on the same argument a B handle answers otherwise (2n+2)" (st_is (ses_invoke t hb (st_n 5)) 12))
+    (Case "an invocation requiring B refuses the A handle: revision"
+      (st_inv_text (ses_invoke_at t ha b (st_n 5)) (quote revision) "handle 1 is bound to revision 1; the invocation requires revision 2"))
+    (Case "an invocation requiring A takes the A handle" (st_is (ses_invoke_at t ha a (st_n 5)) 11))
+    (Case "a new B handle executes B, and an invocation requiring B takes it" (st_is (ses_invoke_at t hb b (st_n 1)) 4))
+    (Case "a released handle is refused: released" (st_inv_no (ses_invoke released ha (st_n 5)) (quote released)))
+    (Case "release is the table's: the other handle on A, and B's, answer as before"
+      (bool_and (st_is (ses_invoke released ha2 (st_n 5)) 11) (st_is (ses_invoke released hb (st_n 5)) 12)))
+    (Case "a released handle stays released: a second release and a revocation after it change nothing"
+      (st_inv_no (ses_invoke (ses_revoke (ses_release released ha) ha "late") ha (st_n 5)) (quote released)))
+    (Case "an explicit revocation is refused with its recorded reason" (st_inv_text (ses_invoke revoked ha (st_n 5)) (quote revoked) "the host's own reason"))
+    (Case "a policy that withdraws permission for A revokes every A handle, the reason recorded"
+      (bool_and (st_inv_text (ses_invoke withdrawn ha (st_n 5)) (quote revoked) "revision 1 withdrawn: the policy no longer permits it")
+                (st_inv_no (ses_invoke withdrawn ha2 (st_n 5)) (quote revoked))))
+    (Case "the withdrawal leaves B: its handle answers, and a new one is prepared"
+      (bool_and (st_is (ses_invoke withdrawn hb (st_n 5)) 12) (< 0 (st_h (ses_prepare withdrawn b (st_main (quote answer)) (st_checked))))))
+    (Case "no handle is prepared on a withdrawn revision: withdrawn, with the reason"
+      (st_no_text (ses_prepare withdrawn a (st_main (quote answer)) (st_checked)) (quote withdrawn) "revision 1 withdrawn: the policy no longer permits it"))
+    (Case "a second withdrawal changes nothing: the revision and its handles keep the first reason"
+      (st_no_text (ses_prepare (ses_withdraw withdrawn a "another reason") a (st_main (quote answer)) (st_checked)) (quote withdrawn) "revision 1 withdrawn: the policy no longer permits it"))
+    (Case "a withdrawal reaches the revisions that extend the withdrawn one — they hold its program: the child's handle is revoked, none is prepared on it, and its load is not handed out"
+      (let ((gone (ses_withdraw (st_s pm) (Setup.data u) "the data root is withdrawn")))
+        (bool_and (st_run_no_pure (ses_got_reason gone (st_h pm)) (quote revoked))
+          (bool_and (st_no (ses_prepare gone e (st_data (quote show3)) (st_effects)) (quote withdrawn))
+            (bool_and (match (ses_load gone e) (None True) ((Some _) False)) (match (ses_load gone (Setup.data u)) (None True) ((Some _) False)))))))
+    (Case "the withdrawal of a child leaves its parent: the data root still prepares"
+      (< 0 (st_h (ses_prepare (ses_withdraw (st_s pm) e "the child alone") (Setup.data u) (st_data (quote shown)) (st_effects)))))
+    (Case "whether or not B exists: A withdrawn in a session that holds A alone revokes its handles the same"
+      (st_inv_no (ses_invoke (ses_withdraw (st_s solo) 1 "alone") (st_h solo) (st_n 5)) (quote revoked)))
+    (Case "a handle of no slot is unknown_handle, whatever is asked of it"
+      (bool_and (st_inv_no (ses_invoke t 99 (st_n 5)) (quote unknown_handle)) (st_inv_no (ses_invoke t 0 (st_n 5)) (quote unknown_handle))))
+    (Case "the table counts: three handles prepared, three live; one released, two; A withdrawn, B's one"
+      (bool_and (= (ses_live t) 3) (bool_and (= (ses_live released) 2) (bool_and (= (ses_live withdrawn) 1) (= (ses_handles withdrawn) 3)))))
+    (Case "reentrancy as it can occur: two handles invoked in turn do not meet — A B A B on 1 is 3 4 3 4"
+      (bool_and (st_is (ses_invoke t ha (st_n 1)) 3) (bool_and (st_is (ses_invoke t hb (st_n 1)) 4) (bool_and (st_is (ses_invoke t ha (st_n 1)) 3) (st_is (ses_invoke t hb (st_n 1)) 4)))))
+    (Case "the handle's line for the reader: its revision, entry, door and key; a released one keeps its reason alone"
+      (bool_and (st_starts (ses_show_handle t ha) "HANDLE 1 revision=1 entry=main.answer door=checked key=") (int_list_eq (ses_show_handle released ha) "HANDLE 1 released")))
+    (Case "a client reads a live handle's revision and its entry's parameter and result types as the program states them; a gone one has none"
+      (bool_and (match (ses_bound t ha) ((Some r) (= r a)) (None False))
+        (bool_and (match (ses_types t ha) ((Some (Pair (Cons p Nil) r)) (bool_and (int_list_eq (show_etype p) "Nat") (int_list_eq (show_etype r) "Nat"))) (_ False))
+                  (match (ses_types released ha) (None True) ((Some _) False)))))
+    (Case "the handles' keys: A's and B's answer under one statement (S) and other declarations (D)"
+      (bool_and (int_list_eq (st_part (st_handle_key t ha) 0) (st_part (st_handle_key t hb) 0)) (bool_not (int_list_eq (st_part (st_handle_key t ha) 1) (st_part (st_handle_key t hb) 1)))))
+    ;; ---- arguments at the boundary (rule 1's door, through the session) ----
+    (Case "an invalid raw argument is refused at the door by position and reason: a negative at Nat"
+      (st_arg (ses_invoke t ha (st_n -3)) 1 (quote not_a_nat)))
+    (Case "the wrong count of arguments is refused: argument_count" (st_arg (ses_invoke t ha (list (VInt 1) (VInt 2))) 2 (quote argument_count)))
+    (Case "a refused argument leaves the handle: the next invocation answers" (st_is (ses_invoke t ha (st_n 2)) 5))
+    ;; ---- the checked door closed from the environment (rule 1's limit, ruled 2026-11-12) ----
+    (Case "checked: an evidence binder of the entry — small's h — is refused preconditioned, the binder named"
+      (st_no_text (ses_prepare s a (st_main (quote small)) (st_checked)) (quote preconditioned) "main.small: the binder h is evidence the erasure dropped: no value supplies it"))
+    (Case "checked: a proposition field of a parameter's constructor — Span's ok — is refused preconditioned, the field named"
+      (st_no_text (ses_prepare s a (st_main (quote width)) (st_checked)) (quote preconditioned) "main.width: the field ok of main.Span.mk is a proposition the erasure dropped: no value shows it"))
+    (Case "assumed: small prepares, takes 99, and what its caller assumed is recorded with the handle"
+      (let ((ps (ses_prepare s a (st_main (quote small)) (st_assumed))))
+        (bool_and (st_is (ses_invoke (st_s ps) (st_h ps) (st_n 99)) 99)
+          (match (ses_assumes (st_s ps) (st_h ps)) ((Cons m Nil) (int_list_eq m "the binder h is evidence the erasure dropped: no value supplies it")) (_ False)))))
+    (Case "checked: an entry with nothing dropped assumes nothing" (match (ses_assumes t ha) (Nil True) (_ False)))
+    (Case "the command line's door runs an entry with nothing dropped (printed `4`)" (st_ran (st_run u 7)))
+    (Case "the command line's door refuses an entry with an evidence binder: preconditioned, before any argument is read"
+      (st_run_text (st_run u 8) (quote preconditioned) "pins.session.data.guarded: the binder h is evidence the erasure dropped: no value supplies it"))
+    ;; ---- declarations built as data (R61) ----
+    (Case "built as data, admitted through the raw entry, their derived views taken: a new revision extending the one they entered" (< (Setup.path u) e))
+    (Case "the revision they entered is what it was: no such entry there" (st_no (ses_prepare s (Setup.data u) (st_data (quote show3)) (st_effects)) (quote unknown_head)))
+    (Case "the first prepared once and invoked twice on arguments built as data (printed `6`, `9`)" (bool_and (st_ran (st_run u 4)) (st_ran (st_run u 5))))
+    (Case "the second, which cites the first, prepared and invoked (printed `6`): route 1's entry, the World alone" (st_ran (st_run u 6)))
+    (Case "under one name: the ACCEPT record, the handle's entry and the emitter's map name pins.session.data.show3, and main beside it"
+      (match (ses_load sb e)
+        (None False)
+        ((Some l)
+         (bool_and (= (count_named (ld_recs l) "pins.session.data.show3") 1)
+           (bool_and (st_starts (ses_show_handle (st_s pm) (st_h pm)) "HANDLE 1 revision=6 entry=pins.session.data.show3 door=checked key=")
+             (match (emit_prog (Load.etab l) (es_prog (Load.etab l)) (st_data_mod) Nil)
+               ((EmitOk _ mp _) (bool_and (st_has_line mp "show3 fn pins.session.data.show3 (no source file)") (st_has_line mp "main fn pins.session.data.main (no source file)")))
+               ((EmitFail _) False)))))))
+    (Case "under one key: a second handle on it shows the same key; another body under the same name and type, the same S and another D"
+      (let ((again (ses_prepare (st_s pm) e (st_data (quote show3)) (st_effects))))
+        (bool_and (int_list_eq (st_handle_key (st_s pm) (st_h pm)) (st_handle_key (st_s again) (st_h again)))
+          (bool_and (int_list_eq (st_part (st_handle_key (st_s pm) (st_h pm)) 0) (st_part (st_handle_key (st_s pm2) (st_h pm2)) 0))
+                    (bool_not (int_list_eq (st_part (st_handle_key (st_s pm) (st_h pm)) 1) (st_part (st_handle_key (st_s pm2) (st_h pm2)) 1)))))))
+    (Case "built as data is not thereby accepted: an ill-typed body is K's refusal and mints nothing"
+      (match (ses_extend s (Setup.data u) (st_data_mod) (list (st_show3_bad)) Nil) ((Pair s1 i) (bool_and (st_refused i) (= (ses_revisions s1) (ses_revisions s))))))
+    (Case "a declaration citing what the revision does not hold is refused: no demand is made for it"
+      (st_refused (match (ses_extend s (Setup.data u) (st_data_mod) (list (st_show3_cites)) Nil) ((Pair _ i) i))))
+    (Case "a name outside the module it is handed to is refused: outside_module"
+      (match (ses_extend s (Setup.data u) (st_data_mod) (list (st_stray)) Nil) ((Pair _ (IntroNo rs)) (has_load_err rs (quote outside_module))) (_ False)))
+    (Case "the module a declaration is handed to is one the revision holds: a name of no module, of Init's namespace or of none is unknown_module"
+      (bool_and (st_load_err (ses_extend s (Setup.data u) (n1 (quote Classical)) (list (st_axiom (n2 (quote Classical) (quote choice)))) Nil) (quote unknown_module))
+        (bool_and (st_load_err (ses_extend s (Setup.data u) Anon (list (st_show3)) Nil) (quote unknown_module))
+                  (st_load_err (ses_extend s (Setup.data u) (n1 (quote pins)) (list (st_show3)) Nil) (quote unknown_module)))))
+    (Case "every name an inductive block states extends the module: a second type outside it, with a constructor under another module's name, is outside_module"
+      (st_load_err (ses_extend s (Setup.data u) (st_data_mod) (list (st_block)) Nil) (quote outside_module)))
+    (Case "a quotient is no declaration of a module: data_kind" (st_load_err (ses_extend s (Setup.data u) (st_data_mod) (list QuotDecl) Nil) (quote data_kind)))
+    (Case "an axiom built as data is outside the standard policy: POLICY, and nothing minted"
+      (match (ses_extend s (Setup.data u) (st_data_mod) (list (st_axiom (st_data (quote myax)))) Nil) ((Pair s1 (IntroNo rs)) (bool_and (st_policy rs "pins.session.data.myax") (= (ses_revisions s1) (ses_revisions s)))) (_ False)))
+    (Case "the standard axioms are Init's own: in a session with no export a root's own Quot.sound is outside the policy"
+      (match (Setup.noinit u) ((IntroNo rs) (st_policy rs "Quot.sound")) (_ False)))
+    (Case "a declaration built as data may not take the name of a program with no constant behind it: name_taken"
+      (match (ses_extend s (Setup.data u) (st_data_mod) (list (st_decl (st_data (quote rawfn)) (mk_pi (n1 (quote n)) BDefault (st_nat) (st_nat)) (mk_lam (n1 (quote n)) BDefault (st_nat) (mk_bvar 0)))) Nil)
+        ((Pair _ (IntroNo rs)) (st_classified rs "pins.session.data.rawfn" (quote name_taken))) (_ False)))
+    (Case "a derived view is taken into a module the revision holds: unknown_module otherwise"
+      (st_load_err (ses_extend s (Setup.data u) (n1 (quote nowhere)) Nil (list (st_data (quote thrice)))) (quote unknown_module)))
+    (Case "a derived view asked twice of one constant is refused"
+      (st_refused (match (ses_extend sb e (st_data_mod) Nil (list (st_data (quote show3)))) ((Pair _ i) i))))
+    (Case "a withdrawn revision is not extended" (st_refused (match (ses_extend (ses_withdraw s (Setup.data u) "gone") (Setup.data u) (st_data_mod) (list (st_show3)) Nil) ((Pair _ i) i))))
+    ;; ---- the law's first connected path, its last link and two of its breaks (§12.4) ----
+    (Case "the path: its entry prepared once and run twice on raw arguments built as data (printed `4`, `6`)" (bool_and (st_ran (st_run u 0)) (st_ran (st_run u 1))))
+    (Case "the path's break, an invalid raw argument: a negative index is refused at the door, nothing printed" (st_run_arg (st_run u 2) 1 (quote not_a_nat)))
+    (Case "the path's break, a mismatched revision: the path's handle asked for revision A is refused, nothing printed" (st_run_no (st_run u 3) (quote revision)))))))))))))))))))))
+
+;; ---- the emit mode: the revision holding the entry built as data, for route 1's chain ----------
+(fn st_write ((dir (List Int)) (fs (List (Pair (List Int) (List Int)))) (w World)) World
+  (measure (struct fs))
+  (match fs
+    (Nil w)
+    ((Cons (Pair name text) r) (match (write_file (append dir (Cons 47 name)) text w) ((Pair _ w1) (st_write dir r w1))))))
+(fn st_emit ((dir (List Int)) (w World)) World
+  (match (ses_introduce (ses_start (export_path) (index_path)) "v3" (list "v3/pins/session/data.shard") w)
+    ((Pair (Pair s0 i0) w1)
+     (match (ses_extend s0 (st_ord i0) (st_data_mod) (list (st_show3) (st_main_decl)) (list (st_data (quote show3)) (st_data (quote main))))
+       ((Pair s1 i1)
+        (match (ses_load s1 (st_ord i1))
+          (None (exit 2 (write_line "session_test: the declarations built as data were not admitted" w1)))
+          ((Some l)
+           (match (emit_prog (Load.etab l) (es_prog (Load.etab l)) (st_data_mod) Nil)
+             ((EmitFail m) (exit 2 (write_line (append "EMIT: " m) w1)))
+             ((EmitOk fs mp entry)
+              (let ((p (ses_prepare s1 (st_ord i1) (st_data (quote main)) (st_effects))))
+                (match (ses_run (st_s p) (st_h p) Nil Nil (write_line (append "EMIT: entry=" entry) (st_write dir fs w1)))
+                  ((Pair _ w2) w2))))))))))))
+
+;; ---- the loads mode: the count's instrument (rule 6) ---------------------------------------------
+;; the first K of the cases' five roots introduced in one session, each revision's line printed:
+;; a run of K against a run of K-1 is what introducing the K-th cost, the base as the earlier
+;; ones left it
+(fn st_roots () (List (Pair (List Int) (List Int)))
+  (list (Pair "v3/pins/session/a" "v3/pins/session/a/main.shard") (Pair "v3/pins/session/b" "v3/pins/session/b/main.shard")
+        (Pair "v3" "v3/pins/session/data.shard") (Pair "v3/pins/session/a" "v3/pins/session/a/main.shard") (Pair "v3" "v3/examples/path/path_main.shard")))
+(fn st_each ((s Session) (roots (List (Pair (List Int) (List Int)))) (k Int) (w World)) World
+  (measure (struct roots))
+  (if (< k 1) w
+    (match roots
+      (Nil w)
+      ((Cons (Pair root file) r)
+       (match (ses_introduce s root (list file) w)
+         ((Pair (Pair s1 i) w1)
+          (match (ses_init_cost s1 (st_ord i))
+            ((Pair checked held)
+             (st_each s1 r (- k 1) (write_line (append (ses_show_rev s1 (st_ord i)) (append " init-checked=" (append (show_nat checked) (append " init-held=" (show_nat held))))) w1))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair (Cons mode (Cons arg Nil)) w1)
+     (if (int_list_eq mode "emit") (st_emit arg w1)
+     (if (int_list_eq mode "loads") (st_each (ses_start (export_path) (index_path)) (st_roots) (match (arg_nat arg) ((Some k) k) (None 0)) w1)
+       (exit 2 (write_line "session_test: [emit DIR | loads K]" w1)))))
+    ((Pair _ w1)
+     (match (st_loads w1)
+       ((Pair u w2)
+        (match (st_effect_runs u w2)
+          ((Pair runs w3) (run_cases "session_test" (cases (with Setup u (runs runs))) 0 (st_counts u (list (Setup.a u) (Setup.b u) (Setup.data u) (Setup.a2 u) (Setup.path u)) w3)))))))))
+;; the count (rule 6): what introducing each revision cost of Init — the constants its own load
+;; checked, and those the base already held — and its line for the reader
+(fn st_counts ((u Setup) (revs (List Int)) (w World)) World
+  (measure (struct revs))
+  (match revs
+    (Nil w)
+    ((Cons r rest)
+     (match (ses_init_cost (Setup.s u) r)
+       ((Pair checked held)
+        (st_counts u rest (write_line (append (ses_show_rev (Setup.s u) r) (append " init-checked=" (append (show_nat checked) (append " init-held=" (show_nat held))))) w)))))))

@@ -1,0 +1,444 @@
+;;; v3/kernel/session.shard — the session: the long-lived value an embedding holds
+;;; (v3/LANGUAGE.md §8.6 slice 4.6 rule 2; law §9.3; the T6 row of §12.5). An E library
+;;; beside the loader, called in-process: no command line stands between two steps.
+;;;
+;;; A session owns three things.
+;;;   the base      what a load starts from (loader.shard ld_reroot): the pinned export and its
+;;;                 index named, nothing of Init checked. It does not grow: every revision
+;;;                 loaded from it checks its own closure of Init, as a driver's load in a
+;;;                 fresh process does, so a revision is what its sources make it and never
+;;;                 what the session loaded before. (A base that kept what earlier loads
+;;;                 demanded made the same root two revisions: the loader states a fn's
+;;;                 equations where Init's `Eq` is in the environment, whoever demanded it —
+;;;                 define.shard's has_eq — and the review of 2026-11-12 found it.)
+;;;   revisions     a table by ordinal. A revision is one load from the base — its own
+;;;                 environment, its own counter, its own program — or an earlier revision
+;;;                 extended by declarations built as data (ses_extend), the parent's load a
+;;;                 value that stays what it was. A revision never changes once minted, and
+;;;                 no operation here takes two environments (§8.6 "One environment, one
+;;;                 counter"). Its identity is the ordinal: the table is the authority and no
+;;;                 hash is (R42). The key printed beside it is slice 4.5's, for the reader.
+;;;   handles       a table by ordinal. A client holds the ordinal, never the prepared value
+;;;                 (ev.shard's Handle), so release and revocation are the table's and reach
+;;;                 every copy a client kept. A released or revoked slot keeps its reason and
+;;;                 drops the prepared value.
+;;;
+;;; The law's sentences, each an operation:
+;;;   a handle bound to revision A keeps denoting A   ses_invoke: the slot's own linked
+;;;                                                    program, whatever revisions came after
+;;;   an operation requesting B refuses an A handle    ses_invoke_at, ses_run_at: `revision`
+;;;   a new B handle executes B                        ses_prepare on B's ordinal
+;;;   a released handle is refused                     ses_release: `released`
+;;;   explicit revocation                              ses_revoke: `revoked`, the reason kept
+;;;   a policy that withdraws permission to run the    ses_withdraw: every live handle of the
+;;;   old realization is such a revocation             revision revoked with the reason, and no
+;;;                                                    handle prepared on it after (`withdrawn`)
+;;;                                                    — whether or not a newer revision exists;
+;;;                                                    the revisions that extend it hold its
+;;;                                                    program and are withdrawn with it
+;;; An invocation answers and returns no session: whatever it does — an answer, a refused
+;;; argument, fuel out — the tables are what they were. A session is a value its host threads:
+;;; the tables' word is the newest value's, and a host that keeps an older one, or prepares on
+;;; a load it took out (ses_load) through ev.shard, has stepped outside them — a convention, as
+;;; the handle's is (ruled 2026-11-12). Reentrancy: an invoked program reaches
+;;; the host through its externs alone and none of them invokes, so no invocation begins
+;;; inside another; invocations of two handles taken in turn do not meet. Cancellation: an
+;;; invocation is one call that returns, bounded by its policy's fuel.
+;;;
+;;; THE CHECKED DOOR, CLOSED FROM THE ENVIRONMENT (rule 1's limit, ruled 2026-11-12). A Prog
+;;; states neither an evidence binder of an entry nor a constructor's proposition field: the
+;;; erasure dropped both, so ev.shard's checked door validates the runtime parameters alone. A
+;;; revision holds the environment the program was erased from, and `prepare_on` reads both
+;;; there: at the checked door such an entry is refused `preconditioned`, naming the binder or
+;;; the field; at the assumed door it is prepared and what the caller thereby assumes is
+;;; recorded with the handle (ses_assumes) — law §9.3's two kinds of entry. The command
+;;; line's run (load.shard --run) is the same door on the load it holds (run_load).
+
+(import "loader.shard")
+(import "ev.shard")
+(use kernel.decl)
+(use kernel.decl.ConstantInfo)
+(use kernel.etable)
+(use kernel.ev)
+(use kernel.ev.Door)
+(use kernel.ev.Handle)
+(use kernel.ev.InvRes)
+(use kernel.ev.Policy)
+(use kernel.ev.Prep)
+(use kernel.ev.RunRes)
+(use kernel.ev.TextArgs)
+(use kernel.expr)
+(use kernel.expr.Expr)
+(use kernel.host)
+(use kernel.host.World)
+(use kernel.index)
+(use kernel.initload)
+(use kernel.intmap)
+(use kernel.intmap.IntMap)
+(use kernel.k)
+(use kernel.kw)
+(use kernel.kw.W)
+(use kernel.loader)
+(use kernel.loader.InitSt)
+(use kernel.loader.Rec)
+(use kernel.name)
+(use kernel.name.Name)
+(use kernel.prelude)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog)
+(use kernel.prog.ECtorDef)
+(use kernel.prog.EDecl)
+(use kernel.prog.EType)
+(use kernel.prog.Prog)
+(use kernel.reader)
+(use kernel.reader.Req)
+(use kernel.reader.ReqCtx)
+(use kernel.scope)
+(use kernel.util)
+
+;; ---- the tables ----------------------------------------------------------------------------
+;; a revision: its load and the program it yielded; the revision it extends (0: a load from the
+;; base); the constants of Init its own load checked into its environment and those it started
+;; with — none for a load, its parent's for an extension (rule 6's count: what introducing a
+;; revision re-checks of Init); its key's text; whether the policy still permits its program
+;; to run
+(type RevState (RevLive) (RevWithdrawn (List Int)))
+(record Rev (load Load) (prog Prog) (parent Int) (checked Int) (held Int) (key (List Int)) (state RevState))
+;; a live handle: the prepared value, its revision, what its caller assumes (the evidence the
+;; erasure dropped: empty at the checked door), its key's text
+(record Held (handle Handle) (rev Int) (assumes (List (List Int))) (key (List Int)))
+;; a slot of the handle table: live, or gone with the reason — released, revoked — and its text
+;; (HSlot: elab.shard has a Slot, and a closure's types are told apart by their last component)
+(type HSlot (SlotLive Held) (SlotGone Symbol (List Int)))
+(record Session (base Load) (revs (IntMap Rev)) (nrev Int) (slots (IntMap HSlot)) (nslot Int))
+
+;; a session over the pinned export and its index (neither named: no Init), nothing loaded
+(fn ses_start ((export (List Int)) (index (List Int))) Session
+  (make Session (base (ld_start Nil export index)) (revs IMEmpty) (nrev 0) (slots IMEmpty) (nslot 0)))
+(fn ses_rev ((s Session) (rev Int)) (Option Rev) (if (< rev 1) None (im_find (Session.revs s) rev)))
+(fn ses_slot ((s Session) (h Int)) (Option HSlot) (if (< h 1) None (im_find (Session.slots s) h)))
+;; the ordinals minted so far; the handles live now
+(fn ses_revisions ((s Session)) Int (Session.nrev s))
+(fn ses_handles ((s Session)) Int (Session.nslot s))
+(fn ses_live ((s Session)) Int (live_below s (Session.nslot s) 0))
+(fn live_below ((s Session) (h Int) (acc Int)) Int
+  (measure h)
+  (if (< h 1) acc
+    (live_below s (- h 1) (match (ses_slot s h) ((Some (SlotLive _)) (+ acc 1)) (_ acc)))))
+
+;; ---- revisions -----------------------------------------------------------------------------
+;; a revision introduced: FILES under ROOT loaded from the base, as a driver loads them in a
+;; fresh process. A clean load mints the next ordinal; a failed one answers its records. The
+;; base is what it was either way
+(type Intro (IntroOk Int) (IntroNo (List Rec)))
+(fn ses_introduce ((s Session) (root (List Int)) (files (List (List Int))) (w World)) (Pair (Pair Session Intro) World)
+  (match (parts_of root)
+    (None (Pair (Pair s (IntroNo (list (RLoadErr root (quote bad_path) "")))) w))
+    ((Some rootp)
+     (match (load_each (ld_reroot (Session.base s) rootp) files w)
+       ((Pair l w1)
+        (if (< 0 (failures l)) (Pair (Pair s (IntroNo (ld_recs l))) w1)
+          (Pair (mint s l 0 (ords_count (Load.inits l)) 0) w1)))))))
+(fn load_each ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
+  (measure (struct files))
+  (match files
+    (Nil (Pair l w))
+    ((Cons f r) (match (load_root_file l f w) ((Pair l1 w1) (load_each l1 r w1))))))
+(fn failures ((l Load)) Int (load_failures (rec_counts (ld_recs l) (zero_counts))))
+(fn mint ((s Session) (l Load) (parent Int) (checked Int) (held Int)) (Pair Session Intro)
+  (let ((n (+ (Session.nrev s) 1)))
+    (Pair (with Session s (nrev n)
+            (revs (im_insert (Session.revs s) n (make Rev (load l) (prog (es_prog (Load.etab l))) (parent parent) (checked checked) (held held) (key (rev_key l)) (state RevLive)))))
+          (IntroOk n))))
+;; the entries of an ordinal table: the constants of Init a load holds
+(fn ords_count ((m (IntMap (List (Pair Name Int))))) Int
+  (measure (struct m))
+  (match m
+    (IMEmpty 0)
+    ((IMLeaf _ b) (len b))
+    ((IMNode v c0 c1 c2 c3) (+ (match v ((Some b) (len b)) (None 0)) (+ (ords_count c0) (+ (ords_count c1) (+ (ords_count c2) (ords_count c3))))))))
+
+;; a revision extended by declarations built as data (R61; loader.shard load_data): each of DS
+;; admitted through K's raw entry into the module M, then the derived view of each of VIEWS —
+;; a new revision, its parent unchanged. A refusal answers the records it made and mints
+;; nothing. A revision whose permission was withdrawn is not extended: its program would run
+;; again under the new ordinal
+(fn ses_extend ((s Session) (rev Int) (m Name) (ds (List Declaration)) (views (List Name))) (Pair Session Intro)
+  (match (ses_rev s rev)
+    (None (Pair s (IntroNo (list (RLoadErr "(data)" (quote unknown_revision) (show_int rev))))))
+    ((Some r)
+     (match (Rev.state r)
+       ((RevWithdrawn why) (Pair s (IntroNo (list (RLoadErr "(data)" (quote withdrawn) why)))))
+       (RevLive
+        (let ((l (data_views (data_decls (Rev.load r) m ds) m views)))
+          (if (< 0 (failures l)) (Pair s (IntroNo (drop_recs (len (ld_recs (Rev.load r))) (ld_recs l))))
+            (mint s l rev 0 (+ (Rev.held r) (Rev.checked r))))))))))
+(fn data_decls ((l Load) (m Name) (ds (List Declaration))) Load
+  (measure (struct ds))
+  (match ds
+    (Nil l)
+    ((Cons d r) (if (< 0 (failures l)) l (data_decls (load_data l m d) m r)))))
+(fn data_views ((l Load) (m Name) (ks (List Name))) Load
+  (measure (struct ks))
+  (match ks
+    (Nil l)
+    ((Cons k r) (if (< 0 (failures l)) l (data_views (load_data_view l m k) m r)))))
+(fn drop_recs ((n Int) (rs (List Rec))) (List Rec)
+  (measure (struct rs))
+  (if (< n 1) rs (match rs (Nil Nil) ((Cons _ r) (drop_recs (- n 1) r)))))
+
+;; a policy withdraws permission to run a revision's program (law §9.3: "such a revocation"):
+;; every live handle bound to it is revoked with the reason, and no handle is prepared on it
+;; after. The revisions that extend it — its children and theirs — hold its program and are
+;; withdrawn with it under the same text. Other revisions and their handles are untouched; a
+;; revision already withdrawn keeps its first reason; an unknown ordinal changes nothing
+(fn ses_withdraw ((s Session) (rev Int) (why (List Int))) Session
+  (match (ses_rev s rev)
+    (None s)
+    ((Some r)
+     (match (Rev.state r)
+       ((RevWithdrawn _) s)
+       (RevLive
+        (let ((text (append "revision " (append (show_nat rev) (append " withdrawn: " why)))))
+          (withdraw_from (with Session s (revs (im_insert (Session.revs s) rev (with Rev r (state (RevWithdrawn text)))))) (+ rev 1) text)))))))
+;; the revisions after one just withdrawn, in the order they were minted — a parent's ordinal is
+;; below its child's: each whose parent is withdrawn is withdrawn; then the handles
+(fn withdraw_from ((s Session) (n Int) (text (List Int))) Session
+  (measure (- (+ (Session.nrev s) 1) n))
+  (if (< (Session.nrev s) n) (revoke_withdrawn s text (Session.nslot s))
+    (withdraw_from
+      (match (ses_rev s n)
+        ((Some r)
+         (match (Rev.state r)
+           (RevLive (if (rev_withdrawn s (Rev.parent r)) (with Session s (revs (im_insert (Session.revs s) n (with Rev r (state (RevWithdrawn text)))))) s))
+           (_ s)))
+        (None s))
+      (+ n 1) text)))
+(fn rev_withdrawn ((s Session) (p Int)) Bool
+  (match (ses_rev s p) ((Some r) (match (Rev.state r) ((RevWithdrawn _) True) (RevLive False))) (None False)))
+;; every live handle bound to a withdrawn revision revoked
+(fn revoke_withdrawn ((s Session) (text (List Int)) (h Int)) Session
+  (measure h)
+  (if (< h 1) s
+    (revoke_withdrawn (match (ses_slot s h)
+                        ((Some (SlotLive hd)) (if (rev_withdrawn s (Held.rev hd)) (with Session s (slots (im_insert (Session.slots s) h (SlotGone (quote revoked) text)))) s))
+                        (_ s))
+                      text (- h 1))))
+
+;; ---- handles -------------------------------------------------------------------------------
+;; an entry of a revision prepared under a policy: the handle's ordinal, or the refusal —
+;; unknown_revision, withdrawn (with the withdrawal's text), `prepare`'s own (a link error's
+;; reason, unknown_head, unlinked, bad_entry, preconditioned), the environment's
+;; preconditioned (prepare_on)
+(type Prepared (PreparedOk Int) (PreparedNo Symbol (List Int)))
+(fn ses_prepare ((s Session) (rev Int) (entry Name) (pol Policy)) (Pair Session Prepared)
+  (match (ses_rev s rev)
+    (None (Pair s (PreparedNo (quote unknown_revision) (show_int rev))))
+    ((Some r)
+     (match (Rev.state r)
+       ((RevWithdrawn why) (Pair s (PreparedNo (quote withdrawn) why)))
+       (RevLive
+        (match (prepare_on (Rev.load r) (Rev.prog r) entry pol rev)
+          ((BoundNo e m) (Pair s (PreparedNo e m)))
+          ((BoundOk h assumes)
+           (let ((n (+ (Session.nslot s) 1)))
+             (Pair (with Session s (nslot n)
+                     (slots (im_insert (Session.slots s) n (SlotLive (make Held (handle h) (rev rev) (assumes assumes) (key (entry_key (Rev.load r) entry)))))))
+                   (PreparedOk n))))))))))
+;; the handle's slot emptied: released by its client, or revoked with a reason. A slot already
+;; gone keeps its first reason; an unknown ordinal changes nothing
+(fn ses_release ((s Session) (h Int)) Session (gone s h (quote released) Nil))
+(fn ses_revoke ((s Session) (h Int) (why (List Int))) Session (gone s h (quote revoked) why))
+(fn gone ((s Session) (h Int) (r Symbol) (why (List Int))) Session
+  (match (ses_slot s h)
+    ((Some (SlotLive _)) (with Session s (slots (im_insert (Session.slots s) h (SlotGone r why)))))
+    (_ s)))
+
+;; the prepared value of a live handle, for an invocation that requires the revision NEED (None:
+;; whichever the handle is bound to) — or why not: unknown_handle, released, revoked (its
+;; text), revision
+(type Got (GotHandle Handle) (GotNo Symbol (List Int)))
+(fn ses_got ((s Session) (h Int) (need (Option Int))) Got
+  (match (ses_slot s h)
+    (None (GotNo (quote unknown_handle) (show_int h)))
+    ((Some (SlotGone r why)) (GotNo r why))
+    ((Some (SlotLive hd))
+     (match need
+       (None (GotHandle (Held.handle hd)))
+       ((Some b)
+        (if (= b (Held.rev hd)) (GotHandle (Held.handle hd))
+          (GotNo (quote revision) (append "handle " (append (show_nat h) (append " is bound to revision " (append (show_nat (Held.rev hd)) (append "; the invocation requires revision " (show_int b)))))))))))))
+;; an invocation without effects: the machine's answer, an argument's refusal, or the table's
+;; (InvNo). The session is not among the results: an invocation changes nothing of it
+(fn ses_invoke ((s Session) (h Int) (args (List Val))) InvRes (invoke_got (ses_got s h None) args))
+(fn ses_invoke_at ((s Session) (h Int) (rev Int) (args (List Val))) InvRes (invoke_got (ses_got s h (Some rev)) args))
+(fn invoke_got ((g Got) (args (List Val))) InvRes
+  (match g ((GotNo r why) (InvNo r why)) ((GotHandle hd) (invoke hd args))))
+;; the same for an entry prepared with effects; the table's refusal is RunLink's
+(fn ses_run ((s Session) (h Int) (args (List Val)) (argv (List (List Int))) (w World)) (Pair RunRes World)
+  (run_got (ses_got s h None) args argv w))
+(fn ses_run_at ((s Session) (h Int) (rev Int) (args (List Val)) (argv (List (List Int))) (w World)) (Pair RunRes World)
+  (run_got (ses_got s h (Some rev)) args argv w))
+(fn run_got ((g Got) (args (List Val)) (argv (List (List Int))) (w World)) (Pair RunRes World)
+  (match g ((GotNo r why) (Pair (RunLink r why) w)) ((GotHandle hd) (invoke_run hd args argv w))))
+
+;; ---- what a client reads -------------------------------------------------------------------
+;; a live handle's revision, its entry's parameter and result types as the program states them
+;; (those the client supplies), what its caller assumes
+(fn ses_bound ((s Session) (h Int)) (Option Int) (match (ses_slot s h) ((Some (SlotLive hd)) (Some (Held.rev hd))) (_ None)))
+(fn ses_types ((s Session) (h Int)) (Option (Pair (List EType) EType))
+  (match (ses_slot s h) ((Some (SlotLive hd)) (Some (Pair (Handle.params (Held.handle hd)) (Handle.result (Held.handle hd))))) (_ None)))
+(fn ses_assumes ((s Session) (h Int)) (List (List Int)) (match (ses_slot s h) ((Some (SlotLive hd)) (Held.assumes hd)) (_ Nil)))
+;; a live revision's load, a value: what a client dumps, stores or emits from (emit.shard). A
+;; withdrawn revision's is not handed out
+(fn ses_load ((s Session) (rev Int)) (Option Load)
+  (match (ses_rev s rev) ((Some r) (match (Rev.state r) (RevLive (Some (Rev.load r))) (_ None))) (None None)))
+;; what introducing the revision cost of Init: the constants its own load checked, and those
+;; it started with
+(fn ses_init_cost ((s Session) (rev Int)) (Pair Int Int) (match (ses_rev s rev) ((Some r) (Pair (Rev.checked r) (Rev.held r))) (None (Pair 0 0))))
+;; one line for the reader: the ordinal, its parent, its key, its state
+(fn ses_show_rev ((s Session) (rev Int)) (List Int)
+  (match (ses_rev s rev)
+    (None (append "REVISION " (append (show_int rev) " unknown")))
+    ((Some r)
+     (append "REVISION " (append (show_nat rev) (append (if (< 0 (Rev.parent r)) (append " extends=" (show_nat (Rev.parent r))) Nil)
+       (append " key=" (append (Rev.key r) (match (Rev.state r) (RevLive " live") ((RevWithdrawn why) (append " withdrawn: " why)))))))))))
+(fn ses_show_handle ((s Session) (h Int)) (List Int)
+  (match (ses_slot s h)
+    (None (append "HANDLE " (append (show_int h) " unknown")))
+    ((Some (SlotGone r why)) (append "HANDLE " (append (show_nat h) (append " " (append (chars_of_sym r) (if (= (len why) 0) Nil (append ": " why)))))))
+    ((Some (SlotLive hd))
+     (append "HANDLE " (append (show_nat h) (append " revision=" (append (show_nat (Held.rev hd)) (append " entry=" (append (show_name (Handle.entry (Held.handle hd)))
+       (append " door=" (append (match (Policy.door (Handle.policy (Held.handle hd))) (Checked "checked") (Assumed "assumed")) (append " key=" (append (Held.key hd) " live")))))))))))))
+
+;; ---- the keys (slice 4.5 rule 1, for the reader: fingerprints, never authorities) -----------
+;; a revision's: the identity closure of every declaration its load admitted, the policy's
+;; part (the load's parameters), the environment's (the export's identity) — D.P.E
+(fn rev_key ((l Load)) (List Int)
+  (match (data_ctx l Anon)
+    ((ReqCtx sc p _)
+     (append (show_int (req_deps (Load.env l) sc (accepted (ld_recs l)))) (Cons 46 (append (show_int p) (Cons 46 (show_int (export_part l)))))))))
+(fn accepted ((rs (List Rec))) (List Name)
+  (measure (struct rs))
+  (match rs (Nil Nil) ((Cons (RAccept n _ _ _ _ _ _) r) (Cons n (accepted r))) ((Cons _ r) (accepted r))))
+(fn export_part ((l Load)) Int
+  (match (Load.init l)
+    ((InitSt x _ _) (mix (ix_hdr_records (odx_hdr x)) (ix_hdr_bytes (odx_hdr x))))
+    (_ 0)))
+;; an entry's: its type's structural hash, the identity closure from the entry itself through
+;; the revision's own declarations, the policy's and the environment's parts under its module
+;; — S.D.P.E, slice 4.5's key with the entry for the statement's citations. An entry with no
+;; constant of K behind it (a fn with no L meaning, §8.4 rule 1) has no such identity: `-`
+(fn entry_key ((l Load) (entry Name)) (List Int)
+  (match (env_find (Load.env l) entry)
+    (None "-")
+    ((Some info)
+     (match (data_ctx l (match (tbl_find (Load.tbl l) entry) ((Some m) m) (None Anon)))
+       ((ReqCtx sc p e) (req_show (ReqFull (hash_expr (ci_type info)) (req_deps (Load.env l) sc (list entry)) p e)))))))
+
+;; ---- the door on a load ------------------------------------------------------------------------
+;; ev.shard's `prepare` on the load's program, then what the load's environment shows of the
+;; entry that the program does not state (the header): the handle and what its caller assumes,
+;; or the refusal
+(type Bound (BoundOk Handle (List (List Int))) (BoundNo Symbol (List Int)))
+(fn prepare_on ((l Load) (p Prog) (entry Name) (pol Policy) (rev Int)) Bound
+  (match (prepare p entry pol rev)
+    ((PrepNo e m) (BoundNo e m))
+    ((PrepOk h)
+     (let ((dropped (append (binder_evidence (Load.env l) entry) (field_evidence (Load.env l) p (Handle.params h)))))
+       (match (Policy.door pol)
+         (Assumed (BoundOk h dropped))
+         (Checked (match dropped
+                    (Nil (BoundOk h Nil))
+                    ((Cons m _) (BoundNo (quote preconditioned) (append (show_name entry) (append ": " m)))))))))))
+;; the evidence binders of the entry's own signature, by name: every binder whose type is a
+;; proposition. A fn with no constant of K behind it has none
+(fn binder_evidence ((env CheckedEnv) (entry Name)) (List (List Int))
+  (match (env_find env entry)
+    (None Nil)
+    ((Some info) (binder_texts (props_of (w0 env) (ci_type info) 0 (budget_depth) Nil)))))
+(fn binder_texts ((ns (List Name))) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n r) (Cons (append "the binder " (append (show_name n) " is evidence the erasure dropped: no value supplies it")) (binder_texts r)))))
+;; the binders of a telescope after the first SKIP whose type is a proposition, in order
+(fn props_of ((w W) (ty Expr) (skip Int) (fuel Int) (acc (List Name))) (List Name)
+  (measure fuel)
+  (if (< fuel 1) (rev acc)
+    (match (w_whnf w ty)
+      ((Pair w1 (Some (Pi _ n _ dom body)))
+       (match (w_is_prop w1 dom)
+         ((Pair w2 p)
+          (match (w_local w2 n dom)
+            ((Pair w3 fv)
+             (match (w_inst1 w3 body fv)
+               ((Pair w4 body1)
+                (props_of w4 body1 (- skip 1) (- fuel 1) (if (bool_and (< skip 1) (match p ((Some True) True) (_ False))) (Cons n acc) acc)))))))))
+      (_ (rev acc)))))
+;; the proposition fields of the constructors of every inductive a value at the parameter types
+;; reaches: the program's inductives walked from the types (each once), the fields read from
+;; K's constructor after the inductive's parameters
+(fn field_evidence ((env CheckedEnv) (p Prog) (params (List EType))) (List (List Int))
+  (match p ((Prog ds) (ctors_evidence env (reach_types (inds_of ds IMEmpty) params)))))
+(fn inds_of ((ds (List EDecl)) (x (IntMap (List (Pair Name EDecl))))) (IntMap (List (Pair Name EDecl)))
+  (measure (struct ds))
+  (match ds
+    (Nil x)
+    ((Cons (EInd n np cs) r) (inds_of r (decl_index_add x (EInd n np cs))))
+    ((Cons _ r) (inds_of r x))))
+;; the constructors of the inductives reached, each inductive once
+(type Reach (Reach (List Name) (List Name)))   ; the inductives seen, their constructors
+(fn reach_types ((x (IntMap (List (Pair Name EDecl)))) (ts (List EType))) (List Name)
+  (match (reach_all x ts (Reach Nil Nil) (reach_fuel)) ((Reach _ cs) (rev cs))))
+(fn reach_fuel () Int 1000000)
+(fn reach_all ((x (IntMap (List (Pair Name EDecl)))) (ts (List EType)) (acc Reach) (fuel Int)) Reach
+  (measure fuel)
+  (if (< fuel 1) acc
+    (match ts
+      (Nil acc)
+      ((Cons (ETVar _) r) (reach_all x r acc (- fuel 1)))
+      ((Cons (ETCon n as) r)
+       (let ((acc1 (reach_all x as acc (- fuel 1))))
+         (match acc1
+           ((Reach seen cs)
+            (if (mem_name n seen) (reach_all x r acc1 (- fuel 1))
+              (match (decl_index_find x n)
+                ((Some (EInd _ _ cds)) (reach_all x r (reach_ctors x cds (Reach (Cons n seen) cs) (- fuel 1)) (- fuel 1)))
+                (_ (reach_all x r acc1 (- fuel 1))))))))))))
+(fn reach_ctors ((x (IntMap (List (Pair Name EDecl)))) (cds (List ECtorDef)) (acc Reach) (fuel Int)) Reach
+  (measure fuel)
+  (if (< fuel 1) acc
+    (match cds
+      (Nil acc)
+      ((Cons (ECtorDef c fts) r)
+       (match (reach_all x fts acc (- fuel 1))
+         ((Reach seen cs) (reach_ctors x r (Reach seen (Cons c cs)) (- fuel 1))))))))
+(fn ctors_evidence ((env CheckedEnv) (cs (List Name))) (List (List Int))
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c r)
+     (append (match (env_find env c)
+               ((Some info) (match info ((CtorInfo _ _ _ np _ _) (field_texts c (props_of (w0 env) (ci_type info) np (budget_depth) Nil))) (_ Nil)))
+               (None Nil))
+             (ctors_evidence env r)))))
+(fn field_texts ((c Name) (ns (List Name))) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n r) (Cons (append "the field " (append (show_name n) (append " of " (append (show_name c) " is a proposition the erasure dropped: no value shows it")))) (field_texts c r)))))
+
+;; ---- the command line's run as a client (load.shard --run; §9) ----------------------------------
+;; the load's entry prepared once at the checked door with effects — the environment's part of
+;; the door included — and invoked once on the arguments the text codec reads from ARGV
+(fn run_load ((l Load) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (w World)) (Pair RunRes World)
+  (match (prepare_on l (es_prog (Load.etab l)) entry (policy_of Checked True trace fuel) 0)
+    ((BoundNo e m) (Pair (RunLink e m) w))
+    ((BoundOk h _)
+     (match (text_args h argv)
+       ((TextNo r) (Pair r w))
+       ((TextOk vs) (invoke_run h vs argv w))))))

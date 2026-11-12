@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
 > open: slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"), landing 2 next, landing 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it; landing 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -1336,7 +1336,12 @@ constant's identity at all (`name_taken`, the loader): only a
 `realize` attaches an E body under one, and its equations are the
 warrant — the review of this slice found a `fn append` in a module
 named `List` standing in for Lean's `List.append` in a realization's
-body, with the equations stated about Lean's. Realizations therefore
+body, with the equations stated about Lean's. **The other direction,
+since 2026-11-12** (slice 4.6 landing 2's review; pin `def_takes_fn`):
+no declaration of L takes the name of a fn or an extern that has a
+program and no constant of K (`name_taken`, `program_named`) — a `def`
+after such a fn took its name, a typed fn citing it was defined
+against the def, and its program called the fn. Realizations therefore
 form no cycle but self-recursion, and self-recursion is either
 structural — a completed realization — or a retained candidate under a
 pending measure (§7.2), whose obligation every later realization
@@ -3372,7 +3377,7 @@ it entrenches. The slices, in the order built:
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 | 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
-| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 next, landing 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
+| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 (`kernel/session.shard`: the revisions and the handles by ordinal, the checked door closed from the environment, declarations built as data) built 2026-11-12, its leans awaiting ratification; landing 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -6564,6 +6569,291 @@ could veto and not answered — standing, not ratified by a word:
 (b)'s and (h)'s refusals decided at `prepare`, (e)'s token, the
 tie's `N ms`. (f) asks nothing.
 
+**As built, landing 2 (2026-11-12): revisions and stale handles — the
+leans below await ratification.** (The user, on landing 1's four
+decisions: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's
+proceed with landing 2." — the landing as designed in rule 2, no word
+on its details.) `kernel/session.shard` (new, 444 lines), an E library
+beside the loader. A `Session` is a value holding the base — what
+`ld_reroot` starts a load from —, a table of revisions and a table of
+handles, each by an ordinal it mints from 1. `ses_introduce` loads
+files under a root from the base as a driver does in a fresh process:
+a clean load is the next revision; a failed one answers its records
+and the session is what it was. `ses_prepare` binds an entry of a
+revision under a policy and answers the handle's ordinal; `ses_invoke`
+and `ses_run` run it — rule 1's `invoke` and `invoke_run` on the
+slot's prepared value —, `ses_invoke_at` and `ses_run_at` for an
+invocation that requires a named revision (`revision` when the handle
+is bound to another); `ses_release` empties the slot (`released`),
+`ses_revoke` with a reason (`revoked`, the reason kept), and
+`ses_withdraw` is the policy withdrawing permission to run a
+revision's program: every live handle bound to it is revoked with the
+text `revision N withdrawn: WHY` and no handle is prepared on it after
+(`withdrawn`) — other revisions untouched, whether or not a newer one
+exists. A slot that is gone keeps its first reason and drops the
+prepared value. An invocation answers and returns no session, so
+whatever it does — an answer, a refused argument, fuel out — the
+tables are what they were. A client reads a handle's revision, its
+parameter and result types, what its caller assumes, a live revision's
+load (a value: what it dumps, stores or emits from), and one line each
+for the reader (`REVISION n key=… live`, `HANDLE n revision=… entry=…
+door=… key=… live`).
+
+**The checked door closed from the environment** (landing 1's (c),
+ruled 2026-11-12: closed here and not by a marker in the erased
+program). `prepare_on` runs rule 1's `prepare` on the revision's
+program and then reads, in the revision's environment, the two things
+the program does not state: the entry's own binders — every binder of
+its constant's type that K says is a proposition (`is_prop` on the
+domain, the telescope opened by `whnf`) — and, for every inductive a
+value at the parameter types reaches (the program's declarations
+walked from the types, each inductive once), the fields of K's
+constructor after the inductive's parameters. At the checked door
+either is `preconditioned`, the binder or the field named —
+`main.small: the binder h is evidence the erasure dropped: no value
+supplies it`, `main.width: the field ok of main.Span.mk is a
+proposition the erasure dropped: no value shows it` —; at the assumed
+door the entry is prepared and the same texts are kept with the handle
+(`ses_assumes`): law §9.3's two kinds of entry, the second "recorded
+in the contract". An entry with no constant of K behind it (a fn with
+no L meaning) has nothing to read. `handle_test`'s two cases stay as
+they are under another label — a program alone, no environment: rule
+1's door — and `session_test` holds the same two entries refused.
+**The command line's run is the same door**: `load.shard --run` calls
+`run_load` (the load's program prepared checked with effects, the
+environment read, the text codec, one invocation) where it called
+`run_prog_traced`, so an entry with an evidence binder or a
+proposition field is `RUN: link preconditioned: …`, exit 5, before any
+argument is read. `run_prog_traced` is gone — its one caller was the
+driver; the trace's path is the policy's — and `run_prog` stays the
+door on a program alone (`entry_test`, `handle_test`).
+
+**A declaration built as data** (R61). `kernel/loader.shard` gained
+two entries that read no S-expression: `load_data l m d` admits a K
+`Declaration` through the raw entry (`check`) into a module `m` the
+load holds, under the standard policy — no trust clause —, with its
+`ACCEPT` record or the refusal's; `load_data_view l m k` gives an
+admitted definition its program by the derived view (§7.1), as a
+file's `(realize NAME (view))` does (`realize.shard`'s `realize_view`
+split so the view is taken by identity: `realize_view_of`, `view_of`,
+`realize_info`). The naming law holds as for a file's own: every name
+the declaration states — an inductive block's types and constructors
+each — extends the module's (`outside_module`), the module is one of
+the load's (`unknown_module`), no name is one of Init's under the
+module's identity — the file's taken names, now kept with the module —
+and none is the name of a program with no constant behind it
+(`name_taken`, both); a quotient and a mutual block are refused
+(`data_kind`). What it cites is in the load's environment or K refuses
+it — no demand is made of Init on its behalf —; nothing is generated
+beside it. `ses_extend s rev m ds views` admits each of `ds` and takes
+each view on the revision's load — a value — and mints **a new
+revision**, its parent what it was; a refusal answers the records it
+made and mints nothing; a withdrawn revision is not extended.
+
+**Two defects of the loader, found by the landing's review and closed
+here** (both on `482b991` before any of the landing: run on a clean
+checkout). (1) *An L declaration could take the name of a program.* A
+`def` after a fn with no L meaning took its name; a typed fn citing
+the name was defined against the def and its program called the fn — K
+proved `h 2 = 5` and the run printed `0`. The other direction was
+refused since §7.5 (`name_taken`); now an L form whose name the E
+table holds a fn or an extern for, with no constant of K, is refused
+`name_taken` (`program_named`; pin `def_takes_fn`). (2) *An L
+declaration could take a name of Init.* §8.4 slice 3.26 rule 5 — none
+of a file's declarations takes a name the export holds under the
+file's identity — was enforced for a fn, an extern and a derivation
+only. A file `Classical.shard` declaring `(axiom choice …)` below the
+horizon of Init's own was admitted as `Classical.choice`, and the
+policy, which knew the standard axioms by name, recorded it as one: a
+theorem resting on it read `axioms=Classical.choice` with no `POLICY`
+record. The release gate refused the same store (`TAKEN
+Classical.choice is a declaration of the export`): the hole was the
+build's, not the release's. Closed twice: every admission of a file's
+declarations checks each name it declares against the file's taken
+names (`admit_under`, at the four sites that called `admit_decls`; pin
+`init_name_taken_l`), and a standard axiom is one the load *imported*
+— in its ordinal table —, never one it declared (`permitted`,
+`imported_decl`; `session_test`'s case on a root loaded with no
+export, pin `v3/pins/session/noinit`).
+
+**The leans of rule 2, as built — for ratification.**
+
+(a) **The base does not grow — a departure from rule 2's text**, which
+had the session own Init's environment, its records and their
+ordinals. As first built the base kept what each load demanded of Init
+before its first declaration, and the review found the same root
+introduced twice in one session to be two different revisions: A, then
+a root citing far more of Init, then A again gave A's second load a
+theorem its first did not have (`lib.twice.eq_1`) and another key. The
+cause is the loader's, and older than the session: a fn's equations
+are stated where Init's `Eq` is in the environment (`define.shard`
+`has_eq`; `confusion_reachable`, `has_fix_eq` likewise), whoever
+demanded it. A revision must be what its sources make it, so every
+revision loaded from the base checks its own closure of Init, as a
+driver's load in a fresh process does; the base holds the export's
+name and nothing checked. The cost is (f)'s. Rejected-because: a base
+that grows makes a revision depend on what the session loaded before
+it — the row's "wrong invalidation" from the other side. What would
+buy the cost back, not built: the loader's generation made a function
+of the module's own imports, then a base that keeps Init.
+
+(b) *An extension is a new revision.* A declaration built as data
+"entering a revision" (rule 2's amendment) does not change that
+revision: the ordinal a handle is bound to always names one
+environment and one program. The child's environment is the parent's
+extended — one environment, never two joined —; two children of one
+parent share ordinals of K's nodes below the parent's watermark and
+never meet. **A withdrawal reaches the extensions**: a child holds its
+parent's program, so withdrawing a revision withdraws every revision
+that extends it, under the same text (as first built it stopped at the
+one ordinal, and the review ran the parent's entry through a child
+after the withdrawal). A later load of the same source is another
+revision and is not reached.
+
+(c) *The keys.* A revision's is `D.P.E` — the identity closure of
+every declaration its load admitted (`req_deps` over its `ACCEPT`
+records), the policy's part (the load's parameters), the environment's
+(the export's identity). A handle's is slice 4.5's `S.D.P.E` with the
+entry in the place of the statement's citations: S the structural hash
+of the entry's type, D the closure from the entry itself, P and E its
+module's. An entry with no constant of K has no such identity and
+shows `-`. Fingerprints for the reader: two loads of one source are
+two ordinals under one key, and nothing in the session compares keys.
+
+(d) *Withdrawal is the policy's act on a revision*, `ses_revoke` the
+host's on one handle; both leave `revoked` with a text, a release
+`released` with none, and the first reason stands — a second
+withdrawal, a release after a revocation change nothing.
+
+(e) *The door from the environment is the session's and the driver's*,
+and ev.shard's `prepare` keeps rule 1's limit for a client that has a
+`Prog` and nothing else. **`--run` changed**: an entry the old run
+took — an evidence binder, a proposition field in a parameter's type —
+is refused now. No entry any test or example of the tree runs is among
+them (the suite; read by the review: every `--run` in
+`kernel/test/*.sh` is over the World alone, a `Nat` and the World, or
+two `ByteArray`s and the World).
+
+(f) *The count's unit and what a revision costs.* Counted in constants
+of Init (the load's ordinal table). Every revision loaded from the
+base checks all it cites: the pins' A and B 184 each, `data` and the
+path 1,533 each. On the quiet dev box a revision costs what the same
+load costs in a fresh process. The bootstrap: A 1.2 s, B 0.9 s, `data`
+20.3 s, A again 0.5 s, the path 24.4 s — the path alone 23.6 s, `data`
+alone 20.3 s. The binaries: A 81 ms, B 86 ms, `data` 1.72 s, A again
+86 ms, the path 1.44 s — the path alone 1.73 s. Under the base as
+first built — it kept what a load demanded of Init before its first
+declaration — the path as the fifth revision took 0.6 s on the
+bootstrap, its 1,533 constants held (one run, the box busy): that is
+what (a) costs.
+
+(g) *A session is a value*, and the tables' word is the newest
+value's. A host that keeps an older `Session`, or takes a revision's
+load (`ses_load`) and prepares on its program through `ev.shard`
+itself, is outside the tables — reproduced by the review: a released
+handle answers through the session value from before its release. A
+convention, as the handle's is (ruled 2026-11-12);
+`handle_cost_test.sh` holds the toolchain's sources to the part a grep
+can see — nothing outside `session.shard` takes a prepared value out
+of a slot or restates the tables. A withdrawn revision's load is not
+handed out.
+
+(h) *Reentrancy and cancellation* as rule 2 read them; the case there
+is — two handles invoked in turn — is `session_test`'s.
+
+(i) *What R61's row was checked to mean.* Two declarations built as
+data in one module — `show3 : Nat → World → World`, and `main : World
+→ World := show3 2`, route 1's entry taking the World alone —
+admitted, their views taken, each prepared and invoked; the revision's
+closure emitted and lowered by the chain (`session_emit_test.sh`:
+tools/lower, tools/codegen, cc), the binary's output the handle's.
+"One name": the `ACCEPT` record, the handle's entry and the emitter's
+map carry `pins.session.data.show3`. "One key": a second handle on the
+entry shows the same key, and another body under the same name and
+type the same S and another D. Not checked: any equation between the
+key and the record's fingerprint.
+
+(j) *Not built here*: releasing a revision (rule 3's reclamation — a
+slot already drops its prepared value); a demand of Init for a
+declaration built as data; an inductive's auxiliaries for one built as
+data.
+
+Tests. `kernel/test/session_test.shard` (new, 447 lines), a root — the
+inventory is 31 —, 62 cases by the row's sentences: the revisions and
+their keys, one root introduced before and after a larger one under
+one key; the count; prepare once and invoke repeatedly; the A handle
+after B; `revision`; a new B handle; `released`; `revoked` with its
+reason; the withdrawal — with and without B, a second one, its reach
+to an extension —; the tables' counts; two handles in turn; the door's
+refusals of an argument; the door from the environment, both doors;
+the command line's door; the declarations built as data and their
+refusals (an ill-typed body, a citation the revision does not hold, a
+name outside its module, a module the revision does not hold, a
+block's stray type, a quotient, an axiom outside the policy, a
+program's name, a view asked twice, a withdrawn parent); a standard
+axiom's name on a root loaded with no export; the path
+(`v3/examples/path`) with its last link — its entry prepared once and
+run twice on raw arguments built as data — and two of its breaks, the
+invalid raw argument and the mismatched revision. Its modes `emit DIR`
+and `loads K` are the lowering's and the count's instruments.
+`kernel/test/session_emit_test.sh` (new, 7 checks). Pins
+`v3/pins/session/` (`a`, `b`: one module and entry, two bodies;
+`data.shard`; `noinit`) and, in the loader's corpus, `def_takes_fn`
+and `init_name_taken_l` (299 cases). `handle_test` +2 cases (55): a
+World declared twice is read from its later declaration — the case
+landing 1's fifth fix lacked. `handle_cost_test.sh` +1 check (5).
+
+**The count (rule 6).** Lines by file: `session.shard` 444, new;
+`loader.shard` +120/−9 — the two data entries, `admit_under`,
+`program_named`, `imported_decl`, a module's taken names —;
+`realize.shard` +41/−31, the view split; `ev.shard` +17/−15;
+`load.shard` +7/−2; `prog.shard` −1, a `use` nothing needed. Refusals
+before success: the bootstrap refused `session_test`'s first run at
+the reader — a closing parenthesis too many — and failed three of its
+first 49 cases, each the test's own error (the count compared
+declarations with constants; an entry named in the wrong module; an
+ordinal); the suite's first pre-check failed parity — a type `Slot`
+beside `elab.shard`'s, the projection not injective: `HSlot` —; the
+chain refused the first emitted closure at the C compiler — route 1's
+entry takes the World alone, and the declaration built as data took a
+`Nat` before it: `main` was built as data over it —; the bootstrap
+refused `block_names`, a second function under a name the loader has.
+Interventions: none. **The review** (a second reader with the diff and
+no account of it, told to break it by
+running): six findings, five reproduced by it. Run again here before
+anything was changed: the loader's two, on a clean checkout of
+`482b991`; the base's and the withdrawal's, as cases that failed. The
+data path's three — a program's name, a standard axiom's name, a
+block's stray names — stand on the review's runs and on cases that
+pass since the fix. The door
+from the environment held on some thirty signatures (a proof field
+under `List`, `Option`, a second structure, an alias; `Decidable`; a
+binder that is a proposition only after unfolding; one after the
+World; a template's instance; a supplied and a derived realize).
+Broken and fixed, each with a case or a pin: a declaration built as
+data under a program's name (K's `h 1 = 101` against a run of `1`) —
+and the same through a source file, defect (1) above; an axiom built
+as data under a standard axiom's name, admitted as standard — and
+through a source file, defect (2); the naming law checked on one name
+of a block and against no module table (a stray type `Nat.Stray` with
+a constructor `lib.twice`; the modules `Anon`, `pins`, `Nat`); one
+root two revisions, (a); a withdrawal that stopped at its ordinal,
+(b); an ordinal's text for a negative one. Stated, not fixed: (g).
+Cost: one pre-check of the suite and its repeat. **What introducing a
+revision costs**: (f)'s figures; `session_test loads K` is the
+instrument, a run of K against a run of K−1.
+
+Gates on the dev box, the tree as committed: `v3/build.sh --all` 31
+roots, 31 built, 0 failed, in 2,826 s; the suite on the binaries 49
+entrypoints, 0 failed, beside the full replay in 523 s of wall — T0
+FULL == PINNED, accepted 57,977, the replay 391 s at 28.8 GB —; on the
+bootstrap 49 entrypoints, 0 failed, in 901 s of wall (parity 33
+closures, 158,654 declarations, 0 differ); the tie 49 entrypoints, 0
+differ; no authored file changed under the round. Before it the
+bootstrap suite ran twice as a pre-check, 48 entrypoints each: the
+first with parity failing on the type's name, the second, after the
+review's fixes, with 0 failed in 912 s.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -6669,7 +6959,18 @@ parameter's type — its first constructor has no field, or integer
 fields — or the entry is `bad_entry`; which type the World is stays
 the Stage-0 limit above. The door's own limit — what the erased
 program does not state, an evidence binder or a constructor's
-proposition field, it cannot validate — is §8.6's (c).
+proposition field, it cannot validate — is §8.6's (c), and holds for a
+program alone.
+
+**The door on a load (slice 4.6 landing 2, 2026-11-12; §8.6 "As built,
+landing 2").** Where the program comes with the environment it was
+erased from, the door reads the two there: `load.shard --run` calls
+`session.shard`'s `run_load` — `prepare`, then the entry's binders and
+its parameter types' constructors in the load's environment, the text
+codec, one invocation — and an entry with an evidence binder, or with
+a proposition field in a constructor a parameter's type reaches, is
+`RUN: link preconditioned: …`, exit 5, before any argument is read. A
+session's `ses_prepare` is the same door on a revision.
 
 ## 10. Conformance at phase 2 (records §4.1 B10)
 
@@ -6808,7 +7109,7 @@ never compared as verdicts.
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
 | lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 — **slice 4.3 (designed 2026-10-16, §8.6)**: the check over `Prog` with the law's fixtures as pins, the extern an opaque L constant, the `bin` form and its record, the trace tied four ways |
-| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; the leans of §8.6 "As built, landing 1" awaiting ratification), landings 2 and 3 not started |
+| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; its leans ruled 2026-11-12); **landing 2 built 2026-11-12** (`kernel/session.shard`: revisions by ordinal, each its own load; handles by ordinal, released, revoked, withdrawn with the revision; the checked door closed from the environment; the leans of §8.6 "As built, landing 2" awaiting ratification — the base does not grow, a departure); landing 3 not started |
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
@@ -6818,7 +7119,7 @@ never compared as verdicts.
 | `CheckedEnv` sealed: K one directory module behind a view (§6.6); complete when the first `meta/` consumer is behind it (§13 item 26, R52) | §3.5, §8.2 | 3, the opener |
 | the Stage-1 authoring facilities ordinary source needs before the broad port (GPT-6 R60): list literals with expected-type-driven empty lists; a negative-numeral rule with no silent `Int → Nat`; named-field construction and update, a changed dependent field an explicit obligation, never hidden by the sugar; a `Name` literal or construction that forges no declaration, node or environment identity (§3.3); a scoped fresh-name supply in ordinary code where `gen_fresh` was; the public byte and text adapters (`ByteArray` for raw bytes, `String` for text, the prelude's cells an internal adapter) decided with the first host-facing S library — each with a first example before the port pays for its absence | §5.1 Stage 1; §12.6 | 3 — **landed**: list literals and the negative numeral (3.15–3.16), `make`/`with` and the fresh-name supply (3.17), the byte and text adapters (3.18); `Name` literals and symbols **deferred** to the toolchain's port (item 51; 3.18 rule 5: `(quote x)` keeps `no_l_identity route=e_first`; corrected at slice 4.0 landing 0, R81) |
 | the checked module instance (GPT-6 R57): the substitution from view parameters to implementation declarations and evidence recorded, the `fulfills` proofs' assumptions inherited by the instantiated consumer, a stricter policy refusing the result, one consumer proof used with two implementations without cloning it, revisions bound so spellings alone mix nothing | law §8.2, T5; §6.5 | **carried to phase 5** with the two-instance gate (ruled 2026-10-13, slice 3.30 rule 3a) |
-| programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 — slice 4.6 landing 2 (designed 2026-11-11, §8.6 rule 2; item 71): one declaration built as data admitted through the raw entry, its function prepared, invoked and emitted through route 1 under one name and key |
+| programmatic validation (GPT-6 R61): a client that builds a `Prog` or declarations as data validates them through the public services without a source round trip — item 15's fusion is an implementation choice, the dump of §10 a conformance format, neither the representation | §9.3, T6 | 4 — **slice 4.6 landing 2, built 2026-11-12** (§8.6 "As built, landing 2"; item 71): `loader.shard` `load_data` and `load_data_view` read no source; two declarations built as terms of K admitted through the raw entry, prepared, invoked, emitted and lowered by route 1's chain, the binary's output the handle's (`session_emit_test.sh`); what "one key" was checked to mean is the as-built text's (i) |
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
 | `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
 | the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; until slice 4.5 the sidecar's key was the statement fingerprint and the store's sharing compared binder names | §8.4 3.22 rule 2 | 4 — **slice 4.5 (designed 2026-10-23, built on pipelines 642–644, closed 2026-11-06, §8.6; item 70)**: the resolved requirement as the sidecar's key (the statement, the referenced declarations' identity closure, the policy, the environment), the reconstruction version with `--reconstruct`'s compare, the store's display map — its own slice before T6 (4.6) and before phase 5's tools police frozen requirements |
@@ -8405,5 +8706,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     `ev.shard`'s by convention, landing 2's client holding an
     ordinal; the reader keeps no handle. The smaller changes — the
     refusals decided at `prepare`, the World's token, the tie's `N
-    ms` — were put as vetoable and not answered. Landing 2 next,
-    landing 3 not started.
+    ms` — were put as vetoable and not answered. (i) **Landing 2
+    built 2026-11-12 on the same reply; its leans put to the user and
+    not ruled** (§8.6 "As built, landing 2", (a)–(j)): the base does
+    not grow — a departure from rule 2's text, every revision checking
+    its own closure of Init, since a base that kept Init made one root
+    two revisions —; an extension by declarations built as data is a
+    new revision, and a withdrawal reaches the extensions; the keys —
+    a revision's `D.P.E`, a handle's `S.D.P.E` over its entry —; the
+    checked door closed from the environment at the session and at
+    `load.shard --run`, which now refuses an entry with an evidence
+    binder or a proposition field; a session a value, its tables'
+    word the newest value's; what R61's row was checked to mean; a
+    revision's release left to landing 3. Closed in the same landing,
+    outside the slice: two defects of the loader its review found —
+    an L declaration under a program's name, and under a name of
+    Init, the second passing the policy as a standard axiom. Landing
+    3 not started.
