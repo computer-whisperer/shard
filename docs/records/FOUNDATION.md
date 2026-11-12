@@ -603,7 +603,8 @@ ratification of slice 4.0 (§13 item 66).
   flagged and four clean, as meant. Over K (`v3/kernel/k/` and
   `expr.shard`, the 354 functions that take or return a state): 339
   clean, all of `tc.shard`, `inductive.shard` and `nested.shard` among
-  them; 12 the primitives that open or build a state (`st_init`,
+  them (both figures and the last clause corrected below); 12 the
+  primitives that open or build a state (`st_init`,
   `st_anon`, `st_node`, `st_fresh_node`, `st_for`, `st_seed`,
   `st_clear_memo`, `st_memo`, `st_set_memo`, `st_ticks`, `guard`,
   `mk_local`), read by hand; 3 that continue from an older state, each
@@ -649,6 +650,76 @@ ratification of slice 4.0 (§13 item 66).
   and hostile 7's `Nat.add` under a user's definition. The gating is
   covered (hostile 7, 7b, 7e, 8, 8b; `accel_test` 7c–7e), and the
   accept side by the Init replay under both engines.
+  *Corrected the same day, at the check's landing* (`v3/LANGUAGE.md`
+  §8.6 "An id confirmed by its hash"; the user on the two questions:
+  "1: A, 2: yes."). The scratch instrument's kinds were the state and
+  the World together: 33 of its 354 were functions that handle the
+  World alone (`k/import.shard`'s record writers), so K's
+  state-handling functions were 321 and the clean ones 306. And it was
+  lenient in one place — the fields matched out of a result that holds
+  the state twice (`(KOk st a)`, the state beside the record that
+  holds it) were given fresh versions — which the check as built is
+  not: `dr_go` (`k/inductive.shard`) wrote the state from before a
+  recursor's declaration over the one `a_set_env` had cleared, so the
+  memo tables outlived the declaration. The counter is the same either
+  way — the audit's finding on ids stands — and no wrong verdict is
+  known; "all of `inductive.shard` clean" was not true of the memo
+  tables. Fixed with the landing, which also makes the rebuild mint
+  after it looks (no rewind left in it) and names the run's
+  resumptions (`run_resume`): the gate `state_test` judges 323
+  functions of K, 311 `ok` and 12 primitives. Gates on the dev box,
+  run twice — before the review below and again on the tree as
+  committed, the same both times: 29 roots built with 0 failed; both
+  suites 45 entrypoints with 0 failed, `state_test` the forty-fifth
+  (24 checks the first time, 36 after the review); the tie 0 differ
+  over the 45 (the second run: the bootstrap 5,286 s of entrypoint
+  time, the native 1,440 s, the two suites and the replay run side by
+  side); T0 FULL == PINNED — 57,977 accepted, the closures identical.
+  The cost, old against new in alternated runs on the first build (the
+  review's changes are in the check alone, which no plain load runs):
+  the replay's first 80 chunks 38 s on each, the outputs
+  byte-identical (the full replay took 385 s with other work on the
+  box against 340 s the day before — not a comparison); the compiled
+  loader on `len.shard` 15.2 s to 14.9 and on the model root 28.8 s to
+  27.8, the outputs byte-identical — the rebuild no longer mints what
+  it then drops.
+  *Reviewed before the commit* — a second reader, a fresh sub-agent
+  told to break the diff and to report only what it ran. Held: the
+  readers and the rebuild on K's accepting path — 800 forged terms
+  (ids 0 to 4, hashes, ranges and flags that lie; under `st_init`,
+  under `st_anon`, under a counter at 41; two terms through one table)
+  came out of the rebuild as they came out of HEAD's, id for id and
+  counter for counter; `t0 -a` over the export's first 250,000 lines
+  (3,208 declarations) was byte-identical between HEAD's kernel and
+  this one; the kernel's tests agreed on both. Not held: the check. It
+  passed a state used twice (a) behind a type the classifier reads off
+  a first branch that leaves it open — `(match (if c None (Some st))
+  …)` —, (b) out of a polymorphic carrier through a function of any
+  type, (c) made from nothing — in a function whose signature names no
+  state, which was not judged at all, or from a source asked twice —,
+  (d) opened by a pattern under a record, (e) in a primitive that mints
+  through a callee and lets the state go; each shown at run time, one
+  id on two nodes. A probe over K's 323 functions found none of these
+  spellings in K (two functions flagged, both with an `Expr` payload).
+  Fixed in the check before the commit (`LANGUAGE.md` rule 4 (d), (f),
+  (g)): eleven more controls, and the gate pins who calls a source
+  (`empty_run` and `run_on`, once each). Left, as rule 11 states them:
+  a declared type is believed — `(fn lie_out ((st St)) Expr st)` was
+  loaded, compiled by route 1 and run on both engines, nothing in a
+  load of the kernel's own sources checking a body against its
+  signature —; the memo tables are values to the check (`dr_go`'s fault
+  in another spelling passes); a client's use of a run is not judged;
+  the primitives are read, not judged; and rule 1's residual can be
+  arranged — the hash is affine in a literal's value, so two literals
+  the modulus apart, minted from one state used twice, are equal to
+  `expr_eq`, `same_node` and `is_def_eq`, while the raw entry refuses
+  the theorem that would follow and the rebuild keeps the two apart.
+  The reviewer's two suspicions it did not reproduce: the seen set of
+  `used_consts` holds one hash per id, so a term whose ids are shared
+  systematically may be walked as its tree — the cost of the plain
+  walk, no wrong answer —; and a requirement's key hashes the
+  statement, forgeable by the same arithmetic — a key detects a
+  changed task and accepts nothing (R42).
 
 - The measured provocation: B-1b's per-function certificates (tb_len
   717, tb_perim 957, tb_app 1,148 canonical lines), the ghost twins

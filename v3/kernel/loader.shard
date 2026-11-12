@@ -248,6 +248,7 @@
   (RTemplate Name (List Name) (List Name))        ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
   (RInstance Name Name (List (List Int)) (List Name))   ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
   (RThread Name Symbol (List Int))          ; the well-threadedness verdict of a token-handling function (slice 4.3 landing 0): ok, or world_twice / world_unsupported / world_forged with its detail
+  (RState Name Symbol (List Int))           ; the state's check on a function that takes or returns the checker's state, under --state (§8.6 "An id confirmed by its hash" rule 5): ok (with its resumptions), primitive, reused or unsupported with its detail
   (RBin Name Name (List Name) Int (List Name) Int)   ; a bin checked (slice 4.3 landing 1): its name, entry, externs, trusted axioms' count, requirements, requirements met
   (RBinErr Name Symbol (List Int)))         ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
 
@@ -279,10 +280,11 @@
   (templates (List (Pair Name Template)))   ; the templates defined (slice 3.28 rule 1), for the instances a body demands
   (instances (List Demand))   ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
   (budget Int)   ; the instances of one template this load may build (rule 4): instance_budget, or the driver's --instance-budget
-  (fuel Int))   ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove (slice 3.29 rule 2); default_fuel, or the driver's --fuel
+  (fuel Int)    ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove (slice 3.29 rule 2); default_fuel, or the driver's --fuel
+  (states (Option (IntMap (List (Pair Name Int))))))   ; the state's check (thread.shard, §8.6 "An id confirmed by its hash" rule 5): None in a plain load; under the driver's --state the modes of the functions judged so far
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone) (tbl IMEmpty) (inits IMEmpty) (mode (quote off))
-             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget)) (fuel (default_fuel))))
+             (pending Nil) (stack Nil) (recs Nil) (params Nil) (etab (es0)) (pm Nil) (forms IMEmpty) (parked Nil) (typed Nil) (discharged Nil) (derived Nil) (templates Nil) (instances Nil) (budget (instance_budget)) (fuel (default_fuel)) (states None)))
 ;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — the
 ;; base's environment of Init alone, its records and ordinals, the export and index handle;
 ;; everything of the old root reset to load0's, the old root's own declarations gone, and with
@@ -433,6 +435,8 @@
 ;; --instance-budget N sets another for a load (the pins harness runs one case at 2)
 (fn instance_budget () Int 1024)
 (fn ld_with_budget ((l Load) (n Int)) Load (with Load l (budget n)))
+;; the state's check asked for: every file loaded from here records its functions' verdicts
+(fn ld_with_states ((l Load)) Load (with Load l (states (Some IMEmpty))))
 (fn instances_of ((c Name) (ds (List Demand))) Int
   (measure (struct ds))
   (match ds (Nil 0) ((Cons d r) (+ (if (name_eq (demand_template d) c) 1 0) (instances_of c r)))))
@@ -1779,7 +1783,7 @@
                  (match (load_forms l1 f1 rest fuel w2)
                    ((Pair (Pair l2 (Some f)) w3)
                     (let ((fp (if view (Some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest)) None)))
-                      (Pair (Pair (ld_rec (rec_bins (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f) f)
+                      (Pair (Pair (ld_rec (rec_bins (rec_states (rec_threads (rec_unused (ld_add_mod (ld_with_stack l2 (Load.stack l)) (make Mod (path mp) (file (join_path rel)) (hash (Fx.hash f)) (closure (Fx.vis f)) (init (Fx.init f)) (fork fp) (ok True))) f dirs rest) f) f) f)
                                           (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
                                   fp)
                             w3)))
@@ -1857,6 +1861,20 @@
   (match ds
     (Nil l)
     ((Cons d r) (rt_go es wk r (match (th_fn es wk d) (None l) ((Some (Pair k m)) (ld_rec l (RThread (edecl_name d) k m))))))))
+;; ---- the state's check (§8.6 "An id confirmed by its hash" rules 4–5; thread.shard) -----------
+;; under --state: the file's own E functions judged with the modes of the files before, a
+;; STATE record for each that takes or returns the checker's state; the modes kept for the
+;; files after. A fork carries its fork point's modes and its own are dropped with it
+(fn rec_states ((l Load) (f Fx)) Load
+  (match (Load.states l)
+    (None l)
+    ((Some md)
+     (let ((es (Load.etab l)))
+       (match (sv_file es md (rev (es_newest es (- (es_count es) (Fx.ecount f)))))
+         ((Pair md1 vs) (rs_go (with Load l (states (Some md1))) vs)))))))
+(fn rs_go ((l Load) (vs (List (Pair Name (Pair Symbol (List Int)))))) Load
+  (measure (struct vs))
+  (match vs (Nil l) ((Cons (Pair n (Pair k m)) r) (rs_go (ld_rec l (RState n k m)) r))))
 ;; ---- the bin form (§8.6 slice 4.3 landing 1, rule 4) ------------------------------------------
 ;; (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)), stashed at its form and checked
 ;; at the file's end once every fn settled: the entry a fn in scope with a World last and
@@ -2622,6 +2640,7 @@
        (append " policy=" (append (chars_of_sym policy) (append " fields=" (show_names_c procs)))))))))))
     ((RTemplate n statics eqs) (append "TEMPLATE " (append (show_name n) (append " static=" (append (show_names_c statics) (append " equations=" (show_names_c eqs)))))))
     ((RThread n k m) (append "THREAD " (append (show_name n) (append " " (append (chars_of_sym k) (match m (Nil "") (_ (append ": " m))))))))
+    ((RState n k m) (append "STATE " (append (show_name n) (append " " (append (chars_of_sym k) (match m (Nil "") (_ (append ": " m))))))))
     ((RBin n f exts nt reqs met)
      (append "BIN " (append (show_name n) (append " entry " (append (show_name f) (append " externs " (append (show_nat (len exts))
        (append " trusts " (append (show_nat nt) (append " requires " (append (show_nat met) (append "/" (show_nat (len reqs))))))))))))))
@@ -2671,6 +2690,7 @@
        ((RDerive _ _ _ _ _) acc)
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
        ((RThread _ _ _) acc)
+       ((RState _ _ _) acc)
        ((RBin _ _ _ _ _ _) acc)
        ((RBinErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))

@@ -5969,15 +5969,16 @@ a run lemma of 4.05 million nodes for 50 thousand distinct.
    ratified.
 
 **An id confirmed by its hash; the state's threading checked. DESIGNED
-2026-11-11, outside the slice sequence, at the user's direction** (on
+and LANDED 2026-11-11, outside the slice sequence, at the user's direction** (on
 the audit's two questions — whether the readers of a node's id should
 compare its hash as well, and whether the audit's check of the state's
 threading should stand as a test — "1: A, 2: yes."). The record is
 `docs/records/FOUNDATION.md` §5, "The state's threading audited".
 
-*What the audit found.* Inside one check K never advances a state
-twice: read over every path of its 354 state-handling functions, three
-places apart that go on from an older state by design. The layers above
+*What the audit found.* Inside one check K never mints from one state
+twice: read over every path of its 321 state-handling functions (the
+audit wrote 354, counting 33 that handle the World alone), three places
+apart that go on from an older state by design. The layers above
 K — elaborator, unifier, tactics, loader — do, by design untrusted, and
 a term of theirs can carry one id on two nodes; `expr_consts`, which
 passes a node whose id it has seen, read such terms for a definition's
@@ -5988,7 +5989,9 @@ in the suite, the heights right in all five.
    answers false on unequal hashes whatever the ids, and true on equal
    positive ids only under equal hashes; `same_node` and `ing_same`
    likewise; the seen set of `used_consts` holds each id's hash, and a
-   node whose id stands there under another hash is read, not passed.
+   node whose id stands there under another hash is read, not passed;
+   and the store writer's `sw_same` (`store.shard`), the fifth reader,
+   found at the building — it reads an environment's terms, K's own.
    On a term whose ids are unique — every term K mints — no answer
    changes. A term with one id on two nodes is read right unless the
    two nodes' hashes are equal too: the hash is a fingerprint here as
@@ -6010,31 +6013,47 @@ in the suite, the heights right in all five.
    program, the token the checker's state `kernel.expr.St`; a box is a
    value of a type one of whose fields names the state. An identity is
    a *version* of the state:
-   (a) a box around one version is that version; a match on a box, a
+   (a) a box is one version: around one, that one — a match on it, a
    variable bound to it, a constructor around it and a reader of it are
-   no use;
+   no use, and every field matched out of it that carries a state is
+   that version (`(KOk st a)` holds one state twice); around two, a
+   fresh one;
    (b) a use is an argument at a parameter the callee *advances*; a
    join of two branches that carry different versions (each yields its
    own, the value after them is fresh); a box built around two
-   versions; the return of a version already used;
+   versions, of each; the return of a version already used;
    (c) a function's parameters are *advanced* (the version is used in
    its body), *returned* (the result is that parameter's own version,
    unused) or read — found with the verdicts, to a fixpoint over a
    file's functions, the files in load order;
-   (d) a *primitive* is a function that matches the state itself or
-   builds one: its verdict is `primitive` and nothing else, its state
-   parameters advanced when its result carries a state and read when it
-   carries none;
+   (d) a *primitive* is a function that matches the state itself — by
+   a pattern at any depth — or builds one: its verdict is `primitive`
+   and nothing else, its state parameters advanced when its result
+   carries a state and read when it carries none; a primitive that
+   passes a state on to a callee that advances it is refused;
    (e) `run_resume`: its argument is read and its result a fresh
    version, and a function's verdict counts the resumptions it makes;
    (f) refused conservatively (`unsupported`): a state at a polymorphic
-   parameter or a primitive operation, a callee the table lacks, a box
-   of two states matched.
+   parameter or a primitive operation, a callee the table lacks or one
+   not judged in this load (an implementation's fork carries its fork
+   point's modes, and its own end with it); a box matched where a
+   field's type is not determined — a type variable, or none; the walk
+   reads a branching term's type off its most determined branch, where
+   the classifier reads the first, so `(KFail f)` or `None` standing
+   first leaves nothing open —; a value the walk holds no state for
+   where a callee takes the state or the function answers it;
+   (g) a *source* answers a state and takes none (`st_init`, `st_for`,
+   a run made): two states from sources are two versions and one
+   counter's start twice, which no version shows — so a verdict counts
+   the sources its body calls, as it counts resumptions, and every
+   function is walked: one whose signature names no state is judged
+   all the same when it opens or builds one or calls a source.
    The fault: a version used twice along a path — `STATE NAME reused:`
    with the version's origin and its two uses.
 5. **Where it runs.** On request (`load.shard --state`): at each
    file's end a `STATE NAME VERDICT` record for every function of the
-   file that takes or returns the state. A plain load does not run it:
+   file that takes or returns the state, opens or builds one, or calls
+   a source. A plain load does not run it:
    outside the kernel's own sources no function names the state, and
    the layers above K reuse states (205 of their 937 such functions, by
    the audit) — what they build is accepted only as the raw entry
@@ -6043,11 +6062,17 @@ in the suite, the heights right in all five.
    tied: the kernel's implementation loaded under `--state`
    (`kernel/t0.shard` with `kernel/k`) — no `reused`, no `unsupported`;
    the primitives exactly the twelve of the audit; the resumptions
-   exactly `check_into` 3 and `process_record` 1; no fewer than 300
-   functions judged. The controls, the root `v3/pins/state`: a fork, a
-   rewind, a mint dropped and its caller, each again through a record,
-   a branch that rewinds and a local minted twice are `reused`; the
-   four linear spellings beside them are `ok`.
+   exactly `check_into` 3 and `process_record` 1; the sources called
+   by `empty_run` and `run_on`, once each, and by no one else; no
+   fewer than 300 functions judged (323 as built: 311 `ok`, 12
+   `primitive`). The controls, `v3/pins/state/main.shard`: a fork, a
+   rewind, a node built and dropped with its caller going on, the fork
+   and the rewind again through a record, a branch that rewinds, two
+   constructors on one state, and of one version held twice the copy
+   inside advanced and the copy beside written over it are `reused`;
+   the six linear spellings and the fixture's three helpers are `ok`;
+   and rule 10's eleven, each with the verdict it has since; all
+   twenty-eight are judged.
 7. **The regression for rule 1.** Hostile battery 21: two nodes forged
    under one id — `expr_eq` and `same_node` say different; the
    constants of a term that holds both are both collected.
@@ -6057,9 +6082,68 @@ in the suite, the heights right in all five.
    machine word for each of the fourteen operations — both engines, tied
    —, the size limit at `shiftLeft`, and a wrong result refused for
    each operation.
-9. **Not in this.** The layers above K made linear; the id's writers as
-   a check (a positive id is written by the five `new_*` constructors
-   alone, each from `st_fresh_node` — read in the audit, not gated).
+9. **What the check found, built.** The audit's scratch instrument
+   gave the fields matched out of a result that holds the state twice
+   fresh versions, and so passed what rule 4 (a) refuses: `dr_go`
+   (`k/inductive.shard`, the recursors' declaration) set the new
+   environment — `a_set_env`, which drops the memo tables with the
+   environment they were made under — and then wrote the state from
+   before over it, so the tables outlived each recursor's declaration
+   where a type's and a constructor's do not. No id is involved (the
+   counter was the same either way) and no wrong verdict is known; a
+   table entry made before a recursor exists can say a term is stuck
+   that the recursor now reduces. Fixed: the state first, then the
+   environment. Also gone, a `use` in `k/add.shard` the transfer's
+   removal had left without a user, and three in `inhabit.shard` the
+   loader's `UNUSED` record named.
+10. **The review, the same day** — a second reader set to break the
+   landing before it was committed. The readers and the rebuild held:
+   800 forged terms — ids, hashes, ranges and flags that lie, under a
+   state that mints and one that does not — came out of the rebuild as
+   they came out of the code before it, id for id, and the replay's
+   verdicts over the export's first 250,000 lines were byte-identical.
+   The check did not hold: a state used twice was passed `ok` where it
+   sat behind a type the first branch left open (`(if c None (Some
+   st))`); where it left a polymorphic carrier through a function of
+   any type; where it was made from nothing — in a function whose
+   signature names no state, which was never judged, or twice in one
+   that was —; where a pattern under a record opened it; and where a
+   primitive minted through a callee and let the state go. K's own
+   functions use none of these spellings — a probe over the 323 showed
+   it — and (d), (f) and (g) of rule 4 are what the review added; each
+   spelling is a control (`re_launder_if`, `re_launder_match`,
+   `un_launder_ctor`, `un_payload`, `re_nosig`, `src_two`, `src_reset`,
+   `un_prim_hand`, `pr_nested_open`, `un_lie_in`), and the one limit
+   that can be written as a control is pinned as it stands
+   (`lim_lie_out`).
+11. **Not in this — the check's limits, as the review drew them.**
+   (a) *A declared type is believed.* The walk reads a function's
+   types as written, and nothing in a load of the kernel's own sources
+   checks them: these files take the route `e_first`, with no
+   elaboration to L, and a function declared `St → Expr` that answers
+   its argument was loaded, compiled by route 1 and run. One direction
+   is caught — a state answered where the walk holds none —; the other
+   is `lim_lie_out`. An accident of this shape is unlikely; an author
+   who means it is not held by this check.
+   (b) *The memo tables are values*, not versions: a table read out of
+   one state and written into a later one — `dr_go`'s fault in another
+   spelling — passes.
+   (c) *A client's use of a run*: `Run` is opaque outside K, so a
+   client that goes on from one run twice is not judged; each branch
+   is a linear history of its own, and no operation takes two.
+   (d) *A primitive is read, not judged*: twelve, pinned by name.
+   (e) *Rule 1's residual can be arranged.* The hash is affine in a
+   literal's value: two literals the modulus apart hash alike, and
+   minted from one state used twice they share an id as well —
+   `expr_eq`, `same_node` and `is_def_eq` then say equal. The raw
+   entry refuses what follows from it and the rebuild keeps the two
+   apart (the review's cases); the guard is against accident, as rule
+   1 says, and what K accepts rests on the rebuild.
+   (f) The other way, conservatively: two states boxed together and
+   each used once are `reused` (rule 4 (a)).
+   (g) The layers above K made linear; the id's writers as a check (a
+   positive id is written by the five `new_*` constructors alone, each
+   from `st_fresh_node` — read in the audit, not gated).
 
 ## 9. Assumption policy and entries
 

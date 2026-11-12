@@ -21,9 +21,15 @@
 ;;; equality fast path; expr_map memo tables keyed structurally). Every
 ;;; node carries a `D` as its FIRST field:
 ;;;   id      0 = ANONYMOUS (no identity claim); > 0 = unique within the
-;;;           environment lineage it was minted in. INVARIANT: two nodes
-;;;           with the same id > 0 are structurally identical. Only the
-;;;           constructors below build a D; a D is never copied.
+;;;           environment lineage it was minted in. INVARIANT, for every
+;;;           term K mints: two nodes with the same id > 0 are
+;;;           structurally identical (inside a check no state is advanced
+;;;           twice — the state's check, thread.shard). The layers above
+;;;           K reuse states and a term of theirs can wear one id on two
+;;;           nodes, so every reader of an id reads the hash with it
+;;;           (expr_eq, same_node, ing_same, used_consts; store.shard's
+;;;           sw_same): LANGUAGE.md §8.6 "An id confirmed by its hash".
+;;;           Only the constructors below build a D; a D is never copied.
 ;;;   hash    the structural hash (binder names/infos ignored) — the same
 ;;;           formulas as before this representation, so the accelerator
 ;;;           identity pins (accel_pins.shard) are unchanged.
@@ -337,9 +343,12 @@
 
 ;; did a traversal keep this node? the same identified node, or (for an
 ;; anonymous node — leaves always are) structural equality, which a touched
-;; node never has (every touch alters a leaf)
+;; node never has (every touch alters a leaf). An id is read with its hash
+;; (LANGUAGE.md §8.6 "An id confirmed by its hash"): a term from above K can
+;; wear one id on two nodes
 (fn same_node ((a Expr) (b Expr)) Bool
-  (let ((ia (expr_id a))) (if (< 0 ia) (= ia (expr_id b)) (expr_eq a b))))
+  (let ((ia (expr_id a)))
+    (if (< 0 ia) (if (= ia (expr_id b)) (= (hash_expr a) (hash_expr b)) False) (expr_eq a b))))
 
 ;; ---- constructors ---------------------------------------------------------------------
 ;; leaves: always anonymous
@@ -404,11 +413,12 @@
 ;; (the hostile battery, case 16). Ingestion rebuilds every node from its structure and reads
 ;; no claim; the raw entry `check` (add.shard) applies it to a submitted declaration before
 ;; anything reads one. And it builds each distinct structure ONCE (LANGUAGE.md §8.6 "The raw
-;; entry builds each structure once"): a compound node is minted from the check's own state
-;; and looked for, by its structural hash, in the table of the nodes this declaration has
-;; built — found when its children are the same nodes (compound children by the ids minted
-;; here, leaves by value) under the same binder name and binder info, so what the author
-;; wrote for display stands — and the node already built is the one kept. A submitted graph
+;; entry builds each structure once"): a compound node is looked for, by its structural hash,
+;; in the table of the nodes this declaration has built — found when its children are the
+;; same nodes (compound children by the ids minted here, leaves by value) under the same
+;; binder name and binder info, so what the author wrote for display stands — and minted from
+;; the check's own state only when the table lacks it: no id is minted twice, the state is
+;; never taken back (§8.6 "An id confirmed by its hash", rule 2). A submitted graph
 ;; leaves ingestion a graph whatever ids it wore, and K's check, the axiom pass and the store
 ;; cost its size; the anonymous tree this walk left before cost them the tree's (a run lemma
 ;; of 4.05 million nodes for 50 thousand distinct). The walk itself is still the tree's: the
@@ -427,7 +437,7 @@
 ;; wrong
 (fn ing_same ((x Expr) (y Expr)) Bool
   (let ((ix (expr_id x)))
-    (if (< 0 ix) (= ix (expr_id y))
+    (if (< 0 ix) (if (= ix (expr_id y)) (= (hash_expr x) (hash_expr y)) False)
       (if (< 0 (expr_id y)) False (if (ing_leaf x) (expr_eq x y) False)))))
 (fn binfo_eq ((a BinderInfo) (b BinderInfo)) Bool
   (match a
@@ -447,18 +457,18 @@
 (fn ing_find ((b (List Expr)) (x Expr)) (Option Expr)
   (measure (struct b))
   (match b (Nil None) ((Cons y r) (if (ing_is x y) (Some y) (ing_find r x)))))
-;; the node just minted (with the state after it) kept and entered, or the one already built —
-;; the state then the one before the minting: the id goes to the next node
-(fn ing_keep ((g Ingest) (r (Pair St Expr))) (Pair Ingest Expr)
+;; the node the table holds for a compound node's anonymous spelling — its hash and its shape,
+;; which no id is part of — if it holds one
+(fn ing_held ((g Ingest) (x Expr)) (Option Expr)
+  (match g ((Ingest _ m) (match (im_find m (hash_expr x)) ((Some b) (ing_find b x)) (None None)))))
+;; a node just minted, with the state after it: entered in the table
+(fn ing_enter ((g Ingest) (r (Pair St Expr))) (Pair Ingest Expr)
   (match g
     ((Ingest _ m)
      (match r
        ((Pair st1 x)
         (let ((h (hash_expr x)))
-          (let ((b (match (im_find m h) ((Some xs) xs) (None Nil))))
-            (match (ing_find b x)
-              ((Some y) (Pair g y))
-              (None (Pair (Ingest st1 (im_insert m h (Cons x b))) x))))))))))
+          (Pair (Ingest st1 (im_insert m h (Cons x (match (im_find m h) ((Some xs) xs) (None Nil))))) x)))))))
 (fn ingest_expr ((g Ingest) (e Expr)) (Pair Ingest Expr)
   (measure (struct e))
   (match e
@@ -470,20 +480,34 @@
     ((MVar _ i) (Pair g (mk_mvar i)))
     ((App _ f a)
      (match (ingest_expr g f)
-       ((Pair g1 f1) (match (ingest_expr g1 a) ((Pair g2 a1) (ing_keep g2 (new_app (ingest_st g2) f1 a1)))))))
+       ((Pair g1 f1)
+        (match (ingest_expr g1 a)
+          ((Pair g2 a1)
+           (match (ing_held g2 (mk_app f1 a1)) ((Some y) (Pair g2 y)) (None (ing_enter g2 (new_app (ingest_st g2) f1 a1)))))))))
     ((Lam _ n bi dm b)
      (match (ingest_expr g dm)
-       ((Pair g1 dm1) (match (ingest_expr g1 b) ((Pair g2 b1) (ing_keep g2 (new_lam (ingest_st g2) n bi dm1 b1)))))))
+       ((Pair g1 dm1)
+        (match (ingest_expr g1 b)
+          ((Pair g2 b1)
+           (match (ing_held g2 (mk_lam n bi dm1 b1)) ((Some y) (Pair g2 y)) (None (ing_enter g2 (new_lam (ingest_st g2) n bi dm1 b1)))))))))
     ((Pi _ n bi dm b)
      (match (ingest_expr g dm)
-       ((Pair g1 dm1) (match (ingest_expr g1 b) ((Pair g2 b1) (ing_keep g2 (new_pi (ingest_st g2) n bi dm1 b1)))))))
+       ((Pair g1 dm1)
+        (match (ingest_expr g1 b)
+          ((Pair g2 b1)
+           (match (ing_held g2 (mk_pi n bi dm1 b1)) ((Some y) (Pair g2 y)) (None (ing_enter g2 (new_pi (ingest_st g2) n bi dm1 b1)))))))))
     ((Let _ n t v b)
      (match (ingest_expr g t)
        ((Pair g1 t1)
         (match (ingest_expr g1 v)
-          ((Pair g2 v1) (match (ingest_expr g2 b) ((Pair g3 b1) (ing_keep g3 (new_let (ingest_st g3) n t1 v1 b1)))))))))
+          ((Pair g2 v1)
+           (match (ingest_expr g2 b)
+             ((Pair g3 b1)
+              (match (ing_held g3 (mk_let n t1 v1 b1)) ((Some y) (Pair g3 y)) (None (ing_enter g3 (new_let (ingest_st g3) n t1 v1 b1)))))))))))
     ((Proj _ s i x)
-     (match (ingest_expr g x) ((Pair g1 x1) (ing_keep g1 (new_proj (ingest_st g1) s i x1)))))))
+     (match (ingest_expr g x)
+       ((Pair g1 x1)
+        (match (ing_held g1 (mk_proj s i x1)) ((Some y) (Pair g1 y)) (None (ing_enter g1 (new_proj (ingest_st g1) s i x1)))))))))
 
 ;; ---- predicates ----------------------------------------------------------
 
@@ -510,14 +534,18 @@
 ;; structural equality (expr_eq_fn.cpp `is_equal`): binder names and
 ;; binder info are NOT compared; levels structurally (level_eq). The
 ;; pin's order: pointer identity → true; hash mismatch → false; structural.
+;; Here the hash is read first: an id stands for a pointer only among the nodes
+;; one counter minted, and a term from above K can wear one id on two nodes
+;; (LANGUAGE.md §8.6 "An id confirmed by its hash") — equal ids on unequal
+;; hashes are two nodes, and no answer changes where the ids are unique.
 (fn expr_eq ((a Expr) (b Expr)) Bool
   (match (expr_d a)
     ((D ia ha _ _ _ _)
      (match (expr_d b)
        ((D ib hb _ _ _ _)
-        (if (= ia ib)
-          (if (< 0 ia) True (if (= ha hb) (expr_eq_core a b) False))
-          (if (= ha hb) (expr_eq_core a b) False)))))))
+        (if (= ha hb)
+          (if (= ia ib) (if (< 0 ia) True (expr_eq_core a b)) (expr_eq_core a b))
+          False))))))
 
 (fn expr_eq_core ((a Expr) (b Expr)) Bool
   (measure (struct a))
@@ -544,13 +572,17 @@
 ;; ---- the constants a term cites --------------------------------------------------
 ;; every Const name in the term (with repeats across distinct nodes; shared
 ;; identified nodes visited once); the axiom closure (axioms.shard) and the
-;; identity closure of the accelerator pins (add.shard) are both over these edges
-(fn used_consts ((e Expr) (seen (IntMap Bool)) (acc (List Name))) (Pair (IntMap Bool) (List Name))
+;; identity closure of the accelerator pins (add.shard) are both over these edges.
+;; The nodes seen are held by id with their hash: a node whose id stands there
+;; under another hash is another node and is read (§8.6 "An id confirmed by its
+;; hash" — the loader reads an elaborated body's constants with this, for a
+;; definition's height and a requirement's key)
+(fn used_consts ((e Expr) (seen (IntMap Int)) (acc (List Name))) (Pair (IntMap Int) (List Name))
   (measure (struct e))
   (let ((id (expr_id e)))
-    (if (bool_and (< 0 id) (im_has seen id))
+    (if (bool_and (< 0 id) (match (im_find seen id) ((Some h) (= h (hash_expr e))) (None False)))
       (Pair seen acc)
-      (let ((seen1 (if (< 0 id) (im_insert seen id True) seen)))
+      (let ((seen1 (if (< 0 id) (im_insert seen id (hash_expr e)) seen)))
         (match e
           ((Const _ n _) (Pair seen1 (Cons n acc)))
           ((App _ f a) (match (used_consts f seen1 acc) ((Pair s1 a1) (used_consts a s1 a1))))

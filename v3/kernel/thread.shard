@@ -18,11 +18,18 @@
 ;;; DETAIL`); the refusal on a bin's closure comes with the bin form (landing 1). Variables are
 ;;; the evaluator's: `EBVar i` the i-th entry from the top of the stack, the last parameter at
 ;;; 0, a let's bindings pushed in order, a pattern's variables in capture order (ev.shard).
+;;;
+;;; And the state's check (LANGUAGE.md §8.6 "An id confirmed by its hash", rule 4; the last
+;;; section here): the same walk's parts over the checker's state `kernel.expr.St`, the identity
+;;; a VERSION of the state — K's node ids are unique because no version is advanced twice, and
+;;; this is the check that none is. On request only (load.shard --state); `state_test` holds
+;;; K's own sources to it.
 (import "classify.shard")
 (use kernel.classify)
 (use kernel.etable)
 (use kernel.etable.EInfo)
 (use kernel.etable.ESt)
+(use kernel.intmap)
 (use kernel.name)
 (use kernel.name.Name)
 (use kernel.prelude)
@@ -37,6 +44,7 @@
 (use kernel.prog.EPat)
 (use kernel.prog.ETerm)
 (use kernel.prog.EType)
+(use kernel.scope)
 (use kernel.util)
 
 ;; ---- the kinds in scope: the World types and the carriers --------------------------------
@@ -110,8 +118,8 @@
 (type Abs (ANone) (ATok Int) (ABox Int))
 ;; the next identity; the identities used, each with its first use; each identity's th_origin; the
 ;; first fault
-(record Th (next Int) (used (List (Pair Int (List Int)))) (orig (List (Pair Int (List Int)))) (bad (Option (Pair Symbol (List Int)))))
-(fn th0 () Th (make Th (next 0) (used Nil) (orig Nil) (bad None)))
+(record Th (next Int) (used (List (Pair Int (List Int)))) (orig (List (Pair Int (List Int)))) (bad (Option (Pair Symbol (List Int)))) (prim Bool) (handed Bool))   ; prim: the state itself opened or built; handed: a state passed on to a callee that advances it (the state's check alone sets them)
+(fn th0 () Th (make Th (next 0) (used Nil) (orig Nil) (bad None) (prim False) (handed False)))
 (fn th_fresh ((st Th) (label (List Int))) (Pair Int Th)
   (Pair (Th.next st) (with Th st (next (+ (Th.next st) 1)) (orig (Cons (Pair (Th.next st) label) (Th.orig st))))))
 (fn th_bad ((st Th) (r Symbol) (m (List Int))) Th
@@ -148,7 +156,9 @@
   (make Th (next (if (< (Th.next a) (Th.next b)) (Th.next b) (Th.next a)))
            (used (assoc_union (Th.used b) (Th.used a)))
            (orig (assoc_union (Th.orig b) (Th.orig a)))
-           (bad (match (Th.bad a) ((Some x) (Some x)) (None (Th.bad b))))))
+           (bad (match (Th.bad a) ((Some x) (Some x)) (None (Th.bad b))))
+           (prim (if (Th.prim a) True (Th.prim b)))
+           (handed (if (Th.handed a) True (Th.handed b)))))
 (fn assoc_union ((xs (List (Pair Int (List Int)))) (acc (List (Pair Int (List Int))))) (List (Pair Int (List Int)))
   (measure (struct xs))
   (match xs
@@ -342,3 +352,360 @@
                (None (Some (Pair (quote ok) Nil))))))))
        None))
     (_ None)))
+
+;; ==== the state's versions ======================================================================
+;; LANGUAGE.md §8.6 "An id confirmed by its hash", rule 4. The token is the checker's state; a
+;; box a value of a type one of whose fields names it (the kinds below, the World's fixpoint
+;; over this one name). An identity is a VERSION of the state:
+;;   - a box is one version: around one, that one — a match on it, a variable bound to it, a
+;;     constructor around it and a reader of it are no use, and every field matched out of it
+;;     that carries a state is that version; around two, a fresh one, both used;
+;;   - a use is an argument at a parameter the callee ADVANCES, a join of two branches carrying
+;;     different versions (each yields its own; the value after them is fresh), a box built
+;;     around two versions, or the return of a version already used;
+;;   - a function's parameters are advanced (the version is used in its body), RETURNED (the
+;;     result is that parameter's own version, unused) or read: its mode, found with the
+;;     verdicts to a fixpoint over a file's functions;
+;;   - a PRIMITIVE matches the state itself or builds one: no verdict but that, its state
+;;     parameters advanced when its result carries a state and read when it carries none;
+;;   - `kernel.k.run_resume` reads its argument and answers a fresh version: a run resumed from
+;;     before a step that refused (import.shard); a verdict counts the resumptions written.
+;; A version used twice along a path is the fault (`reused`); what the walk cannot follow is
+;; refused (`unsupported`): a state at a polymorphic parameter or a primitive operation, a
+;; callee not judged in this load.
+(fn sv_state_name () Name (Str (Str (Str Anon (quote kernel)) (quote expr)) (quote St)))
+(fn sv_resume_name () Name (Str (Str (Str Anon (quote kernel)) (quote k)) (quote run_resume)))
+(fn sv_kinds ((es ESt)) Wk
+  (let ((ws (Cons (sv_state_name) Nil)))
+    (Wk ws (carriers_fix (es_decls es) ws Nil 64))))
+;; a mode: bit k-1 set where parameter k is advanced; above bit 40, the parameter returned (0 none)
+(fn sv_adv ((m Int) (k Int)) Bool (if (< 39 k) True (= 1 (band (bshr m (- k 1)) 1))))
+(fn sv_ret ((m Int)) Int (bshr m 40))
+(fn sv_bit ((k Int)) Int (if (< 39 k) 0 (bshl 1 (- k 1))))
+(fn sv_id ((a Abs)) Int (match a (ANone (- 0 1)) ((ATok i) i) ((ABox i) i)))
+(fn sv_use ((st Th) (id Int) (label (List Int))) Th
+  (match (th_assoc (Th.used st) id)
+    ((Some first) (th_bad st (quote reused) (append (th_origin st id) (append " used twice: " (append first (append ", " label))))))
+    (None (with Th st (used (Cons (Pair id label) (Th.used st)))))))
+(fn sv_consume ((st Th) (a Abs) (label (List Int))) Th
+  (match a (ANone st) ((ATok i) (sv_use st i label)) ((ABox i) (sv_use st i label))))
+(fn sv_consume_all ((st Th) (as (List Abs)) (label (List Int))) Th
+  (measure (struct as))
+  (match as (Nil st) ((Cons a r) (sv_consume_all (sv_consume st a label) r label))))
+;; two branch values of one version (a branch without a state joins with anything)
+(fn sv_same ((a Abs) (b Abs)) Bool (match a (ANone True) (_ (match b (ANone True) (_ (= (sv_id a) (sv_id b)))))))
+(fn sv_pick ((a Abs) (b Abs)) Abs (match a (ANone b) (_ a)))
+(fn sv_join ((ab Abs) (stb Th) (ac Abs) (stc Th)) (Pair Abs Th)
+  (if (sv_same ab ac) (Pair (sv_pick ab ac) (th_merge stb stc))
+    (th_result (kind_join (abs_kind ab) ac) (th_merge (sv_consume stb ab "joined with another version") (sv_consume stc ac "joined with another version")))))
+;; the versions among a constructor's arguments: -1 none, i the one, -2 more than one
+(fn sv_common ((as (List Abs)) (cur Int)) Int
+  (measure (struct as))
+  (match as
+    (Nil cur)
+    ((Cons a r) (sv_common r (match a (ANone cur) (_ (if (= cur (- 0 1)) (sv_id a) (if (= cur (sv_id a)) cur (- 0 2)))))))))
+(fn sv_box ((c Name) (as (List Abs)) (st Th)) (Pair Abs Th)
+  (let ((cm (sv_common as (- 0 1))))
+    (if (= cm (- 0 1)) (Pair ANone st)
+      (if (< cm 0)
+        (match (th_fresh (sv_consume_all st as (append "boxed with another version in " (show_name c))) (append "a " (show_name c)))
+          ((Pair i st2) (Pair (ABox i) st2)))
+        (Pair (ABox cm) st)))))
+(fn sv_retag ((wk Wk) (rt (Option EType)) (id Int)) Abs
+  (match rt ((Some ty) (if (is_world wk ty) (ATok id) (if (carries wk ty) (ABox id) ANone))) (None ANone)))
+(fn sv_nth_abs ((as (List Abs)) (k Int)) (Option Abs) (if (< k 1) None (nth as (- k 1))))
+(fn sv_term ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (t ETerm) (st Th)) (Pair Abs Th)
+  (measure (struct t))
+  (match t
+    ((EBVar i) (match (nth env i) ((Some (Pair _ a)) (Pair a st)) (None (Pair ANone st))))
+    ((ELit _) (Pair ANone st))
+    (EAbsurd (Pair ANone st))
+    ((ECtor c args)
+     (match (sv_args es wk md env args st Nil)
+       ((Pair as st1)
+        (match (es_info es c)
+          ((Some (EICtor ind _ _))
+           (if (mem_name ind (wk_worlds wk))
+             (match (th_fresh (with Th st1 (prim True)) "a state built") ((Pair i st2) (Pair (ATok i) st2)))
+             (sv_box c as st1)))
+          (_ (sv_box c as st1))))))
+    ((ECall f args)
+     (match (sv_args es wk md env args st Nil)
+       ((Pair as st1)
+        (match (es_find_decl es f)
+          ((Some (EFn _ _ ps _ _ _)) (sv_call es wk md env t f ps as st1))
+          ((Some (ESig _ _ ps _)) (sv_call es wk md env t f ps as st1))
+          (_ (Pair ANone (if (any_tok as) (th_bad st1 (quote unsupported) (append "a state passed to " (append (show_name f) ", which the table lacks"))) st1)))))))
+    ((EExt f args)
+     (match (sv_args es wk md env args st Nil)
+       ((Pair as st1) (Pair ANone (if (any_tok as) (th_bad st1 (quote unsupported) (append "a state passed to the extern " (show_name f))) st1)))))
+    ((EPrim n args)
+     (match (sv_args es wk md env args st Nil)
+       ((Pair as st1) (Pair ANone (if (any_tok as) (th_bad st1 (quote unsupported) (append "a state at the primitive " (show_name n))) st1)))))
+    ((EIf a b c)
+     (match (sv_term es wk md env a st)
+       ((Pair aa st1)
+        (let ((st2 (if (is_tok aa) (th_bad st1 (quote unsupported) "a state as a condition") st1)))
+          (match (sv_term es wk md env b st2)
+            ((Pair ab stb)
+             (match (sv_term es wk md env c (with Th st2 (next (Th.next stb))))
+               ((Pair ac stc) (sv_join ab stb ac stc)))))))))
+    ((EMatch s arms) (sv_match es wk md env s arms st))
+    ((ELet rs b) (sv_let es wk md env rs b st))))
+(fn sv_args ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (args (List ETerm)) (st Th) (acc (List Abs))) (Pair (List Abs) Th)
+  (measure (struct args))
+  (match args
+    (Nil (Pair (rev acc) st))
+    ((Cons a r) (match (sv_term es wk md env a st) ((Pair x st1) (sv_args es wk md env r st1 (Cons x acc)))))))
+;; a call: the resumption; else a callee judged in this load, by its mode — the advanced
+;; parameters used, the result the returned parameter's version or a fresh one of its type
+(fn sv_call ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (t ETerm) (f Name) (ps (List EType)) (as (List Abs)) (st Th)) (Pair Abs Th)
+  (let ((rt (sv_ty es (env_tys env) t)))
+    (if (name_eq f (sv_resume_name)) (abs_of_type es wk rt st "a run resumed")
+      (match (ords_find md f)
+        (None (abs_of_type es wk rt (if (any_tok as) (th_bad st (quote unsupported) (append "a state passed to " (append (show_name f) ", not judged in this load"))) st) (append "the result of " (show_name f))))
+        ((Some m)
+         (let ((st1 (sv_params wk f m 1 ps as st)))
+           (match (sv_nth_abs as (sv_ret m))
+             ((Some a) (match a (ANone (abs_of_type es wk rt st1 (append "the result of " (show_name f)))) (_ (Pair (sv_retag wk rt (sv_id a)) st1))))
+             (None (abs_of_type es wk rt st1 (append "the result of " (show_name f)))))))))))
+(fn sv_params ((wk Wk) (f Name) (m Int) (k Int) (ps (List EType)) (as (List Abs)) (st Th)) Th
+  (measure (struct as))
+  (match as
+    (Nil st)
+    ((Cons a ar)
+     (match ps
+       (Nil (sv_params wk f m (+ k 1) Nil ar (if (is_tok a) (th_bad st (quote unsupported) (append "a state past the parameters of " (show_name f))) st)))
+       ((Cons p pr)
+        (sv_params wk f m (+ k 1) pr ar
+          (if (carries wk p)
+            (if (if (is_world wk p) (bool_not (is_tok a)) False)
+              (th_bad st (quote unsupported) (append "a value the walk holds no state for, where " (append (show_name f) " takes the state")))
+              (if (sv_adv m k) (sv_hand (sv_consume st a (show_name f)) a) st))
+            (if (is_tok a) (th_bad st (quote unsupported) (append "a state passed to " (append (show_name f) " at a parameter that names none"))) st))))))))
+(fn sv_hand ((st Th) (a Abs)) Th (if (is_tok a) (with Th st (handed True)) st))
+;; a match: a box looked into is no use, the one state inside it the box's version; the state
+;; itself matched makes the function a primitive
+(fn sv_match ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (s ETerm) (arms (List EArm)) (st Th)) (Pair Abs Th)
+  (let ((sty (sv_ty es (env_tys env) s)))
+    (match (sv_term es wk md env s st)
+      ((Pair sa st1)
+       (let ((alias (all_pvar arms)))
+         (let ((st2 (if (sv_opens_arms es wk arms) (with Th st1 (prim True)) (if alias st1 (match sa ((ATok _) (with Th st1 (prim True))) (_ st1))))))
+           (sv_arms es wk md env sty sa alias arms st2 None)))))))
+;; a pattern that names a constructor of the state, at any depth: the state opened
+(fn sv_opens ((es ESt) (wk Wk) (p EPat)) Bool
+  (measure (struct p))
+  (match p
+    (PVar False)
+    ((PLit _) False)
+    ((PCtor c subs)
+     (if (match (es_info es c) ((Some (EICtor ind _ _)) (mem_name ind (wk_worlds wk))) (_ False)) True (sv_opens_all es wk subs)))))
+(fn sv_opens_all ((es ESt) (wk Wk) (ps (List EPat))) Bool
+  (measure (struct ps))
+  (match ps (Nil False) ((Cons p r) (if (sv_opens es wk p) True (sv_opens_all es wk r)))))
+(fn sv_opens_arms ((es ESt) (wk Wk) (arms (List EArm))) Bool
+  (measure (struct arms))
+  (match arms (Nil False) ((Cons (EArm p _) r) (if (sv_opens es wk p) True (sv_opens_arms es wk r)))))
+;; the arms, each from the state after the scrutinee: the value they agree on (one version in
+;; every arm that carries one), its state the arms' joined; or each arm's version yielded and a
+;; fresh value. The accumulator: the common value so far, whether the arms agree, the joined
+;; state without the yields and with them
+(fn sv_arms ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (sty (Option EType)) (sa Abs) (alias Bool) (arms (List EArm)) (st2 Th) (acc (Option (Pair Abs (Pair Bool (Pair Th Th)))))) (Pair Abs Th)
+  (measure (struct arms))
+  (match arms
+    (Nil (match acc
+           ((Some (Pair cv (Pair u (Pair mn my)))) (match cv (ANone (Pair ANone mn)) (_ (if u (Pair cv mn) (th_result (abs_kind cv) my)))))
+           (None (Pair ANone st2))))
+    ((Cons (EArm p b) r)
+     (match (sv_bind_arm es wk (pat_types es sty p) sa alias (with Th st2 (next (match acc ((Some (Pair _ (Pair _ (Pair s _)))) (Th.next s)) (None (Th.next st2))))))
+       ((Pair binds st3)
+        (match (sv_term es wk md (rev_onto binds env) b st3)
+          ((Pair ab stb)
+           (sv_arms es wk md env sty sa alias r st2
+             (Some (match acc
+                     (None (Pair ab (Pair True (Pair stb (sv_consume stb ab "joined with another version")))))
+                     ((Some (Pair cv (Pair u (Pair mn my))))
+                      (Pair (sv_pick cv ab) (Pair (if u (sv_same cv ab) False) (Pair (th_merge mn stb) (th_merge my (sv_consume stb ab "joined with another version"))))))))))))))))
+(fn sv_bind_in ((wk Wk) (tys (List (Option EType))) (i Int) (acc (List (Pair (Option EType) Abs)))) (List (Pair (Option EType) Abs))
+  (measure (struct tys))
+  (match tys
+    (Nil (rev acc))
+    ((Cons t r) (sv_bind_in wk r i (Cons (Pair t (sv_retag wk t i)) acc)))))
+;; a pattern's variables: the whole value's alias; of a box, its version at every field that
+;; carries a state (a box is one version — `(KOk st a)` holds one state twice, and two states
+;; boxed together were both used for the one fresh version the box is); else fresh by type
+(fn sv_bind_arm ((es ESt) (wk Wk) (tys (List (Option EType))) (sa Abs) (alias Bool) (st Th)) (Pair (List (Pair (Option EType) Abs)) Th)
+  (if alias (th_bind es wk tys (Some sa) st Nil)
+    (match sa
+      ((ABox i) (Pair (sv_bind_in wk tys i Nil) (if (sv_loose_any tys) (th_bad st (quote unsupported) "a box matched where a field's type is not determined") st)))
+      (_ (th_bind es wk tys None st Nil)))))
+;; a type the declarations do not determine: none, or one that names a type variable
+(fn sv_tvars ((t EType)) Int
+  (measure (struct t))
+  (match t ((ETVar _) 1) ((ETCon _ ts) (sv_tvars_all ts))))
+(fn sv_tvars_all ((ts (List EType))) Int
+  (measure (struct ts))
+  (match ts (Nil 0) ((Cons t r) (+ (sv_tvars t) (sv_tvars_all r)))))
+(fn sv_loose_any ((tys (List (Option EType)))) Bool
+  (measure (struct tys))
+  (match tys (Nil False) ((Cons t r) (match t (None True) ((Some ty) (if (< 0 (sv_tvars ty)) True (sv_loose_any r)))))))
+;; a term's static type for this walk: the classifier's, but of branches the most determined one
+;; (the classifier reads a match and an `if` off the first branch, and `(KFail f)` or `None`
+;; standing first leaves the type's argument open)
+(fn sv_firm ((a (Option EType)) (b (Option EType))) (Option EType)
+  (match a (None b) ((Some ta) (match b (None a) ((Some tb) (if (< (sv_tvars tb) (sv_tvars ta)) b a))))))
+(fn sv_ty ((es ESt) (tys (List (Option EType))) (t ETerm)) (Option EType)
+  (measure (struct t))
+  (match t
+    ((EIf _ b c) (sv_firm (sv_ty es tys b) (sv_ty es tys c)))
+    ((EMatch s arms) (sv_ty_arms es tys (sv_ty es tys s) arms None))
+    ((ELet rs b) (sv_ty_let es tys rs b))
+    (_ (c_type es tys t))))
+(fn sv_ty_arms ((es ESt) (tys (List (Option EType))) (sty (Option EType)) (arms (List EArm)) (acc (Option EType))) (Option EType)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (EArm p b) r)
+     (sv_ty_arms es tys sty r (match b (EAbsurd acc) (_ (sv_firm acc (sv_ty es (rev_onto (pat_types es sty p) tys) b))))))))
+(fn sv_ty_let ((es ESt) (tys (List (Option EType))) (rs (List ETerm)) (b ETerm)) (Option EType)
+  (measure (struct rs))
+  (match rs
+    (Nil (sv_ty es tys b))
+    ((Cons t r) (sv_ty_let es (Cons (sv_ty es tys t) tys) r b))))
+(fn sv_let ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (env (List (Pair (Option EType) Abs))) (rs (List ETerm)) (b ETerm) (st Th)) (Pair Abs Th)
+  (measure (struct rs))
+  (match rs
+    (Nil (sv_term es wk md env b st))
+    ((Cons r more)
+     (let ((ty (sv_ty es (env_tys env) r)))
+       (match r
+         ((EBVar i) (sv_let es wk md (Cons (Pair ty (match (nth env i) ((Some (Pair _ a)) a) (None ANone))) env) more b st))
+         (_ (match (sv_term es wk md env r st)
+              ((Pair a st1) (sv_let es wk md (Cons (Pair ty a) env) more b st1)))))))))
+;; the resumptions a body writes
+(fn sv_resumes ((t ETerm)) Int
+  (measure (struct t))
+  (match t
+    ((EBVar _) 0)
+    ((ELit _) 0)
+    (EAbsurd 0)
+    ((ECtor _ as) (sv_resumes_all as))
+    ((ECall f as) (+ (if (name_eq f (sv_resume_name)) 1 0) (sv_resumes_all as)))
+    ((EPrim _ as) (sv_resumes_all as))
+    ((EExt _ as) (sv_resumes_all as))
+    ((EMatch s arms) (+ (sv_resumes s) (sv_resumes_arms arms)))
+    ((ELet rs b) (+ (sv_resumes_all rs) (sv_resumes b)))
+    ((EIf a b c) (+ (sv_resumes a) (+ (sv_resumes b) (sv_resumes c))))))
+(fn sv_resumes_all ((ts (List ETerm))) Int
+  (measure (struct ts))
+  (match ts (Nil 0) ((Cons t r) (+ (sv_resumes t) (sv_resumes_all r)))))
+(fn sv_resumes_arms ((arms (List EArm))) Int
+  (measure (struct arms))
+  (match arms (Nil 0) ((Cons (EArm _ b) r) (+ (sv_resumes b) (sv_resumes_arms r)))))
+;; a SOURCE answers a state and takes none (`st_init`, `st_for`, a run made): the calls of one
+;; a body writes — two states from sources are two versions and one counter's start twice
+(fn sv_source ((es ESt) (wk Wk) (f Name)) Bool
+  (match (es_find_decl es f)
+    ((Some (EFn _ _ ps rt _ _)) (if (carries wk rt) (bool_not (tys_carry wk ps)) False))
+    ((Some (ESig _ _ ps rt)) (if (carries wk rt) (bool_not (tys_carry wk ps)) False))
+    (_ False)))
+(fn sv_sources ((es ESt) (wk Wk) (t ETerm)) Int
+  (measure (struct t))
+  (match t
+    ((EBVar _) 0)
+    ((ELit _) 0)
+    (EAbsurd 0)
+    ((ECtor _ as) (sv_sources_all es wk as))
+    ((ECall f as) (+ (if (sv_source es wk f) 1 0) (sv_sources_all es wk as)))
+    ((EPrim _ as) (sv_sources_all es wk as))
+    ((EExt _ as) (sv_sources_all es wk as))
+    ((EMatch s arms) (+ (sv_sources es wk s) (sv_sources_arms es wk arms)))
+    ((ELet rs b) (+ (sv_sources_all es wk rs) (sv_sources es wk b)))
+    ((EIf a b c) (+ (sv_sources es wk a) (+ (sv_sources es wk b) (sv_sources es wk c))))))
+(fn sv_sources_all ((es ESt) (wk Wk) (ts (List ETerm))) Int
+  (measure (struct ts))
+  (match ts (Nil 0) ((Cons t r) (+ (sv_sources es wk t) (sv_sources_all es wk r)))))
+(fn sv_sources_arms ((es ESt) (wk Wk) (arms (List EArm))) Int
+  (measure (struct arms))
+  (match arms (Nil 0) ((Cons (EArm _ b) r) (+ (sv_sources es wk b) (sv_sources_arms es wk r)))))
+;; a verdict's note: the resumptions and the sources its body writes
+(fn sv_note ((res Int) (src Int)) (List Int)
+  (let ((a (if (< 0 res) (append "resumes " (show_nat res)) Nil)))
+    (if (< 0 src) (append (if (< 0 res) (append a ", ") a) (append "sources " (show_nat src))) a)))
+;; the mode's parts from a function's end: the parameters whose version was used (the stack
+;; holds the last parameter first), and the parameter whose own unused version the result is
+(fn sv_cmask ((env (List (Pair (Option EType) Abs))) (k Int) (fin Th) (acc Int)) Int
+  (measure (struct env))
+  (match env
+    (Nil acc)
+    ((Cons (Pair _ a) r)
+     (sv_cmask r (- k 1) fin
+       (match a (ANone acc) (_ (match (th_assoc (Th.used fin) (sv_id a)) ((Some _) (+ acc (sv_bit k))) (None acc))))))))
+(fn sv_returned ((env (List (Pair (Option EType) Abs))) (k Int) (a Abs) (st Th)) Int
+  (measure (struct env))
+  (match a
+    (ANone 0)
+    (_ (match (th_assoc (Th.used st) (sv_id a))
+         ((Some _) 0)
+         (None (match env
+                 (Nil 0)
+                 ((Cons (Pair _ p) r) (match p (ANone (sv_returned r (- k 1) a st)) (_ (if (= (sv_id p) (sv_id a)) k (sv_returned r (- k 1) a st)))))))))))
+(fn sv_all_adv ((wk Wk) (ps (List EType)) (k Int) (acc Int)) Int
+  (measure (struct ps))
+  (match ps (Nil acc) ((Cons p r) (sv_all_adv wk r (+ k 1) (if (carries wk p) (+ acc (sv_bit k)) acc)))))
+;; a function's verdict, its detail and its mode. Every function is walked; None when it neither
+;; takes nor returns the state, opens or builds none, and calls no source
+(type SvV (SvV Symbol (List Int) Int))
+(fn sv_fn ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (d EDecl)) (Option SvV)
+  (match d
+    ((EFn _ _ ps rt _ body)
+     (let ((ns (sv_sources es wk body)))
+       (match (th_params_abs es wk ps 1 (th0) Nil)
+         ((Pair env st)
+          (match (sv_term es wk md env body st)
+            ((Pair a st0)
+             (if (bool_not (bool_or (tys_carry wk ps) (bool_or (carries wk rt) (bool_or (Th.prim st0) (< 0 ns))))) None
+               (if (Th.prim st0)
+                 (if (Th.handed st0)
+                   (Some (SvV (quote unsupported) "a primitive that passes a state on to a function that advances it" (sv_all_adv wk ps 1 0)))
+                   (Some (SvV (quote primitive) (sv_note 0 ns) (if (carries wk rt) (sv_all_adv wk ps 1 0) 0))))
+                 (let ((st1 (if (if (is_world wk rt) (bool_not (is_tok a)) False) (th_bad st0 (quote unsupported) "the result is the state, and the walk holds none for it") st0)))
+                   (let ((p (sv_returned env (len env) a st1)))
+                     (let ((fin (if (< 0 p) st1 (sv_consume st1 a "returned"))))
+                       (let ((m (+ (sv_cmask env (len env) fin 0) (* 1099511627776 p))))
+                         (match (Th.bad fin)
+                           ((Some (Pair r msg)) (Some (SvV r msg m)))
+                           (None (Some (SvV (quote ok) (sv_note (sv_resumes body) ns) m))))))))))))))))
+    (_ None)))
+;; a file's functions (in the order written) with the modes of the files before: each judged
+;; under the modes so far until a pass changes none — a callee is in this file or an earlier
+;; one, so the fixpoint is the load's; the modes after, and the verdicts of the last pass
+(fn sv_seed ((md (IntMap (List (Pair Name Int)))) (ds (List EDecl))) (IntMap (List (Pair Name Int)))
+  (measure (struct ds))
+  (match ds
+    (Nil md)
+    ((Cons d r) (sv_seed (match d ((EFn _ _ _ _ _ _) (match (ords_find md (edecl_name d)) ((Some _) md) (None (ords_add md (edecl_name d) 0)))) (_ md)) r))))
+(fn sv_pass ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (ds (List EDecl)) (changed Bool) (acc (List (Pair Name (Pair Symbol (List Int)))))) (Pair (Pair (IntMap (List (Pair Name Int))) Bool) (List (Pair Name (Pair Symbol (List Int)))))
+  (measure (struct ds))
+  (match ds
+    (Nil (Pair (Pair md changed) (rev acc)))
+    ((Cons d r)
+     (match (sv_fn es wk md d)
+       (None (sv_pass es wk md r changed acc))
+       ((Some (SvV k msg m))
+        (let ((n (edecl_name d)))
+          (let ((same (match (ords_find md n) ((Some m0) (= m0 m)) (None False))))
+            (sv_pass es wk (if same md (ords_add md n m)) r (if same changed True) (Cons (Pair n (Pair k msg)) acc)))))))))
+(fn sv_settle ((es ESt) (wk Wk) (md (IntMap (List (Pair Name Int)))) (ds (List EDecl)) (fuel Int)) (Pair (IntMap (List (Pair Name Int))) (List (Pair Name (Pair Symbol (List Int)))))
+  (measure fuel)
+  (match (sv_pass es wk md ds False Nil)
+    ((Pair (Pair md1 changed) vs)
+     (if changed
+       (if (< fuel 1) (Pair md1 (sv_unsettled vs Nil)) (sv_settle es wk md1 ds (- fuel 1)))
+       (Pair md1 vs)))))
+(fn sv_unsettled ((vs (List (Pair Name (Pair Symbol (List Int))))) (acc (List (Pair Name (Pair Symbol (List Int)))))) (List (Pair Name (Pair Symbol (List Int))))
+  (measure (struct vs))
+  (match vs (Nil (rev acc)) ((Cons (Pair n _) r) (sv_unsettled r (Cons (Pair n (Pair (quote unsupported) "the modes of this file did not settle")) acc)))))
+(fn sv_file ((es ESt) (md (IntMap (List (Pair Name Int)))) (ds (List EDecl))) (Pair (IntMap (List (Pair Name Int))) (List (Pair Name (Pair Symbol (List Int)))))
+  (sv_settle es (sv_kinds es) (sv_seed md ds) ds 64))

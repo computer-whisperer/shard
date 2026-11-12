@@ -1,0 +1,118 @@
+;;; v3/pins/state/main.shard — the controls of the state's check (v3/LANGUAGE.md §8.6 "An id
+;;; confirmed by its hash", rules 4 and 6; kernel/thread.shard): spellings that use one version
+;;; of the checker's state twice, each to be judged `reused`, and the linear spellings beside
+;;; them, each `ok`; then the spellings a second reader found the check passing (2026-11-11),
+;;; each with the verdict it has since, and one limit pinned as it stands. Loaded by
+;;; kernel/test/state_test.sh under `--state` from the root v3; never run, and no part of any
+;;; driver's closure.
+(import "../../kernel/expr.shard")
+(import "../../kernel/name.shard")
+(use kernel.expr)
+(use kernel.name)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.St)
+(use kernel.prelude)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+
+;; a record around the state, and a result that holds the state beside the record — K's own
+;; shapes (inductive.shard's A, verdict.shard's KOk)
+(type Box (Box Int St))
+(type Res (ROk St Box))
+(fn box_st ((b Box)) St (match b ((Box _ s) s)))
+(fn box_set_st ((b Box) (s St)) Box (match b ((Box n _) (Box n s))))
+(fn box_app ((b Box) (f Expr) (a Expr)) (Pair Box Expr)
+  (match (new_app (box_st b) f a) ((Pair s e) (Pair (box_set_st b s) e))))
+
+;; ---- linear ----------------------------------------------------------------------------------
+;; one node after another, each from the state the last left
+(fn ok_chain ((st St) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair st1 x) (new_app st1 x a))))
+;; a node built and its state let go: the caller's state is advanced, and that is all
+(fn ok_drop ((st St) (f Expr) (a Expr)) Expr
+  (match (new_app st f a) ((Pair _ x) x)))
+;; the same through the record
+(fn ok_record ((b Box) (f Expr) (a Expr)) (Pair Box Expr)
+  (match (box_app b f a) ((Pair b1 x) (box_app b1 x a))))
+;; one version held twice in a result, beside the record and inside it
+(fn ok_beside ((b Box) (f Expr) (a Expr)) Res
+  (match (new_app (box_st b) f a) ((Pair s _) (ROk s (box_set_st b s)))))
+;; and taken out again: either copy, once
+(fn ok_beside_out ((r Res) (f Expr) (a Expr)) (Pair Box Expr)
+  (match r ((ROk s b) (box_app (box_set_st b s) f a))))
+;; two branches that answer the one version
+(fn ok_join ((st St) (c Bool) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair st1 x) (if c (Pair st1 x) (Pair st1 f)))))
+
+;; ---- one version used twice ------------------------------------------------------------------
+;; two nodes from one state: they wear one id
+(fn re_fork ((st St) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair _ x) (new_app st x a))))
+;; the node kept, the state before it answered
+(fn re_rewind ((st St) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair _ x) (Pair st x))))
+;; a callee that builds and lets its state go, and the caller going on from its own
+(fn re_drop_caller ((st St) (f Expr) (a Expr)) (Pair St Expr)
+  (new_app st (ok_drop st f a) a))
+;; the fork and the rewind through the record
+(fn re_record_fork ((b Box) (f Expr) (a Expr)) (Pair Box Expr)
+  (match (box_app b f a) ((Pair _ x) (box_app b x a))))
+(fn re_record_rewind ((b Box) (f Expr) (a Expr)) (Pair Box Expr)
+  (match (box_app b f a) ((Pair _ x) (Pair b x))))
+;; one branch answers the state before the node
+(fn re_branch_rewind ((st St) (c Bool) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair st1 x) (if c (Pair st1 x) (Pair st x)))))
+;; two different constructors on one state
+(fn re_two_minters ((st St) (n Name) (f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app st f a) ((Pair _ x) (new_pi st n BDefault a x))))
+;; of one version held twice, the copy inside advanced and the copy beside written over it —
+;; what `dr_go` did with the memo tables until 2026-11-11
+(fn re_over_written ((r Res) (f Expr) (a Expr)) Box
+  (match r ((ROk s b) (match (box_app b f a) ((Pair b1 _) (box_set_st b1 s))))))
+
+;; ---- from the review: a state behind a type the first branch leaves open ----------------------
+;; `None` standing first: the state inside the other branch is still the parameter's version
+(fn re_launder_if ((st St) (c Bool) (f Expr) (a Expr)) (Pair St Expr)
+  (match (if c None (Some st))
+    ((Some s) (match (new_app s f a) ((Pair _ x) (new_app s x a))))
+    (None (Pair st f))))
+;; the same through a match, and the rewind
+(fn re_launder_match ((st St) (o (Option Expr)) (f Expr) (a Expr)) (Pair St Expr)
+  (match (match o (None None) ((Some _) (Some st)))
+    ((Some s) (match (new_app s f a) ((Pair _ x) (Pair s x))))
+    (None (Pair st f))))
+;; no branch to read the type from: refused, not passed
+(fn un_launder_ctor ((st St) (f Expr) (a Expr)) (Pair St Expr)
+  (match (Cons None (Cons (Some st) Nil))
+    ((Cons _ (Cons (Some s) _)) (match (new_app s f a) ((Pair _ x) (new_app s x a))))
+    (_ (Pair st f))))
+;; a carrier with a payload of any type, and the payload taken out by a function of any type
+(type (Carry A) (CarryOk St A) (CarryNo Int))
+(fn un_payload ((A Type) (r (Carry A))) (Option A) (match r ((CarryOk _ x) (Some x)) ((CarryNo _) None)))
+
+;; ---- from the review: a state made from nothing ------------------------------------------------
+;; no state in the signature: judged all the same, and the fork inside it found
+(fn re_nosig ((f Expr) (a Expr)) Expr
+  (let ((st (st_init)))
+    (match (new_app st f a) ((Pair _ x) (match (new_app st x a) ((Pair _ y) y))))))
+;; one source asked twice — two versions, one counter's start twice: counted, the gate over K
+;; pins who may
+(fn src_two ((f Expr) (a Expr)) (Pair St Expr)
+  (match (new_app (st_init) f a) ((Pair _ x) (new_app (st_init) x a))))
+;; a rewind through a source
+(fn src_reset ((st St)) St (st_init))
+
+;; ---- from the review: the primitives ------------------------------------------------------------
+;; a function that opens the state, mints through a callee and lets the state go
+(fn un_prim_hand ((st St) (f Expr) (a Expr)) Expr
+  (match st ((St _ _ _ _) (match (new_app st f a) ((Pair _ x) x)))))
+;; the state opened by a pattern under a record
+(fn pr_nested_open ((b Box)) Int (match b ((Box _ (St _ _ k _)) k)))
+
+;; ---- from the review: declared types -------------------------------------------------------------
+;; a state answered where the walk holds none
+(fn un_lie_in ((e Expr)) St e)
+;; THE LIMIT, pinned as it stands: the check believes a declared type, and nothing in a load
+;; of the kernel's own sources checks one — a state declared an `Expr` leaves the walk
+(fn lim_lie_out ((st St)) Expr st)

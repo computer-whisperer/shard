@@ -2241,8 +2241,40 @@ record on the std root and one on calc's list the same two axioms in
 the other order. The removal's cost: a demand reads again the node
 lines it shares with earlier ones (the std root's load 86 s to 96 on
 the bootstrap). Gates on the dev box: 29 roots built, both suites 44
-entrypoints with 0 failed, the tie 0 differ, T0 FULL == PINNED. Slice
-4.6 stands as proposed, not ratified.
+entrypoints with 0 failed, the tie 0 differ, T0 FULL == PINNED; CI
+pipeline 652 green on `0b3ff06`. **The state's threading audited and
+held to a check** (2026-11-11; the user, on the audit's two questions:
+"1: A, 2: yes."; `LANGUAGE.md` §8.6 "An id confirmed by its hash";
+`docs/records/FOUNDATION.md` §5): inside a check K mints from no state
+twice, while the layers above K do reuse states and a term of theirs
+can wear one id on two nodes — the loader read such terms' constants
+with a walk that passed any id it had seen (a definition's height, a
+requirement's key; five times in the suite, no wrong value). Every
+reader of an id now reads the hash with it; the rebuild mints after it
+looks; a record run's resumption is named (`run_resume`); and the
+audit's static check stands as `state_test` (`thread.shard`'s state's
+check under `load.shard --state`, 323 functions of K judged,
+twenty-eight controls). The check as built found what the audit's
+instrument had passed: `dr_go` wrote an older state over the one whose
+memo tables `a_set_env` had just dropped — fixed. A second reader set
+to break the landing before its commit found the readers and the
+rebuild holding (800 forged terms rebuilt as before, the replay's
+verdicts byte-identical over 250,000 lines) and the check passing five
+spellings of a state used twice — behind a type the first branch left
+open, out of a polymorphic carrier, made from nothing, opened under a
+record, minted through a callee by a primitive —, none of them K's:
+each is refused or counted now and stands as a control, and what the
+check still does not hold — a declared type is believed — is rule 11
+of that section. `tc_test` gained the
+accelerators' missing cases (forty: the four operations without one,
+operands past the machine word, a wrong result refused for each).
+Gates on the dev box, before the review and again on the tree as
+committed: 29 roots built, both suites 45 entrypoints with 0 failed,
+the tie 0 differ, T0 FULL == PINNED; old against new in alternated
+runs the replay's first 80 chunks 38 s on each, `len.shard` 15.2 s to
+14.9 and the model root 28.8 s to 27.8, every output byte-identical. Slice 4.6 ruled the same day (an in-process shard
+driver; the buffer fixtures carried with a law amendment), to be
+written in next.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
@@ -2293,7 +2325,11 @@ each closes on its named gate:
   (`docs/records/FOUNDATION.md` §5). Both operations are removed; the
   raw entry mints what it rebuilds, each distinct structure once
   (`LANGUAGE.md` §8.6; hostile battery 18 and 19, `add_test`'s
-  one-counter census, the pin `k_client_transfer`).
+  one-counter census, the pin `k_client_transfer`). **And held to
+  a check the same day:** that no state is advanced twice inside a
+  check was read, not tested — `state_test` tests it on every path of
+  K's sources, and every reader of an id reads the hash with it
+  (§8.6 "An id confirmed by its hash"; hostile battery 21).
 - **R49, the matcher's kind check** — a theorem under a candidate's
   name was pinned (an authorization hole, no false theorem: K types a
   head before it reduces it); **fixed at slice 9 (2026-09-13)**,
@@ -2366,5 +2402,5 @@ v3/CANON.md       the canonical form of S — layout, the term tier over E, the 
 v3/kernel/        the rule inventory as declarations (phase 0); phase 1: K (sealed in k/ since slice 3.8); phase 2: prog, the reader tower, ev, realize; phase 3: the elaborators, I, the goal graph, tactics, the store (planned as v3/meta/, built here; kernel/README.md is the file map)
 v3/std/           phase 3: the library under the naming law — Init is the library; std/README.md holds the records of the old modules (slice 3.27)
 v3/examples/      the ported examples: calc/ (slice 6: the program half in S; its 100 claims theorems since slices 3.20 and 3.21); derive/ (slice 3.19: derived equality, ordering and rendering in use); template/ (slice 3.28: templates, lifted lambdas and a package in use)
-v3/pins/          the corpus law of the new tree: pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
+v3/pins/          the corpus law of the new tree: pins/state/ (the state's check's controls, loaded by state_test.sh under --state: spellings that use one version of the checker's state twice and the linear ones beside them, the spellings the review of 2026-11-11 found the check passing, one limit pinned as it stands), pins/reader/ (slice 2: S files with `;; expect:` headers), pins/loader/ (slices 3–7: package roots, main.shard's `;; expect:` and `;; roots:` headers; the ev_* cases are the classifier's, entry*/same_spelled/realize_theorem slice 7's)
 ```
