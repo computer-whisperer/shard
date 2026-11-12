@@ -3,7 +3,8 @@
 # (v3/LANGUAGE.md §8.6 slice 4.1 rule 4). A and B are V3_TEST_OUT directories of `bash v3/test.sh`
 # (DIR/NAME.out, .rc, .secs; DIR/engine, DIR/wall), one on the bootstrap — the authority — and one
 # on the binaries: the same entrypoints on both sides, each with the same exit status and the same
-# output under THE NORMALIZATION, in full: a count of seconds (`N s`), a store's size (`N kB`), a
+# output under THE NORMALIZATION, in full: a count of seconds or milliseconds (`N s`, `N ms` — the
+# second since slice 4.6 landing 1, for handle_cost_test's link-once ratio), a store's size (`N kB`), a
 # scratch path's generated name (mktemp's /tmp/tmp.XXXXXXXXXX, v3/NAME_XXXXXX,
 # v3/.cache/init.index.XXXXXX). A verdict, a count of checks or declarations, an assumption
 # closure, a fingerprint, a record are never normalized. The seconds of both sides are printed per
@@ -12,7 +13,7 @@
 # it over the v3 and native jobs' kept outputs, and native_tie_test.sh tests it on a fabricated pair.
 set -u
 a=${1:?suite_tie.sh A B (two V3_TEST_OUT directories)}; b=${2:?suite_tie.sh A B}
-norm() { sed -E 's/\b[0-9]+ s\b/N s/g; s/\b[0-9]+ kB\b/N kB/g; s#/tmp/tmp\.[A-Za-z0-9]{10}#/tmp/tmp.X#g; s#\bv3/([a-z_]+)_[A-Za-z0-9]{6}\b#v3/\1_X#g; s#init\.index\.[A-Za-z0-9]{6}#init.index.X#g' "$1"; }
+norm() { sed -E 's/\b[0-9]+ s\b/N s/g; s/\b[0-9]+ ms\b/N ms/g; s/\b[0-9]+ kB\b/N kB/g; s#/tmp/tmp\.[A-Za-z0-9]{10}#/tmp/tmp.X#g; s#\bv3/([a-z_]+)_[A-Za-z0-9]{6}\b#v3/\1_X#g; s#init\.index\.[A-Za-z0-9]{6}#init.index.X#g' "$1"; }
 ea=$(cat "$a/engine" 2>/dev/null || echo A); eb=$(cat "$b/engine" 2>/dev/null || echo B)
 n=0; differ=0; ta=0; tb=0
 for f in "$a"/*.out; do

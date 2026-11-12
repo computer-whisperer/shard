@@ -20,9 +20,12 @@
 ;;; of the library are Init's and unrelated (prelude.shard).
 
 (import "util.shard")
+(import "intmap.shard")
+(use kernel.intmap)
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.util)
+(use kernel.intmap.IntMap)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -48,6 +51,16 @@
   (match as
     (Nil (match bs (Nil True) (_ False)))
     ((Cons a ar) (match bs ((Cons b br) (bool_and (etype_eq a b) (etypes_eq ar br))) (Nil False)))))
+;; a type under the type arguments of the inductive it is a field of, and a constructor's field
+;; types among its inductive's (the classifier's static types; ev.shard's checked door)
+(fn subst_tys ((args (List EType)) (ts (List EType))) (List EType)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons (subst_ty args t) (subst_tys args r)))))
+(fn subst_ty ((args (List EType)) (t EType)) EType
+  (measure (struct t))
+  (match t
+    ((ETVar i) (match (nth args i) ((Some a) a) (None (ETVar i))))
+    ((ETCon n ts) (ETCon n (subst_tys args ts)))))
 
 ;; ---------------------------------------------------------------------
 ;; LITERALS (LANGUAGE.md §8.1 rule 2, one rule for every file). LNat and LInt
@@ -113,6 +126,10 @@
 ;; ---------------------------------------------------------------------
 ;; DECLARATIONS.
 (type ECtorDef (ECtorDef Name (List EType)))   ; constructor identity, field types over ETVar 0..nparams-1
+
+(fn fields_of ((cs (List ECtorDef)) (c Name)) (Option (List EType))
+  (measure (struct cs))
+  (match cs (Nil None) ((Cons (ECtorDef d fts) r) (if (name_eq c d) (Some fts) (fields_of r c)))))
 
 (type EDecl
   (EInd Name Int (List ECtorDef))              ; an E-eligible inductive: identity, nparams, constructors
@@ -188,6 +205,28 @@
   (match ds
     (Nil None)
     ((Cons d r) (if (name_eq (edecl_name d) n) (Some d) (prog_find_in r n)))))
+;; declarations by identity: an index keyed by the name's hash, the newest first under one
+;; name — an identity registered again overrides (the E table's, etable.shard; a checked
+;; handle's inductives, ev.shard)
+(fn decl_index_add ((x (IntMap (List (Pair Name EDecl)))) (d EDecl)) (IntMap (List (Pair Name EDecl)))
+  (let ((n (edecl_name d)))
+    (let ((h (name_key n)))
+      (im_insert x h (Cons (Pair n d) (match (im_find x h) ((Some b) b) (None Nil)))))))
+(fn decl_index_find ((x (IntMap (List (Pair Name EDecl)))) (n Name)) (Option EDecl)
+  (match (im_find x (name_key n)) (None None) ((Some b) (assoc_decl b n))))
+(fn assoc_decl ((b (List (Pair Name EDecl))) (n Name)) (Option EDecl)
+  (measure (struct b))
+  (match b (Nil None) ((Cons (Pair k d) r) (if (name_eq k n) (Some d) (assoc_decl r n)))))
+;; an E type as text: `Int`, `(List Int)`, a type parameter by position as `Ti`
+(fn show_etype ((t EType)) (List Int)
+  (measure (struct t))
+  (match t
+    ((ETVar i) (Cons 84 (show_nat i)))
+    ((ETCon n Nil) (show_name n))
+    ((ETCon n as) (append "(" (append (show_name n) (append (show_etypes as) ")"))))))
+(fn show_etypes ((ts (List EType))) (List Int)
+  (measure (struct ts))
+  (match ts (Nil Nil) ((Cons t r) (Cons 32 (append (show_etype t) (show_etypes r))))))
 
 ;; ---------------------------------------------------------------------
 ;; THE PRIMITIVE TABLE (LANGUAGE.md §6.4): identity → (operation code,

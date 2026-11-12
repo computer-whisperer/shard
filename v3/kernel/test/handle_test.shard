@@ -1,0 +1,335 @@
+;;; v3/kernel/test/handle_test.shard — the prepared handle (v3/LANGUAGE.md §8.6 slice 4.6
+;;; rule 1; law §9.3, §12.5's T6 row: "prepare once, invoke repeatedly", "erased-invariant
+;;; argument validation"): `prepare` links a program once and binds an entry; `invoke` runs it
+;;; on arguments built as data. Refusals before success: what `prepare` refuses by name, what
+;;; the checked door refuses of an argument — its position, reason and text —, then one handle
+;;; invoked many times, the two doors beside each other, a run with effects on arguments built
+;;; as data, and the checked door's stated limit as it stands. On hand-built programs and on
+;;; the pins' (the registry's rows under the naming law).
+;;;
+;;; With arguments the entrypoint is the count's instrument (rule 6, the link-once ratio;
+;;; kernel/test/handle_cost_test.sh): `each N D` runs an entry N times through `ev` — N links
+;;; of a program of D functions — and `once N D` prepares it once and invokes N times; each
+;;; prints the sum of the answers, which must agree.
+
+(import "loader_kit.shard")
+(import "case_kit.shard")
+(use kernel.ev)
+(use kernel.host)
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.test.loader_kit)
+(use kernel.util)
+(use kernel.ev.Door)
+(use kernel.ev.Handle)
+(use kernel.ev.InvRes)
+(use kernel.ev.Policy)
+(use kernel.ev.Prep)
+(use kernel.ev.RunRes)
+(use kernel.host.World)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog.EArm)
+(use kernel.prog.ECtorDef)
+(use kernel.prog.EDecl)
+(use kernel.prog.ELit)
+(use kernel.prog.EPat)
+(use kernel.prog.ERec)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
+(use kernel.prog.EvRes)
+(use kernel.prog.Prog)
+(use kernel.prog.Val)
+(use kernel.test.case_kit)
+(use kernel.test.case_kit.Case)
+
+;; ---- a hand-built program ---------------------------------------------------------------------
+(fn ht_list () Name (Str (n2 (quote kernel) (quote prelude)) (quote List)))
+(fn ht_nil () Name (Str (ht_list) (quote Nil)))
+(fn ht_cons () Name (Str (ht_list) (quote Cons)))
+(fn ht_nm ((s Symbol)) Name (n2 (quote t) s))
+(fn ht_int () EType (ETCon (n1 (quote Int)) Nil))
+(fn ht_nat () EType (ETCon (n1 (quote Nat)) Nil))
+(fn ht_list_of ((t EType)) EType (ETCon (ht_list) (list t)))
+(fn ht_tree () Name (ht_nm (quote Tree)))
+(fn ht_branch () Name (Str (ht_tree) (quote Branch)))
+;; (type (List A) (Nil) (Cons A (List A)))
+(fn ht_list_decl () EDecl
+  (EInd (ht_list) 1 (list (ECtorDef (ht_nil) Nil) (ECtorDef (ht_cons) (list (ETVar 0) (ht_list_of (ETVar 0)))))))
+;; (type Tree (Leaf) (Branch Tree Tree))
+(fn ht_tree_decl () EDecl
+  (EInd (ht_tree) 0 (list (ECtorDef (Str (ht_tree) (quote Leaf)) Nil) (ECtorDef (ht_branch) (list (ETCon (ht_tree) Nil) (ETCon (ht_tree) Nil))))))
+;; (fn NAME ((n Int) (xs (List T))) Int (match xs (Nil n) ((Cons x r) (NAME (+ n x) r))))
+(fn ht_sum_decl ((name Name) (elem EType)) EDecl
+  (EFn name 0 (list (ht_int) (ht_list_of elem)) (ht_int) (RecStruct 1)
+    (EMatch (EBVar 0)
+      (list (EArm (PCtor (ht_nil) Nil) (EBVar 1))
+            (EArm (PCtor (ht_cons) (list PVar PVar))
+                  (ECall name (list (EPrim (n1 (quote +)) (list (EBVar 3) (EBVar 1))) (EBVar 0))))))))
+;; (fn first ((A Type) (xs (List A)) (d A)) A (match xs (Nil d) ((Cons x _) x)))
+(fn ht_first_decl () EDecl
+  (EFn (ht_nm (quote first)) 1 (list (ht_list_of (ETVar 0)) (ETVar 0)) (ETVar 0) RecNone
+    (EMatch (EBVar 1) (list (EArm (PCtor (ht_nil) Nil) (EBVar 0)) (EArm (PCtor (ht_cons) (list PVar PVar)) (EBVar 1))))))
+;; (fn NAME ((x T)) T x)
+(fn ht_id_decl ((name Name) (t EType)) EDecl (EFn name 0 (list t) t RecNone (EBVar 0)))
+;; (fn land1 ((n Nat)) Nat (Nat.land n 1)): the machine's own guard on a negative
+(fn ht_land_decl () EDecl
+  (EFn (ht_nm (quote land1)) 0 (list (ht_nat)) (ht_nat) RecNone (EPrim (n2 (quote Nat) (quote land)) (list (EBVar 0) (ELit (LNat 1))))))
+(fn ht_prog () Prog
+  (Prog (list (ht_list_decl) (ht_tree_decl)
+              (ht_sum_decl (ht_nm (quote total)) (ht_int))
+              (ht_sum_decl (ht_nm (quote total_nat)) (ht_nat))
+              (ht_first_decl)
+              (ht_id_decl (ht_nm (quote neg)) (ht_int))
+              (ht_id_decl (ht_nm (quote natid)) (ht_nat))
+              (ht_id_decl (ht_nm (quote symid)) (ETCon (n1 (quote Symbol)) Nil))
+              (ht_id_decl (ht_nm (quote treeid)) (ETCon (ht_tree) Nil))
+              (ht_id_decl (ht_nm (quote ghost)) (ETCon (ht_nm (quote Ghost)) Nil))
+              (ht_land_decl)
+              (EFn (ht_nm (quote at)) 0 (list (ht_list_of (ht_int)) (ETCon (n1 (quote Fin)) Nil) (ht_int)) (ht_int) RecNone (EBVar 0))
+              ;; (fn konst ((A Type) (n Int)) Int n): a type parameter no parameter states
+              (EFn (ht_nm (quote konst)) 1 (list (ht_int)) (ht_int) RecNone (EBVar 0))
+              ;; a list applied to no type and to two; Int applied to one
+              (ht_id_decl (ht_nm (quote bare)) (ETCon (ht_list) Nil))
+              (ht_id_decl (ht_nm (quote wide)) (ETCon (ht_list) (list (ht_int) (ht_int))))
+              (ht_id_decl (ht_nm (quote intint)) (ETCon (n1 (quote Int)) (list (ht_int))))
+              ;; (type Wrap (Mk Tree)) (fn peek ((x Int) (wr Wrap)) Int x): no World last — Mk over a zero is no Wrap
+              (EInd (ht_nm (quote Wrap)) 0 (list (ECtorDef (Str (ht_nm (quote Wrap)) (quote Mk)) (list (ETCon (ht_tree) Nil)))))
+              (EFn (ht_nm (quote peek)) 0 (list (ht_int) (ETCon (ht_nm (quote Wrap)) Nil)) (ht_int) RecNone (EBVar 1))
+              (ESig (ht_nm (quote twice)) 0 (list (ht_int)) (ht_int))
+              (EExtern (ht_nm (quote ext)) 0 (list (ht_int)) (ht_int)))))
+;; a program that declares an inductive under an integer's name: the door reads Nat by identity
+(fn ht_nat_ind () Prog
+  (Prog (list (EInd (n1 (quote Nat)) 0 (list (ECtorDef (n2 (quote Nat) (quote zero)) Nil)))
+              (ht_id_decl (ht_nm (quote natid)) (ht_nat)))))
+;; a program that does not link: a body citing a function it does not hold
+(fn ht_broken () Prog
+  (Prog (list (EFn (ht_nm (quote calls)) 0 (list (ht_int)) (ht_int) RecNone (ECall (ht_nm (quote nowhere)) (list (EBVar 0)))))))
+
+;; ---- values, policies, readings ---------------------------------------------------------------
+(fn ht_cells ((xs (List Int))) Val
+  (measure (struct xs))
+  (match xs (Nil (VCtor (ht_nil) Nil)) ((Cons x r) (VCtor (ht_cons) (list (VInt x) (ht_cells r))))))
+(fn ht_leaf () Val (VCtor (Str (ht_tree) (quote Leaf)) Nil))
+(fn ht_pol ((d Door) (fuel Int)) Policy (policy_of d False Nil fuel))
+(fn ht_run_pol ((d Door) (fuel Int)) Policy (policy_of d True Nil fuel))
+(fn ht_fuel () Int 1000000)
+(fn ht_checked ((p Prog) (f Name)) Prep (prepare p f (ht_pol Checked (ht_fuel)) 0))
+(fn ht_assumed ((p Prog) (f Name)) Prep (prepare p f (ht_pol Assumed (ht_fuel)) 0))
+(fn ht_no ((r Prep) (reason Symbol)) Bool (match r ((PrepNo e _) (sym_eq e reason)) (_ False)))
+(fn ht_no_text ((r Prep) (reason Symbol) (txt (List Int))) Bool
+  (match r ((PrepNo e m) (bool_and (sym_eq e reason) (int_list_eq m txt))) (_ False)))
+(fn ht_ok ((r Prep)) Bool (match r ((PrepOk _) True) (_ False)))
+(fn ht_inv ((r Prep) (args (List Val))) InvRes (match r ((PrepOk h) (invoke h args)) ((PrepNo e m) (InvNo e m))))
+(fn ht_is ((r InvRes) (k Int)) Bool (match r ((InvRan (EvOk (VInt j))) (= j k)) (_ False)))
+(fn ht_arg ((r InvRes) (i Int) (reason Symbol)) Bool
+  (match r ((InvArg j e _) (bool_and (= i j) (sym_eq e reason))) (_ False)))
+(fn ht_arg_text ((r InvRes) (i Int) (reason Symbol) (txt (List Int))) Bool
+  (match r ((InvArg j e m) (bool_and (= i j) (bool_and (sym_eq e reason) (int_list_eq m txt)))) (_ False)))
+(fn ht_stuck ((r InvRes) (reason Symbol)) Bool (match r ((InvRan (EvStuck e _)) (sym_eq e reason)) (_ False)))
+(fn ht_ev_stuck ((r EvRes) (reason Symbol)) Bool (match r ((EvStuck e _) (sym_eq e reason)) (_ False)))
+(fn ht_nope () Val (VCtor (ht_nm (quote Nope)) Nil))
+(fn ht_out ((r InvRes)) Bool (match r ((InvRan EvOut) True) (_ False)))
+(fn ht_refused ((r InvRes) (reason Symbol)) Bool (match r ((InvNo e _) (sym_eq e reason)) (_ False)))
+(fn ht_run ((r Prep) (args (List Val)) (w World)) (Pair RunRes World)
+  (match r ((PrepOk h) (invoke_run h args Nil w)) ((PrepNo e m) (Pair (RunLink e m) w))))
+(fn ht_run_ok ((r RunRes)) Bool (match r (RunOk True) (_ False)))
+(fn ht_run_arg ((r RunRes) (i Int) (reason Symbol)) Bool
+  (match r ((RunArg j e _) (bool_and (= i j) (sym_eq e reason))) (_ False)))
+(fn ht_run_link ((r RunRes) (reason Symbol)) Bool (match r ((RunLink e _) (sym_eq e reason)) (_ False)))
+(fn ht_list_is ((r InvRes) (txt (List Int))) Bool
+  (match r ((InvRan (EvOk v)) (int_list_eq (match v ((VCtor _ Nil) "empty") (_ (show_nat_list v))) txt)) (_ False)))
+(fn ht_span ((lo Int) (hi Int)) Val (VCtor (Str (Str (Str Anon (quote main)) (quote Span)) (quote mk)) (list (VInt lo) (VInt hi))))
+(fn ht_e_fn ((s Symbol)) Name (Str (Str (Str Anon (quote kernel)) (quote main)) s))
+(fn ht_ints ((k Int) (acc (List Int))) (List Int) (measure k) (if (< k 1) acc (ht_ints (- k 1) (Cons (mod k 256) acc))))
+(fn ht_len ((r InvRes)) Int (match r ((InvRan (EvOk v)) (ht_cells_len v 0)) (_ (- 0 1))))
+(fn ht_cells_len ((v Val) (acc Int)) Int
+  (measure (struct v))
+  (match v ((VCtor _ (Cons _ (Cons r Nil))) (ht_cells_len r (+ acc 1))) (_ acc)))
+;; one handle invoked on each list in turn: the answers in order
+(fn ht_each ((r Prep) (xss (List (List Int)))) (List Int)
+  (measure (struct xss))
+  (match xss
+    (Nil Nil)
+    ((Cons xs rest) (Cons (match (ht_inv r (list (VInt 0) (ht_cells xs))) ((InvRan (EvOk (VInt j))) j) (_ (- 0 1))) (ht_each r rest)))))
+
+(fn cases ((w World)) (Pair (List Case) World)
+  (match (load_prog "v3/pins/loader/row_types" True (list "v3/pins/loader/row_types/main.shard") w)
+    ((Pair (Pair pr _) w1)
+        (match (load_prog "v3/pins/loader/handle_door" True (list "v3/pins/loader/handle_door/main.shard") w1)
+          ((Pair (Pair ph _) w3)
+           (match (load_prog "v3/pins/loader/entry" False (list "v3/pins/loader/entry/kernel/main.shard") w3)
+             ((Pair (Pair pe _) w4)
+              (match (load_prog "v3/pins/loader/entry_s" True (list "v3/pins/loader/entry_s/main.shard") w4)
+                ((Pair (Pair ps _) w5)
+                 (let ((say (prepare pe (ht_e_fn (quote main)) (ht_run_pol Checked (ht_fuel)) 0)))
+                 (match (ht_run say (list (VInt 21) (ht_cells "data")) w5)
+                   ((Pair r1 w6)
+                    (match (ht_run say (list (VInt -4) (ht_cells "again")) w6)
+                      ((Pair r2 w7)
+                       (match (ht_run say (list (VSym (quote x)) (ht_cells "never")) w7)
+                         ((Pair r3 w8)
+                          (match (ht_run (ht_checked (ht_prog) (ht_nm (quote total))) (list (VInt 1) (ht_cells (list 2 3))) w8)
+                            ((Pair r4 w9)
+                             (Pair (ht_cases pr ph ps say r1 r2 r3 r4) w9)))))))))))))))))))
+
+(fn ht_cases ((pr Prog) (ph Prog) (ps Prog) (say Prep) (r1 RunRes) (r2 RunRes) (r3 RunRes) (r4 RunRes)) (List Case)
+  (let ((total (ht_checked (ht_prog) (ht_nm (quote total)))))
+  (list
+    ;; ---- `prepare` refuses, by name ----
+    (Case "prepare: an entry the program does not hold is unknown_head"
+      (ht_no (ht_checked (ht_prog) (ht_nm (quote nowhere))) (quote unknown_head)))
+    (Case "prepare: a sig fn no implementation is linked to is unlinked"
+      (ht_no (ht_checked (ht_prog) (ht_nm (quote twice))) (quote unlinked)))
+    (Case "prepare: an extern is no entry (unknown_head)"
+      (ht_no (ht_checked (ht_prog) (ht_nm (quote ext))) (quote unknown_head)))
+    (Case "prepare: a program that does not link is refused with the linker's reason (unresolved), whatever the entry"
+      (ht_no (ht_checked (ht_broken) (ht_nm (quote calls))) (quote unresolved)))
+    (Case "prepare: a policy with effects on an entry without a World last is bad_entry"
+      (ht_no (prepare (ht_prog) (ht_nm (quote neg)) (ht_run_pol Checked (ht_fuel)) 0) (quote bad_entry)))
+    (Case "prepare: a policy with effects on an entry whose last parameter's token would be no value of its type is bad_entry"
+      (ht_no (prepare (ht_prog) (ht_nm (quote peek)) (ht_run_pol Checked (ht_fuel)) 0) (quote bad_entry)))
+    (Case "prepare, checked: a parameter stating a type parameter states no closed type — preconditioned"
+      (ht_no_text (ht_checked (ht_prog) (ht_nm (quote first))) (quote preconditioned) "t.first: parameter 1 states (kernel.prelude.List T0): T0 is a type parameter with no type stated for it"))
+    (Case "prepare, checked: a type applied to fewer types than it takes — preconditioned"
+      (ht_no_text (ht_checked (ht_prog) (ht_nm (quote bare))) (quote preconditioned) "t.bare: parameter 1 states kernel.prelude.List: kernel.prelude.List takes 1 type argument(s) and is applied to 0"))
+    (Case "prepare, checked: a type applied to more, and an integer's type applied to one"
+      (bool_and (ht_no (ht_checked (ht_prog) (ht_nm (quote wide))) (quote preconditioned))
+                (ht_no (ht_checked (ht_prog) (ht_nm (quote intint))) (quote preconditioned))))
+    (Case "prepare, checked: a type the program does not define — preconditioned"
+      (ht_no_text (ht_checked (ht_prog) (ht_nm (quote ghost))) (quote preconditioned) "t.ghost: parameter 1 states t.Ghost: t.Ghost is not a type the program defines"))
+    (Case "prepare, checked: a Fin's bound is a value argument E dropped — preconditioned, the parameter and the type named"
+      (ht_no_text (ht_checked pr (main_fn (quote val))) (quote preconditioned) "main.val: parameter 1 states Fin: Fin's bound or predicate is a value argument E dropped, which no reading of a value restores"))
+    (Case "prepare, checked: a BitVec's width likewise"
+      (ht_no (ht_checked pr (main_fn (quote width))) (quote preconditioned)))
+    (Case "prepare, checked: a Fin among checked parameters — the second of three is named"
+      (ht_no_text (ht_checked (ht_prog) (ht_nm (quote at))) (quote preconditioned) "t.at: parameter 2 states Fin: Fin's bound or predicate is a value argument E dropped, which no reading of a value restores"))
+    (Case "prepare, assumed: the same entry prepares — the caller answers for the bound — and runs: val 2 = 2"
+      (ht_is (ht_inv (ht_assumed pr (main_fn (quote val))) (list (VInt 2))) 2))
+    ;; ---- the checked door refuses an argument: its position, reason and text ----
+    (Case "checked: an argument short is argument_count at the first missing position"
+      (ht_arg_text (ht_inv total (list (VInt 1))) 2 (quote argument_count) "t.total takes 2 argument(s), got 1"))
+    (Case "checked: an argument over is argument_count at the first surplus"
+      (ht_arg_text (ht_inv total (list (VInt 1) (ht_cells Nil) (VInt 9))) 3 (quote argument_count) "t.total takes 2 argument(s), got 3"))
+    (Case "checked: a symbol where the parameter states Int is not_of_type, with the value's head and the type"
+      (ht_arg_text (ht_inv total (list (VSym (quote a)) (ht_cells Nil))) 1 (quote not_of_type) "the symbol a at Int"))
+    (Case "checked: an integer where the parameter states a list"
+      (ht_arg_text (ht_inv total (list (VInt 1) (VInt 2))) 2 (quote not_of_type) "the integer 2 at (kernel.prelude.List Int)"))
+    (Case "checked: a constructor of another type"
+      (ht_arg_text (ht_inv total (list (VInt 1) (ht_leaf))) 2 (quote not_of_type) "the constructor t.Tree.Leaf at (kernel.prelude.List Int)"))
+    (Case "checked: a constructor over the wrong number of fields is field_count"
+      (ht_arg (ht_inv total (list (VInt 1) (VCtor (ht_cons) (list (VInt 1))))) 2 (quote field_count)))
+    (Case "checked: a field of the wrong type inside a value — a Tree in a list's element"
+      (ht_arg_text (ht_inv total (list (VInt 1) (VCtor (ht_cons) (list (ht_leaf) (ht_cells Nil))))) 2 (quote not_of_type) "the constructor t.Tree.Leaf at Int"))
+    (Case "checked: an erased invariant read back — a negative integer where the parameter states Nat is not_a_nat, the text codec's refusal"
+      (ht_arg_text (ht_inv (ht_checked (ht_prog) (ht_nm (quote natid))) (list (VInt -1))) 1 (quote not_a_nat) "-1"))
+    (Case "checked: a negative Nat deep in a list"
+      (ht_arg_text (ht_inv (ht_checked (ht_prog) (ht_nm (quote total_nat))) (list (VInt 0) (ht_cells (list 4 -7 2)))) 2 (quote not_a_nat) "-7"))
+    (Case "checked, the naming law: a negative Nat in Init's List"
+      (ht_arg_text (ht_inv (ht_checked ps (main_fn (quote total))) (list (VInt 1) (nat_list (list 2 -3)))) 2 (quote not_a_nat) "-3"))
+    (Case "checked: a ByteArray's element past 255 is not_a_byte"
+      (ht_arg_text (ht_inv (ht_checked pr (main_fn (quote unpack))) (list (nat_list (list 7 300)))) 1 (quote not_a_byte) "300"))
+    (Case "checked: a UInt8 past 255 in Init's List"
+      (ht_arg_text (ht_inv (ht_checked pr (main_fn (quote pack))) (list (nat_list (list 1 256)))) 1 (quote not_a_byte) "256"))
+    (Case "checked: a String whose bytes are not UTF-8 is not_utf8 — the validity proof the erasure dropped, read from the value"
+      (ht_arg (ht_inv (ht_checked pr (main_fn (quote bytes))) (list (nat_list (list 97 255)))) 1 (quote not_utf8)))
+    (Case "checked: a ByteArray built of the prelude's cells is not of the type"
+      (ht_arg (ht_inv (ht_checked pr (main_fn (quote unpack))) (list (ht_cells (list 1 2)))) 1 (quote not_of_type)))
+    (Case "a handle prepared for effects does not take invoke (policy)"
+      (ht_refused (ht_inv say (list (VInt 1) (ht_cells "x"))) (quote policy)))
+    (Case "a handle prepared without effects does not take invoke_run (policy)"
+      (ht_run_link r4 (quote policy)))
+    ;; ---- success ----
+    (Case "checked: total 1 [2 3] = 6"
+      (ht_is (ht_inv total (list (VInt 1) (ht_cells (list 2 3)))) 6))
+    (Case "one handle, one link, invoked on four argument lists: each its own answer, the first again the same"
+      (int_list_eq (ht_each total (list (list 1 2 3) Nil (list 10 20) (list 1 2 3))) (list 6 0 30 6)))
+    (Case "ev is one preparation and one invocation through the assumed door: the same answer"
+      (match (ev (ht_prog) (ht_nm (quote total)) (list (VInt 1) (ht_cells (list 2 3))) (ht_fuel)) ((EvOk (VInt 6)) True) (_ False)))
+    (Case "the two doors on one argument: assumed, the machine runs and its own guard stops it (stuck guard)"
+      (ht_stuck (ht_inv (ht_assumed (ht_prog) (ht_nm (quote land1))) (list (VInt -1))) (quote guard)))
+    (Case "the two doors on one argument: checked, the machine never starts (not_a_nat at position 1)"
+      (ht_arg (ht_inv (ht_checked (ht_prog) (ht_nm (quote land1))) (list (VInt -1))) 1 (quote not_a_nat)))
+    (Case "assumed: an argument naming no constructor of the program is bad_value, as ev's"
+      (ht_arg (ht_inv (ht_assumed (ht_prog) (ht_nm (quote treeid))) (list (VCtor (ht_nm (quote Nope)) Nil))) 0 (quote bad_value)))
+    (Case "checked: a type parameter of the entry that no parameter states is no obstacle — konst 5 = 5"
+      (ht_is (ht_inv (ht_checked (ht_prog) (ht_nm (quote konst))) (list (VInt 5))) 5))
+    (Case "checked: Nat is read by identity — a program's inductive under the name lends it no constructor"
+      (ht_arg (ht_inv (ht_checked (ht_nat_ind) (ht_nm (quote natid))) (list (VCtor (n2 (quote Nat) (quote zero)) Nil))) 1 (quote not_of_type)))
+    (Case "ev on a sig fn and on an extern answers as it always did: the arguments resolved first (bad_value), then the machine (unlinked, unknown_head)"
+      (bool_and (ht_ev_stuck (ev (ht_prog) (ht_nm (quote twice)) (list (ht_nope)) (ht_fuel)) (quote bad_value))
+      (bool_and (ht_ev_stuck (ev (ht_prog) (ht_nm (quote twice)) (list (VInt 1)) (ht_fuel)) (quote unlinked))
+      (bool_and (ht_ev_stuck (ev (ht_prog) (ht_nm (quote ext)) (list (ht_nope)) (ht_fuel)) (quote bad_value))
+                (ht_ev_stuck (ev (ht_prog) (ht_nm (quote ext)) (list (VInt 1)) (ht_fuel)) (quote unknown_head))))))
+    (Case "checked: a symbol at Symbol, a Tree at Tree"
+      (bool_and (match (ht_inv (ht_checked (ht_prog) (ht_nm (quote symid))) (list (VSym (quote a)))) ((InvRan (EvOk (VSym s))) (sym_eq s (quote a))) (_ False))
+                (match (ht_inv (ht_checked (ht_prog) (ht_nm (quote treeid))) (list (VCtor (ht_branch) (list (ht_leaf) (ht_leaf))))) ((InvRan (EvOk (VCtor c _))) (name_eq c (ht_branch))) (_ False))))
+    (Case "checked, the rows: unpack [7 8] = 7 8 — a ByteArray is its cells"
+      (ht_list_is (ht_inv (ht_checked pr (main_fn (quote unpack))) (list (nat_list (list 7 8)))) "7 8"))
+    (Case "checked, the rows: pack [1 2 255] = 1 2 255 — a UInt8 below 256 in Init's List"
+      (ht_list_is (ht_inv (ht_checked pr (main_fn (quote pack))) (list (nat_list (list 1 2 255)))) "1 2 255"))
+    (Case "checked, the rows: bytes of a String whose bytes are UTF-8 (two bytes of one character)"
+      (ht_list_is (ht_inv (ht_checked pr (main_fn (quote bytes))) (list (nat_list (list 195 169)))) "195 169"))
+    (Case "checked: a ByteArray of 100,000 bytes — the spine is a loop, no host stack"
+      (= (ht_len (ht_inv (ht_checked pr (main_fn (quote unpack))) (list (nat_list (ht_ints 100000 Nil))))) 100000))
+    (Case "the fuel is the policy's: total of a 3-list needs four — out under 3"
+      (ht_out (ht_inv (prepare (ht_prog) (ht_nm (quote total)) (ht_pol Checked 3) 0) (list (VInt 0) (ht_cells (list 1 2 3))))))
+    (Case "an exhausted invocation leaves the handle as it was: the next, within the fuel, answers"
+      (let ((h3 (prepare (ht_prog) (ht_nm (quote total)) (ht_pol Checked 3) 0)))
+        (bool_and (ht_out (ht_inv h3 (list (VInt 0) (ht_cells (list 1 2 3)))))
+                  (ht_is (ht_inv h3 (list (VInt 0) (ht_cells (list 1 2)))) 3))))
+    (Case "the handle states its entry, its parameters, its result and its revision"
+      (match (prepare (ht_prog) (ht_nm (quote total)) (ht_pol Checked 5) 7)
+        ((PrepOk h) (bool_and (name_eq (Handle.entry h) (ht_nm (quote total)))
+                    (bool_and (= (len (Handle.params h)) 2)
+                    (bool_and (etype_eq (Handle.result h) (ht_int))
+                    (bool_and (= (Handle.revision h) 7) (= (Policy.fuel (Handle.policy h)) 5))))))
+        (_ False)))
+    ;; ---- a run with effects on arguments built as data (the two lines above are its output) ----
+    (Case "effects: the entry's parameters before the World are the handle's — two, the World its own"
+      (match say ((PrepOk h) (= (len (Handle.params h)) 2)) (_ False)))
+    (Case "effects: invoke_run on (21, \"data\") built as data ran (printed `data 42`)" (ht_run_ok r1))
+    (Case "effects: the same handle again on (-4, \"again\") ran (printed `again -8`)" (ht_run_ok r2))
+    (Case "effects: an argument of the wrong type is refused before the run — nothing printed"
+      (ht_run_arg r3 1 (quote not_of_type)))
+    ;; ---- the checked door's stated limit, as it stands (rule 1) ----
+    (Case "LIMIT: a constructor's proposition field is not in the program — width prepares as checked and takes Span.mk 9 3, which no Span is (answers 0)"
+      (ht_is (ht_inv (ht_checked ph (main_fn (quote width))) (list (ht_span 9 3))) 0))
+    (Case "LIMIT: an evidence binder is not in the program — small prepares as checked with one parameter and takes 99, which its hypothesis excludes"
+      (ht_is (ht_inv (ht_checked ph (main_fn (quote small))) (list (VInt 99))) 99)))))
+
+;; ---- the count's instrument (rule 6): N invocations on one link against N links ----------------
+;; a program of D functions beside the entry: (fn f.i ((n Int)) Int (match n (0 1) (_ (+ n (f.i (- n 1))))))
+(fn ht_filler ((i Int)) EDecl
+  (let ((name (Num (ht_nm (quote f)) i)))
+    (EFn name 0 (list (ht_int)) (ht_int) RecNone
+      (EMatch (EBVar 0)
+        (list (EArm (PLit (LNat 0)) (ELit (LNat 1)))
+              (EArm PVar (EPrim (n1 (quote +)) (list (EBVar 0) (ECall name (list (EPrim (n1 (quote -)) (list (EBVar 0) (ELit (LNat 1))))))))))))))
+(fn ht_fillers ((d Int) (acc (List EDecl))) (List EDecl) (measure d) (if (< d 1) acc (ht_fillers (- d 1) (Cons (ht_filler d) acc))))
+(fn ht_big ((d Int)) Prog
+  (Prog (Cons (ht_list_decl) (Cons (ht_sum_decl (ht_nm (quote total)) (ht_int)) (ht_fillers d Nil)))))
+(fn ht_bench_each ((p Prog) (n Int) (acc Int)) Int
+  (measure n)
+  (if (< n 1) acc
+    (ht_bench_each p (- n 1) (+ acc (match (ev p (ht_nm (quote total)) (list (VInt n) (ht_cells (list 1 2 3))) (ht_fuel)) ((EvOk (VInt j)) j) (_ 0))))))
+(fn ht_bench_once ((h Prep) (n Int) (acc Int)) Int
+  (measure n)
+  (if (< n 1) acc
+    (ht_bench_once h (- n 1) (+ acc (match (ht_inv h (list (VInt n) (ht_cells (list 1 2 3)))) ((InvRan (EvOk (VInt j))) j) (_ 0))))))
+(fn ht_num ((a (List Int))) Int (match (arg_nat a) ((Some k) k) (None 0)))
+(fn ht_bench ((mode (List Int)) (n Int) (d Int) (w World)) World
+  (if (int_list_eq mode "each")
+    (write_line (append "each " (show_int (ht_bench_each (ht_big d) n 0))) w)
+  (if (int_list_eq mode "once")
+    (write_line (append "once " (show_int (ht_bench_once (ht_checked (ht_big d) (ht_nm (quote total))) n 0))) w)
+    (exit 2 (write_line "handle_test: each N D | once N D" w)))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair (Cons mode (Cons n (Cons d Nil))) w1) (ht_bench mode (ht_num n) (ht_num d) w1))
+    ((Pair _ w1) (match (cases w1) ((Pair cs w2) (run_cases "handle_test" cs 0 w2))))))

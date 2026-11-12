@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
 > open: slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled and nothing built.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11 with the landing's leans awaiting ratification (§8.6 "As built, landing 1"), landings 2 and 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -604,7 +604,10 @@ costs none. **Pure**: an extern node is `EvStuck extern`; the effectful
 driver `run` performs the extern through the host's own extern of the
 same short name and resumes with its result — the explicit handler
 contract of law §4.7 at phase 2 is "the toolchain's six World externs,
-performed in order".
+performed in order". Since slice 4.6 landing 1 (§8.6) `ev` is one
+`prepare` and one `invoke` through a handle's *assumed* door: the
+caller answers for the arguments' types, only their constructors are
+resolved (`bad_value`), and its answers are what they were.
 
 Per node: a variable reads its frame slot; a literal is its value; a
 constructor evaluates its arguments left to right and builds the cell;
@@ -3369,7 +3372,7 @@ it entrenches. The slices, in the order built:
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 | 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
-| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); designed, nothing built** | the tactic library's step (one link where every step links today); the law's first connected path, its last link; phase 5's tools |
+| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, its leans awaiting ratification; landings 2 and 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -3738,8 +3741,9 @@ The rules:
 
 8. **The roots and the stamps** (R84). The root inventory is written
    in full in `v3/build.sh --all`: the five drivers (`load`, `prove`,
-   `verify_release`, `t0`, `initindex`), `calc_harness`, the 18 public
-   harnesses of `kernel/test/` and the 5 of `k/test/` — 29 roots,
+   `verify_release`, `t0`, `initindex`), `calc_harness`, the 19 public
+   harnesses of `kernel/test/` and the 5 of `k/test/` — 30 roots
+   (29 until slice 4.6 landing 1's `handle_test`),
    parity's list; and every shell entrypoint's invocation has its
    disposition in the script — `direct load.shard … --run M.FN` native
    (the K-client harness), `--dump` and `eval dump` the bootstrap's.
@@ -3863,7 +3867,7 @@ a binary whose stamp is current is never rebuilt. Landing 2 is the shim
 and the suite switch (rule 4), CI's second run compared, the
 measurements (rule 7), the close-out.
 
-**As built, landing 2 (2026-10-14):** the shim `v3/bin/eval`, a generated file `v3/build.sh --all` writes last (and `--shim` alone): `direct FILE ARGS…` runs `v3/bin/NAME` (NAME the file's stem) when that binary exists and its stamp is current — `v3/build.sh --stamp NAME` against `NAME.stamp`, on every invocation — and otherwise exits 70 with a message (never a silent fallback to the bootstrap, R84: a missing binary and a stale stamp are each refused); `dump` and `run` go to the bootstrap unchanged; any other operation is refused with the usage line. `v3/test.sh` takes `V3_ENGINE`: `bootstrap` (the default; the authority) or `native` (the shim, required present), names the engine in its last line, and keeps every entrypoint's output, exit status and seconds under `V3_TEST_OUT=DIR` (`NAME.out`, `.rc`, `.secs`; `engine`, `wall`). `kernel/test/suite_tie.sh A B` compares two kept runs entrypoint by entrypoint — the same entrypoints on both sides, the same exit status, the same output under a stated normalization: a count of seconds (`N s`), a store's size (`N kB`), a scratch path's generated name (`mktemp`'s); a verdict, a count of checks or declarations, an assumption closure, a fingerprint, a record never — printing both sides' seconds per entrypoint and summed, exit the entrypoints that differ. CI: the `v3` job keeps its bootstrap run (`v3/bin/suite/bootstrap`), the `native` job runs the tie and then the whole suite on the binaries (`v3/bin/suite/native`, 41 entrypoints as the bootstrap's), and a `suite_tie` job in a `tie` stage after both compares the two — seconds, not minutes. The tie (rule 3) gained the shim's checks (present; a current binary run as the bootstrap runs it; a missing binary and a stale stamp refused with exit 70 — the stale case a private copy of a binary without a stamp of its own, never a real stamp touched) and the suite comparison's own test on a fabricated pair (two runs identical up to their seconds pass; an altered verdict, a differing exit and an entrypoint missing on one side each fail): 76 checks from 68; every `tie` line now carries both sides' seconds — rule 7's per-driver measurement from every run of the gate — and the tie names the bootstrap explicitly (`BOOT`, `RUST_EVAL`), since under `V3_ENGINE=native` the suite's `EVAL` is the shim. *Departures from rule 4, stated:* the shim serves `direct`, `dump` and `run` only — the bootstrap's expression mode (`eval FILE EXPR`), which `calc_test` uses for its old-tree side, is named in that script as the bootstrap's (rule 8's disposition, listed in `v3/build.sh`'s header), not passed through by the shim; CI's comparison is a job of its own over the two jobs' kept outputs rather than a second run inside the `native` job, so the two suites run beside each other and the comparison costs seconds; the suite comparison's normalization list is not empty as the tie's is (the suite's scripts print their seconds, a size and a scratch name), and `suite_tie.sh` states it in full; locally the native run is not the default — `V3_ENGINE=native` is explicit, as the no-silent-fallback rule wants in both directions. *Found in the build:* the native suite's first run failed `calc_test` alone — its 21 old-tree cases through `$EVAL` reached the shim, which printed its usage line for each (the disposition above; the harness side had tied); the tie under the native suite would have tied the shim against the binaries (both sides native) until it named the bootstrap; `v3/build.sh` printed its boot-engine note on stdout before every operation, so `--stamp` would have returned two lines wherever `bin/shard_eval` is absent and the tie's and the shim's stamp checks would have failed there — the note now prints only when building. *Measured on the dev box under a load of ~340 from other sessions' Rust builds (the bootstrap suite's wall 1,130 s against 680 s on the quiet box at landing 1), both suites with the tie as their 42nd entrypoint, six at a time:* the whole suite on the binaries 1,519 s of entrypoint time and 532 s of wall against the bootstrap's 3,925 and 1,130 — and the native run's remainder is largely the bootstrap inside it (the tie 432 s runs both engines; `calc_test`'s old-tree side 152 of its 172 s is the bootstrap's expression mode; parity's `eval dump` is the bootstrap's); per entrypoint, bootstrap → native: `store_test` 890 → 259 s (calc's five leaves stored 411 → 133, K's replay of them 82 → 21), `parity_test` 348 → 165, `path_test` 323 → 94 (load, run, store, verify 25, 25, 37, 12 → 4, 4, 12, 5), `tactic_lib_test` 289 → 53, `define_test` 237 → 43, `calc_test` 235 → 172 (the port under `ev` 71 → 20), `engine_test` 188 → 73, `std_test` 162 → 29 (the std root loaded and stored 89 → 16, K's replay 72 → 12), `wire_test` 153 → 22, `template_test` 109 → 18 (load, run, dump 35, 40, 34 → 6, 6, 6), `derive_test` 105 → 23, `calc_main_test` 104 → 34, `k_clients_test` 77 → 45, the loader pins' entrypoint 57 → 13 (265 cases), `tactic_test` 54 → 14, `rows_test` 49 → 9, `route2_test` 28 → 9, `matcher_test` 25 → 4, `project_test` 9 → 2, `index_test` 8 → 0, `loader_test` 7 → 1, `ev_test` 6 → 4, the rest under 2 s on both; per driver on the tie's workloads (the tie's own lines, bootstrap → native): the loader's dump of `auto` 24 → 4, one author's load of a single file (`calc_spec`, 283 lines of output) 34 → 5, t0 over 300 lines under `ev` 11 → 5 and out of fuel 8 → 5, a store written 32 → 8; `prove` over `auto` 25 → 4, over `use_split` 25 → 4, `--measure` over `calc_ndigit` 65 → 20; `verify_release` over the store 29 → 4; `t0` and `initindex` over 3,000 lines a second on either; the loader pins' harness 55 → 11; the shim's own cost under 0.1 s an invocation (`json_test` through it 0.31 s against 0.30 bare). The gate: the tie 76 checks, 0 failed, in 453 s inside the bootstrap suite and 432 s inside the native one; `suite_tie.sh` over the two kept runs 42 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. **Slice 4.1 closed 2026-10-14** (on the full gate: pipeline 610 green on `2b2cde0` — the `native` job's suite run 41 entrypoints, 0 failed, in 471 s against the bootstrap's 2,180; the `suite_tie` job's first run 41 entrypoints, 0 differ; records §9): the five drivers and the 24 harnesses run natively under the suite and compare byte for byte with the bootstrap's run; the bootstrap suite stays the authority (rule 6); the binaries are engines, their proof the phase's later slice (law §12.4 item 4).
+**As built, landing 2 (2026-10-14):** the shim `v3/bin/eval`, a generated file `v3/build.sh --all` writes last (and `--shim` alone): `direct FILE ARGS…` runs `v3/bin/NAME` (NAME the file's stem) when that binary exists and its stamp is current — `v3/build.sh --stamp NAME` against `NAME.stamp`, on every invocation — and otherwise exits 70 with a message (never a silent fallback to the bootstrap, R84: a missing binary and a stale stamp are each refused); `dump` and `run` go to the bootstrap unchanged; any other operation is refused with the usage line. `v3/test.sh` takes `V3_ENGINE`: `bootstrap` (the default; the authority) or `native` (the shim, required present), names the engine in its last line, and keeps every entrypoint's output, exit status and seconds under `V3_TEST_OUT=DIR` (`NAME.out`, `.rc`, `.secs`; `engine`, `wall`). `kernel/test/suite_tie.sh A B` compares two kept runs entrypoint by entrypoint — the same entrypoints on both sides, the same exit status, the same output under a stated normalization: a count of seconds (`N s`; since slice 4.6 landing 1 of milliseconds too, `N ms`), a store's size (`N kB`), a scratch path's generated name (`mktemp`'s); a verdict, a count of checks or declarations, an assumption closure, a fingerprint, a record never — printing both sides' seconds per entrypoint and summed, exit the entrypoints that differ. CI: the `v3` job keeps its bootstrap run (`v3/bin/suite/bootstrap`), the `native` job runs the tie and then the whole suite on the binaries (`v3/bin/suite/native`, 41 entrypoints as the bootstrap's), and a `suite_tie` job in a `tie` stage after both compares the two — seconds, not minutes. The tie (rule 3) gained the shim's checks (present; a current binary run as the bootstrap runs it; a missing binary and a stale stamp refused with exit 70 — the stale case a private copy of a binary without a stamp of its own, never a real stamp touched) and the suite comparison's own test on a fabricated pair (two runs identical up to their seconds pass; an altered verdict, a differing exit and an entrypoint missing on one side each fail): 76 checks from 68; every `tie` line now carries both sides' seconds — rule 7's per-driver measurement from every run of the gate — and the tie names the bootstrap explicitly (`BOOT`, `RUST_EVAL`), since under `V3_ENGINE=native` the suite's `EVAL` is the shim. *Departures from rule 4, stated:* the shim serves `direct`, `dump` and `run` only — the bootstrap's expression mode (`eval FILE EXPR`), which `calc_test` uses for its old-tree side, is named in that script as the bootstrap's (rule 8's disposition, listed in `v3/build.sh`'s header), not passed through by the shim; CI's comparison is a job of its own over the two jobs' kept outputs rather than a second run inside the `native` job, so the two suites run beside each other and the comparison costs seconds; the suite comparison's normalization list is not empty as the tie's is (the suite's scripts print their seconds, a size and a scratch name), and `suite_tie.sh` states it in full; locally the native run is not the default — `V3_ENGINE=native` is explicit, as the no-silent-fallback rule wants in both directions. *Found in the build:* the native suite's first run failed `calc_test` alone — its 21 old-tree cases through `$EVAL` reached the shim, which printed its usage line for each (the disposition above; the harness side had tied); the tie under the native suite would have tied the shim against the binaries (both sides native) until it named the bootstrap; `v3/build.sh` printed its boot-engine note on stdout before every operation, so `--stamp` would have returned two lines wherever `bin/shard_eval` is absent and the tie's and the shim's stamp checks would have failed there — the note now prints only when building. *Measured on the dev box under a load of ~340 from other sessions' Rust builds (the bootstrap suite's wall 1,130 s against 680 s on the quiet box at landing 1), both suites with the tie as their 42nd entrypoint, six at a time:* the whole suite on the binaries 1,519 s of entrypoint time and 532 s of wall against the bootstrap's 3,925 and 1,130 — and the native run's remainder is largely the bootstrap inside it (the tie 432 s runs both engines; `calc_test`'s old-tree side 152 of its 172 s is the bootstrap's expression mode; parity's `eval dump` is the bootstrap's); per entrypoint, bootstrap → native: `store_test` 890 → 259 s (calc's five leaves stored 411 → 133, K's replay of them 82 → 21), `parity_test` 348 → 165, `path_test` 323 → 94 (load, run, store, verify 25, 25, 37, 12 → 4, 4, 12, 5), `tactic_lib_test` 289 → 53, `define_test` 237 → 43, `calc_test` 235 → 172 (the port under `ev` 71 → 20), `engine_test` 188 → 73, `std_test` 162 → 29 (the std root loaded and stored 89 → 16, K's replay 72 → 12), `wire_test` 153 → 22, `template_test` 109 → 18 (load, run, dump 35, 40, 34 → 6, 6, 6), `derive_test` 105 → 23, `calc_main_test` 104 → 34, `k_clients_test` 77 → 45, the loader pins' entrypoint 57 → 13 (265 cases), `tactic_test` 54 → 14, `rows_test` 49 → 9, `route2_test` 28 → 9, `matcher_test` 25 → 4, `project_test` 9 → 2, `index_test` 8 → 0, `loader_test` 7 → 1, `ev_test` 6 → 4, the rest under 2 s on both; per driver on the tie's workloads (the tie's own lines, bootstrap → native): the loader's dump of `auto` 24 → 4, one author's load of a single file (`calc_spec`, 283 lines of output) 34 → 5, t0 over 300 lines under `ev` 11 → 5 and out of fuel 8 → 5, a store written 32 → 8; `prove` over `auto` 25 → 4, over `use_split` 25 → 4, `--measure` over `calc_ndigit` 65 → 20; `verify_release` over the store 29 → 4; `t0` and `initindex` over 3,000 lines a second on either; the loader pins' harness 55 → 11; the shim's own cost under 0.1 s an invocation (`json_test` through it 0.31 s against 0.30 bare). The gate: the tie 76 checks, 0 failed, in 453 s inside the bootstrap suite and 432 s inside the native one; `suite_tie.sh` over the two kept runs 42 entrypoints, 0 differ, byte-identical under both engines on every entrypoint. **Slice 4.1 closed 2026-10-14** (on the full gate: pipeline 610 green on `2b2cde0` — the `native` job's suite run 41 entrypoints, 0 failed, in 471 s against the bootstrap's 2,180; the `suite_tie` job's first run 41 entrypoints, 0 differ; records §9): the five drivers and the 24 harnesses run natively under the suite and compare byte for byte with the bootstrap's run; the bootstrap suite stays the authority (rule 6); the binaries are engines, their proof the phase's later slice (law §12.4 item 4).
 
 *Not in this slice, stated:* the compiler proof (law §12.4 item 4's
 first item; after this slice, over the engine it builds); route 1 over
@@ -6302,6 +6306,239 @@ The rules:
    session is that much and no more; the incremental goal states and
    R85's origin map, each its own slice (§11).
 
+**As built, landing 1 (2026-11-11): prepared invocation — the leans
+below await ratification.**
+`kernel/ev.shard` (+378/−70 lines): `prepare`, the one place of the
+file that links — `link` is called once, where `ev` and
+`run_prog_traced` each called it —, answering a `Handle` or a refusal
+by name: a link error's reason, `unknown_head` (no such fn),
+`bad_entry` (effects asked of an entry without a World last), and at
+the checked door `unlinked` (a sig fn no implementation is linked to),
+`unknown_head` (an extern) and `preconditioned` (below). The entry's
+declaration is the one the linker numbered (`fn_decl_at`): of two
+under one name the later, for its types as for its body. A client
+reads the handle's `entry`, `params` (those it supplies: under
+effects, the ones before the World), `result`, `policy` and
+`revision`; the linked program, the entry's index, the World's token
+and the inductives' index stay the file's. The `Policy` — `policy_of
+DOOR EFFECTS TRACE FUEL` — is fixed at `prepare`. `invoke` runs a
+handle prepared without effects and answers the machine's `EvRes`, an
+argument's refusal with its position, reason and text, or `policy`
+for a handle prepared with effects; `invoke_run` is the same for a
+run with effects — the World's token after the client's arguments,
+each extern performed by the host's, the trace written to the
+policy's path. `ev`, `run_prog` and `run_prog_traced` are one
+preparation and one invocation each. An invocation does not change
+its handle: an exhausted one is followed by one that answers.
+
+**The leans of rule 1, as built — for ratification.**
+
+(a) *The two doors.* Law §9.3's two kinds of entry are the handle's
+policy. **Checked**: every argument is validated against the E type
+the program states for its parameter before the machine starts — the
+count (`argument_count`), an integer at `Int`, a symbol at `Symbol`, a
+constructor of the type's inductive over exactly its fields, each at
+its field's type under the type's arguments (`not_of_type`,
+`field_count`) — and the invariants the erasure dropped that a value
+still shows are read back from it: not negative at `Nat`
+(`not_a_nat`, the text codec's refusal of the same argument), below
+256 at `UInt8` and in a `ByteArray`'s cells (`not_a_byte`), an
+`Array`'s cells at its element type, a `String`'s bytes UTF-8
+(`not_utf8`). A type read by identity — `Int`, `Nat`, `Symbol`,
+`UInt8` — has no constructor, whatever a program declares under its
+name. **Assumed**: the caller answers for the arguments' types and
+only their constructors are resolved (`bad_value`); whatever the
+linker indexed is bound and the machine answers for it. **`ev` is the
+assumed door — a departure from rule 1's text**, which had `ev`
+become prepare-then-invoke on the one validated path: `ev`'s contract
+(§6.2) is over values, and `ev_test` hands it values outside the
+parameter's type on purpose — a negative at `Nat` reaching the
+primitive's guard — which a validated path would refuse before the
+machine. `ev` takes the steps it took in their order — the link, the
+entry's index, the arguments' constructors, the machine — and
+`ev_test` passes unchanged; `handle_test` holds the order on a sig fn
+and an extern (the arguments resolved first, then the machine). The
+reader's tactic step and K's tests stay its clients. `run_prog` is the
+checked door: the text codec (`text_args`) parses a command-line
+argument into a value by its parameter's type and the door validates
+it like any other — the codec one producer among the door's clients,
+as the rule has it.
+
+(b) *`preconditioned` at `prepare`*, under Checked, by parameter,
+its position and type named: a parameter that states a type
+parameter with no type stated for it — an entry's type parameter
+that no parameter states is no obstacle, no value being read at it
+—; a type that reaches `Fin`, `BitVec` or `Subtype`, whose bound or
+predicate is a value argument E dropped with the row (§8.4 slice 3.18
+rule 1), which no reading of a value restores; a type the program
+does not define — a view's `sig type` among them — or applies to
+another number of types than it takes. An inductive's constructors
+are examined once, its field types over its own parameters; the
+arguments at every application. The rule's text had the handle
+*record* a preconditioned entry and a policy refuse it; as built the
+door is the policy, so the same entry is refused under Checked and
+prepared under Assumed, and nothing else is recorded.
+
+(c) **The checked door's limit, stated and pinned.** The door
+validates against what the `Prog` states, and a `Prog` does not state
+what the erasure dropped beside a row's value arguments: an evidence
+binder of the entry's own signature, a proposition field of a
+constructor (§7.5: `ctor_fields` drops it; the E table records
+neither). Such an entry prepares as checked on its runtime parameters
+alone. Pin `handle_door` shows both and `handle_test`'s last two
+cases hold them as they stand: `(fn small ((n Nat) (h (Nat.lt n 10)))
+Nat n)` is `fn small 0 (Nat) Nat #0` in the program and takes 99;
+`(structure Span () (lo Nat) (hi Nat) (ok (Nat.le lo hi)))` is `type
+Span 0 (mk Nat Nat)` and `width` takes `Span.mk 9 3`; `Decidable`'s
+cells are the same case. **Landing 2's, as a lean:** the session
+holds the revision's load, so its `prepare` reads the entry's binder
+roles and its types' constructors from the environment
+(`erase.shard`'s `tele_of`, K's constructor types) and refuses, or
+records, what `ev.shard` cannot see; the two cases flip there.
+
+(d) **The handle is this file's by convention, not by a seal.** A
+record's constructor and updaters are ordinary declarations
+(`record.shard`: `MkHandle`, `Handle.with_FIELD`), so another file
+could restate a handle's parameters or its door — reproduced:
+`(Handle.with_params (list Int) h)` on a `Nat` entry took −5, which
+the handle as prepared refuses (`not_a_nat`). What the reader does
+refuse outside the declaring file is the sugar (`make`, `with`),
+which is why a client states a policy through `policy_of`. The same
+holds for `Linked` since phase 2: no view seals `ev.shard`.
+`handle_cost_test.sh` holds the toolchain's sources to the convention
+by name — `Linked`, `IVal`, the linker's results, `MkHandle`,
+`Handle.with_*` and the four fields outside `ev.shard` fail it; a
+client's own file is not among them. **Landing 2's, as a lean:** a
+client there holds an ordinal into the session's table and never a
+`Handle`, so the question of a seal is the session's — a view over it
+(K's form) if the grep is not enough.
+
+(e) *Under effects the World is not the door's.* It is no argument:
+its token is built by `prepare` — the last parameter's type's first
+constructor over zeros — and which type that is stays §9's stated
+Stage-0 limit. Tightened here: the token is a value of that type —
+the constructor has no field, or integer fields (`Int`, `Nat`) — and
+an entry whose last parameter would get a token that is no value of
+its type is `bad_entry` (before: it ran, a zero standing in a field
+of another type).
+
+(f) *A parameter of a function's type* (rule 1's second lean) does
+not occur: E has no function type — a function-typed binder makes
+the declaration a template (§8.4 slice 3.28), which is no fn of a
+program, so `prepare` answers `unknown_head`.
+
+(g) *The reader keeps no handle* across a file's steps, on the
+measurement: the native prover regenerating the
+sidecar of `examples/tactic/use_split.shard` — six steps through
+`bool_split.solve`, the load's program 67 runnable functions — spends
+1.3–1.4 ms of each step in the link and 2.3–2.6 ms resolving the
+arguments and running the library (five runs on the quiet box under a
+breakpoint timeline, the instrument's stops of some 0.2 ms each inside
+the figures: one in the link's, two in the other's), the six steps
+30–33 ms at the end of a process of 1.7–1.8 s (1.6–1.7 s without the
+instrument). The five links a kept handle would save are some 6.5 ms,
+under half a percent of the run. Against the saving stands an
+invalidation: the program a step runs is the load's E table as it
+stands at that declaration (`producers_of`, `es_prog` — read, not
+measured), so a handle kept across steps would have to be dropped at
+every definition between them — the row's "wrong invalidation" risked
+for 6 ms. The link is linear in the program (the ratio below), so the
+question returns with a library called from a large closure, and a
+handle bound to a revision is landing 2's.
+
+(h) *What a run reports differently* (`run_prog`, `load.shard
+--run`). `preconditioned` is decided at `prepare`, before any
+argument is read, so on an entry with such a parameter it comes
+first, where the refusals came in argument order: a parameter stating
+a type parameter, `Fin`, `BitVec` or `Subtype`, a type the program
+does not define (before: `bad_entry` at that parameter's turn — "no
+command-line argument supplies" —, or an earlier argument's
+`RunArg`). A sig fn or an extern named as the entry is `unlinked` /
+`unknown_head` (before: `bad_entry`, "does not take a World last").
+Each is still `RUN: link REASON: TEXT`, exit 5. An argument list no
+host produces — an element past a byte at a `ByteArray`, a negative
+one at Init's `(List Nat)` — is refused at the door (`not_a_byte`,
+`not_a_nat`) where it ran (read from the code, not run: no test hands
+`run_prog` such a list). The other refusals, their positions,
+texts and order are held where they were by `entry_test`, the pins
+`entry`, `entry_s` and `entry_shape` and `path_test`'s argument
+break, none of them edited but for `entry_test`'s two new cases.
+
+`kernel/prog.shard` (+39): `subst_ty`, `subst_tys` and `fields_of`
+from `classify.shard`, and the by-identity declaration index
+(`decl_index_add`, `decl_index_find`, `assoc_decl`) from
+`etable.shard` — one copy each, the classifier, the E table and the
+checked door on them —; `show_etype`. `kernel/etable.shard`
+(+2/−10), `kernel/classify.shard` (−11): the moved functions gone.
+
+Tests. `kernel/test/handle_test.shard` (new, 335 lines), a root of
+its own — the inventory is 30 roots —, 53 cases, refusals first:
+`prepare`'s refusals by name with their texts; the checked door's of
+an argument by position, reason and text, on hand-built programs and
+on the pins `row_types` and `entry_s` under the naming law; one
+handle invoked on four argument lists; the two doors on one argument;
+`ev` on a sig fn and an extern as it always answered; a run with
+effects on arguments built as data — the same handle twice, then an
+argument of the wrong type refused before anything is printed —; the
+policy's fuel; the handle's readers; the limit's two cases.
+`kernel/test/handle_cost_test.sh` (new, 37 lines, 4 checks): one
+`link` call in `ev.shard`; the convention of (d); the link-once
+ratio, its two sums compared with the sum the entry's definition
+gives. `entry_test` (+2 cases): an entry with a type parameter no
+parameter states runs, one with a parameter stating it is
+`preconditioned` (pin `entry`'s `poly` and `polyx`). Pin
+`handle_door` in the loader pins (297 cases).
+`kernel/test/suite_tie.sh`: the tie's normalization reads `N ms` as
+it read `N s` — the cost test prints its times.
+
+**The count (rule 6).** Lines by file: above. Refusals before
+success: the bootstrap ran the first build of the handle and all of
+`handle_test`'s cases at the first attempt; the V3 loader then
+refused the test twice — `READ-ERROR … record_make: Policy: no such
+record in this file` (the sugar reaches the file's own records: the
+policy gained `policy_of`), then `ambiguous_head: policy` with
+`pattern_name` in the loader's `show_rec` (a function named like the
+handle's field and like another file's pattern variable: renamed).
+Interventions: none. **The review** (a second reader with the diff
+and no account of it, asked for a value that passes the checked door
+without being of its type): nine findings, none a value of the wrong
+type passing the door on a well-formed program. Fixed, the first
+four with a case each, the fifth without one (read, not run: no
+loader produces such a program) — an entry with a type parameter
+that no parameter states ran
+before and was refused (a bin the loader accepts no longer ran
+through `--run`): the condition is per parameter now, pinned at the
+run path; `ev`'s order of refusals on a sig fn or an extern;
+closedness and arity, which `prepare` did not check (`List` applied
+to no type prepared, `(List Int Int)` validated); a constructor
+accepted at `Nat` where a hand-built program declares an inductive
+under that name; a World declared twice read from the first
+declaration while the door's index took the last. Stated where they
+were not — (d), which the first draft's comment claimed the other
+way and which was reproduced before the comment was changed; (e);
+(h)'s order, its wider set of types and its argument lists. Cost: one
+stopped build and a second round.
+**The link-once ratio**, `handle_cost_test.sh`, N invocations of one
+entry in a program of D functions, the dev box: N = 100, D = 1,000 —
+the bootstrap 3.6–3.9 s through `ev` (a link each) against 0.36–0.40 s
+on one handle, the process with one preparation and no invocation
+0.35–0.39 s: some 33 ms a link, 0.1 ms an invocation; the native
+binary 460–469 ms against 23–25 ms, the process with one preparation
+21–22 ms: 4.4 ms a link, 0.02 ms an invocation (three runs each). N =
+1,000: the bootstrap 33.2 s against 0.51 s, the native 4.40 s against
+0.028 s. D = 5,000, N = 100, native: 2.40 s against 0.051 s — 24 ms a
+link, linear in the program.
+
+Gates on the dev box, the tree as committed: `v3/build.sh --all` 30
+roots, 30 built, 0 failed, in 2,889 s; the suite on the bootstrap 47
+entrypoints, 0 failed, in 919 s of wall (parity 32 closures, 149,425
+declarations, 0 differ); on the binaries 47 entrypoints, 0 failed, in
+544 s — a second run: the first failed one check of the native tie's
+80, "the tree's authored files changed", two documents having been
+edited while it ran, and the suite was run again on the untouched
+tree —; the tie 47 entrypoints, 0 differ; the full replay T0 FULL ==
+PINNED, accepted 57,977, in 435 s at 28.7 GB.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -6386,6 +6623,28 @@ T1's fixture is a `realize` body's erased binders (§7.5: `BErased`
 carries no runtime value; the `REALIZE` record). Pins `entry` (the
 profile: `Int`, `(List Int)`, the World, `get_args`) and `entry_s` (S:
 `Nat`, Init's `(List Nat)`); `kernel/test/entry_test.shard`.
+
+**The checked entry as a handle's door (slice 4.6 landing 1,
+2026-11-11; §8.6 "As built, landing 1").** `run_prog` prepares the
+entry once — `prepare` under a policy that is checked and with
+effects — and the text codec above is one producer of its arguments:
+each command-line argument becomes a value by its parameter's type,
+and the handle's checked door validates that value against the type
+before the machine starts, as it validates a value any other client
+built. Two refusals are `prepare`'s, decided before any argument is
+read: `preconditioned` — a parameter states a type a value cannot be
+validated against in full: a type parameter, `Fin`, `BitVec` or
+`Subtype`, a type the program does not define —, and `unlinked` /
+`unknown_head` for an entry that is a sig fn without an
+implementation or an extern; the driver prints each as `RUN: link
+REASON: TEXT` and exits 5. A type parameter of the entry that no
+parameter states is no obstacle (pin `entry`'s `poly`; `polyx`
+states it and is refused). The World's token is a value of the last
+parameter's type — its first constructor has no field, or integer
+fields — or the entry is `bad_entry`; which type the World is stays
+the Stage-0 limit above. The door's own limit — what the erased
+program does not state, an evidence binder or a constructor's
+proposition field, it cannot validate — is §8.6's (c).
 
 ## 10. Conformance at phase 2 (records §4.1 B10)
 
@@ -6524,7 +6783,7 @@ never compared as verdicts.
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
 | lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 — **slice 4.3 (designed 2026-10-16, §8.6)**: the check over `Prog` with the law's fixtures as pins, the extern an opaque L constant, the `bin` form and its record, the trace tied four ways |
-| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; nothing built |
+| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; the leans of §8.6 "As built, landing 1" awaiting ratification), landings 2 and 3 not started |
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
@@ -8096,4 +8355,20 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     rule 2 reads them; which quantity the host limit bounds — brought
     to the boundary before landing 3 is built; whether the reader
     keeps a tactic library's handle across a file's steps. The count
-    agreed before the run, no pass bar (§8.6 rule 6). Nothing built.
+    agreed before the run, no pass bar (§8.6 rule 6). (g) **Landing 1
+    built 2026-11-11 on the user's "Good. Let's continue with slice
+    4.6"; its leans put to the user and not ruled** (§8.6 "As built,
+    landing 1", (a)–(h)): `ev` is the handle's *assumed* door and not
+    a validated path — a departure from rule 1's text, `ev`'s tests
+    handing it values outside the parameter's type on purpose —,
+    `run_prog` the checked one; `preconditioned` is the checked door's
+    refusal at `prepare` and nothing is recorded on the handle; the
+    checked door's limit — a `Prog` states neither an evidence binder
+    nor a constructor's proposition field, so such an entry is
+    validated on its runtime parameters alone (pin `handle_door`) —,
+    landing 2's session to close it from the revision's environment;
+    the handle is `ev.shard`'s by convention under a grep, a seal the
+    session's question; the World's token is a value of its type or
+    the entry is `bad_entry`; E has no function-typed parameter; the
+    reader keeps no handle, on the measurement; what a run refuses
+    differently. Landings 2 and 3 not started.

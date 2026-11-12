@@ -2273,6 +2273,8 @@ committed: 29 roots built, both suites 45 entrypoints with 0 failed,
 the tie 0 differ, T0 FULL == PINNED; old against new in alternated
 runs the replay's first 80 chunks 38 s on each, `len.shard` 15.2 s to
 14.9 and the model root 28.8 s to 27.8, every output byte-identical.
+CI pipeline 656 green on `0e27958` (2026-11-11): engine 30 s, corpus
+1,987 s, v3 4,618 s, native 4,471 s, the suite's tie 17 s.
 
 **Slice 4.6 designed 2026-11-11 — T6, the embedding** (`LANGUAGE.md` §8.6
 "Slice 4.6", §13 item 71; law §9.3, §9.4, the T6 row; proposed 2026-11-06,
@@ -2292,6 +2294,53 @@ in-process, on both engines and tied; no foreign-language host is exercised
 in phase 4. The buffer rules and the row's two buffer fixtures are carried
 to the slice that builds packed buffers (law §12.4 amended; `LANGUAGE.md`
 §11): T6 will close in phase 4 short of the two. Nothing built.
+
+**Slice 4.6 landing 1 built 2026-11-11 — prepared invocation; its leans
+await ratification** (`LANGUAGE.md` §8.6 "As built, landing 1"; law
+§9.3; the user: "Good. Let's continue with slice 4.6").
+`kernel/ev.shard` gained `prepare` — the file's one call of the linker,
+answering a handle or a refusal by name — and `invoke` / `invoke_run`,
+which run a handle's entry on arguments built as data as often as the
+client likes; `ev`, `run_prog` and `run_prog_traced` are one preparation
+and one invocation each. A handle's policy names one of law §9.3's two
+doors. At the **checked** door every argument is validated against the E
+type the program states for its parameter — a constructor of the type
+over its fields, an integer where one stands — and the invariants the
+erasure dropped that a value still shows are read back from it: not
+negative at `Nat`, a byte at `UInt8` and in a `ByteArray`, UTF-8 in a
+`String`; an entry the door cannot validate in full — a parameter
+stating `Fin`, `BitVec`, `Subtype`, an open type parameter or a type the
+program does not define — is refused `preconditioned` at `prepare`. The
+**assumed** door is `ev`'s contract: the caller answers for the types.
+`run_prog` is the checked door, the command line's text codec one
+producer of its arguments. What departs from the design's text: `ev` is
+the assumed door, not a validated path — its tests hand it values
+outside the parameter's type on purpose. The limit found and pinned: an
+erased program states neither an evidence binder nor a constructor's
+proposition field, so a checked handle validates the runtime parameters
+alone (pin `handle_door`: `small`, whose hypothesis bounds its argument
+by 10, takes 99); landing 2's session is to read both from the
+revision's environment. The handle is `ev.shard`'s by convention, held
+by a grep in `handle_cost_test.sh`, not by a seal. Measured on the dev
+box: 100 invocations of one entry in a program of 1,000 functions take
+3.6–3.9 s through `ev` on the bootstrap, a link each, against 0.36–0.40
+s on one handle, and 460–469 ms against 23–25 ms on the native binary —
+some 33 ms and 4.4 ms a link, 0.1 ms and 0.02 ms an invocation. The one
+tactic library in the tree does not repay a kept handle: the native
+prover spends 1.3–1.4 ms of each of its six steps in the link, some 8 ms
+of a 1.7 s run, so the reader keeps none (a lean). A second reader given
+the diff and no account of it found nine things, none a wrongly typed
+value passing the door on a well-formed program; five were fixed, four
+of them with a case each, and one claim of the first draft — that no
+other file can restate a handle — was wrong, reproduced and corrected.
+`handle_test` (53 cases; the inventory's 30th root) and
+`handle_cost_test.sh` (4 checks) are new. Gates on the dev box, the tree
+as committed: `v3/build.sh --all` 30 roots, 30 built, 0 failed, in 2,889
+s; both suites 47 entrypoints with 0 failed (the bootstrap 919 s, the
+binaries 544 s — the binaries' second run: the first failed the native
+tie's check that no authored file changes under it, two documents having
+been edited while it ran); the tie 0 differ; parity 32 closures, 149,425
+declarations, 0 differ; T0 FULL == PINNED.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
