@@ -13,7 +13,7 @@ family; the rest follow the contract.**
 | family | files | lines | label | note |
 |---|---|---|---|---|
 | `kernel/` | 39 | 35,224 | **DELETED 2026-11-13, slice 5.0** (`LANGUAGE.md` §8.7; the tag `v2-kernel-last` holds it — 37 files, 26,914 lines by then); was: new code; `facts.shard`'s 15 axioms PORT as theorems (phase 3); `proof.shard`'s Step roster is the I vocabulary's source | §3, §7 |
-| `meta/` | 38 | 17,704 | new code onto the goal graph (§7.3); theorems PORT | §6–§7 |
+| `meta/` | 38 | 17,704 | new code onto the goal graph (§7.3); theorems PORT. **`meta/format` (3 files, 2,046 lines) migrated with `tools/shardfmt` at slice 5.1 and deleted** — the formatter's core is `v3/tools/shardfmt/print`, in the tool's directory until a second consumer exists (the old one, `tools/prove`, is unchecked text) | §6–§7 |
 | `std/list`, `order`, `nat`, `div`, `bits`, `arith`, `map` | 18 | 3,390 | PORT (phase 3, named) | the naming law; `Nat` sizes; `order`, `nat`, `div`, `arith` are records in `v3/std/README.md` and no file (slice 3.27 landing 2, 2026-10-10); `list`, `bits` are `v3/std/list.shard` and `v3/std/bits.shard` (landing 3, 2026-10-10); `map` open |
 | `std/str`, `std/bytes`, `std/word` | 15 | 3,475 | PORT — typed representation change onto `String`/`ByteArray`/`UInt*` (INVENTORY.md) | §10.3 |
 | `std/mem` | 7 | 2,198 | PORT | the counted heap's substrate |
@@ -38,7 +38,7 @@ family; the rest follow the contract.**
 | `tools/lower`, `tools/codegen` | 2 | 2,013 | **DELETED 2026-11-13, slice 5.0** — replaced by V3's own back end in their design (`v3/kernel/lower.shard`, `v3/kernel/cgen.shard`; `rt.h` moved to `v3/kernel/`), unproven; the proven lowering replaces that at phase 7 (law §12.4 as amended 2026-11-13; was: carried through the flip) | the temporary chain |
 | `tools/search` | 117 | 40,569 | new code onto §7.3–7.4; the LS-law fixtures PORT | the engine |
 | `tools/prove`, `tools/explain`, `tools/canon`, `tools/digest` | 14 | 10,685 | new code (I producer; goal-state renderer; the S rule set; the map instrument) | |
-| `tools/shardfmt` | 3 | 989 | PORT | the goal's flagship (#23) |
+| `tools/shardfmt` | 3 | 989 | **MIGRATED 2026-11-13, slice 5.1 landing 1** (`LANGUAGE.md` §8.7) to `v3/tools/shardfmt` — the program, its binary and its test; the old files deleted (the tag `v2-kernel-last` holds them). Carried as fixtures: the nine scenarios. Not yet carried: the contract as theorems (`fmt_gate`, `fmt_main_contract` — the slice's landing 2); the scenarios as theorems and the printer's termination (they wait on mutual recursion compiled into L). Was: PORT | the goal's flagship (#23) |
 | `pins/` | 118 | 6,052 | PORT | corpus law; `pins/trust` seeds T0's hostile battery |
 | `examples/calc` | — | 3,130 | PORT — the program half (lexer, parser, evaluator, show, the app's step; 51 fns, 9 types, ~1,000 lines) **PORTED 2026-09-13 (slice 6) to `v3/examples/calc/`, one S file per old file, byte-identical to the old tree over the differential's input set**; the 100 claims (~2,100 lines) at phase 3 with tactics (ruled 2026-09-07) | `examples/calc/calc_differential.shard` is the old side's pure driver module; **slice 4.3 landing 1 (2026-10-16): the first `bin`, `calc_bin.shard` — three observables, nine bolts, two requirements proven (`main_output` through the model and 3.21's claim, `main_reads`); landing 2: its trace tied to the model's, the bolts on a model host; route 1's binary blocked at the chain (phase 5)** |
 | `examples/sha256sum` (the bin, `mod.req`, stream) | ~5 | ~10,000 | PORT | |

@@ -1,0 +1,275 @@
+;;; v3/tools/shardfmt/print/cst.shard — the formatter's own reading of a source: the tree with
+;;; everything the loader's reader throws away (LANGUAGE.md §8.7 slice 5.1 rule 3; CANON.md §3).
+;;; A `CNode` keeps comments (on their own line or trailing one), blank lines, the `'x` sugar
+;;; and the raw bytes of every atom and string, escapes untouched, so printing cannot corrupt
+;;; them. The lexical rules are the reader's (`kernel/sexpr.shard`, LANGUAGE.md §2): a
+;;; delimiter is whitespace, a paren, the string quote, the comment mark or a brace; `'` opens
+;;; a quote at a token's start only; an atom ending in `.` with `{` after it opens a universe
+;;; list closed by `}`. Where this reading and the reader's disagree the gate refuses the
+;;; output (`fmt.shard`): this file is layout's, never meaning's.
+;;;
+;;; Two passes, each one structural recursion: `lex`, a state machine over the bytes (`step`
+;;; is one byte's move); `parse`, a fold over the tokens with a stack of open frames. Blank
+;;; lines are normalized as they are read — none first or last in a list, one in a row inside
+;;; a list, two between top-level forms, none in a universe list or after a quote.
+(import Init UInt8.toNat)
+(use Init.Bool)
+(use Init.List)
+(use Init.Option)
+
+(type CNode
+  (CAtom (List Nat))  ; an atom, its bytes as written
+  (CStr (List Nat))  ; a string, the bytes between its quotes as written
+  (CQuote CNode)  ; 'X
+  (CList (List CNode))  ; ( … ), the layout nodes below among its items
+  (CLevels (List Nat) (List CNode))  ; NAME.{ … }: the symbol with its dot, the level terms
+  (CComment (List Nat))  ; a comment on its own line, the `;`s included
+  (CTrail (List Nat))  ; a comment after a node on the node's line
+  (CBlank))  ; one blank line
+
+;; ---- bytes ------------------------------------------------------------------------------------
+;; b's bytes onto a reversed accumulator
+(fn em ((b (List Nat)) (acc (List Nat))) (List Nat)
+  (measure (struct b))
+  (match b
+    (nil acc)
+    ((cons h t) (em t (cons h acc)))))
+(fn is_ws ((c Nat)) Bool
+  (if (= c 32) true
+  (if (= c 10) true
+  (if (= c 13) true
+  (if (= c 9) true
+  false)))))
+(fn is_delim ((c Nat)) Bool
+  (if (is_ws c) true
+  (if (= c 40) true
+  (if (= c 41) true
+  (if (= c 34) true
+  (if (= c 59) true
+  (if (= c 123) true
+  (if (= c 125) true
+  false))))))))
+
+;; ---- the lexer ----------------------------------------------------------------------------------
+;; newlines survive as tokens, so the parser can tell a blank line and a trailing comment
+(type Tok
+  (TLP)
+  (TRP)
+  (TRB)
+  (TQuote)
+  (TNL)
+  (TAtom (List Nat))
+  (TLevels (List Nat))  ; NAME.{ — the atom with its dot, the brace consumed
+  (TStr (List Nat))
+  (TComment (List Nat)))  ; with its leading `;`
+
+;; where the lexer stands; the bytes of an open token are held reversed
+(type LexSt
+  (LNone)  ; between tokens
+  (LAtom (List Nat))
+  (LStr (List Nat) Bool)  ; the flag: the last byte was a backslash that escapes this one
+  (LComment (List Nat)))
+
+;; one byte's move: the next state and the tokens with this byte's added, or no reading
+(type Step (Bad) (Go LexSt (List Tok)))
+
+(fn step_none ((c Nat) (acc (List Tok))) Step
+  (if (= c 40) (Go LNone (cons TLP acc))
+  (if (= c 41) (Go LNone (cons TRP acc))
+  (if (= c 125) (Go LNone (cons TRB acc))
+  (if (= c 39) (Go LNone (cons TQuote acc))
+  (if (= c 10) (Go LNone (cons TNL acc))
+  (if (is_ws c) (Go LNone acc)
+  (if (= c 34) (Go (LStr nil false) acc)
+  (if (= c 59) (Go (LComment (cons 59 nil)) acc)
+  (if (= c 123) Bad  ; a brace that no `NAME.` opens
+  (Go (LAtom (cons c nil)) acc)))))))))))
+(fn ends_dot ((a (List Nat))) Bool  ; a is reversed: its last byte first
+  (match a
+    (nil false)
+    ((cons c _) (if (= c 46) true false))))
+(fn step ((st LexSt) (c Nat) (acc (List Tok))) Step
+  (match st
+    (LNone (step_none c acc))
+    ((LAtom a)
+     (if (is_delim c)
+       (if (= c 123)
+         (if (ends_dot a) (Go LNone (cons (TLevels (em a nil)) acc)) Bad)
+         (step_none c (cons (TAtom (em a nil)) acc)))
+       (Go (LAtom (cons c a)) acc)))
+    ((LStr s esc)
+     (if esc (Go (LStr (cons c s) false) acc)
+     (if (= c 34) (Go LNone (cons (TStr (em s nil)) acc))
+     (if (= c 92) (Go (LStr (cons c s) true) acc)
+     (Go (LStr (cons c s) false) acc)))))
+    ((LComment t)
+     (if (= c 10) (Go LNone (cons TNL (cons (TComment (em t nil)) acc)))
+     (Go (LComment (cons c t)) acc)))))
+
+(fn rev_toks ((ts (List Tok)) (acc (List Tok))) (List Tok)
+  (measure (struct ts))
+  (match ts
+    (nil acc)
+    ((cons h t) (rev_toks t (cons h acc)))))
+;; the tokens of a source; none on an unterminated string or a stray brace
+(fn lex ((cs (List Nat)) (st LexSt) (acc (List Tok))) (Option (List Tok))
+  (measure (struct cs))
+  (match cs
+    (nil
+      (match st
+        (LNone (some (rev_toks acc nil)))
+        ((LAtom a) (some (rev_toks (cons (TAtom (em a nil)) acc) nil)))
+        ((LStr _ _) none)
+        ((LComment t) (some (rev_toks (cons (TComment (em t nil)) acc) nil)))))
+    ((cons c r)
+     (match (step st c acc)
+       (Bad none)
+       ((Go st1 acc1) (lex r st1 acc1))))))
+
+;; ---- the parser ---------------------------------------------------------------------------------
+;; an open frame, its nodes so far reversed; a quote waits for the one node it wraps
+(type Frame (FList (List CNode)) (FLevels (List Nat) (List CNode)) (FQuote))
+
+(fn rev_nodes ((xs (List CNode)) (acc (List CNode))) (List CNode)
+  (measure (struct xs))
+  (match xs
+    (nil acc)
+    ((cons h t) (rev_nodes t (cons h acc)))))
+(fn drop_blanks ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons h t)
+     (match h
+       (CBlank (drop_blanks t))
+       (_ ns)))))
+(fn has_node ((ns (List CNode))) Bool
+  (match ns
+    (nil false)
+    (_ true)))
+
+;; a node into the innermost open list, through the quotes waiting for it
+(fn push_node ((n CNode) (st (List Frame))) (List Frame)
+  (measure (struct st))
+  (match st
+    (nil nil)
+    ((cons f r)
+     (match f
+       ((FList ns) (cons (FList (cons n ns)) r))
+       ((FLevels s ns) (cons (FLevels s (cons n ns)) r))
+       (FQuote (push_node (CQuote n) r))))))
+;; a blank line where one may stand (the normalization of this file's header)
+(fn push_blank ((st (List Frame))) (List Frame)
+  (match st
+    (nil nil)
+    ((cons f r)
+     (match f
+       ((FList ns)
+        (match ns
+          (nil st)
+          ((cons h ns1)
+           (match h
+             (CBlank
+               (match r
+                 (nil  ; between top-level forms: a second blank, never a third
+                   (match ns1
+                     (nil st)
+                     ((cons h2 _)
+                      (match h2
+                        (CBlank st)
+                        (_ (cons (FList (cons CBlank ns)) r))))))
+                 (_ st)))
+             (_ (cons (FList (cons CBlank ns)) r))))))
+       (_ st)))))
+;; a comment into the innermost open list, below the quotes: trailing when it stands on the
+;; line of the node before it
+(fn push_comment ((txt (List Nat)) (same_line Bool) (st (List Frame)))
+  (List Frame)
+  (measure (struct st))
+  (match st
+    (nil nil)
+    ((cons f r)
+     (match f
+       ((FList ns)
+        (cons
+          (FList
+            (cons
+              (if same_line (if (has_node ns) (CTrail txt) (CComment txt))
+              (CComment txt))
+              ns))
+          r))
+       ((FLevels _ _) st)
+       (FQuote (cons FQuote (push_comment txt same_line r)))))))
+;; the innermost open frame below the quotes is a universe list (no comment may stand there)
+(fn in_levels ((st (List Frame))) Bool
+  (measure (struct st))
+  (match st
+    (nil false)
+    ((cons f r)
+     (match f
+       ((FList _) false)
+       ((FLevels _ _) true)
+       (FQuote (in_levels r))))))
+;; `)`: the innermost frame is a list with a parent; none on a stray `)`, a quote left
+;; waiting, or a universe list left open
+(fn close_list ((st (List Frame))) (Option (List Frame))
+  (match st
+    (nil none)
+    ((cons f r)
+     (match f
+       ((FList ns)
+        (match r
+          (nil none)
+          (_ (some (push_node (CList (rev_nodes (drop_blanks ns) nil)) r)))))
+       (_ none)))))
+;; `}`
+(fn close_levels ((st (List Frame))) (Option (List Frame))
+  (match st
+    (nil none)
+    ((cons f r)
+     (match f
+       ((FLevels s ns) (some (push_node (CLevels s (rev_nodes ns nil)) r)))
+       (_ none)))))
+;; the end: exactly the top-level frame is open
+(fn finish ((st (List Frame))) (Option (List CNode))
+  (match st
+    (nil none)
+    ((cons f r)
+     (match f
+       ((FList ns)
+        (match r
+          (nil (some (rev_nodes (drop_blanks ns) nil)))
+          (_ none)))
+       (_ none)))))
+(fn is_zero ((n Nat)) Bool (if (= n 0) true false))
+
+;; nl: the newlines since the last node — 0 on the node's own line, so a comment there trails
+;; it and the first newline after it is no blank line
+(fn parse ((ts (List Tok)) (st (List Frame)) (nl Nat)) (Option (List CNode))
+  (measure (struct ts))
+  (match ts
+    (nil (finish st))
+    ((cons t r)
+     (match t
+       (TLP (parse r (cons (FList nil) st) 0))
+       ((TLevels s) (parse r (cons (FLevels s nil) st) 0))
+       (TRP
+         (match (close_list st)
+           (none none)
+           ((some st1) (parse r st1 0))))
+       (TRB
+         (match (close_levels st)
+           (none none)
+           ((some st1) (parse r st1 0))))
+       (TQuote (parse r (cons FQuote st) nl))
+       (TNL (parse r (if (is_zero nl) st (push_blank st)) 1))
+       ((TAtom a) (parse r (push_node (CAtom a) st) 0))
+       ((TStr s) (parse r (push_node (CStr s) st) 0))
+       ((TComment txt)
+        (if (in_levels st) none (parse r (push_comment txt (is_zero nl) st) 0)))))))
+
+;; a source's top-level nodes; none where this reading has none
+(fn cst_read ((src (List Nat))) (Option (List CNode))
+  (match (lex src LNone nil)
+    (none none)
+    ((some ts) (parse ts (cons (FList nil) nil) 1))))

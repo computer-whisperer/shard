@@ -1,0 +1,96 @@
+;;; v3/tools/shardfmt/shardfmt.shard — the formatter's program (LANGUAGE.md §8.7 slice 5.1
+;;; rule 4): `shardfmt [--check] FILE`. The file's text in the canonical layout goes to
+;;; standard output; the file is never written.
+;;;
+;;;   exit 0   the text was written and reads as the file does; under --check, the file is
+;;;            already that text, byte for byte
+;;;   exit 1   --check only: the text was written and differs from the file
+;;;   exit 2   no text: the usage, a file that cannot be read, a source the reader refuses
+;;;            (its reason and byte offset on standard output) or the printer has no reading of
+;;;   exit 3   no text: the printer's output reads differently from the file — the gate's
+;;;            refusal, a printer defect to report
+;;;
+;;; The arguments are exactly `FILE` or `--check FILE`: anything else is the usage, so a flag
+;;; in the wrong place is never read as a file's name and never as a pass.
+;;;
+;;;   v3/build.sh v3/tools/shardfmt/shardfmt.shard v3/bin/shardfmt v3/tools/shardfmt/print v3/tools/shardfmt/reads
+(import "fmt.shard")
+(import "../../std/bytes.shard")
+(import "../../std/host.shard")
+(use tools.shardfmt.fmt)
+(use tools.shardfmt.print)
+(use tools.shardfmt.reads)
+(use std.bytes)
+(use std.host)
+(use Init.Bool)
+(use Init.List)
+(use Init.Option)
+
+(fn text ((s String)) ByteArray (Bytes.ofString s))
+(fn same_bytes ((a (List UInt8)) (b (List UInt8))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x xs)
+     (match b
+       (nil false)
+       ((cons y ys)
+        (if (= (UInt8.toNat x) (UInt8.toNat y)) (same_bytes xs ys) false))))))
+(fn is_check ((a ByteArray)) Bool
+  (same_bytes (Bytes.toList a) (Bytes.toList (text "--check"))))
+
+;; why a source got no text: the reader's refusal, the printer's, or the gate's
+(fn refuse ((src ByteArray) (w World)) World
+  (match (read_error src)
+    ((some why)
+     (exit
+       2
+       (write_line why (write (text "shardfmt: the source does not read: ") w))))
+    (none
+      (match (print src)
+        (none
+          (exit
+            2
+            (write
+              (text "shardfmt: the printer has no reading of this source\n")
+              w)))
+        ((some _)
+         (exit
+           3
+           (write
+             (text
+               "shardfmt: the reformatted text reads differently; refusing to emit\n")
+             w)))))))
+
+(fn run_fmt ((path ByteArray) (check Bool) (w World)) World
+  (match (read_file path w)
+    ((Prod.mk r w2)
+     (match r
+       (none (exit 2 (write (text "shardfmt: cannot read file\n") w2)))
+       ((some src)
+        (match (fmt src)
+          ((some out)
+           (if check
+             (if (same_bytes (Bytes.toList out) (Bytes.toList src))
+               (exit 0 (write out w2))
+               (exit 1 (write out w2)))
+             (exit 0 (write out w2))))
+          (none (refuse src w2))))))))
+
+(fn usage ((w World)) World
+  (exit 2 (write (text "usage: shardfmt [--check] FILE\n") w)))
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk args w1)
+     (match args
+       (nil (usage w1))
+       ((cons a0 more)
+        (match more
+          (nil (if (is_check a0) (usage w1) (run_fmt a0 false w1)))
+          ((cons a1 more2)
+           (match more2
+             (nil (if (is_check a0) (run_fmt a1 true w1) (usage w1)))
+             (_ (usage w1))))))))))

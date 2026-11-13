@@ -2505,6 +2505,25 @@ new configuration's first run: `host` 40 s, `v3` 3,782 s, `native`
 1,985 s, `suite_tie` 26 s (pipeline 671, through the old chain: v3
 4,678 s, native 5,091 s).
 
+**Slice 5.1 taken up 2026-11-13 — the formatter migrated; landing 1
+built** (`LANGUAGE.md` §8.7 "Slice 5.1", §13 item 74). The user: "Good.
+Let's migrate the formatter first." The old tree's `tools/shardfmt` and
+`meta/format` are `v3/tools/shardfmt`: an ordinary program under the
+naming law, `shardfmt [--check] FILE`, a native binary by route 1. `fmt`
+is the printer and then the gate — the loader's own reader decides
+whether the output reads as the input did. The printer and the reader
+each sit behind a view, so `fmt` and `main` are definitions (45 of the
+tool's 64 functions are; the printer's mutually recursive renderers are
+programs without a definition until V3 compiles mutual recursion). The
+old printer is carried function for function: with the old head table
+it agrees with the old formatter, run from the tag, on every readable
+file of the old tree it was run on (624 unchanged by both, 33
+reformatted byte for byte alike). Of `v3/`'s 591 sources 280 are
+canonical today and 309 are not; nothing refuses them yet. Not started,
+each on the user's word: landing 2, the contract as theorems; landing
+3, the tree reformatted and the gate on. The old family's files are
+deleted.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

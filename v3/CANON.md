@@ -1,6 +1,11 @@
 # The canonical form of S — CANON's rule set rewritten for V3 (phase 2, slice 8)
 
 > **STATUS (2026-09-13): the rule set, written; the gate is phase 6.**
+> **Since 2026-11-13 the formatter exists** — `v3/tools/shardfmt`, the
+> old one migrated at slice 5.1 landing 1 (`v3/LANGUAGE.md` §8.7); §3
+> and §7–§8 carry its notes. The tree is not yet reformatted and no
+> gate refuses a file: that is the slice's landing 3, on the user's
+> ruling.
 > This document is law §10.5's CANON row at phase 2: `docs/CANON.md`'s
 > rule set rewritten for S, its §7 content addressing superseded by law
 > §8.3, and the law itself carried — one canonical form, a gate that
@@ -96,8 +101,8 @@ tie two readers. The canonical form of S is a form of the *source*.
 
 ## 3. Layout — tier 0, D1
 
-**Carried, the whole of shardfmt's law** (`tools/shardfmt`,
-`meta/format`, `docs/CANON.md` §2 precedent 1): 80 columns; two-space
+**Carried, the whole of shardfmt's law** (the old tree's `tools/shardfmt`
+and `meta/format`, `docs/CANON.md` §2 precedent 1): 80 columns; two-space
 indent; fit-or-break; break after the head with a per-head count of
 arguments that stay on the head line, greedy while they fit; all-atom
 lists fill; a `match` is never flat; a broken `if` cascade holds one
@@ -111,7 +116,15 @@ to emit output that reads differently from its input.
 `keep_n`) knows `fn sig extern claim requirement axiom fulfills goal
 match if let type case-on case wf-induct induct have bin`. The V3 forms
 of `LANGUAGE.md` §4 take these counts — the arguments that name the
-declaration and its signature stay on the head line, the body breaks:
+declaration and its signature stay on the head line, the body breaks.
+*As built (slice 5.1, `tools/shardfmt/print/layout.shard` `keep_n`):*
+the table below with the old one's `fn sig extern fulfills match if let
+type have bin`; six old heads — `claim goal case-on case wf-induct
+induct` — name forms V3 does not have and are not carried. The proof
+steps other than `by` and `exact` (`induction`, `cases`, their arms,
+`rw`, `intro`, …) have no count here and print one argument a line
+when they break: counts for them are a decision to make before the
+tree is reformatted.
 
 | head | keep | on the head line |
 |---|---|---|
@@ -137,7 +150,12 @@ as E's literal rule says in every file (`LANGUAGE.md` §8.1 rule 2,
 2026-09-14). The old formatter's reader
 knows none of this — `Eq.{1}` is "unreadable source" to it (§7) — so the
 V3 formatter is a printer over `kernel/sexpr.shard`'s s-expressions,
-which already lex S.
+which already lex S. *As built (slice 5.1):* the printer needs what
+that reader drops — comments, blank lines, raw bytes — so it has its
+own reading with these lexical rules (`tools/shardfmt/print/cst.shard`,
+a universe list a node of its tree), and `kernel/sexpr.shard` is the
+gate's judge: the output is emitted only if that reader reads it as it
+read the input.
 
 **Sugar is presentation** (old D12, carried): the canonical form is
 defined on what the reader builds; the rewriter emits the maximally
@@ -284,6 +302,13 @@ Migration order carries from the old §10 — the smallest tree first, the
 kernel sources last, and the proof-neutrality probe before any sweep —
 and lands at phase 6.
 
+**Measured again 2026-11-13 with the V3 formatter** (slice 5.1 landing
+1; `tools/shardfmt/test/shardfmt_test.sh` prints the count on every
+run): of the 591 tracked sources under `v3/`, 280 are canonical, 309 a
+reformat would change — each a fixed point after it, every comment
+kept —, 2 do not read (the pins broken on purpose), and none is
+refused by the gate. The S pin the old reader could not lex reads.
+
 ## 8. Enforcement — the ratchet on V3
 
 The old §3 ratchet, restated for the new tree; each stage is its own
@@ -304,7 +329,10 @@ decision:
    resource-sensitive body — each with the report expected.
 2. **The tree canonical, pinned.** `v3/kernel` reformatted under the V3
    formatter — a printer over `kernel/sexpr.shard` — and its E bodies at
-   zero advisory lines; the loader pins gain the canon cases.
+   zero advisory lines; the loader pins gain the canon cases. *The
+   formatter is built (slice 5.1 landing 1, 2026-11-13); the reformat
+   is its landing 3 and waits on the user's ruling — item 5 of §9 named
+   phase 6.*
 3. **The gate.** `v3/test.sh` refuses a drifting file, as
    `bin/rebuild.sh` refused to stamp one until its deletion at slice 5.0 —
    the fmt gate on V3
@@ -389,6 +417,8 @@ tag rule), §6.4 (the primitive table), §6.7 (the classifier's matrix),
 §10 item 1 (the parity text, which this form is not), §11 and §12.5
 (the fmt gate at phase 6), §13 (ratification); `docs/FOUNDATION.md`
 §5.1 "One canonical S", §8.3 identity, §10.5 the disposition row;
-`tools/shardfmt` and `meta/format` (the layout law's implementation);
+`v3/tools/shardfmt` (the layout law's implementation since slice 5.1;
+the old tree's `tools/shardfmt` and `meta/format`, which this document
+cites above, are at the tag `v2-kernel-last`);
 `kernel/canon.shard` and `tools/canon/` (the old recognizer and
 rewriter, the reference for stage 1).

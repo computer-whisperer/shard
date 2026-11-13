@@ -1,0 +1,52 @@
+;;; v3/tools/shardfmt/reads/reads.shard — the view's implementation: the loader's reader itself
+;;; (`kernel/sexpr.shard`), called over the bytes as the toolchain holds them (the prelude's
+;;; list of integers). Two texts read the same when both read and their trees print alike under
+;;; the reader's own printer (`show_sexprs`: numerals by value, strings by their decoded bytes,
+;;; symbols by name, a universe list in its braces) — the comparison of the parity dump. The
+;;; functions here that touch the reader's types are programs without a definition (the
+;;; toolchain's types are E only); the view's two signatures are what a consumer reasons with.
+(import Init UInt8.toNat)
+(import "../../../kernel/sexpr.shard")
+(import "../../../std/bytes.shard")
+(use kernel.sexpr)
+(use kernel.util)
+(use std.bytes)
+(use kernel.sexpr.RAll)
+
+;; a text's bytes as the toolchain's list, and a toolchain text back
+(fn to_codes ((bs (List UInt8))) (kernel.prelude.List Int)
+  (measure (struct bs))
+  (match bs
+    (List.nil kernel.prelude.List.Nil)
+    ((List.cons b t)
+     (kernel.prelude.List.Cons (Int.ofNat (UInt8.toNat b)) (to_codes t)))))
+(fn of_codes ((cs (kernel.prelude.List Int))) (List UInt8)
+  (measure (struct cs))
+  (match cs
+    (kernel.prelude.List.Nil List.nil)
+    ((kernel.prelude.List.Cons c t)
+     (List.cons (Byte.ofNat (Int.natAbs c)) (of_codes t)))))
+(fn read_text ((src ByteArray)) RAll (read_all (to_codes (Bytes.toList src))))
+
+(fn reads_same ((a ByteArray) (b ByteArray)) Bool
+  (match (read_text a)
+    ((RAErr _ _) Bool.false)
+    ((RAOk xs)
+     (match (read_text b)
+       ((RAErr _ _) Bool.false)
+       ((RAOk ys)
+        (if (int_list_eq (show_sexprs xs) (show_sexprs ys)) Bool.true
+        Bool.false))))))
+
+(fn read_error ((src ByteArray)) (Option ByteArray)
+  (match (read_text src)
+    ((RAOk _) Option.none)
+    ((RAErr why at)
+     (Option.some
+       (Bytes.ofList
+         (of_codes
+           (append
+             (chars_of_sym why)
+             (append
+               (to_codes (Bytes.toList (Bytes.ofString " at byte ")))
+               (show_int at)))))))))

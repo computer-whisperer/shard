@@ -10,7 +10,9 @@
 > is **unchecked text** until each family migrates to V3 — nothing on this branch loads or gates it. The
 > proven binaries, the search engine and the corpus described below are the old tree's: they run at the
 > tag **`v2-kernel-last`**, the last commit that holds the old kernel, where the commands of the old
-> quick start work as written.
+> quick start work as written. **Migrated so far:** the formatter — `tools/shardfmt` and `meta/format`
+> are [`v3/tools/shardfmt`](v3/tools/shardfmt/README.md) since 2026-11-13 (slice 5.1), their old files
+> deleted.
 
 Every mainstream programming language asks one notation to do three
 jobs at once: **state what the software must do**, **express how it is
@@ -369,8 +371,10 @@ authority for its area:
   engines, their byte-tie and the full `Init` replay (`v3/test.sh`,
   `v3/build.sh`, `v3/t0_full.sh`; CI's `v3`, `native`, `suite_tie`); new
   features land with pins (positive and negative) under `v3/pins/`.
-- **Sources are canonical-format**, enforced by shardfmt's gate and
-  the rebuild stamp check.
+- **Sources are written toward the canonical format** (`v3/CANON.md`;
+  the formatter is `v3/tools/shardfmt`). No gate refuses a drifting
+  file yet: the old tree's stamp check went with its kernel, and V3's
+  gate is slice 5.1's third landing.
 - **Design decisions live in ledgers.** Scope ledgers (docs above)
   for the arcs; REVISIT.md entries ("what was chosen / why now /
   revisit when") for everything smaller.

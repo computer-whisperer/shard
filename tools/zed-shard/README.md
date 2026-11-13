@@ -69,23 +69,17 @@ enclosing top-level form for vim-mode `af`, comment blocks for `gc`.
 
 ## Optional: shardfmt on save
 
-`tools/shardfmt` is a gate-not-printer (`shardfmt --check FILE`) with
-a rewriting mode (`shardfmt FILE`). Zed runs external formatters from
-user settings, not from an extension, so if you want format-on-save add
-something like this to your `settings.json` once the `shardfmt` binary
-is on your `PATH`:
-
-```json
-"languages": {
-  "Shard": {
-    "formatter": { "external": { "command": "shardfmt", "arguments": ["{buffer_path}"] } },
-    "format_on_save": "on"
-  }
-}
-```
-
-(`shardfmt` rewrites the file in place rather than printing to stdout,
-so pair this with Zed's autosave or run it as a task instead.)
+The formatter is `v3/tools/shardfmt` (its README has the build line):
+`shardfmt FILE` prints FILE's canonical text on standard output and
+`shardfmt --check FILE` also says by its exit code whether FILE already
+is that text. It reads the file on disk, never standard input, and
+never writes the file — so it is **not** usable as Zed's on-save
+formatter, which hands the unsaved buffer to the command's standard
+input: wired that way it would replace the buffer with the formatted
+text of the last save. Run it as a task on a saved file instead
+(`shardfmt FILE > FILE.new && mv FILE.new FILE`). (This section used to
+give an on-save setting and said the tool rewrites in place; neither
+was right for the old formatter either.)
 
 ## Caveats
 
