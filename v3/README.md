@@ -2589,7 +2589,29 @@ no step named since slice 5.1 landing 2, is accepted (pins
 cost was measured (the model root: 28 to 31 s after, 30 to 33 s
 before). Green on the full local gate: 31 roots rebuilt, the full
 replay equal to its pin, both suites 51 entrypoints with 0 failed,
-0 differ between the engines.
+0 differ between the engines. Pipeline 690 green on `19b8027`: `host`
+42 s, `v3` 4,005 s, `native` 2,156 s, `suite_tie` 44 s.
+
+**Slice 5.2's four decisions ruled, and landing 2 built 2026-11-13 —
+a group of functions that call each other is one definition**
+(`LANGUAGE.md` §8.7 "As built, landing 2"). The user, on the four put
+with landing 1's report: "1: no new syntax, 2: agreed, 3: agreed, 4:
+agreed. Proceed." Functions that call each other, each with its own
+`(measure N)`, are now one definition by well-founded recursion: the
+loader finds the group when its last member is read, generates a type
+with a constructor per member over its arguments, and defines one
+fixpoint over it; each member is the fixpoint at its constructor, with
+its equations and one obligation per call between members. A group
+that does not compile — a member without a measure, with a structural
+one, with a type parameter — stays programs, the reason on each
+record. The domain is a generated type where the design had Lean's
+`PSum` of tuples: Init is loaded on demand below a file's horizon and
+`PSum` stands far above the formatter's. Six pins; a program built
+from a group runs and exits as K proves. Green on the full local gate:
+31 roots rebuilt, the full replay equal to its pin, both suites 51
+entrypoints with 0 failed, 0 differ between the engines. Next:
+landing 3, `(derive TYPE size)`, and with it a program's clause for a
+measure that has no program.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

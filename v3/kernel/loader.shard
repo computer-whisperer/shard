@@ -69,6 +69,8 @@
 (use kernel.predef.PdRes)
 (use kernel.define)
 (use kernel.define.DfRes)
+(use kernel.define.GrpDef)
+(use kernel.define.GrpRes)
 (use kernel.decl.InductiveType)
 (use kernel.record)
 (use kernel.record.RxRes)
@@ -1366,7 +1368,7 @@
            ((EFn _ _ _ _ _ body) (calls_of body))
            (_ Nil))
          Nil)))
-    (if pending (Cons k inherited) inherited)))
+    (if (bool_and pending (bool_not (mem_name k inherited))) (Cons k inherited) inherited)))  ; a member of a group inherits itself from its group (load_group)
 (fn roots_of ((pm (List (Pair Name (List Name)))) (calls (List Name)) (acc (List Name))) (List Name)
   (measure (struct calls))
   (match calls
@@ -1539,8 +1541,9 @@
       (match (load_fn l1 f s 2)
         ((Pair l2 f2)
          (if (= (len (Load.parked l2)) (len (Load.parked l1)))
-           (retry_parked l2 f2 (+ 1 (len (Load.parked l2))))
-           (Pair l2 f2))))
+           (match (retry_parked l2 f2 (+ 1 (len (Load.parked l2))))
+             ((Pair l3 f3) (settle_groups l3 f3 (+ 1 (len (Load.parked l3))))))
+           (settle_groups l2 f2 (+ 1 (len (Load.parked l2)))))))
       (load_extern l1 f s)))))
 ;; an extern: its L constant first — an opaque of the declared type with the type's default
 ;; witness (reader.shard read_extern; §8.6 slice 4.3 landing 1 rule 3), an ACCEPT — then the
@@ -2078,6 +2081,362 @@
           (_
             (match (load_e_first (ld_with_parked l1 Nil) f s why (quote e_first))
               ((Pair l2 _) (flush_each l2 f r))))))))))
+;; ---- a group of functions that call each other, settled when its last member is read ------
+;; (§8.7 slice 5.2 rule 3.) After every fn the parked are looked at once more: a parked fn whose
+;; wait leads round to itself is read with the parked as callee-locals, and so is every parked
+;; fn it reaches; when all of them read, and none calls a fn outside them that has no
+;; definition, the set is closed. Its lowest cycle is then one definition by well-founded
+;; recursion (define.shard define_group) — DEFINE for each member — or, where the group does
+;; not compile (rule 4), RUNNABLE for each with the reason. The retry settles their callers.
+
+;; a parked fn as the settlement reads it: its name, its form, the parked callees its body binds
+(type Probe (Probe Name SExpr (List Callee)))
+(type Probed (ProbedOk (List Callee)) (ProbedWaits (List Int)) (ProbedNo))
+(fn probe_name ((p Probe)) Name
+  (match p
+    ((Probe k _ _) k)))
+(fn probe_names ((ps (List Probe))) (List Name)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p r) (Cons (probe_name p) (probe_names r)))))
+(fn callee_ids ((cs (List Callee))) (List Name)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (Callee _ id _ _) r) (Cons id (callee_ids r)))))
+(fn probe_find ((ps (List Probe)) (k Name)) (Option Probe)
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons p r) (if (name_eq (probe_name p) k) (Some p) (probe_find r k)))))
+(fn parked_find ((ps (List Parked)) (k Name)) (Option Parked)
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons (Parked n s why m) r) (if (name_eq n k) (Some (Parked n s why m)) (parked_find r k)))))
+(fn parked_names ((ps (List Parked))) (List Name)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Parked n _ _ _) r) (Cons n (parked_names r)))))
+(fn parked_without ((ps (List Parked)) (ks (List Name))) (List Parked)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Parked n s why m) r)
+     (if (mem_name n ks) (parked_without r ks) (Cons (Parked n s why m) (parked_without r ks))))))
+(fn parked_only ((ps (List Parked)) (ks (List Name))) (List Parked)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Parked n s why m) r)
+     (if (mem_name n ks) (Cons (Parked n s why m) (parked_only r ks)) (parked_only r ks)))))
+;; a parked fn waiting on another name from now on (the name its last reading did not find)
+(fn parked_waits ((ps (List Parked)) (k Name) (m (List Int))) (List Parked)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Parked n s why m0) r)
+     (if (name_eq n k) (Cons (Parked n s why m) r) (Cons (Parked n s why m0) (parked_waits r k m))))))
+;; the parked fn the name a parked fn waits on stands for, if it is one (lt: the parked as typed)
+(fn waited_parked ((lt Load) (sc Scope) (m (List Int))) (Option Name)
+  (match (callee_state lt sc m)
+    ((CsTyped (Callee _ id _ _)) (if (mem_name id (parked_names (Load.parked lt))) (Some id) None))
+    (_ None)))
+;; a parked fn's wait leads round to a fn already on the way: a cycle by the recorded waits
+;; alone, no body read. A wait on a name not declared yet ends the walk: nothing can close
+(fn waits_round ((lt Load) (sc Scope) (k Name) (seen (List Name)) (fuel Int)) Bool
+  (measure fuel)
+  (if (< fuel 1) False
+  (match (parked_find (Load.parked lt) k)
+    (None False)
+    ((Some (Parked _ _ _ m))
+     (match (waited_parked lt sc m)
+       (None False)
+       ((Some next)
+        (if (bool_or (name_eq next k) (mem_name next seen)) True
+        (waits_round lt sc next (Cons k seen) (- fuel 1)))))))))
+;; a parked fn read with the parked as callee-locals — the retry's loop without a load: its
+;; callees; or the name it still waits on; or an obstacle of its own (settled at the file's end)
+(fn probe_fn ((lt Load) (sc Scope) (s SExpr) (callees (List Callee)) (cfuel Int)) Probed
+  (measure cfuel)
+  (match (read_predef sc (Load.env lt) s callees)
+    ((PdOk _) (ProbedOk callees))
+    ((PdSkip _ _) ProbedNo)
+    ((PdErr r m)
+     (if (bool_not (sym_eq r (quote unknown_constant))) ProbedNo
+     (match (callee_state lt sc m)
+       ((CsTyped c)
+        (if (< cfuel 1) ProbedNo (probe_fn lt sc s (append callees (list c)) (- cfuel 1))))
+       (CsPark (ProbedWaits m))
+       (_ ProbedNo))))))
+;; every parked fn the start reaches through parked callees, each read: the probes, or the
+;; first that does not read — with the name it waits on, kept on its entry so the next look
+;; ends at the recorded waits
+(type ProbeReach (ReachOk (List Probe)) (ReachWaits Name (List Int)) (ReachNo))
+(fn probe_reach ((lt Load) (sc Scope) (todo (List Name)) (done (List Probe)) (fuel Int)) ProbeReach
+  (measure fuel)
+  (if (< fuel 1) ReachNo
+  (match todo
+    (Nil (ReachOk (rev done)))
+    ((Cons k r)
+     (match (probe_find done k)
+       ((Some _) (probe_reach lt sc r done (- fuel 1)))
+       (None
+         (match (parked_find (Load.parked lt) k)
+           (None ReachNo)  ; a callee with a program and no definition, outside the parked: callee_runnable at the file's end
+           ((Some (Parked _ s _ _))
+            (match (probe_fn lt sc s Nil 16)
+              ((ProbedOk callees)
+               (probe_reach lt sc (append r (callee_ids callees)) (Cons (Probe k s callees) done)
+                 (- fuel 1)))
+              ((ProbedWaits m) (ReachWaits k m))
+              (ProbedNo ReachNo))))))))))
+;; the names a name reaches through one call or more, among the probes
+(fn reach_names ((ps (List Probe)) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (< fuel 1) seen
+  (match todo
+    (Nil seen)
+    ((Cons k r)
+     (if (mem_name k seen) (reach_names ps r seen (- fuel 1))
+     (reach_names ps
+       (append r
+         (match (probe_find ps k)
+           ((Some (Probe _ _ cs)) (callee_ids cs))
+           (None Nil)))
+       (Cons k seen)
+       (- fuel 1)))))))
+(fn probe_reaches ((ps (List Probe)) (k Name)) (List Name)
+  (match (probe_find ps k)
+    ((Some (Probe _ _ cs)) (reach_names ps (callee_ids cs) Nil (* 4 (+ 1 (len ps)))))
+    (None Nil)))
+(fn names_within ((xs (List Name)) (ys (List Name))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x r) (if (mem_name x ys) (names_within r ys) False))))
+;; a lowest cycle among the probes: a fn that reaches itself and nothing that does not reach it back
+(fn lowest_cycle ((ps (List Probe)) (cands (List Probe))) (Option (List Name))
+  (measure (struct cands))
+  (match cands
+    (Nil None)
+    ((Cons (Probe k _ _) r)
+     (let ((rk (probe_reaches ps k)))
+       (if (bool_and (mem_name k rk) (all_reach_back ps rk k)) (Some rk) (lowest_cycle ps r))))))
+(fn all_reach_back ((ps (List Probe)) (xs (List Name)) (k Name)) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x r) (if (mem_name k (probe_reaches ps x)) (all_reach_back ps r k) False))))
+;; the probes of the named, in the parked's order (the file's)
+(fn probes_in_order ((ps (List Parked)) (probes (List Probe)) (ks (List Name))) (List Probe)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Parked n _ _ _) r)
+     (if (mem_name n ks)
+       (match (probe_find probes n)
+         ((Some p) (Cons p (probes_in_order r probes ks)))
+         (None (probes_in_order r probes ks)))
+       (probes_in_order r probes ks)))))
+;; the parked looked at from the last one back: a closed set's lowest cycle, settled; then the
+;; retry, and again
+(fn settle_groups ((l Load) (f Fx) (fuel Int)) (Pair Load Fx)
+  (measure fuel)
+  (if (< fuel 1) (Pair l f)
+  (match (Load.parked l)
+    (Nil (Pair l f))
+    (ps
+      (let ((sc (fx_scope l f)))
+        (match (find_group (typed_all l sc ps) sc l (rev ps) (+ 1 (len ps)))
+          ((Pair l1 None) (Pair l1 f))
+          ((Pair l1 (Some g))
+           (match (load_group l1 f g)
+             ((Pair l2 f2)
+              (match (retry_parked l2 f2 (+ 1 (len (Load.parked l2))))
+                ((Pair l3 f3) (settle_groups l3 f3 (- fuel 1)))))))))))))
+;; `l`: the load, whose parked entries take the name a reading still waits on
+(fn find_group ((lt Load) (sc Scope) (l Load) (starts (List Parked)) (fuel Int))
+  (Pair Load (Option (List Probe)))
+  (measure (struct starts))
+  (match starts
+    (Nil (Pair l None))
+    ((Cons (Parked k _ _ _) r)
+     (if (bool_not (waits_round lt sc k Nil fuel)) (find_group lt sc l r fuel)
+     (match (probe_reach lt sc (list k) Nil (* 4 fuel))
+       ((ReachOk probes)
+        (match (lowest_cycle probes probes)
+          ((Some ks) (Pair l (Some (probes_in_order (Load.parked l) probes ks))))
+          (None (find_group lt sc l r fuel))))
+       ((ReachWaits n m)
+        (find_group (ld_with_parked lt (parked_waits (Load.parked lt) n m)) sc
+          (ld_with_parked l (parked_waits (Load.parked l) n m))
+          r
+          fuel))
+       (ReachNo (find_group lt sc l r fuel)))))))
+;; the group's members read one after the other in one state (predef.shard read_predef_from)
+(fn read_group ((sc Scope) (env CheckedEnv) (g (List Probe)) (base (Option El)) (acc (List PreDef)))
+  (Option (List PreDef))
+  (measure (struct g))
+  (match g
+    (Nil (Some (rev acc)))
+    ((Cons (Probe _ s callees) r)
+     (match (read_predef_from base sc env s callees)
+       ((PdOk pd) (read_group sc env r (Some (pd_state pd)) (Cons pd acc)))
+       (_ None)))))
+;; every member has a program by erasure alone (no template)
+(fn group_erases ((es ESt) (sc Scope) (pds (List PreDef))) Bool
+  (measure (struct pds))
+  (match pds
+    (Nil True)
+    ((Cons pd r)
+     (match (erase_predef es sc pd)
+       ((PdEraseOk _ _ _ _) (group_erases es sc r))
+       (_ False)))))
+;; the members' programs: each erasure, the lambdas it lifted and the instances it demands
+;; admitted first (load_fn_with's order); None when one of those is refused
+(fn erase_group ((l Load) (f Fx) (sc Scope) (pds (List PreDef)) (acc (List EDecl)))
+  (Pair (Pair Load Fx) (Option (List EDecl)))
+  (measure (struct pds))
+  (match pds
+    (Nil (Pair (Pair l f) (Some (rev acc))))
+    ((Cons pd r)
+     (match (erase_predef (Load.etab l) sc pd)
+       ((PdEraseOk es1 d lifted demands)
+        (match (admit_lifted (ld_with_e l es1) f lifted)
+          ((Pair l1 None) (Pair (Pair l1 f) None))
+          ((Pair l1 (Some f1))
+           (match (build_demands l1 f1 (pd_name pd) demands 64)
+             ((Pair l2 None) (Pair (Pair l2 f1) None))
+             ((Pair l2 (Some f2)) (erase_group l2 f2 sc r (Cons d acc)))))))
+       (_ (Pair (Pair l f) None))))))
+;; a closed cycle settled: read in one state, erased, projected
+(fn load_group ((l0 Load) (f0 Fx) (g (List Probe))) (Pair Load Fx)
+  (let
+    ((sc (fx_scope l0 f0))
+     (mine (parked_only (Load.parked l0) (probe_names g)))
+     (l (ld_with_parked l0 (parked_without (Load.parked l0) (probe_names g)))))
+    (match (read_group sc (Load.env l) g None Nil)
+      (None (group_as_programs l f0 sc mine))
+      ((Some pds)
+       (if (bool_not (group_erases (Load.etab l) sc pds)) (group_as_programs l f0 sc mine)
+       (match (erase_group l f0 sc pds Nil)
+         ((Pair (Pair l1 f1) None) (Pair l1 f1))
+         ((Pair (Pair l1 f1) (Some ds))
+          (match (define_group (Load.etab l1) sc pds)
+            ((GrpSkip why _) (Pair (group_runnable l1 sc g ds why) f1))
+            ((GrpErr e m) (Pair (group_refused l1 g e m) f1))
+            ((GrpOk es2 obls core defs)
+             (match (admit_matchers (ld_with_e l1 es2) f1 (group_form g) (group_aux pds))
+               ((Pair l2 None) (Pair l2 f1))
+               ((Pair l2 (Some f2))
+                (match (admit_obligations l2 f2 obls)
+                  ((Pair l3 f3)
+                   (match (admit_core l3 f3 core)
+                     ((Pair l4 None) (Pair l4 f3))
+                     ((Pair l4 (Some recs))
+                      (group_defined (group_roots l4 (probe_names g) (probe_names g))
+                        (mix_recs f3 recs)
+                        ds
+                        defs))))))))))))))))
+(fn group_form ((g (List Probe))) SExpr
+  (match g
+    ((Cons (Probe _ s _) _) s)
+    (Nil (SList Nil))))
+;; the matchers the group's bodies generated: the last member's state holds them all
+(fn group_aux ((pds (List PreDef))) (List Declaration)
+  (measure (struct pds))
+  (match pds
+    (Nil Nil)
+    ((Cons pd Nil) (pd_aux pd))
+    ((Cons _ r) (group_aux r))))
+;; every member carries every member's measure until its obligations are discharged: the
+;; fixpoint is one, and each member's closure holds it (slice 5.2 rule 2)
+(fn group_roots ((l Load) (ks (List Name)) (all (List Name))) Load
+  (measure (struct ks))
+  (match ks
+    (Nil l)
+    ((Cons k r) (group_roots (ld_add_pm l k all) r all))))
+;; the members' programs into the table and their definitions admitted, all of them; then
+;; each member's equations — which cite the other members — with its records (load_defined's:
+;; DEFINE, and PENDING for the measure)
+(fn group_defined ((l Load) (f Fx) (ds (List EDecl)) (defs (List GrpDef))) (Pair Load Fx)
+  (match (group_definitions l f ds defs)
+    ((Pair l1 None) (Pair l1 f))
+    ((Pair l1 (Some f1)) (group_equations l1 f1 ds defs))))
+(fn group_definitions ((l Load) (f Fx) (ds (List EDecl)) (defs (List GrpDef)))
+  (Pair Load (Option Fx))
+  (measure (struct defs))
+  (match defs
+    (Nil (Pair l (Some f)))
+    ((Cons (GrpDef _ dd _) r)
+     (match ds
+       ((Cons d dr)
+        (match (admit_core (ld_with_e l (es_add_decl (Load.etab l) d)) f (list dd))
+          ((Pair l1 None) (Pair l1 None))
+          ((Pair l1 (Some recs)) (group_definitions l1 (mix_recs f recs) dr r))))
+       (Nil (Pair l (Some f)))))))
+(fn group_equations ((l Load) (f Fx) (ds (List EDecl)) (defs (List GrpDef))) (Pair Load Fx)
+  (measure (struct defs))
+  (match defs
+    (Nil (Pair l f))
+    ((Cons (GrpDef k _ eqs) r)
+     (match ds
+       ((Cons d dr)
+        (match (admit_core l f eqs)
+          ((Pair l1 None) (group_equations l1 f dr r))
+          ((Pair l1 (Some recs))
+           (let ((roots (realize_roots l1 k d True)))
+             (group_equations
+               (ld_rec
+                 (ld_rec (ld_add_pm l1 k roots) (RDefine k (decls_declare (Load.env l1) eqs) roots))
+                 (RPending k (quote measure)))
+               (mix_recs f recs)
+               dr
+               r)))))
+       (Nil (Pair l f))))))
+;; the group does not compile (rule 4): each member its program, RUNNABLE with the reason, a
+;; callee-local of later bodies as any typed fn without a definition
+(fn group_runnable ((l Load) (sc Scope) (g (List Probe)) (ds (List EDecl)) (why Symbol)) Load
+  (measure (struct g))
+  (match g
+    (Nil l)
+    ((Cons (Probe k s _) r)
+     (match ds
+       ((Cons d dr)
+        (group_runnable
+          (ld_rec (ld_add_typed (ld_with_e l (es_add_decl (Load.etab l) d)) k sc s)
+            (RRun (quote fn) k why (quote typed)))
+          sc
+          r
+          dr
+          why))
+       (Nil l)))))
+(fn group_refused ((l Load) (g (List Probe)) (e Symbol) (m (List Int))) Load
+  (measure (struct g))
+  (match g
+    (Nil l)
+    ((Cons (Probe k _ _) r) (group_refused (ld_rec l (RClassify k e m)) r e m))))
+;; a group that does not read as one — a member's program is a template, a second reading
+;; differs —: its members as the file's end settles the parked, each other's callee-locals
+(fn group_as_programs ((l Load) (f Fx) (sc Scope) (mine (List Parked))) (Pair Load Fx)
+  (let ((others (Load.parked l)))
+    (match (programs_each (ld_with_parked (typed_all l sc mine) Nil) f mine)
+      ((Pair l1 f1) (Pair (ld_with_parked l1 others) f1)))))
+(fn programs_each ((l Load) (f Fx) (ps (List Parked))) (Pair Load Fx)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair l f))
+    ((Cons (Parked _ s why _) r)
+     (match (load_fn l f s 2)
+       ((Pair l1 f1)
+        (match (Load.parked l1)
+          (Nil (programs_each l1 f1 r))
+          (_
+            (match (load_e_first (ld_with_parked l1 Nil) f1 s why (quote e_first))
+              ((Pair l2 f2) (programs_each l2 f2 r))))))))))
 (fn ld_last_accepted ((l Load)) Bool
   (match (ld_recs_head l)
     ((Some (RAccept _ _ _ _ _ _ _)) True)

@@ -93,10 +93,19 @@ for e in main_bool:10 main_nat:10 main_nat_eq:11; do
   "$EVAL" direct v3/kernel/load.shard --root $R $INIT --run main.${e%%:*} $R/main.shard > /dev/null 2>&1; rc=$?
   [ "$rc" -eq "${e##*:}" ] || { echo "define_test: decidable_cells: ${e%%:*} exits $rc, K proves ${e##*:}"; fail=$((fail+1)); }
 done
+# slice 5.2 landing 2: the members of a group are one definition in K and run as written — the
+# entry's exit code is the one K proves of `ping 5` (the pin's theorem `caller_five`)
+R=v3/pins/loader/mutual_measure
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
+for pat in '^ACCEPT main.ping.args ' '^ACCEPT main.ping.mutual ' '^ACCEPT main.ping.mutual.eq ' '^DEFINE main.ping equations=main.ping.eq_1$' '^DEFINE main.pong equations=main.pong.eq_1$' '^DISCHARGE main.pong.dec_1 proved' 'pending 0  realized 0  defined 4  errors 0'; do
+  echo "$out" | grep -q -- "$pat" || { echo "define_test: mutual_measure lacks '$pat'"; echo "$out" | grep -E '^(DEFINE|RUNNABLE|REFUSE|PENDING|READ-ERROR|LOAD:)' | head -6; fail=$((fail+1)); }
+done
+"$EVAL" direct v3/kernel/load.shard --root $R $INIT --run main.main $R/main.shard > /dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] || { echo "define_test: mutual_measure: main exits $rc, K proves 3"; fail=$((fail+1)); }
 R=v3/pins/loader/derive_refusals
 out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
 for pat in 'derive_shape: main.Void' 'derive_type: True is a proposition' 'derive_type: Nat is the integer' 'derive_type: (Fin 3): an argument that is a value' 'derive_type: Nope is not a type here'; do
   echo "$out" | grep -q -- "$pat" || { echo "define_test: derive_refusals lacks '$pat'"; fail=$((fail+1)); }
 done
-echo "define_test: 12 checks, $fail failed"
+echo "define_test: 20 checks, $fail failed"
 exit "$fail"

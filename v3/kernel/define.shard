@@ -39,7 +39,11 @@
 (use kernel.predef)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
+(use kernel.decl.Constructor)
+(use kernel.decl.Constructor)
 (use kernel.decl.Declaration)
+(use kernel.decl.InductiveType)
+(use kernel.decl.InductiveType)
 (use kernel.decl.DefinitionSafety)
 (use kernel.decl.ReducibilityHints)
 (use kernel.etable.ESt)
@@ -85,7 +89,16 @@
 ;; elaborated. One that does is compiled by its recursion clause: structural — `T.brecOn`, each
 ;; self-call the table's entry found by type (pj_find); measured — `WellFounded.fix`, each
 ;; self-call `rec (tuple args) f.dec_N`. The equations come with it (pj_equations).
-(type PjKind (PkStruct Int Int) (PkWf Expr Expr (List Expr) Expr (List Expr)) (PkEqn))  ; C's id, the structural position among the data arguments; rec, the tuple, the components' types, the measure over the data binders, the data binders; the statement of a measured function's equations (a self-call stays a call, a matcher carries its equation as under PkWf)
+;; a member of a group as a body calls it: the local's id in this body, the member's
+;; constructor of the group's argument type, its measure over its data binders, those binders
+(type PjCallee (PjCallee Int Name Expr (List Expr)))
+;; PkGrp: a member of a group (slice 5.2) — rec, the member's measure, its data binders, the
+;; members as this body calls them
+(type PjKind
+  (PkStruct Int Int)
+  (PkWf Expr Expr (List Expr) Expr (List Expr))
+  (PkEqn)
+  (PkGrp Expr Expr (List Expr) (List PjCallee)))  ; C's id, the structural position among the data arguments; rec, the tuple, the components' types, the measure over the data binders, the data binders; the statement of a measured function's equations (a self-call stays a call, a matcher carries its equation as under PkWf)
 (fn pj_carries_eq ((k PjKind)) Bool
   (match k
     ((PkStruct _ _) False)
@@ -97,8 +110,11 @@
 ;; the lexical context of the walk: the self-local's id, the type binders (fixed in a
 ;; self-call), the recursion, the tables in scope innermost first — a local with its type over
 ;; the abstract motive —, every local in scope outermost first (True = a let)
+;; `members`: the callee-locals that stand for the other members of the function's group (slice
+;; 5.2), none for a function that calls only itself
 (record PjCx (self Int) (tps (List Expr)) (kind PjKind) (tables (List (Pair Expr Expr)))
-  (scope (List (Pair Bool Expr))))
+  (scope (List (Pair Bool Expr)))
+  (members (List Int)))
 (fn pj_push ((cx PjCx) (is_let Bool) (fvs (List Expr))) PjCx
   (measure (struct fvs))
   (match fvs
@@ -157,7 +173,8 @@
                              (if measured
                                (pj_term (tr_set_w t1 w2)
                                  (make PjCx (self selfid) (tps tps) (kind (PkEqn)) (tables Nil)
-                                   (scope Nil))
+                                   (scope Nil)
+                                   (members Nil))
                                  (pd_body pd)
                                  (budget_depth))
                                (TrOk (tr_set_w t1 w2) (pd_body pd)))
@@ -288,7 +305,8 @@
                                  (make PjCx (self selfid) (tps tps)
                                    (kind (PkStruct (fvar_id_of cfv) pos))
                                    (tables (list (Pair below belowabs)))
-                                   (scope Nil))))
+                                   (scope Nil)
+                                   (members Nil))))
                               (match (pj_term t8 cx (pd_body pd) (budget_depth))
                                 ((TrErr e m) (AuxErr t8 e m))
                                 ((TrOk t9 b)
@@ -389,7 +407,8 @@
                                        (make PjCx (self selfid) (tps tps)
                                          (kind (PkWf recl p ltys m data))
                                          (tables Nil)
-                                         (scope (list (Pair False p))))))
+                                         (scope (list (Pair False p)))
+                                         (members Nil))))
                                     (match (pj_term t11 cx body1 (budget_depth))
                                       ((TrErr e m2) (AuxErr t11 e m2))
                                       ((TrOk t12 b)
@@ -715,7 +734,7 @@
 (fn pj_term ((t Tr) (cx PjCx) (e Expr) (fuel Int)) TrRes
   (measure fuel)
   (if (< fuel 1) (TrErr (quote define_depth) "a body too deep")
-  (if (bool_not (mentions_any e (list (PjCx.self cx)))) (TrOk t e)
+  (if (bool_not (mentions_any e (Cons (PjCx.self cx) (PjCx.members cx)))) (TrOk t e)
   (match e
     ((Lam _ n _ dom b)
      (match (tr_local t n dom)
@@ -750,7 +769,10 @@
   (measure fuel)
   (if (< fuel 1) (TrErr (quote define_depth) "a body too deep")
   (match head
-    ((FVar _ id) (if (= id (PjCx.self cx)) (pj_self t cx args fuel) (pj_plain t cx head args fuel)))
+    ((FVar _ id)
+     (if (= id (PjCx.self cx)) (pj_self t cx args fuel)
+     (if (mem_int id (PjCx.members cx)) (pj_member t cx id args fuel)
+     (pj_plain t cx head args fuel))))
     ((Const _ c ls)
      (if
        (bool_and (bool_and (name_eq c (n1 (quote ite))) (<= 5 (len args)))
@@ -796,6 +818,12 @@
            ((PkEqn)
             (match (tr_apps t1 (mk_fvar (PjCx.self cx)) (append (take nt args) dargs))
               ((Pair t2 r) (TrOk t2 r))))
+           ((PkGrp _ _ data _)
+            (if (pj_exprs_eq (take (len data) dargs) data)
+              (TrErr (quote realize_descent)
+                (append (show_name (Tr.id t1))
+                  " calls itself on its own parameters — no measure decreases (§7.5)"))
+              (pj_grp_call t1 cx (PjCx.self cx) dargs)))
            ((PkStruct cid pos)
             (match (nth dargs pos)
               (None
@@ -1220,6 +1248,508 @@
                          (match (tr_lams t3 (append vars (firsts_of tlocals)) b)
                            ((Pair t4 alt1) (pj_alts t4 cx gen sid dty rr ar fuel (Cons alt1 acc))))))))))))))
           (_ (Pair t (Left2 (quote define_matrix) "a matcher row over several scrutinees")))))))))
+
+;; ---- a group of functions that call each other: one well-founded fixpoint (§8.7 slice 5.2) -----
+;; Lean's WF.Fix over a domain made for the group: an inductive type `f_1.args` with one
+;; constructor per member, its fields the member's data binders — the tagged union of the
+;; members' arguments, with no tuple and nothing of Init beyond what one measured function
+;; needs. The result type C and the measure M are each `f_1.args.rec` over the constructors;
+;; the functional F is one `f_1.args.rec` whose motive carries the recursion hypothesis —
+;; `λ x. (∀ y, rel y x → C y) → C x` — each minor a member's body under its own binders, a call
+;; to member j `rec (c_j args) (f_i.dec_N locals…)`. One constant holds the fixpoint,
+;; `f_1.mutual := λ x. WellFounded.fix … F x`; one theorem unfolds it, `f_1.mutual.eq`, by
+;; WellFounded.fix_eq; each member is the fixpoint at its constructor. The members'
+;; pre-definitions were read in one state (predef.shard read_predef_from), so every term here
+;; is one walk's.
+
+;; a call to a member under the equations' statement: the call stays a call; in the group's
+;; functional: the recursion hypothesis at the callee's constructor
+(fn pj_member ((t Tr) (cx PjCx) (id Int) (args (List Expr)) (fuel Int)) TrRes
+  (match (pj_terms t cx args fuel Nil)
+    ((Pair _ (Left2 x m)) (TrErr x m))
+    ((Pair t1 (Right2 (Pair dargs _)))
+     (match (PjCx.kind cx)
+       ((PkGrp _ _ _ _) (pj_grp_call t1 cx id dargs))
+       (_
+         (match (tr_apps t1 (mk_fvar id) dargs)
+           ((Pair t2 r) (TrOk t2 r))))))))
+(fn pj_callee_of ((cs (List PjCallee)) (id Int)) (Option PjCallee)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons (PjCallee i c m data) r) (if (= i id) (Some (PjCallee i c m data)) (pj_callee_of r id)))))
+;; `rec (c_j args) (f_i.dec_N locals…)`: the obligation is the comparison of the callee's
+;; measure at the arguments with the caller's at its parameters, named under the caller in the
+;; caller's own count, stated over every local in scope at the call — the caller's binders
+;; first, each by its name (pj_self's obligation, with no tuple)
+(fn pj_grp_call ((t Tr) (cx PjCx) (id Int) (dargs (List Expr))) TrRes
+  (match (PjCx.kind cx)
+    ((PkGrp recl m _ callees)
+     (match (pj_callee_of callees id)
+       (None (TrErr (quote define_matrix) "a call to a function outside the group"))
+       ((Some (PjCallee _ ctor cm cdata))
+        (let ((n (len cdata)))
+          (if (< (len dargs) n)
+            (TrErr (quote function_value)
+              (append (show_name (Tr.id t))
+                ": a member of its group is not applied to all its arguments (no function values, §4)"))
+            (match (tr_apps t (mk_const ctor Nil) (take n dargs))
+              ((Pair t2 tagged)
+               (match (pj_subst_list t2 cm cdata (take n dargs))
+                 ((Pair t3 ma)
+                  (match
+                    (tr_pis t3 (scope_fvars (pj_obl_scope t3 (PjCx.scope cx) (fvar_id_of recl)))
+                      (mk_app (mk_app (mk_const (n2 (quote Nat) (quote lt)) Nil) ma) m))
+                    ((Pair t4 stmt)
+                     (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
+                       (let
+                         ((name
+                            (match had
+                              ((Some k) k)
+                              (None
+                                (name_append (Tr.id t4)
+                                  (n1
+                                    (sym_of_chars
+                                      (append "dec_"
+                                        (show_nat (+ 1 (obls_under (Tr.obls t4) (Tr.id t4))))))))))))
+                         (match
+                           (tr_apps t4 (mk_const name Nil)
+                             (scope_lambda_fvars (pj_obl_scope t4 (PjCx.scope cx) (fvar_id_of recl))))
+                           ((Pair t5 proof)
+                            (match (tr_apps t5 recl (Cons tagged (Cons proof (drop n dargs))))
+                              ((Pair t6 r)
+                               (TrOk
+                                 (match had
+                                   ((Some _) t6)
+                                   (None
+                                     (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False))))
+                                 r))))))))))))))))))
+    (_ (TrErr (quote define_matrix) "a group call outside a group"))))
+;; the obligations named under one owner: their count, and the one stating a fact already
+(fn obl_owner_is ((k Name) (owner Name)) Bool
+  (match k
+    ((Str p _) (name_eq p owner))
+    (_ False)))
+(fn obls_under ((obls (List Declaration)) (owner Name)) Int
+  (measure (struct obls))
+  (match obls
+    (Nil 0)
+    ((Cons (AxiomDecl (ConstantVal k _ _) _) r)
+     (+ (if (obl_owner_is k owner) 1 0) (obls_under r owner)))
+    ((Cons _ r) (obls_under r owner))))
+(fn obl_stating_under ((obls (List Declaration)) (owner Name) (stmt Expr)) (Option Name)
+  (measure (struct obls))
+  (match obls
+    (Nil None)
+    ((Cons (AxiomDecl (ConstantVal k _ ty) _) r)
+     (if (bool_and (obl_owner_is k owner) (expr_eq ty stmt)) (Some k)
+     (obl_stating_under r owner stmt)))
+    ((Cons _ r) (obl_stating_under r owner stmt))))
+
+;; a member as the projection holds it: the pre-definition, its data binders, the result
+;; type, the measure, its constructor of the group's argument type
+(record GrpM (pd PreDef) (data (List Expr)) (rl Expr) (m Expr) (con Name))
+;; a member defined: its name, its definition, its equations
+(type GrpDef (GrpDef Name Declaration (List Declaration)))
+;; GrpSkip: the group has no L meaning here — every member RUNNABLE with the reason; GrpErr: it
+;; should and the definition failed; GrpOk: the E table, the obligations, the argument type
+;; with the fixpoint and its unfolding theorem, the members in order
+(type GrpRes
+  (GrpSkip Symbol (List Int))
+  (GrpErr Symbol (List Int))
+  (GrpOk ESt (List Declaration) (List Declaration) (List GrpDef)))
+(type GrpPrep (GpOk Tr (List GrpM)) (GpSkip Symbol (List Int)) (GpErr Symbol (List Int)))
+(fn pd_names ((pds (List PreDef))) (List Name)
+  (measure (struct pds))
+  (match pds
+    (Nil Nil)
+    ((Cons pd r) (Cons (pd_name pd) (pd_names r)))))
+(fn pd_last ((pds (List PreDef))) (Option PreDef)
+  (measure (struct pds))
+  (match pds
+    (Nil None)
+    ((Cons pd Nil) (Some pd))
+    ((Cons _ r) (pd_last r))))
+(fn grp_callees_in ((cs (List CalleeLocal)) (names (List Name))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil True)
+    ((Cons (CalleeLocal _ id _) r) (if (mem_name id names) (grp_callees_in r names) False))))
+(fn grp_reachable ((t Tr)) Bool
+  (bool_and (wf_reachable t) (bool_and (has_fix_eq (tr_env t)) (has_eq (tr_env t)))))
+(fn grp_args_name ((k1 Name)) Name (name_append k1 (n1 (quote args))))
+(fn grp_ctor_name ((k1 Name) (i Int)) Name
+  (name_append (grp_args_name k1) (n1 (sym_of_chars (append "of_" (show_nat (+ i 1)))))))
+;; the K projection of a group (slice 5.2 rules 1, 2, 4, 5)
+(fn define_group ((es ESt) (sc Scope) (pds (List PreDef))) GrpRes
+  (match pds
+    (Nil (GrpErr (quote define_matrix) "an empty group"))
+    ((Cons first _)
+     (match (pd_last pds)
+       (None (GrpErr (quote define_matrix) "an empty group"))
+       ((Some lastpd)
+        (let ((t (tr_new (el_w (pd_state lastpd)) es sc (pd_name first) Nil)))
+          (match (grp_prepare t (pd_name first) pds (pd_names pds) 0 Nil)
+            ((GpSkip e m) (GrpSkip e m))
+            ((GpErr e m) (GrpErr e m))
+            ((GpOk t1 ms)
+             (if (bool_not (grp_reachable t1))
+               (GrpSkip (quote wf_unreached)
+                 "WellFounded.fix, WellFounded.fix_eq, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
+               (grp_build t1 (pd_name first) ms))))))))))
+;; each member with its data binders, its result type and its measure — or the reason the
+;; group is not compiled (rule 4)
+(fn grp_prepare ((t Tr) (k1 Name) (pds (List PreDef)) (names (List Name)) (i Int) (acc (List GrpM)))
+  GrpPrep
+  (measure (struct pds))
+  (match pds
+    (Nil (GpOk t (rev acc)))
+    ((Cons pd r)
+     (if (bool_not (grp_callees_in (pd_callees pd) names))
+       (GpSkip (quote callee_runnable)
+         (append (show_name (pd_name pd))
+           ": a callee with a program and no K constant outside its group — the group has its programs and no definition (rule 6)"))
+       (match (pd_rec pd)
+         ((PdMeasure m)
+          (match (pj_split_binders (Tr.w t) (pd_binders pd) Nil Nil)
+            ((Pair tps data)
+             (if (< 0 (len tps))
+               (GpSkip (quote group_shape)
+                 (append (show_name (pd_name pd))
+                   ": a member of a group of functions that call each other has type parameters — not compiled (slice 5.2 rule 4)"))
+               (match (mt_inst_args (Tr.w t) (pd_type pd) (pd_binders pd))
+                 ((Pair _ None)
+                  (GpErr (quote define_matrix) "the declared type does not take the binders"))
+                 ((Pair w1 (Some rl))
+                  (if (mentions_any rl (pd_fvar_ids data))
+                    (GpSkip (quote group_shape)
+                      (append (show_name (pd_name pd))
+                        ": a member of a group of functions that call each other has a result type over its parameters — not compiled (slice 5.2 rule 4)"))
+                    (match (measure_is_nat (tr_set_w t w1) m)
+                      ((Pair _ False)
+                       (GpSkip (quote measure_type)
+                         "the measure must be a Nat (an Int measure: write a Nat one; the law inserts no Int.toNat)"))
+                      ((Pair t1 True)
+                       (grp_prepare t1 k1 r names (+ i 1)
+                         (Cons
+                           (make GrpM (pd pd) (data data) (rl rl) (m m) (con (grp_ctor_name k1 i)))
+                           acc)))))))))))
+         (_
+           (GpSkip (quote group_measure)
+             (append (show_name (pd_name pd))
+               ": a member of a group of functions that call each other needs (measure N) with N a Nat over its parameters — a structural clause is not read as a size (slice 5.2 rule 2)"))))))))
+;; the group's argument type: `f_1.args : Type`, a constructor per member over its data binders
+(fn grp_ctors ((t Tr) (ms (List GrpM)) (argc Expr) (acc (List Constructor)))
+  (Pair Tr (List Constructor))
+  (measure (struct ms))
+  (match ms
+    (Nil (Pair t (rev acc)))
+    ((Cons g r)
+     (match (tr_pis t (GrpM.data g) argc)
+       ((Pair t1 cty) (grp_ctors t1 r argc (Cons (Constructor (GrpM.con g) cty) acc)))))))
+;; a function on the argument type by its constructors: `f_1.args.rec motive minor_1 … minor_n`
+(fn grp_rec ((t Tr) (k1 Name) (lv Level) (motive Expr) (minors (List Expr))) (Pair Tr Expr)
+  (tr_apps t (mk_const (name_append (grp_args_name k1) (n1 (quote rec))) (list lv))
+    (Cons motive minors)))
+;; the minors of the result type, `λ data_i. R_i`, and of the measure, `λ data_i. m_i`
+(fn grp_result_minors ((t Tr) (ms (List GrpM)) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct ms))
+  (match ms
+    (Nil (Pair t (rev acc)))
+    ((Cons g r)
+     (match (tr_lams t (GrpM.data g) (GrpM.rl g))
+       ((Pair t1 b) (grp_result_minors t1 r (Cons b acc)))))))
+(fn grp_measure_minors ((t Tr) (ms (List GrpM)) (acc (List Expr))) (Pair Tr (List Expr))
+  (measure (struct ms))
+  (match ms
+    (Nil (Pair t (rev acc)))
+    ((Cons g r)
+     (match (tr_lams t (GrpM.data g) (GrpM.m g))
+       ((Pair t1 b) (grp_measure_minors t1 r (Cons b acc)))))))
+;; the members as one member's body calls them: itself by its self-local, the others by the
+;; callee-locals its pre-definition bound
+(fn grp_member ((ms (List GrpM)) (k Name)) (Option GrpM)
+  (measure (struct ms))
+  (match ms
+    (Nil None)
+    ((Cons g r) (if (name_eq (pd_name (GrpM.pd g)) k) (Some g) (grp_member r k)))))
+(fn grp_callees ((ms (List GrpM)) (cls (List CalleeLocal))) (List PjCallee)
+  (measure (struct cls))
+  (match cls
+    (Nil Nil)
+    ((Cons (CalleeLocal fv id _) r)
+     (match (grp_member ms id)
+       ((Some g)
+        (Cons (PjCallee (fvar_id_of fv) (GrpM.con g) (GrpM.m g) (GrpM.data g)) (grp_callees ms r)))
+       (None (grp_callees ms r))))))
+(fn grp_callee_ids ((cls (List CalleeLocal))) (List Int)
+  (measure (struct cls))
+  (match cls
+    (Nil Nil)
+    ((Cons (CalleeLocal fv _ _) r) (Cons (fvar_id_of fv) (grp_callee_ids r)))))
+(fn grp_scope ((fvs (List Expr))) (List (Pair Bool Expr))
+  (measure (struct fvs))
+  (match fvs
+    (Nil Nil)
+    ((Cons fv r) (Cons (Pair False fv) (grp_scope r)))))
+;; ∀ (q : A), rel q x → C q — the recursion hypothesis at a value x of the argument type
+(fn grp_rec_type ((t Tr) (argc Expr) (rel Expr) (x Expr) (cfn Expr)) (Pair Tr Expr)
+  (match (tr_local t (n1 (quote q)) argc)
+    ((Pair t1 q)
+     (match (tr_apps t1 rel (list q x))
+       ((Pair t2 hty)
+        (match (tr_local t2 (n1 (quote h)) hty)
+          ((Pair t3 h)
+           (match (tr_apps t3 cfn (list q))
+             ((Pair t4 cq) (tr_pis t4 (list q h) cq))))))))))
+;; the minors of the functional, in order: `λ data_i (rec : ∀ y, rel y (c_i data_i) → C y).
+;; body_i'`, the obligations of member i named under it
+(fn grp_minors
+  ((t Tr) (all (List GrpM)) (ms (List GrpM)) (argc Expr) (rel Expr) (cfn Expr) (acc (List Expr)))
+  (Pair Tr Either2)
+  (measure (struct ms))
+  (match ms
+    (Nil (Pair t (Right2 (Pair (rev acc) argc))))
+    ((Cons g r)
+     (let ((pd (GrpM.pd g)) (data (GrpM.data g)) (selfid (fvar_id_of (pd_self (GrpM.pd g)))))
+       (match (tr_apps t (mk_const (GrpM.con g) Nil) data)
+         ((Pair t1 here)
+          (match (grp_rec_type t1 argc rel here cfn)
+            ((Pair t2 recty)
+             (match (tr_local t2 (n1 (quote rec)) recty)
+               ((Pair t3 recl)
+                (let
+                  ((cx
+                     (make PjCx (self selfid) (tps Nil)
+                       (kind
+                         (PkGrp recl (GrpM.m g) data
+                           (Cons (PjCallee selfid (GrpM.con g) (GrpM.m g) data)
+                             (grp_callees all (pd_callees pd)))))
+                       (tables Nil)
+                       (scope (grp_scope data))
+                       (members (grp_callee_ids (pd_callees pd))))))
+                  (match (pj_term (tr_set_id t3 (pd_name pd)) cx (pd_body pd) (budget_depth))
+                    ((TrErr e m) (Pair t3 (Left2 e m)))
+                    ((TrOk t4 b)
+                     (match (tr_lams t4 (append data (list recl)) b)
+                       ((Pair t5 minor) (grp_minors t5 all r argc rel cfn (Cons minor acc)))))))))))))))))
+(fn df_grp_verdict ((e Symbol) (m (List Int))) GrpRes
+  (if (df_obstacle e) (GrpSkip e m) (GrpErr e m)))
+;; the argument type checked into the walk's environment; the result type and the measure by
+;; constructor, the relation, the functional; then the fixpoint, its unfolding theorem and the
+;; members, each checked into the walk's environment so the equations are stated where K
+;; decides them (define_pd_go's order)
+(fn grp_build ((t Tr) (k1 Name) (ms (List GrpM))) GrpRes
+  (let ((aname (grp_args_name k1)) (argc (mk_const (grp_args_name k1) Nil)))
+    (match (grp_ctors t ms argc Nil)
+      ((Pair t1 ctors)
+       (let
+         ((adecl (InductDecl Nil 0 (list (InductiveType aname (mk_sort (level_one)) ctors)) False)))
+         (match (w_admit (Tr.w t1) adecl)
+           ((Pair _ (Some why))
+            (GrpErr (quote definition_refused)
+              (append (show_name aname)
+                (append ": K refused the group's argument type (" (append (chars_of_sym why) ")")))))
+           ((Pair w2 None)
+            (let ((t2 (tr_set_w t1 w2)))
+              (match (tr_local t2 (n1 (quote x)) argc)
+                ((Pair t3 x0)
+                 (match (tr_lams t3 (list x0) (mk_sort (level_one)))
+                   ((Pair t4 cmotive)
+                    (match (grp_result_minors t4 ms Nil)
+                      ((Pair t5 cmins)
+                       (match (grp_rec t5 k1 (LSucc (level_one)) cmotive cmins)
+                         ((Pair t6 cfn)
+                          (match (tr_lams t6 (list x0) (mk_const (nm_nat) Nil))
+                            ((Pair t7 mmotive)
+                             (match (grp_measure_minors t7 ms Nil)
+                               ((Pair t8 mmins)
+                                (match (grp_rec t8 k1 (level_one) mmotive mmins)
+                                  ((Pair t9 mfn)
+                                   (match (wf_relation t9 argc mfn)
+                                     ((Pair t10 (Pair rel hwf))
+                                      (match (grp_minors t10 ms ms argc rel cfn Nil)
+                                        ((Pair _ (Left2 e m)) (df_grp_verdict e m))
+                                        ((Pair t11 (Right2 (Pair fmins _)))
+                                         (match (grp_rec_type t11 argc rel x0 cfn)
+                                           ((Pair t12 recty)
+                                            (match (tr_local t12 (n1 (quote rec)) recty)
+                                              ((Pair t13 rv)
+                                               (match (tr_apps t13 cfn (list x0))
+                                                 ((Pair t14 ret)
+                                                  (match (tr_pis t14 (list rv) ret)
+                                                    ((Pair t15 pi)
+                                                     (match (tr_lams t15 (list x0) pi)
+                                                       ((Pair t16 fmotive)
+                                                        (match
+                                                          (grp_rec t16 k1 (level_one) fmotive fmins)
+                                                          ((Pair t17 fnl)
+                                                           (grp_fix t17 k1 ms argc cfn rel hwf fnl
+                                                             adecl)))))))))))))))))))))))))))))))))))))))
+;; `f_1.mutual : (x : A) → C x := λ x. WellFounded.fix A C rel hwf F x` and
+;; `f_1.mutual.eq : ∀ x, f_1.mutual x = F x (λ y _. f_1.mutual y) := λ x. WellFounded.fix_eq …`
+(fn grp_fix
+  ((t Tr)
+   (k1 Name)
+   (ms (List GrpM))
+   (argc Expr)
+   (cfn Expr)
+   (rel Expr)
+   (hwf Expr)
+   (fnl Expr)
+   (adecl Declaration))
+  GrpRes
+  (let
+    ((mname (name_append k1 (n1 (quote mutual))))
+     (ename (name_append (name_append k1 (n1 (quote mutual))) (n1 (quote eq)))))
+    (match (tr_local t (n1 (quote x)) argc)
+      ((Pair t1 x)
+       (match
+         (tr_apps t1 (mk_const (n2 (quote WellFounded) (quote fix)) (list (level_one) (level_one)))
+           (list argc cfn rel hwf fnl x))
+         ((Pair t2 fixed)
+          (match (tr_lams t2 (list x) fixed)
+            ((Pair t3 mval)
+             (match (tr_apps t3 cfn (list x))
+               ((Pair t4 cx)
+                (match (tr_pis t4 (list x) cx)
+                  ((Pair t5 mty)
+                   (let
+                     ((mdecl
+                        (DefnDecl (ConstantVal mname Nil mty) mval
+                          (HRegular (def_height (tr_env t5) mval))
+                          Safe
+                          (list mname))))
+                     (match (w_admit_after (Tr.w t5) (tr_obls t5) mdecl)
+                       ((Pair _ (Some why))
+                        (GrpErr (quote definition_refused)
+                          (append (show_name mname)
+                            (append ": K refused the group's fixpoint ("
+                              (append (chars_of_sym why) ")")))))
+                       ((Pair w6 None)
+                        (let ((t6 (tr_set_w t5 w6)) (mc (mk_const mname Nil)))
+                          (match (tr_local t6 (n1 (quote y)) argc)
+                            ((Pair t7 y)
+                             (match (tr_apps t7 rel (list y x))
+                               ((Pair t8 hty)
+                                (match (tr_local t8 (n1 (quote h)) hty)
+                                  ((Pair t9 h)
+                                   (match (tr_lams t9 (list y h) (mk_app mc y))
+                                     ((Pair t10 again)
+                                      (match (tr_apps t10 fnl (list x again))
+                                        ((Pair t11 rhs)
+                                         (match
+                                           (tr_apps t11 (mk_const (nm_eq) (list (level_one)))
+                                             (list cx (mk_app mc x) rhs))
+                                           ((Pair t12 stmt)
+                                            (match (tr_pis t12 (list x) stmt)
+                                              ((Pair t13 ety)
+                                               (match
+                                                 (tr_apps t13
+                                                   (mk_const (n2 (quote WellFounded) (quote fix_eq))
+                                                     (list (level_one) (level_one)))
+                                                   (list argc cfn rel hwf fnl x))
+                                                 ((Pair t14 prf)
+                                                  (match (tr_lams t14 (list x) prf)
+                                                    ((Pair t15 evalue)
+                                                     (let
+                                                       ((edecl
+                                                          (ThmDecl (ConstantVal ename Nil ety)
+                                                            evalue
+                                                            (list ename))))
+                                                       (match (w_admit (Tr.w t15) edecl)
+                                                         ((Pair _ (Some why))
+                                                          (GrpErr (quote definition_refused)
+                                                            (append (show_name ename)
+                                                              (append
+                                                                ": K refused the fixpoint's unfolding ("
+                                                                (append (chars_of_sym why) ")")))))
+                                                         ((Pair w16 None)
+                                                          (grp_members (tr_set_w t15 w16) mc ms ms
+                                                            (list adecl mdecl edecl)
+                                                            Nil
+                                                            Nil))))))))))))))))))))))))))))))))))))))
+;; each member `λ binders. f_1.mutual (c_i data)`, admitted in order; then the equations
+(fn grp_members
+  ((t Tr)
+   (mc Expr)
+   (all (List GrpM))
+   (ms (List GrpM))
+   (core (List Declaration))
+   (dds (List Declaration))
+   (vals (List Expr)))
+  GrpRes
+  (measure (struct ms))
+  (match ms
+    (Nil (grp_equations t all (rev dds) (rev vals) core Nil))
+    ((Cons g r)
+     (let ((pd (GrpM.pd g)))
+       (match (tr_apps t (mk_const (GrpM.con g) Nil) (GrpM.data g))
+         ((Pair t1 tagged)
+          (match (tr_lams t1 (pd_binders pd) (mk_app mc tagged))
+            ((Pair t2 v)
+             (let
+               ((dd
+                  (DefnDecl (ConstantVal (pd_name pd) Nil (pd_type pd)) v
+                    (HRegular (def_height (tr_env t2) v))
+                    Safe
+                    (list (pd_name pd)))))
+               (match (w_admit (Tr.w t2) dd)
+                 ((Pair _ (Some why))
+                  (GrpErr (quote definition_refused)
+                    (append (show_name (pd_name pd))
+                      (append ": K refused the definition (" (append (chars_of_sym why) ")")))))
+                 ((Pair w3 None)
+                  (grp_members (tr_set_w t2 w3) mc all r core (Cons dd dds) (Cons v vals)))))))))))))
+;; a member's equations (slice 3.20's): the body under PkEqn, a matcher carrying its equation
+;; as the value has it, the members' locals their constants; each leaf's proof the fixpoint's
+;; unfolding at the member's constructor (realize.shard fix_eq_proof)
+(fn grp_equations
+  ((t Tr)
+   (ms (List GrpM))
+   (dds (List Declaration))
+   (vals (List Expr))
+   (core (List Declaration))
+   (acc (List GrpDef)))
+  GrpRes
+  (measure (struct ms))
+  (match ms
+    (Nil (GrpOk (Tr.es t) (tr_obls t) core (rev acc)))
+    ((Cons g r)
+     (match dds
+       ((Cons dd dr)
+        (match vals
+          ((Cons v vr)
+           (let ((pd (GrpM.pd g)) (selfid (fvar_id_of (pd_self (GrpM.pd g)))))
+             (match
+               (pj_term (tr_set_id t (pd_name pd))
+                 (make PjCx (self selfid) (tps Nil) (kind (PkEqn)) (tables Nil) (scope Nil)
+                   (members (grp_callee_ids (pd_callees pd))))
+                 (pd_body pd)
+                 (budget_depth))
+               ((TrErr e m) (GrpErr e m))
+               ((TrOk t1 eqbody)
+                (match (grp_subst_members t1 eqbody (pd_callees pd))
+                  ((Pair t2 eqbody1)
+                   (match
+                     (pj_equations t2 (mk_const (pd_name pd) Nil) selfid (pd_binders pd) (GrpM.rl g)
+                       eqbody1
+                       Nil
+                       True
+                       (Some v))
+                     ((Pair _ (Left3 e m)) (GrpErr e m))
+                     ((Pair t3 (Right3 eqs))
+                      (grp_equations t3 r dr vr core (Cons (GrpDef (pd_name pd) dd eqs) acc))))))))))
+          (Nil (GrpErr (quote define_matrix) "a member without its value"))))
+       (Nil (GrpErr (quote define_matrix) "a member without its definition"))))))
+;; a body's callee-locals replaced by the members' constants
+(fn grp_subst_members ((t Tr) (e Expr) (cls (List CalleeLocal))) (Pair Tr Expr)
+  (measure (struct cls))
+  (match cls
+    (Nil (Pair t e))
+    ((Cons (CalleeLocal fv id _) r)
+     (match (tr_subst t e (fvar_id_of fv) (mk_const id Nil))
+       ((Pair t1 e1) (grp_subst_members t1 e1 r))))))
 
 ;; ---- below and brecOn (slice 3.14 rule 1) ----------------------------------------------------------
 ;; Init's under Lean's names at solved levels; a native inductive's generated once, monomorphic,

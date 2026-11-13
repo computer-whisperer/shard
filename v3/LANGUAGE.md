@@ -6959,7 +6959,7 @@ family is taken up).
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
 | 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13, green on pipeline 684, on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the layout ruled anew — 100 columns, structure first —, the tree reformatted, the gate on) built 2026-11-13 on the user's "Agreed with your recommendations at 100 columns" (`CANON.md` §3, §9 item 13), green on pipeline 686 (one job retried after a failed clone); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
-| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a tagged union of the members' argument tuples, each member the fixpoint at its tag, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13 on the full local gate** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
+| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a type generated for the group — a constructor per member over its arguments —, each member the fixpoint at its constructor, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13, green on pipeline 690; landing 2 (the group's definition: `define.shard` `define_group`, the loader's `settle_groups`, six pins) built 2026-11-13 on the full local gate — the domain a generated type, not the design's `PSum`** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7446,36 +7446,51 @@ well-founded recursion and no structural one; five only call the
 others (`fits`, `em_keep`, `pp_tops`, `pp_top`, `print`). The rules:
 
 1. **One definition by well-founded recursion for the whole group**
-   (ruled; Lean's `WF.Fix`). For members `f_1 … f_n` in file order, n
-   at least 2: each member's data binders are its tuple `α_i` (slice
-   3.14's `PProd` nest); the domain is `PSum α_1 (PSum α_2 … α_n)`; the
-   result type and the measure are each a `PSum.rec` over the tag —
-   `C x` the member's result type, `M x` its `(measure E_i)` over the
-   tuple's components; the relation is `InvImage Nat.lt M` with
-   `InvImage.wf` as slice 3.14 has it; the functional is one `PSum.rec`
-   whose motive carries the recursion hypothesis (`λ x. (∀ y, rel y x →
-   C y) → C x`), each branch a member's body over its tuple. One
-   constant holds the fixpoint, `f_1.mutual := λ x. WellFounded.fix … F
-   x`; one theorem unfolds it, `f_1.mutual.eq : ∀ x, f_1.mutual x = F x
-   (λ y _. f_1.mutual y)`, by `WellFounded.fix_eq`; each member is the
-   fixpoint at its tag, `f_i := λ binders. f_1.mutual (inj_i (tuple
-   data))`. A call to member `j` in member `i`'s body is `rec (inj_j
-   (tuple args)) (f_i.dec_N locals…)`. A function that calls only
-   itself keeps slice 3.14's construction term for term: no hash of a
-   declaration in the tree moves. Rejected-because, the structural
-   route (one `brecOn` with a motive per function, the nested type's
-   auxiliary motives used): it owes no proof, but it needs `below` and
-   `brecOn` generated for nested types, a motive per function over one
-   type, and it would refuse five of the seven renderers as they are
-   written; it is a deferred row (§11), taken up when the obligations
-   of rule 2 are the burden.
+   (ruled; Lean's `WF.Fix`, over a domain made for the group). For
+   members `f_1 … f_n` in file order, n at least 2: the domain is an
+   inductive type generated for the group, `f_1.args`, with one
+   constructor per member (`f_1.args.of_K`) whose fields are that
+   member's data binders — the tagged union of the members'
+   arguments. The result type and the measure are each
+   `f_1.args.rec` over the constructors — `C x` the member's result
+   type, `M x` its `(measure E_i)` over its binders; the relation is
+   `InvImage Nat.lt M` with `InvImage.wf` as slice 3.14 has it; the
+   functional is one `f_1.args.rec` whose motive carries the recursion
+   hypothesis (`λ x. (∀ y, rel y x → C y) → C x`), each minor a
+   member's body under its own binders. One constant holds the
+   fixpoint, `f_1.mutual := λ x. WellFounded.fix … F x`; one theorem
+   unfolds it, `f_1.mutual.eq : ∀ x, f_1.mutual x = F x (λ y _.
+   f_1.mutual y)`, by `WellFounded.fix_eq`; each member is the fixpoint
+   at its constructor, `f_i := λ binders. f_1.mutual (of_i data)`. A
+   call to member `j` in member `i`'s body is `rec (of_j args)
+   (f_i.dec_N locals…)`. A function that calls only itself keeps slice
+   3.14's construction term for term: no hash of a declaration in the
+   tree moves. **Changed at landing 2 from the design as first
+   written**, which had Lean's own domain — `PSum α_1 (PSum α_2 … α_n)`
+   over the members' `PProd` tuples: Init is loaded on demand below a
+   file's horizon, `PSum` is declaration 25,089 of the export and the
+   formatter's files stand at 3,400, so every file with a group would
+   have had to raise its import, and the four names in the definer's
+   kit would have changed the records of the files that stand above
+   them already. The generated type needs nothing of Init beyond what
+   one measured function needs, takes a member's binders as they are —
+   no tuple, no projection, a dependent binder allowed — and its
+   recursor is one step where the nest was one per member.
+   Rejected-because, the structural route (one `brecOn` with a motive
+   per function, the nested type's auxiliary motives used): it owes no
+   proof, but it needs `below` and `brecOn` generated for nested
+   types, a motive per function over one type, and it would refuse
+   five of the seven renderers as they are written; it is a deferred
+   row (§11), taken up when the obligations of rule 2 are the burden.
 2. **The author writes a measure on every member, and discharges one
    fact per call.** `(measure E)` with `E : Nat` over the member's own
    binders, the clause a single function has. Each call from a member
    to a member — itself included — is an obligation `E_j[arguments] <
    E_i[binders]` at `Nat`, named `f_i.dec_N` in the caller's order,
    stated over every local in scope at the call (slice 3.14 rule 2,
-   slice 3.21) and discharged by `fulfills` in the file; the group is
+   slice 3.21) — the caller's binders first, each by its own name,
+   where one measured function with several binders has its tuple `p`
+   — and discharged by `fulfills` in the file; the group is
    `PENDING measure` until all are discharged, since every member's
    closure holds the fixpoint and the fixpoint every obligation. A
    call that hands its argument on unchanged is paid in the measure by
@@ -7501,14 +7516,16 @@ others (`fits`, `em_keep`, `pp_tops`, `pp_top`, `print`). The rules:
    record.** Every member of a group is `RUNNABLE … why=group_measure`
    where a member has no measure or a structural one; `why=group_shape`
    where a member has type parameters or a result type over its data
-   binders; `why=wf_unreached`, naming the import, where `PSum.rec` or
-   `WellFounded.fix_eq` is past the file's horizon. Their callers are
+   binders; `why=wf_unreached` where `WellFounded.fix` or
+   `WellFounded.fix_eq` is past the file's horizon, as for one measured
+   function. Their callers are
    `callee_runnable` as today. A group that should be defined and that
    K refuses is a refusal (`definition_refused`), never a fall-back.
 5. **The equations** are slice 3.20's, per member: `f_i.eq_N` for each
    leaf of the body's leading matchers, `∀ kept, f_i lhs = rhs` with a
    call to a member that member's constant, proven by `f_1.mutual.eq`
-   at `inj_i (tuple lhs)`, K converting both sides. `rw`, `unfold` and
+   at the member's constructor over the leaf's arguments, K converting
+   both sides. `rw`, `unfold` and
    `reduce` find them by name as any function's.
 6. **A size for data: `(derive TYPE size)`.** `T.size : T → Nat` from
    the type's recursor with every motive `λ _. Nat`: a constructor is 1
@@ -7602,7 +7619,73 @@ the suite on the bootstrap 51 entrypoints, 0 failed, 908 s, the native
 tie among them, the pins' harness 302 cases; on the binaries 51
 entrypoints, 0 failed, 572 s; `suite_tie` 51 entrypoints, 0 differ; no
 authored file changed under the round. Rules 2, 3, 6 and 9a were put
-to the user with this landing's report and ruled the same day.
+to the user with this landing's report and ruled the same day. *On
+CI:* pipeline 690 green on `19b8027` — `host` 42 s, `v3` 4,005 s,
+`native` 2,156 s, `suite_tie` 44 s; no job retried.
+
+**As built, landing 2 (2026-11-13) — rules 1 to 5, the group's
+definition.** *The construction* is rule 1's as changed at this
+landing: the domain a type generated for the group. The first build
+had the design's `PSum` and met the loader's Init on demand: the
+members stayed `RUNNABLE … wf_unreached` in a file whose horizon was
+below `PSum`, and above it the four names would have entered the
+definer's kit and so the records of every file standing there. *In
+`define.shard`:* `define_group` — the members prepared (`grp_prepare`:
+a measure of type `Nat` on each, no type parameter, no result over the
+binders, no callee outside the group), `f_1.args` checked into the
+walk, the result type and the measure by `f_1.args.rec`, the
+functional's minors by the body walk under a new kind (`PkGrp`: a call
+to a member is `rec (of_j args) (f_i.dec_N …)`, `pj_grp_call`), the
+fixpoint, its unfolding theorem, the members, and each member's
+equations through `pj_equations` with the fixpoint's unfolding as the
+proof (`realize.shard` `fix_eq_proof`). The walk's context holds the
+callee-locals that stand for members (`PjCx.members`), so a matcher
+around a call to another member carries its equation as one around a
+self-call does. *In `predef.shard`:* `read_predef_from` — a
+pre-definition read in the state another left, so a group's bodies are
+one walk's. *In `loader.shard`:* `settle_groups`, after every `fn`: a
+parked function whose recorded wait leads round (`waits_round`, no
+body read) is read with the parked as callee-locals, and what it
+reaches with it (`probe_reach`); a closed set's lowest cycle
+(`lowest_cycle`) goes to `load_group` — the members read in one state,
+erased, projected; the matchers, the obligations, then `f_1.args`,
+`f_1.mutual`, `f_1.mutual.eq`, every member's definition, then every
+member's equations with its `DEFINE` and `PENDING measure`. A reading
+that still waits on a name not declared is kept on the parked entry,
+so the next look ends at the recorded waits. Each member's pending
+roots are the group's (`group_roots`), since the fixpoint is one.
+*Nothing in K changed.* *The obligation's shape:* over the caller's
+binders by name, then the facts in scope — `∀ xs acc x r, xs = cons x r
+→ even_len r = true → len r + len r + 1 < len xs + len xs + 1`; the
+pins' four close by `(intro …) (rw h) (rw len.eq_2) (arith)`. *The
+pins:* `mutual_measure` (two members, discharged, a caller and three
+theorems below them, the program run by `define_test.sh`: exit 3 as K
+proves), `mutual_three` (two binders, a call under a match and an
+`if`, a rank in the measures, a third function that calls only itself
+left on slice 3.14's construction), `mutual_forward` (a caller before
+the group, a forward reference inside it), `mutual_pending` (one
+obligation open: `pong` PENDING, the others naming it),
+`mutual_shape`, `mutual_no_measure`; `define_mutual` re-pinned at
+`group_measure`. *What the formatter's records say now:* the two pairs
+are `group_measure` (their clauses are structural) and the twelve
+functions above them `callee_runnable` as before — landing 4 gives
+them measures. *Found by the gates on the way:* two new names took
+ones the toolchain has (`Reach`, `PrepOk`: `parity_test.sh`), and a
+record updated outside its own file is the bootstrap's reading alone
+(`with Tr` in `define.shard`; `erasure.shard` `tr_set_id`). *The
+cost:* the model root loads in 28.8 and 28.3 s (28.0 to 31.0 s at
+landing 1); the formatter's contract in 2.7 s where it took 2.3 to
+2.4 s — the settlement's readings of the printer's parked functions.
+*Found for landing 3:* a program records its measure (`RecMeasure`,
+the measure erased), so a measure that cites a function with no
+program is refused at the erasure (`no_realization`); rule 6's sizes
+are such functions, and landing 3 lets a program's clause say that
+its measure is K's alone. *The gate, on the dev box:* `v3/build.sh
+--all` 31 roots built in 178 s; T0 FULL == PINNED, accepted 57,977;
+the suite on the bootstrap 51 entrypoints, 0 failed, 940 s, the native
+tie among them, the pins' harness 308 cases; on the binaries 51
+entrypoints, 0 failed, 541 s; `suite_tie` 51 entrypoints, 0 differ;
+no authored file changed under the round.
 
 ## 9. Assumption policy and entries
 
@@ -7865,7 +7948,7 @@ never compared as verdicts.
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | **carried 2026-11-13** to its first consumer (item 72; was phase 4's) |
 | a rewrite under a dependency (found as "`reduce` over a text literal"): `rw`, `simp_only`, `unfold` and `reduce` build `congrArg motive heq` after asking K for the motive's type in infer-only mode, so an ill-typed motive — the occurrence beside a proof that states it — passes and K refuses the certificate with no step named (`app_type_mismatch`); `(reduce)` over `(String.toByteArray "x")` is the repro | §8.4 slice 3.20 rule 6 | **FIXED 2026-11-13, slice 5.2 landing 1** (§8.7 rule 7 and "As built, landing 1"): the motive goes through K's checking inference; pins `reduce_dependent`, `rw_dependent`. Found 2026-11-13 at slice 5.1 landing 2 and ruled into this chunk (the user: "as well as fixing the V3 defect in the next chunk"); `tools/shardfmt` had avoided it by naming each text as a constant |
-| mutual recursion compiled into L: today functions that call each other are programs by erasure with no definition (`callee_runnable`; §8.4 slice 3.14 rule 3, pin `define_mutual`), and so is everything that calls them | §4.1, §8.4 | **slice 5.2 (designed 2026-11-13, §8.7): the well-founded route, ruled** (the user: "Agreed, let's proceed with the well-founded route."); first consumer the formatter's printer |
+| mutual recursion compiled into L: today functions that call each other are programs by erasure with no definition (`callee_runnable`; §8.4 slice 3.14 rule 3, pin `define_mutual`), and so is everything that calls them | §4.1, §8.4 | **LANDED 2026-11-13, slice 5.2 landing 2** (§8.7 "As built, landing 2"): a group whose members each state a measure is one definition by well-founded recursion, settled when its last member is read; a group that does not compile stays programs with the reason (`group_measure`, `group_shape`). The route ruled (the user: "Agreed, let's proceed with the well-founded route."); first consumer the formatter's printer, at landing 4 |
 | structural recursion for a group and on a nested type: one `brecOn` with a motive per function, `below` and `brecOn` generated for a nested type's auxiliary types — today one function structural on a parameter of a nested type is refused (`equation_form: a nested inductive's recursor has no Stage-0 translation`) | §8.4 slice 3.14 rule 1 | **no phase** (slice 5.2 rule 1's rejected alternative): taken up when the decrease facts of the well-founded route are the burden; no consumer named |
 | evaluation of a closed call at size — a scenario of the formatter as a theorem: K's own evaluation through a well-founded fixpoint ends near depth 40 to 200 (measured 2026-11-13) and `reduce` stops at 64 unfoldings | §8.4 slice 3.20 rule 6 | **no phase** (slice 5.2 rule 9a); consumer named: the formatter's scenarios, tests against the binary until then |
 | coupled program/proof holes and refutation scope | §6, §7.3, T4, T7 | **carried 2026-11-13** to their first consumer — the search engine's rebuild onto the goal graph (item 72; were phase 4's, never designed) |
@@ -9589,9 +9672,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     on request, as `def`s over the recursor — a departure from slice
     3.19 rule 2 (rule 6); (d) what does not compile stays a program
     with a reason, the limits named: type parameters, a dependent
-    result, the horizon (rule 4); (e) the names `f_1.mutual` and
-    `f_1.mutual.eq`, and a single function's construction left term for
-    term (rule 1); (f) the defect's fix is the motive through K's
+    result, the horizon (rule 4); (e) the names `f_1.args`,
+    `f_1.mutual` and `f_1.mutual.eq`, a single function's construction
+    left term for term, and — changed at landing 2, not ruled — the
+    domain a type generated for the group where the design first had
+    Lean's `PSum` of tuples (rule 1 states why); (f) the defect's fix is the motive through K's
     checking inference, with the reconstruction version kept (rule 7);
     (g) **the scenarios as theorems leave this slice** (rule 9a): slice
     5.1 rule 7 said they wait on mutual recursion, the measurement says
