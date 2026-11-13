@@ -6959,7 +6959,7 @@ family is taken up).
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
 | 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13, green on pipeline 684, on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the layout ruled anew — 100 columns, structure first —, the tree reformatted, the gate on) built 2026-11-13 on the user's "Agreed with your recommendations at 100 columns" (`CANON.md` §3, §9 item 13), green on pipeline 686 (one job retried after a failed clone); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
-| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a tagged union of the members' argument tuples, each member the fixpoint at its tag, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13 on the full local gate; landings 2 to 4 not started** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
+| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a tagged union of the members' argument tuples, each member the fixpoint at its tag, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13 on the full local gate** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7398,9 +7398,14 @@ definition: the well-founded route; a rewrite's motive checked**
 (designed 2026-11-13; §13 item 75). The user, on the gap as measured
 and the question which of Lean's two routes to build first: "Agreed,
 let's proceed with the well-founded route." — the route ruled (bare
-assent to a lean given with its reason: a checkpoint); every other
-rule below is this document's and is put for ratification before
-landing 2. The defect is this slice's by slice 5.1 landing 3's answer
+assent to a lean given with its reason: a checkpoint). **The other
+decisions ruled 2026-11-13**, on the four put with landing 1's report
+— no `mutual` form (rule 3); a measure on every member, a structural
+clause in a group refused and not read as a size (rule 2); the size by
+`(derive TYPE size)` on request (rule 6); the scenarios as theorems out
+of the slice (rule 9a) —, the user: "1: no new syntax, 2: agreed, 3:
+agreed, 4: agreed. Proceed." (checkpoints: bare assent; §13 item 75).
+The defect is this slice's by slice 5.1 landing 3's answer
 ("as well as fixing the V3 defect in the next chunk"). **Clause,
 consumer, timing:** the clause is law §4.4 — "mutually recursive
 groups need a joint well-founded argument" — over §8.4 slice 3.14 rule
@@ -7596,8 +7601,8 @@ built in 180 s; the full replay T0 FULL == PINNED, accepted 57,977;
 the suite on the bootstrap 51 entrypoints, 0 failed, 908 s, the native
 tie among them, the pins' harness 302 cases; on the binaries 51
 entrypoints, 0 failed, 572 s; `suite_tie` 51 entrypoints, 0 differ; no
-authored file changed under the round. Landings 2 to 4 are not
-started: rules 2, 3, 6 and 9a are put to the user first.
+authored file changed under the round. Rules 2, 3, 6 and 9a were put
+to the user with this landing's report and ruled the same day.
 
 ## 9. Assumption policy and entries
 
@@ -9571,8 +9576,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     and would refuse five of the printer's seven renderers: "Agreed,
     let's proceed with the well-founded route." — **the route ruled**
     (a checkpoint: bare assent to a lean with its reason; cheap to
-    reopen). Decisions the design makes beyond that word, **none
-    ruled**, put to the user before landing 2: (a) a group is found by
+    reopen). Decisions the design makes beyond that word, of which
+    (a), (b), (c) and (g) were put to the user with landing 1's report
+    and **ruled 2026-11-13** — "1: no new syntax, 2: agreed, 3: agreed,
+    4: agreed. Proceed." (four bare assents: checkpoints) — and (d),
+    (e), (f), (h) stand as designed, not ruled: (a) a group is found by
     the loader when its last member is read, with no `mutual` form
     (rule 3); (b) every member states its own measure, a structural
     clause inside a group is not read as a size, and a rank is written
