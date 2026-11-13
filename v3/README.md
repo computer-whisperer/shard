@@ -2578,6 +2578,19 @@ checked — and its fix confirmed on a copy; it is the slice's first
 landing. The formatter's scenarios as theorems leave the slice: they
 need evaluation of a closed call at size as well, a deferred row.
 
+**Slice 5.2 landing 1 built 2026-11-13 — a rewrite's motive is
+checked** (`LANGUAGE.md` §8.7 "As built, landing 1"). `rw`,
+`simp_only`, `unfold` and `reduce` now ask K whether the motive they
+abstract is a term at all; a step under a dependency is left to
+conversion where it is one and refused at its step (`rw_motive`) where
+it is not. `(reduce)` over a call on a text literal, refused by K with
+no step named since slice 5.1 landing 2, is accepted (pins
+`reduce_dependent`, `rw_dependent`). No accepted proof changed and no
+cost was measured (the model root: 28 to 31 s after, 30 to 33 s
+before). Green on the full local gate: 31 roots rebuilt, the full
+replay equal to its pin, both suites 51 entrypoints with 0 failed,
+0 differ between the engines.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
