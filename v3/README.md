@@ -2415,6 +2415,49 @@ bootstrap suite ran twice as a pre-check, 48 entrypoints each: the first
 with parity failing on the type's name, the second, after the review's
 fixes, with 0 failed in 912 s.
 
+**Phase 4 closed short 2026-11-13 by the user's ruling — slice 4.6
+closed at landing 2** (`LANGUAGE.md` §8.6 "Slice 4.6 closed", §13 item
+72; law §12.4 amended). Pipeline 671 green on `a2408d4`, landing 2's
+commit: engine 31 s, corpus 2,033 s, v3 4,678 s, native 5,091 s, the
+suite's tie 19 s. Carried to their first consumers, to no phase: budgets
+and reclamation (the slice's landing 3), coupled program/proof holes and
+refutation scope (T4, T7), incremental goal states with the origin map,
+evaluation reflection (T8); landing 2's leans stand as built, not ruled.
+The user: "Agreed with cutting phase 4 short." — the reason given the
+message before: "I think the biggest risk here is instilling bad
+architectural details. I am only able to provide scattered attention
+here in the evenings, and have been probably leaning too much on the
+roadmap. The fact that v2 is still deep in everything makes it hard to
+cleanly cut and implement." The direction after it, the user's and not
+yet a design: the old tree goes before the port, the old kernel whole.
+What V3 runs on of the old kernel, measured the same day in scratch
+checkouts without it: the V3 sources import no file of the old tree; the
+whole suite on the bootstrap there, 48 entrypoints, 45 passed and 3
+failed in 897 s of wall — `bin_test.sh` (1 of 43 checks) and
+`session_emit_test.sh` (1 of 7) at the lowerer, `calc_test.sh` on its
+reference side —, so on the bootstrap V3 runs on no file of the old
+kernel. The old kernel is 37 files, 26,914 lines. The chain's two tools
+(`tools/lower/lower.shard`, `tools/codegen/codegen.shard`; 2,014 lines)
+import nine of them, 5,963 lines — `stdlib`, `term`, `module`, `sexpr`,
+`expand`, `reader`, `resolve`, `image`, `loader`: the old front end,
+which reads the text the V3 emitter prints —, and with the old kernel
+gone the lowerer stops at its first import. `v3/build.sh` runs the two
+tools on the old evaluator compiled (`bin/shard_eval`: four files more —
+`expr_size`, `reduce`, `evm`, `eval`), and that half is used, not
+needed: with the nine files alone the tools run on the bootstrap's
+`direct` — `json_test`'s closure lowered, generated, compiled and run,
+both texts byte-identical to the build's; the loader's closure, 8,905
+declarations, lowered in 22 s, byte-identical, the generator overflowing
+the interpreter's stack there — and compiled by themselves (14 s for the
+two) they lower and generate the loader's closure in 4 s and 6 s, both
+texts byte-identical to the build's, against the 79 s and 285 s recorded
+at slice 4.4. `calc_test.sh` reads its reference side from the old
+tree's `examples/calc` under the old evaluator. The other 24 files of
+the old kernel, the checker's, V3 uses nowhere. One cause, then: V3 has
+no back end of its own — its programs are printed in the old dialect and
+compiled by two old-tree tools that parse that text with the old
+kernel's reader.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

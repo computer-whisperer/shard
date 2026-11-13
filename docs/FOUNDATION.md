@@ -1231,6 +1231,26 @@ phase 3.
 > shorter than its shape or mutated after validation, and a view type
 > designed before its representation would be designed twice.
 
+> **AMENDED 2026-11-13 (ruled by the user; `v3/LANGUAGE.md` §13 item
+> 72).** Phase 4 closes short of item 4's list. Built in it: the
+> `tb_len`-class compiler proof, the World-use and model tests, and of
+> T6 prepared invocation and stale handles. Carried, each to the first
+> consumer that needs it and to no phase: budgets and reclamation
+> (§9.4; T6's "bounded live state"), coupled program/proof holes and
+> refutation scope (T4, T7), incremental goal states with the
+> occurrence map owed before them, evaluation reflection and its cost
+> comparison (T8); the buffer rules stay where the amendment above put
+> them. §12.5's rows stand as written, owed by whoever builds the
+> consumer. Reason: each remaining item is a design with no consumer
+> in the tree, ratified by a reader who cannot inspect it — the user:
+> "the biggest risk here is instilling bad architectural details" —,
+> while a ported file is checked by K and against the old tree's
+> behaviour. The order after it is the user's direction of the same
+> day and not yet a design: the old tree goes before the port —
+> "ripping out the old first and rebuilding the new once we know what
+> we need" —, the old kernel whole, V3 then made to run with no file of
+> it; items 5 and 6 are re-ordered by the slice that designs the cut.
+
 Serial on main, one gate per phase, CI green behind each, generated
 files never hand-patched, kernel sources frozen during corpus runs.
 

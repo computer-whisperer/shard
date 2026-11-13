@@ -327,8 +327,9 @@ authority for its area:
 ## Live arcs
 
 - **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06; phases 0–3 closed
-  (phase 3 on 2026-10-13); phase 4 open, slices 4.0–4.5 closed (status
-  and evidence in [`v3/README.md`](v3/README.md))**:
+  (phase 3 on 2026-10-13); phase 4 closed short by ruling 2026-11-13,
+  slices 4.0–4.6 (status and evidence in
+  [`v3/README.md`](v3/README.md))**:
   [docs/FOUNDATION.md](docs/FOUNDATION.md) is the law; the tree is built
   under [`v3/`](v3/README.md) (Lean v4.33.1 pinned; `v3/LANGUAGE.md` the
   V3 surface). Phases 0–7 in FOUNDATION §12.4; the coverage arc below is

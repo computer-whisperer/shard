@@ -1,14 +1,14 @@
 # The V3 language — S, L, E and I as phase 3 built them
 
-> **STATUS (2026-11-12): S, L, E and I as phase 3 built them — phase 3
+> **STATUS (2026-11-13): S, L, E and I as phase 3 built them — phase 3
 > closed 2026-10-13 at slice 3.30 landing 4. §13 items 1–69 all ruled:
 > 1–38 ratified 2026-09-15; 43, 47 and 49–53 at their slices; 54–64
 > 2026-10-08 to 2026-10-13 (57 retired at slice 3.26 landing 3, 59 and
 > 60 as amended there, 61–64 as built); 39–42, 44–46 and 48, and item
-> 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) is
-> open: slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
+> 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) closed
+> short 2026-11-13 by ruling (item 72; the law amended): slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it; landing 3 not started.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it, green on pipeline 671; the slice closed 2026-11-13 at landing 2 with the phase — landing 3 and the phase's unbuilt items carried to their first consumers, the old tree to go before the port (§8.6 "Slice 4.6 closed"; §13 item 72).** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -3377,7 +3377,7 @@ it entrenches. The slices, in the order built:
 | 4.3 | the program side (law §4.7): the well-threadedness check over the erased E program with the law's fixtures as pins; an extern's L meaning (an opaque constant) so a requirement can name the entry; the `bin` form with `entry`, `externs`, `trusts` and `requires`, its record, manifest line and release check, an unmet requirement failing the load; calc's main the first bin, two requirements over its observables through nine bolts; the effect trace tied four ways (both engines, the model, route 1's binary) and the bolt bundle tested on the model world — **designed 2026-10-16; ratified 2026-10-16 as described (the user: "The program side sounds good as described -- proceed."); landing 0 built 2026-10-16 (the check, nine pins, the kernel's drivers measured: one stale World found and fixed), green on pipeline 625; landing 1 built 2026-10-16 (an extern an opaque with a witness, the `bin` form, calc's bin with its two requirements proven, eight pins, `bin_test.sh`), green on pipeline 628; landing 2 built 2026-10-16 (the trace, the model's trace, the model test, the count; route 1's binary blocked at the chain's representation of Init's types, two emitter refusals pinned — the deferral to phase 5 for ratification), green on pipeline 629 (the landing's `build.sh` index lookup found building the index on the bootstrap in both CI jobs, fixed at the close); slice closed 2026-10-16, the deferral ratified** | phase 5's effectful ports (the toolchain's drivers, `examples/sha256sum`); the goal's `bin shardfmt`; T6's prepared handle |
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 | 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
-| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 (`kernel/session.shard`: the revisions and the handles by ordinal, the checked door closed from the environment, declarations built as data) built 2026-11-12, its leans awaiting ratification; landing 3 not started** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
+| 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 (`kernel/session.shard`: the revisions and the handles by ordinal, the checked door closed from the environment, declarations built as data) built 2026-11-12, green on pipeline 671, its leans not ruled and standing as built; **slice closed 2026-11-13 at landing 2 by the phase's ruling (item 72), landing 3 carried** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -6854,6 +6854,88 @@ bootstrap suite ran twice as a pre-check, 48 entrypoints each: the
 first with parity failing on the type's name, the second, after the
 review's fixes, with 0 failed in 912 s.
 
+**Slice 4.6 closed 2026-11-13 at landing 2, and phase 4 with it, short
+of the law's list** (the user's ruling; §13 item 72; law §12.4 amended
+the same day). The landing's pipeline: 671 green on `a2408d4` — engine
+31 s, corpus 2,033 s, v3 4,678 s, native 5,091 s, the suite's tie 19 s.
+What the slice leaves: landing 2's leans (a)–(j) above were put to the
+user and not ruled; they stand as built, each a checkpoint to be decided
+when a consumer uses a session. Landing 3 — rule 3: fuel and a host
+limit as separate records, exhaustion leaving the session as it was,
+resident memory over fork/fail/release cycles — is not built and is
+carried to its first consumer, the host limit's quantity with it. T6's
+row at this close: built, its sentences on preparation, invocation,
+argument validation, revisions and release, and a declaration built as
+data through the chain; not built, "bounded live state after many
+fork/fail/release cycles" (carried here) and the two buffer fixtures
+(carried 2026-11-11, rule 5). The phase's other unbuilt items — coupled
+program/proof holes and refutation scope (T4, T7), incremental goal
+states with R85's origin map before them, evaluation reflection and its
+cost (T8) — were never designed and are carried the same way (§11's
+rows). One comment landing 2 left stale is owed to the next kernel edit:
+`kernel/load.shard`'s header names `ev.shard`'s `run_prog` where the run
+is `session.shard`'s `run_load`.
+*Why the phase closes here* (the exchange of 2026-11-12 and 13). The
+user asked where this slice's scope came from. The trace: law §12.4 item
+4's clause and §12.5's T6 row; two review items (R42, R61); three
+landings cut by the implementer; the user's words on two sub-decisions
+only — that T6 be built at this point was "the next of the law's list"
+(slice 4.4 rule 4) and was never put as a choice. Nothing in the tree
+consumes a session but `load.shard --run` and the slice's own tests: the
+slice table's first consumer, the tactic library's step, was measured at
+landing 1 and ruled out. Of the phase's seven slices four were not on
+the law's list (4.0, 4.1, 4.4, 4.5), and no document lists what is still
+ahead. The user: "I think the biggest risk here is instilling bad
+architectural details. I am only able to provide scattered attention
+here in the evenings, and have been probably leaning too much on the
+roadmap. The fact that v2 is still deep in everything makes it hard to
+cleanly cut and implement." — and on closing the phase: "Agreed with
+cutting phase 4 short." Chose-because: each remaining item is a design
+without a consumer, ratified on a reading the user cannot inspect —
+slice 4.0's checked transfer, ratified the day it was designed, admitted
+a false theorem until the audit of 2026-11-11 —, while a ported file is
+checked by K and against the old tree's behaviour. Rejected-because:
+finishing item 4's list first is the law's own order, there so that an
+interface's mistakes show before a ported library stands on it; the cost
+of giving that up, stated: ported files redone where a carried item
+later changes an interface.
+*What follows, the user's direction and not yet a design:* "As always, I
+am in favor of ripping out the old first and rebuilding the new once we
+know what we need, and I think we do know what we need here. The main
+hazard to watch for is how much of the v2 kernel is still required for
+running v3, and why that still is. I would love to just rip out the
+entire v2 kernel and then work on updating everything to run again with
+the new system." Measured the same day on `a2408d4`, in scratch
+checkouts with the old `kernel/` deleted and the bootstrap built there:
+the V3 sources import no file of the old tree; the whole suite on the
+bootstrap there, 48 entrypoints, 45 passed and 3 failed in 897 s of wall
+— `bin_test.sh` (1 of 43 checks) and `session_emit_test.sh` (1 of 7) at
+the lowerer, `calc_test.sh` on its reference side —, so on the bootstrap
+V3 runs on no file of the old kernel. The old kernel is 37 files, 26,914
+lines. The chain's two tools (`tools/lower/lower.shard`,
+`tools/codegen/codegen.shard`; 2,014 lines) import nine of them, 5,963
+lines — `stdlib`, `term`, `module`, `sexpr`, `expand`, `reader`,
+`resolve`, `image`, `loader`: the old front end, which reads the text
+the V3 emitter prints —, and with the old kernel gone the lowerer stops
+at its first import. `v3/build.sh` runs the two tools on the old
+evaluator compiled (`bin/shard_eval`: four files more — `expr_size`,
+`reduce`, `evm`, `eval`), and that half is used, not needed: with the
+nine files alone the tools run on the bootstrap's `direct` —
+`json_test`'s closure lowered, generated, compiled and run, both texts
+byte-identical to the build's; the loader's closure, 8,905 declarations,
+lowered in 22 s, byte-identical, the generator overflowing the
+interpreter's stack there — and compiled by themselves (14 s for the
+two) they lower and generate the loader's closure in 4 s and 6 s, both
+texts byte-identical to the build's, against the 79 s and 285 s recorded
+at slice 4.4. `calc_test.sh` reads its reference side from the old
+tree's `examples/calc` under the old evaluator. The other 24 files of
+the old kernel, the checker's, V3 uses nowhere. One cause, then: V3 has
+no back end of its own — its programs are printed in the old dialect and
+compiled by two old-tree tools that parse that text with the old
+kernel's reader. The cut's design — what takes the place of the chain's
+front end, what of the old tree is deleted and what a tag keeps, the CI
+jobs — is the next slice's, put to the user before it is built.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -7104,14 +7186,15 @@ never compared as verdicts.
 | implicit arguments, first-order unification, universe inference, the numeral rule of §5.2, coercion `Nat → Int` | §5.1 Stage 1, §5.2 | 3 — **landed slice 3.15** (§5.1, §8.4) |
 | match compilation, structural recursion to recursors, `f.eq_N`, `noConfusion`, `WellFounded.fix` from `measure`, `fn` = `def` + `realize` | §5.1 Stage 1, §4.5; §8.4 | 3 — slices 3.13 (immediate-field recursion, `eq_N`), 3.14 (course-of-values, `WellFounded.fix`), 3.15 (`casesOn`, `noConfusion`, `c.inj` for a type without parameters; the parametric `HEq` shape later) |
 | deriving under a declared policy | §5.1 | 3 — **landed slice 3.19** (§8.4): a type without parameters and Init's `List`, `Option`, `Prod` at closed arguments; types with parameters, nested and mutual types, the ordering's laws and the instance constants later |
-| tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 — **landed slices 3.20–3.22** (§8.4): `(by STEP…)` as I, `goal_of`, `applicable`, `step` and `elaborate` as E functions over one derivation, `sorry` the pending hole (3.20 rule 9), the producers (3.22); the law's `change` is `show`; holes shared across goals and incremental goal states are phase 4's (T4, T6) — slice 3.30's ledger |
+| tactic blocks, the I elaborator, the goal graph, `sorry` as a hole | §5.1 Stage 2, §7 | 3 — **landed slices 3.20–3.22** (§8.4): `(by STEP…)` as I, `goal_of`, `applicable`, `step` and `elaborate` as E functions over one derivation, `sorry` the pending hole (3.20 rule 9), the producers (3.22); the law's `change` is `show`; holes shared across goals and incremental goal states were phase 4's (T4, T6) — slice 3.30's ledger —, **carried 2026-11-13** to their first consumer (item 72) |
 | typeclasses, instances, coercions | §5.1 Stage 3 | 3 — instance arguments at the library's types from a fixed table at slice 3.27 landing 1 (§8.4 rule 3, designed 2026-10-09), the `Nat → Int` coercion at 3.15; search stays the door — the phase-3 form by item 61's ruling (slice 3.30's ledger) |
 | the `Init` import with E realizations attached; `String`, `Array`, `ByteArray` representations (Init's E-eligible inductives are E types since slice 5b, §7.5; a `realize` attaches a body per constant) — **the byte-list representations landed at slice 3.18** (§8.4: `String`, `ByteArray`, `Array`, `UInt8`, `BitVec`, `Fin`); the packed buffers are the lowering's, behind the same types | §4.4, INVENTORY | 3 — **landed** (slices 5b, 3.18, 3.26: the on-demand load, a module's horizon the only measure) |
 | lambda lifting, templates, specialization | §4.3 | 3 — **landed slice 3.28** (templates by shape, lifted lambdas, static packages, the budget; T2 and T3); specialization over user files is route 1's at phase 4 |
 | `bin`, `requires`, the World-use check, effect traces | §4.7 | 4 — **slice 4.3 (designed 2026-10-16, §8.6)**: the check over `Prog` with the law's fixtures as pins, the extern an opaque L constant, the `bin` form and its record, the trace tied four ways |
-| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; its leans ruled 2026-11-12); **landing 2 built 2026-11-12** (`kernel/session.shard`: revisions by ordinal, each its own load; handles by ordinal, released, revoked, withdrawn with the revision; the checked door closed from the environment; the leans of §8.6 "As built, landing 2" awaiting ratification — the base does not grow, a departure); landing 3 not started |
+| prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; its leans ruled 2026-11-12); **landing 2 built 2026-11-12** (`kernel/session.shard`: revisions by ordinal, each its own load; handles by ordinal, released, revoked, withdrawn with the revision; the checked door closed from the environment; the leans of §8.6 "As built, landing 2" not ruled, standing as built — the base does not grow, a departure; green on pipeline 671); **the slice closed 2026-11-13 at landing 2**, landing 3 (budgets, reclamation, the host limit) **carried** to its first consumer (item 72) |
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
-| evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | 4 |
+| evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | **carried 2026-11-13** to its first consumer (item 72; was phase 4's) |
+| coupled program/proof holes and refutation scope | §6, §7.3, T4, T7 | **carried 2026-11-13** to their first consumer — the search engine's rebuild onto the goal graph (item 72; were phase 4's, never designed) |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); the gate 6 |
 | T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3 — **landed slice 3.24** (`(dif h C T F)`, the `Fin.mk` field under its hypothesis; pins `dif_ok`, `dif_type`, `dif_needs_init`, `dif_scope`; `examples/path`, `path_test.sh`) |
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | **carried to phase 5** (ruled 2026-10-13, slice 3.30 rule 3a): built as a landing when the port's first consumer needs two implementations of one view — a loader rule naming the implementing file and R57's checked-instance record by substitution; the mechanism for one implementation is built (§6.6) |
@@ -7123,7 +7206,7 @@ never compared as verdicts.
 | the one E (§8, RULED 2026-09-14): the bootstrap to the whole of E, the toolchain migrated by tool, the profile flag deleted — slices 3.2–3.5 | §8.3; law §9.2 as amended | 3, first |
 | `Symbol`'s L identity `String` and the flip of `"…"` from the byte list to a `String` value in E, for every file at once, the toolchain migrated by tool | §8.1 rules 1–2; INVENTORY | **carried to phase 4** (ruled 2026-10-13, slice 3.30 rule 3b): with route 1's chain, as slice 3.18 stated |
 | the three persisted identities (law §5.2, §7.2, §7.5; R82, records §4.12): the resolved requirement — the statement with its referenced declarations' identities, selected instances and coercions, policy and environment dependencies —, the reconstruction contract with its version, retained P under the canonical encoding with display names outside it; until slice 4.5 the sidecar's key was the statement fingerprint and the store's sharing compared binder names | §8.4 3.22 rule 2 | 4 — **slice 4.5 (designed 2026-10-23, built on pipelines 642–644, closed 2026-11-06, §8.6; item 70)**: the resolved requirement as the sidecar's key (the statement, the referenced declarations' identity closure, the policy, the environment), the reconstruction version with `--reconstruct`'s compare, the store's display map — its own slice before T6 (4.6) and before phase 5's tools police frozen requirements |
-| occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | 4, before the incremental goal-state slice; slice 4.1's emitter keeps the map |
+| occurrence provenance (law §4 "provenance is structural and occurrence-aware"; R85, records §4.12): occurrence identifiers and an origin map across parsing, record expansion, generated obligations and I nodes, K's terms location-free, a diagnostic following the occurrence; today `SExpr` carries no span after a parse and a tactic failure names its step and goal | §4; §8.4 3.20 | **carried 2026-11-13** with the incremental goal states (item 72; was phase 4's), owed before them as before; slice 4.1's emitter keeps the map |
 | user notation | §5.3 departure 6 | never in v1 |
 | an existential's witness introduction through `exact` — `(exact (Exists.intro w h))` with `h` a hypothesis of known type, or the `@` form with the predicate written, is `unify_stuck … blocked on p`: the first-order unifier meets the predicate applied to the witness before the result type meets the goal (slice 4.2 landing 2, §8.6 item 2); the form that works is `(apply (Exists.intro w) ((show P) …))` | §5.1 Stage 1 | 5 — a Stage-1 item: the goal's result type unified first, or a pattern case for a metavariable applied to a witness |
 
@@ -8722,4 +8805,26 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     outside the slice: two defects of the loader its review found —
     an L declaration under a program's name, and under a name of
     Init, the second passing the policy as a standard axiom. Landing
-    3 not started.
+    3 not built: carried at the phase's close (item 72).
+72. **Phase 4 closed short; the old tree before the port (ruled
+    2026-11-13; law §12.4 amended; §8.6 "Slice 4.6 closed").** The
+    user: "Agreed with cutting phase 4 short." (a) **The phase
+    closes at slice 4.6 landing 2.** Built of law §12.4 item 4: the
+    compiler proof (4.2), the World-use and model tests (4.3),
+    prepared invocation and stale handles (4.6 landings 1–2). (b)
+    **Carried to the first consumer, to no phase:** budgets and
+    reclamation (4.6 rule 3, the host limit's quantity undecided);
+    T4 and T7; incremental goal states and R85's origin map;
+    evaluation reflection (T8) — §11's rows. (c) **Landing 2's leans
+    stand as built, not ruled** (item 71 (i)), a checkpoint each.
+    (d) Chose-because and rejected-because: §8.6 "Why the phase
+    closes here". (e) **The direction after it, the user's, not yet
+    a design:** the old tree goes before the port, the old kernel
+    whole — "I would love to just rip out the entire v2 kernel and
+    then work on updating everything to run again with the new
+    system" —, the hazard the user named being what of the old
+    kernel V3 still runs on. Measured the same day (§8.6): nothing
+    on the bootstrap; for a native build, nine files under the
+    chain's two tools, and the old evaluator used but not needed.
+    The cut's design is the next slice's, put to the user before it
+    is built.
