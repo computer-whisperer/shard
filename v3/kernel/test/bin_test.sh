@@ -10,7 +10,7 @@
 # negatives — the bin with a requirement left `sorry` fails the load with UNMET, and a
 # program with a write duplicated fails it with UNTHREADED — each a nonzero exit. Since
 # slice 4.4 landing 1, route 1's binary of calc's main (v3/build.sh over the naming-law
-# root, through the emitter's bridge) runs over the same inputs and is the driver's byte for
+# root, through the back end's bridge rows) runs over the same inputs and is the driver's byte for
 # byte.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.

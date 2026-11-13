@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) closed
 > short 2026-11-13 by ruling (item 72; the law amended): slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it, green on pipeline 671; the slice closed 2026-11-13 at landing 2 with the phase — landing 3 and the phase's unbuilt items carried to their first consumers, the old tree to go before the port (§8.6 "Slice 4.6 closed"; §13 item 72). Phase 5 is open (§8.7): slice 5.0, the cut — the old kernel deleted, V3's own back end — designed and ratified 2026-11-13 (item 73), not yet built.** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it, green on pipeline 671; the slice closed 2026-11-13 at landing 2 with the phase — landing 3 and the phase's unbuilt items carried to their first consumers, the old tree to go before the port (§8.6 "Slice 4.6 closed"; §13 item 72). Phase 5 is open (§8.7): slice 5.0, the cut — the old kernel deleted, V3's own back end — designed and ratified 2026-11-13 (item 73), built the same day on the full local gate (§8.7 "As built").** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -1522,7 +1522,11 @@ carried (§8.2).
    `ev`'s entries, computed through the bootstrap's operator primitives
    when `ev` runs on it; a toolchain source cites the operator
    spellings, and one that cited `Nat.add` directly would be an unknown
-   call under `eval direct`. **Route 1 reads the same E** (2026-09-14,
+   call under `eval direct`. **Since slice 5.0 (§8.7) route 1 reads no
+   source** — the back end takes the program the V3 loader yielded, and
+   the reader the rest of this rule holds to its binder rule is deleted
+   with the old kernel; what follows is the record of the chain it
+   replaced. **Route 1 reads the same E** (2026-09-14,
    after CI): the compiled K is built by the old tree's chain
    (`v3/build.sh`: `tools/lower` on the compiled engine, whose front end
    is the old `kernel/reader.shard`), so that reader carries the same
@@ -3378,6 +3382,10 @@ it entrenches. The slices, in the order built:
 | 4.4 | the bridge: Init's types onto the chain at the emitter (a string literal as the closure's constructors; the dotted primitives mapped by name or by expression, `Nat.sub` truncating), no edit of the old tree; landing 0 the probe as the kill-test; landing 1 the bridge, the two refusal pins flipped to ties, calc's binary built by route 1 and tied on its observables; landing 2 the rename of the kernel's comparison spellings by tool — **designed 2026-10-16 at slice 4.3's close with three law changes (item 68's deferral reopened on evidence, the flip decoupled from the chain's replacement, the five dialect debts re-attributed); ratified as outlined (the user: "Agreed with the plan changes as outlined; update the docs."); landing 0 built 2026-10-16 (the probe: calc's binary through a scratch bridge ties the driver; the mechanism Init's wire types identified with the chain's prelude); landing 1 built 2026-10-16 (the bridge in `kernel/emit.shard`, the two pins flipped, calc's binary in `bin_test.sh` and the tie), green on pipeline 633; landing 2 built 2026-10-17 (the rename by the tool, 1,055 sites in 74 files; the exception retired; pin `rename_refused_kernel`), green on pipeline 638; slice closed 2026-10-17** | phase 5's effectful ports' binaries; V3's own chain's first generation (phase 7); the goal's `bin shardfmt` native |
 | 4.5 | the three persisted identities (law §5.2, §7.2, §7.5; R82): the sidecar's key the resolved requirement — the closed statement, the referenced declarations' identity closure through the load's own declarations, the policy, the environment — with a stale entry pending by cause, `req=` on every theorem's `ACCEPT` record and `prove` restamping older sidecars by tool; the reconstruction version in the sidecar's form and the manifest, `load.shard --reconstruct DIR` comparing a replay's P against retained P and reporting an evidence change; the store's binders anonymous with the display names in `ID.names`, sharing name-blind — **designed 2026-10-23 at slice 4.4's close, §11's row's ordering over 4.4 rule 4 (item 70); ratified 2026-10-23 as proposed (the user: "Agreed, let's write slice 4.5 into the design."); landing 1 built 2026-10-23 (the key: `(req S D P E)` under `(sidecar 3)`, the stale causes, the restamp, `req=` on every theorem's record, six pins; an Init-free module's environment part 0), green on the local gate — the loader pins 290 cases, both suites 44 entrypoints with 0 failed, the tie 0 differ —, green on pipeline 642; landing 2 built 2026-10-23 (the reconstruction version: `(sidecar 3 1)`, `RECON` and the restamp, the manifest's `recon` line, `--reconstruct` comparing the canonical records), green on pipeline 643; landing 3 built 2026-10-23 (the display map: binders anonymous in the records, `DIR/ID.names` beside them, sharing modulo binder names; the one merge over calc's bundle found), green on pipeline 644; slice closed 2026-11-06** | T6's prepared handle (slice 4.6); phase 5's migration tool's frozen-requirement checks |
 | 4.6 | T6, the embedding (law §9.3, §9.4; R61): a handle prepared once — the program linked, the entry, its parameter and result types, the policy and the revision bound — and invoked many times on arguments built as data and validated against the entry's types, `ev` and `run_prog` clients of the one path; a session that owns the Init-only base, a table of revisions — each its own load, environment and counter, its identity an ordinal the session mints — and a table of live handles, the T6 row's sentences each a named check, one declaration built as data admitted, prepared, invoked and emitted under one name and key; fuel and a host limit as separate records, exhaustion leaving the session as it was, resident memory over fork/fail/release cycles — **proposed 2026-11-06; amended 2026-11-11 for "One environment, one counter"; its two decisions ruled 2026-11-11 (the user: "On 4.6: shard driver in-process, and yes to the law amendment."): the host a shard driver in-process, the buffer rules and the row's two buffer fixtures carried to the slice that builds packed buffers with law §12.4 amended (item 71); landing 1 (prepared invocation: `prepare`, `invoke`, the checked and the assumed door) built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (the user: "1: keep it as built, 2: A, 3: A, 4: no handle. Let's proceed with landing 2."); landing 2 (`kernel/session.shard`: the revisions and the handles by ordinal, the checked door closed from the environment, declarations built as data) built 2026-11-12, green on pipeline 671, its leans not ruled and standing as built; **slice closed 2026-11-13 at landing 2 by the phase's ruling (item 72), landing 3 carried** | the tactic library's step (measured at landing 1: the reader keeps no handle, a lean); the law's first connected path, its last link; phase 5's tools |
+
+*Superseded at slice 5.0 (§8.7): slice 4.1's projection and chain, slice
+4.4's bridge as the emitter's, the engine's `run` operation — the texts
+below are the record of what phase 4 built.*
 
 **Slice 4.0 — the checkpoint memo answered: the documents, the release
 gate, the seal** (designed 2026-10-14 at phase 4's opening, on the memo
@@ -6949,7 +6957,7 @@ family is taken up).
 
 | slice | content | first consumer |
 |---|---|---|
-| 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed.")** | every native binary of the toolchain; the port's programs |
+| 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin** | every native binary of the toolchain; the port's programs |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7070,6 +7078,86 @@ the old kernel's reader, loader and resolver. The rules:
    labels; the proven lowering (law §12.4 item 7); packed buffers; a
    foreign host; `shard-viewer`; the documents of the old arcs under
    `docs/`, which stay as the record of what the old tree proved.
+
+**As built (2026-11-13).** *The deletion.* `kernel/` is gone — 37
+`.shard` files, 26,914 lines, `reader_corpus.txt` — in its own commit;
+the tag `v2-kernel-last` (`6239c33`) holds it. *The back end.*
+`kernel/lower.shard` (605 lines: `lw_prog`, the wire roles `lw_role`),
+`kernel/cgen.shard` (592 lines: `cg_prog`), `kernel/emit.shard`
+rewritten as their driver (94 lines; the text projection was 505),
+`kernel/rt.h` moved from `tools/codegen/` unchanged (978 lines of C) —
+1,291 lines of shard where the two old tools and the projection were
+2,519; `tools/lower` and `tools/codegen` deleted. `load.shard --emit
+DIR` writes `main.c`, the functions in parts of 400 (`pNNNN.c`, included
+by `main.c`), `map` and `sources`; `v3/build.sh` is that and `cc`.
+*Measured on the dev box:* the loader's own closure — 9,003 declarations
+— loads, lowers and generates in 34 s on the bootstrap, where the old
+path took 29 s to print it, 79 s to lower and 285 s to generate (slice
+4.4's record); `cc` 65 s; the binary 5.29 MB against 4.99 MB. So the
+bootstrap runs every emit and no binary builds another (rule 4's
+question); the tie still compares the two engines' C text for one
+closure (`native_tie_test.sh` 2c). The whole build, 31 roots from an
+empty directory: 222 s against 2,826 s. *The tests.* `calc_test.sh`
+against `test/fixtures/calc_old_tree.txt` (727 lines, recorded from the
+old tree at the tag, byte-identical to the port's that day);
+`session_emit_test.sh` and `session_test`'s emit mode on the new back
+end, the names read from `map` and from the generated functions; pins
+`mangle_injective` and `symbol_pattern` tie where
+`refused_mangle_collision` and `refused_symbol_pattern` were refused,
+and `refused_numeral_pattern` is the refusal path's pin now;
+`lower_test.sh` (new; rule 5) runs seven programs as loaded and under
+the driver's new `--lowered`, which runs a program's restricted form in
+its place through the same door (`session.shard` `run_load_as`). *The
+bootstrap.* `eval direct` and `eval dump` only; the old-kernel mode,
+`load_kernel_from`, `default_kernel_dir` and the 22 unit tests over the
+old kernel's files removed (`lib.rs` 1,267 lines to 571), 24 tests left,
+all passing. *CI.* Jobs `host` (the Rust evaluator built, its tests run,
+the docs-only self-test), `v3`, `native`, `suite_tie`; the eight jobs of
+the old tree removed. *Deleted with the kernel as its harness (cleanup,
+rule 1):* `run_corpus.sh`, `fails-base.txt`, `gate_sweep.sh`,
+`bin/check`, `bin/rebuild.sh`, `bin/engine_stamp.sh`.
+*Departures from the design, stated.* (1) **The seven named rows are
+kept, not renamed** (rule 2c). As first built the lowering spelled
+`Nat.land lor xor shiftLeft shiftRight beq ble` as the profile's
+primitives, as the emitter had; `lower_test.sh` then showed pin
+`init_prim` stuck under `ev` on its restricted form (`no_arm` in
+`main.brow`) where its binary was right — `Nat.beq` answers Init's
+`Bool`, `=` the prelude's, and a `match` on the answer names Init's
+constructors; the binary cannot see the difference, both being the true
+cell. RS keeps the seven under their own identity and the generator
+names the runtime's operation for each. (2) **One refusal fewer than
+rule 3 lists:** a string literal over a list that is not a wire list is
+lowered as the cells it names; nothing reads it back. (3) **The lowering
+test is a shell test over the driver**, not a harness: a program's
+externs are performed by the driver's run, so the same streams are
+compared. It is small on purpose — each program runs under `ev` on the
+engine under test, twice; its first form took 1,168 s on the bootstrap
+and found one harness that needs K's directory as a root. (4) **`eval
+run` leaves the shim** with the mode it forwarded to.
+*Found on the way.* A constructor call one field short in `load.shard`
+(`--reconstruct`'s) ran on the bootstrap, which resolves flat and counts
+no fields, and was refused by the V3 loader at the first build
+(`unsaturated`): the build's own load is what caught it. Refusals before
+success: that one. Interventions: none.
+*What this supersedes of phase 4's texts:* slice 4.1 rules 1, 2 and 8
+where they name the projection, the old chain and its files in the
+stamp; slice 4.4's bridge as the emitter's — its rows and roles are
+`lower.shard`'s; the dispositions' `eval FILE EXPR` and `BOOT run`. *Not
+done, stated:* every other family of the old tree is where it was,
+unchecked; `v3/MANIFEST.md`'s labels are still proposals; the top README
+and `docs/OVERVIEW.md` carry a dated note and otherwise describe the
+tree as the tag holds it.
+*Gates on the dev box, the tree as committed:* `v3/build.sh --all` 31
+roots, 31 built, 0 failed, in 222 s (2,826 s at slice 4.6 landing 2,
+through the old chain); the suite on the binaries 50 entrypoints, 0
+failed, beside the full replay in 514 s of wall — the native tie 83
+checks, 0 failed; T0 FULL == PINNED, accepted 57,977, the replay 380 s
+at 28.8 GB —; on the bootstrap 50 entrypoints, 0 failed, in 901 s of
+wall (parity 33 closures, 158,825 declarations, 0 differ;
+`lower_test.sh` 7 checks, 0 failed); the tie 50 entrypoints, 0 differ;
+no authored file changed under the round. The round was run twice: once,
+green, before three comments of the new sources were corrected, and
+again on the tree as committed.
 
 ## 9. Assumption policy and entries
 
@@ -7273,7 +7361,9 @@ Four suites, agreed before any result is read:
    imports) over `examples/calc/calc_differential.shard`, a pure module
    in the old tree adding only the derived inputs (LAYOUT: no file
    under `v3/` imports the old tree), driven case by case by
-   `kernel/test/calc_test.sh`. Both sides read
+   `kernel/test/calc_test.sh` — until slice 5.0 (§8.7): the old kernel
+   is deleted, and the old side is its output as the last commit that
+   held it produced it, `kernel/test/fixtures/calc_old_tree.txt`. Both sides read
    `kernel/test/fixtures/calc_inputs.txt` and produce one line per
    input and case — `lex`, `parse`, `run`, the spec parser's eleven
    functions, `spec_run`, `step` and `step_spec` with the state
@@ -7425,7 +7515,7 @@ row.
 | `(admit)` truncation | `sorry`, reported loudly, never accepted | law §7.5 |
 | `.auto.shard` sidecars, `(proof-for NAME PROOF)` (1,495), the `auto` delegation | the sidecar and the pin store keyed by the resolved requirement; engine-authored I | law §7.5; T8's stale-pin rule |
 | the tracer, focus mode, `tools/explain` | renderers of goal states | law §7.3 |
-| corpus pins (`pins/`, `pin_run`, `fails-base.txt`, the tiers) | `v3/pins`, the hostile battery first | phase 5; `run_corpus.sh` never reaches `v3/` (phase 1 header) |
+| corpus pins (`pins/`, `pin_run`, `fails-base.txt`, the tiers) | `v3/pins`, the hostile battery first | phase 5, by need; `run_corpus.sh` and `fails-base.txt` were deleted with the old kernel at slice 5.0 (§8.7) — the old pins are unchecked text until they migrate |
 
 ### 12.4 Semantics and the host
 
@@ -7446,7 +7536,7 @@ row.
 
 | v2 | fate | note |
 |---|---|---|
-| `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver (`kernel/load.shard`, slice 3) replaces `check`; `eval direct` stays the bootstrap's; the compiled chain is route 1 | law §9.1; `tools/lower` ARCHIVE at the flip |
+| `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver (`kernel/load.shard`, slice 3) replaces `check`; `eval direct` stays the bootstrap's; route 1 is V3's own back end since slice 5.0 (§8.7: `kernel/lower.shard`, `kernel/cgen.shard`), `bin/check`, the two binaries, `tools/lower` and `tools/codegen` deleted | law §9.1 |
 | shardfmt and CANON's rule set | rewritten for S — `v3/CANON.md` (slice 8, 2026-09-13) | law §10.5; the fmt gate on V3 at phase 6 (`v3/CANON.md` §8) |
 | `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
 | `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
@@ -8986,3 +9076,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     kernel as the chain's own front end removes nothing the user
     asked to remove; re-hosting the old tools' text on a V3 reader
     keeps a second parser between V3 and its binary.
+    **Built 2026-11-13** (§8.7 "As built"): `kernel/lower.shard`,
+    `kernel/cgen.shard`, `kernel/emit.shard` as their driver,
+    `kernel/rt.h`; the bootstrap runs every emit; four departures
+    stated there — the seven named primitive rows kept under their
+    own identity (found by the lowering's test under `ev`), one
+    refusal fewer, the lowering's test a shell test over the
+    driver's new `--lowered`, `eval run` out of the shim. The leans
+    of (d) stand as built and are not ruled.

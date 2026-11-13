@@ -2,6 +2,8 @@
 
 > **STATUS (reset 2026-08-22): LAW.** design intent; §10 records the 2026-08-22 reset — the 2026-07-18 design review's ordering is retired and ONE goal (#23) governs. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
+> **Note (2026-11-13):** the kernel this document describes (`kernel/`, its engines `bin/shard_check` and `bin/shard_eval`, the corpus) was deleted at V3's slice 5.0 (`v3/LANGUAGE.md` §8.7); it runs at the tag `v2-kernel-last`. The design intent below stands; the tree that carries it now is `v3/`.
+
 > Path note (2026-07-18): file paths in this ledger are as-landed history; the repo was reorganized — decode old `examples/` paths via [LAYOUT.md](LAYOUT.md).
 
 This is the "why" behind the project, in full. The README is the front door;

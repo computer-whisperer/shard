@@ -3,16 +3,16 @@
 #
 #   bin/ci_docs_only.sh               exit 0: the push changed files and every one of them ends
 #                                     in `.md` — the gate jobs step aside (.gitlab-ci.yml:
-#                                     corpus, v3, native, suite_tie); exit 1: anything else, and
+#                                     v3, native, suite_tie); exit 1: anything else, and
 #                                     every doubt
 #   bin/ci_docs_only.sh --self-test   the cases at the foot of this file on a scratch repository
-#                                     (the engine job runs it first, on the runner's own git);
+#                                     (the host job runs it first, on the runner's own git);
 #                                     exit = the cases that failed
 #
 # The push is $CI_COMMIT_BEFORE_SHA..$CI_COMMIT_SHA — the branch's head before the push and
 # after it — so a code commit pushed together with the commit that records it is one push and is
 # gated; a rename is read as a removal and an addition. What makes stepping aside sound: no gate
-# reads a `.md` file (checked 2026-11-11 over run_corpus.sh, the v3 scripts and the shard sources;
+# reads a `.md` file (checked 2026-11-11 over the v3 scripts and the shard sources;
 # a gate that starts to read one must name that file here as code).
 #
 # The answer is "no" whenever it cannot be had: not a push pipeline (a manual, API or scheduled

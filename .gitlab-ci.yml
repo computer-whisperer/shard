@@ -1,211 +1,76 @@
-# The corpus gate as an async checkmark per commit.
+# The V3 gates, as an async checkmark per commit.
 #
-# The corpus (run_corpus.sh) is a FAIL-set diff tool: red targets are
-# pinned reject fixtures, and the gate fails only when the FAIL-set
-# drifts from fails-base.txt. CI runs the FULL corpus including the
-# embedded lowering-driver leg (interactive cycles skip it locally via
-# SKIP_LOWERING=1 after running the driver directly).
+# WHAT IS GATED. V3, under v3/, and the Rust evaluator that runs it (rust_bootstrap/). The
+# old tree's kernel was deleted at slice 5.0 (v3/LANGUAGE.md §8.7; the tag v2-kernel-last holds
+# it) and its jobs with it — `engine` as the builder of the old checker's binaries, `corpus`,
+# `corpus-long`, `corpus-closed`, `corpus-images`, `engine-run`, `swap-route-deep`,
+# `pio-dme-free`. What is left of the old tree (std/, meta/, models/, tools/, examples/, pins/)
+# is unchecked text until each family migrates: no job reads it.
 #
-# THE PROJECTION IS `^(FAIL|TYPE!)`, NOT `^FAIL`. A decl-level type
-# rejection prints `TYPE! NAME`, never `FAIL NAME`, so while the grep
-# read only ^FAIL an entire class of rejection pin was INVISIBLE here:
-# pins/lang/types_gate.shard (3 legs) and refine_try_rejects.shard (2)
-# had no fails-base rows at all and gated NOTHING — reopen the holes
-# they watch and this diff would not move. Both line shapes put the
-# subject in field 2, so one awk serves both.
+#   host        the Rust evaluator built and its unit tests run; the docs-only script's
+#               self-test. Untagged: any runner.
+#   v3          the suite on the bootstrap (the authority), then the full replay of the pinned
+#               Lean `Init` export on compiled K against its pinned verdict (v3/t0_full.sh).
+#   native      every root of the inventory built by V3's own back end (v3/build.sh --all:
+#               kernel/lower.shard, kernel/cgen.shard, cc), the byte-tie gate, then the suite on
+#               the binaries.
+#   suite_tie   the two suite runs compared entrypoint by entrypoint.
 #
-# AND IT COMPARES `target: claim` PAIRS, not bare claim names. Folding
-# TYPE! in pushed six names onto more than one row (bad_premise, big,
-# zero_is_one, __decls__, __module__, __totality__), and a name-only
-# diff rests on MULTIPLICITY: a leg lost in one file and gained in
-# another under the same name passes it. Tracking `=== target ===` and
-# emitting the pair costs nothing and pins each leg to its home file.
-# The awk below IS the baseline regenerator — `| sort > fails-base.txt`
-# on a known-clean log rebuilds the whole thing mechanically, which is
-# how the TYPE! back-fill was derived. Never hand-curate it.
+# NO HAND-OFF BETWEEN JOBS but the suite's kept outputs (v3 and native to suite_tie): each gate
+# job builds the Rust evaluator itself, from its runner-local cargo cache when it has one.
 #
-# WHICH TREE EACH GATE COVERS (FOUNDATION §10.5, phase 1). Two trees
-# live in this repository until the flip (§12.4 phase 6): the old tree
-# (kernel/, std/, meta/, models/, tools/, apps — the v2 lineage) and V3
-# under v3/. `engine`, `corpus`, `corpus-closed`, `corpus-long` and the
-# engine-run/PIO/swap jobs gate the OLD tree; the `v3` job (below) is
-# V3's one job per phase gate — phase 1 = T0; phase 2 (2026-09-13) = T0
-# plus the conformance suites inside v3/test.sh (frontend parity, calc's
-# differential, route 2's byte-tie, the primitive suite, the checked
-# entry; v3/LANGUAGE.md §10). run_corpus.sh's tier header says the same
-# from its side: no corpus tier reaches v3/.
-#
-# TWO JOBS, TWO RUNNERS. The engine build does not need the corpus
-# machine: the `engine` job runs UNTAGGED (any runner) and builds BOTH
-# fast engines (`bin/rebuild.sh check` — shard_eval, then shard_check
-# compiled by it). The `corpus` job runs on the high-cpu machine.
-#
-# HAND-OFF IS ARTIFACTS, NOT CACHE: this GitLab has no shared cache
-# server, so each runner's cache is LOCAL — a cache written by the
-# engine runner is invisible to the corpus runner. The engine job
-# publishes the four engine files as artifacts; `needs: [engine]`
-# downloads them into the corpus job wherever it runs. Each job still
-# keeps a local cache for its own run-to-run warm start (cargo target,
-# engines for the fast-boot rebuild path). GitLab uploads neither cache
-# nor artifacts on a TIMED-OUT job (measured, #44/#45) — the engine
-# job's own generous timeout is what guarantees the artifacts land.
-# The one-time cold bootstrap (Rust interpreter builds gen-1) is slow
-# on a small runner; every later rebuild fast-boots from the cached
-# previous engine and only runs when kernel sources actually changed
-# (stamp check).
-#
-# DOCUMENTATION-ONLY PUSHES (2026-11-11). A push that changed only `.md`
-# files gates nothing: `corpus`, `v3`, `native` and `suite_tie` ask
-# bin/ci_docs_only.sh first and step aside — each ends green in seconds
-# with "DOCUMENTATION-ONLY PUSH" in its log. Such a pipeline's green
-# says nothing about the tree: a record cites the pipeline of the push
-# that carried the code. The question is about the PUSH
-# ($CI_COMMIT_BEFORE_SHA..$CI_COMMIT_SHA), not the head commit, so code
-# pushed together with its record is gated. It is asked inside the jobs
-# because `rules: changes` can say "some changed file matches" and
-# cannot say "every changed file matches". Every doubt runs the gates
-# (the script's header lists them; a script that is missing or broken
-# is a doubt), and a full run on a documentation head is
+# DOCUMENTATION-ONLY PUSHES (2026-11-11). A push that changed only `.md` files gates nothing:
+# `v3`, `native` and `suite_tie` ask bin/ci_docs_only.sh first and step aside — each ends green
+# in seconds with "DOCUMENTATION-ONLY PUSH" in its log. Such a pipeline's green says nothing
+# about the tree: a record cites the pipeline of the push that carried the code. The question
+# is about the PUSH ($CI_COMMIT_BEFORE_SHA..$CI_COMMIT_SHA), not the head commit, so code pushed
+# together with its record is gated. It is asked inside the jobs because `rules: changes` can
+# say "some changed file matches" and cannot say "every changed file matches". Every doubt runs
+# the gates (the script's header lists them; a script that is missing or broken is a doubt), and
+# a full run on a documentation head is
 #   glab ci run -b main
-# The `engine` job is not asked — warm, it is a stamp check — and runs
-# the script's self-test first, on the runner's own git. Before this,
-# the pipeline of a record pushed after its code ran the whole gate a
-# second time beside the first (pipelines 656 and 657).
+# The `host` job is not asked — it is seconds — and runs the script's self-test first, on the
+# runner's own git.
 
 stages:
-  - engine
+  - host
   - gate
   - tie
 
-# The line the four gate jobs open with (DOCUMENTATION-ONLY PUSHES, above).
+# The line the gate jobs open with (DOCUMENTATION-ONLY PUSHES, above).
 .docs_only: &docs_only |
   if bin/ci_docs_only.sh; then
     echo "DOCUMENTATION-ONLY PUSH: nothing to gate, this job steps aside (.gitlab-ci.yml, the header)"
     exit 0
   fi
 
-# The engine job is deliberately NOT interruptible: the one-time cold
-# bootstrap (Rust interpreter compiles both engines; ~5-6h on the
-# small runner) must run to completion ONCE to seed the runner-local
-# cache -- auto-cancel on push was killing it mid-build every time
-# (#54: 96m, #55: 108m), so the cache never landed. Warm runs are a
-# stamp check (~minutes) and never block the pipeline long.
-engine:
-  stage: engine
+# The Rust evaluator: E's executor, trusted by review (FOUNDATION §9.1). Its unit tests are
+# the evaluator's own — the primitives, the control forms, the loader's reading of E.
+host:
+  stage: host
   image: docker.io/library/rust:latest
-  timeout: 8h
-  resource_group: engine-build
+  timeout: 30m
   cache:
-    key: shard-engine
+    key: shard-host
     paths:
       - rust_bootstrap/target/
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
   script:
     - bin/ci_docs_only.sh --self-test
     - echo "runner cores:" $(nproc) && (free -g || true)
     - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding (check mode: both engines)"
-        bin/rebuild.sh check
-      else
-        echo "engine fresh (stamp match) -- rebuild skipped"
-      fi
-  artifacts:
-    paths:
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
-    expire_in: 7 days
+    - cargo test --release --manifest-path rust_bootstrap/Cargo.toml
 
-corpus:
-  stage: gate
-  tags:
-    - high-cpu
-  image: docker.io/library/rust:latest
-  timeout: 6h
-  interruptible: true
-  rules:
-    - if: $PIO_DEEP == "1"
-      when: never
-    - if: $SWAP_DEEP == "1"
-      when: never
-    - if: $ENGINE_RUN == "1"
-      when: never
-    - if: $CORPUS_LONG == "1"
-      when: never
-    - if: $CORPUS_CLOSED == "1"
-      when: never
-    - if: $CORPUS_IMAGES == "1"
-      when: never
-    - when: on_success
-  needs:
-    - engine
-  cache:
-    key: shard-engine
-    policy: pull
-    paths:
-      - rust_bootstrap/target/
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq nodejs libcap2-bin > /dev/null
-  script:
-    - *docs_only
-    - echo "runner cores:" $(nproc) && (free -g || true)
-    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding (cache eviction fallback)"
-        bin/rebuild.sh check
-      fi
-    # The full stream goes to the artifact ONLY: teeing it to stdout ran the
-    # trace past GitLab's 4MB collection cap, which swallowed the gate's
-    # verdict on EVERY run — #289's failure was diagnosable only by pulling
-    # the corpus.log artifact. Stdout carries the tail, the FAIL/SKIP rows,
-    # and the baseline diff; the artifact keeps the whole log.
-    - bash run_corpus.sh > corpus.log 2>&1 || { tail -80 corpus.log; exit 1; }
-    - tail -30 corpus.log
-    - grep -n '^FAIL \|^TYPE! \|^SKIP ' corpus.log | head -80 || true
-    - |
-      awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus.log | sort > fails-run.txt
-      sort fails-base.txt > fails-base-sorted.txt
-      diff fails-run.txt fails-base-sorted.txt
-    - echo "CORPUS == BASELINE"
-  artifacts:
-    paths:
-      - corpus.log
-    when: always
-    expire_in: 30 days
-
-# The V3 gate (docs/FOUNDATION.md §9.1, v3/README.md): the export first
-# (v3/export.sh, from the pinned toolchain, fresh on every run: 77 s on
-# this runner — elan, the toolchain, lean4export, the export itself), its
-# index next (the driver compiled by route 1, kernel/test/init_index.sh;
-# LANGUAGE.md §8.4 slice 3.26: every test loads Init on demand from the
-# export through the index, no prefix fixture), then the toolchain-profile
-# tests and phase 2's conformance suites on the Rust bootstrap (v3/test.sh:
-# every kernel/test entrypoint, parity_test.sh, calc_test.sh,
-# route2_test.sh), then T0 on COMPILED K — route 1,
-# K compiled by the chain (v3/build.sh), still unproven, so the run first
-# byte-ties the binary's verbose per-declaration output against the
-# interpreter on a prefix, then replays the whole pinned Lean `Init` export
-# and requires the pinned verdict line (v3/t0_expected.txt; v3/t0_full.sh).
-# A runner cache of the export's 3.5 GB, 18,569-file tree was
-# tried on the first pass (2026-09-07) and its upload ran past 45 minutes
-# with the script long finished, so nothing of it is cached. The replay
-# was 43 min on this runner (12 min on the dev box) at a 30 GB peak
-# resident set (the export tables hold every referenced node) — the
-# high-cpu machine has the memory. Engine files arrive as the engine
-# job's artifacts (needs:), as for the corpus. v3/release/ is the store
-# store_test.sh writes for calc (LANGUAGE.md §8.4 slice 3.22 rule 7): the
-# release bundle K alone replays, published as the artifact, never committed.
+# V3's gate (v3/README.md, v3/t0_full.sh, v3/test.sh; FOUNDATION §12.4, §12.5). The suite on
+# the bootstrap first — the authority —, its outputs kept for the suite_tie job; then T0: K
+# compiled by V3's back end (v3/build.sh), still unproven, so the run first byte-ties the
+# binary's verbose per-declaration output against the interpreter on a prefix, then replays the
+# whole pinned Lean `Init` export and requires the pinned verdict line (v3/t0_expected.txt).
+# A runner cache of the export's 3.5 GB, 18,569-file tree was tried on the first pass
+# (2026-09-07) and its upload ran past 45 minutes with the script long finished, so nothing of
+# it is cached. The replay holds a 30 GB peak resident set (the export tables hold every
+# referenced node) — the high-cpu machine has the memory. v3/release/ is the store
+# store_test.sh writes for calc (LANGUAGE.md §8.4 slice 3.22 rule 7): the release bundle K
+# alone replays, published as the artifact, never committed.
 v3:
   stage: gate
   tags:
@@ -213,31 +78,12 @@ v3:
   image: docker.io/library/rust:latest
   timeout: 3h
   interruptible: true
-  rules:
-    - if: $PIO_DEEP == "1"
-      when: never
-    - if: $SWAP_DEEP == "1"
-      when: never
-    - if: $ENGINE_RUN == "1"
-      when: never
-    - if: $CORPUS_LONG == "1"
-      when: never
-    - if: $CORPUS_CLOSED == "1"
-      when: never
-    - if: $CORPUS_IMAGES == "1"
-      when: never
-    - when: on_success
   needs:
-    - engine
+    - host
   cache:
-    - key: shard-engine
-      policy: pull
+    - key: shard-host-gate
       paths:
         - rust_bootstrap/target/
-        - bin/shard_check
-        - bin/shard_check.stamp
-        - bin/shard_eval
-        - bin/shard_eval.stamp
   script:
     - *docs_only
     - echo "runner cores:" $(nproc) && (free -g || true)
@@ -256,18 +102,13 @@ v3:
     when: always
     expire_in: 30 days
 
-# The native toolchain (v3/LANGUAGE.md §8.6 slice 4.1): route 1 over every
-# root of the inventory — the V3 loader's projection (load.shard --emit,
-# kernel/emit.shard) through the old tree's chain into v3/bin/ — and the
-# byte-tie gate (kernel/test/native_tie_test.sh): the suite's workloads under
-# the bootstrap and the binaries, stdout, stderr, exit status and artifacts
-# byte for byte; then the whole suite on the binaries (V3_ENGINE=native: the
-# shim v3/bin/eval, rule 4), its outputs kept for the suite_tie job below. Its
-# own job beside `v3` so that the bootstrap suite (the authority) keeps its
-# time; the build is 31 roots through the chain, parallel (the code generator
-# holds 20–30 GB per driver-sized closure: the runner's 2.7 TB takes sixteen
-# at once, the dev box two — V3_HEAVY_JOBS). The gate jobs share the runner:
-# pipeline 608 measured the build beside them at 1.2–1.4× on every entrypoint.
+# The native toolchain (v3/LANGUAGE.md §8.6 slice 4.1, §8.7 slice 5.0): route 1 over every
+# root of the inventory — the V3 loader's emit (load.shard --emit: kernel/lower.shard,
+# kernel/cgen.shard) and cc into v3/bin/ — and the byte-tie gate
+# (kernel/test/native_tie_test.sh): the suite's workloads under the bootstrap and the binaries,
+# stdout, stderr, exit status and artifacts byte for byte; then the whole suite on the binaries
+# (V3_ENGINE=native: the shim v3/bin/eval, rule 4), its outputs kept for the suite_tie job
+# below. Its own job beside `v3` so that the bootstrap suite (the authority) keeps its time.
 native:
   stage: gate
   tags:
@@ -275,37 +116,18 @@ native:
   image: docker.io/library/rust:latest
   timeout: 3h
   interruptible: true
-  rules:
-    - if: $PIO_DEEP == "1"
-      when: never
-    - if: $SWAP_DEEP == "1"
-      when: never
-    - if: $ENGINE_RUN == "1"
-      when: never
-    - if: $CORPUS_LONG == "1"
-      when: never
-    - if: $CORPUS_CLOSED == "1"
-      when: never
-    - if: $CORPUS_IMAGES == "1"
-      when: never
-    - when: on_success
   needs:
-    - engine
+    - host
   cache:
-    - key: shard-engine
-      policy: pull
+    - key: shard-host-gate
       paths:
         - rust_bootstrap/target/
-        - bin/shard_check
-        - bin/shard_check.stamp
-        - bin/shard_eval
-        - bin/shard_eval.stamp
   script:
     - *docs_only
     - echo "runner cores:" $(nproc) && (free -g || true)
     - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
     - v3/export.sh
-    - V3_BUILD_JOBS=16 V3_HEAVY_JOBS=16 v3/build.sh --all
+    - V3_BUILD_JOBS=16 v3/build.sh --all
     - v3/kernel/test/init_index.sh
     - v3/kernel/test/native_tie_test.sh
     - V3_ENGINE=native V3_TEST_OUT=v3/bin/suite/native bash v3/test.sh
@@ -317,11 +139,10 @@ native:
     when: always
     expire_in: 30 days
 
-# The suite's two runs compared (v3/LANGUAGE.md §8.6 slice 4.1 rule 4): the v3
-# job's bootstrap run and the native job's run on the binaries, entrypoint by
-# entrypoint — exit status and output byte for byte under suite_tie.sh's stated
-# normalization (a count of seconds, a store's size, a scratch name). Needs
-# both jobs' kept outputs (v3/bin/suite/); seconds, not minutes.
+# The suite's two runs compared (v3/LANGUAGE.md §8.6 slice 4.1 rule 4): the v3 job's bootstrap
+# run and the native job's run on the binaries, entrypoint by entrypoint — exit status and
+# output byte for byte under suite_tie.sh's stated normalization (a count of seconds, a store's
+# size, a scratch name). Needs both jobs' kept outputs (v3/bin/suite/); seconds, not minutes.
 suite_tie:
   stage: tie
   tags:
@@ -329,370 +150,9 @@ suite_tie:
   image: docker.io/library/rust:latest
   timeout: 20m
   interruptible: true
-  rules:
-    - if: $PIO_DEEP == "1"
-      when: never
-    - if: $SWAP_DEEP == "1"
-      when: never
-    - if: $ENGINE_RUN == "1"
-      when: never
-    - if: $CORPUS_LONG == "1"
-      when: never
-    - if: $CORPUS_CLOSED == "1"
-      when: never
-    - if: $CORPUS_IMAGES == "1"
-      when: never
-    - when: on_success
   needs:
     - v3
     - native
   script:
     - *docs_only
     - v3/kernel/test/suite_tie.sh v3/bin/suite/bootstrap v3/bin/suite/native
-
-# The LONG corpus: everything the default corpus runs PLUS the ~45-90 min
-# block of search/PIO engine-run pins gated behind CORPUS_LONG=1 in
-# run_corpus.sh.  Fire on occasion (after search-family merges, before
-# baseline changes) with:  glab ci run -b main --variables CORPUS_LONG:1
-# (the variable also steps the default corpus job aside).  Deliberately
-# NOT interruptible: a later push must not auto-cancel a deliberate
-# full sweep.
-# NOTE no job-level `variables: CORPUS_LONG` here: job variables are
-# visible to the job's OWN rules evaluation, so setting it would
-# self-trigger this job in every pipeline (measured: #81). In a
-# genuine CORPUS_LONG:1 pipeline the PIPELINE variable reaches the
-# script's environment on its own.
-corpus-long:
-  extends: corpus
-  interruptible: false
-  # The long sweep is the FULL sweep: it also runs the CLOSED tier (a job
-  # variable is safe here — this job's own rule reads only CORPUS_LONG).
-  variables:
-    CORPUS_CLOSED: "1"
-  rules:
-    - if: $CORPUS_LONG == "1"
-      when: on_success
-    - when: never
-
-# The CLOSED corpus (2026-09-02, run_corpus.sh's tier header): the default
-# corpus PLUS the closed arcs' frozen gates — the floats/rat tower (the
-# 15-min long pole, #37), Arc B's sha256 articles + link layer + its
-# silicon legs, the wasm leg + V8 differential, RISC-V + qemu, PIO. Every
-# gate is kept; it fires ON DEMAND and before any baseline change:
-#   glab ci run -b main --variables CORPUS_CLOSED:1
-# (a GitLab pipeline schedule with that variable makes it nightly). Same
-# variable discipline as corpus-long: no job-level CORPUS_CLOSED here, or
-# the job would self-trigger on every pipeline (#81's lesson).
-corpus-closed:
-  extends: corpus
-  interruptible: false
-  rules:
-    - if: $CORPUS_CLOSED == "1"
-      when: on_success
-    - when: never
-
-# The S2b image-differential corpus (docs/STORAGE.md §8a): the whole
-# corpus run TWICE with the loader's image front door on (SHARD_IMAGES=1
-# -> every check consults/populates .shard-cache/images/) — pass 1 COLD
-# (text parse + image write), pass 2 WARM (validated hits: decode, no
-# parse). Both passes' FAIL projections must equal the committed text
-# baseline — the "identical verdicts" half of the S2b gate ("identical
-# loaded structures" is S2a's corpus roundtrip + the container's exact
-# byte validation). Fire with:
-#   glab ci run -b main --variables CORPUS_IMAGES:1
-# (steps the default corpus aside, same pattern as corpus-long; same
-# no-job-level-variable rule — see the corpus-long NOTE above).
-corpus-images:
-  extends: corpus
-  interruptible: false
-  rules:
-    - if: $CORPUS_IMAGES == "1"
-      when: on_success
-    - when: never
-  script:
-    - echo "runner cores:" $(nproc) && (free -g || true)
-    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding (cache eviction fallback)"
-        bin/rebuild.sh check
-      fi
-    # Full streams to the artifacts only — see the corpus job's 4MB-cap note.
-    - SHARD_IMAGES=1 bash run_corpus.sh > corpus-img-cold.log 2>&1 || { tail -80 corpus-img-cold.log; exit 1; }
-    - SHARD_IMAGES=1 bash run_corpus.sh > corpus-img-warm.log 2>&1 || { tail -80 corpus-img-warm.log; exit 1; }
-    - tail -15 corpus-img-cold.log && tail -15 corpus-img-warm.log
-    - |
-      sort fails-base.txt > fails-base-sorted.txt
-      awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus-img-cold.log | sort > fails-img-cold.txt
-      diff fails-img-cold.txt fails-base-sorted.txt
-      awk '/^=== /{t=$2} /^(FAIL|TYPE!) /{print t ": " $2}' corpus-img-warm.log | sort > fails-img-warm.txt
-      diff fails-img-warm.txt fails-base-sorted.txt
-    - echo "IMAGE CORPUS == TEXT BASELINE (cold + warm)"
-  artifacts:
-    paths:
-      - corpus-img-cold.log
-      - corpus-img-warm.log
-    when: always
-    expire_in: 30 days
-
-# The template-free DME first-result probe (docs/PIO.md P5c-2),
-# variable-gated on any branch carrying the task (merged to main
-# 2026-07-17).  Fire with:  glab ci run -b main --variables PIO_DEEP:1
-# (PIO_DEEP=1 also SKIPS the corpus job -- the deep probe replaces the
-# gate for that pipeline).
-#
-# The task's committed drive budget (50) is the fast smoke value; this
-# job seds it to $PIO_BUDGET (default 38,000).  Measured shape (local
-# A/B 2026-07-17): the ~11-12 MB/decision retention SATURATES at
-# ~67.6 GB around 6k decisions — RSS is byte-flat from there on, and
-# flat RSS is HEALTHY search, not a stall.  Per-decision cost grows
-# with depth (~quadratic fit: 6,100 decisions = 18 min local; 38k
-# projected ~10-12 h local, more on these cores).  Override the budget
-# per-run to climb the validation ladder:
-#   glab ci run -b BRANCH --variables PIO_DEEP:1 --variables PIO_BUDGET:12000
-# Each on-time clean exit extends the validated frontier; a run far
-# past its prediction has BRACKETED a stuck decision — attach and dump
-# before killing.  Green = a winner region in the log; red = budget
-# exhausted (informative — recalibrates the frontier, not a
-# regression).  The watchdog cap stays at 490 GiB (512Gi pod tier);
-# nothing measured yet needs the 1.5T high-mem slot.
-#
-# TIMEOUT: no runner has maximum_timeout set (checked 2026-07-18), so
-# the job-level timeout is the only ceiling.  48h covers the 38k rung's
-# ~32h projection (T_CI(n) ~ 1.32e-6 n^2 min, two-point fit) with slack
-# for a worse-than-quadratic tail.  The margin is load-bearing: GitLab
-# uploads NO artifacts on a timed-out job, and the engine reports only
-# at exit — a timeout here means total loss of the run.
-# Generic engine-run job for probe-style programs (drivers, demos) whose
-# runtime is UNVALIDATED.  The standing rule: any new engine-run
-# configuration — new task, instance, budget, or driver — fires HERE
-# first (RSS watchdog + artifact capture); the dev box only runs
-# configurations already measured fast.  Founding case: the PCB routing
-# driver sat at the ~67.6GB retention plateau for six CPU-hours locally
-# because refutation levels cost exponential-in-slack.  Fire with:
-#   glab ci run -b BRANCH --variables ENGINE_RUN:1 \
-#     --variables ENGINE_RUN_TARGET:tools/search/pcb_route_probe.shard
-engine-run:
-  stage: gate
-  tags:
-    - high-cpu
-  image: docker.io/library/rust:latest
-  # Generous JOB timeout: the internal ENGINE_RUN_SECS watchdog governs
-  # the actual run length and MUST stay below this, else the pod dies at
-  # the job timeout and uploads NO artifacts (measured twice: pipeline
-  # 174, and pipeline 298 where an ENGINE_RUN_SECS override ABOVE the
-  # then-8h job timeout disabled the watchdog's protection). When
-  # overriding ENGINE_RUN_SECS at fire time, keep it under this timeout
-  # minus upload slack.
-  timeout: 24h
-  variables:
-    ENGINE_RUN_TARGET: "tools/search/pcb_route_probe.shard"
-    # Internal deadline BELOW the job timeout: a pod killed at the job
-    # timeout uploads NO artifacts (measured: pipeline 174 lost its log).
-    # The watchdog loop kills the engine at this age, so the script ends
-    # while artifacts can still upload.  Exit 124 = deadline hit.
-    ENGINE_RUN_SECS: "25200"
-  rules:
-    - if: $ENGINE_RUN == "1"
-      when: on_success
-    - when: never
-  cache:
-    key: shard-engine
-    paths:
-      - rust_bootstrap/target/
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
-  script:
-    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding"
-        bin/rebuild.sh
-      else
-        echo "engine fresh (stamp match) -- rebuild skipped"
-      fi
-    - 'echo "target: ${ENGINE_RUN_TARGET}"'
-    - |
-      bin/shard_eval run "$ENGINE_RUN_TARGET" > engine_run.log 2>&1 &
-      ENG=$!
-      CAP_KB=$((490 * 1024 * 1024))
-      PEAK=0; TICK=0; DEADLINE=0
-      while kill -0 "$ENG" 2>/dev/null; do
-        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
-        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
-        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
-          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
-          kill -9 "$ENG"
-          break
-        fi
-        if [ $((TICK * 30)) -ge "$ENGINE_RUN_SECS" ]; then
-          echo "WATCHDOG: internal deadline ${ENGINE_RUN_SECS}s hit -- killing engine"
-          DEADLINE=1
-          kill -9 "$ENG"
-          break
-        fi
-        TICK=$((TICK + 1))
-        if [ $((TICK % 10)) -eq 0 ]; then
-          echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)  log: $(tail -n 1 engine_run.log 2>/dev/null)"
-        fi
-        sleep 30
-      done
-      wait "$ENG"; STATUS=$?
-      [ "$DEADLINE" -eq 1 ] && STATUS=124
-      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB  (124 = internal deadline)"
-      cat engine_run.log
-      exit "$STATUS"
-  artifacts:
-    paths:
-      - engine_run.log
-    when: always
-    expire_in: 30 days
-
-# The swap-network split-economics ladder (R5 follow-on): the k=4 routing
-# task (swap_route5, depth 11, four-letter alphabet) under three arms —
-#   theorem-first WITH relational splits   (more-search HEAD)
-#   theorem-first with GROUND forks only   (branch swap-ground = HEAD with
-#                                           the skl_iso extension reverted)
-#   semantic-first                         (SWAP_SCHED:semantic_first —
-#                                           structurally split-free)
-# Fire per arm:
-#   glab ci run -b more-search --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N
-#   glab ci run -b more-search --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N \
-#     --variables SWAP_SCHED:semantic_first
-#   glab ci run -b swap-ground --variables SWAP_DEEP:1 --variables SWAP_BUDGET:N
-# Local calibration (2026-07-28, dev box): budget 500 = 3m54s wall,
-# prepass-dominated (9,586 terminal regions, splits 10 before the loop's
-# 500 decisions).  Climb SWAP_BUDGET rungs; the 24h timeout is a ceiling,
-# not a target — a timed-out job uploads NO artifacts (PIO lesson).
-swap-route-deep:
-  stage: gate
-  tags:
-    - high-cpu
-  image: docker.io/library/rust:latest
-  timeout: 24h
-  variables:
-    SWAP_TASK: "tools/search/tasks/swap_route5.shard"
-    SWAP_BUDGET: "5000"
-    SWAP_SCHED: "theorem_first"
-  rules:
-    - if: $SWAP_DEEP == "1"
-      when: on_success
-    - when: never
-  cache:
-    key: shard-engine
-    paths:
-      - rust_bootstrap/target/
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
-  script:
-    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding"
-        bin/rebuild.sh
-      else
-        echo "engine fresh (stamp match) -- rebuild skipped"
-      fi
-    - |
-      if [ "$SWAP_SCHED" = "semantic_first" ]; then
-        sed -i "/(fn search_narrowing_strategy () Symbol (quote theorem_first))/d" "$SWAP_TASK"
-        echo "schedule: semantic_first (hook removed)"
-      else
-        echo "schedule: theorem_first (committed hook)"
-      fi
-    - sed -i "s/(fn search_drive_budget () Int [0-9]*)/(fn search_drive_budget () Int ${SWAP_BUDGET})/" "$SWAP_TASK"
-    - grep -F "(fn search_drive_budget () Int ${SWAP_BUDGET})" "$SWAP_TASK"
-    - |
-      bin/shard_eval run tools/search/typed_superpose.shard "$SWAP_TASK" > swap_route_deep.log 2>&1 &
-      ENG=$!
-      CAP_KB=$((490 * 1024 * 1024))
-      PEAK=0; TICK=0
-      while kill -0 "$ENG" 2>/dev/null; do
-        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
-        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
-        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
-          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
-          kill -9 "$ENG"
-          break
-        fi
-        TICK=$((TICK + 1))
-        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
-        sleep 30
-      done
-      wait "$ENG"; STATUS=$?
-      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
-      cat swap_route_deep.log
-      exit "$STATUS"
-  artifacts:
-    paths:
-      - swap_route_deep.log
-    when: always
-    expire_in: 30 days
-
-pio-dme-free:
-  stage: gate
-  tags:
-    - high-cpu
-  image: docker.io/library/rust:latest
-  timeout: 48h
-  variables:
-    PIO_BUDGET: "38000"
-  rules:
-    - if: $PIO_DEEP == "1"
-      when: on_success
-    - when: never
-  cache:
-    key: shard-engine
-    paths:
-      - rust_bootstrap/target/
-      - bin/shard_check
-      - bin/shard_check.stamp
-      - bin/shard_eval
-      - bin/shard_eval.stamp
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq nodejs > /dev/null
-  script:
-    - cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-    - |
-      if [ ! -x bin/shard_check ] || [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
-        echo "engine stale or missing -- rebuilding"
-        bin/rebuild.sh
-      else
-        echo "engine fresh (stamp match) -- rebuild skipped"
-      fi
-    - sed -i "s/(fn search_drive_budget () Int 50)/(fn search_drive_budget () Int ${PIO_BUDGET})/" tools/search/tasks/pio_dme_free.shard
-    - grep -F "(fn search_drive_budget () Int ${PIO_BUDGET})" tools/search/tasks/pio_dme_free.shard
-    - |
-      bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/pio_dme_free.shard > pio_dme_free.log 2>&1 &
-      ENG=$!
-      CAP_KB=$((490 * 1024 * 1024))
-      PEAK=0; TICK=0
-      while kill -0 "$ENG" 2>/dev/null; do
-        RSS=$(awk '/VmRSS/{print $2}' /proc/$ENG/status 2>/dev/null)
-        [ "${RSS:-0}" -gt "$PEAK" ] && PEAK=$RSS
-        if [ "${RSS:-0}" -gt "$CAP_KB" ]; then
-          echo "WATCHDOG: RSS ${RSS} kB over ${CAP_KB} kB cap -- killing engine"
-          kill -9 "$ENG"
-          break
-        fi
-        TICK=$((TICK + 1))
-        if [ $((TICK % 10)) -eq 0 ]; then echo "watchdog: RSS ${RSS:-0} kB (peak ${PEAK} kB)"; fi
-        sleep 30
-      done
-      wait "$ENG"; STATUS=$?
-      echo "ENGINE EXIT ${STATUS}  PEAK RSS ${PEAK} kB"
-      cat pio_dme_free.log
-      exit "$STATUS"
-  artifacts:
-    paths:
-      - pio_dme_free.log
-    when: always
-    expire_in: 30 days

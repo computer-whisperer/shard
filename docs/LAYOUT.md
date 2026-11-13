@@ -3,6 +3,11 @@
 > **STATUS (reset 2026-08-22): LAW.** the placement rule and the path map, unchanged since ratification 2026-07-18. The backlog is the GitHub issue tracker (labels `arc:coverage` / `parked` / `debt`; the goal = #23, the prune arc = #24) — any "next arc/rung" pointer below is history unless it names an issue.
 
 Status: RATIFIED 2026-07-18 (the repo reorganization, slices 0–4).
+**Since 2026-11-13** `kernel/`, `tools/lower`, `tools/codegen` and the old
+gate's scripts (`run_corpus.sh`, `bin/rebuild.sh`, `bin/check`, …) are
+deleted (`v3/LANGUAGE.md` §8.7; the tag `v2-kernel-last`); the rules below
+describe the old tree, whose remaining families are unchecked text until
+they migrate under `v3/`.
 This is the decoder for every path in the tree — and for every
 *historical* path in the ledgers, which deliberately keep their
 as-landed spellings (see "The path-map policy" below).

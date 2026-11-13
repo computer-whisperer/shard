@@ -1,17 +1,16 @@
-//! `eval` — the clean narrow-interpreter passthrough.
+//! `eval` — the bootstrap's executable: E programs run directly.
 //!
-//! The Rust side is *only* a host: it bootstraps the kernel + shard toolchain
-//! + the kernel's executable entrypoint (`kernel/eval.shard`) into the VM,
-//! installs the World file-I/O extern handlers, and runs `(main world0)`.
-//! Everything else — reading the referenced `.shard` files (and, in time,
-//! their imports / stdlib), parsing, reducing, rendering — happens IN SHARD,
-//! inside `eval.shard`, via the externs. No eval logic lives here.
+//! The Rust side is *only* a host: it loads an E program's import closure
+//! into the VM (load.rs), installs the World file-I/O extern handlers, and
+//! runs `(main world0)` on the evaluator (eval.rs).
 //!
-//!   eval <module.shard> <expr>
+//!   eval direct <app.shard> [args…]   load the app's closure, run its `main`
+//!   eval dump <file.shard>            the closure as `direct` loads it, printed
+//!                                     as the canonical text of frontend parity
 //!
-//! This replaced the overloaded `check` binary's bespoke orchestration; the
-//! proof-check entrypoint is now itself a shard app (`kernel/check.shard`)
-//! run on top of this executor, and check.rs is deleted.
+//! Until slice 5.0 (v3/LANGUAGE.md §8.7) a third mode loaded the old tree's
+//! evaluator (`kernel/eval.shard`) and interpreted a program through it — the
+//! tower. That kernel is deleted and the mode with it.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,7 +19,7 @@ use std::process::ExitCode;
 use lexpr::Value;
 use lexpr::parse::Parser;
 use num_traits::ToPrimitive;
-use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load};
+use proving_bootstrap_v2::{ast, eval, load};
 
 /// Resolve the entrypoint's import closure: each `(import "X")` is followed
 /// relative to the importing file's directory, post-order (deps before
@@ -120,20 +119,11 @@ fn run() -> ExitCode {
     let mut prog_args: Vec<String> = std::env::args().skip(1).collect();
 
     // --- bootstrap the VM: resolve the entrypoint's import closure ----------
-    // `kernel/eval.shard` declares the files it needs; we follow its imports
-    // (deps first, entrypoint last) and load exactly that closure — no proof
-    // checker, no proof toolchain, no std/. The list lives in the entrypoint,
-    // not here.
-    //
-    // `eval direct <app.shard> [args…]` instead loads the APP's closure and
-    // runs its `main` on this bootstrap evaluator — one interpretation layer
-    // instead of two (the tower `eval run` pays ~100× to interpret the app
-    // through eval.shard's `ev`). Host-side verb only: eval.shard never sees
-    // it. The app must be E as load.rs reads it (v3/LANGUAGE.md §8.1); its
-    // import closure is followed by `resolve_closure` above, a directory
-    // module as its view and implementation (slice 3.2; the old tree's
-    // `use-module` scoping stays loader.shard's). Semantics are identical —
-    // the tower remains the self-hosting cross-check.
+    // `eval direct <app.shard> [args…]` loads the APP's closure and runs its
+    // `main` on this evaluator. The app must be E as load.rs reads it
+    // (v3/LANGUAGE.md §8.1); its import closure is followed by
+    // `resolve_closure` above, a directory module as its view and
+    // implementation (slice 3.2).
     // `eval dump <file.shard>`: the file's closure loaded exactly as `direct`
     // loads it and printed as the canonical text of frontend parity
     // (v3/LANGUAGE.md §10 item 1; dump.rs) — nothing is run.
@@ -168,7 +158,8 @@ fn run() -> ExitCode {
         prog_args.drain(..2);
         app
     } else {
-        default_kernel_dir().join("eval.shard")
+        eprintln!("usage: eval direct <app.shard> [args…] | eval dump <file.shard>");
+        return ExitCode::from(2);
     };
     let paths = match resolve_closure(&entry) {
         Ok(ps) => ps,

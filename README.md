@@ -3,6 +3,15 @@
   <img src="assets/shard.png" alt="shard" width="128" height="128">
 </p>
 
+> **State of the tree (2026-11-13).** The kernel this README describes — `kernel/`, the v2 lineage — was
+> deleted on 2026-11-13 ([`v3/LANGUAGE.md`](v3/LANGUAGE.md) §8.7, slice 5.0). What runs on this branch is
+> **V3**, under [`v3/`](v3/README.md): a kernel implementing Lean 4's rules, its loader, and its own
+> compiler back end. The rest of the old tree (`std/`, `meta/`, `models/`, `tools/`, `examples/`, `pins/`)
+> is **unchecked text** until each family migrates to V3 — nothing on this branch loads or gates it. The
+> proven binaries, the search engine and the corpus described below are the old tree's: they run at the
+> tag **`v2-kernel-last`**, the last commit that holds the old kernel, where the commands of the old
+> quick start work as written.
+
 Every mainstream programming language asks one notation to do three
 jobs at once: **state what the software must do**, **express how it is
 computed**, and **control what the hardware actually executes**. All
@@ -120,7 +129,7 @@ this to its full depth.
 
 > **FOUNDATION (2026-09-06):** the V3 foundation — a kernel implementing Lean 4's rules exactly, written in first-order shard, with a proof IR and the naming law — is **ratified** ([docs/FOUNDATION.md](docs/FOUNDATION.md)) and is being built under [`v3/`](v3/README.md) beside this tree. This section describes the tree as it runs today; the Rust bootstrap is now the *enduring* bootstrap facility (FOUNDATION §9.1), not a disposable one.
 
-**The tower.** A deliberately small **Rust bootstrap**
+**The tower (the old tree, as the tag `v2-kernel-last` holds it).** A deliberately small **Rust bootstrap**
 (`rust_bootstrap/`, ~4k lines, trusted by review)
 evaluates *narrow* shard — a minimal subset. Everything else is shard:
 the engine (`kernel/eval.shard`, an environment machine with TCO), the
@@ -205,49 +214,35 @@ will be compiled away.
 
 ## Quick start
 
-Build the bootstrap once, then check a file — checking means running
-the self-hosted checker on it:
+Build the Rust evaluator once, then run V3's suite on it and build V3's
+native binaries:
 
 ```sh
 cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-rust_bootstrap/target/release/eval run kernel/check.shard examples/mem_reverse.shard
+v3/export.sh                 # the pinned Lean `Init` export (needs Lean; see v3/README.md)
+bash v3/test.sh              # every V3 test entrypoint on the interpreter
+v3/build.sh --all            # V3's own back end: each root lowered, written as C, compiled
+V3_ENGINE=native bash v3/test.sh   # the same suite on the binaries
 ```
 
-Expected output (tail):
-
-```
-51 passed, 0 failed, 55 axiom(s) admitted without proof
-```
-
-(The "axioms" are imported modules' opaque interfaces as seen from the
-consumer side.) For the fast dev loop, compile the checker itself:
+A single file is loaded, checked and reported by the V3 driver:
 
 ```sh
-bin/rebuild.sh check                        # gen-N builds gen-N+1, byte-tie guarded
-bin/shard_check examples/mem_reverse.shard  # same output, much faster
+rust_bootstrap/target/release/eval direct v3/kernel/load.shard --root v3 \
+  --init .shard-cache/v3-export/init.ndjson --init-index v3/.cache/init.index \
+  v3/examples/calc/calc_spec.shard
 ```
 
-`./run_corpus.sh` runs the whole pinned corpus in parallel. **It is a
-diff tool**: it exits 0 even with failing targets — gate changes by
-diffing its FAIL set against the current baseline, never by exit code.
-The corpus is tiered (the header of `run_corpus.sh`): DEFAULT runs per
-commit; `CORPUS_CLOSED=1` adds the closed arcs' frozen gates (floats,
-Arc B's sha256 articles, build products and silicon legs, the wasm leg, RISC-V, PIO);
-`CORPUS_LONG=1` adds the engine-run pins. `CORPUS_LIST=1` prints the
-membership without running anything.
-Sources are kept canonical with the proven formatter
-(`bin/shard_eval run tools/shardfmt/shardfmt.shard FILE`); the
-formatter's gate guarantees it cannot change what a file parses to.
-`tools/digest` prints a file's stratified read surface — every fn as
-its signature, every claim as its goal, proofs and bodies elided with
-size trailers — at tier 1 (signatures) or tier 2 (plus every doc
-comment), and `closure` mode digests a whole import closure in loader
-order (`bin/shard_eval run tools/digest/digest.shard FILE [1|2] [closure]`).
+**The old tree's quick start** — `eval run kernel/check.shard FILE`,
+`bin/rebuild.sh`, `./run_corpus.sh`, the formatter and the digest tool
+on `bin/shard_eval` — needs the old kernel: check out the tag
+`v2-kernel-last` and read this section there.
 
 ## Repository layout
 
 ```
-kernel/          ; the trust floor: term/reduce/proof/checker + the
+kernel/          ; DELETED 2026-11-13 (the tag v2-kernel-last holds it); was
+                 ;   the trust floor: term/reduce/proof/checker + the
                  ;   self-hosted reader, elaborator, driver, engine (ev),
                  ;   canon recognizer, and the reviewed facts.shard axioms
 std/             ; the standard library — directory modules with reviewed
@@ -263,8 +258,8 @@ tools/           ; untrusted toolchain: prove (auto-prover), shardfmt,
                  ;   digest (the stratified read surface), canon,
                  ;   wasmgen/x86gen/impgen/wordgen (generators),
                  ;   lowcheck/bytetie/lowbuild (the gates), build (the
-                 ;   product driver + build_products.shard), bench, plus
-                 ;   the temporary native chain (lower/codegen/low);
+                 ;   product driver + build_products.shard), bench (the
+                 ;   temporary native chain lower/codegen: deleted 2026-11-13);
                  ;   tools own their fixtures/ and blueprints/
 examples/        ; genuine programs and demonstrations: the bin
                  ;   families (add, addw, sha256sum), feature demos, the
@@ -274,9 +269,7 @@ pins/            ; corpus-law pins: proof/ (proof-layer regressions),
                  ;   lang/ (language + loader semantics), trust/ (trust-
                  ;   boundary refusals) — kernel behavior may not drift
                  ;   from these silently
-bin/             ; local fast engines (shard_check / shard_eval) built by
-                 ;   bin/rebuild.sh; stamp files guard source drift;
-                 ;   bin/ci_docs_only.sh is CI's question whether a push
+bin/             ; bin/ci_docs_only.sh is CI's question whether a push
                  ;   changed documentation only (.gitlab-ci.yml's header)
 docs/            ; the documentation map below
 rust_bootstrap/  ; the Rust host (evaluate-only): the enduring bootstrap
@@ -328,7 +321,8 @@ authority for its area:
 
 - **THE FOUNDATION ARC (V3) — RATIFIED 2026-09-06; phases 0–3 closed
   (phase 3 on 2026-10-13); phase 4 closed short by ruling 2026-11-13,
-  slices 4.0–4.6; phase 5 open — the old kernel removed, the port by need
+  slices 4.0–4.6; phase 5 open — the old kernel removed 2026-11-13 (slice
+  5.0), the port by need
   (status and evidence in [`v3/README.md`](v3/README.md))**:
   [docs/FOUNDATION.md](docs/FOUNDATION.md) is the law; the tree is built
   under [`v3/`](v3/README.md) (Lean v4.33.1 pinned; `v3/LANGUAGE.md` the
@@ -371,9 +365,10 @@ authority for its area:
   `kernel/*.shard`, `rust_bootstrap/src/*.rs`, or any `mod.req.shard`
   grow or shift the audited surface; impls, proofs, and examples do
   not. Under `v3/`, `v3/kernel/*.shard` is the audited surface.
-- **Corpus discipline.** Every change is gated by the FAIL-set diff of
-  `./run_corpus.sh` against the pinned baseline; new features land
-  with corpus pins (positive and negative).
+- **Suite discipline.** Every change is gated by V3's suite on both
+  engines, their byte-tie and the full `Init` replay (`v3/test.sh`,
+  `v3/build.sh`, `v3/t0_full.sh`; CI's `v3`, `native`, `suite_tie`); new
+  features land with pins (positive and negative) under `v3/pins/`.
 - **Sources are canonical-format**, enforced by shardfmt's gate and
   the rebuild stamp check.
 - **Design decisions live in ledgers.** Scope ledgers (docs above)

@@ -2,13 +2,13 @@
 # v3/kernel/test/native_tie_test.sh — the byte-tie gate of the native toolchain
 # (v3/LANGUAGE.md §8.6 slice 4.1 rule 3; R84, records §4.12): a fixed set of the suite's
 # workloads run under both engines — the Rust bootstrap (`eval direct`, route 3, the
-# authority) and the binaries route 1 built (v3/build.sh, kernel/emit.shard) — and compared
+# authority) and the binaries route 1 built (v3/build.sh: kernel/lower.shard, kernel/cgen.shard) — and compared
 # on four things: stdout, stderr, the exit status and every artifact written (a sidecar, a
 # store's files, an index), byte for byte. Both runs use the same scratch paths (the first
 # engine's artifacts are set aside before the second runs), so a path printed is the same
 # text in both logs. A divergence is a miscompile or a semantic gap between the bootstrap
-# and the chain and fails the gate: the binary is never patched — the emitter or the chain
-# is fixed and the build rerun.
+# and the back end and fails the gate: the binary is never patched — the back end is fixed
+# and the build rerun.
 #
 # THE NORMALIZATION, in full: none. No workload below prints a time or a size; a
 # scratch root is the same path for both engines. A verdict, an assumption closure, a
@@ -22,7 +22,9 @@
 # cases v3/pins/emit/* built fresh and tied, the refused_* cases refused with their first
 # line's message, a naming-law case (at its root, no kernel/ directory) tied against the V3
 # driver's run rather than the bootstrap's flat read; (2b) calc's main built through the
-# bridge (slice 4.4 landing 1) and tied to the driver's run over the differential's inputs; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
+# bridge (slice 4.4 landing 1) and tied to the driver's run over the differential's inputs; (2c)
+# the back end's own text — the loader's emit of one closure under both engines, every file
+# of it byte for byte; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
 # view), a dump, an example, a program run under ev with and without fuel, a store written;
 # (4) prove regenerating two examples' sidecars and a measure run; (5) verify_release over
 # the tie's store and a store without a manifest; (6) t0 over the export's first 3,000
@@ -41,9 +43,9 @@ SCRATCH=$(mktemp -d -p v3 native_tie_XXXXXX)
 trap 'rm -rf "$OUT" "$SCRATCH"' EXIT
 fail=0; checks=0; s0=$(date +%s)
 bad() { echo "native_tie_test: $*"; fail=$((fail+1)); }
-# the authored tree: every tracked file under v3, tools and kernel unmodified, and no new file under
-# the authored directories (the suite's other entrypoints keep their scratch roots directly under v3/)
-tree_state() { { git status --porcelain --untracked-files=no -- v3 tools kernel; git status --porcelain --untracked-files=all -- v3/kernel v3/pins v3/examples v3/std tools kernel; } 2>/dev/null | grep -v "native_tie_" | sort -u; }
+# the authored tree: every tracked file under v3 unmodified, and no new file under the authored
+# directories (the suite's other entrypoints keep their scratch roots directly under v3/)
+tree_state() { { git status --porcelain --untracked-files=no -- v3; git status --porcelain --untracked-files=all -- v3/kernel v3/pins v3/examples v3/std; } 2>/dev/null | grep -v "native_tie_" | sort -u; }
 before=$(tree_state)
 
 # ---- the comparison: two result directories (out, err, rc, artifacts/…) byte for byte
@@ -165,6 +167,12 @@ if v3/build.sh v3/examples/calc/calc_main.shard "$OUT/bin_calc_main" --root v3 >
   if compare "calc binary" "$OUT/calc/a" "$OUT/calc/b"; then echo "   tie calc binary: exit $(cat "$OUT/calc/a/rc"), $(wc -l < "$OUT/calc/a/out") lines (bootstrap $ta s, native $tb s)"; else bad "calc's binary differs from the driver's run"; fi
 else bad "calc's main did not build through the bridge"; grep -E 'EMIT|FAIL' "$OUT/build_calc_main.txt" | head -2 | cut -c1-200; fi
 echo "native_tie_test: a naming-law program's binary tied — calc's main through the bridge over ${#lines[@]} inputs"
+
+# ---- (2c) the back end's own text (§8.7 slice 5.0 rule 4): one closure emitted by the loader
+# under both engines — main.c, its parts, the map and the sources byte for byte, the line too
+mkdir -p "$SCRATCH/emit"
+ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' tie "load emit" load --root v3 --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
+echo "native_tie_test: the back end's C text tied — the loader's emit of one closure under both engines"
 
 # ---- (3) the loader
 for c in basic refused read_error; do tie "load pin $c" load --root v3/pins/loader/$c $INIT v3/pins/loader/$c/main.shard; done

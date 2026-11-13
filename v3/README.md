@@ -2475,7 +2475,32 @@ the old chain's design: `kernel/lower.shard` (a `Prog` to a `Prog` in
 the restricted form RS) and `kernel/cgen.shard` (RS to C over
 `kernel/rt.h`), run inside the loader's process — the text projection
 and the two old tools gone, and with them every use V3 made of the old
-kernel. Not yet built.
+kernel.
+
+**Slice 5.0 built 2026-11-13 — the old kernel is deleted and V3 builds
+itself** (`LANGUAGE.md` §8.7 "As built"). `kernel/` (37 files, 26,914
+lines) is gone under the tag `v2-kernel-last`; the rest of the old tree
+is unchecked text. `kernel/lower.shard` (605 lines) and
+`kernel/cgen.shard` (592) replace `tools/lower`, `tools/codegen` and the
+text projection (2,519 lines); `kernel/rt.h` is the runtime, moved. The
+loader's own closure, 9,003 declarations, goes from a load to C in 34 s
+on the bootstrap (393 s through the old path), so the bootstrap runs
+every emit. The Rust evaluator has two operations, `direct` and `dump`.
+CI has four jobs: `host`, `v3`, `native`, `suite_tie`. The lowering has
+its own test, the restricted form run under `ev` against the program
+(`lower_test.sh`, `load.shard --lowered`); it found the one defect of
+the build — a primitive renamed across two `Bool`s — before any binary
+showed it. Gates on the dev box, the tree as committed: `v3/build.sh
+--all` 31 roots, 31 built, 0 failed, in 222 s (2,826 s at slice 4.6
+landing 2, through the old chain); the suite on the binaries 50
+entrypoints, 0 failed, beside the full replay in 514 s of wall — the
+native tie 83 checks, 0 failed; T0 FULL == PINNED, accepted 57,977, the
+replay 380 s at 28.8 GB —; on the bootstrap 50 entrypoints, 0 failed, in
+901 s of wall (parity 33 closures, 158,825 declarations, 0 differ;
+`lower_test.sh` 7 checks, 0 failed); the tie 50 entrypoints, 0 differ;
+no authored file changed under the round. The round was run twice: once,
+green, before three comments of the new sources were corrected, and
+again on the tree as committed.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

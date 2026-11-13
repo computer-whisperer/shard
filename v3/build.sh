@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # v3/build.sh — route 1 (FOUNDATION §9.1): a toolchain closure as the V3 loader accepted
-# it, projected by `load.shard --emit` (kernel/emit.shard) into the dialect the old tree's
-# chain reads, then tools/lower → tools/codegen → cc into a native binary under v3/bin/
-# (LANGUAGE.md §8.6 slice 4.1 rules 1, 2 and 8). The binaries are ENGINES: route 1's proof
-# is still to come, so the Rust interpreter (route 3) stays the authority and the byte-ties
-# (v3/t0_full.sh; kernel/test/native_tie_test.sh) tie the two.
+# it, lowered and written as C by V3's own back end inside the loader's process (`load.shard
+# --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc` into a native
+# binary under v3/bin/ (LANGUAGE.md §8.7 slice 5.0 rules 2 and 4; §8.6 slice 4.1 rules 1, 2
+# and 8). The binaries are ENGINES: route 1's proof is still to come, so the Rust interpreter
+# (route 3) stays the authority and the byte-ties (v3/t0_full.sh;
+# kernel/test/native_tie_test.sh) tie the two. Nothing of the old tree is read: until slice
+# 5.0 the closure was printed in the old dialect and compiled by the old tree's two tools.
 #
 #   v3/build.sh [SRC [OUT]] [--root DIR] [EXTRA…]   one root: SRC's closure (default
 #                        v3/kernel/t0.shard) into OUT (default v3/bin/STEM); --root the loader's
 #                        root (default v3); EXTRA… further root files for the load (K's directory)
-#   v3/build.sh --all    the inventory below, V3_BUILD_JOBS roots at a time (default 8) with at most
-#                        V3_HEAVY_JOBS of them in the chain's two heavy steps at once (default 2: on a
-#                        driver-sized closure the lowerer holds 12 GB and the generator 20–30 GB);
-#                        a binary whose stamp is current is kept; exit = the roots that failed
+#   v3/build.sh --all    the inventory below, V3_BUILD_JOBS roots at a time (default 8); a binary
+#                        whose stamp is current is kept; exit = the roots that failed
 #   v3/build.sh --stamp NAME   the stamp v3/bin/NAME would carry now (empty: never emitted)
 #   v3/build.sh --list   the inventory: NAME SRC
 #   v3/build.sh --shim   the engine shim v3/bin/eval (rule 4; --all writes it last): the bootstrap's
 #                        command line over the binaries — `direct FILE` runs v3/bin/STEM when its
-#                        stamp is current and fails loudly otherwise; `dump` and `run` the bootstrap's
+#                        stamp is current and fails loudly otherwise; `dump` the bootstrap's
 #
-# THE INVENTORY (rule 8): the five drivers, calc_harness, the 20 public harnesses of
-# kernel/test/ and the 5 of k/test/ — 31 roots, parity's list (kernel/test/parity_test.sh).
+# THE INVENTORY (rule 8): the five drivers, calc_harness, the public harnesses of
+# kernel/test/ and those of k/test/ — parity's list (kernel/test/parity_test.sh).
 # A root outside K's directory whose closure consumes K's view is loaded with v3/kernel/k as a
 # second root, so the directory's own check links the implementation into the program (as
 # parity and k_clients_test do; the bootstrap's dump shows env_empty when K is in the closure).
@@ -29,31 +29,24 @@
 #   eval direct load.shard … --run M.FN F…     -> v3/bin/load …       (the loader's own operation: k_clients_test, wire_test, define_test, calc_main_test, route2_test)
 #   eval direct load.shard … --dump F          -> v3/bin/load …       (the loader's own operation: template_test, define_test, parity's V3 side)
 #   eval dump F                                -> the bootstrap's     (parity's second reader; never compiled)
-#   eval FILE EXPR                             -> the bootstrap's     (the old tree's expression mode: calc_test's reference side)
-#   BOOT run tools/lower|codegen …             -> bin/shard_eval or the bootstrap (the old tree's chain; its boot)
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
 # under V3_ENGINE=native (rule 4), and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
-# THE STAMP (rule 8): sha256 over the root's closure sources (the emit's `sources` list),
-# the emitter's closure (v3/kernel/*.shard, k/*.shard, k's view), the chain (tools/lower/
-# lower.shard, tools/codegen/codegen.shard, tools/codegen/rt.h) and the compiler's flags —
-# v3/bin/NAME.stamp beside the binary; the tie and the shim refuse a stale one. Generated
-# files live under v3/bin/ only (emit/NAME/ with map and sources, NAME.low.shard,
-# NAME.low.shard.c, NAME, NAME.stamp, NAME.build.log); an authored file is never written.
+# THE EMIT'S ENGINE: the bootstrap for every root. The loader's own closure — 9,003
+# declarations — loads, lowers and generates in 34 s on it (measured at slice 5.0), so no binary
+# builds another and a build never trusts one.
 #
-# The tools are named REPO-RELATIVE from the repo root: kernel/resolve.shard grants `core`
-# identity only to the exact path kernel/stdlib, so a tool named by an absolute path imports
-# a non-core prelude and its every Pair pattern fails (#41). Boot engine: bin/shard_eval
-# when present (seconds), else the Rust interpreter (minutes). v3/bin/ is derived and untracked.
+# THE STAMP (rule 8): sha256 over the root's closure sources (the emit's `sources` list),
+# the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,
+# the runtime (v3/kernel/rt.h) and the compiler's flags — v3/bin/NAME.stamp beside the binary;
+# the tie and the shim refuse a stale one. Generated files live under v3/bin/ only (emit/NAME/
+# with main.c, its parts, map and sources; NAME, NAME.stamp, NAME.build.log); an authored file
+# is never written. v3/bin/ is derived and untracked.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 RUST_EVAL=${RUST_EVAL:-./rust_bootstrap/target/release/eval}
-BOOT=bin/shard_eval
 CFLAGS="-O2"
-CODEGEN_JOBS=${V3_HEAVY_JOBS:-${V3_CODEGEN_JOBS:-2}}
 [ -x "$RUST_EVAL" ] || { echo "missing $RUST_EVAL (cargo build --release in rust_bootstrap/)"; exit 1; }
-[ -x "$BOOT" ] || BOOT=$RUST_EVAL   # the Rust interpreter when bin/shard_eval is absent
-boot_note() { [ "$BOOT" != "$RUST_EVAL" ] || echo "== boot engine: the Rust interpreter (bin/shard_eval absent; minutes, not seconds)"; }
 
 inventory() {   # NAME SRC per root, parity's list
   for f in v3/kernel/load.shard v3/kernel/prove.shard v3/kernel/verify_release.shard v3/kernel/t0.shard v3/kernel/initindex.shard \
@@ -68,7 +61,7 @@ stamp_of() {
   root=$(cat "v3/bin/emit/$1/root" 2>/dev/null || echo v3)
   { awk -v r="$root" '{print r "/" $2}' "$srcs" | sort | xargs cat 2>/dev/null
     cat v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/k/mod.req.shard
-    cat tools/lower/lower.shard tools/codegen/codegen.shard tools/codegen/rt.h
+    cat v3/kernel/rt.h
     echo "cc $CFLAGS"; } | sha256sum | cut -c1-16
 }
 # K's directory as a second root when the closure consumes its view from outside it
@@ -78,25 +71,6 @@ extra_roots() {
   if "$RUST_EVAL" dump "$1" 2>/dev/null | grep '^fn env_empty ' > /dev/null; then echo v3/kernel/k; fi
 }
 secs() { echo $(( $(date +%s) - $1 )); }
-# the heavy steps' slots: at most CODEGEN_JOBS lowerings and code generations at once (their
-# resident sets are the build's memory); the same slots for both steps
-codegen_acquire() {
-  local i fd
-  while :; do
-    for i in $(seq 1 "$CODEGEN_JOBS"); do
-      exec {fd}> "v3/bin/.codegen.$i.lock"
-      if flock -n "$fd"; then CODEGEN_FD=$fd; return 0; fi
-      exec {fd}>&-
-    done
-    sleep 5
-  done
-}
-codegen_release() { flock -u "$CODEGEN_FD"; exec {CODEGEN_FD}>&-; }
-# the generator under /usr/bin/time when present: its peak resident set into the log
-run_codegen() {
-  if [ -x /usr/bin/time ]; then /usr/bin/time -f 'codegen peak RSS %M kB' -a -o "$1" "$BOOT" run tools/codegen/codegen.shard "$2" "$3"
-  else "$BOOT" run tools/codegen/codegen.shard "$2" "$3"; fi
-}
 # the engine shim (rule 4): a generated file under v3/bin/, rewritten by every --all
 write_shim() {
   mkdir -p v3/bin
@@ -108,7 +82,7 @@ write_shim() {
 #   direct FILE ARGS…   v3/bin/NAME ARGS… (NAME = FILE's stem) when that binary exists and its
 #                       stamp is current (v3/build.sh --stamp NAME); otherwise exit 70 with a
 #                       message — never a silent fallback to the bootstrap (R84)
-#   dump … | run …      the bootstrap, unchanged (parity's second reader; the old chain's boot)
+#   dump …              the bootstrap, unchanged (parity's second reader)
 # The command line's paths stay the caller's: every entrypoint runs from the repo root.
 set -u
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -120,16 +94,16 @@ case ${1:-} in
     now=$("$root/v3/build.sh" --stamp "$name")
     [ -n "$now" ] && [ "$now" = "$(cat "$bin.stamp" 2>/dev/null)" ] || { echo "v3/bin/eval: v3/bin/$name is stale (v3/build.sh --all)" >&2; exit 70; }
     exec "$bin" "$@";;
-  dump|run) exec "${RUST_EVAL:-$root/rust_bootstrap/target/release/eval}" "$@";;
-  *) echo "v3/bin/eval: direct FILE ARGS… | dump … | run … (the engine shim; v3/build.sh --all)" >&2; exit 2;;
+  dump) exec "${RUST_EVAL:-$root/rust_bootstrap/target/release/eval}" "$@";;
+  *) echo "v3/bin/eval: direct FILE ARGS… | dump … (the engine shim; v3/build.sh --all)" >&2; exit 2;;
 esac
 SHIM
   chmod +x v3/bin/eval
 }
-# build_one NAME SRC OUT ROOT EXTRA…: emit, lower, codegen, cc; the stamp last
+# build_one NAME SRC OUT ROOT EXTRA…: emit (the load, the lowering, the C text), cc; the stamp last
 build_one() {
   local name=$1 src=$2 out=$3 root=$4; shift 4
-  local emit=v3/bin/emit/$name log=v3/bin/$name.build.log low=v3/bin/$name.low.shard s t_emit t_lower t_codegen t_cc entry rc
+  local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
   # Init on demand for a root under the naming law (slice 4.3 landing 2): the pinned export and
   # its index when the fixtures hold them and the index is current — never built here (CI builds
@@ -144,19 +118,14 @@ build_one() {
   t_emit=$(secs $s); echo "$root" > "$emit/root"
   entry=$(sed -n 's/^EMIT: .* entry=\([^ ]*\).*/\1/p' "$log" | tail -1)
   [ -n "$entry" ] && [ -s "$emit/$entry" ] || { echo "FAIL: $name: no entry file after the emit"; tail -2 "$log" | cut -c1-200; return 1; }
-  codegen_acquire; s=$(date +%s)
-  "$BOOT" run tools/lower/lower.shard "$emit/$entry" "$low" >> "$log" 2>&1 && [ -s "$low" ] || { codegen_release; echo "FAIL: $name: the lowerer"; tail -3 "$log" | cut -c1-300; return 1; }
-  t_lower=$(secs $s); codegen_release
-  codegen_acquire; s=$(date +%s)
-  run_codegen "$log" "$low" "$low.c" >> "$log" 2>&1 && [ -s "$low.c" ] || { codegen_release; echo "FAIL: $name: the codegen"; tail -3 "$log" | cut -c1-300; return 1; }
-  t_codegen=$(secs $s); codegen_release; s=$(date +%s)
-  cc $CFLAGS -o "$out" "$low.c" -I tools/codegen >> "$log" 2>&1 || { echo "FAIL: $name: cc"; tail -3 "$log" | cut -c1-300; return 1; }
+  s=$(date +%s)
+  cc $CFLAGS -o "$out" "$emit/$entry" -I v3/kernel >> "$log" 2>&1 || { echo "FAIL: $name: cc"; tail -3 "$log" | cut -c1-300; return 1; }
   t_cc=$(secs $s)
   stamp_of "$name" > "$out.stamp"
-  echo "OK: $out ($(sed -n 's/^EMIT: [^ ]* entry=[^ ]* //p' "$log" | tail -1); emit $t_emit s, lower $t_lower s, codegen $t_codegen s$(sed -n 's/^codegen peak RSS \([0-9]*\) kB/ at \1 kB/p' "$log" | tail -1), cc $t_cc s)"
+  echo "OK: $out ($(sed -n 's/^EMIT: [^ ]* entry=[^ ]* //p' "$log" | tail -1); emit $t_emit s, cc $t_cc s)"
 }
-export -f stamp_of extra_roots secs build_one inventory codegen_acquire codegen_release run_codegen
-export RUST_EVAL BOOT CFLAGS CODEGEN_JOBS
+export -f stamp_of extra_roots secs build_one inventory
+export RUST_EVAL CFLAGS
 
 case ${1:-} in
   --list) inventory; exit 0;;
@@ -170,7 +139,6 @@ case ${1:-} in
     build_one "$name" "$src" "v3/bin/$name" v3 $(extra_roots "$src");;
   --all)
     JOBS=${V3_BUILD_JOBS:-8}
-    boot_note
     out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
     s=$(date +%s)
     inventory | awk '{print NR, $1, $2}' | xargs -P "$JOBS" -L 1 bash -c 'v3/build.sh --one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
@@ -191,5 +159,5 @@ case ${1:-} in
     done
     [ -n "$OUT" ] || OUT=v3/bin/$(basename "$SRC" .shard)
     [ "$ROOT" = v3 ] && [ ${#EXTRA[@]} -eq 0 ] && EXTRA=($(extra_roots "$SRC"))
-    boot_note; build_one "$(basename "$OUT")" "$SRC" "$OUT" "$ROOT" "${EXTRA[@]}";;
+    build_one "$(basename "$OUT")" "$SRC" "$OUT" "$ROOT" "${EXTRA[@]}";;
 esac

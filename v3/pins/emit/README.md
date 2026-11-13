@@ -2,14 +2,14 @@
 
 Each case is a self-contained toolchain-profile program (`main.shard`, a `main` over the
 World, printing to its streams) that `v3/kernel/test/native_tie_test.sh` builds through
-route 1 (`v3/build.sh`: `load.shard --emit`, kernel/emit.shard, then the old tree's chain)
+route 1 (`v3/build.sh`: `load.shard --emit` — kernel/lower.shard, kernel/cgen.shard — then `cc`)
 and runs under both engines — the Rust bootstrap's `eval direct` and the binary — tying
 stdout, stderr and the exit status byte for byte (LANGUAGE.md §8.6 slice 4.1 rule 3; R84,
-records §4.12). A case is what the emitter must get right where the two dialects differ,
-or what the chain's runtime must agree with the bootstrap on; no case carries an expected
+records §4.12; §8.7 slice 5.0). A case is what the back end must get right, or what its
+runtime must agree with the bootstrap on; no case carries an expected
 text — the bootstrap is the authority, the comparison is the verdict — except a `refused_*`
-case, whose first line `;; emit refused: MESSAGE` is the emitter's refusal the tie expects
-in place of a binary (the bootstrap runs such a program; the chain never receives it). A case at the root with no `kernel/` directory is a naming-law program (slice 4.4 landing 1): the tie loads it with Init and takes the V3 driver's `--run` as its reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an effect, `-` at `Nat` the integer's.
+case, whose first line `;; emit refused: MESSAGE` is the back end's refusal the tie expects
+in place of a binary (the bootstrap runs such a program; no C is written for it). A case at the root with no `kernel/` directory is a naming-law program (slice 4.4 landing 1): the tie loads it with Init and takes the V3 driver's `--run` as its reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an effect, `-` at `Nat` the integer's.
 
 | case | discriminates |
 |---|---|
@@ -21,8 +21,9 @@ in place of a binary (the bootstrap runs such a program; the chain never receive
 | `sealed_client` | a consumer of a directory module's view, the implementation linked by the directory's check (`lib` as a second root): the linked program is what the chain receives |
 | `program_exit` | a nonzero exit after output: the status and the streams tied, never the output alone |
 | `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: re-escaped for the old reader |
-| `refused_symbol_pattern` | a symbol the old reader cannot lex, in a pattern: the emit refused with its message (the first line's `;; emit refused:`), nothing built — the refusal path of rule 1 |
-| `refused_mangle_collision` | a record's accessor `A.x` beside a plain fn `A_x`: the mangling's collision refused, nothing built |
+| `symbol_pattern` | a symbol with a quote character in it, in a pattern: a static of the generated text, compared by identity (refused until slice 5.0 as `refused_symbol_pattern`: the old reader could not lex it) |
+| `mangle_injective` | a record's accessor `A.x` beside a plain fn `A_x`: two identities, two C names (refused until slice 5.0 as `refused_mangle_collision`: the text projection mangled both to one spelling) |
+| `refused_numeral_pattern` | a numeral pattern past 2^62: no C case label for it, the emit refused with its message (the first line's `;; emit refused:`), nothing built — the refusal path |
 | `init_list` | a program under the naming law through the bridge (slice 4.4 landing 1; refused until then as `refused_init_list`): its World, an extern over `ByteArray`, a string literal over Init's `List` — Init's four wire types identified with the chain's prelude by the emitter, so the literal needs no rewrite; the reference the V3 driver's `--run` |
 | `init_prim` | the bridge's primitive rows at their edges (refused until slice 4.4 as `refused_init_prim`): `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble` — each row silent when the naming law's result holds, its name printed otherwise, the last line always; the driver under `ev` the authority (its entries K's), the binary agreeing byte for byte |
 | `prims` | the profile's integer and symbol primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the chain's runtime against the bootstrap's |

@@ -12,7 +12,7 @@
 ;;; driver runs on (3 the bootstrap, 1 compiled K) and the engine.
 ;;; `--run` (§6.7): after a clean load, the program the load yielded is run
 ;;; from MODULE.FN on the World with ARG… as its arguments, its externs
-;;; performed (ev.shard's run_prog); nothing is printed but the program's
+;;; performed (session.shard's run_load); nothing is printed but the program's
 ;;; own output. ARG… are the checked entry's (§9, slice 7): validated
 ;;; against the entry's parameters before the World — Int, Nat, a byte list
 ;;; — before ev runs; a malformed one is refused by position and text
@@ -42,18 +42,21 @@
 ;;; `--reconstruct DIR` (§8.6 slice 4.5 rule 2): after a clean load, the load's P of every
 ;;; theorem DIR holds against the retained record, byte for byte — RECONSTRUCT NAME same or
 ;;; EVIDENCE-CHANGE NAME, recon=A→B across versions; nothing written; the exit the changes.
-;;; `--emit DIR` (§8.6 slice 4.1 rule 1): after a clean load, the program the load
-;;; yielded is written under DIR as the files route 1's chain reads (emit.shard) —
-;;; one per module, DIR/map (each emitted declaration against its identity and source)
-;;; and DIR/sources (each module's source file and hash); `EMIT: DIR entry=FILE
-;;; modules=N declarations=M` names the file the chain lowers. What the chain cannot
-;;; take is refused (`EMIT: …`, exit 2) and nothing is written.
+;;; `--lowered` with `--run`: the program's restricted form (lower.shard) is run in its place —
+;;; the same output or the lowering is wrong (§8.7 slice 5.0 rule 5).
+;;; `--emit DIR` (§8.7 slice 5.0 rule 4; §8.6 slice 4.1 rule 1): after a clean load, the
+;;; program the load yielded is lowered and written under DIR as the C text of its binary
+;;; (emit.shard: lower.shard, then cgen.shard) — DIR/main.c and its parts, DIR/map (each
+;;; declaration against its identity and source) and DIR/sources (each module's source file
+;;; and hash); `EMIT: DIR entry=FILE modules=N declarations=M` names the file `cc` compiles.
+;;; What the back end cannot take is refused (`EMIT: …`, exit 2) and nothing is written.
 
 (import "loader.shard")
 (import "store.shard")
 (import "ev.shard")
 (import "dump.shard")
 (import "emit.shard")
+(import "lower.shard")
 (import "session.shard")
 (use kernel.dump)
 (use kernel.emit)
@@ -62,6 +65,8 @@
 (use kernel.ev)
 (use kernel.host)
 (use kernel.loader)
+(use kernel.lower)
+(use kernel.lower.LwRes)
 (use kernel.k)
 (use kernel.tactic)
 (use kernel.decl.ConstantInfo)
@@ -83,30 +88,31 @@
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int (List Int) (List Int) (List Int) Bool))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory, the trace file, the reconstruct directory (4.5 rule 2)
+(type Args (Args (List Int) (List Int) (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool (List Int) Int (List Int) (List Int) (List Int) Bool Bool))   ; root, the export, its index, route, engine, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory, the trace file, the reconstruct directory (4.5 rule 2), the state check, the lowered run (5.0 rule 5)
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
-    ((Args root export index route engine files run fuel argv dump store budget emit trace recon stc)
+    ((Args root export index route engine files run fuel argv dump store budget emit trace recon stc low)
      (match args
-       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget emit trace recon stc))
+       (Nil (Args root export index route engine (rev files) run fuel argv dump store budget emit trace recon stc low))
        ((Cons x r)
-        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget emit trace recon stc)
-        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--state") (parse_args r (Args root export index route engine files run fuel argv dump store budget emit trace recon True))
-        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget emit trace recon stc))
-        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--emit") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget v trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0) emit trace recon stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--reconstruct") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit trace v stc))) (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--trace") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit v recon stc))) (Nil (parse_args Nil a)))
-          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget emit trace recon stc))))))))))))))))))))))
+        (if (int_list_eq x "--") (Args root export index route engine (rev files) run fuel r dump store budget emit trace recon stc low)
+        (if (int_list_eq x "--root") (match r ((Cons v r2) (parse_args r2 (Args v export index route engine files run fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init") (match r ((Cons v r2) (parse_args r2 (Args root v index route engine files run fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--init-index") (match r ((Cons v r2) (parse_args r2 (Args root export v route engine files run fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--route") (match r ((Cons v r2) (parse_args r2 (Args root export index v engine files run fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--engine") (match r ((Cons v r2) (parse_args r2 (Args root export index route v files run fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--run") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files (name_of_sym (sym_of_chars v)) fuel argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--fuel") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run (digits_val v 0) argv dump store budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--state") (parse_args r (Args root export index route engine files run fuel argv dump store budget emit trace recon True low))
+        (if (int_list_eq x "--dump") (parse_args r (Args root export index route engine files run fuel argv True store budget emit trace recon stc low))
+        (if (int_list_eq x "--lowered") (parse_args r (Args root export index route engine files run fuel argv dump store budget emit trace recon stc True))
+        (if (int_list_eq x "--store") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump v budget emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--emit") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget v trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--instance-budget") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store (digits_val v 0) emit trace recon stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--reconstruct") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit trace v stc low))) (Nil (parse_args Nil a)))
+        (if (int_list_eq x "--trace") (match r ((Cons v r2) (parse_args r2 (Args root export index route engine files run fuel argv dump store budget emit v recon stc low))) (Nil (parse_args Nil a)))
+          (parse_args r (Args root export index route engine (Cons x files) run fuel argv dump store budget emit trace recon stc low)))))))))))))))))))))))
 
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
@@ -121,8 +127,8 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget) Nil Nil Nil False))
-       ((Args root export index route engine files run fuel argv dump store budget emit trace recon stc)
+     (match (parse_args args (Args Nil Nil Nil "3" "bootstrap" Nil None (default_fuel) Nil False Nil (instance_budget) Nil Nil Nil False False))
+       ((Args root export index route engine files run fuel argv dump store budget emit trace recon stc low)
         (match (parts_of root)
           (None (exit 2 (write_line "load: --root DIR is required" w1)))
           ((Some rootp)
@@ -133,7 +139,7 @@
                (if (< 0 (len emit)) (main_emit l0 files emit w1)
                (match run
                  (None (main_records l0 route engine files store recon w1))
-                 ((Some entry) (main_run l0 files entry argv fuel trace w1))))))))))))))
+                 ((Some entry) (main_run l0 files entry argv fuel trace low w1))))))))))))))
 
 ;; a clean load, then the canonical text of the program it yielded (§10 item 1)
 (fn main_dump ((l0 Load) (files (List (List Int))) (w World)) World
@@ -146,7 +152,7 @@
 (fn print_lines ((ls (List (List Int))) (w World)) World
   (measure (struct ls))
   (match ls (Nil w) ((Cons x r) (print_lines r (write_line x w)))))
-;; a clean load, then the closure written under DIR in the chain's dialect (§8.6 slice 4.1 rule 1)
+;; a clean load, then the closure's C text written under DIR (§8.7 slice 5.0 rule 4)
 (fn main_emit ((l0 Load) (files (List (List Int))) (dir (List Int)) (w World)) World
   (match (load_files l0 files w)
     ((Pair l w2)
@@ -155,12 +161,12 @@
          (exit 2 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))
          (match (emit_prog (Load.etab l) (es_prog (Load.etab l)) (root_module l0 files) (module_files (ld_recs l)))
            ((EmitFail msg) (exit 2 (write_line (append "EMIT: " msg) w2)))
-           ((EmitOk fs mp entry)
+           ((EmitOk fs mp entry nmod)
             (match (write_under dir (append fs (list (Pair "map" (join_lines mp)) (Pair "sources" (join_lines (source_lines (ld_recs l)))))) w2)
               ((Pair (Some p) w3) (exit 2 (write_line (append "EMIT: cannot write " p) w3)))
               ((Pair None w3)
-               (write_line (append "EMIT: " (append dir (append " entry=" (append entry (append " modules=" (append (show_nat (len fs)) (append " declarations=" (show_nat (len mp))))))))) w3))))))))))
-;; the first file's module: the root the chain is built from
+               (write_line (append "EMIT: " (append dir (append " entry=" (append entry (append " modules=" (append (show_nat nmod) (append " declarations=" (show_nat (len mp))))))))) w3))))))))))
+;; the first file's module: the root whose `main` the binary starts from
 (fn root_module ((l Load) (files (List (List Int)))) Name
   (match files
     (Nil Anon)
@@ -309,13 +315,21 @@
 ;; session's door on this load (session.shard run_load; slice 4.6 rule 2): ev.shard's checked
 ;; entry, and what the load's environment shows of the entry that its program does not state —
 ;; an evidence binder, a proposition field — refused `RUN: link preconditioned`
-(fn main_run ((l0 Load) (files (List (List Int))) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (w World)) World
+;; the program the load yielded, or under --lowered its restricted form (lower.shard) in its place:
+;; the lowering's own gate — the two runs print the same (kernel/test/lower_test.sh)
+(fn run_as ((l Load) (low Bool) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (w World)) (Pair RunRes World)
+  (if low
+    (match (lw_prog (es_prog (Load.etab l)))
+      ((LwRefused errs) (Pair (RunLink (quote lowering) (match errs ((Cons m _) m) (Nil "refused"))) w))
+      ((LwProg rs) (run_load_as l rs entry argv fuel trace w)))
+    (run_load l entry argv fuel trace w)))
+(fn main_run ((l0 Load) (files (List (List Int))) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (low Bool) (w World)) World
   (match (load_files l0 files w)
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (if (< 0 (load_failures cs))
          (exit 2 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))
-         (match (run_load l entry argv fuel trace w2)
+         (match (run_as l low entry argv fuel trace w2)
            ((Pair RunOk w3) w3)
            ((Pair (RunOut n) w3) (exit 3 (write_line (append "RUN: out of fuel in " (show_name n)) w3)))
            ((Pair (RunExhausted r n) w3) (exit 3 (write_line (append "RUN: exhausted " (append (chars_of_sym r) (append " in " (show_name n)))) w3)))

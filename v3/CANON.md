@@ -260,7 +260,9 @@ keying on L.
 ## 7. Where the tree stands — the migration baseline (2026-09-13)
 
 Measured before the rules were written, with the old tree's
-`shardfmt --check` over every V3 source (210 files; `bin/shard_eval`):
+`shardfmt --check` over every V3 source (210 files; `bin/shard_eval` —
+the old tree's formatter on the old tree's engine, neither runnable since
+the old kernel's deletion at slice 5.0, `LANGUAGE.md` §8.7):
 
 | area | canonical | drifting | unreadable |
 |---|---|---|---|
@@ -304,7 +306,8 @@ decision:
    formatter — a printer over `kernel/sexpr.shard` — and its E bodies at
    zero advisory lines; the loader pins gain the canon cases.
 3. **The gate.** `v3/test.sh` refuses a drifting file, as
-   `bin/rebuild.sh` refuses to stamp one today — the fmt gate on V3
+   `bin/rebuild.sh` refused to stamp one until its deletion at slice 5.0 —
+   the fmt gate on V3
    (`LANGUAGE.md` §12.5, phase 6).
 4. **Read-time refusal for the syntactic tier** — the "deny parse" end
    state; a later decision, reachable only for C1–C6 and the L rules,

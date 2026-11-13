@@ -12,7 +12,7 @@ family; the rest follow the contract.**
 
 | family | files | lines | label | note |
 |---|---|---|---|---|
-| `kernel/` | 39 | 35,224 | new code; `facts.shard`'s 15 axioms PORT as theorems (phase 3); `proof.shard`'s Step roster is the I vocabulary's source | §3, §7 |
+| `kernel/` | 39 | 35,224 | **DELETED 2026-11-13, slice 5.0** (`LANGUAGE.md` §8.7; the tag `v2-kernel-last` holds it — 37 files, 26,914 lines by then); was: new code; `facts.shard`'s 15 axioms PORT as theorems (phase 3); `proof.shard`'s Step roster is the I vocabulary's source | §3, §7 |
 | `meta/` | 38 | 17,704 | new code onto the goal graph (§7.3); theorems PORT | §6–§7 |
 | `std/list`, `order`, `nat`, `div`, `bits`, `arith`, `map` | 18 | 3,390 | PORT (phase 3, named) | the naming law; `Nat` sizes; `order`, `nat`, `div`, `arith` are records in `v3/std/README.md` and no file (slice 3.27 landing 2, 2026-10-10); `list`, `bits` are `v3/std/list.shard` and `v3/std/bits.shard` (landing 3, 2026-10-10); `map` open |
 | `std/str`, `std/bytes`, `std/word` | 15 | 3,475 | PORT — typed representation change onto `String`/`ByteArray`/`UInt*` (INVENTORY.md) | §10.3 |
@@ -35,7 +35,7 @@ family; the rest follow the contract.**
 | `tools/wasmgen`, `tools/x86gen` | 3 | 12,585 | ARCHIVE (proposed) | FROZEN generators; superseded by the generic path |
 | `tools/impgen` (`blueprints/`, `fixtures/`) | 28 | 65,892 | ARCHIVE (proposed) | the frozen oracles; a handful of blueprints retained as PORT fixtures for the generic compiler's tests |
 | `tools/impc`, `lowbuild`, `lowcheck`, `bytetie`, `build`, `low`, `reach`, `invoke`, `image` | ~80 | ~30,000 | new code where toolchain — phase 7, with the per-function generator (amended 2026-10-16, `v3/LANGUAGE.md` §13 item 69), its first generation compiled through slice 4.4's bridge; their theorems and fixtures PORT | the lowering-side toolchain; certificates become I |
-| `tools/lower`, `tools/codegen` | 2 | 2,013 | ARCHIVE when V3's own chain compiles itself — phase 7, with its proof; carried through the flip as route 1's engine behind the V3 emitter (amended 2026-10-16, `v3/LANGUAGE.md` §13 item 69; was "ARCHIVE at the flip") | the temporary chain; route 1's proven chain replaces it (§9.1) |
+| `tools/lower`, `tools/codegen` | 2 | 2,013 | **DELETED 2026-11-13, slice 5.0** — replaced by V3's own back end in their design (`v3/kernel/lower.shard`, `v3/kernel/cgen.shard`; `rt.h` moved to `v3/kernel/`), unproven; the proven lowering replaces that at phase 7 (law §12.4 as amended 2026-11-13; was: carried through the flip) | the temporary chain |
 | `tools/search` | 117 | 40,569 | new code onto §7.3–7.4; the LS-law fixtures PORT | the engine |
 | `tools/prove`, `tools/explain`, `tools/canon`, `tools/digest` | 14 | 10,685 | new code (I producer; goal-state renderer; the S rule set; the map instrument) | |
 | `tools/shardfmt` | 3 | 989 | PORT | the goal's flagship (#23) |
@@ -46,7 +46,9 @@ family; the rest follow the contract.**
 | `examples/snake_game_3`, `addw`, `add`, `io`, `modules_demo`, `req_*`, `ledger_dep`, root demos | ~30 | ~11,000 | PORT | the teaching corpus; T9's material |
 | `examples/snake_game` (v1) | — | 676 | ARCHIVE (proposed) | superseded by `snake_game_3` |
 | `rust_bootstrap/` | — | (Rust) | carried — the enduring bootstrap facility (§9.1); its parser profile is fixed by §9.2 | |
-| `bin/`, `run_corpus.sh`, `.gitlab-ci.yml`, `fails-base.txt` | — | — | carried; a V3 job per gate from phase 1 | §10.5 |
+| `bin/`, `run_corpus.sh`, `.gitlab-ci.yml`, `fails-base.txt` | — | — | the old kernel's harness (`run_corpus.sh`, `fails-base.txt`, `gate_sweep.sh`, `bin/check`, `bin/rebuild.sh`, `bin/engine_stamp.sh`) and its CI jobs **deleted 2026-11-13, slice 5.0**; `bin/ci_docs_only.sh` and the V3 jobs stay | §10.5 |
+
+**Since 2026-11-13 (law §12.4 amended; `LANGUAGE.md` §8.7):** the old kernel is deleted and every family below that is still in the tree is unchecked text — nothing loads it, nothing gates it — until it is taken up; a family's label is decided then, and its old files are deleted when its migration is green. The labels above are the phase-0 proposals.
 
 Totals at drafting: ≈1.22M `.shard` lines; the REGENERATE rows alone
 are ≈700k of them and the proposed ARCHIVE rows ≈200k, so the PORT

@@ -11,12 +11,10 @@
 //! names be configurable.
 //!
 //! `=`, `<`, `<=` are V3's spellings of `int_eq`, `lt`, `le`
-//! (v3/LANGUAGE.md §8.4, slice 3.17 rule 5): this host runs both trees,
-//! so it reads both. They are native-only names — kernel/reduce.shard's
-//! table does not carry them, and no old-tree `fn` body writes them
-//! (`=` there is the claim language's, which this table never sees).
-//! lib.rs's `NATIVE_ALIASES` is their spec list, swept against the names
-//! they stand for. `canonical_prim` is the one spelling `eval dump` prints.
+//! (v3/LANGUAGE.md §8.4, slice 3.17 rule 5); the old tree's spellings are
+//! still read. lib.rs's `NATIVE_ALIASES` is their spec list, swept against
+//! the names they stand for. `canonical_prim` is the one spelling `eval
+//! dump` prints.
 //!
 //! `gen_fresh` is the documented effectful primitive — REVISIT.md,
 //! "Fresh-symbol generation as an effectful primitive". Implemented
@@ -45,11 +43,10 @@ pub fn canonical_prim(name: &str) -> &str {
 /// shape; `None` otherwise (the call stays stuck, which the
 /// evaluator surfaces as `UnknownCall`).
 ///
-/// CONFORMANCE: this table and kernel/reduce.shard's `prim_apply`
-/// are the two primitive tables (eval.shard's interpreter reuses the
-/// latter). The `prim_conformance_*` tests in lib.rs sweep both over a
-/// value matrix — when adding/removing a name here, update the spec
-/// lists there (SHARED_INT2 / OBJECT_ONLY_*) or the sweep fails.
+/// CONFORMANCE: V3's primitive table is v3/kernel/prog.shard's, run by
+/// `ev`; v3/kernel/test/prims_test.shard compares the two. lib.rs sweeps
+/// this table against the evaluator's fast arms over a value matrix —
+/// when adding or removing a name here, update its SHARED_INT2.
 pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
     use Expr::{IntLit, SymLit};
 
@@ -74,8 +71,7 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("ediv", [IntLit(a), IntLit(b)]) if !b.is_zero()   => Some(IntLit((a - rem_euclid(a, b)) / b)),
 
         // Bitwise on non-negative ints. Shifts by 64+ or negative amounts
-        // are caller errors; we keep the i64-era guard (call stays stuck)
-        // so the Rust table and kernel/reduce.shard's mirror agree.
+        // are caller errors; we keep the i64-era guard (call stays stuck).
         ("band", [IntLit(a), IntLit(b)])                              => Some(IntLit(a & b)),
         ("bor",  [IntLit(a), IntLit(b)])                              => Some(IntLit(a | b)),
         ("bxor", [IntLit(a), IntLit(b)])                              => Some(IntLit(a ^ b)),

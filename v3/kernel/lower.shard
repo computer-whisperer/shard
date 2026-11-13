@@ -1,0 +1,605 @@
+;;; v3/kernel/lower.shard — a program lowered to the restricted form RS: the first of the
+;;; back end's two stages (v3/LANGUAGE.md §8.7 slice 5.0 rule 2; law §9.1 route 1). The
+;;; design is the old tree's chain (tools/lower, removed at this slice): rewrite every
+;;; body to a shape the generator (cgen.shard) transcribes without a decision of its own.
+;;; The input is the program the load yielded — a Prog, every name an identity, every head
+;;; classified, every variable an index —, so there is no text to print and read back and
+;;; no second reader, loader or resolver between a loaded program and its binary.
+;;;
+;;; RS IS A PROG. `lw_prog : Prog → Prog` (or the refusals), and in the result
+;;;
+;;;   atom ::= EBVar | ELit of a numeral or a symbol
+;;;   rhs  ::= atom | ECtor/ECall/EPrim/EExt over atoms | EAbsurd
+;;;   body ::= rhs | ELet (rhs) body | EIf atom body body | EMatch atom arm…
+;;;   arm  ::= a constructor over variables | a numeral | a symbol | a variable
+;;;
+;;; a match with no arm being the sink (stuck under `ev`, a trap in the binary). Being a
+;;; Prog, RS runs under `ev`: the lowering is tested against the program it came from
+;;; without the generator (`load.shard --lowered --run`; test/lower_test.sh).
+;;;
+;;; THE PASSES, per function. (A) the body to a named form — a variable a number, the
+;;; parameters 0…n-1 —, with the bridge's rows applied (below) and a string literal spelled
+;;; as its cells. (JP) an `if` or a `match` in an operand's position is lifted whole to a
+;;; function over its free variables, a call being a legal operand; a nested pattern is
+;;; compiled per arm into a chain of flat matches, the fall-through continuation lifted once
+;;; per arm so nothing is duplicated. (ANF) every operand an atom, the bindings pushed
+;;; outward in evaluation order. Then back to the locally nameless form. A lifted function's
+;;; identity is its owner's with a numeric component (`f.7`), which no source name has; its
+;;; parameters and result carry the opaque type `JV` — RS is a run artifact.
+;;;
+;;; THE BRIDGE'S ROWS (slice 4.4 landing 1, carried from the emitter this file replaces).
+;;; Of the naming law's primitives, seven stay as they are — `Nat.land lor xor shiftLeft
+;;; shiftRight beq ble` —, the runtime's operation agreeing with them on the values E reaches
+;;; (cgen.shard names it); they are not renamed to the profile's, because under `ev` the two
+;;; differ in the cell they answer with (`Nat.beq` Init's `Bool`, `=` the prelude's) and RS
+;;; must run as the program did. Seven become an expression over both operands bound once,
+;;; where the runtime's operation differs: `Nat.sub` truncating at zero; `Nat.div`,
+;;; `Int.tdiv`, `Int.ediv` zero at a zero divisor; `Nat.mod`, `Int.emod`, `Int.tmod` the
+;;; dividend there (the migration table, law §10.3) — the same value under `ev`, whose own
+;;; operations these are. A primitive with no row is refused, never approximated.
+;;;
+;;; THE WIRE ROLES (`lw_role`). The runtime builds and reads eight cells by tag — true,
+;;; false, nil, cons, none, some, pair and the World's (rt.h's extern shims, `if`) —, so the
+;;; constructors that are those cells carry a role, not a spelling: in the toolchain's
+;;; profile the constructor so named in whatever type declares it (the bootstrap's own rule
+;;; for `True False Nil Cons None Some`), under the naming law Init's `Bool`, `List`,
+;;; `Option`, `Prod` and `Decidable`'s two as `Bool`'s. The generator gives a role its fixed
+;;; tag and every other constructor a tag of its own.
+;;;
+;;; REFUSED, each a line naming the function: a `sig fn` or `sig type` left unlinked; a
+;;; primitive with no row; a string pattern. Every refusal of a program is reported.
+
+(import "prog.shard")
+(use kernel.name)
+(use kernel.prelude)
+(use kernel.prog)
+(use kernel.util)
+(use kernel.name.Name)
+(use kernel.prelude.Bool)
+(use kernel.prelude.List)
+(use kernel.prelude.Option)
+(use kernel.prelude.Pair)
+(use kernel.prog.EArm)
+(use kernel.prog.EDecl)
+(use kernel.prog.ELit)
+(use kernel.prog.EPat)
+(use kernel.prog.ERec)
+(use kernel.prog.ETerm)
+(use kernel.prog.EType)
+(use kernel.prog.Prim)
+(use kernel.prog.Prog)
+
+;; ---- the wire roles: 0 none; 1 true, 2 false, 3 nil, 4 cons, 5 none, 6 some, 7 pair, 8 the World
+(fn lw_role ((n Name)) Int
+  (match n
+    ((Str _ s)
+     (let ((c (chars_of_sym s)))
+       (if (int_list_eq c "True") 1
+       (if (int_list_eq c "False") 2
+       (if (int_list_eq c "Nil") 3
+       (if (int_list_eq c "Cons") 4
+       (if (int_list_eq c "None") 5
+       (if (int_list_eq c "Some") 6
+       (if (int_list_eq c "Pair") 7
+       (if (int_list_eq c "World") 8
+         (lw_role_init (show_name n))))))))))))
+    (_ 0)))
+(fn lw_role_init ((s (List Int))) Int
+  (if (bool_or (int_list_eq s "Bool.true") (int_list_eq s "Decidable.isTrue")) 1
+  (if (bool_or (int_list_eq s "Bool.false") (int_list_eq s "Decidable.isFalse")) 2
+  (if (int_list_eq s "List.nil") 3
+  (if (int_list_eq s "List.cons") 4
+  (if (int_list_eq s "Option.none") 5
+  (if (int_list_eq s "Option.some") 6
+  (if (int_list_eq s "Prod.mk") 7 0))))))))
+
+;; ---- the named form ------------------------------------------------------------------------
+(type LwE
+  (LwVar Int)
+  (LwInt Int)
+  (LwSym Symbol)
+  (LwCtor Name (List LwE))
+  (LwCall Name (List LwE))
+  (LwPrim Name (List LwE))
+  (LwExt Name (List LwE))
+  (LwIf LwE LwE LwE)
+  (LwMatch LwE (List LwArm))
+  (LwLet Int LwE LwE)
+  (LwAbsurd))
+(type LwArm (LwArm LwP LwE))
+(type LwP
+  (LwPVar Int)
+  (LwPInt Int)
+  (LwPSym Symbol)
+  (LwPCtor Name (List LwP)))
+
+;; an application's operands, and the same head over other operands
+(fn lw_args ((e LwE)) (Option (List LwE))
+  (match e
+    ((LwCtor _ as) (Some as))
+    ((LwCall _ as) (Some as))
+    ((LwPrim _ as) (Some as))
+    ((LwExt _ as) (Some as))
+    (_ None)))
+(fn lw_rehead ((e LwE) (as (List LwE))) LwE
+  (match e
+    ((LwCtor c _) (LwCtor c as))
+    ((LwCall f _) (LwCall f as))
+    ((LwPrim p _) (LwPrim p as))
+    ((LwExt x _) (LwExt x as))
+    (_ e)))
+(fn lw_vars ((vs (List Int))) (List LwE)
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons v r) (Cons (LwVar v) (lw_vars r)))))
+
+;; ---- pass A: indices to numbers; env is innermost first, k the next unused number ----------
+(type LwR (LwOk LwE Int) (LwErr (List Int)))
+(type LwRs (LwsOk (List LwE) Int) (LwsErr (List Int)))
+(type LwPR (LwPOk LwP (List Int) Int) (LwPErr (List Int)))          ; the pattern, its variables in binding order
+(type LwPRs (LwPsOk (List LwP) (List Int) Int) (LwPsErr (List Int)))
+(type LwAR (LwAOk (List LwArm) Int) (LwAErr (List Int)))
+
+(fn lw_named ((t ETerm) (env (List Int)) (k Int)) LwR
+  (match t
+    ((EBVar i) (match (nth env i) ((Some v) (LwOk (LwVar v) k)) (None (LwErr "a variable out of range"))))
+    ((ELit l) (LwOk (lw_lit l) k))
+    ((ECtor c as) (match (lw_named_all as env k) ((LwsErr m) (LwErr m)) ((LwsOk rs k1) (LwOk (LwCtor c rs) k1))))
+    ((ECall f as) (match (lw_named_all as env k) ((LwsErr m) (LwErr m)) ((LwsOk rs k1) (LwOk (LwCall f rs) k1))))
+    ((EPrim p as) (match (lw_named_all as env k) ((LwsErr m) (LwErr m)) ((LwsOk rs k1) (lw_prim p rs k1))))
+    ((EExt x as) (match (lw_named_all as env k) ((LwsErr m) (LwErr m)) ((LwsOk rs k1) (LwOk (LwExt x rs) k1))))
+    ((EMatch s arms)
+     (match (lw_named s env k)
+       ((LwErr m) (LwErr m))
+       ((LwOk rs k1)
+        (match (lw_named_arms arms env k1)
+          ((LwAErr m) (LwErr m))
+          ((LwAOk ras k2) (LwOk (LwMatch rs ras) k2))))))
+    ((ELet rs body) (lw_named_let rs body env k))
+    ((EIf c a b)
+     (match (lw_named c env k)
+       ((LwErr m) (LwErr m))
+       ((LwOk rc k1)
+        (match (lw_named a env k1)
+          ((LwErr m) (LwErr m))
+          ((LwOk ra k2)
+           (match (lw_named b env k2)
+             ((LwErr m) (LwErr m))
+             ((LwOk rb k3) (LwOk (LwIf rc ra rb) k3))))))))
+    (EAbsurd (LwOk LwAbsurd k))))
+(fn lw_named_all ((ts (List ETerm)) (env (List Int)) (k Int)) LwRs
+  (match ts
+    (Nil (LwsOk Nil k))
+    ((Cons t r)
+     (match (lw_named t env k)
+       ((LwErr m) (LwsErr m))
+       ((LwOk e k1)
+        (match (lw_named_all r env k1)
+          ((LwsErr m) (LwsErr m))
+          ((LwsOk es k2) (LwsOk (Cons e es) k2))))))))
+;; the sequential let (R44): each right-hand side sees the bindings before it
+(fn lw_named_let ((rs (List ETerm)) (body ETerm) (env (List Int)) (k Int)) LwR
+  (match rs
+    (Nil (lw_named body env k))
+    ((Cons r rest)
+     (match (lw_named r env k)
+       ((LwErr m) (LwErr m))
+       ((LwOk rr k1)
+        (match (lw_named_let rest body (Cons k1 env) (+ k1 1))
+          ((LwErr m) (LwErr m))
+          ((LwOk inner k2) (LwOk (LwLet k1 rr inner) k2))))))))
+(fn lw_named_arms ((arms (List EArm)) (env (List Int)) (k Int)) LwAR
+  (match arms
+    (Nil (LwAOk Nil k))
+    ((Cons (EArm p body) rest)
+     (match (lw_pat p k)
+       ((LwPErr m) (LwAErr m))
+       ((LwPOk rp vs k1)
+        (match (lw_named body (rev_onto vs env) k1)      ; the last variable bound is index 0
+          ((LwErr m) (LwAErr m))
+          ((LwOk rb k2)
+           (match (lw_named_arms rest env k2)
+             ((LwAErr m) (LwAErr m))
+             ((LwAOk rr k3) (LwAOk (Cons (LwArm rp rb) rr) k3))))))))))
+(fn lw_pat ((p EPat) (k Int)) LwPR
+  (match p
+    (PVar (LwPOk (LwPVar k) (list k) (+ k 1)))
+    ((PLit (LNat n)) (LwPOk (LwPInt n) Nil k))
+    ((PLit (LInt n)) (LwPOk (LwPInt n) Nil k))
+    ((PLit (LSym s)) (LwPOk (LwPSym s) Nil k))
+    ((PLit (LStr _ _ _)) (LwPErr "a string pattern has no form in the chain"))
+    ((PCtor c subs)
+     (match (lw_pats subs k)
+       ((LwPsErr m) (LwPErr m))
+       ((LwPsOk rps vs k1) (LwPOk (LwPCtor c rps) vs k1))))))
+(fn lw_pats ((ps (List EPat)) (k Int)) LwPRs
+  (match ps
+    (Nil (LwPsOk Nil Nil k))
+    ((Cons p r)
+     (match (lw_pat p k)
+       ((LwPErr m) (LwPsErr m))
+       ((LwPOk rp vs1 k1)
+        (match (lw_pats r k1)
+          ((LwPsErr m) (LwPsErr m))
+          ((LwPsOk rps vs2 k2) (LwPsOk (Cons rp rps) (append vs1 vs2) k2))))))))
+;; a literal; a string as its cells, the cons and nil it names
+(fn lw_lit ((l ELit)) LwE
+  (match l
+    ((LNat n) (LwInt n))
+    ((LInt n) (LwInt n))
+    ((LSym s) (LwSym s))
+    ((LStr nl cs bs) (lw_str nl cs bs))))
+(fn lw_str ((nl Name) (cs Name) (bs (List Int))) LwE
+  (measure (struct bs))
+  (match bs
+    (Nil (LwCtor nl Nil))
+    ((Cons b r) (LwCtor cs (list (LwInt b) (lw_str nl cs r))))))
+
+;; ---- the bridge's rows -------------------------------------------------------------------
+(fn lw_pn ((s Symbol)) Name (n1 s))
+;; a naming-law primitive the runtime's operation agrees with — Nat.land (23), lor (24), xor
+;; (25), shiftLeft (26), shiftRight (27), beq (34), ble (35): kept under its own identity
+(fn lw_prim_kept ((code Int)) Bool
+  (bool_or (bool_and (<= 23 code) (<= code 27)) (bool_or (= code 34) (= code 35))))
+;; the ones that differ: Nat.sub (22), Nat.div (30), Nat.mod (31), Int.tdiv (18), Int.tmod (19),
+;; Int.ediv (20), Int.emod (21)
+(fn lw_prim_expr ((code Int)) Bool
+  (bool_or (= code 22) (bool_or (= code 30) (bool_or (= code 31) (bool_and (<= 18 code) (<= code 21))))))
+(fn lw_prim ((p Name) (rs (List LwE)) (k Int)) LwR
+  (match (prim_find p)
+    (None (LwErr (append "the primitive " (append (show_name p) " is not in the table"))))
+    ((Some (Prim code _))
+     (if (bool_or (< code 18) (lw_prim_kept code)) (LwOk (LwPrim p rs) k)
+     (if (lw_prim_expr code)
+       (match rs
+         ((Cons a (Cons b Nil))
+          (LwOk (LwLet k a (LwLet (+ k 1) b (lw_row code (LwVar k) (LwVar (+ k 1))))) (+ k 2)))
+         (_ (LwErr (append "the primitive " (append (show_name p) " is not applied to two operands")))))
+       (LwErr (append "the primitive " (append (show_name p) " has no row in the chain (the profile's eighteen and the bridge's rows only)"))))))))
+;; both operands bound once, then the naming law's result where the runtime's operation differs
+(fn lw_row ((code Int) (a LwE) (b LwE)) LwE
+  (if (= code 22) (LwIf (LwPrim (lw_pn (quote <)) (list a b)) (LwInt 0) (LwPrim (lw_pn (quote -)) (list a b)))
+  (if (bool_or (= code 30) (= code 18)) (lw_at_zero (quote /) a b (LwInt 0))
+  (if (= code 20) (lw_at_zero (quote ediv) a b (LwInt 0))
+  (if (bool_or (= code 31) (= code 21)) (lw_at_zero (quote mod) a b a)
+    (lw_at_zero (quote tmod) a b a))))))
+;; (if (= B 0) AT_ZERO (OP A B))
+(fn lw_at_zero ((op Symbol) (a LwE) (b LwE) (z LwE)) LwE
+  (LwIf (LwPrim (lw_pn (quote =)) (list b (LwInt 0))) z (LwPrim (lw_pn op) (list a b))))
+
+;; ---- pass JP: join-point lifting and nested-pattern compilation ------------------------------
+(type LwLifted (LwLifted Name (List Int) LwE))     ; identity, parameters, a body in tail form
+(type LwJ (LwJ LwE (List LwLifted) Int))
+(type LwJs (LwJs (List LwE) (List LwLifted) Int))
+(type LwJa (LwJa (List LwArm) (List LwLifted) Int))
+
+;; free variables, first occurrence first
+(fn lw_fv ((e LwE) (bound (List Int)) (acc (List Int))) (List Int)
+  (match e
+    ((LwVar v) (if (mem_int v bound) acc (if (mem_int v acc) acc (append acc (list v)))))
+    ((LwInt _) acc)
+    ((LwSym _) acc)
+    (LwAbsurd acc)
+    ((LwIf c t f) (lw_fv f bound (lw_fv t bound (lw_fv c bound acc))))
+    ((LwMatch s arms) (lw_fv_arms arms bound (lw_fv s bound acc)))
+    ((LwLet n r body) (lw_fv body (Cons n bound) (lw_fv r bound acc)))
+    (_ (match (lw_args e) ((Some as) (lw_fv_all as bound acc)) (None acc)))))
+(fn lw_fv_all ((es (List LwE)) (bound (List Int)) (acc (List Int))) (List Int)
+  (match es (Nil acc) ((Cons e r) (lw_fv_all r bound (lw_fv e bound acc)))))
+(fn lw_fv_arms ((arms (List LwArm)) (bound (List Int)) (acc (List Int))) (List Int)
+  (match arms
+    (Nil acc)
+    ((Cons (LwArm p body) r) (lw_fv_arms r bound (lw_fv body (lw_pat_vars p bound) acc)))))
+(fn lw_pat_vars ((p LwP) (acc (List Int))) (List Int)
+  (match p
+    ((LwPVar v) (Cons v acc))
+    ((LwPCtor _ ps) (lw_pats_vars ps acc))
+    (_ acc)))
+(fn lw_pats_vars ((ps (List LwP)) (acc (List Int))) (List Int)
+  (match ps (Nil acc) ((Cons p r) (lw_pats_vars r (lw_pat_vars p acc)))))
+
+;; a tail-form expression lifted to a function over its free variables; what is left is the call
+(fn lw_lift ((owner Name) (e LwE) (k Int)) LwJ
+  (let ((fvs (lw_fv e Nil Nil)) (jn (Num owner k)))
+    (LwJ (LwCall jn (lw_vars fvs)) (list (LwLifted jn fvs e)) (+ k 1))))
+
+;; an operand's position: no `if`, no `match`
+(fn lw_jp_named ((owner Name) (e LwE) (k Int)) LwJ
+  (match e
+    ((LwIf _ _ _) (lw_jp_lifted owner e k))
+    ((LwMatch _ _) (lw_jp_lifted owner e k))
+    ((LwLet n r body)
+     (match (lw_jp_named owner r k)
+       ((LwJ rr ls1 k1)
+        (match (lw_jp_named owner body k1)
+          ((LwJ rb ls2 k2) (LwJ (LwLet n rr rb) (append ls1 ls2) k2))))))
+    (_ (match (lw_args e)
+         ((Some as) (match (lw_jp_all owner as k) ((LwJs rs ls k1) (LwJ (lw_rehead e rs) ls k1))))
+         (None (LwJ e Nil k))))))
+(fn lw_jp_lifted ((owner Name) (e LwE) (k Int)) LwJ
+  (match (lw_jp_tail owner e k)
+    ((LwJ pe ls k1)
+     (match (lw_lift owner pe k1)
+       ((LwJ call ls2 k2) (LwJ call (append ls ls2) k2))))))
+(fn lw_jp_all ((owner Name) (es (List LwE)) (k Int)) LwJs
+  (match es
+    (Nil (LwJs Nil Nil k))
+    ((Cons e r)
+     (match (lw_jp_named owner e k)
+       ((LwJ re ls1 k1)
+        (match (lw_jp_all owner r k1)
+          ((LwJs rs ls2 k2) (LwJs (Cons re rs) (append ls1 ls2) k2))))))))
+;; a tail position
+(fn lw_jp_tail ((owner Name) (e LwE) (k Int)) LwJ
+  (match e
+    ((LwIf c t f)
+     (match (lw_jp_named owner c k)
+       ((LwJ rc ls1 k1)
+        (match (lw_jp_tail owner t k1)
+          ((LwJ rt ls2 k2)
+           (match (lw_jp_tail owner f k2)
+             ((LwJ rf ls3 k3) (LwJ (LwIf rc rt rf) (append ls1 (append ls2 ls3)) k3))))))))
+    ((LwMatch s arms)
+     (match (lw_jp_named owner s k)
+       ((LwJ rs ls1 k1)
+        (match (lw_jp_arms owner arms k1)
+          ((LwJa rarms ls2 k2)
+           (if (lw_arms_flat rarms)
+             (LwJ (LwMatch rs rarms) (append ls1 ls2) k2)
+             (match (lw_scrut owner rs rarms k2)
+               ((LwJ mce ls3 k3) (LwJ mce (append ls1 (append ls2 ls3)) k3)))))))))
+    ((LwLet n r body)
+     (match (lw_jp_named owner r k)
+       ((LwJ rr ls1 k1)
+        (match (lw_jp_tail owner body k1)
+          ((LwJ rb ls2 k2) (LwJ (LwLet n rr rb) (append ls1 ls2) k2))))))
+    (_ (lw_jp_named owner e k))))
+(fn lw_jp_arms ((owner Name) (arms (List LwArm)) (k Int)) LwJa
+  (match arms
+    (Nil (LwJa Nil Nil k))
+    ((Cons (LwArm p body) r)
+     (match (lw_jp_tail owner body k)
+       ((LwJ rb ls1 k1)
+        (match (lw_jp_arms owner r k1)
+          ((LwJa rr ls2 k2) (LwJa (Cons (LwArm p rb) rr) (append ls1 ls2) k2))))))))
+(fn lw_arms_flat ((arms (List LwArm))) Bool
+  (match arms (Nil True) ((Cons (LwArm p _) r) (if (lw_flat p) (lw_arms_flat r) False))))
+(fn lw_flat ((p LwP)) Bool
+  (match p ((LwPCtor _ ps) (lw_all_vars ps)) (_ True)))
+(fn lw_all_vars ((ps (List LwP))) Bool
+  (match ps (Nil True) ((Cons (LwPVar _) r) (lw_all_vars r)) (_ False)))
+;; the scrutinee a variable, then the arms as a chain
+(fn lw_scrut ((owner Name) (s LwE) (arms (List LwArm)) (k Int)) LwJ
+  (match s
+    ((LwVar sv) (lw_chain owner sv arms k))
+    (_ (match (lw_chain owner k arms (+ k 1))
+         ((LwJ e ls k1) (LwJ (LwLet k s e) ls k1))))))
+;; arm by arm: try the first; where it does not match, the rest of the chain — a call to it,
+;; lifted once. Past the last arm is the sink: a match with no arm
+(fn lw_chain ((owner Name) (sv Int) (arms (List LwArm)) (k Int)) LwJ
+  (match arms
+    (Nil (LwJ (LwMatch (LwVar sv) Nil) Nil k))
+    ((Cons (LwArm p body) rest)
+     (match (lw_chain owner sv rest k)
+       ((LwJ fail ls1 k1)
+        (match (lw_lift_fail owner fail k1)
+          ((LwJ failc ls2 k2)
+           (match (lw_test owner sv p body failc k2)
+             ((LwJ e ls3 k3) (LwJ e (append ls1 (append ls2 ls3)) k3))))))))))
+;; a continuation small enough to repeat is not lifted: the sink, a call of no operand
+(fn lw_lift_fail ((owner Name) (e LwE) (k Int)) LwJ
+  (match e
+    ((LwMatch _ Nil) (LwJ e Nil k))
+    ((LwCall _ Nil) (LwJ e Nil k))
+    (_ (lw_lift owner e k))))
+;; one pattern tested on the variable sv: BODY where it matches, FAILC where it does not
+(fn lw_test ((owner Name) (sv Int) (p LwP) (body LwE) (failc LwE) (k Int)) LwJ
+  (match p
+    ((LwPVar x) (LwJ (LwLet x (LwVar sv) body) Nil k))
+    ((LwPInt _) (LwJ (LwMatch (LwVar sv) (list (LwArm p body) (LwArm (LwPVar k) failc))) Nil (+ k 1)))
+    ((LwPSym _) (LwJ (LwMatch (LwVar sv) (list (LwArm p body) (LwArm (LwPVar k) failc))) Nil (+ k 1)))
+    ((LwPCtor c ps)
+     (match (lw_fields ps k)
+       ((Pair fs k1)
+        (match (lw_tests owner fs ps body failc k1)
+          ((LwJ inner ls k2)
+           (LwJ (LwMatch (LwVar sv) (list (LwArm (LwPCtor c (lw_pvars fs)) inner) (LwArm (LwPVar k2) failc))) ls (+ k2 1)))))))))
+;; a field's variable: the pattern's own where the sub-pattern is a variable, else a new one
+(fn lw_fields ((ps (List LwP)) (k Int)) (Pair (List Int) Int)
+  (match ps
+    (Nil (Pair Nil k))
+    ((Cons (LwPVar x) r) (match (lw_fields r k) ((Pair ns k1) (Pair (Cons x ns) k1))))
+    ((Cons _ r) (match (lw_fields r (+ k 1)) ((Pair ns k1) (Pair (Cons k ns) k1))))))
+(fn lw_pvars ((vs (List Int))) (List LwP)
+  (measure (struct vs))
+  (match vs (Nil Nil) ((Cons v r) (Cons (LwPVar v) (lw_pvars r)))))
+;; the fields' sub-patterns tested in order; the last one's success is the arm's body
+(fn lw_tests ((owner Name) (fs (List Int)) (ps (List LwP)) (body LwE) (failc LwE) (k Int)) LwJ
+  (match ps
+    (Nil (LwJ body Nil k))
+    ((Cons p prest)
+     (match fs
+       (Nil (LwJ body Nil k))
+       ((Cons f frest)
+        (match p
+          ((LwPVar _) (lw_tests owner frest prest body failc k))      ; bound by the flat arm
+          (_ (match (lw_tests owner frest prest body failc k)
+               ((LwJ inner ls1 k1)
+                (match (lw_test owner f p inner failc k1)
+                  ((LwJ e ls2 k2) (LwJ e (append ls1 ls2) k2))))))))))))
+
+;; ---- pass ANF: every operand an atom --------------------------------------------------------
+(type LwN (LwNOk (List (Pair Int LwE)) LwE Int) (LwNErr (List Int)))           ; the bindings, the atom
+(type LwNs (LwNsOk (List (Pair Int LwE)) (List LwE) Int) (LwNsErr (List Int)))
+(type LwT (LwTOk LwE Int) (LwTErr (List Int)))
+(type LwTa (LwTaOk (List LwArm) Int) (LwTaErr (List Int)))
+
+;; to an atom, the bindings it needs outward
+(fn lw_anf_name ((e LwE) (k Int)) LwN
+  (match e
+    ((LwVar _) (LwNOk Nil e k))
+    ((LwInt _) (LwNOk Nil e k))
+    ((LwSym _) (LwNOk Nil e k))
+    (LwAbsurd (LwNOk (list (Pair k LwAbsurd)) (LwVar k) (+ k 1)))
+    ((LwLet n rhs body)
+     (match (lw_anf_rhs rhs k)
+       ((LwNErr m) (LwNErr m))
+       ((LwNOk binds1 r k1)
+        (match (lw_anf_name body k1)
+          ((LwNErr m) (LwNErr m))
+          ((LwNOk binds2 atom k2) (LwNOk (append binds1 (Cons (Pair n r) binds2)) atom k2))))))
+    ((LwIf _ _ _) (LwNErr "internal: an if in an operand's position was not lifted"))
+    ((LwMatch _ _) (LwNErr "internal: a match in an operand's position was not lifted"))
+    (_ (match (lw_args e)
+         (None (LwNErr "internal: not an application"))
+         ((Some as)
+          (match (lw_anf_names as k)
+            ((LwNsErr m) (LwNErr m))
+            ((LwNsOk binds atoms k1) (LwNOk (append binds (list (Pair k1 (lw_rehead e atoms)))) (LwVar k1) (+ k1 1)))))))))
+;; to a right-hand side: an application stays where it is, over atoms
+(fn lw_anf_rhs ((e LwE) (k Int)) LwN
+  (match e
+    (LwAbsurd (LwNOk Nil e k))
+    (_ (match (lw_args e)
+         ((Some as)
+          (match (lw_anf_names as k)
+            ((LwNsErr m) (LwNErr m))
+            ((LwNsOk binds atoms k1) (LwNOk binds (lw_rehead e atoms) k1))))
+         (None (lw_anf_name e k))))))
+(fn lw_anf_names ((es (List LwE)) (k Int)) LwNs
+  (match es
+    (Nil (LwNsOk Nil Nil k))
+    ((Cons e r)
+     (match (lw_anf_name e k)
+       ((LwNErr m) (LwNsErr m))
+       ((LwNOk binds a k1)
+        (match (lw_anf_names r k1)
+          ((LwNsErr m) (LwNsErr m))
+          ((LwNsOk binds2 atoms k2) (LwNsOk (append binds binds2) (Cons a atoms) k2))))))))
+(fn lw_wrap ((binds (List (Pair Int LwE))) (tail LwE)) LwE
+  (measure (struct binds))
+  (match binds (Nil tail) ((Cons (Pair n r) rest) (LwLet n r (lw_wrap rest tail)))))
+;; a body
+(fn lw_anf_tail ((e LwE) (k Int)) LwT
+  (match e
+    ((LwIf c t f)
+     (match (lw_anf_name c k)
+       ((LwNErr m) (LwTErr m))
+       ((LwNOk binds ca k1)
+        (match (lw_anf_tail t k1)
+          ((LwTErr m) (LwTErr m))
+          ((LwTOk rt k2)
+           (match (lw_anf_tail f k2)
+             ((LwTErr m) (LwTErr m))
+             ((LwTOk rf k3) (LwTOk (lw_wrap binds (LwIf ca rt rf)) k3))))))))
+    ((LwMatch s arms)
+     (match (lw_anf_name s k)
+       ((LwNErr m) (LwTErr m))
+       ((LwNOk binds sa k1)
+        (match (lw_anf_arms arms k1)
+          ((LwTaErr m) (LwTErr m))
+          ((LwTaOk rarms k2) (LwTOk (lw_wrap binds (LwMatch sa rarms)) k2))))))
+    ((LwLet n rhs body)
+     (match (lw_anf_rhs rhs k)
+       ((LwNErr m) (LwTErr m))
+       ((LwNOk binds r k1)
+        (match (lw_anf_tail body k1)
+          ((LwTErr m) (LwTErr m))
+          ((LwTOk rb k2) (LwTOk (lw_wrap binds (LwLet n r rb)) k2))))))
+    (_ (match (lw_anf_rhs e k)
+         ((LwNErr m) (LwTErr m))
+         ((LwNOk binds r k1) (LwTOk (lw_wrap binds r) k1))))))
+(fn lw_anf_arms ((arms (List LwArm)) (k Int)) LwTa
+  (match arms
+    (Nil (LwTaOk Nil k))
+    ((Cons (LwArm p body) r)
+     (if (lw_flat p)
+       (match (lw_anf_tail body k)
+         ((LwTErr m) (LwTaErr m))
+         ((LwTOk rb k1)
+          (match (lw_anf_arms r k1)
+            ((LwTaErr m) (LwTaErr m))
+            ((LwTaOk rr k2) (LwTaOk (Cons (LwArm p rb) rr) k2)))))
+       (LwTaErr "internal: a nested pattern was not compiled")))))
+
+;; ---- back to indices: env is innermost first -------------------------------------------------
+(fn lw_index ((v Int) (env (List Int)) (i Int)) Int
+  (measure (struct env))
+  (match env (Nil -1) ((Cons x r) (if (= x v) i (lw_index v r (+ i 1))))))
+(fn lw_term ((e LwE) (env (List Int))) ETerm
+  (match e
+    ((LwVar v) (EBVar (lw_index v env 0)))
+    ((LwInt n) (ELit (if (< n 0) (LInt n) (LNat n))))
+    ((LwSym s) (ELit (LSym s)))
+    ((LwCtor c as) (ECtor c (lw_terms as env)))
+    ((LwCall f as) (ECall f (lw_terms as env)))
+    ((LwPrim p as) (EPrim p (lw_terms as env)))
+    ((LwExt x as) (EExt x (lw_terms as env)))
+    ((LwIf c t f) (EIf (lw_term c env) (lw_term t env) (lw_term f env)))
+    ((LwMatch s arms) (EMatch (lw_term s env) (lw_tarms arms env)))
+    ((LwLet n r body) (ELet (list (lw_term r env)) (lw_term body (Cons n env))))
+    (LwAbsurd EAbsurd)))
+(fn lw_terms ((es (List LwE)) (env (List Int))) (List ETerm)
+  (match es (Nil Nil) ((Cons e r) (Cons (lw_term e env) (lw_terms r env)))))
+(fn lw_tarms ((arms (List LwArm)) (env (List Int))) (List EArm)
+  (match arms
+    (Nil Nil)
+    ((Cons (LwArm p body) r) (Cons (EArm (lw_tpat p) (lw_term body (rev_onto (lw_pat_order p) env))) (lw_tarms r env)))))
+(fn lw_tpat ((p LwP)) EPat
+  (match p
+    ((LwPVar _) PVar)
+    ((LwPInt n) (PLit (if (< n 0) (LInt n) (LNat n))))
+    ((LwPSym s) (PLit (LSym s)))
+    ((LwPCtor c ps) (PCtor c (lw_tpats ps)))))
+(fn lw_tpats ((ps (List LwP))) (List EPat)
+  (match ps (Nil Nil) ((Cons p r) (Cons (lw_tpat p) (lw_tpats r)))))
+;; a pattern's variables in binding order
+(fn lw_pat_order ((p LwP)) (List Int) (rev (lw_pat_vars p Nil)))
+
+;; ---- a function --------------------------------------------------------------------------
+(fn lw_jv () EType (ETCon (n1 (quote JV)) Nil))
+(fn lw_jvs ((k Int)) (List EType) (measure k) (if (< k 1) Nil (Cons (lw_jv) (lw_jvs (- k 1)))))
+;; the parameters' numbers innermost first: n-1 … 0
+(fn lw_params ((n Int)) (List Int) (measure n) (if (< n 1) Nil (Cons (- n 1) (lw_params (- n 1)))))
+(type LwF (LwFOk (List EDecl)) (LwFErr (List Int)))
+(fn lw_fn ((n Name) (nt Int) (ps (List EType)) (rt EType) (rec ERec) (body ETerm)) LwF
+  (let ((np (len ps)))
+    (match (lw_named body (lw_params np) np)
+      ((LwErr m) (LwFErr m))
+      ((LwOk e0 k0)
+       (match (lw_jp_tail n e0 k0)
+         ((LwJ e ls k)
+          (match (lw_anf_tail e k)
+            ((LwTErr m) (LwFErr m))
+            ((LwTOk rs k1)
+             (match (lw_lifted ls k1 Nil)
+               ((LwFErr m) (LwFErr m))
+               ((LwFOk lifted) (LwFOk (Cons (EFn n nt ps rt rec (lw_term rs (lw_params np))) lifted))))))))))))
+;; the lifted functions in the order they were lifted; acc is newest first
+(fn lw_lifted ((ls (List LwLifted)) (k Int) (acc (List EDecl))) LwF
+  (match ls
+    (Nil (LwFOk (rev acc)))
+    ((Cons (LwLifted jn params body) rest)
+     (match (lw_anf_tail body k)
+       ((LwTErr m) (LwFErr m))
+       ((LwTOk rb k1)
+        (lw_lifted rest k1 (Cons (EFn jn 0 (lw_jvs (len params)) (lw_jv) RecNone (lw_term rb (rev params))) acc)))))))
+
+;; ---- a program -----------------------------------------------------------------------------
+(type LwRes (LwProg Prog) (LwRefused (List (List Int))))
+(fn lw_prog ((p Prog)) LwRes
+  (match p ((Prog ds) (lw_decls ds Nil Nil))))
+;; acc and errs newest first
+(fn lw_decls ((ds (List EDecl)) (acc (List EDecl)) (errs (List (List Int)))) LwRes
+  (match ds
+    (Nil (match errs (Nil (LwProg (Prog (rev acc)))) (_ (LwRefused (rev errs)))))
+    ((Cons d r)
+     (match d
+       ((EFn n nt ps rt rec body)
+        (match (lw_fn n nt ps rt rec body)
+          ((LwFOk fs) (lw_decls r (rev_onto fs acc) errs))
+          ((LwFErr m) (lw_decls r acc (Cons (append m (append " in " (show_name n))) errs)))))
+       ((ESig n _ _ _)
+        (lw_decls r acc (Cons (append "unlinked sig fn " (append (show_name n) ": the implementation's directory was not loaded (give it as a root)")) errs)))
+       ((ESigType n _)
+        (lw_decls r acc (Cons (append "unlinked sig type " (append (show_name n) ": the implementation's directory was not loaded (give it as a root)")) errs)))
+       (_ (lw_decls r (Cons d acc) errs))))))
