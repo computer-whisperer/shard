@@ -69,10 +69,18 @@ statements; nothing else in this directory needs trust.
 
 ## What is not here yet
 
-- **The scenarios as theorems, and the printer's totality.** Both
-  wait on V3 compiling mutual recursion into a definition. Until then
-  the scenarios are run against the binary and the printer's functions
-  are programs without a definition.
+- **The printer's totality.** Sixteen of the printer's functions are
+  programs without a definition, because its renderers call one
+  another in a cycle; the view's function is linked to the binary's
+  printer, not discharged by it. Slice 5.2 (`v3/LANGUAGE.md` §8.7,
+  designed 2026-11-13) compiles such a group into a definition by
+  well-founded recursion; its last landing gives the renderers their
+  measures and discharges the view's function.
+- **The scenarios as theorems.** They need more than a definition:
+  evaluation of a closed call at a scenario's size, which the kernel's
+  own evaluation does not reach through a measured definition
+  (measured 2026-11-13; a deferred row of `v3/LANGUAGE.md` §11). Until
+  then the scenarios are run against the binary.
 
 ## The gate, and the command
 

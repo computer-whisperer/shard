@@ -2561,6 +2561,23 @@ Pipeline 686 green on `3e6d44a`: `host` 37 s, `v3` 3,785 s, `native`
 first having died at the clone on the runner's DNS before any project
 code ran.
 
+**Slice 5.2 designed 2026-11-13 — a group of functions that call each
+other gets a definition, by the well-founded route; nothing built**
+(`LANGUAGE.md` §8.7 "Slice 5.2", §13 item 75). The gap was measured
+first: a group has no definition whatever its recursion, a nested type
+cannot be recursed into structurally even by one function, and the
+measured route has no size of a data value. The user, on which of
+Lean's two routes to build first: "Agreed, let's proceed with the
+well-founded route." The design: one fixpoint over a tagged union of
+the members' arguments, each member the fixpoint at its tag; a measure
+on every member and one decrease fact per call; the group found by the
+loader when its last member is read; `(derive TYPE size)` for the size
+of a data value. Its other rules are not ruled. The `reduce` defect of
+landing 2 has its cause — a rewrite's motive was typed without being
+checked — and its fix confirmed on a copy; it is the slice's first
+landing. The formatter's scenarios as theorems leave the slice: they
+need evaluation of a closed call at size as well, a deferred row.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until
