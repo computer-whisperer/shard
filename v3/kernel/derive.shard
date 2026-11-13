@@ -40,6 +40,7 @@
 (use kernel.decl.ConstantInfo)
 (use kernel.elab.ERes)
 (use kernel.expr.Expr)
+(use kernel.level.Level)
 (use kernel.matcher.MtInd)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
@@ -119,6 +120,7 @@
                   ((Pair w2 (MtInd ind ls params ctors))
                    (match (env_find env ind)
                      ((Some (InductInfo _ _ _ all _ nnested _ _ _))
+                      (if (dv_only_size (Cons c1 caps)) (dv_size sc env w2 ty ind ls params)
                       (if (bool_not (= (len all) 1))
                         (DvErr (quote derive_shape) (append (show_name ind) ": a mutual type"))
                       (if (< 0 nnested)
@@ -152,7 +154,7 @@
                                 (Cons c1 caps)
                                 False
                                 Nil
-                                Nil))))))))))
+                                Nil)))))))))))
                      (_
                        (DvErr (quote derive_type)
                          (append (show_expr ty) " is not an inductive type")))))))))))))))
@@ -272,6 +274,376 @@
     (Nil False)
     ((Cons x r) (if (mem_int x ys) True (dv_any_in r ys)))))
 
+;; ---- size: the measure of a data value (§8.7 slice 5.2 rule 6) ---------------------------------
+;; `(derive TYPE size)`: `NS.size : TYPE → Nat` from the type's recursor with every motive
+;; `λ _. Nat` — a constructor is 1 plus the sizes of its recursive fields, a recursive field
+;; being one K gives an induction hypothesis for. A nested type has a function per auxiliary
+;; type of K's translation as well, under that type's mangled name (`List_T.size`, from
+;; `T.rec_1`). Each function has its equations `NAME.size.eq_K`, one per constructor in
+;; order, by `Eq.refl`. The functions are `def`s over the recursor — source, as every
+;; derivation's, but no `fn`: a `fn` over a nested type would be a group of its own, whose
+;; measure this is. They have no program, and need none: a measure is never run, and a
+;; program whose measure cites one records that (prog.shard RecLogical).
+;; The whole is read off the recursor's telescope: its motives' domains are the types, its
+;; minors the constructors, a minor's binder under a motive an induction hypothesis.
+(fn dv_only_size ((caps (List SExpr))) Bool
+  (match caps
+    ((Cons (SSym k) Nil) (sym_eq k (quote size)))
+    (_ False)))
+;; a motive: its local's id, the type it is over, the size function's name as the source writes it
+(type DvMot (DvMot Int Expr (List Int)))
+;; a minor read: the source of the minor, the motive its constructor's type belongs to, the
+;; equation's binders, the constructor applied, the equation's right side
+(type DvMinor (DvMinor SExpr Int (List SExpr) SExpr SExpr))
+(type DvMins (DvMinsOk (List DvMinor)) (DvMinsErr Symbol (List Int)))
+(fn dv_level_nat ((l Level)) (Option Int)
+  (measure (struct l))
+  (match l
+    (LZero (Some 0))
+    ((LSucc x)
+     (match (dv_level_nat x)
+       ((Some k) (Some (+ k 1)))
+       (None None)))
+    (_ None)))
+;; the type's universe arguments as the source writes them: numerals
+(fn dv_level_nums ((ls (List Level))) (Option (List SExpr))
+  (measure (struct ls))
+  (match ls
+    (Nil (Some Nil))
+    ((Cons l r)
+     (match (dv_level_nat l)
+       (None None)
+       ((Some k)
+        (match (dv_level_nums r)
+          (None None)
+          ((Some t) (Some (Cons (SNum k) t)))))))))
+(fn dv_cite_text ((sc Scope) (n Name)) (List Int)
+  (if (native_decl sc n) (show_name n) (append "Init." (show_name n))))
+(fn dv_nat_s ((sc Scope)) SExpr (dv_s (dv_cite_text sc (n1 (quote Nat)))))
+(fn dv_size_name ((a Expr)) (List Int) (append (dv_mangle a) ".size"))
+(fn dv_size
+  ((sc Scope) (env CheckedEnv) (w W) (ty Expr) (ind Name) (ls (List Level)) (params (List Expr)))
+  DvRes
+  (if (< 0 (len (expr_fvars ty Nil)))
+    (DvErr (quote derive_type) (append (show_expr ty) " is not closed"))
+    (match (dv_level_nums ls)
+      (None
+        (DvErr (quote derive_type)
+          (append (dv_show_ty ty) ": a universe argument that is not a number")))
+      ((Some lstext)
+       (match (env_find env (name_append ind (n1 (quote rec))))
+         ((Some rinfo)
+          (match rinfo
+            ((RecInfo _ _ _ ni nmot nmin _ _ _)
+             (if (< 0 ni)
+               (DvErr (quote derive_shape) (append (show_name ind) ": an indexed family"))
+               (match (w_inst_lparams w (ci_type rinfo) (ci_lparams rinfo) (Cons (LSucc LZero) ls))
+                 ((Pair w1 rty)
+                  (match (dv_inst_params w1 rty params)
+                    ((Pair _ None)
+                     (DvErr (quote derive_shape)
+                       (append (show_name ind) ": the recursor does not take the type's arguments")))
+                    ((Pair w2 (Some rty1))
+                     (match (dv_open_motives w2 rty1 nmot Nil)
+                       ((Pair _ None)
+                        (DvErr (quote derive_shape)
+                          (append (show_name ind) ": the recursor's motives could not be opened")))
+                       ((Pair w3 (Some (Pair rty2 mots)))
+                        (match (dv_minors sc env w3 rty2 nmin mots 1 Nil)
+                          ((DvMinsErr e m) (DvErr e m))
+                          ((DvMinsOk mins)
+                           (DvOk
+                             (list
+                               (DvGen ty (quote size) (dv_size_ident sc (dv_size_name ty))
+                                 (quote structural)
+                                 (dv_size_idents sc (drop 1 mots))
+                                 (append
+                                   (dv_size_defs sc ind lstext (dv_tys_s sc params) mots mots mins 0)
+                                   (dv_size_eqns sc mots mots mins 0)))))))))))))))
+            (_ (DvErr (quote derive_shape) (append (show_name ind) " has no recursor")))))
+         (None (DvErr (quote derive_shape) (append (show_name ind) " has no recursor"))))))))
+(fn dv_size_ident ((sc Scope) (short (List Int))) Name
+  (match (name_of_sym (sym_of_chars short))
+    ((Some n) (qualify sc n))
+    (None (qualify sc (n1 (sym_of_chars short))))))
+(fn dv_size_idents ((sc Scope) (mots (List DvMot))) (List Name)
+  (measure (struct mots))
+  (match mots
+    (Nil Nil)
+    ((Cons (DvMot _ _ nm) r) (Cons (dv_size_ident sc nm) (dv_size_idents sc r)))))
+(fn dv_inst_params ((w W) (ty Expr) (params (List Expr))) (Pair W (Option Expr))
+  (measure (struct params))
+  (match params
+    (Nil (Pair w (Some ty)))
+    ((Cons p r)
+     (match ty
+       ((Pi _ _ _ _ body)
+        (match (w_inst1 w body p)
+          ((Pair w1 body1) (dv_inst_params w1 body1 r))))
+       (_ (Pair w None))))))
+;; the motives opened as locals: each binder is `(x : A) → Sort 1`, A the type the motive is over
+(fn dv_open_motives ((w W) (ty Expr) (n Int) (acc (List DvMot)))
+  (Pair W (Option (Pair Expr (List DvMot))))
+  (measure n)
+  (if (< n 1) (Pair w (Some (Pair ty (rev acc))))
+  (match ty
+    ((Pi _ nm _ dom body)
+     (match dom
+       ((Pi _ _ _ a _)
+        (match (w_local w nm dom)
+          ((Pair w1 fv)
+           (match (w_inst1 w1 body fv)
+             ((Pair w2 body1)
+              (dv_open_motives w2 body1 (- n 1)
+                (Cons (DvMot (fvar_id_of fv) a (dv_size_name a)) acc)))))))
+       (_ (Pair w None))))
+    (_ (Pair w None)))))
+(fn dv_mot_ids ((mots (List DvMot))) (List Int)
+  (measure (struct mots))
+  (match mots
+    (Nil Nil)
+    ((Cons (DvMot id _ _) r) (Cons id (dv_mot_ids r)))))
+(fn dv_mot_index ((mots (List DvMot)) (id Int) (j Int)) (Option (Pair Int (List Int)))
+  (measure (struct mots))
+  (match mots
+    (Nil None)
+    ((Cons (DvMot i _ nm) r) (if (= i id) (Some (Pair j nm)) (dv_mot_index r id (+ j 1))))))
+;; a telescope's binders as locals, in order, with what is under them
+(fn dv_open ((w W) (ty Expr) (acc (List Expr)) (fuel Int)) (Pair W (Pair (List Expr) Expr))
+  (measure fuel)
+  (if (< fuel 1) (Pair w (Pair (rev acc) ty))
+  (match ty
+    ((Pi _ nm _ dom body)
+     (match (w_local w nm dom)
+       ((Pair w1 fv)
+        (match (w_inst1 w1 body fv)
+          ((Pair w2 body1) (dv_open w2 body1 (Cons fv acc) (- fuel 1)))))))
+    (_ (Pair w (Pair (rev acc) ty))))))
+;; the minors, in order: each `Π fields ihs. motive_j (C params fields)`
+(fn dv_minors
+  ((sc Scope)
+   (env CheckedEnv)
+   (w W)
+   (ty Expr)
+   (n Int)
+   (mots (List DvMot))
+   (k Int)
+   (acc (List DvMinor)))
+  DvMins
+  (measure n)
+  (if (< n 1) (DvMinsOk (rev acc))
+  (match ty
+    ((Pi _ _ _ dom body)
+     (match (dv_open w dom Nil 256)
+       ((Pair w1 (Pair fvs cod))
+        (match (get_app_fn cod)
+          ((FVar _ mid)
+           (match (dv_mot_index mots mid 0)
+             (None (DvMinsErr (quote derive_shape) "a minor premise that ends in no motive"))
+             ((Some (Pair j nm))
+              (match (get_app_args cod)
+                ((Cons capp Nil)
+                 (match (dv_minor_binders sc w1 mots fvs fvs 1 Nil Nil Nil)
+                   ((Pair (Pair fbs ihbs) (Pair (Some terms) _))
+                    (match (dv_ctor_app sc env capp fvs)
+                      (None (DvMinsErr (quote derive_shape) "a minor premise over no constructor"))
+                      ((Some cs)
+                       (let ((rhs (dv_size_sum terms)) (ihsum (dv_size_sum (dv_ih_vars ihbs))))
+                         (match (w_inst1 w1 body (mk_const (n1 (quote Nat)) Nil))  ; the minor's own binder is not cited after it
+                           ((Pair w2 body1)
+                            (dv_minors sc env w2 body1 (- n 1) mots (+ k 1)
+                              (Cons
+                                (DvMinor
+                                  (match (append fbs ihbs)
+                                    (Nil ihsum)
+                                    (bs (SList (list (dv_s "fun") (SList bs) ihsum))))
+                                  j
+                                  fbs
+                                  cs
+                                  rhs)
+                                acc))))))))
+                   ((Pair _ (Pair None (Pair e m))) (DvMinsErr e m))))
+                (_ (DvMinsErr (quote derive_shape) "a motive applied to more than its value"))))))
+          (_ (DvMinsErr (quote derive_shape) "a minor premise that ends in no motive"))))))
+    (_ (DvMinsErr (quote derive_shape) "the recursor has fewer minor premises than it says")))))
+;; a minor's binders: a field `(v K TYPE)` — its type closed, no earlier field in it — or an
+;; induction hypothesis `(h K Nat)`, which adds `(SIZE v)` of the field it is about to the sum
+(fn dv_minor_binders
+  ((sc Scope)
+   (w W)
+   (mots (List DvMot))
+   (all (List Expr))
+   (fvs (List Expr))
+   (i Int)
+   (fbs (List SExpr))
+   (ihbs (List SExpr))
+   (terms (List SExpr)))
+  (Pair (Pair (List SExpr) (List SExpr)) (Pair (Option (List SExpr)) (Pair Symbol (List Int))))
+  (measure (struct fvs))
+  (match fvs
+    (Nil (Pair (Pair (rev fbs) (rev ihbs)) (Pair (Some (rev terms)) (Pair (quote none) Nil))))
+    ((Cons fv r)
+     (match (w_local_type w (fvar_id_of fv))
+       (None (Pair (Pair Nil Nil) (Pair None (Pair (quote derive_shape) "a binder without a type"))))
+       ((Some fty)
+        (match (get_app_fn fty)
+          ((FVar _ hid)
+           (match (dv_mot_index mots hid 0)
+             ((Some (Pair _ nm))
+              (match (get_app_args fty)
+                ((Cons x Nil)
+                 (match (dv_field_pos all (fvar_id_of x) 1)
+                   ((Some fi)
+                    (dv_minor_binders sc w mots all r (+ i 1) fbs
+                      (Cons (dv_bind (dv_vname "h" i) (dv_nat_s sc)) ihbs)
+                      (Cons (dv_ap (dv_s nm) (list (dv_var "v" fi))) terms)))
+                   (None
+                     (Pair (Pair Nil Nil)
+                       (Pair None
+                         (Pair (quote derive_field)
+                           "an induction hypothesis about a term that is no field"))))))
+                (_
+                  (Pair (Pair Nil Nil)
+                    (Pair None (Pair (quote derive_shape) "a motive applied to more than its value"))))))
+             (None
+               (Pair (Pair Nil Nil)
+                 (Pair None (Pair (quote derive_field) "a field whose type is a variable"))))))
+          (_
+            (if (< 0 (len (expr_fvars fty Nil)))
+              (Pair (Pair Nil Nil)
+                (Pair None
+                  (Pair (quote derive_field)
+                    "a field whose type is over an earlier field, or a recursive field under a function: no size is derived")))
+              (dv_minor_binders sc w mots all r (+ i 1)
+                (Cons (dv_bind (dv_vname "v" i) (dv_ty_s sc fty)) fbs)
+                ihbs
+                terms)))))))))
+(fn dv_field_pos ((fvs (List Expr)) (id Int) (i Int)) (Option Int)
+  (measure (struct fvs))
+  (match fvs
+    (Nil None)
+    ((Cons fv r) (if (= (fvar_id_of fv) id) (Some i) (dv_field_pos r id (+ i 1))))))
+;; the induction hypotheses' variables: the first symbol of each binder
+(fn dv_ih_vars ((bs (List SExpr))) (List SExpr)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (SList (Cons x _)) r) (Cons x (dv_ih_vars r)))
+    ((Cons _ r) (dv_ih_vars r))))
+;; 1, or (+ 1 (+ a (+ b …)))
+(fn dv_size_sum ((ts (List SExpr))) SExpr
+  (match ts
+    (Nil (SNum 1))
+    (_ (dv_l3 (dv_s "+") (SNum 1) (dv_sum ts)))))
+(fn dv_sum ((ts (List SExpr))) SExpr
+  (measure (struct ts))
+  (match ts
+    (Nil (SNum 0))
+    ((Cons t Nil) t)
+    ((Cons t r) (dv_l3 (dv_s "+") t (dv_sum r)))))
+;; the constructor of a minor's result applied in source: its type arguments written where it
+;; has any, then the fields — each a field's variable
+(fn dv_ctor_app ((sc Scope) (env CheckedEnv) (capp Expr) (fvs (List Expr))) (Option SExpr)
+  (match (get_app_fn capp)
+    ((Const _ c _)
+     (match (env_find env c)
+       ((Some (CtorInfo _ _ _ np _ _))
+        (let ((args (get_app_args capp)))
+          (match (dv_field_args fvs (drop np args) Nil)
+            (None None)
+            ((Some fs)
+             (if (= np 0)
+               (match fs
+                 (Nil (Some (dv_s (dv_cite_text sc c))))
+                 (_ (Some (dv_ap (dv_s (dv_cite_text sc c)) fs))))
+               (Some
+                 (dv_ap (dv_s (append "@" (dv_cite_text sc c)))
+                   (append (dv_tys_s sc (take np args)) fs))))))))
+       (_ None)))
+    (_ None)))
+(fn dv_field_args ((fvs (List Expr)) (args (List Expr)) (acc (List SExpr))) (Option (List SExpr))
+  (measure (struct args))
+  (match args
+    (Nil (Some (rev acc)))
+    ((Cons a r)
+     (match a
+       ((FVar _ id)
+        (match (dv_field_pos fvs id 1)
+          ((Some i) (dv_field_args fvs r (Cons (dv_var "v" i) acc)))
+          (None None)))
+       (_ None)))))
+;; `(def NS.size ((x 1 TYPE)) Nat (@T.rec[_J].{1 LS} PARAMS MOTIVES MINORS x 1))`, a motive each
+(fn dv_size_defs
+  ((sc Scope)
+   (ind Name)
+   (lstext (List SExpr))
+   (params (List SExpr))
+   (all (List DvMot))
+   (mots (List DvMot))
+   (mins (List DvMinor))
+   (j Int))
+  (List SExpr)
+  (measure (struct mots))
+  (match mots
+    (Nil Nil)
+    ((Cons (DvMot _ a nm) r)
+     (Cons
+       (SList
+         (list (dv_s "def") (dv_s nm) (SList (list (dv_bind (dv_vname "x" 1) (dv_ty_s sc a))))
+           (dv_nat_s sc)
+           (dv_ap
+             ;; `@T.rec.{1 LS}`: the recursor explicit, its motives into Type — cited as its
+             ;; inductive is (a native one by its identity, an imported one under Init)
+             (SSymU
+               (sym_of_chars
+                 (append (if (native_decl sc ind) "@" "@Init.")
+                   (show_name
+                     (name_append ind
+                       (n1 (if (= j 0) (quote rec) (sym_of_chars (append "rec_" (show_nat j)))))))))
+               (Cons (SNum 1) lstext))
+             (append params
+               (append (dv_size_motives sc all)
+                 (append (dv_minor_sources mins) (list (dv_var "x" 1))))))))
+       (dv_size_defs sc ind lstext params all r mins (+ j 1))))))
+(fn dv_size_motives ((sc Scope) (mots (List DvMot))) (List SExpr)
+  (measure (struct mots))
+  (match mots
+    (Nil Nil)
+    ((Cons (DvMot _ a _) r)
+     (Cons
+       (SList
+         (list (dv_s "fun") (SList (list (SList (list (dv_s "_") (dv_ty_s sc a))))) (dv_nat_s sc)))
+       (dv_size_motives sc r)))))
+(fn dv_minor_sources ((mins (List DvMinor))) (List SExpr)
+  (measure (struct mins))
+  (match mins
+    (Nil Nil)
+    ((Cons (DvMinor src _ _ _ _) r) (Cons src (dv_minor_sources r)))))
+;; `(theorem NS.size.eq_K (FIELDS) (= (NS.size (C fields)) RHS) (exact (Eq.refl (NS.size (C fields)))))`,
+;; a motive's constructors in order
+(fn dv_size_eqns ((sc Scope) (all (List DvMot)) (mots (List DvMot)) (mins (List DvMinor)) (j Int))
+  (List SExpr)
+  (measure (struct mots))
+  (match mots
+    (Nil Nil)
+    ((Cons (DvMot _ _ nm) r)
+     (append (dv_size_eqns_of sc nm mins j 1) (dv_size_eqns sc all r mins (+ j 1))))))
+(fn dv_size_eqns_of ((sc Scope) (nm (List Int)) (mins (List DvMinor)) (j Int) (k Int)) (List SExpr)
+  (measure (struct mins))
+  (match mins
+    (Nil Nil)
+    ((Cons (DvMinor _ mj fbs cs rhs) r)
+     (if (bool_not (= mj j)) (dv_size_eqns_of sc nm r j k)
+     (let ((lhs (dv_ap (dv_s nm) (list cs))))
+       (Cons
+         (SList
+           (list (dv_s "theorem") (dv_s (append nm (append ".eq_" (show_nat k)))) (SList fbs)
+             (dv_eqn lhs rhs)
+             (SList
+               (list (dv_s "exact")
+                 (dv_ap (dv_s (dv_cite_text sc (n2 (quote Eq) (quote refl)))) (list lhs))))))
+         (dv_size_eqns_of sc nm r j (+ k 1))))))))
+
 ;; ---- the capabilities of one form ------------------------------------------------------------
 ;; `idx`: NS.ctorIdx is already among the forms of an earlier capability
 (fn dv_caps ((cx DvCx) (caps (List SExpr)) (idx Bool) (done (List Symbol)) (acc (List DvGen))) DvRes
@@ -291,7 +663,8 @@
   (bool_or (sym_eq k (quote eq)) (bool_or (sym_eq k (quote ord)) (sym_eq k (quote render)))))
 (fn dv_bad_cap ((c SExpr)) DvCap
   (DvCapErr (quote bad_shape)
-    (append (show_sexpr c) ": a capability is eq, (ord structural), render, or (CAPABILITY by NAME)")))
+    (append (show_sexpr c)
+      ": a capability is eq, (ord structural), render, or (CAPABILITY by NAME); size is derived by a form of its own, (derive TYPE size)")))
 (fn dv_cap ((cx DvCx) (c SExpr) (idx Bool) (done (List Symbol))) DvCap
   (match c
     ((SSym k)

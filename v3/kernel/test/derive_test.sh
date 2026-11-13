@@ -65,5 +65,22 @@ want convention "$out" 'DERIVE examples.derive.convention.Urgency.first type=exa
 want convention "$out" 'DERIVE examples.derive.convention.Job.compare type=examples.derive.convention.Job cap=ord policy=structural fields=examples.derive.convention.Urgency.first,Nat.lt'
 want convention "$out" 'ACCEPT examples.derive.convention.urgent_first '
 
+# slice 5.2 landing 3: the size of a data value. A nested type's and its list's from the
+# recursor, a group measured by them; a plain type's and Init's list's, one function measured
+# by a size whose program runs though the measure has none — exit 3, as K proves
+R=v3/pins/loader/derive_size
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
+want size "$out" 'DERIVE main.Tree.size type=main.Tree cap=size policy=structural fields=main.List_Tree.size'
+want size "$out" '^ACCEPT main.List_Tree.size.eq_2 '
+want size "$out" '^DEFINE main.counts equations=main.counts.eq_1,main.counts.eq_2$'
+want size "$out" 'pending 0  realized 0  defined 2  errors 0'
+R=v3/pins/loader/derive_size_plain
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
+want size_plain "$out" 'DERIVE main.List_Nat.size type=(List Nat) cap=size policy=structural fields='
+want size_plain "$out" '^DISCHARGE main.depth.dec_1 proved'
+checks=$((checks+1))
+"$EVAL" direct v3/kernel/load.shard --root $R $INIT --run main.main $R/main.shard > /dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] || { echo "derive_test: derive_size_plain: main exits $rc, K proves 3"; fail=$((fail+1)); }
+
 echo "derive_test: $checks checks, $fail failed"
 exit $fail

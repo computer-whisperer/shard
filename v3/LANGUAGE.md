@@ -6959,7 +6959,7 @@ family is taken up).
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
 | 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13, green on pipeline 684, on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the layout ruled anew — 100 columns, structure first —, the tree reformatted, the gate on) built 2026-11-13 on the user's "Agreed with your recommendations at 100 columns" (`CANON.md` §3, §9 item 13), green on pipeline 686 (one job retried after a failed clone); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
-| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a type generated for the group — a constructor per member over its arguments —, each member the fixpoint at its constructor, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13, green on pipeline 690; landing 2 (the group's definition: `define.shard` `define_group`, the loader's `settle_groups`, six pins) built 2026-11-13 on the full local gate — the domain a generated type, not the design's `PSum`** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
+| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a type generated for the group — a constructor per member over its arguments —, each member the fixpoint at its constructor, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13, green on pipeline 690; landing 2 (the group's definition: `define.shard` `define_group`, the loader's `settle_groups`, six pins) built 2026-11-13 on the full local gate — the domain a generated type, not the design's `PSum`; landing 3 (`(derive TYPE size)` and a program's clause for a measure that has no program, four pins) built 2026-11-13 on the full local gate** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7539,7 +7539,15 @@ others (`fits`, `em_keep`, `pp_tops`, `pp_top`, `print`). The rules:
    forms"): a `fn` over a nested type would be a group of its own, and
    rule 1 needs the size first. On request, by the declared policy of
    law §5.1, not generated for every type as Lean's `sizeOf` is: a
-   type that asks for nothing keeps its records.
+   type that asks for nothing keeps its records. **Added at landing
+   3:** a program records its measure — `EFn`'s recursion clause holds
+   the measure erased (`prog.shard` `RecMeasure`; law §4.4's "its
+   cases, callees, representations and recursion") — so a measure over
+   a function that has no program was refused at the erasure
+   (`no_realization`). The clause gains a case, `RecLogical`: the
+   measure is K's alone, the definition's obligations; `ev` reads no
+   clause, fuel bounding every run. A measure that erases is recorded
+   as before.
 7. **The defect: a rewrite's motive is checked, not only typed** (the
    cause found 2026-11-13 and the fix confirmed on a copy of the
    kernel outside the tree). `rewrite_eq` — where `rw`, `simp_only`,
@@ -7686,6 +7694,45 @@ the suite on the bootstrap 51 entrypoints, 0 failed, 940 s, the native
 tie among them, the pins' harness 308 cases; on the binaries 51
 entrypoints, 0 failed, 541 s; `suite_tie` 51 entrypoints, 0 differ;
 no authored file changed under the round.
+
+**As built, landing 3 (2026-11-13) — rule 6, the size of a data
+value.** *`(derive TYPE size)`* is a form of its own in
+`derive.shard` (`dv_size`), taken before the shapes the other
+capabilities refuse, so a nested type derives. The generation reads
+the recursor's telescope and writes source, as every derivation does:
+the motives' domains are the types — the type's own, then K's
+auxiliary ones —, each minor is a constructor, a minor's binder under
+a motive an induction hypothesis. Per type a `def`, `NS.size ((x T))
+Nat`, the recursor applied explicitly (`@T.rec.{1 …}`, `@T.rec_1.{1
+…}`) with every motive `(fun ((_ T)) Nat)` and each minor `1` or
+`(fun (FIELDS IHS) (+ 1 (+ h …)))`; per constructor a theorem
+`NS.size.eq_K : NS.size (C fields) = 1 + (sizes of its recursive
+fields)`, by `Eq.refl`. One `DERIVE NS.size type=T cap=size
+policy=structural fields=` record names the auxiliary sizes. Init's
+`List` at a closed argument derives the same way (`List_Nat.size`).
+Refused: a field whose type is over an earlier field or a recursive
+field under a function (`derive_field`), an indexed family
+(`derive_shape`), `size` in another capability's list (`bad_shape`:
+"derived by a form of its own"), a second derivation (`name_taken`).
+*The program's clause:* `prog.shard` `ERec` gains `RecLogical`;
+`erasure.shard` `predef_rec` (and `template.shard`'s) answers it where
+the measure's erasure ends in `no_realization`; `realize.shard`'s
+descent check reads it as a measure. Nothing else reads a clause (the
+dump, the lowering and the C generator pass it by). *The pins:*
+`derive_size` — a tree nested through `List`, its two sizes, and the
+tree-and-forest pair a group measured by them, three obligations
+closed by `(intro …) (rw h) (rw SIZE.eq_2) (arith)`, a closed example
+by `rfl`; `derive_size_plain` — a plain type and `(List Nat)`, one
+function measured by the size that calls itself on a value another
+function computed, its obligation `(arith (strip_le a))` over the
+lemma that the other returns no more than it was given, its program
+run by `derive_test.sh` (exit 3, as K's value is 2);
+`derive_size_mixed`, `derive_size_twice`. *The gate, on the dev box:*
+`v3/build.sh --all` 31 roots built in 175 s; T0 FULL == PINNED,
+accepted 57,977; the suite on the bootstrap 51 entrypoints, 0 failed,
+901 s, the native tie among them, the pins' harness 312 cases; on the
+binaries 51 entrypoints, 0 failed, 524 s; `suite_tie` 51 entrypoints,
+0 differ; no authored file changed under the round.
 
 ## 9. Assumption policy and entries
 

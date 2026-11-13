@@ -2609,9 +2609,22 @@ record. The domain is a generated type where the design had Lean's
 `PSum` stands far above the formatter's. Six pins; a program built
 from a group runs and exits as K proves. Green on the full local gate:
 31 roots rebuilt, the full replay equal to its pin, both suites 51
-entrypoints with 0 failed, 0 differ between the engines. Next:
-landing 3, `(derive TYPE size)`, and with it a program's clause for a
-measure that has no program.
+entrypoints with 0 failed, 0 differ between the engines.
+
+**Slice 5.2 landing 3 built 2026-11-13 — `(derive TYPE size)`**
+(`LANGUAGE.md` §8.7 "As built, landing 3"). A data value's size is
+derived on request from the type's recursor: a constructor is 1 plus
+the sizes of its recursive fields; a type nested through another
+gets a size for the other at it as well (`List_T.size`); each has an
+equation per constructor. The sizes are definitions with no program —
+no `fn` over a nested type can be written before a group has a
+measure — so a program's recursion clause can now say that its
+measure is K's alone (`RecLogical`). With this the tree-and-forest
+pair over a nested type is a definition: the pin's three obligations
+each close in three steps. Green on the full local gate: 31 roots
+rebuilt, the full replay equal to its pin, both suites 51 entrypoints
+with 0 failed, 0 differ between the engines. Next: landing 4, the
+formatter's printer.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
