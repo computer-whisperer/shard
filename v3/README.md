@@ -2556,6 +2556,10 @@ tool writes — the proof sidecars, the generated pins — are not gated.
 Fixed on the way: a binary's stamp did not cover the code behind a
 view (`v3/build.sh`). Next: mutual recursion compiled into L and the
 `reduce` defect, one kernel chunk, its design put to the user first.
+Pipeline 686 green on `3e6d44a`: `host` 37 s, `v3` 3,785 s, `native`
+1,970 s, `suite_tie` 26 s — `suite_tie` on its second attempt, the
+first having died at the clone on the runner's DNS before any project
+code ran.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
