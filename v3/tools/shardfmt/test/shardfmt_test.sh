@@ -20,6 +20,11 @@
 #       already canonical is printed, not judged: the tree is written toward the form until
 #       the gate is turned on (CANON.md §8 stage 3).
 #
+#   (5) THE CONTRACT (shardfmt_bin.shard; landing 2): the load records the bin with both
+#       requirements met — `fmt_gate` and `fmt_main_contract` —, the program's four effectful
+#       functions threaded, and each requirement's assumptions are exactly the views'
+#       parameters (the printer, the reader) and the bolts it uses: nothing else is assumed.
+#
 # The gate's refusal itself has no fixture: provoking it needs a printer that changes a
 # reading. Exit code = the number of failed checks.
 set -u
@@ -123,6 +128,23 @@ checks=$((checks+1)); [ "$lost" = 0 ] || bad "$lost reformatted files changed a 
 want_unread="v3/pins/loader/read_error/main.shard v3/pins/reader/refuse_unterminated.shard "
 checks=$((checks+1)); [ "$(tr '\n' ' ' < "$OUT/unread" 2>/dev/null)" = "$want_unread" ] || { bad "the sources that do not read are not the two pins broken on purpose"; cat "$OUT/unread" 2>/dev/null | head -5; }
 echo "shardfmt_test: the tree — $files files: $same canonical, $change that a reformat would change (each a fixed point after it, every comment kept), $unread that do not read (the pins broken on purpose), $gate refused by the gate"
+
+# ---- (5) the contract
+s=$(date +%s)
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT $T/shardfmt_bin.shard $T/print $T/reads > "$OUT/bin.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the contract's load failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|UNMET|UNTHREADED|BAD-BIN|LOAD:)' "$OUT/bin.txt" | head -5 | cut -c1-300; }
+B=tools.shardfmt.shardfmt_bin
+checks=$((checks+1)); grep -qx "BIN $B.shardfmt entry tools.shardfmt.shardfmt.main externs 4 trusts 9 requires 2/2" "$OUT/bin.txt" || { bad "the bin's record is not BIN … externs 4 trusts 9 requires 2/2"; grep '^BIN' "$OUT/bin.txt" | cut -c1-200; }
+checks=$((checks+1)); [ "$(grep -c '^\(UNMET\|UNTHREADED\|BAD-BIN\|PENDING\) ' "$OUT/bin.txt")" = 0 ] || { bad "the contract has failure or pending lines"; grep '^\(UNMET\|UNTHREADED\|BAD-BIN\|PENDING\) ' "$OUT/bin.txt" | head -3 | cut -c1-300; }
+for f in refuse run_fmt usage main; do
+  checks=$((checks+1)); grep -qx "THREAD tools.shardfmt.shardfmt.$f ok" "$OUT/bin.txt" || bad "shardfmt.$f is not THREAD ok"
+done
+closure() { sed -nE "s/^ACCEPT $1 .* axioms=([^ ]*) .*/\1/p" "$OUT/bin.txt" | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' '; }
+want_gate="tools.shardfmt.print.print tools.shardfmt.reads.reads_same "
+want_main="tools.shardfmt.print.print tools.shardfmt.reads.read_error tools.shardfmt.reads.reads_same $B.exit_exit $B.exit_output $B.exit_reads $B.get_args_output $B.get_args_reads $B.read_file_output $B.read_file_reads $B.write_output $B.write_reads "
+checks=$((checks+1)); [ "$(closure $B.fmt_gate)" = "$want_gate" ] || { bad "fmt_gate's assumptions are not the printer and the reader alone"; closure $B.fmt_gate; }
+checks=$((checks+1)); [ "$(closure $B.fmt_main_contract)" = "$want_main" ] || { bad "fmt_main_contract's assumptions are not the views' three parameters and the nine bolts"; closure $B.fmt_main_contract; }
+echo "shardfmt_test: the contract loaded in $(( $(date +%s) - s )) s — BIN $B.shardfmt requires 2/2, each requirement on the views' parameters and its bolts alone"
 
 echo "shardfmt_test: $checks checks, $fail failed"
 exit $fail

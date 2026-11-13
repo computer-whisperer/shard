@@ -6958,7 +6958,7 @@ family is taken up).
 | slice | content | first consumer |
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
-| 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13; landing 2 (the contract as theorems) and landing 3 (the tree reformatted, the gate on) not started, each on the user's word; the design's leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
+| 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13 on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the tree reformatted, the gate on) not started — the layout rules are open again by the user's word and a rule set is put to them (`CANON.md` §9 item 13); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7294,7 +7294,53 @@ moved the head down a line; diagnostics for a source that does not
 read are the reader's reason and offset, where the old program had its
 own diagnosis. *Found on the way:* nothing in the kernel was edited,
 and no kernel defect was met. *Gates:* see the record
-(`docs/records/FOUNDATION.md` §9).
+(`docs/records/FOUNDATION.md` §9). *On CI:* pipeline 681 green on
+`9f98910` — `host` 34 s, `v3` 3,774 s, `native` 1,961 s, `suite_tie`
+33 s; no job retried.
+
+**As built, landing 2 (2026-11-13)** — on the user's answer to landing
+1's report: "Good. I would agree with proving the contract, then V3
+mutual recursion as the task order. The exact layout rules are up for
+mutation, since humans looking at it in an ide is not a critical measure
+anymore." `tools/shardfmt/shardfmt_bin.shard` (326 lines) declares the
+formatter's binary as V3's second `bin`: `BIN
+tools.shardfmt.shardfmt_bin.shardfmt entry tools.shardfmt.shardfmt.main
+externs 4 trusts 9 requires 2/2`. *The requirements* are the old tree's
+two, in its total-predicate form: `fmt_gate` — `gate_holds (fmt src)
+src` is true: a text `fmt` returns reads as the source does; and
+`fmt_main_contract` — from a world with nothing read and nothing
+written, `run_ok` holds of the run's three observables: it ends in an
+exit, and exit 0 means one file read, `fmt` accepting its bytes, one
+chunk written, that chunk `fmt`'s text. *What they rest on,* by the
+records and checked by the test: `fmt_gate` on the two views'
+parameters alone (`print`, `reads_same`); `fmt_main_contract` on those,
+`read_error`, and the nine bolts — no Init axiom in either closure. The
+old contract trusted twelve bolts; the three that say `get_args`,
+`read_file` and `write` leave the exit alone are not needed (every path
+ends in `exit`) and are not declared. *The proof* is the program's cases
+walked once through eight lemmas (`same_bytes_refl`, `exit1_ok`,
+`exit2_ok`, `exit3_ok`, `usage_ok`, `refuse_ok`, `wrote_ok`,
+`run_fmt_ok`): `cases` on each extern's result and each decision,
+`reduce` for the match it opens, the bolts by `rw`. *The program
+changed for it in two places:* its texts are constants of their own
+(`msg_usage` … `flag_check`), and a source the reader refuses is
+reported by three `write`s where landing 1 used `write_line` — so the
+externs are the old contract's four. *Found on the way, two things of
+V3, neither fixed here.* (1) **`reduce` over a text literal builds a
+certificate K refuses**: `(theorem t () (= (String.toByteArray "x")
+(String.toByteArray "x")) (by (reduce lhs) rfl))` is `REFUSE …
+app_type_mismatch`, and so is any goal `reduce` walks that holds a
+ground call over a literal (`(Bytes.ofString "x")`); `unfold`, `rw` and
+`rfl` over the same terms are accepted. Isolated with six one-line
+theorems; the formatter avoids it by the constants above, which
+`reduce` does not open; a §11 row. (2) **A read error in the root file
+is followed by false errors about the view directories** (`IMPL
+LOAD-ERROR std/bytes.shard duplicate_name`, `impl_missing_fn`, …): the
+first line is the true one. The scenarios as theorems and the printer's
+termination still wait on mutual recursion (rule 7), the next task by
+the same answer. *The test:* `shardfmt_test.sh` gains the contract's
+load — the record, the four threaded functions, the two closures — 57
+checks.
 
 ## 9. Assumption policy and entries
 
@@ -7556,6 +7602,7 @@ never compared as verdicts.
 | prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; its leans ruled 2026-11-12); **landing 2 built 2026-11-12** (`kernel/session.shard`: revisions by ordinal, each its own load; handles by ordinal, released, revoked, withdrawn with the revision; the checked door closed from the environment; the leans of §8.6 "As built, landing 2" not ruled, standing as built — the base does not grow, a departure; green on pipeline 671); **the slice closed 2026-11-13 at landing 2**, landing 3 (budgets, reclamation, the host limit) **carried** to its first consumer (item 72) |
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | **carried 2026-11-13** to its first consumer (item 72; was phase 4's) |
+| `reduce` over a text literal: a goal that `reduce` walks and that holds a ground call over a string literal — `(String.toByteArray "x")`, so `(Bytes.ofString "x")` — gets a certificate K refuses (`app_type_mismatch`); `unfold`, `rw` and `rfl` over the same term are accepted | §8.4 slice 3.20 rule 6 | **a defect, found 2026-11-13** (slice 5.1 landing 2, §8.7); no pin yet; avoided in `tools/shardfmt` by naming each text as a constant; to fix when the kernel is next opened |
 | mutual recursion compiled into L: today two functions that call each other are programs by erasure with no definition (`callee_runnable`; §8.4 slice 3.14 rule 3, pin `define_mutual`), and so is everything that calls them | §4.1, §8.4 | **no phase; first consumer named 2026-11-13** (slice 5.1 rule 7): the formatter's printer — seven renderers in one cycle over a type nested through `List` —, whose scenarios as theorems and whose termination wait on it |
 | coupled program/proof holes and refutation scope | §6, §7.3, T4, T7 | **carried 2026-11-13** to their first consumer — the search engine's rebuild onto the goal graph (item 72; were phase 4's, never designed) |
 | the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); **the formatter built at slice 5.1 landing 1** (§8.7; `tools/shardfmt`); the tree reformatted and the gate at its landing 3, on the user's ruling (was: the gate 6); the recognizer with it or on demand |
@@ -9238,3 +9285,14 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     wait on mutual recursion compiled into L, a deferred row with this
     consumer named (rule 7; §11); (g) the old family's files deleted
     at landing 1 (rule 8).
+    **Landing 2 and the order after it (2026-11-13).** The user, on
+    landing 1's report: "Good. I would agree with proving the contract,
+    then V3 mutual recursion as the task order. The exact layout rules
+    are up for mutation, since humans looking at it in an ide is not a
+    critical measure anymore. What do you think makes sense for the
+    shardfmt ruleset moving forward?" — the order ruled (the contract,
+    then mutual recursion); the layout law reopened, with no rule set
+    ruled: the answer given is `CANON.md` §9 item 13. Landing 2's own
+    choices, not ruled: nine bolts where the old contract had twelve;
+    the program's texts as constants; the requirements in the old
+    total-predicate form.

@@ -5,7 +5,9 @@
 > old one migrated at slice 5.1 landing 1 (`v3/LANGUAGE.md` §8.7); §3
 > and §7–§8 carry its notes. The tree is not yet reformatted and no
 > gate refuses a file: that is the slice's landing 3, on the user's
-> ruling.
+> ruling. **The layout rules of §3 are open again** by the user's word
+> of 2026-11-13; §9 item 13 holds the measurements and the rule set
+> put to them.
 > This document is law §10.5's CANON row at phase 2: `docs/CANON.md`'s
 > rule set rewritten for S, its §7 content addressing superseded by law
 > §8.3, and the law itself carried — one canonical form, a gate that
@@ -407,6 +409,49 @@ records §4.8) are recorded under each for the ratification pass.
     unused value is unobservable"); rejected because under strict
     evaluation an unused right-hand side still runs, and at Stage 0 it
     may loop or perform an effect.
+
+13. **OPEN — the layout rules themselves, reopened 2026-11-13.** The
+    user, on slice 5.1 landing 1's measurement (a reformat under §3 as
+    written takes the tree from 51,524 lines to 91,786): "The exact
+    layout rules are up for mutation, since humans looking at it in an
+    ide is not a critical measure anymore. What do you think makes
+    sense for the shardfmt ruleset moving forward?" **The answer put to
+    them, not ruled.** With agents the readers and the writers, a
+    layout is judged by three things: a small edit touches few lines;
+    reading costs few lines (the tools charge by the line); the rules
+    are simple enough to predict and to pin by example. §3 as written
+    breaks at a width — 80 columns — and then drops every argument of
+    a broken call to its own line; loosening the width alone gives
+    fewer lines by putting a whole nested `match` or `if` on one long
+    one, the worst shape to edit. The proposal is to break at
+    structure and keep the width as a backstop: (a) 100 columns, the
+    width the tree was written at; (b) a head with no count keeps its
+    arguments on the head line while they fit, the rest one a line
+    (today: none stays); (c) an `if` whose else-branch is an `if`
+    never prints flat, as a `match` never does; (d) the rest of §3
+    unchanged. Measured over the tree's 589 readable sources with the
+    printer built once per rule set:
+
+    | rule set | lines | against today's 51,524 |
+    |---|---|---|
+    | §3 as written | 91,786 | +78% |
+    | 120 columns | 73,781 | +43% |
+    | (b) at 80 | 81,704 | +59% |
+    | (a) (b) (c) — the proposal | 72,431 | +41% |
+    | (b) (c) at 120 | 67,465 | +31% |
+    | (a) (b) and a `match` flat when it fits | 67,025 | +30% |
+    | (b) and a flat `match` at 120 | 60,263 | +17% |
+
+    Under the proposal the kernel reader's guard chains come out as
+    they are written, and landing 1's `theorem` scenario takes 9
+    lines where §3 gives 23. Bytes grow 17% under §3 as written, all
+    of it indentation and newlines. Not measured: `(measure …)` on
+    the `fn` head line (about a thousand lines); a fill rule for the
+    steps of a proof (under (b) the first steps pack and the rest go
+    one a line). The choice is cheap to revisit: the gate keeps any
+    reformat from changing a reading, so a later rule change is one
+    mechanical commit. Before the gate is turned on the program wants
+    a mode that writes the file in place.
 
 ## 10. Related
 

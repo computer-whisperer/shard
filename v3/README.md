@@ -2522,7 +2522,23 @@ reformatted byte for byte alike). Of `v3/`'s 591 sources 280 are
 canonical today and 309 are not; nothing refuses them yet. Not started,
 each on the user's word: landing 2, the contract as theorems; landing
 3, the tree reformatted and the gate on. The old family's files are
-deleted.
+deleted. Pipeline 681 green on `9f98910`: `host` 34 s, `v3` 3,774 s,
+`native` 1,961 s, `suite_tie` 33 s.
+
+**Slice 5.1 landing 2 built 2026-11-13 — the formatter's contract
+proven** (`LANGUAGE.md` §8.7 "As built, landing 2"). The user: "I would
+agree with proving the contract, then V3 mutual recursion as the task
+order." `tools/shardfmt/shardfmt_bin.shard` is V3's second `bin`: `BIN
+… externs 4 trusts 9 requires 2/2`. `fmt_gate`: a text `fmt` returns
+reads as its source does. `fmt_main_contract`: a run that exits 0 read
+one file and wrote one chunk, `fmt`'s text for it. Both rest on the
+printer and the reader as parameters and on nine bolts, three fewer
+than the old contract. Found on the way and not fixed: `reduce` over a
+text literal builds a certificate K refuses (`LANGUAGE.md` §11); the
+formatter names its texts as constants to stay clear of it. The layout
+rules are open again by the user's word; a rule set is put to them
+(`CANON.md` §9 item 13). Next by the same answer: mutual recursion
+compiled into L.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
