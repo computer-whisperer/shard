@@ -8,7 +8,7 @@
 > 64's as-built notes, at the close. Phase 4 (law §12.4 item 4) closed
 > short 2026-11-13 by ruling (item 72; the law amended): slices 4.0–4.5 closed 2026-10-14 to 2026-11-06 (§13 items 65–70
 > ruled at their slices, 71 at slice 4.6's design; 4.4 the bridge with three law changes ratified
-> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it, green on pipeline 671; the slice closed 2026-11-13 at landing 2 with the phase — landing 3 and the phase's unbuilt items carried to their first consumers, the old tree to go before the port (§8.6 "Slice 4.6 closed"; §13 item 72).** Normative parent: `docs/FOUNDATION.md`. Scope: the
+> 2026-10-16; 4.5 the three persisted identities, R82, closed 2026-11-06 on pipelines 642–644); 4.6, T6 the embedding, designed 2026-11-11 with its two decisions ruled; its landing 1, prepared invocation, built 2026-11-11, green on pipeline 665, its leans ruled 2026-11-12 (§8.6 "As built, landing 1"); its landing 2, revisions and stale handles, built 2026-11-12 with the landing's leans awaiting ratification (§8.6 "As built, landing 2") and two defects of the loader its review found closed in it, green on pipeline 671; the slice closed 2026-11-13 at landing 2 with the phase — landing 3 and the phase's unbuilt items carried to their first consumers, the old tree to go before the port (§8.6 "Slice 4.6 closed"; §13 item 72). Phase 5 is open (§8.7): slice 5.0, the cut — the old kernel deleted, V3's own back end — designed and ratified 2026-11-13 (item 73), not yet built.** Normative parent: `docs/FOUNDATION.md`. Scope: the
 > surface S, the executable fragment E and `ev` — the reader (§2,
 > §4–5), the loader (§3), views (§6.5–6.6, §8.5), the classifier and
 > `ev` (§6.2–6.4, §6.7), `realize` (§7) —, the one E and Stage 1 with
@@ -6936,6 +6936,141 @@ kernel's reader. The cut's design — what takes the place of the chain's
 front end, what of the old tree is deleted and what a tag keeps, the CI
 jobs — is the next slice's, put to the user before it is built.
 
+### 8.7 Phase 5 — the old kernel removed; the port by need (opened 2026-11-13)
+
+Law §12.4 as amended twice on 2026-11-13: phase 4 closed short (§8.6
+"Slice 4.6 closed"), the old kernel goes before the port, and the port
+is by need — a family of the old tree is taken up, migrated under `v3/`
+and its old files deleted; until then it is unchecked text no gate
+reads. This section is the register of that motion: the slices in the
+order built, and for each family of the old tree what has become of it
+(`v3/MANIFEST.md` holds the families; its labels are proposals until a
+family is taken up).
+
+| slice | content | first consumer |
+|---|---|---|
+| 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed.")** | every native binary of the toolchain; the port's programs |
+
+**Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
+(designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
+ratified the same day — the user: "Agreed with this approach. I would
+opt to delete kernel/ for now and leave the rest of v2 as unchecked text
+until we migrate each piece. The compiler should be the same idea as the
+v2 one, with proven lowering replacing it later. shard-viewer can be
+left alone for now. Proceed." — a ruling with its reasons on the scope
+and on the compiler's design, so frozen on those two; §13 item 73; law
+§12.4 as amended; law §9.1). What stood between V3 and a tree without
+the old kernel was one thing: its programs were printed in the old
+dialect and compiled by two old-tree tools that parsed that text with
+the old kernel's reader, loader and resolver. The rules:
+
+1. **The tag and the deletion.** The tag `v2-kernel-last` names the last
+   commit that holds the old kernel (the commit of this design).
+   `kernel/` is then deleted whole: 37 `.shard` files, 26,914 lines, and
+   `reader_corpus.txt`. The rest of the old tree — `std/`, `meta/`,
+   `models/`, `tools/`, `examples/`, `pins/`, 1.18M lines — stays where
+   it is as unchecked text until each family migrates (the user's
+   ruling; rejected-because: deleting it now and porting from the tag
+   removes more at once than the user asked). Nothing checks it and
+   nothing runs it: every file of it imports the deleted kernel, at the
+   least its prelude. `shard-viewer/` is left alone. What is deleted
+   with the kernel because it is only the kernel's harness, reported
+   apart as cleanup: `run_corpus.sh`, `fails-base.txt`, `gate_sweep.sh`,
+   `bin/check`, `bin/rebuild.sh`, `bin/engine_stamp.sh`, and the CI jobs
+   of rule 7.
+2. **The back end, in the old chain's design** (`tools/lower/DESIGN.md`:
+   a lowering to a restricted subset that is still a legal program, then
+   a mechanical transcription to C). Two files of `v3/kernel`, run
+   inside the loader's process on the program the load yielded — no text
+   is printed and read back, so no reader, loader or resolver stands
+   between V3 and its binary. (a) `lower.shard`, `lower_prog : Prog →
+   Prog` or refusals: a body to a named form (a variable a number), the
+   bridge's expression rows expanded (`Nat.sub` truncating; `Nat.div`,
+   `Int.tdiv`, `Int.ediv` zero at a zero divisor; `Nat.mod`, `Int.emod`,
+   `Int.tmod` the dividend there), a string literal its cells, an `if`
+   or a `match` in an operand's position lifted to a function over its
+   free variables, a nested pattern compiled to a chain of flat matches
+   whose fall-through is lifted once per arm, every operand an atom —
+   and back to the locally nameless form. The result is a `Prog` in the
+   restricted shape **RS**: an atom is a variable, a numeral or a symbol
+   literal; a right-hand side is an atom, a constructor, call, primitive
+   or extern over atoms, or `EAbsurd`; a body is a right-hand side, a
+   `let` of one right-hand side, an `if` over an atom, or a `match` over
+   an atom whose arms are flat (a constructor over variables, a numeral,
+   a symbol, a variable); a match with no arm is the sink. A lifted
+   function's identity is its owner's with a numeric component, which no
+   source name has. Because RS is a `Prog`, `ev` runs it: the lowering
+   is testable against the program it came from without the generator.
+   (b) `cgen.shard`, RS to C: a function per `EFn`, a self tail call a
+   loop, a `match` a switch on the tag, an integer or a chain of symbol
+   tests, a constructor an allocation, the runtime's operations by name;
+   any shape outside RS is refused. A C name is the identity, mangled
+   injectively (an alphanumeric as itself, `_` as `__`, any other byte
+   as `_xHH`), so two identities never collide and no word is reserved.
+   (c) The bridge of slice 4.4 as roles, not spellings: the constructors
+   of the wire types — the prelude's and Init's `Bool`, `List`,
+   `Option`, `Pair`/`Prod`, `Decidable`'s two as `Bool`'s — carry the
+   runtime's eight fixed tags (true, false, nil, cons, none, some, pair,
+   and the World's), every other constructor a tag from 1000 in the
+   program's order; `if` tests the true tag. The primitives by identity:
+   the profile's eighteen and the rows the bridge had by name (`Nat.land
+   lor xor shiftLeft shiftRight beq ble`); a primitive with no row is
+   refused as before. (d) The runtime is `tools/codegen/rt.h` moved to
+   `v3/kernel/rt.h`, unchanged.
+3. **What is refused, and what no longer is.** Refused before any file
+   is written, `EMIT: MSG`, exit 2: a `sig fn` or `sig type` left
+   unlinked; a primitive with no row; a string literal over a list that
+   is not a wire list; a string pattern; a numeral pattern outside the
+   runtime's small integers; an extern the runtime has no shim for; a
+   root module with no `main`. No longer refused, their cause being the
+   text projection: a mangling collision and a symbol the old reader
+   could not lex — pins `refused_mangle_collision` and
+   `refused_symbol_pattern` become ties under new names.
+4. **The driver and the build.** `load.shard --emit DIR FILE…` keeps its
+   name and its line (`EMIT: DIR entry=FILE modules=N declarations=M`);
+   DIR now holds the C text (`main.c`, in parts if one text proves too
+   long for the bootstrap to hold), `map` (each generated function
+   against its identity, kind and source) and `sources`. `v3/build.sh`
+   is emit then `cc`; the stamp is over the root's sources, the
+   toolchain's sources (the back end among them), the runtime and the
+   flags. Which engine runs the emit — the bootstrap for every root, or
+   the bootstrap for the loader's own binary and that binary for the
+   rest — is decided on the measurement and stated in the as-built text;
+   if the second, the tie compares the two engines' C text.
+5. **The tests.** `calc_test.sh` compares the harness with
+   `test/fixtures/calc_old_tree.txt`, the old tree's side recorded from
+   the last commit that could run it. `session_emit_test.sh` and
+   `session_test`'s emit mode use the new back end and read the names
+   from `map`. `native_tie_test.sh`, `bin_test.sh` and the pins of
+   `v3/pins/emit` go through `v3/build.sh` as before. A lowering test
+   runs `ev` on a program and on its RS form and compares.
+6. **The bootstrap.** `eval direct` and `eval dump` are the Rust
+   evaluator's two operations. The mode that loaded the old kernel's
+   evaluator to interpret a program through it (`eval FILE EXPR`, `eval
+   run …`) is removed with the kernel it loaded, and the crate's
+   functions and tests over the old kernel's files with it.
+7. **CI.** The jobs of the old tree are removed: `engine` as the builder
+   of the old checker's binaries, `corpus`, `corpus-long`,
+   `corpus-closed`, `corpus-images`, `engine-run`, `swap-route-deep`,
+   `pio-dme-free`. `v3`, `native` and `suite_tie` stay, the bootstrap's
+   build wherever those jobs need it.
+8. **The gate, and the order of work.** Delete first, then build: the
+   tag, the deletion, the back end, the tests, the bootstrap, CI —
+   locally, committed as they stand, pushed once when the tree is green:
+   `v3/build.sh --all` with every root built; the suite on the bootstrap
+   and on the binaries with 0 failed; the tie with 0 differ; the full
+   replay equal to its pin. Between the deletion and that point the tree
+   has no native binaries; no remote sees it.
+9. **The count**, agreed before the run, no pass bar: lines by file
+   against the two old tools (2,014) and the projection (505); the
+   build's time against 2,826 s; the two heavy steps on the loader's
+   closure against 79 s and 285 s; refusals before success;
+   interventions.
+10. **Not in this slice.** Any other family's migration; the manifest's
+   labels; the proven lowering (law §12.4 item 7); packed buffers; a
+   foreign host; `shard-viewer`; the documents of the old arcs under
+   `docs/`, which stay as the record of what the old tree proved.
+
 ## 9. Assumption policy and entries
 
 **Policy** (law §8.1, §3.2): a declaration is accepted only if its
@@ -8828,3 +8963,26 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     chain's two tools, and the old evaluator used but not needed.
     The cut's design is the next slice's, put to the user before it
     is built.
+73. **Slice 5.0, the cut (designed and ratified 2026-11-13; §8.7;
+    law §12.4 amended twice that day).** The user: "Agreed with this
+    approach. I would opt to delete kernel/ for now and leave the
+    rest of v2 as unchecked text until we migrate each piece. The
+    compiler should be the same idea as the v2 one, with proven
+    lowering replacing it later. shard-viewer can be left alone for
+    now. Proceed." (a) **`kernel/` deleted whole, the rest of the
+    old tree left as unchecked text** — the user's choice over the
+    lean, which was to delete the old tree at once and port from the
+    tag. (b) **V3's back end is the old chain's design**, unproven,
+    the proven lowering replacing it later — the user's ruling on
+    the lean; built as two files over `Prog` inside the loader's
+    process, the restricted form itself a `Prog`. (c) `shard-viewer`
+    left alone. (d) Leans of the design, not ruled: the old kernel's
+    harness scripts and the old tree's CI jobs deleted with it; the
+    wire types as roles on fixed tags; identities mangled
+    injectively, the two refusals of the projection gone; the calc
+    test's reference a recorded file; the old evaluator's mode out
+    of the bootstrap; which engine runs the emit decided on the
+    measurement. (e) Rejected-because: keeping nine files of the old
+    kernel as the chain's own front end removes nothing the user
+    asked to remove; re-hosting the old tools' text on a V3 reader
+    keeps a second parser between V3 and its binary.

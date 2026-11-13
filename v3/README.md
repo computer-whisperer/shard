@@ -2458,6 +2458,25 @@ no back end of its own — its programs are printed in the old dialect and
 compiled by two old-tree tools that parse that text with the old
 kernel's reader.
 
+## Phase 5 status (opened 2026-11-13)
+
+The old kernel removed, the port by need (FOUNDATION §12.4 as amended
+twice on 2026-11-13; `LANGUAGE.md` §8.7 is the register: the slices, and
+what has become of each family of the old tree).
+**Slice 5.0 designed and ratified 2026-11-13 — the cut** (`LANGUAGE.md`
+§8.7 "Slice 5.0", §13 item 73). The user: "Agreed with this approach. I
+would opt to delete kernel/ for now and leave the rest of v2 as
+unchecked text until we migrate each piece. The compiler should be the
+same idea as the v2 one, with proven lowering replacing it later.
+shard-viewer can be left alone for now. Proceed." `kernel/` is deleted
+whole under the tag `v2-kernel-last`; the rest of the old tree stays as
+unchecked text until each family migrates. V3 gets its own back end in
+the old chain's design: `kernel/lower.shard` (a `Prog` to a `Prog` in
+the restricted form RS) and `kernel/cgen.shard` (RS to C over
+`kernel/rt.h`), run inside the loader's process — the text projection
+and the two old tools gone, and with them every use V3 made of the old
+kernel. Not yet built.
+
 ## Open obligations (2026-09-12; GPT-6 R48)
 
 What the phase-1 result above does **not** establish, beside it until

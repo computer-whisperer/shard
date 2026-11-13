@@ -1251,6 +1251,28 @@ phase 3.
 > we need" —, the old kernel whole, V3 then made to run with no file of
 > it; items 5 and 6 are re-ordered by the slice that designs the cut.
 
+> **AMENDED 2026-11-13, the same day (ruled by the user;
+> `v3/LANGUAGE.md` §8.7, §13 item 73).** The old kernel is removed
+> before the port and without a flip: `kernel/` is deleted whole at
+> slice 5.0, a tag naming the last commit that holds it; the rest of the
+> old tree stays as unchecked text until each family migrates, and no
+> gate reads it. Items 5 and 6 are then one motion — a family is taken
+> up, migrated under `v3/` and its old files deleted, its manifest label
+> (PORT, ARCHIVE, REGENERATE) decided when it is taken up —, and "the
+> flip" is what is left when the last family has gone: the tree's move
+> and the documents. The amendment of 2026-10-16 changes in one point:
+> the temporary chain is not carried. V3 gets a back end of its own at
+> the same slice — the old chain's design, a lowering to a restricted
+> form and a transcription to C over the same runtime, written over V3's
+> own program representation, unproven —, and V3's proven lowering
+> replaces it at item 7 as ruled. The user: "I would opt to delete
+> kernel/ for now and leave the rest of v2 as unchecked text until we
+> migrate each piece. The compiler should be the same idea as the v2
+> one, with proven lowering replacing it later." Reason: measured the
+> same day, V3 ran on no file of the old kernel except through the
+> chain's front end, and the gate over the old corpus guarded text that
+> four commits had touched in a month.
+
 Serial on main, one gate per phase, CI green behind each, generated
 files never hand-patched, kernel sources frozen during corpus runs.
 
