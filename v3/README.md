@@ -2500,7 +2500,10 @@ replay 380 s at 28.8 GB —; on the bootstrap 50 entrypoints, 0 failed, in
 `lower_test.sh` 7 checks, 0 failed); the tie 50 entrypoints, 0 differ;
 no authored file changed under the round. The round was run twice: once,
 green, before three comments of the new sources were corrected, and
-again on the tree as committed.
+again on the tree as committed. **Pipeline 678 green on `c9f9ccd`**, the
+new configuration's first run: `host` 40 s, `v3` 3,782 s, `native`
+1,985 s, `suite_tie` 26 s (pipeline 671, through the old chain: v3
+4,678 s, native 5,091 s).
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
