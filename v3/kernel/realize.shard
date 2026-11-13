@@ -75,7 +75,9 @@
 ;; the metas are locals of the callee's telescope; a solved meta is compared structurally
 (fn assoc_int_expr ((id Int) (sub (List (Pair Int Expr)))) (Option Expr)
   (measure (struct sub))
-  (match sub (Nil None) ((Cons (Pair j e) r) (if (= id j) (Some e) (assoc_int_expr id r)))))
+  (match sub
+    (Nil None)
+    ((Cons (Pair j e) r) (if (= id j) (Some e) (assoc_int_expr id r)))))
 ;; the leaves of a body under the outer environment, with the columns the leading match may split
 ;; the first row all variables: a leaf (later rows are unreachable for these shapes); else split
 ;; the first column some row constrains
@@ -87,10 +89,19 @@
   (measure (struct es))
   (match es
     (Nil (Pair t (rev acc)))
-    ((Cons e r) (match (tr_subst t e id v) ((Pair t1 e1) (subst_all t1 r id v (Cons e1 acc)))))))
+    ((Cons e r)
+     (match (tr_subst t e id v)
+       ((Pair t1 e1) (subst_all t1 r id v (Cons e1 acc)))))))
 ;; a kept binder whose type mentions the split variable (an erased binder over a data parameter)
 ;; is re-opened at the substituted type; the pairs (old id, new local) apply to everything after
-(fn refresh_kept ((t Tr) (kept (List Expr)) (vid Int) (cterm Expr) (acc (List Expr)) (pairs (List (Pair Int Expr)))) (Pair Tr (Pair (List Expr) (List (Pair Int Expr))))
+(fn refresh_kept
+  ((t Tr)
+   (kept (List Expr))
+   (vid Int)
+   (cterm Expr)
+   (acc (List Expr))
+   (pairs (List (Pair Int Expr))))
+  (Pair Tr (Pair (List Expr) (List (Pair Int Expr))))
   (measure (struct kept))
   (match kept
     (Nil (Pair t (Pair (rev acc) (rev pairs))))
@@ -103,13 +114,16 @@
            (match (subst_pairs t1 ty1 (rev pairs))
              ((Pair t2 ty2)
               (if (expr_eq ty ty2) (refresh_kept t2 r vid cterm (Cons fv acc) pairs)
-                (match (tr_local t2 (n1 (quote h)) ty2)
-                  ((Pair t3 fv1) (refresh_kept t3 r vid cterm (Cons fv1 acc) (Cons (Pair (fvar_id_of fv) fv1) pairs))))))))))))))
+              (match (tr_local t2 (n1 (quote h)) ty2)
+                ((Pair t3 fv1)
+                 (refresh_kept t3 r vid cterm (Cons fv1 acc) (Cons (Pair (fvar_id_of fv) fv1) pairs))))))))))))))
 (fn subst_pairs ((t Tr) (e Expr) (pairs (List (Pair Int Expr)))) (Pair Tr Expr)
   (measure (struct pairs))
   (match pairs
     (Nil (Pair t e))
-    ((Cons (Pair id v) r) (match (tr_subst t e id v) ((Pair t1 e1) (subst_pairs t1 e1 r))))))
+    ((Cons (Pair id v) r)
+     (match (tr_subst t e id v)
+       ((Pair t1 e1) (subst_pairs t1 e1 r))))))
 (fn without_id ((fvs (List Expr)) (id Int)) (List Expr)
   (measure (struct fvs))
   (match fvs
@@ -122,50 +136,94 @@
 ;; the pending callee is the obstacle no_l_meaning here
 (fn pending_as_runnable ((r (Option (Pair Symbol (List Int))))) (Option (Pair Symbol (List Int)))
   (match r
-    ((Some (Pair e m)) (if (sym_eq e (quote callee_pending)) (Some (Pair (quote no_l_meaning) (append m ": a fn has no L meaning (RUNNABLE, §0)"))) r))
+    ((Some (Pair e m))
+     (if (sym_eq e (quote callee_pending))
+       (Some (Pair (quote no_l_meaning) (append m ": a fn has no L meaning (RUNNABLE, §0)")))
+       r))
     (None None)))
-(fn check_calls ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (e ETerm)) (Option (Pair Symbol (List Int)))
+(fn check_calls ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (e ETerm))
+  (Option (Pair Symbol (List Int)))
   (measure (struct e))
   (match e
     ((EBVar _) None)
     ((ELit _) None)
     ((ECtor _ as) (check_all es env id rec flags as))
     ((EPrim _ as) (check_all es env id rec flags as))
-    ((EExt f _) (Some (Pair (quote no_l_meaning) (append (show_name f) ": an extern has no L meaning"))))
+    ((EExt f _)
+     (Some (Pair (quote no_l_meaning) (append (show_name f) ": an extern has no L meaning"))))
     ((ECall f as)
      (match (check_all es env id rec flags as)
        ((Some x) (Some x))
        (None
-        (if (name_eq f id)
-          (match rec
-            (RecNone (Some (Pair (quote realize_recursion) (append (show_name id) " calls itself without a measure"))))
-            ((RecStruct i)
-             (match (nth as i)
-               ((Some (EBVar j)) (if (= (flag_at flags j) 1) None (Some (Pair (quote realize_descent) (append (show_name id) ": a recursive call does not pass a proper subterm of the structural parameter")))))
-               (_ (Some (Pair (quote realize_descent) (append (show_name id) ": a recursive call does not pass a proper subterm of the structural parameter"))))))
-            ((RecMeasure _)
-             (if (args_are_params as (len flags) 0)
-               (Some (Pair (quote realize_descent) (append (show_name id) " calls itself on its own parameters — no measure decreases (§7.5)")))
-               None)))
-          (match (es_find_decl es f)
-            ((Some (EFn _ _ _ _ _ _)) (match (env_find env f) ((Some _) None) (None (Some (Pair (quote callee_pending) (show_name f))))))   ; the loader parks a definition on a callee still parked; otherwise the obstacle no_l_meaning (§8.4 rule 1)
-            ((Some (ESig _ _ _ _)) None)
-            ((Some (EExtern _ _ _ _)) (Some (Pair (quote no_l_meaning) (append (show_name f) ": an extern has no L meaning"))))
-            (_ (Some (Pair (quote realize_order) (append (show_name f) ": cited before its realization is attached (§7.5)")))))))))
+         (if (name_eq f id)
+           (match rec
+             (RecNone
+               (Some
+                 (Pair (quote realize_recursion)
+                   (append (show_name id) " calls itself without a measure"))))
+             ((RecStruct i)
+              (match (nth as i)
+                ((Some (EBVar j))
+                 (if (= (flag_at flags j) 1) None
+                 (Some
+                   (Pair (quote realize_descent)
+                     (append (show_name id)
+                       ": a recursive call does not pass a proper subterm of the structural parameter")))))
+                (_
+                  (Some
+                    (Pair (quote realize_descent)
+                      (append (show_name id)
+                        ": a recursive call does not pass a proper subterm of the structural parameter"))))))
+             ((RecMeasure _)
+              (if (args_are_params as (len flags) 0)
+                (Some
+                  (Pair (quote realize_descent)
+                    (append (show_name id)
+                      " calls itself on its own parameters — no measure decreases (§7.5)")))
+                None)))
+           (match (es_find_decl es f)
+             ((Some (EFn _ _ _ _ _ _))
+              (match (env_find env f)
+                ((Some _) None)
+                (None (Some (Pair (quote callee_pending) (show_name f))))))  ; the loader parks a definition on a callee still parked; otherwise the obstacle no_l_meaning (§8.4 rule 1)
+             ((Some (ESig _ _ _ _)) None)
+             ((Some (EExtern _ _ _ _))
+              (Some
+                (Pair (quote no_l_meaning) (append (show_name f) ": an extern has no L meaning"))))
+             (_
+               (Some
+                 (Pair (quote realize_order)
+                   (append (show_name f) ": cited before its realization is attached (§7.5)")))))))))
     ((EMatch s arms)
      (match (check_calls es env id rec flags s)
        ((Some x) (Some x))
-       (None (check_arms es env id rec flags (match s ((EBVar j) (flag_at flags j)) (_ 0)) arms))))
+       (None
+         (check_arms es env id rec flags
+           (match s
+             ((EBVar j) (flag_at flags j))
+             (_ 0))
+           arms))))
     ((ELet rs b) (check_let es env id rec flags rs b))
     ((EIf a b c)
      (match (check_calls es env id rec flags a)
        ((Some x) (Some x))
-       (None (match (check_calls es env id rec flags b) ((Some x) (Some x)) (None (check_calls es env id rec flags c))))))
+       (None
+         (match (check_calls es env id rec flags b)
+           ((Some x) (Some x))
+           (None (check_calls es env id rec flags c))))))
     (EAbsurd None)))
-(fn check_all ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (ts (List ETerm))) (Option (Pair Symbol (List Int)))
+(fn check_all ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (ts (List ETerm)))
+  (Option (Pair Symbol (List Int)))
   (measure (struct ts))
-  (match ts (Nil None) ((Cons x r) (match (check_calls es env id rec flags x) ((Some y) (Some y)) (None (check_all es env id rec flags r))))))
-(fn check_arms ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (sflag Int) (arms (List EArm))) (Option (Pair Symbol (List Int)))
+  (match ts
+    (Nil None)
+    ((Cons x r)
+     (match (check_calls es env id rec flags x)
+       ((Some y) (Some y))
+       (None (check_all es env id rec flags r))))))
+(fn check_arms
+  ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (sflag Int) (arms (List EArm)))
+  (Option (Pair Symbol (List Int)))
   (measure (struct arms))
   (match arms
     (Nil None)
@@ -187,7 +245,9 @@
     ((Cons PVar r) (Cons f (sub_flags r f)))
     ((Cons (PLit _) r) (sub_flags r f))
     ((Cons (PCtor _ subs) r) (append (sub_flags subs f) (sub_flags r f)))))
-(fn check_let ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (rs (List ETerm)) (b ETerm)) (Option (Pair Symbol (List Int)))
+(fn check_let
+  ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (rs (List ETerm)) (b ETerm))
+  (Option (Pair Symbol (List Int)))
   (measure (struct rs))
   (match rs
     (Nil (check_calls es env id rec flags b))
@@ -195,7 +255,10 @@
      (match (check_calls es env id rec flags x)
        ((Some y) (Some y))
        (None (check_let es env id rec (Cons 0 flags) r b))))))
-(fn flag_at ((flags (List Int)) (j Int)) Int (match (nth flags j) ((Some f) f) (None 0)))
+(fn flag_at ((flags (List Int)) (j Int)) Int
+  (match (nth flags j)
+    ((Some f) f)
+    (None 0)))
 ;; the arguments are the parameters in order: argument i is the variable at depth n-1-i
 (fn args_are_params ((as (List ETerm)) (n Int) (i Int)) Bool
   (measure (struct as))
@@ -220,9 +283,12 @@
 ;; lambdas it lifted and the instances it demands (§8.4 slice 3.28); or a realize template
 ;; (rule 6): the constant, the elaboration state, the body, the recursion clause, the binders,
 ;; the result's E and L types, the levels, the matchers, the equations, pending?
-(type RzRes (RzOk ESt EDecl (List Declaration) (List Declaration) Bool (List Lifted) (List Demand))
-            (RzTemplate Name El Expr PdRec (List TBind) EType Expr (List Level) (List Declaration) (List Declaration) Bool)
-            (RzErr Symbol (List Int)))
+(type RzRes
+  (RzOk ESt EDecl (List Declaration) (List Declaration) Bool (List Lifted) (List Demand))
+  (RzTemplate Name El Expr PdRec (List TBind) EType Expr (List Level) (List Declaration)
+    (List Declaration)
+    Bool)
+  (RzErr Symbol (List Int)))
 ;; NAME's identity resolved through the scope: a definition of the environment
 (type RtRes (RtOk Name ConstantInfo) (RtErr Symbol (List Int)))
 (fn realize_target ((sc Scope) (env CheckedEnv) (n Name)) RtRes
@@ -238,39 +304,63 @@
      (match info
        ((DefnInfo _ _ _ _ _)
         (match (prim_l_identity k)
-          ((Some _) (RtErr (quote realize_primitive) (append (show_name k) " is an entry of the primitive table (§6.4): K's own rule realizes it, and a body cites it as a primitive")))
+          ((Some _)
+           (RtErr (quote realize_primitive)
+             (append (show_name k)
+               " is an entry of the primitive table (§6.4): K's own rule realizes it, and a body cites it as a primitive")))
           (None (RtOk k info))))
-       (_ (RtErr (quote realize_kind) (append (show_name k) " is not a definition (an axiom, a theorem, a constructor or a type has no realization at Stage 0)")))))
+       (_
+         (RtErr (quote realize_kind)
+           (append (show_name k)
+             " is not a definition (an axiom, a theorem, a constructor or a type has no realization at Stage 0)")))))
     (None (RtErr (quote unknown_constant) (show_name k)))))
 ;; the E signature read from BINDERS RET, compared with the erasure of the L type
-(fn signature_matches ((es ESt) (sc Scope) (env CheckedEnv) (binds (List TBind)) (rt EType) (bs (List SExpr)) (ret SExpr)) (Option (List Int))
+(fn signature_matches
+  ((es ESt)
+   (sc Scope)
+   (env CheckedEnv)
+   (binds (List TBind))
+   (rt EType)
+   (bs (List SExpr))
+   (ret SExpr))
+  (Option (List Int))
   (match (read_params es sc env Nil bs Nil Nil)
     ((PmErr e m) (Some (append (chars_of_sym e) (append ": " m))))
     ((PmOk _ ptypes tps)
      (match (read_ety es sc env tps ret)
        ((TyErr e m) (Some (append (chars_of_sym e) (append ": " m))))
        ((TyOk ert _)
-        (if (bool_not (= (len tps) (count_types binds))) (Some (append "the L type has " (append (show_nat (count_types binds)) (append " type parameters, the E signature " (show_nat (len tps))))))
-        (match (data_mismatch binds ptypes 0)
-          ((Some m) (Some m))
-          (None (if (etype_eq ert rt) None (Some "the result type differs from the L type's erasure"))))))))))
+        (if (bool_not (= (len tps) (count_types binds)))
+          (Some
+            (append "the L type has "
+              (append (show_nat (count_types binds))
+                (append " type parameters, the E signature " (show_nat (len tps))))))
+          (match (data_mismatch binds ptypes 0)
+            ((Some m) (Some m))
+            (None
+              (if (etype_eq ert rt) None (Some "the result type differs from the L type's erasure"))))))))))
 (fn data_mismatch ((binds (List TBind)) (ptypes (List EType)) (i Int)) (Option (List Int))
   (measure (struct binds))
   (match binds
-    (Nil (match ptypes (Nil None) (_ (Some "the E signature has more binders than the L type's erasure"))))
+    (Nil
+      (match ptypes
+        (Nil None)
+        (_ (Some "the E signature has more binders than the L type's erasure"))))
     ((Cons (TBind n (BData ety) _) r)
      (match ptypes
        (Nil (Some (append "the E signature lacks the binder " (show_name n))))
-       ((Cons p pr) (if (etype_eq p ety) (data_mismatch r pr (+ i 1)) (Some (append "the binder " (append (show_name n) " has another type than the L type's erasure")))))))
+       ((Cons p pr)
+        (if (etype_eq p ety) (data_mismatch r pr (+ i 1))
+        (Some
+          (append "the binder " (append (show_name n) " has another type than the L type's erasure")))))))
     ((Cons _ r) (data_mismatch r ptypes i))))
 ;; the forms after RET without a trailing (equations THM…), and the clause's theorems
 (type Either4 (Left4 Symbol (List Int)) (Right4 (List Name)))
 (fn split_equations ((sc Scope) (env CheckedEnv) (rest (List SExpr))) (Pair (List SExpr) Either4)
   (match (rev rest)
     ((Cons (SList (Cons (SSym e) thms)) r)
-     (if (sym_eq e (quote equations))
-       (Pair (rev r) (thm_names sc env thms Nil))
-       (Pair rest (Right4 Nil))))
+     (if (sym_eq e (quote equations)) (Pair (rev r) (thm_names sc env thms Nil))
+     (Pair rest (Right4 Nil))))
     (_ (Pair rest (Right4 Nil)))))
 (fn thm_names ((sc Scope) (env CheckedEnv) (ss (List SExpr)) (acc (List Name))) Either4
   (measure (struct ss))
@@ -293,7 +383,8 @@
     (match (sc_vis sc)
       ((VisOnly _ _ tbl _ _ _)
        (match (tbl_find tbl k)
-         ((Some m) (if (name_eq m (sc_tag sc)) (name_append k suffix) (qualify sc (name_append k suffix))))
+         ((Some m)
+          (if (name_eq m (sc_tag sc)) (name_append k suffix) (qualify sc (name_append k suffix))))
          (None (qualify sc (name_append k suffix)))))
       (VisAll (name_append k suffix)))))
 (fn realize_supplied ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) RzRes
@@ -312,15 +403,25 @@
                 ((TeleErr e m) (RzErr e m))
                 ((TeleOk w1 es1 (Tele ls binds rt rl))
                  (match (signature_matches es1 sc env binds rt (static_free binds bs) ret)
-                   ((Some m) (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
+                   ((Some m)
+                    (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
                    (None
-                    (match (static_signature w1 es1 sc env binds bs)
-                      ((Pair (Pair w2 es2) (Some m)) (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
-                      ((Pair (Pair w2 es2) None)
-                       (if (has_static binds)
-                         (realize_template es2 sc env k w2 ls binds rt rl bs rest thms)
-                         (realize_body (ensure_head es2 sc k (count_data binds)) sc env k w2 ls binds rt rl bs rest thms)))))))))))))))
-    (_ (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?) or (realize NAME (view))"))))
+                     (match (static_signature w1 es1 sc env binds bs)
+                       ((Pair (Pair w2 es2) (Some m))
+                        (RzErr (quote realize_signature) (append (show_name k) (append ": " m))))
+                       ((Pair (Pair w2 es2) None)
+                        (if (has_static binds)
+                          (realize_template es2 sc env k w2 ls binds rt rl bs rest thms)
+                          (realize_body (ensure_head es2 sc k (count_data binds)) sc env k w2 ls
+                            binds
+                            rt
+                            rl
+                            bs
+                            rest
+                            thms)))))))))))))))
+    (_
+      (RzErr (quote bad_shape)
+        "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?) or (realize NAME (view))"))))
 ;; the written binders without the static ones (rule 6): the data binders' E types are compared
 ;; with the L type's erasure; a static binder's written type is checked by static_signature
 (fn static_free ((binds (List TBind)) (bs (List SExpr))) (List SExpr)
@@ -328,14 +429,31 @@
   (match binds
     (Nil bs)
     ((Cons (TBind _ BErased _) r) (static_free r bs))
-    ((Cons (TBind _ (BStatic _) _) r) (match bs ((Cons _ br) (static_free r br)) (Nil Nil)))
-    ((Cons _ r) (match bs ((Cons b br) (Cons b (static_free r br))) (Nil Nil)))))
+    ((Cons (TBind _ (BStatic _) _) r)
+     (match bs
+       ((Cons _ br) (static_free r br))
+       (Nil Nil)))
+    ((Cons _ r)
+     (match bs
+       ((Cons b br) (Cons b (static_free r br)))
+       (Nil Nil)))))
 ;; each static binder's written type `(-> D… R)` against the L type's domains and result as E types
-(fn static_signature ((w W) (es ESt) (sc Scope) (env CheckedEnv) (binds (List TBind)) (bs (List SExpr))) (Pair (Pair W ESt) (Option (List Int)))
+(fn static_signature
+  ((w W) (es ESt) (sc Scope) (env CheckedEnv) (binds (List TBind)) (bs (List SExpr)))
+  (Pair (Pair W ESt) (Option (List Int)))
   (match (read_params es sc env Nil (static_free binds bs) Nil Nil)
-    ((PmErr _ _) (Pair (Pair w es) None))   ; signature_matches reported it
+    ((PmErr _ _) (Pair (Pair w es) None))  ; signature_matches reported it
     ((PmOk _ _ tps) (static_signature_go w es sc env tps (tbind_types binds) binds bs))))
-(fn static_signature_go ((w W) (es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (tpl (List Expr)) (binds (List TBind)) (bs (List SExpr))) (Pair (Pair W ESt) (Option (List Int)))
+(fn static_signature_go
+  ((w W)
+   (es ESt)
+   (sc Scope)
+   (env CheckedEnv)
+   (tps (List Name))
+   (tpl (List Expr))
+   (binds (List TBind))
+   (bs (List SExpr)))
+  (Pair (Pair W ESt) (Option (List Int)))
   (measure (struct binds))
   (match binds
     (Nil (Pair (Pair w es) None))
@@ -343,61 +461,139 @@
     ((Cons (TBind n (BStatic _) fv) r)
      (match bs
        ((Cons (SList (Cons _ (Cons (SList (Cons (SSym arrow) wtys)) Nil))) br)
-        (if (bool_not (sym_eq arrow (quote ->))) (Pair (Pair w es) (Some (append "the binder " (append (show_name n) " is a function in the L type: write (-> D… R)"))))
-        (match (read_etys es sc env tps wtys Nil)
-          ((Pair (TyErr e m) _) (Pair (Pair w es) (Some (append (chars_of_sym e) (append ": " m)))))
-          ((Pair (TyOk _ _) written)
-           (match (w_local_type w (fvar_id_of fv))
-             (None (Pair (Pair w es) (Some "a bound variable without a local")))
-             ((Some lty)
-              (match (static_etypes w es sc lty tpl Nil (budget_depth))
-                ((Pair (Pair w1 es1) None) (Pair (Pair w1 es1) (Some (append "the binder " (append (show_name n) " has no function type over E types in the L type")))))
-                ((Pair (Pair w1 es1) (Some ltys))
-                 (if (etypes_same written ltys) (static_signature_go w1 es1 sc env tps tpl r br)
-                   (Pair (Pair w1 es1) (Some (append "the binder " (append (show_name n) " has another type than the L type's erasure")))))))))))))
-       (_ (Pair (Pair w es) (Some (append "the binder " (append (show_name n) " is a function in the L type: write (-> D… R)")))))))
-    ((Cons _ r) (match bs ((Cons _ br) (static_signature_go w es sc env tps tpl r br)) (Nil (Pair (Pair w es) None))))))
+        (if (bool_not (sym_eq arrow (quote ->)))
+          (Pair (Pair w es)
+            (Some
+              (append "the binder "
+                (append (show_name n) " is a function in the L type: write (-> D… R)"))))
+          (match (read_etys es sc env tps wtys Nil)
+            ((Pair (TyErr e m) _)
+             (Pair (Pair w es) (Some (append (chars_of_sym e) (append ": " m)))))
+            ((Pair (TyOk _ _) written)
+             (match (w_local_type w (fvar_id_of fv))
+               (None (Pair (Pair w es) (Some "a bound variable without a local")))
+               ((Some lty)
+                (match (static_etypes w es sc lty tpl Nil (budget_depth))
+                  ((Pair (Pair w1 es1) None)
+                   (Pair (Pair w1 es1)
+                     (Some
+                       (append "the binder "
+                         (append (show_name n) " has no function type over E types in the L type")))))
+                  ((Pair (Pair w1 es1) (Some ltys))
+                   (if (etypes_same written ltys) (static_signature_go w1 es1 sc env tps tpl r br)
+                   (Pair (Pair w1 es1)
+                     (Some
+                       (append "the binder "
+                         (append (show_name n) " has another type than the L type's erasure")))))))))))))
+       (_
+         (Pair (Pair w es)
+           (Some
+             (append "the binder "
+               (append (show_name n) " is a function in the L type: write (-> D… R)")))))))
+    ((Cons _ r)
+     (match bs
+       ((Cons _ br) (static_signature_go w es sc env tps tpl r br))
+       (Nil (Pair (Pair w es) None))))))
 (fn etypes_same ((as (List EType)) (bs (List EType))) Bool
   (measure (struct as))
   (match as
-    (Nil (match bs (Nil True) (_ False)))
-    ((Cons a ar) (match bs ((Cons b br) (bool_and (etype_eq a b) (etypes_same ar br))) (Nil False)))))
+    (Nil
+      (match bs
+        (Nil True)
+        (_ False)))
+    ((Cons a ar)
+     (match bs
+       ((Cons b br) (bool_and (etype_eq a b) (etypes_same ar br)))
+       (Nil False)))))
 ;; a realize template (rule 6): the body elaborated as any supplied body's and its equations
 ;; proven over the arbitrary static binder — the L half, once —; no program: the loader checks
 ;; the body at placeholder shapes (template.shard's check_template) and builds the instances
 ;; later bodies demand
-(fn realize_template ((es ESt) (sc Scope) (env CheckedEnv) (k Name) (w W) (ls (List Level)) (binds (List TBind)) (rt EType) (rl Expr) (bs (List SExpr)) (rest (List SExpr)) (thms (List Name))) RzRes
+(fn realize_template
+  ((es ESt)
+   (sc Scope)
+   (env CheckedEnv)
+   (k Name)
+   (w W)
+   (ls (List Level))
+   (binds (List TBind))
+   (rt EType)
+   (rl Expr)
+   (bs (List SExpr))
+   (rest (List SExpr))
+   (thms (List Name)))
+  RzRes
   (match (fn_body rest)
-    (None (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
+    (None
+      (RzErr (quote bad_shape)
+        "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
     ((Some body)
-     (let ((e0 (bind_tele (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w) binds bs)))
+     (let
+       ((e0
+          (bind_tele
+            (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w)
+            binds
+            bs)))
        (match (fn_rec e0 (fn_measure rest) (tbind_fvars binds))
          ((Pair _ (Left5 r m)) (RzErr r m))
          ((Pair e1 (Right5 prec))
           (match (elab e1 body (Some rl))
-            ((EErr r m) (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
+            ((EErr r m)
+             (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
             ((EOk e2 v _)
              (match (el_finish e2 v)
                ((FinErr r m) (RzErr r m))
                ((FinOk b)
-                (match (pj_equations (tr_new (el_w e2) es sc k (tbind_types binds)) (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False None)
+                (match
+                  (pj_equations (tr_new (el_w e2) es sc k (tbind_types binds)) (mk_const k ls)
+                    (- 0 1)
+                    (tbind_fvars binds)
+                    rl
+                    b
+                    thms
+                    False
+                    None)
                   ((Pair _ (Left3 r m)) (RzErr r m))
                   ((Pair _ (Right3 decls))
-                   (RzTemplate k e2 b prec binds rt rl ls (el_aux e2) decls (match prec ((PdMeasure _) True) (_ False)))))))))))))))
+                   (RzTemplate k e2 b prec binds rt rl ls (el_aux e2) decls
+                     (match prec
+                       ((PdMeasure _) True)
+                       (_ False)))))))))))))))
 ;; the body, elaborated once against the constant's own telescope (slice 3.16 rule 7): the
 ;; signature's names bound to the telescope's locals — a type or data binder each, an erased
 ;; binder none —, the body at the result's L type; its program the erasure, its equations the
 ;; leaves of its leading matchers, the matchers it generated admitted before them
-(fn realize_body ((es ESt) (sc Scope) (env CheckedEnv) (k Name) (w W) (ls (List Level)) (binds (List TBind)) (rt EType) (rl Expr) (bs (List SExpr)) (rest (List SExpr)) (thms (List Name))) RzRes
+(fn realize_body
+  ((es ESt)
+   (sc Scope)
+   (env CheckedEnv)
+   (k Name)
+   (w W)
+   (ls (List Level))
+   (binds (List TBind))
+   (rt EType)
+   (rl Expr)
+   (bs (List SExpr))
+   (rest (List SExpr))
+   (thms (List Name)))
+  RzRes
   (match (fn_body rest)
-    (None (RzErr (quote bad_shape) "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
+    (None
+      (RzErr (quote bad_shape)
+        "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?)"))
     ((Some body)
-     (let ((e0 (bind_tele (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w) binds bs)))
+     (let
+       ((e0
+          (bind_tele
+            (el_set_w (el0 sc env Nil Nil (qualify sc (name_append k (n1 (quote realize))))) w)
+            binds
+            bs)))
        (match (fn_rec e0 (fn_measure rest) (tbind_fvars binds))
          ((Pair _ (Left5 r m)) (RzErr r m))
          ((Pair e1 (Right5 prec))
           (match (elab e1 body (Some rl))
-            ((EErr r m) (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
+            ((EErr r m)
+             (if (sym_eq r (quote unknown_constant)) (unknown_in_body es sc m) (RzErr r m)))
             ((EOk e2 v _)
              (match (el_finish e2 v)
                ((FinErr r m) (RzErr r m))
@@ -409,13 +605,27 @@
                      (match (erase t0 ents b (budget_depth))
                        ((ErErr r m) (RzErr r m))
                        ((ErOk t1 ebody)
-                        (match (pending_as_runnable (check_calls (Tr.es t1) env k rec (param_flags (count_data binds) rec) ebody))
+                        (match
+                          (pending_as_runnable
+                            (check_calls (Tr.es t1) env k rec (param_flags (count_data binds) rec)
+                              ebody))
                           ((Some (Pair r m)) (RzErr r m))
                           (None
-                           (match (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms False None)
-                             ((Pair _ (Left3 r m)) (RzErr r m))
-                             ((Pair t2 (Right3 decls))
-                              (RzOk (Tr.es t2) (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody) (el_aux e2) decls (match rec ((RecMeasure _) True) (_ False)) (Tr.lifted t2) (Tr.demands t2)))))))))))))))))))))
+                            (match
+                              (pj_equations t1 (mk_const k ls) (- 0 1) (tbind_fvars binds) rl b thms
+                                False
+                                None)
+                              ((Pair _ (Left3 r m)) (RzErr r m))
+                              ((Pair t2 (Right3 decls))
+                               (RzOk (Tr.es t2)
+                                 (EFn k (count_types binds) (bind_ptypes binds) rt rec ebody)
+                                 (el_aux e2)
+                                 decls
+                                 (match rec
+                                   ((RecMeasure _) True)
+                                   (_ False))
+                                 (Tr.lifted t2)
+                                 (Tr.demands t2)))))))))))))))))))))
 ;; a body that lifted a lambda or demanded an instance (§8.4 slice 3.28): a fn's and a supplied realize's do; a derived view's cannot
 (fn takes_instances ((t Tr)) Bool (bool_or (< 0 (len (Tr.lifted t))) (< 0 (len (Tr.demands t)))))
 ;; a name the environment lacks, in a realization's body: a RUNNABLE function has no L meaning
@@ -425,10 +635,16 @@
     (None (RzErr (quote unknown_constant) m))
     ((Some n)
      (match (only_values (eresolve es sc n))
-       ((Cons (EHit id _ _) _) (RzErr (quote no_l_meaning) (append (show_name id) ": a fn has no L meaning (RUNNABLE, §0) — realize it, or make it a def")))
-       (Nil (match (prim_find n)
-              ((Some _) (RzErr (quote no_l_identity) (append m ": an E primitive with no L identity (§6.4) — cite the L constant")))
-              (None (RzErr (quote unknown_constant) m))))))))
+       ((Cons (EHit id _ _) _)
+        (RzErr (quote no_l_meaning)
+          (append (show_name id)
+            ": a fn has no L meaning (RUNNABLE, §0) — realize it, or make it a def")))
+       (Nil
+         (match (prim_find n)
+           ((Some _)
+            (RzErr (quote no_l_identity)
+              (append m ": an E primitive with no L identity (§6.4) — cite the L constant")))
+           (None (RzErr (quote unknown_constant) m))))))))
 (fn bind_tele ((e El) (binds (List TBind)) (bs (List SExpr))) El
   (measure (struct binds))
   (match binds
@@ -437,11 +653,18 @@
     ((Cons (TBind _ _ fv) r)
      (match bs
        ((Cons (SList (Cons (SSym x) _)) br)
-        (bind_tele (match (name_of_sym x) ((Some n) (el_set_cx e (cx_bind (el_cx e) n fv))) (None e)) r br))
+        (bind_tele
+          (match (name_of_sym x)
+            ((Some n) (el_set_cx e (cx_bind (el_cx e) n fv)))
+            (None e))
+          r
+          br))
        (_ e)))))
 ;; the realized constant as a function head of the E table, when pre-registration could not resolve it
 (fn ensure_head ((es ESt) (sc Scope) (k Name) (arity Int)) ESt
-  (match (es_info es k) ((Some _) es) (None (es_register es k (sc_tag sc) (EIFn arity)))))
+  (match (es_info es k)
+    ((Some _) es)
+    (None (es_register es k (sc_tag sc) (EIFn arity)))))
 
 ;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------
 (type Either3 (Left3 Symbol (List Int)) (Right3 (List Declaration)))
@@ -449,32 +672,59 @@
 ;; (param_flags gives them innermost first, so they are consumed reversed)
 ;; Eq.refl, or the clause's theorem applied to the binders — at the constant's solved levels
 ;; when it has as many universe parameters, at none when it has none
-(fn proof_of ((t Tr) (kept (List Expr)) (rl Expr) (lhs Expr) (thm (Option Name)) (ls (List Level))) (Pair Tr (Option Expr))
+(fn proof_of ((t Tr) (kept (List Expr)) (rl Expr) (lhs Expr) (thm (Option Name)) (ls (List Level)))
+  (Pair Tr (Option Expr))
   (match thm
-    (None (match (tr_apps t (mk_const (nm_eq_refl) (list (level_one))) (list rl lhs)) ((Pair t1 e) (Pair t1 (Some e)))))
+    (None
+      (match (tr_apps t (mk_const (nm_eq_refl) (list (level_one))) (list rl lhs))
+        ((Pair t1 e) (Pair t1 (Some e)))))
     ((Some th)
-     (let ((arity (match (env_find (tr_env t) th) ((Some info) (len (ci_lparams info))) (None 0))))
-       (if (= arity 0) (match (tr_apps t (mk_const th Nil) kept) ((Pair t1 e) (Pair t1 (Some e))))
-       (if (= arity (len ls)) (match (tr_apps t (mk_const th ls) kept) ((Pair t1 e) (Pair t1 (Some e))))
+     (let
+       ((arity
+          (match (env_find (tr_env t) th)
+            ((Some info) (len (ci_lparams info)))
+            (None 0))))
+       (if (= arity 0)
+         (match (tr_apps t (mk_const th Nil) kept)
+           ((Pair t1 e) (Pair t1 (Some e))))
+       (if (= arity (len ls))
+         (match (tr_apps t (mk_const th ls) kept)
+           ((Pair t1 e) (Pair t1 (Some e))))
          (Pair t None)))))))
 ;; the leaves of the body's leading matchers, read off the rows without reduction: a row
 ;; against the scrutinee term binds, clashes, or is stuck on a local — a universally quantified
 ;; one is split over its constructors, in order, the first row that does not clash deciding —
 ;; so the leaves and their numbering are the case tree's, a fall-through row one equation per
 ;; leaf it reaches. `∀ kept, f lhs = rhs`, the self-local the constant, by Eq.refl
-(type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))   ; the left-hand side's arguments, the binders, the result type, the body
+(type PjLeaf (PjLeaf (List Expr) (List Expr) Expr Expr))  ; the left-hand side's arguments, the binders, the result type, the body
 (type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
 ;; `wfv`: a measured definition's value, `λ binders. WellFounded.fix α C r hwf F (tuple data)` —
 ;; then every leaf is an equation and its proof is Lean's `WellFounded.fix_eq` at the
 ;; instance (slice 3.20: K decides `F t (λ y _. fix y)` against the leaf's body by conversion)
-(fn pj_equations ((t Tr) (head Expr) (selfid Int) (binders (List Expr)) (rl Expr) (body Expr) (thms (List Name)) (dm Bool) (wfv (Option Expr))) (Pair Tr Either3)
+(fn pj_equations
+  ((t Tr)
+   (head Expr)
+   (selfid Int)
+   (binders (List Expr))
+   (rl Expr)
+   (body Expr)
+   (thms (List Name))
+   (dm Bool)
+   (wfv (Option Expr)))
+  (Pair Tr Either3)
   (match (pj_leaves t binders binders rl body 256 Nil)
     ((Pair t1 None) (Pair t1 (Left3 (quote equation_form) "a constructor no row covers")))
     ((Pair t1 (Some lvs))
      (if (bool_and (< 0 (len thms)) (bool_not (= (len thms) (len lvs))))
-       (Pair t1 (Left3 (quote equations_count) (append "the body has " (append (show_nat (len lvs)) (append " equations, the clause names " (show_nat (len thms)))))))
+       (Pair t1
+         (Left3 (quote equations_count)
+           (append "the body has "
+             (append (show_nat (len lvs))
+               (append " equations, the clause names " (show_nat (len thms)))))))
        (pj_equation_decls t1 head selfid (rev lvs) thms dm wfv 1 Nil)))))
-(fn pj_leaves ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+(fn pj_leaves
+  ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (fuel Int) (acc (List PjLeaf)))
+  (Pair Tr (Option (List PjLeaf)))
   (measure fuel)
   (if (< fuel 1) (Pair t None)
   (match (get_app_fn body)
@@ -484,13 +734,26 @@
         ;; a matcher that carries its equation (a measured function's, define.shard's pj_match_eq)
         ;; has one argument more, `Eq.refl s`: the alternative's last binder at a leaf
         (let ((args (get_app_args body)) (n0 (+ np (+ 2 (len rows)))))
-          (if (< (len args) n0) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))   ; past the alternatives: the measured function's Eq.refl, the dependent match's generalized locals (slice 3.27 landing 3)
-            (match (nth args (+ np 1))
-              (None (Pair t None))
-              ((Some s) (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) (drop n0 args) fuel acc))))))
+          (if (< (len args) n0) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))  ; past the alternatives: the measured function's Eq.refl, the dependent match's generalized locals (slice 3.27 landing 3)
+          (match (nth args (+ np 1))
+            (None (Pair t None))
+            ((Some s)
+             (pj_rows t lhs kept rl body s rows (drop (+ np 2) args) (drop n0 args) fuel acc))))))
        (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))))
     (_ (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))))))
-(fn pj_rows ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (s Expr) (rows (List (List MtPat))) (alts (List Expr)) (extra (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+(fn pj_rows
+  ((t Tr)
+   (lhs (List Expr))
+   (kept (List Expr))
+   (rl Expr)
+   (body Expr)
+   (s Expr)
+   (rows (List (List MtPat)))
+   (alts (List Expr))
+   (extra (List Expr))
+   (fuel Int)
+   (acc (List PjLeaf)))
+  (Pair Tr (Option (List PjLeaf)))
   (measure (struct rows))
   (match rows
     (Nil (Pair t None))
@@ -504,12 +767,17 @@
            (match (pj_inst_lams t alt (append (pj_slot_args binds (len binds) 0) extra))
              ((Pair t1 b1) (pj_leaves t1 lhs kept rl b1 (- fuel 1) acc))))
           ((FoStuck vid)
-           (if (bool_not (mem_int vid (fvar_ids kept))) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
+           (if (bool_not (mem_int vid (fvar_ids kept)))
+             (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
              (pj_split t lhs kept rl body vid fuel acc)))))))))
 (fn pj_slot_args ((binds (List (Pair Int Expr))) (n Int) (i Int)) (List Expr)
   (measure (- n i))
   (if (<= n i) Nil
-    (Cons (match (assoc_int_expr i binds) ((Some v) v) (None (mk_const Anon Nil))) (pj_slot_args binds n (+ i 1)))))
+  (Cons
+    (match (assoc_int_expr i binds)
+      ((Some v) v)
+      (None (mk_const Anon Nil)))
+    (pj_slot_args binds n (+ i 1)))))
 ;; a row's patterns against terms: a clash anywhere decides (the row is gone from the
 ;; specialized matrix), else the first stuck local, else the bindings
 (fn pj_fo_all ((env CheckedEnv) (ps (List MtPat)) (ts (List Expr)) (st PjFo)) PjFo
@@ -526,26 +794,63 @@
 (fn pj_fo ((env CheckedEnv) (p MtPat) (x Expr) (st PjFo)) PjFo
   (measure (struct p))
   (match p
-    ((MtVar slot) (match st ((FoBind binds) (FoBind (Cons (Pair slot x) binds))) (other other)))
+    ((MtVar slot)
+     (match st
+       ((FoBind binds) (FoBind (Cons (Pair slot x) binds)))
+       (other other)))
     ((MtCtor c subs)
      (match (get_app_fn x)
-       ((FVar _ id) (match st ((FoBind _) (FoStuck id)) (other other)))
+       ((FVar _ id)
+        (match st
+          ((FoBind _) (FoStuck id))
+          (other other)))
        ((Const _ c2 _)
-        (if (name_eq c c2) (pj_fo_all env subs (drop (- (len (get_app_args x)) (len subs)) (get_app_args x)) st)
-          (if (pj_is_ctor env c2) FoClash (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))
-       (_ (match st ((FoBind _) (FoStuck (- 0 1))) (other other)))))))
+        (if (name_eq c c2)
+          (pj_fo_all env subs (drop (- (len (get_app_args x)) (len subs)) (get_app_args x)) st)
+        (if (pj_is_ctor env c2) FoClash
+        (match st
+          ((FoBind _) (FoStuck (- 0 1)))
+          (other other)))))
+       (_
+         (match st
+           ((FoBind _) (FoStuck (- 0 1)))
+           (other other)))))))
 (fn pj_is_ctor ((env CheckedEnv) (c Name)) Bool
-  (match (env_find env c) ((Some (CtorInfo _ _ _ _ _ _)) True) (_ False)))
+  (match (env_find env c)
+    ((Some (CtorInfo _ _ _ _ _ _)) True)
+    (_ False)))
 ;; the local split over its inductive's constructors: the constructor term for it in the
 ;; left-hand side, the result type and the body, its fields new binders
-(fn pj_split ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+(fn pj_split
+  ((t Tr)
+   (lhs (List Expr))
+   (kept (List Expr))
+   (rl Expr)
+   (body Expr)
+   (vid Int)
+   (fuel Int)
+   (acc (List PjLeaf)))
+  (Pair Tr (Option (List PjLeaf)))
   (match (w_local_type (Tr.w t) vid)
     (None (Pair t None))
     ((Some vty)
      (match (mt_ind_of (Tr.w t) vty)
        ((Pair _ (MtNoInd _ _)) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc))))
-       ((Pair w1 (MtInd _ ls largs ctors)) (pj_split_ctors (tr_set_w t w1) lhs kept rl body vid ctors ls largs fuel acc))))))
-(fn pj_split_ctors ((t Tr) (lhs (List Expr)) (kept (List Expr)) (rl Expr) (body Expr) (vid Int) (ctors (List Name)) (ls (List Level)) (largs (List Expr)) (fuel Int) (acc (List PjLeaf))) (Pair Tr (Option (List PjLeaf)))
+       ((Pair w1 (MtInd _ ls largs ctors))
+        (pj_split_ctors (tr_set_w t w1) lhs kept rl body vid ctors ls largs fuel acc))))))
+(fn pj_split_ctors
+  ((t Tr)
+   (lhs (List Expr))
+   (kept (List Expr))
+   (rl Expr)
+   (body Expr)
+   (vid Int)
+   (ctors (List Name))
+   (ls (List Level))
+   (largs (List Expr))
+   (fuel Int)
+   (acc (List PjLeaf)))
+  (Pair Tr (Option (List PjLeaf)))
   (measure (struct ctors))
   (match ctors
     (Nil (Pair t (Some acc)))
@@ -567,28 +872,46 @@
                          ((Pair t7 rl2)
                           (match (subst_pairs t7 body1 pairs)
                             ((Pair t8 body2)
-                             (match (pj_leaves t8 lhs2 (leaf_binders kept0 pairs (field_fvars fields)) rl2 body2 (- fuel 1) acc)
+                             (match
+                               (pj_leaves t8 lhs2 (leaf_binders kept0 pairs (field_fvars fields))
+                                 rl2
+                                 body2
+                                 (- fuel 1)
+                                 acc)
                                ((Pair t9 None) (Pair t9 None))
-                               ((Pair t9 (Some acc1)) (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
+                               ((Pair t9 (Some acc1))
+                                (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
 ;; the leaf's binders after a split: the kept binders the split left as they were, the
 ;; constructor's fields, then the kept binders re-opened at a type mentioning the fields
 ;; (`i : Fin (List.length xs)` under `match xs`, slice 3.27 rule 7) — each after what its type names
-(fn leaf_binders ((kept (List Expr)) (pairs (List (Pair Int Expr))) (fields (List Expr))) (List Expr)
+(fn leaf_binders ((kept (List Expr)) (pairs (List (Pair Int Expr))) (fields (List Expr)))
+  (List Expr)
   (append (kept_unrefreshed kept pairs) (append fields (kept_refreshed kept pairs))))
 (fn kept_refreshed ((kept (List Expr)) (pairs (List (Pair Int Expr)))) (List Expr)
   (measure (struct kept))
-  (match kept (Nil Nil) ((Cons fv r) (if (is_refreshed fv pairs) (Cons fv (kept_refreshed r pairs)) (kept_refreshed r pairs)))))
+  (match kept
+    (Nil Nil)
+    ((Cons fv r)
+     (if (is_refreshed fv pairs) (Cons fv (kept_refreshed r pairs)) (kept_refreshed r pairs)))))
 (fn kept_unrefreshed ((kept (List Expr)) (pairs (List (Pair Int Expr)))) (List Expr)
   (measure (struct kept))
-  (match kept (Nil Nil) ((Cons fv r) (if (is_refreshed fv pairs) (kept_unrefreshed r pairs) (Cons fv (kept_unrefreshed r pairs))))))
+  (match kept
+    (Nil Nil)
+    ((Cons fv r)
+     (if (is_refreshed fv pairs) (kept_unrefreshed r pairs) (Cons fv (kept_unrefreshed r pairs))))))
 (fn is_refreshed ((fv Expr) (pairs (List (Pair Int Expr)))) Bool
   (measure (struct pairs))
-  (match pairs (Nil False) ((Cons (Pair _ v) r) (if (= (fvar_id_of v) (fvar_id_of fv)) True (is_refreshed fv r)))))
-(fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr))) (Pair Tr (List Expr))
+  (match pairs
+    (Nil False)
+    ((Cons (Pair _ v) r) (if (= (fvar_id_of v) (fvar_id_of fv)) True (is_refreshed fv r)))))
+(fn pj_subst_pairs_all ((t Tr) (es (List Expr)) (pairs (List (Pair Int Expr))) (acc (List Expr)))
+  (Pair Tr (List Expr))
   (measure (struct es))
   (match es
     (Nil (Pair t (rev acc)))
-    ((Cons e r) (match (subst_pairs t e pairs) ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
+    ((Cons e r)
+     (match (subst_pairs t e pairs)
+       ((Pair t1 e1) (pj_subst_pairs_all t1 r pairs (Cons e1 acc)))))))
 ;; a fn's leaf is stated where K decides it by conversion — the definition is in the walk's
 ;; environment (define.shard). A structural recursion whose leaf leaves the structural
 ;; argument a local, or keeps a self-call under a matcher that is still stuck, unfolds only by
@@ -596,13 +919,23 @@
 ;; equations are all stated (its clause may prove them; a wrong one is K's refusal)
 (fn pj_decided ((t Tr) (dm Bool) (lhs Expr) (rhs Expr)) (Pair Tr Bool)
   (if (bool_not dm) (Pair t True)
-    (match (w_is_def_eq_r (Tr.w t) lhs rhs)
-      ((Pair w1 (WVal True)) (Pair (tr_set_w t w1) True))
-      ((Pair w1 _) (Pair (tr_set_w t w1) False)))))
+  (match (w_is_def_eq_r (Tr.w t) lhs rhs)
+    ((Pair w1 (WVal True)) (Pair (tr_set_w t w1) True))
+    ((Pair w1 _) (Pair (tr_set_w t w1) False)))))
 ;; a leaf's theorem: the self-local (a fn's) the constant; Eq.refl, or the equations clause's
 ;; theorem applied to the binders (a realize's); a fn's equation under its identity (dm), a
 ;; realization's under the realizing module (eq_name)
-(fn pj_equation_decls ((t Tr) (head Expr) (selfid Int) (lvs (List PjLeaf)) (thms (List Name)) (dm Bool) (wfv (Option Expr)) (i Int) (acc (List Declaration))) (Pair Tr Either3)
+(fn pj_equation_decls
+  ((t Tr)
+   (head Expr)
+   (selfid Int)
+   (lvs (List PjLeaf))
+   (thms (List Name))
+   (dm Bool)
+   (wfv (Option Expr))
+   (i Int)
+   (acc (List Declaration)))
+  (Pair Tr Either3)
   (measure (struct lvs))
   (match lvs
     (Nil (Pair t (Right3 (rev acc))))
@@ -611,20 +944,37 @@
        ((Pair t1 rhs)
         (match (tr_apps t1 head lhs)
           ((Pair t2a lhs1)
-           (match (match wfv ((Some _) (Pair t2a True)) (None (pj_decided t2a dm lhs1 rhs)))
+           (match
+             (match wfv
+               ((Some _) (Pair t2a True))
+               (None (pj_decided t2a dm lhs1 rhs)))
              ((Pair t2 False) (pj_equation_decls t2 head selfid r thms dm wfv (+ i 1) acc))
              ((Pair t2 True)
-           (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
-             ((Pair t3 stmt)
-              (match (tr_pis t3 kept stmt)
-                ((Pair t4 ty)
-                 (match (match wfv ((Some v) (fix_eq_proof t4 v lhs)) (None (proof_of t4 kept rl lhs1 (nth thms (- i 1)) (match head ((Const _ _ ls) ls) (_ Nil)))))
-                   ((Pair t5 None) (Pair t5 (Left3 (quote universe_arity) "a theorem of the equations clause takes neither no universe arguments nor the constant's")))
-                   ((Pair t5 (Some proof))
-                    (match (tr_lams t5 kept proof)
-                      ((Pair t6 value)
-                       (let ((name (if dm (name_append (Tr.id t6) (nm_eq_n i)) (eq_name (Tr.sc t6) (Tr.id t6) False i))))
-                         (pj_equation_decls t6 head selfid r thms dm wfv (+ i 1) (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))))
+              (match (tr_apps t2 (mk_const (nm_eq) (list (level_one))) (list rl lhs1 rhs))
+                ((Pair t3 stmt)
+                 (match (tr_pis t3 kept stmt)
+                   ((Pair t4 ty)
+                    (match
+                      (match wfv
+                        ((Some v) (fix_eq_proof t4 v lhs))
+                        (None
+                          (proof_of t4 kept rl lhs1 (nth thms (- i 1))
+                            (match head
+                              ((Const _ _ ls) ls)
+                              (_ Nil)))))
+                      ((Pair t5 None)
+                       (Pair t5
+                         (Left3 (quote universe_arity)
+                           "a theorem of the equations clause takes neither no universe arguments nor the constant's")))
+                      ((Pair t5 (Some proof))
+                       (match (tr_lams t5 kept proof)
+                         ((Pair t6 value)
+                          (let
+                            ((name
+                               (if dm (name_append (Tr.id t6) (nm_eq_n i))
+                               (eq_name (Tr.sc t6) (Tr.id t6) False i))))
+                            (pj_equation_decls t6 head selfid r thms dm wfv (+ i 1)
+                              (Cons (ThmDecl (ConstantVal name Nil ty) value (list name)) acc))))))))))))))))))))
 ;; the measured definition's value at the leaf's arguments is `WellFounded.fix α C r hwf F t`;
 ;; `WellFounded.fix_eq α C r hwf F t : fix … t = F t (λ y _. fix … y)` is the equation's proof,
 ;; its two sides K-convertible to the leaf's (the left by delta, the right by beta, the tuple's
@@ -636,7 +986,9 @@
        (match (get_app_fn inst)
          ((Const _ n ls)
           (if (name_eq n (n2 (quote WellFounded) (quote fix)))
-            (Pair t1 (Some (mk_app_n (mk_const (n2 (quote WellFounded) (quote fix_eq)) ls) (get_app_args inst))))
+            (Pair t1
+              (Some
+                (mk_app_n (mk_const (n2 (quote WellFounded) (quote fix_eq)) ls) (get_app_args inst))))
             (Pair t1 None)))
          (_ (Pair t1 None)))))))
 
@@ -662,23 +1014,35 @@
   (match (tele_of (w0 env) es sc info)
     ((TeleErr e m) (RzErr e m))
     ((TeleOk w1 es1 (Tele ls binds rt _))
-     (if (has_static binds) (RzErr (quote realize_signature) (append (show_name k) ": a function-typed binder — a realize template is supplied, never a view (§8.4 slice 3.28 rule 6)"))
-     (match (ci_value info)
-       (None (RzErr (quote realize_kind) (append (show_name k) " has no value")))
-       ((Some v0)
-        (match (w_inst_lparams w1 v0 (ci_lparams info) ls)
-          ((Pair w2 v)
-           (let ((t (tr_new w2 es1 sc k (tbind_types binds))))
-             (match (peel_binders t v binds)
-               ((Pair t1 body)
-                (match (erase t1 (binder_ents binds) body (budget_depth))
-                  ((ErErr e m) (RzErr e m))
-                  ((ErOk t2 ebody)
-                   (if (takes_instances t2) (RzErr (quote function_value) (append (show_name k) ": a derived view lifting a lambda or taking an instance — supply the body (§8.4 slice 3.28 rule 6)"))
-                   (let ((ptypes (bind_ptypes binds)))
-                     (match (classify_both (Tr.es t2) k (some_all (rev ptypes)) ebody RecNone)
-                       ((Some (Pair e m)) (RzErr e m))
-                       (None (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody) Nil Nil False Nil Nil))))))))))))))))))
+     (if (has_static binds)
+       (RzErr (quote realize_signature)
+         (append (show_name k)
+           ": a function-typed binder — a realize template is supplied, never a view (§8.4 slice 3.28 rule 6)"))
+       (match (ci_value info)
+         (None (RzErr (quote realize_kind) (append (show_name k) " has no value")))
+         ((Some v0)
+          (match (w_inst_lparams w1 v0 (ci_lparams info) ls)
+            ((Pair w2 v)
+             (let ((t (tr_new w2 es1 sc k (tbind_types binds))))
+               (match (peel_binders t v binds)
+                 ((Pair t1 body)
+                  (match (erase t1 (binder_ents binds) body (budget_depth))
+                    ((ErErr e m) (RzErr e m))
+                    ((ErOk t2 ebody)
+                     (if (takes_instances t2)
+                       (RzErr (quote function_value)
+                         (append (show_name k)
+                           ": a derived view lifting a lambda or taking an instance — supply the body (§8.4 slice 3.28 rule 6)"))
+                       (let ((ptypes (bind_ptypes binds)))
+                         (match (classify_both (Tr.es t2) k (some_all (rev ptypes)) ebody RecNone)
+                           ((Some (Pair e m)) (RzErr e m))
+                           (None
+                             (RzOk (Tr.es t2) (EFn k (count_types binds) ptypes rt RecNone ebody)
+                               Nil
+                               Nil
+                               False
+                               Nil
+                               Nil))))))))))))))))))
 ;; the value's leading lambdas instantiated with the binders' locals; fewer lambdas than binders: applied to the rest
 (fn peel_binders ((t Tr) (v Expr) (binds (List TBind))) (Pair Tr Expr)
   (measure (struct binds))
@@ -686,5 +1050,9 @@
     (Nil (Pair t v))
     ((Cons (TBind _ _ fv) r)
      (match v
-       ((Lam _ _ _ _ body) (match (tr_inst1 t body fv) ((Pair t1 body1) (peel_binders t1 body1 r))))
-       (_ (match (tr_apps t v (list fv)) ((Pair t1 v1) (peel_binders t1 v1 r))))))))
+       ((Lam _ _ _ _ body)
+        (match (tr_inst1 t body fv)
+          ((Pair t1 body1) (peel_binders t1 body1 r))))
+       (_
+         (match (tr_apps t v (list fv))
+           ((Pair t1 v1) (peel_binders t1 v1 r))))))))

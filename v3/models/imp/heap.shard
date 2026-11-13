@@ -20,8 +20,9 @@
 
 (record HCell (haddr Nat) (hcount Nat) (htag Nat) (harity Nat) (hslots (List Nat)))
 (record HRaw (raddr Nat) (rtag Nat) (rarity Nat) (rfill (List Nat)))
-(record GHeap (gcells (List HCell)) (gfree (List (List Nat))) (glo Nat) (gtop Nat) (gend Nat) (graw (Option HRaw)))
-(type Ext (Ext Nat Nat))   ; an extent: its address and its arity
+(record GHeap (gcells (List HCell)) (gfree (List (List Nat))) (glo Nat) (gtop Nat) (gend Nat)
+  (graw (Option HRaw)))
+(type Ext (Ext Nat Nat))  ; an extent: its address and its arity
 
 ;; --- the representation in memory -------------------------------------------------------------
 (fn hword ((c HCell)) Nat
@@ -34,13 +35,17 @@
     (List.nil True)
     ((List.cons w rest) (And (= (load_le 8 m a) w) (hslots_rep m (+ a 8) rest)))))
 (def hcell_rep ((m Mem) (c HCell)) Prop
-  (And (= (load_le 8 m (HCell.haddr c)) (hword c)) (hslots_rep m (+ (HCell.haddr c) 8) (HCell.hslots c))))
+  (And (= (load_le 8 m (HCell.haddr c)) (hword c))
+    (hslots_rep m (+ (HCell.haddr c) 8) (HCell.hslots c))))
 (def hcells_rep ((m Mem) (cs (List HCell))) Prop
   (measure (struct cs))
   (match cs
     (List.nil True)
     ((List.cons c rest) (And (hcell_rep m c) (hcells_rep m rest)))))
-(fn hhead ((as (List Nat))) Nat (match as (List.nil 0) ((List.cons a _) a)))
+(fn hhead ((as (List Nat))) Nat
+  (match as
+    (List.nil 0)
+    ((List.cons a _) a)))
 (def hchain_rep ((m Mem) (as (List Nat))) Prop
   (measure (struct as))
   (match as
@@ -52,23 +57,27 @@
     (List.nil True)
     ((List.cons fl rest)
      (And (= (load_le 8 m (+ rb (+ 24 (* 8 k)))) (hhead fl))
-          (And (hchain_rep m fl) (hfree_rep m rb (+ k 1) rest))))))
+       (And (hchain_rep m fl) (hfree_rep m rb (+ k 1) rest))))))
 (def hraw_rep ((m Mem) (r (Option HRaw))) Prop
   (match r
     (Option.none True)
-    ((Option.some rc) (And (= (load_le 8 m (HRaw.raddr rc)) (rword rc)) (hslots_rep m (+ (HRaw.raddr rc) 8) (HRaw.rfill rc))))))
+    ((Option.some rc)
+     (And (= (load_le 8 m (HRaw.raddr rc)) (rword rc))
+       (hslots_rep m (+ (HRaw.raddr rc) 8) (HRaw.rfill rc))))))
 (def heap_rep ((m Mem) (rb Nat) (g GHeap)) Prop
   (And (= (load_le 8 m rb) (GHeap.gtop g))
-  (And (= (load_le 8 m (+ rb 8)) (GHeap.gend g))
-  (And (= (load_le 8 m (+ rb 16)) 0)
-  (And (= (List.length (GHeap.gfree g)) 16)
-  (And (hfree_rep m rb 0 (GHeap.gfree g))
-  (And (hcells_rep m (GHeap.gcells g)) (hraw_rep m (GHeap.graw g)))))))))
+    (And (= (load_le 8 m (+ rb 8)) (GHeap.gend g))
+      (And (= (load_le 8 m (+ rb 16)) 0)
+        (And (= (List.length (GHeap.gfree g)) 16)
+          (And (hfree_rep m rb 0 (GHeap.gfree g))
+            (And (hcells_rep m (GHeap.gcells g)) (hraw_rep m (GHeap.graw g)))))))))
 
 ;; --- the invariant: the pure well-formedness --------------------------------------------------
 (fn haddrs ((cs (List HCell))) (List Nat)
   (measure (struct cs))
-  (match cs (List.nil List.nil) ((List.cons c rest) (List.cons (HCell.haddr c) (haddrs rest)))))
+  (match cs
+    (List.nil List.nil)
+    ((List.cons c rest) (List.cons (HCell.haddr c) (haddrs rest)))))
 (fn count_in ((xs (List Nat)) (x Nat)) Nat
   (measure (struct xs))
   (match xs
@@ -80,7 +89,9 @@
     (List.nil 0)
     ((List.cons c rest) (+ (count_in (HCell.hslots c) a) (inbound_cells rest a)))))
 (fn raw_refs ((r (Option HRaw)) (a Nat)) Nat
-  (match r (Option.none 0) ((Option.some rc) (count_in (HRaw.rfill rc) a))))
+  (match r
+    (Option.none 0)
+    ((Option.some rc) (count_in (HRaw.rfill rc) a))))
 ;; a slot word is an immediate or the address of an older cell
 (def slot_ok ((w Nat) (older (List Nat))) Prop (Or (= (% w 2) 1) (List.Mem w older)))
 (def slots_ok ((ws (List Nat)) (older (List Nat))) Prop
@@ -94,20 +105,22 @@
     (List.nil True)
     ((List.cons c rest)
      (And (slots_ok (HCell.hslots c) (haddrs rest))
-     (And (= (List.length (HCell.hslots c)) (HCell.harity c))
-     (And (<= 1 (HCell.hcount c))
-     (And (< (HCell.hcount c) 4294967296)
-     (And (< (HCell.htag c) 65536)
-     (And (< (HCell.harity c) 65536) (cells_ok rest))))))))))
+       (And (= (List.length (HCell.hslots c)) (HCell.harity c))
+         (And (<= 1 (HCell.hcount c))
+           (And (< (HCell.hcount c) 4294967296)
+             (And (< (HCell.htag c) 65536) (And (< (HCell.harity c) 65536) (cells_ok rest))))))))))
 ;; an immortal cell's count is free; every other count is the references to the cell
 (def counts_ok ((all (List HCell)) (cs (List HCell)) (r (List Nat)) (raw (Option HRaw))) Prop
   (measure (struct cs))
   (match cs
     (List.nil True)
     ((List.cons c rest)
-     (And (Or (<= 2147483648 (HCell.hcount c))
-              (= (HCell.hcount c) (+ (count_in r (HCell.haddr c)) (+ (inbound_cells all (HCell.haddr c)) (raw_refs raw (HCell.haddr c))))))
-          (counts_ok all rest r raw)))))
+     (And
+       (Or (<= 2147483648 (HCell.hcount c))
+         (= (HCell.hcount c)
+           (+ (count_in r (HCell.haddr c))
+             (+ (inbound_cells all (HCell.haddr c)) (raw_refs raw (HCell.haddr c))))))
+       (counts_ok all rest r raw)))))
 (def roots_ok ((r (List Nat)) (as (List Nat))) Prop
   (measure (struct r))
   (match r
@@ -116,55 +129,70 @@
 ;; the extents: the live cells', the free lists' (at their arity), the raw cell's
 (fn hexts ((cs (List HCell))) (List Ext)
   (measure (struct cs))
-  (match cs (List.nil List.nil) ((List.cons c rest) (List.cons (Ext (HCell.haddr c) (HCell.harity c)) (hexts rest)))))
+  (match cs
+    (List.nil List.nil)
+    ((List.cons c rest) (List.cons (Ext (HCell.haddr c) (HCell.harity c)) (hexts rest)))))
 (fn fexts1 ((as (List Nat)) (k Nat)) (List Ext)
   (measure (struct as))
-  (match as (List.nil List.nil) ((List.cons a rest) (List.cons (Ext a k) (fexts1 rest k)))))
+  (match as
+    (List.nil List.nil)
+    ((List.cons a rest) (List.cons (Ext a k) (fexts1 rest k)))))
 (fn fexts ((fls (List (List Nat))) (k Nat)) (List Ext)
   (measure (struct fls))
-  (match fls (List.nil List.nil) ((List.cons fl rest) (List.append (fexts1 fl k) (fexts rest (+ k 1))))))
+  (match fls
+    (List.nil List.nil)
+    ((List.cons fl rest) (List.append (fexts1 fl k) (fexts rest (+ k 1))))))
 (fn rexts ((r (Option HRaw))) (List Ext)
-  (match r (Option.none List.nil) ((Option.some rc) (List.cons (Ext (HRaw.raddr rc) (HRaw.rarity rc)) List.nil))))
+  (match r
+    (Option.none List.nil)
+    ((Option.some rc) (List.cons (Ext (HRaw.raddr rc) (HRaw.rarity rc)) List.nil))))
 (fn ext_all ((g GHeap)) (List Ext)
-  (List.append (hexts (GHeap.gcells g)) (List.append (fexts (GHeap.gfree g) 0) (rexts (GHeap.graw g)))))
+  (List.append (hexts (GHeap.gcells g))
+    (List.append (fexts (GHeap.gfree g) 0) (rexts (GHeap.graw g)))))
 (def e_disj2 ((a Nat) (n Nat) (b Nat) (k Nat)) Prop
   (Or (<= (+ a (+ 8 (* 8 n))) b) (<= (+ b (+ 8 (* 8 k))) a)))
 (def e_disj1 ((a Nat) (n Nat) (es (List Ext))) Prop
   (measure (struct es))
   (match es
     (List.nil True)
-    ((List.cons e rest) (match e ((Ext b k) (And (e_disj2 a n b k) (e_disj1 a n rest)))))))
+    ((List.cons e rest)
+     (match e
+       ((Ext b k) (And (e_disj2 a n b k) (e_disj1 a n rest)))))))
 (def e_disj ((es (List Ext))) Prop
   (measure (struct es))
   (match es
     (List.nil True)
-    ((List.cons e rest) (match e ((Ext a n) (And (e_disj1 a n rest) (e_disj rest)))))))
+    ((List.cons e rest)
+     (match e
+       ((Ext a n) (And (e_disj1 a n rest) (e_disj rest)))))))
 (def e_brk ((es (List Ext)) (lo Nat) (top Nat)) Prop
   (measure (struct es))
   (match es
     (List.nil True)
     ((List.cons e rest)
      (match e
-       ((Ext a n) (And (<= lo a) (And (<= (+ a (+ 8 (* 8 n))) top) (And (= (% a 8) 0) (e_brk rest lo top)))))))))
+       ((Ext a n)
+        (And (<= lo a) (And (<= (+ a (+ 8 (* 8 n))) top) (And (= (% a 8) 0) (e_brk rest lo top)))))))))
 (def raw_ok ((r (Option HRaw)) (cs (List HCell))) Prop
   (match r
     (Option.none True)
     ((Option.some rc)
      (And (slots_ok (HRaw.rfill rc) (haddrs cs))
-     (And (<= (List.length (HRaw.rfill rc)) (HRaw.rarity rc))
-     (And (< (HRaw.rtag rc) 65536) (< (HRaw.rarity rc) 65536)))))))
+       (And (<= (List.length (HRaw.rfill rc)) (HRaw.rarity rc))
+         (And (< (HRaw.rtag rc) 65536) (< (HRaw.rarity rc) 65536)))))))
 (def hinv ((rb Nat) (g GHeap) (r (List Nat))) Prop
   (And (<= (+ rb 152) (GHeap.glo g))
-  (And (<= (GHeap.glo g) (GHeap.gtop g))
-  (And (<= (GHeap.gtop g) (GHeap.gend g))
-  (And (<= (GHeap.gend g) 4294967296)
-  (And (= (% (GHeap.glo g) 8) 0)
-  (And (= (% (GHeap.gtop g) 8) 0)
-  (And (e_disj (ext_all g))
-  (And (e_brk (ext_all g) (GHeap.glo g) (GHeap.gtop g))
-  (And (cells_ok (GHeap.gcells g))
-  (And (counts_ok (GHeap.gcells g) (GHeap.gcells g) r (GHeap.graw g))
-  (And (roots_ok r (haddrs (GHeap.gcells g))) (raw_ok (GHeap.graw g) (GHeap.gcells g))))))))))))))
+    (And (<= (GHeap.glo g) (GHeap.gtop g))
+      (And (<= (GHeap.gtop g) (GHeap.gend g))
+        (And (<= (GHeap.gend g) 4294967296)
+          (And (= (% (GHeap.glo g) 8) 0)
+            (And (= (% (GHeap.gtop g) 8) 0)
+              (And (e_disj (ext_all g))
+                (And (e_brk (ext_all g) (GHeap.glo g) (GHeap.gtop g))
+                  (And (cells_ok (GHeap.gcells g))
+                    (And (counts_ok (GHeap.gcells g) (GHeap.gcells g) r (GHeap.graw g))
+                      (And (roots_ok r (haddrs (GHeap.gcells g)))
+                        (raw_ok (GHeap.graw g) (GHeap.gcells g))))))))))))))
 
 ;; --- the vocabulary over cells ------------------------------------------------------------------
 ;; a reference joins the roots; an immediate leaves them alone
@@ -181,20 +209,23 @@
     ((Option.some c) c)))
 (def cbands ((c HCell)) Prop
   (And (<= 1 (HCell.hcount c))
-  (And (< (HCell.hcount c) 4294967296)
-  (And (< (HCell.htag c) 65536) (< (HCell.harity c) 65536)))))
+    (And (< (HCell.hcount c) 4294967296) (And (< (HCell.htag c) 65536) (< (HCell.harity c) 65536)))))
 (def live_ok ((g GHeap) (v Nat)) Prop
   (And (<= (GHeap.glo g) v)
-  (And (<= (+ v (+ 8 (* 8 (HCell.harity (hfget (GHeap.gcells g) v))))) (GHeap.gtop g))
-  (And (= (% v 8) 0)
-  (And (<= (count_in (haddrs (GHeap.gcells g)) v) 1)
-  (And (e_disj (hexts (GHeap.gcells g)))
-  (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (fexts (GHeap.gfree g) 0))
-  (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (rexts (GHeap.graw g)))
-       (cbands (hfget (GHeap.gcells g) v))))))))))
+    (And (<= (+ v (+ 8 (* 8 (HCell.harity (hfget (GHeap.gcells g) v))))) (GHeap.gtop g))
+      (And (= (% v 8) 0)
+        (And (<= (count_in (haddrs (GHeap.gcells g)) v) 1)
+          (And (e_disj (hexts (GHeap.gcells g)))
+            (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (fexts (GHeap.gfree g) 0))
+              (And (e_disj1 v (HCell.harity (hfget (GHeap.gcells g) v)) (rexts (GHeap.graw g)))
+                (cbands (hfget (GHeap.gcells g) v))))))))))
 (fn e_addrs ((es (List Ext))) (List Nat)
   (measure (struct es))
-  (match es (List.nil List.nil) ((List.cons e rest) (match e ((Ext a _) (List.cons a (e_addrs rest)))))))
+  (match es
+    (List.nil List.nil)
+    ((List.cons e rest)
+     (match e
+       ((Ext a _) (List.cons a (e_addrs rest)))))))
 (def anodup ((xs (List Nat))) Prop
   (measure (struct xs))
   (match xs
@@ -202,17 +233,23 @@
     ((List.cons x t) (And (= (count_in t x) 0) (anodup t)))))
 (fn faddrs ((fls (List (List Nat)))) (List Nat)
   (measure (struct fls))
-  (match fls (List.nil List.nil) ((List.cons f rest) (List.append f (faddrs rest)))))
+  (match fls
+    (List.nil List.nil)
+    ((List.cons f rest) (List.append f (faddrs rest)))))
 (def emem ((es (List Ext)) (a Nat) (n Nat)) Prop
   (measure (struct es))
   (match es
     (List.nil False)
-    ((List.cons e t) (match e ((Ext b k) (Or (And (= b a) (= k n)) (emem t a n)))))))
+    ((List.cons e t)
+     (match e
+       ((Ext b k) (Or (And (= b a) (= k n)) (emem t a n)))))))
 (def eall ((xs (List Ext)) (ys (List Ext))) Prop
   (measure (struct xs))
   (match xs
     (List.nil True)
-    ((List.cons e t) (match e ((Ext a n) (And (emem ys a n) (eall t ys)))))))
+    ((List.cons e t)
+     (match e
+       ((Ext a n) (And (emem ys a n) (eall t ys)))))))
 
 ;; --- the ghost operations of the runtime's protocol (landing 2: the increment, the fill, the seal) ---
 ;; the count of the cell at a raised by one (the old hincc); an address no cell has changes nothing
@@ -221,28 +258,40 @@
   (match cs
     (List.nil List.nil)
     ((List.cons c rest)
-     (if (= (HCell.haddr c) a) (List.cons (HCell.with_hcount (+ (HCell.hcount c) 1) c) rest) (List.cons c (hincc rest a))))))
+     (if (= (HCell.haddr c) a) (List.cons (HCell.with_hcount (+ (HCell.hcount c) 1) c) rest)
+     (List.cons c (hincc rest a))))))
 ;; the ghost increment: an immediate, an address no cell has, or an immortal cell leaves the ghost
 (fn gh_inc ((g GHeap) (v Nat)) GHeap
   (if (= (% v 2) 1) g
-    (match (hfind (GHeap.gcells g) v)
-      (Option.none g)
-      ((Option.some c) (if (<= 2147483648 (HCell.hcount c)) g (GHeap.with_gcells (hincc (GHeap.gcells g) v) g))))))
+  (match (hfind (GHeap.gcells g) v)
+    (Option.none g)
+    ((Option.some c)
+     (if (<= 2147483648 (HCell.hcount c)) g (GHeap.with_gcells (hincc (GHeap.gcells g) v) g))))))
 ;; the raw cell's next slot filled with w; nothing where no raw cell is
 (fn gh_fill ((g GHeap) (w Nat)) GHeap
   (match (GHeap.graw g)
     (Option.none g)
-    ((Option.some rc) (GHeap.with_graw (Option.some (HRaw.with_rfill (List.append (HRaw.rfill rc) (List.cons w List.nil)) rc)) g))))
+    ((Option.some rc)
+     (GHeap.with_graw
+       (Option.some (HRaw.with_rfill (List.append (HRaw.rfill rc) (List.cons w List.nil)) rc))
+       g))))
 ;; the raw cell sealed: a live cell of count 1 at the head of the cells, no raw cell
 (fn gh_seal ((g GHeap)) GHeap
   (match (GHeap.graw g)
     (Option.none g)
     ((Option.some rc)
      (GHeap.with_graw Option.none
-       (GHeap.with_gcells (List.cons (make HCell (haddr (HRaw.raddr rc)) (hcount 1) (htag (HRaw.rtag rc)) (harity (HRaw.rarity rc)) (hslots (HRaw.rfill rc))) (GHeap.gcells g)) g)))))
+       (GHeap.with_gcells
+         (List.cons
+           (make HCell (haddr (HRaw.raddr rc)) (hcount 1) (htag (HRaw.rtag rc))
+             (harity (HRaw.rarity rc))
+             (hslots (HRaw.rfill rc)))
+           (GHeap.gcells g))
+         g)))))
 ;; a cell up to its count: what an increment leaves of it
 (fn hsig ((c HCell)) HCell
-  (make HCell (haddr (HCell.haddr c)) (hcount 0) (htag (HCell.htag c)) (harity (HCell.harity c)) (hslots (HCell.hslots c))))
+  (make HCell (haddr (HCell.haddr c)) (hcount 0) (htag (HCell.htag c)) (harity (HCell.harity c))
+    (hslots (HCell.hslots c))))
 ;; one occurrence removed (the old irem); a stored reference leaves the roots, an immediate leaves
 ;; them alone (the old rdec) — rinc's inverse at the word the fill consumed
 (fn irem ((xs (List Nat)) (x Nat)) (List Nat)
