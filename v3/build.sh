@@ -39,7 +39,11 @@
 # THE STAMP (rule 8): sha256 over the root's closure sources (the emit's `sources` list),
 # the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,
 # the runtime (v3/kernel/rt.h) and the compiler's flags — v3/bin/NAME.stamp beside the binary;
-# the tie and the shim refuse a stale one. Generated files live under v3/bin/ only (emit/NAME/
+# the tie and the shim refuse a stale one. The `sources` list names a view by its mod.req.shard
+# alone, never the implementation behind it, so a root built with a view's directory as an
+# extra root has that directory's .shard files in its stamp too (emit/NAME/extra lists the
+# directories; K's own is in every stamp already). Found at slice 5.1 landing 3: an edit of
+# the formatter's printer, which sits behind a view, left its binary's stamp unchanged. Generated files live under v3/bin/ only (emit/NAME/
 # with main.c, its parts, map and sources; NAME, NAME.stamp, NAME.build.log); an authored file
 # is never written. v3/bin/ is derived and untracked.
 set -uo pipefail
@@ -60,6 +64,9 @@ stamp_of() {
   [ -s "$srcs" ] || { echo ""; return; }
   root=$(cat "v3/bin/emit/$1/root" 2>/dev/null || echo v3)
   { awk -v r="$root" '{print r "/" $2}' "$srcs" | sort | xargs cat 2>/dev/null
+    if [ -s "v3/bin/emit/$1/extra" ]; then   # the implementations behind the root's views
+      while IFS= read -r d; do find "$d" -name '*.shard' | LC_ALL=C sort | xargs cat 2>/dev/null; done < "v3/bin/emit/$1/extra"
+    fi
     cat v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/k/mod.req.shard
     cat v3/kernel/rt.h
     echo "cc $CFLAGS"; } | sha256sum | cut -c1-16
@@ -116,6 +123,7 @@ build_one() {
     echo "FAIL: $name: the emit (exit $rc); $(grep -m1 '^EMIT: \|^LOAD: ' "$log" | cut -c1-200)"; grep -E '^(REFUSE|ERROR|EMIT)' "$log" | head -3 | cut -c1-300; return 1
   fi
   t_emit=$(secs $s); echo "$root" > "$emit/root"
+  for x in "$@"; do case $x in v3/kernel/k|v3/kernel/k/) ;; *) [ -d "$x" ] && echo "$x";; esac; done > "$emit/extra"
   entry=$(sed -n 's/^EMIT: .* entry=\([^ ]*\).*/\1/p' "$log" | tail -1)
   [ -n "$entry" ] && [ -s "$emit/$entry" ] || { echo "FAIL: $name: no entry file after the emit"; tail -2 "$log" | cut -c1-200; return 1; }
   s=$(date +%s)

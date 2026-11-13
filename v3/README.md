@@ -2538,7 +2538,24 @@ text literal builds a certificate K refuses (`LANGUAGE.md` §11); the
 formatter names its texts as constants to stay clear of it. The layout
 rules are open again by the user's word; a rule set is put to them
 (`CANON.md` §9 item 13). Next by the same answer: mutual recursion
-compiled into L.
+compiled into L. Pipeline 684 green on `2c04f80`: `host` 44 s, `v3`
+3,803 s, `native` 1,969 s, `suite_tie` 25 s.
+
+**Slice 5.1 landing 3 built 2026-11-13 — the layout ruled anew, the
+tree reformatted, the gate on** (`LANGUAGE.md` §8.7 "As built, landing
+3"; `CANON.md` §3, §8, §9 item 13). The user: "Agreed with your
+recommendations at 100 columns, as well as fixing the V3 defect in the
+next chunk." The layout follows structure with 100 columns as the
+backstop: a form that breaks keeps arguments on its head line while
+they fit; a `match` and an `if` chain never print on one line. 276 of
+the 576 gated sources were rewritten, 46,669 lines to 65,525; no
+program changed (the loader's, the replay driver's and the prover's C
+text is byte-identical before and after). `v3/test.sh` now refuses a
+source that is not canonical; `v3/fmt.sh --fix` rewrites one. Files a
+tool writes — the proof sidecars, the generated pins — are not gated.
+Fixed on the way: a binary's stamp did not cover the code behind a
+view (`v3/build.sh`). Next: mutual recursion compiled into L and the
+`reduce` defect, one kernel chunk, its design put to the user first.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 

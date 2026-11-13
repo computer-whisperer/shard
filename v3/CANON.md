@@ -3,11 +3,11 @@
 > **STATUS (2026-09-13): the rule set, written; the gate is phase 6.**
 > **Since 2026-11-13 the formatter exists** — `v3/tools/shardfmt`, the
 > old one migrated at slice 5.1 landing 1 (`v3/LANGUAGE.md` §8.7); §3
-> and §7–§8 carry its notes. The tree is not yet reformatted and no
-> gate refuses a file: that is the slice's landing 3, on the user's
-> ruling. **The layout rules of §3 are open again** by the user's word
-> of 2026-11-13; §9 item 13 holds the measurements and the rule set
-> put to them.
+> and §7–§8 carry its notes. **The layout rules of §3 were ruled anew
+> on 2026-11-13** (§9 item 13: 100 columns, the layout following
+> structure), **the tree is reformatted under them and the gate is on**
+> (slice 5.1 landing 3; §8 stage 3): `v3/test.sh` refuses a source that
+> is not canonical and `v3/fmt.sh --fix` rewrites one.
 > This document is law §10.5's CANON row at phase 2: `docs/CANON.md`'s
 > rule set rewritten for S, its §7 content addressing superseded by law
 > §8.3, and the law itself carried — one canonical form, a gate that
@@ -103,30 +103,49 @@ tie two readers. The canonical form of S is a form of the *source*.
 
 ## 3. Layout — tier 0, D1
 
-**Carried, the whole of shardfmt's law** (the old tree's `tools/shardfmt`
-and `meta/format`, `docs/CANON.md` §2 precedent 1): 80 columns; two-space
-indent; fit-or-break; break after the head with a per-head count of
-arguments that stay on the head line, greedy while they fit; all-atom
-lists fill; a `match` is never flat; a broken `if` cascade holds one
-column, a trailing comment on the condition or the then-branch rides
-its line; closers pack; blank runs cap at two between top-level forms
-and one inside; comments, the `'x` sugar and the raw bytes of atoms and
-strings are preserved. The gate is the contract: the formatter refuses
-to emit output that reads differently from its input.
+**The layout, as ruled 2026-11-13** (§9 item 13; the old tree's law —
+`tools/shardfmt`, `meta/format`, `docs/CANON.md` §2 precedent 1 —
+carried and changed in three places). The readers and the writers of
+this tree are agents, so a layout is judged by three things: a small
+edit touches few lines; reading costs few lines; the rules are simple
+enough to predict and to pin by example. Hence **the layout follows
+structure and the width is the backstop**:
 
-**The V3 heads join the keep table.** Today's table (`meta/format`'s
-`keep_n`) knows `fn sig extern claim requirement axiom fulfills goal
-match if let type case-on case wf-induct induct have bin`. The V3 forms
-of `LANGUAGE.md` §4 take these counts — the arguments that name the
-declaration and its signature stay on the head line, the body breaks.
-*As built (slice 5.1, `tools/shardfmt/print/layout.shard` `keep_n`):*
-the table below with the old one's `fn sig extern fulfills match if let
-type have bin`; six old heads — `claim goal case-on case wf-induct
-induct` — name forms V3 does not have and are not carried. The proof
-steps other than `by` and `exact` (`induction`, `cases`, their arms,
-`rw`, `intro`, …) have no count here and print one argument a line
-when they break: counts for them are a decision to make before the
-tree is reformatted.
+- **100 columns**, a two-space indent. A form prints on one line when
+  it fits — except a `match`, and an `if` whose else-branch is an `if`,
+  which never do: the arms and the links of a chain each take a line.
+- **A form that breaks keeps arguments on its head line while they
+  fit** and puts the rest one a line, two columns in. A head of the
+  table below keeps at most its count, so a declaration's body, a
+  `match`'s arms, a `let`'s body and a `by`'s steps always start a
+  line; a head with no row keeps all that fit.
+- A list of atoms fills. A broken `if` cascade holds one column, a
+  trailing comment on the condition or the then-branch riding its
+  line. Closers pack. Blank runs cap at two between top-level forms
+  and one inside. Comments, the `'x` sugar and the raw bytes of atoms
+  and strings are preserved; a comment is never rewrapped.
+
+The gate is the contract: the formatter refuses to emit output that
+reads differently from its input. *What changed from the old law, and
+why:* 80 columns became 100 (the tree was written at that width; at 80
+a quarter of the kernel's lines broke); a head with no row kept no
+argument and now keeps all that fit (the old rule dropped every
+argument of a broken call to its own line and made the tree 78%
+taller); an `if` chain that fitted printed on one line and now never
+does (a nested decision on one line is the worst shape to edit).
+Rejected-because: a wider page alone, or a `match` allowed on one
+line, gets fewer lines by packing nested control onto long ones (§9
+item 13's table).
+
+**The head table** (`tools/shardfmt/print/layout.shard` `keep_n`): the
+most arguments a head keeps on its line — the arguments that name the
+declaration and its signature; the body breaks. The old table's
+`fn` (3), `sig` (4), `extern` (3), `fulfills` (1), `match` (1), `if`
+(1), `let` (1), `type` (1), `have` (2), `bin` (1) are carried; six old
+heads — `claim goal case-on case wf-induct induct` — name forms V3 does
+not have and are not; the V3 forms of `LANGUAGE.md` §4 take the counts
+below. A proof step other than `by` and `exact` (`induction`, `cases`,
+their arms, `rw`, `intro`, …) has no row and follows the general rule.
 
 | head | keep | on the head line |
 |---|---|---|
@@ -138,7 +157,7 @@ tree is reformatted.
 | `realize` | 3 | name, binders, result (`(realize NAME (view))`: 2) |
 | `requirement` | 2 | name, binders |
 | `derive` | all | one line: the type, then the capabilities (`LANGUAGE.md` §8.4 slice 3.19) |
-| `by` | 0 | each step on its own line, the children's blocks indented under their node (`LANGUAGE.md` §8.4 slice 3.20); a one-step premise block as the step |
+| `by` | 0 | each step on its own line when the block breaks, the children's blocks indented under their node (`LANGUAGE.md` §8.4 slice 3.20); a block that fits its line stays on it |
 | `import`, `use`, `trusts` | all | one line each, atoms fill |
 | `measure` | 1 | the measure term |
 | `fun`, `forall` | 1 | the binders |
@@ -311,6 +330,15 @@ reformat would change — each a fixed point after it, every comment
 kept —, 2 do not read (the pins broken on purpose), and none is
 refused by the gate. The S pin the old reader could not lex reads.
 
+**Canonical since 2026-11-13** (slice 5.1 landing 3): the 576 gated
+sources are each their own canonical text under §3 as ruled — 276 of
+them rewritten once by the formatter, 46,669 lines to 65,525 (+40%),
+no program changed (the C text of the loader, the replay driver and
+the prover is byte-identical before and after). Not gated, because a
+tool writes them and its regeneration is what keeps them stable: the
+15 proof sidecars (`*.auto.shard`) and `kernel/k/accel_pins.shard`
+(`v3/fmt.sh` names them).
+
 ## 8. Enforcement — the ratchet on V3
 
 The old §3 ratchet, restated for the new tree; each stage is its own
@@ -332,10 +360,14 @@ decision:
 2. **The tree canonical, pinned.** `v3/kernel` reformatted under the V3
    formatter — a printer over `kernel/sexpr.shard` — and its E bodies at
    zero advisory lines; the loader pins gain the canon cases. *The
-   formatter is built (slice 5.1 landing 1, 2026-11-13); the reformat
-   is its landing 3 and waits on the user's ruling — item 5 of §9 named
-   phase 6.*
-3. **The gate.** `v3/test.sh` refuses a drifting file, as
+   formatter is built (slice 5.1 landing 1, 2026-11-13) and the tree
+   reformatted (landing 3, the same day, on the ruling of §9 item 13);
+   the E bodies' advisory lines wait on stage 1's recognizer, which is
+   not built.*
+3. **The gate — ON since 2026-11-13** (slice 5.1 landing 3:
+   `tools/shardfmt/test/shardfmt_test.sh`, an entrypoint of
+   `v3/test.sh`, fails on a gated source that is not canonical and
+   names it; `v3/fmt.sh --fix` rewrites it). `v3/test.sh` refuses a drifting file, as
    `bin/rebuild.sh` refused to stamp one until its deletion at slice 5.0 —
    the fmt gate on V3
    (`LANGUAGE.md` §12.5, phase 6).
@@ -367,7 +399,12 @@ records §4.8) are recorded under each for the ratification pass.
 4. **RULED — C9's generalization** (§4). Alternative: `Bool`-shaped
    types only; declined because `if`'s tag rule already reaches every
    two-constructor type.
-5. **RULED — no reformat now.** The 98 drifting files wait for the V3
+5. **RULED — no reformat now; REVERSED 2026-11-13** (item 13: the
+   formatter exists and the tree is reformatted, at slice 5.1 landing 3
+   and not at phase 6 — chose-because: the formatter's first consumer
+   is this gate, and a tree left to drift is reformatted at a higher
+   price later; rejected-because, of waiting: phase 6's flip is gone
+   from the law since 2026-11-13). The 98 drifting files wait for the V3
    formatter at phase 6. Alternative: the old tool now; it cannot lex
    the universe suffix and has no counts for the V3 heads.
 6. **RULED — §7 superseded** by law §8.3 with the store (§6), the
@@ -410,7 +447,7 @@ records §4.8) are recorded under each for the ratification pass.
     evaluation an unused right-hand side still runs, and at Stage 0 it
     may loop or perform an effect.
 
-13. **OPEN — the layout rules themselves, reopened 2026-11-13.** The
+13. **RULED 2026-11-13 — the layout rules** (the user, on the answer below: "Agreed with your recommendations at 100 columns, as well as fixing the V3 defect in the next chunk." — a bare assent, so a checkpoint, cheap to reopen; §3 is the law as ruled, built at slice 5.1 landing 3 with `by` keeping its row of §3's table). **The question and the answer as they were put.** The
     user, on slice 5.1 landing 1's measurement (a reformat under §3 as
     written takes the tree from 51,524 lines to 91,786): "The exact
     layout rules are up for mutation, since humans looking at it in an
@@ -451,7 +488,11 @@ records §4.8) are recorded under each for the ratification pass.
     one a line). The choice is cheap to revisit: the gate keeps any
     reformat from changing a reading, so a later rule change is one
     mechanical commit. Before the gate is turned on the program wants
-    a mode that writes the file in place.
+    a mode that writes the file in place. *As built:* the rewrite in
+    place is `v3/fmt.sh --fix`, a script over the binary, and not a
+    mode of it — the binary's proven contract is one read and one
+    write to standard output, and a mode that writes files would have
+    added an observable and its bolts to it.
 
 ## 10. Related
 

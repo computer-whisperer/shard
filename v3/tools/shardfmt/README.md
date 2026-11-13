@@ -38,10 +38,10 @@ change what the file means.
 | `shardfmt.shard` | the program: the arguments, the one read, the one write, the exit |
 | `fmt.shard` | `fmt`: print, then the gate |
 | `shardfmt_bin.shard` | the contract: the binary declared with its two requirements proven (`fmt_gate`, `fmt_main_contract`), the observables and the nine bolts they rest on |
-| `print/` | the printer behind a view (`mod.req.shard`: one opaque function). `cst.shard` reads a source into a tree that keeps comments, blank lines, the `'x` sugar and raw bytes; `layout.shard` prints it — the old printer carried function for function |
+| `print/` | the printer behind a view (`mod.req.shard`: one opaque function). `cst.shard` reads a source into a tree that keeps comments, blank lines, the `'x` sugar and raw bytes; `layout.shard` prints it — the old printer carried function for function, the layout rules as ruled 2026-11-13 |
 | `reads/` | the reader behind a view: `reads_same` and `read_error`, implemented by the loader's reader itself |
 | `test/shardfmt_test.sh` | the gate of this tool: the scenarios, the command line, the program under `ev` against the binary, and every source of the tree |
-| `test/scenarios/` | the layout's worked examples, `NAME.in` and `NAME.out`; the first nine are the old contract's, their texts unchanged |
+| `test/scenarios/` | the layout's worked examples, `NAME.in` and `NAME.out`; nine sources are the old contract's, `keep` and `chain` pin the rules ruled 2026-11-13 |
 
 Both views exist for the same reason: the formatter's statements are
 about `fmt` and `main`, and those are definitions only if what they
@@ -73,8 +73,24 @@ statements; nothing else in this directory needs trust.
   wait on V3 compiling mutual recursion into a definition. Until then
   the scenarios are run against the binary and the printer's functions
   are programs without a definition.
-- **The gate on the tree.** `v3/test.sh` does not yet refuse a file
-  that is not canonical; the test prints how many are. That is the
-  slice's third landing; it rewrites the layout of the V3 sources, and
-  the layout rules themselves are open before it (`v3/CANON.md` §9
-  item 13).
+
+## The gate, and the command
+
+Every source of `v3/` that an author writes is kept in its canonical
+layout: the formatter's test — an entrypoint of `v3/test.sh` — fails on
+one that is not and names it (`v3/CANON.md` §8 stage 3, on since slice
+5.1 landing 3).
+
+```
+v3/fmt.sh                 # list the sources that are not canonical
+v3/fmt.sh --fix [FILE…]   # rewrite them in place
+```
+
+`v3/fmt.sh` builds `v3/bin/shardfmt` when it is stale. The rewrite is
+the script's, not the binary's: the text replaces the file only when the
+binary exits 0. Files a tool writes — the proof sidecars
+(`*.auto.shard`) and `kernel/k/accel_pins.shard` — are not gated.
+
+The layout rules are `v3/CANON.md` §3: 100 columns as the backstop; a
+form that breaks keeps arguments on its head line while they fit, the
+rest one a line; a `match` and an `if` chain never print on one line.

@@ -5,20 +5,25 @@
 #
 #   (1) THE SCENARIOS (test/scenarios/NAME.in, NAME.out): the layout's worked examples. The
 #       binary's text for NAME.in is NAME.out byte for byte, exit 0, and NAME.out is its own
-#       text (--check exits 0). The first nine are the old tree's requirements
-#       (tools/shardfmt/mod.req's fmt_scenario_*), their texts unchanged; the rest pin the V3
-#       forms. A `refuse_NAME` pair is a source that gets no text: exit 2, NAME.out the message.
+#       text (--check exits 0). The first nine sources are the old tree's requirements'
+#       (tools/shardfmt/mod.req's fmt_scenario_*) — their texts were the old ones until the
+#       layout was ruled anew on 2026-11-13, and `break` is the one that changed; the rest pin
+#       the V3 forms and the ruled rules (`keep`, `chain`). A `refuse_NAME` pair is a source
+#       that gets no text: exit 2, NAME.out the message.
 #   (2) THE COMMAND LINE: the usage for no argument, two files, a flag after the file, three
 #       arguments; a missing file; --check on a file that is not canonical — exit 1, the
 #       canonical text written.
 #   (3) THE DRIVER'S RUN: the program under `ev` (load.shard --run, on the engine under test)
 #       over every scenario's source in one file — the binary's text, byte for byte.
-#   (4) THE TREE: every tracked .shard file under v3/. None is refused by the gate (exit 3: the
-#       printer's output read differently — a printer defect); the sources that do not read
-#       are the pins broken on purpose and nothing else; each text is its own text on a second
-#       pass; every comment is in the text as it stood in the file. How many files are
-#       already canonical is printed, not judged: the tree is written toward the form until
-#       the gate is turned on (CANON.md §8 stage 3).
+#   (4) THE TREE, AND THE GATE (CANON.md §8 stage 3, on since slice 5.1 landing 3): every
+#       tracked .shard file under v3/ that an author writes (v3/fmt.sh --list: a file a tool
+#       writes — a proof sidecar, the generated pins — is that tool's text and is not gated)
+#       is its own canonical text — a file that is not fails
+#       this test and is named, with the command that rewrites it (v3/fmt.sh --fix). The
+#       sources that do not read are the pins broken on purpose and nothing else, and none is
+#       refused by the formatter's own gate (exit 3: the printer's output read differently — a
+#       printer defect). For a file that is not canonical the checks of the reformat still
+#       run: its text is its own text on a second pass, every comment kept.
 #
 #   (5) THE CONTRACT (shardfmt_bin.shard; landing 2): the load records the bin with both
 #       requirements met — `fmt_gate` and `fmt_main_contract` —, the program's four effectful
@@ -112,7 +117,7 @@ while IFS= read -r f; do
   "$FMT" "$f" > "$OUT/a" 2>/dev/null; rc=$?
   case $rc in
     0) if cmp -s "$OUT/a" "$f"; then same=$((same+1)); else
-         change=$((change+1))
+         change=$((change+1)); echo "   not canonical: $f"
          "$FMT" --check "$OUT/a" > /dev/null 2>&1 || { notfix=$((notfix+1)); echo "   not a fixed point: $f"; }
          python3 -I "$OUT/comments.py" "$f" "$OUT/a" || { lost=$((lost+1)); echo "   a comment changed: $f"; }
        fi ;;
@@ -120,14 +125,15 @@ while IFS= read -r f; do
     3) gate=$((gate+1)); echo "   the gate refused: $f" ;;
     *) other=$((other+1)); echo "   exit $rc: $f" ;;
   esac
-done < <(git ls-files 'v3/*.shard' | LC_ALL=C sort)   # the tracked sources: a test's scratch root beside this run is not the tree
+done < <(v3/fmt.sh --list)   # the gated sources: tracked, an author's (v3/fmt.sh names what is not gated and why)
+checks=$((checks+1)); [ "$change" = 0 ] || bad "$change tracked sources are not canonical (v3/fmt.sh --fix rewrites them)"
 checks=$((checks+1)); [ "$gate" = 0 ] || bad "the gate refused $gate files of the tree — a printer defect"
 checks=$((checks+1)); [ "$other" = 0 ] || bad "$other files ended on an exit outside 0, 2 and 3"
 checks=$((checks+1)); [ "$notfix" = 0 ] || bad "$notfix reformatted files are not fixed points"
 checks=$((checks+1)); [ "$lost" = 0 ] || bad "$lost reformatted files changed a comment"
 want_unread="v3/pins/loader/read_error/main.shard v3/pins/reader/refuse_unterminated.shard "
 checks=$((checks+1)); [ "$(tr '\n' ' ' < "$OUT/unread" 2>/dev/null)" = "$want_unread" ] || { bad "the sources that do not read are not the two pins broken on purpose"; cat "$OUT/unread" 2>/dev/null | head -5; }
-echo "shardfmt_test: the tree — $files files: $same canonical, $change that a reformat would change (each a fixed point after it, every comment kept), $unread that do not read (the pins broken on purpose), $gate refused by the gate"
+echo "shardfmt_test: the tree — $files files: $same canonical, $change not, $unread that do not read (the pins broken on purpose), $gate refused by the formatter's gate"
 
 # ---- (5) the contract
 s=$(date +%s)

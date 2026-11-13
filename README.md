@@ -371,10 +371,10 @@ authority for its area:
   engines, their byte-tie and the full `Init` replay (`v3/test.sh`,
   `v3/build.sh`, `v3/t0_full.sh`; CI's `v3`, `native`, `suite_tie`); new
   features land with pins (positive and negative) under `v3/pins/`.
-- **Sources are written toward the canonical format** (`v3/CANON.md`;
-  the formatter is `v3/tools/shardfmt`). No gate refuses a drifting
-  file yet: the old tree's stamp check went with its kernel, and V3's
-  gate is slice 5.1's third landing.
+- **V3's sources are canonical-format**, enforced by the formatter's
+  gate in `v3/test.sh` (`v3/CANON.md` §3, §8; `v3/tools/shardfmt`):
+  `v3/fmt.sh` lists a drifting file and `v3/fmt.sh --fix` rewrites it.
+  The old tree's files are not gated.
 - **Design decisions live in ledgers.** Scope ledgers (docs above)
   for the arcs; REVISIT.md entries ("what was chosen / why now /
   revisit when") for everything smaller.

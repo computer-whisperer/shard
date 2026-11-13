@@ -6958,7 +6958,7 @@ family is taken up).
 | slice | content | first consumer |
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
-| 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13 on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the tree reformatted, the gate on) not started — the layout rules are open again by the user's word and a rule set is put to them (`CANON.md` §9 item 13); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
+| 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13, green on pipeline 684, on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the layout ruled anew — 100 columns, structure first —, the tree reformatted, the gate on) built 2026-11-13 on the user's "Agreed with your recommendations at 100 columns" (`CANON.md` §3, §9 item 13); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7340,7 +7340,49 @@ first line is the true one. The scenarios as theorems and the printer's
 termination still wait on mutual recursion (rule 7), the next task by
 the same answer. *The test:* `shardfmt_test.sh` gains the contract's
 load — the record, the four threaded functions, the two closures — 57
-checks.
+checks. *On CI:* pipeline 684 green on `2c04f80` — `host` 44 s, `v3`
+3,803 s, `native` 1,969 s, `suite_tie` 25 s; no job retried.
+
+**As built, landing 3 (2026-11-13)** — on the user's answer to the
+rule set put to them (`CANON.md` §9 item 13): "Agreed with your
+recommendations at 100 columns, as well as fixing the V3 defect in the
+next chunk." *The rules,* three places of `print/layout.shard`: `width`
+is 100; `keep_n`'s default is "all that fit" where it was none, the
+table's rows now bounds; `is_chain` — an `if` whose else-branch is an
+`if` never prints flat. `by` keeps its row of `CANON.md` §3's table (0:
+a block that breaks puts each step on a line), which the measured
+variant lacked — 82 lines of difference over the tree. Two scenarios pin
+the new rules (`keep`, `chain`); of the old contract's nine one text
+changed (`break`). *The reformat:* 276 of the 576 gated sources
+rewritten by the binary, 46,669 lines to 65,525 (+40%; `CANON.md` §3 as
+it stood would have given +78%). No program changed: the C text of the
+loader's, the replay driver's and the prover's closures, emitted from
+the commit before and from the reformatted tree, is byte-identical (76
+files); the toolchain's 31 binaries were rebuilt by stamp. *The gate*
+(`CANON.md` §8 stage 3): `shardfmt_test.sh` fails on a gated source that
+is not canonical and names it. *Not gated:* a file a tool writes — the
+15 proof sidecars (`*.auto.shard`) and `kernel/k/accel_pins.shard` — is
+that tool's text; `prove`'s two tests compare a regenerated sidecar with
+the committed one byte for byte, and the first reformat, which rewrote
+two sidecars and the pins, failed exactly those two tests
+(`engine_test.sh`, `tactic_lib_test.sh`) before the three files were
+restored. *The command:* `v3/fmt.sh` lists the sources that are not
+canonical and `v3/fmt.sh --fix` rewrites them — a script over the
+binary, not a mode of it: the binary's proven contract is one read and
+one write to standard output. *Found on the way, fixed:* **a binary's
+stamp did not cover the implementation behind a view.** The emit's
+`sources` list names a view by its `mod.req.shard`, so an edit of the
+printer left the formatter binary's stamp unchanged and `v3/fmt.sh` ran
+the old binary; `v3/build.sh` now records a root's extra root
+directories (`emit/NAME/extra`) and hashes their `.shard` files into the
+stamp (K's directory was in every stamp already, which hid it). Also
+met: a reformat of the index's two sources stales the Init index by its
+stamp, and a root under the naming law does not build until the index
+is rebuilt — the build's message is the loader's `init_unavailable`.
+*Not done:* the recognizer of `CANON.md` §8 stage 1; the two
+refinements named with the rule set (`(measure …)` on the `fn` line, a
+fill rule for proof steps). The `reduce` defect of landing 2 is the
+next chunk's by the same answer, with mutual recursion.
 
 ## 9. Assumption policy and entries
 
@@ -7602,10 +7644,10 @@ never compared as verdicts.
 | prepared handles, long-lived environments | §9.3, §9.4, T6 | 4 — **slice 4.6 (designed 2026-11-11, §8.6; item 71)**: a handle prepared once and invoked many times; a session that owns the Init-only base with a table of revisions — each its own load — and of live handles; budgets and reclamation; the host a shard driver in-process; **landing 1 built 2026-11-11** (`kernel/ev.shard` `prepare`, `invoke`, `invoke_run`; the two doors; its leans ruled 2026-11-12); **landing 2 built 2026-11-12** (`kernel/session.shard`: revisions by ordinal, each its own load; handles by ordinal, released, revoked, withdrawn with the revision; the checked door closed from the environment; the leans of §8.6 "As built, landing 2" not ruled, standing as built — the base does not grow, a departure; green on pipeline 671); **the slice closed 2026-11-13 at landing 2**, landing 3 (budgets, reclamation, the host limit) **carried** to its first consumer (item 72) |
 | T6's two buffer fixtures — a buffer shorter than its shape, mutation after validation — and the buffer rules of law §9.3 (explicit views with format, shape, length, alignment, aliasing and lifetime): E's bytes are immutable lists (slice 3.18), so in phase 4 nothing is shorter than its shape and nothing is mutated | law §9.3, §12.4 item 4, T6 | **carried to the slice that builds packed buffers**, with V3's own lowering (ruled 2026-11-11, slice 4.6 rule 5, item 71; law §12.4 amended): T6 closes in phase 4 short of the two, stated at its close |
 | evaluation reflection: `ev`'s theorem, the `rfl` node | §4.4, T8 | **carried 2026-11-13** to its first consumer (item 72; was phase 4's) |
-| `reduce` over a text literal: a goal that `reduce` walks and that holds a ground call over a string literal — `(String.toByteArray "x")`, so `(Bytes.ofString "x")` — gets a certificate K refuses (`app_type_mismatch`); `unfold`, `rw` and `rfl` over the same term are accepted | §8.4 slice 3.20 rule 6 | **a defect, found 2026-11-13** (slice 5.1 landing 2, §8.7); no pin yet; avoided in `tools/shardfmt` by naming each text as a constant; to fix when the kernel is next opened |
+| `reduce` over a text literal: a goal that `reduce` walks and that holds a ground call over a string literal — `(String.toByteArray "x")`, so `(Bytes.ofString "x")` — gets a certificate K refuses (`app_type_mismatch`); `unfold`, `rw` and `rfl` over the same term are accepted | §8.4 slice 3.20 rule 6 | **a defect, found 2026-11-13** (slice 5.1 landing 2, §8.7); no pin yet; avoided in `tools/shardfmt` by naming each text as a constant; **to fix in the next chunk, with mutual recursion — ruled 2026-11-13** (the user: "as well as fixing the V3 defect in the next chunk") |
 | mutual recursion compiled into L: today two functions that call each other are programs by erasure with no definition (`callee_runnable`; §8.4 slice 3.14 rule 3, pin `define_mutual`), and so is everything that calls them | §4.1, §8.4 | **no phase; first consumer named 2026-11-13** (slice 5.1 rule 7): the formatter's printer — seven renderers in one cycle over a type nested through `List` —, whose scenarios as theorems and whose termination wait on it |
 | coupled program/proof holes and refutation scope | §6, §7.3, T4, T7 | **carried 2026-11-13** to their first consumer — the search engine's rebuild onto the goal graph (item 72; were phase 4's, never designed) |
-| the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); **the formatter built at slice 5.1 landing 1** (§8.7; `tools/shardfmt`); the tree reformatted and the gate at its landing 3, on the user's ruling (was: the gate 6); the recognizer with it or on demand |
+| the canonical S form: CANON's rule set rewritten for S — **landed slice 8, `v3/CANON.md`**; its recognizer, formatter and gate | §5.1 "One canonical S", §10.5 | the rule set 2 (done); **the formatter built at slice 5.1 landing 1** (§8.7; `tools/shardfmt`); **the tree reformatted and the gate on at its landing 3, 2026-11-13**, under the layout ruled that day (`CANON.md` §3; was: the gate 6); the recognizer on demand |
 | T1's branch-local proof: a `dite` whose `h` is used only in a `Fin.mk` field — `Fin n` over erased bounds needs a **value** parameter at E, which §7.5's eligibility rule (types and propositions only) does not admit; `Fin`, `dite` and `Nat.decLt` are all inside the `Int` fixture, so the export is not what blocks it | law §4.1, §4.2 | 3 — **landed slice 3.24** (`(dif h C T F)`, the `Fin.mk` field under its hypothesis; pins `dif_ok`, `dif_type`, `dif_needs_init`, `dif_scope`; `examples/path`, `path_test.sh`) |
 | T5's "two validated instances of one interface" — §6.6 binds one implementation per view directory (§13 item 14) | law §8.2, T5 | **carried to phase 5** (ruled 2026-10-13, slice 3.30 rule 3a): built as a landing when the port's first consumer needs two implementations of one view — a loader rule naming the implementing file and R57's checked-instance record by substitution; the mechanism for one implementation is built (§6.6) |
 | T5's "an imported theorem about the original still usable after a realization" with an **imported** theorem — every theorem about a realizable constant lies past the `Int` fixture (`ite_self` at export line 18,116); the native form of the fixture is pinned (`realize_theorem`) | law §4.4, T5 | 3 — **landed slice 3.30 landing 1**: pin `realize_imported` (Init's `List.append_nil` cited before and after a supplied realization of `List.append`, under the on-demand load) |
@@ -7722,7 +7764,7 @@ row.
 | v2 | fate | note |
 |---|---|---|
 | `bin/check`, `bin/shard_check`, `bin/shard_eval`, `eval direct` | the V3 driver (`kernel/load.shard`, slice 3) replaces `check`; `eval direct` stays the bootstrap's; route 1 is V3's own back end since slice 5.0 (§8.7: `kernel/lower.shard`, `kernel/cgen.shard`), `bin/check`, the two binaries, `tools/lower` and `tools/codegen` deleted | law §9.1 |
-| shardfmt and CANON's rule set | rewritten for S — `v3/CANON.md` (slice 8, 2026-09-13); the formatter migrated to `v3/tools/shardfmt` (slice 5.1 landing 1, 2026-11-13; §8.7) | law §10.5; the fmt gate on V3 at slice 5.1 landing 3, on the user's ruling (`v3/CANON.md` §8) |
+| shardfmt and CANON's rule set | rewritten for S — `v3/CANON.md` (slice 8, 2026-09-13); the formatter migrated to `v3/tools/shardfmt` (slice 5.1 landing 1, 2026-11-13; §8.7) | law §10.5; the fmt gate on V3 on since slice 5.1 landing 3, 2026-11-13 (`v3/CANON.md` §8; `v3/fmt.sh`) |
 | `tools/digest`, `explain`, `prove`, `search` | new code onto law §7.3 | MANIFEST |
 | `tools/zed-shard`, `shard-viewer` keyword lists | the V3 keywords (§4) | law §10.5, phase 2 |
 
@@ -9296,3 +9338,11 @@ The canonical form's own decisions are `v3/CANON.md` §9 (six ruled
     choices, not ruled: nine bolts where the old contract had twelve;
     the program's texts as constants; the requirements in the old
     total-predicate form.
+    **Landing 3 (2026-11-13).** The user, on the rule set of
+    `CANON.md` §9 item 13 and on landing 2's report: "Agreed with your
+    recommendations at 100 columns, as well as fixing the V3 defect in
+    the next chunk." — the layout ruled (a checkpoint: bare assent),
+    the reformat and the gate with it; the `reduce` defect assigned to
+    the next chunk, with mutual recursion. Landing 3's own choices,
+    not ruled: files a tool writes are not gated; the rewrite in place
+    is a script, not a mode of the proven binary; `by` keeps its row.

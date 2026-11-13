@@ -1,16 +1,20 @@
 ;;; v3/tools/shardfmt/print/layout.shard — the printer: a tree (`cst.shard`) as text in the
-;;; canonical layout (CANON.md §3; LANGUAGE.md §8.7 slice 5.1 rule 3). Fit-or-break at 80
-;;; columns with a two-space indent: a form prints flat when it fits its line, else it breaks
-;;; after the head, the head keeping a per-head count of arguments on its line (greedy, while
-;;; they fit); a list of atoms fills; a `match` is never flat; a broken `if` cascade holds one
-;;; column, a comment after the condition or the then-branch riding its line; closers pack;
-;;; comments, the `'x` sugar and the raw bytes of atoms and strings are printed as read.
+;;; canonical layout (CANON.md §3 as ruled 2026-11-13; LANGUAGE.md §8.7 slice 5.1 rule 3 and
+;;; landing 3). The layout follows structure, and the width — 100 columns — is the backstop: a
+;;; form prints flat when it fits its line, except a `match` and an `if` whose else-branch is
+;;; an `if`, which never do; a form that breaks keeps arguments on its head line while they
+;;; fit and puts the rest one a line, two columns in — a head of the table below keeps at most
+;;; its count, so a declaration's body, a match's arms and a let's body always start a line; a
+;;; list of atoms fills; a broken `if` cascade holds one column, a comment after the condition
+;;; or the then-branch riding its line; closers pack; comments, the `'x` sugar and the raw
+;;; bytes of atoms and strings are printed as read.
 ;;;
-;;; This is `meta/format`'s printer of the old tree carried function for function, on Nat
-;;; columns (a width that does not fit is `none`, where the old code went negative) and with
-;;; the universe list added. Every renderer threads a reversed byte accumulator and fitting is
-;;; decided by `flat_w`, a width probe over a budget — no intermediate text, no re-rendering.
-;;; The renderers `em_pp em_list em_head em_kids em_if em_if_deep em_chain` recurse through one
+;;; The renderers are `meta/format`'s of the old tree, carried function for function on Nat
+;;; columns (a width that does not fit is `none`, where the old code went negative) with the
+;;; universe list added; what the ruling changed is three places: `width`, `keep_n`'s default
+;;; and `is_chain`. Every renderer threads a reversed byte accumulator and fitting is decided
+;;; by `flat_w`, a width probe over a budget — no intermediate text, no re-rendering. The
+;;; renderers `em_pp em_list em_head em_kids em_if em_if_deep em_chain` recurse through one
 ;;; another, as do the probe and the flat printer with their list halves: programs without a
 ;;; definition until V3 compiles mutual recursion (`callee_runnable`). Nothing here is
 ;;; trusted: the gate compares what the reader makes of the output with what it made of the
@@ -25,6 +29,8 @@
 (use tools.shardfmt.print.cst.CNode)
 
 ;; ---- sizes and text ----------------------------------------------------------------------------
+;; the line's width: the backstop, not the rule (CANON.md §3)
+(fn width () Nat 100)
 (fn blen ((b (List Nat))) Nat
   (measure (struct b))
   (match b
@@ -35,9 +41,7 @@
   (measure n)
   (if (= n 0) acc (sp (Nat.sub n 1) (cons 32 acc))))
 (fulfills sp.dec_1
-  (by
-    (intro p h)
-    (exact (Nat.sub_lt (Nat.pos_of_ne_zero h) (Nat.lt_succ_self 0)))))
+  (by (intro p h) (exact (Nat.sub_lt (Nat.pos_of_ne_zero h) (Nat.lt_succ_self 0)))))
 ;; a width taken from a budget: what is left, or none when it does not fit
 (fn fit ((b Nat) (w Nat)) (Option Nat) (if (<= w b) (some (Nat.sub b w)) none))
 ;; an atom's bytes against a word
@@ -52,11 +56,11 @@
      (match w
        (nil false)
        ((cons y ys) (if (= x (UInt8.toNat y)) (codes_are xs ys) false))))))
-(fn is_word ((a (List Nat)) (w String)) Bool
-  (codes_are a (Bytes.toList (Bytes.ofString w))))
+(fn is_word ((a (List Nat)) (w String)) Bool (codes_are a (Bytes.toList (Bytes.ofString w))))
 
 ;; ---- the heads -------------------------------------------------------------------------------
-;; how many arguments belong on the head's line (CANON.md §3's table; 1000: all of them)
+;; the most arguments a head keeps on its line — they stay while they fit, the rest go one a
+;; line (CANON.md §3's table). A head with no row keeps all that fit (1000: no bound)
 (fn keep_n ((h (List Nat))) Nat
   (if (is_word h "fn") 3  ; name, binders, result
   (if (is_word h "sig") 4  ; fn, name, binders, result
@@ -79,13 +83,14 @@
   (if (is_word h "fun") 1  ; the binders
   (if (is_word h "forall") 1
   (if (is_word h "exact") 1
+  (if (is_word h "by") 0  ; each step on its own line
   (if (is_word h "match") 1  ; the scrutinee
   (if (is_word h "if") 1  ; the condition
   (if (is_word h "let") 1  ; the bindings
   (if (is_word h "type") 1  ; name
   (if (is_word h "have") 2  ; name, statement
   (if (is_word h "bin") 1  ; name
-  0))))))))))))))))))))))))))))
+  1000)))))))))))))))))))))))))))))
 
 ;; a match with at least two items after its head never prints flat: arms on their own lines
 (fn is_match ((items (List CNode))) Bool
@@ -110,6 +115,22 @@
           ((CAtom a) (is_word a "if"))
           (_ false)))))
     (_ false)))
+(fn last_is_if ((ns (List CNode))) Bool
+  (measure (struct ns))
+  (match ns
+    (nil false)
+    ((cons h t)
+     (match t
+       (nil (is_if h))
+       (_ (last_is_if t))))))
+;; an if whose last item — its else-branch — is an if: a chain, which never prints flat
+(fn is_chain ((items (List CNode))) Bool
+  (match items
+    (nil false)
+    ((cons h t)
+     (match h
+       ((CAtom a) (if (is_word a "if") (last_is_if t) false))
+       (_ false)))))
 (fn all_atoms ((ns (List CNode))) Bool
   (measure (struct ns))
   (match ns
@@ -121,7 +142,7 @@
 (fn drop_lead_blanks ((ns (List CNode))) (List CNode) (drop_blanks ns))
 
 ;; ---- the width probe: the budget left after a flat render, none when it does not fit -------------
-;; (none also says "has no flat form": a comment, a blank line, a match)
+;; (none also says "has no flat form": a comment, a blank line, a match, an if chain)
 (fn flat_w ((n CNode) (b Nat)) (Option Nat)
   (measure (struct n))
   (match n
@@ -132,7 +153,7 @@
        (none none)
        ((some b1) (flat_w m b1))))
     ((CList items)
-     (if (is_match items) none
+     (if (if (is_match items) true (is_chain items)) none
      (match (fit b 2)
        (none none)
        ((some b1) (flat_items_w items b1)))))
@@ -189,13 +210,12 @@
   (match ns
     (nil (EmK cur acc nil))
     ((cons h t)
-     (match (fit 80 (+ cur 1))
+     (match (fit (width) (+ cur 1))
        (none (EmK cur acc ns))
        ((some b)
         (match (flat_w h b)
           (none (EmK cur acc ns))
-          ((some b1)
-           (em_keep t (Nat.sub k 1) (Nat.sub 80 b1) (em_flat h (cons 32 acc)))))))))))
+          ((some b1) (em_keep t (Nat.sub k 1) (Nat.sub (width) b1) (em_flat h (cons 32 acc)))))))))))
 
 ;; a trailing comment at the front of a list, split off
 (type Trail (Trail (Option (List Nat)) (List CNode)))
@@ -238,8 +258,7 @@
              (_ (em_kids t ind pcol acc1)))))))))
 
 ;; a list of atoms: as many per line as fit, wrapped at `ind`
-(fn em_fill_go ((ns (List CNode)) (cur Nat) (ind Nat) (acc (List Nat)))
-  (List Nat)
+(fn em_fill_go ((ns (List CNode)) (cur Nat) (ind Nat) (acc (List Nat))) (List Nat)
   (measure (struct ns))
   (match ns
     (nil (cons 41 acc))
@@ -247,22 +266,19 @@
      (match h
        ((CAtom a)
         (let ((wd (blen a)))
-          (if (<= (+ (+ cur 1) wd) 80)
-            (em_fill_go t (+ (+ cur 1) wd) ind (em a (cons 32 acc)))
-            (em_fill_go t (+ ind wd) ind (em a (sp ind (cons 10 acc)))))))
+          (if (<= (+ (+ cur 1) wd) (width)) (em_fill_go t (+ (+ cur 1) wd) ind (em a (cons 32 acc)))
+          (em_fill_go t (+ ind wd) ind (em a (sp ind (cons 10 acc)))))))
        (_ (cons 41 acc))))))  ; not reached: the caller checked all_atoms
 (fn em_fill ((ns (List CNode)) (col Nat) (acc (List Nat))) (List Nat)
   (match ns
     (nil (cons 41 (cons 40 acc)))
     ((cons h t)
      (match h
-       ((CAtom a)
-        (em_fill_go t (+ (+ col 1) (blen a)) (+ col 2) (em a (cons 40 acc))))
+       ((CAtom a) (em_fill_go t (+ (+ col 1) (blen a)) (+ col 2) (em a (cons 40 acc))))
        (_ acc)))))  ; not reached
 
 ;; "(head kept…" and the rest as children at col+2
-(fn em_head ((hb (List Nat)) (t (List CNode)) (col Nat) (acc (List Nat)))
-  (List Nat)
+(fn em_head ((hb (List Nat)) (t (List CNode)) (col Nat) (acc (List Nat))) (List Nat)
   (match (em_keep t (keep_n hb) (+ (+ col 1) (blen hb)) (em hb (cons 40 acc)))
     ((EmK _ acc2 rest)
      (match rest
@@ -278,11 +294,9 @@
 ;; head line: T rides it when T fits too, else T breaks to col+2; E renders at col — a chained
 ;; if broken in turn (em_chain), anything else packed there. With T on its own line a
 ;; non-if E goes to col+2 beside it. Any other shape is the generic break after the head.
-(fn em_if_deep
-  ((thn CNode) (ttr (Option (List Nat))) (els CNode) (col Nat) (acc (List Nat)))
+(fn em_if_deep ((thn CNode) (ttr (Option (List Nat))) (els CNode) (col Nat) (acc (List Nat)))
   (List Nat)
-  (let
-    ((acc3 (em_trail ttr (em_pp thn (+ col 2) (sp (+ col 2) (cons 10 acc))))))
+  (let ((acc3 (em_trail ttr (em_pp thn (+ col 2) (sp (+ col 2) (cons 10 acc))))))
     (if (is_if els) (cons 41 (em_chain els col (sp col (cons 10 acc3))))
     (cons 41 (em_pp els (+ col 2) (sp (+ col 2) (cons 10 acc3)))))))
 ;; a chained if in else position breaks without the flat check; anything else is fit-or-break
@@ -293,12 +307,10 @@
        (nil (em_pp els col acc))
        ((cons h t)
         (match h
-          ((CAtom hb)
-           (if (is_word hb "if") (em_if hb t col acc) (em_pp els col acc)))
+          ((CAtom hb) (if (is_word hb "if") (em_if hb t col acc) (em_pp els col acc)))
           (_ (em_pp els col acc))))))
     (_ (em_pp els col acc))))
-(fn em_if ((hb (List Nat)) (t (List CNode)) (col Nat) (acc (List Nat)))
-  (List Nat)
+(fn em_if ((hb (List Nat)) (t (List CNode)) (col Nat) (acc (List Nat))) (List Nat)
   (match t
     (nil (em_head hb t col acc))
     ((cons cnd r1)
@@ -314,42 +326,25 @@
                 ((cons els r5)
                  (match r5
                    (nil
-                     (match (fit 80 (+ col 4))
+                     (match (fit (width) (+ col 4))
                        (none (em_head hb t col acc))
                        ((some b)
                         (match (flat_w cnd b)
                           (none (em_head hb t col acc))
                           ((some bc)
-                           (let
-                             ((acc1
-                                (em_flat
-                                  cnd
-                                  (cons 32 (cons 102 (cons 105 (cons 40 acc)))))))
+                           (let ((acc1 (em_flat cnd (cons 32 (cons 102 (cons 105 (cons 40 acc)))))))
                              (match ctr
                                ((some ctxt)
-                                (em_if_deep
-                                  thn
-                                  ttr
-                                  els
-                                  col
-                                  (em ctxt (cons 32 (cons 32 acc1)))))
+                                (em_if_deep thn ttr els col (em ctxt (cons 32 (cons 32 acc1)))))
                                (none
                                  (match (fit bc 1)
                                    (none (em_if_deep thn ttr els col acc1))
                                    ((some bt0)
                                     (if (fits thn bt0)
-                                      (cons
-                                        41
-                                        (em_chain
-                                          els
-                                          col
-                                          (sp
-                                            col
-                                            (cons
-                                              10
-                                              (em_trail
-                                                ttr
-                                                (em_flat thn (cons 32 acc1)))))))
+                                      (cons 41
+                                        (em_chain els col
+                                          (sp col
+                                            (cons 10 (em_trail ttr (em_flat thn (cons 32 acc1)))))))
                                       (em_if_deep thn ttr els col acc1))))))))))))
                    (_ (em_head hb t col acc))))))))))))))
 (fn em_list ((items (List CNode)) (col Nat) (acc (List Nat))) (List Nat)
@@ -362,14 +357,10 @@
         (if (all_atoms items) (em_fill items col acc)
         (em_head hb t col acc))))
        (_  ; no head atom: the items align under the first
-         (em_kids
-           (drop_lead_blanks t)
-           (+ col 1)
-           col
-           (em_pp h (+ col 1) (cons 40 acc))))))))
+         (em_kids (drop_lead_blanks t) (+ col 1) col (em_pp h (+ col 1) (cons 40 acc))))))))
 ;; one node at column `col`: flat when it fits, else broken
 (fn em_pp ((n CNode) (col Nat) (acc (List Nat))) (List Nat)
-  (if (fits n (Nat.sub 80 col)) (em_flat n acc)
+  (if (fits n (Nat.sub (width) col)) (em_flat n acc)
   (match n
     ((CList items) (em_list items col acc))
     ((CQuote m) (em_pp m (+ col 1) (cons 39 acc)))
@@ -391,8 +382,7 @@
              (nil (cons 10 acc1))
              ((cons h2 t2)
               (match h2
-                ((CTrail txt)
-                 (pp_tops t2 (cons 10 (em txt (cons 32 (cons 32 acc1))))))
+                ((CTrail txt) (pp_tops t2 (cons 10 (em txt (cons 32 (cons 32 acc1))))))
                 (_ (pp_tops t (cons 10 acc1))))))))))))
 ;; a file's nodes as its text
 (fn pp_top ((ns (List CNode))) (List Nat) (em (pp_tops ns nil) nil))
