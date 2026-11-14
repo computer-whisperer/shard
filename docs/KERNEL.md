@@ -235,17 +235,17 @@ The other four roots of the build's inventory are drivers of other areas: `t0.sh
 export's chunks), `prove.shard` (the producers), `verify_release.shard` (K's replay of a store),
 `initindex.shard` (the Init index).
 
-#### The Rust bootstrap (`rust_bootstrap/src/`, 3,518 lines; no README)
+#### The Rust bootstrap (`rust_bootstrap/src/`, 3,191 lines; no README)
 
 | file | lines | what it does |
 |---|---|---|
-| `bin/eval.rs` | 346 | The `eval` executable: `direct FILE ARGS…` and `dump FILE`; resolves the import closure (files; a directory as its view then its implementation); runs on a thread with a 4 GiB stack (`SHARD_STACK_MIB`); the host handler for seven extern names. |
-| `load.rs` | 1,105 | The reader: `type`, `fn`, `extern`, `record` expansion, `(T Type)` binders, sequential `let`, flat name resolution with dotted citations canonicalized to the declared name they end in; skips the logic's forms. |
-| `eval.rs` | 1,165 | The evaluator: an environment machine over one value stack, reference-counted values; `SHARD_PROF` call counts. |
-| `prim.rs` | 130 | The eighteen primitives over arbitrary-precision integers. |
+| `bin/eval.rs` | 331 | The `eval` executable: `direct FILE ARGS…` and `dump FILE`; resolves the import closure (files; a directory as its view then its implementation); runs on a thread with a 4 GiB stack (`SHARD_STACK_MIB`); the host handler for seven extern names. |
+| `load.rs` | 897 | The reader: `type`, `fn`, `extern`, `record` expansion, `(T Type)` binders, sequential `let`, flat name resolution with dotted citations canonicalized to the declared name they end in; skips the logic's forms. |
+| `eval.rs` | 1,104 | The evaluator: an environment machine over one value stack, reference-counted values; `SHARD_PROF` call counts. |
+| `prim.rs` | 124 | The eighteen primitives over arbitrary-precision integers. |
 | `dump.rs` | 160 | `eval dump`: the canonical text of frontend parity. |
-| `ast.rs` | 93 | The AST. |
-| `lib.rs` | 519 | The crate root, the allocator (mimalloc), 21 unit tests. |
+| `ast.rs` | 83 | The AST. |
+| `lib.rs` | 492 | The crate root, the allocator (mimalloc), 20 unit tests. |
 
 #### Scripts
 
@@ -447,7 +447,7 @@ of `T` is derivable in Lean 4's type theory from the axioms `A` (the parameters 
      and expands string literals itself. One believes each computes what the pinned definition
      defines (`k/test/tc_test.shard`: results, large operands, a wrong result for each).
 3. **The engine that runs K.** The authority is the Rust bootstrap, `rust_bootstrap/src/`
-   (3,518 lines; the crates `lexpr`, `num-bigint`, `num-traits`, `mimalloc`; the Rust compiler):
+   (3,191 lines; the crates `lexpr`, `num-bigint`, `num-traits`, `mimalloc`; the Rust compiler):
    it parses K's sources, evaluates them, and supplies integer arithmetic and the host calls. Its
    parse is compared with the V3 reader's on every toolchain root (`parity_test.sh`). A checker
    run as a native binary (`v3/bin/load`, `v3/bin/t0`, …) adds the back end (`lower.shard`,
@@ -628,7 +628,7 @@ verdict — the full Init replay runs on compiled K — it rests on those tests.
 The toolchain — the loader, the checker K, the provers, the tests — is itself a set of shard
 programs under `v3/kernel/`. Two engines run it.
 
-**The Rust bootstrap** (`rust_bootstrap/`, about 3,500 lines; the binary is
+**The Rust bootstrap** (`rust_bootstrap/`, about 3,200 lines; the binary is
 `rust_bootstrap/target/release/eval`) is an evaluator and nothing else, with two commands.
 `eval direct FILE ARGS…` reads FILE and the files it imports and runs FILE's `main` on
 `(World 0)` with ARGS as the arguments; the exit code is the program's, or 2 when the closure does
@@ -640,7 +640,7 @@ implementation. It follows a directory import to the view and then the implement
 not follow `(import Init NAME)`. It knows the eighteen bare-named primitives and performs the
 host calls itself. So it runs the toolchain's own sources, which import no Init, and cannot run a
 program written over Init's types: that one runs through `load.shard --run` or as a binary. It is
-trusted by review; its 21 unit tests run in CI.
+trusted by review; its 20 unit tests run in CI.
 
 **The native binaries** (`v3/bin/NAME`) are the same sources compiled by the back end above. To
 build one, the bootstrap runs the loader over the root's closure with `--emit`: the loader loads

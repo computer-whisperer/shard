@@ -1,9 +1,10 @@
-//! Bootstrap evaluator for E, the executable fragment.
+//! The bootstrap evaluator: it reads the toolchain's sources (v3/kernel/)
+//! and runs them.
 //!
-//! The Rust crate is the trusted base of the bootstrap. Its only contract is
-//! to faithfully load and reduce E programs (FOUNDATION §9.1: it implements
-//! E's operational semantics and nothing else) — no proof work happens here.
-//! Everything proof-shaped is written in E and interpreted by this evaluator.
+//! The crate is in the trust base (docs/LAW.md "The trust base"). Its only
+//! contract is to load and evaluate programs faithfully — no proof work
+//! happens here. The checker and everything above it are programs this
+//! evaluator runs.
 
 pub mod ast;
 pub mod dump;
@@ -11,10 +12,10 @@ pub mod eval;
 pub mod load;
 pub mod prim;
 
-// The process allocator. The evaluator's values are Rc-boxed constructor
-// buffers and BigInts, allocated and freed at the dispatch rate; mimalloc's
-// thread-local free lists make that materially cheaper than glibc's (see
-// the kernel-replay timings in the commit that introduced it).
+// The process allocator. The evaluator's values are reference-counted
+// constructor blocks and BigInts, allocated and freed at the dispatch rate;
+// mimalloc's thread-local free lists make that materially cheaper than
+// glibc's.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -28,6 +29,10 @@ mod tests {
         eval::eval(&module, &expr).expect("eval succeeds")
     }
 
+    fn fn_named<'a>(m: &'a ast::Module, name: &str) -> &'a ast::FnDef {
+        m.fns.iter().find(|f| f.name == name).expect("the fn is declared")
+    }
+
     fn true_v() -> ast::Expr {
         ast::Expr::Ctor("True".into(), Vec::new())
     }
@@ -35,16 +40,12 @@ mod tests {
         ast::Expr::Ctor("False".into(), Vec::new())
     }
 
-
-    /// Construct a runtime narrow-Expr ctor value: `nctor("Foo", vec![…])`
-    /// builds `Ctor("Foo", […])`. Used to write expected results for
-    /// tests that exercise kernel fns over Expr/Pat/Env *values*.
+    /// A constructor value: `nctor("Foo", vec![…])` is `Ctor("Foo", […])`.
     fn nctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
         ast::Expr::Ctor(name.into(), args)
     }
 
-    /// Build the `(List Int)` runtime value `(Cons x0 (Cons x1 … Nil))`.
-    /// Expected-result builder for string-literal / list tests.
+    /// The `(List Int)` value `(Cons x0 (Cons x1 … Nil))`.
     fn int_list(xs: &[i64]) -> ast::Expr {
         let mut acc = nctor("Nil", Vec::new());
         for &x in xs.iter().rev() {
@@ -54,18 +55,20 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Stage-0 slice 1: string literals — "abc" ≡ (List Int) of codepoints.
+    // String literals: "abc" is the (List Int) of its UTF-8 bytes.
     // ------------------------------------------------------------------
 
     #[test]
-    fn string_literal_is_codepoint_list() {
+    fn string_literal_is_byte_list() {
         let m = "(fn id ((x Int)) Int x)";
         // 'x'=120, '+'=43, 'y'=121.
         assert_eq!(eval_str(m, "\"x+y\""), int_list(&[120, 43, 121]));
         // Empty string is Nil.
         assert_eq!(eval_str(m, "\"\""), int_list(&[]));
-        // Digits are their ASCII codepoints, not their numeric value.
+        // Digits are their ASCII codes, not their numeric value.
         assert_eq!(eval_str(m, "\"0\""), int_list(&[48]));
+        // Bytes, not code points: λ (U+03BB) is two.
+        assert_eq!(eval_str(m, "\"λ\""), int_list(&[0xCE, 0xBB]));
     }
 
     /// A string is an ordinary `(List Int)`, so list-shaped fns and
@@ -80,19 +83,11 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Stage-0 slice 2: the lexer — String (List Int) → (List Token).
-    // ------------------------------------------------------------------
-
-    // ------------------------------------------------------------------
-    // Stage-0 slice 3: AST + parser + evaluator (the naive impl).
-    // ------------------------------------------------------------------
-
-    // ------------------------------------------------------------------
-    // Slice 1: arithmetic MVP — user fn + primitive.
+    // A user fn and a primitive.
     // ------------------------------------------------------------------
 
     #[test]
-    fn mvp_add_two_three() {
+    fn call_add_two_three() {
         assert_eq!(
             eval_str("(fn add ((a Int) (b Int)) Int (+ a b))", "(add 2 3)"),
             ast::Expr::IntLit(5.into())
@@ -101,7 +96,7 @@ mod tests {
 
     /// Catches arg-order bugs `+` (symmetric) would mask.
     #[test]
-    fn mvp_first_arg() {
+    fn call_first_arg() {
         assert_eq!(
             eval_str("(fn first ((a Int) (b Int)) Int a)", "(first 7 9)"),
             ast::Expr::IntLit(7.into())
@@ -109,7 +104,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice 2: primitives — exhaustive coverage of one example each.
+    // Primitives: one example each.
     // ------------------------------------------------------------------
 
     #[test]
@@ -123,10 +118,8 @@ mod tests {
     }
 
     /// Arbitrary precision: arithmetic past i64 range must be exact, not
-    /// wrap. Guards the BigInt swap — under the old i64 primitives these
-    /// silently wrapped in release mode (a soundness hole for the LIA /
-    /// Farkas multiplier arithmetic that runs through these primitives
-    /// at proof-check time).
+    /// wrap. A machine integer wraps silently in a release build, and the
+    /// checker's arithmetic runs through these primitives.
     #[test]
     fn prim_arithmetic_is_arbitrary_precision() {
         use std::str::FromStr;
@@ -137,7 +130,7 @@ mod tests {
             eval_str(m, "(+ 9223372036854775807 1)"),
             big("9223372036854775808")
         );
-        // i64::MAX² — multiplier-product overflow, the Farkas risk shape.
+        // i64::MAX² — the product of two large multipliers.
         assert_eq!(
             eval_str(m, "(* 9223372036854775807 9223372036854775807)"),
             big("85070591730234615847396907784232501249")
@@ -165,8 +158,7 @@ mod tests {
     /// The paired division variants: `/`+`tmod` (truncating) and
     /// `ediv`+`mod` (Euclidean) must each satisfy a = b*q + r across all
     /// sign combinations, with their respective remainder ranges. The
-    /// mixed pair `/`+`mod` does NOT — that mismatch was a false axiom
-    /// in std/div until guarded.
+    /// mixed pair `/`+`mod` does NOT.
     #[test]
     fn prim_division_pairs() {
         let m = "(fn id ((x Int)) Int x)";
@@ -190,14 +182,14 @@ mod tests {
                 "ediv/mod identity at ({a}, {b})"
             );
         }
-        // The historical falsity: 10*(-7/10) + (-7 mod 10) = 3, not -7.
+        // The mixed pair on a negative: 10*(-7/10) + (-7 mod 10) = 3, not -7.
         assert_eq!(eval_str(m, "(+ (* 10 (/ -7 10)) (mod -7 10))"), int(3));
     }
 
     /// Source literals beyond the host parser's integer range must be a
     /// LOAD ERROR, not silently degraded — lexpr falls back to lossy f64
-    /// for them. (The self-hosted reader builds ints by arithmetic and
-    /// has no such ceiling.)
+    /// for them. (The V3 reader builds integers by arithmetic and has no
+    /// such ceiling.)
     #[test]
     fn oversized_literal_is_rejected_at_load() {
         let src = "(fn big (()) Int 99999999999999999999999999999999)";
@@ -214,11 +206,10 @@ mod tests {
         assert_eq!(eval_str(m, "(bshr 16 2)"),  ast::Expr::IntLit(4.into()));
     }
 
-    /// V3's spellings of the three comparisons (v3/LANGUAGE.md §8.4,
-    /// slice 3.17 rule 5): the same operations, in a call and as an
-    /// `if` condition (the fused-compare path).
+    /// The three comparisons, in a call and as an `if` condition (the
+    /// fused-compare path).
     #[test]
-    fn prim_v3_comparison_spellings() {
+    fn prim_comparisons() {
         let m = "(fn pick ((a Int) (b Int)) Int (if (< a b) 1 (if (= a b) 2 (if (<= b a) 3 4))))";
         assert_eq!(eval_str(m, "(= 3 3)"),  true_v());
         assert_eq!(eval_str(m, "(= 3 4)"),  false_v());
@@ -240,7 +231,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice 3: control flow — if, match, let — and ADTs.
+    // Control flow — if, match, let — and data types.
     // ------------------------------------------------------------------
 
     /// `if` dispatches on True/False ctors returned by comparison.
@@ -276,10 +267,9 @@ mod tests {
         );
     }
 
-    /// Match + recursion: `len` over a List. The keystone test for this
-    /// slice — exercises type defs, ctor recognition, nested-list
-    /// values, pattern bindings, BVar resolution under match arms, and
-    /// recursive Call.
+    /// Match + recursion: `len` over a List — type defs, ctor recognition,
+    /// nested-list values, pattern bindings, BVar resolution under match
+    /// arms, and a recursive Call.
     #[test]
     fn match_list_length() {
         let src = r#"
@@ -320,9 +310,9 @@ mod tests {
         assert_eq!(eval::eval(&m, &e3).unwrap(), ast::Expr::IntLit(0.into()));
     }
 
-    /// Sequential `let` (v3/LANGUAGE.md §5.4; slice 3.2): each right-hand
-    /// side sees the bindings before it, the body sees them all. Catches
-    /// mis-counting of binder depth in a right-hand side and in the body.
+    /// Sequential `let`: each right-hand side sees the bindings before it,
+    /// the body sees them all. Catches mis-counting of binder depth in a
+    /// right-hand side and in the body.
     #[test]
     fn let_sequential() {
         let src = r#"
@@ -334,7 +324,7 @@ mod tests {
         let m = load::module_from_str(src).expect("loads");
         let e = load::expr_from_str("(add_squares 3 4)", &m).expect("parses");
         assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(34.into()));
-        let f = m.lookup_fn("add_squares").unwrap();
+        let f = fn_named(&m, "add_squares");
         assert_eq!(
             dump::dump(&m),
             "fn add_squares 0 (Int Int) Int (let ((* #1 #1) (+ #0 (* #1 #1))) (+ #1 #0))\n"
@@ -342,22 +332,8 @@ mod tests {
         assert_eq!(f.params.len(), 2);
     }
 
-    /// Where the closure declares a type named `Type` (the old tree's
-    /// kernel/module.shard), `(t Type)` stays a runtime parameter.
-    #[test]
-    fn type_as_declared_type() {
-        let src = r#"
-(type Type (TCon Int) (TVar Int))
-(fn arity_of ((t Type) (k Int)) Int (match t ((TCon n) (+ n k)) ((TVar n) n)))
-"#;
-        let m = load::module_from_str(src).expect("loads");
-        assert_eq!(m.lookup_fn("arity_of").unwrap().params.len(), 2);
-        let e = load::expr_from_str("(arity_of (TCon 2) 3)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(5.into()));
-    }
-
-    /// A dotted citation resolves to the declared name it ends in (slice
-    /// 3.2; the flat mirror of the V3 suffix table): `Stack.mk` in a term
+    /// A dotted citation resolves to the declared name it ends in (the
+    /// flat mirror of the V3 reader's suffix table): `Stack.mk` in a term
     /// and a pattern, `lib.push` as a call head, `lib.Stack` as a type
     /// printed by its last component.
     #[test]
@@ -377,10 +353,9 @@ mod tests {
         );
     }
 
-    /// `(T Type)` binders (v3/LANGUAGE.md §8.1 rule 3; slice 3.2): a type
-    /// parameter, in scope for the binders after it and the result, never
-    /// a runtime parameter; the dump numbers it by first occurrence, as the
-    /// V3 dump does.
+    /// `(T Type)` binders: a type parameter, in scope for the binders after
+    /// it and the result, never a runtime parameter; the dump numbers it by
+    /// first occurrence, as the V3 dump does.
     #[test]
     fn type_binders() {
         let src = r#"
@@ -389,7 +364,7 @@ mod tests {
   (match xs (Nil d) ((Cons x _) x)))
 "#;
         let m = load::module_from_str(src).expect("loads");
-        let f = m.lookup_fn("first").unwrap();
+        let f = fn_named(&m, "first");
         assert_eq!(f.params.len(), 2);
         assert_eq!(f.params[1], ast::Type::TVar("T".into()));
         assert_eq!(f.ret, ast::Type::TVar("T".into()));
@@ -421,9 +396,7 @@ mod tests {
 
     // ------------------------------------------------------------------
     // The primitive table (prim.rs::try_apply) and the evaluator's fast arms
-    // over one value matrix. Until slice 5.0 (v3/LANGUAGE.md §8.7) a second
-    // sweep compared the table with the old kernel's (reduce.shard's
-    // prim_apply); that kernel is deleted. V3's side of the primitives is
+    // over one value matrix. The toolchain's side of the primitives is
     // v3/kernel/prog.shard's table under `ev`, compared with this evaluator
     // by v3/kernel/test/prims_test.shard.
     // ------------------------------------------------------------------
@@ -437,7 +410,7 @@ mod tests {
 
     /// The Int value matrix: zero, units, small values, sign mixes,
     /// shift-range edges (63/64/65, negative), i64 boundaries, and
-    /// past-i64 BigInts (the Farkas-multiplier shape).
+    /// integers past i64.
     fn int_matrix() -> Vec<ast::IntLit> {
         use std::str::FromStr;
         let mut v: Vec<ast::IntLit> = [0i64, 1, -1, 2, -7, 10, -10, 63, 64, 65, -64]
@@ -451,7 +424,7 @@ mod tests {
         v
     }
 
-    /// A runtime (List X) value from element values.
+    /// A (List X) value from element values.
     fn expr_spine(items: Vec<ast::Expr>) -> ast::Expr {
         let mut acc = nctor("Nil", Vec::new());
         for it in items.into_iter().rev() {

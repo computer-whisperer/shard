@@ -1,7 +1,7 @@
-//! `eval dump FILE` — the bootstrap's side of frontend parity
-//! (v3/LANGUAGE.md §10 item 1, slice 6): the loaded closure printed as the
-//! canonical text `v3/kernel/dump.shard` prints for the V3 reader's `Prog`
-//! over the same files, one line per declaration, sorted bytewise:
+//! `eval dump FILE`: the loaded closure printed as the canonical text that
+//! `v3/kernel/dump.shard` prints for the V3 reader's `Prog` over the same
+//! files, one line per declaration, sorted bytewise.
+//! `v3/kernel/test/parity_test.sh` compares the two readers through it.
 //!
 //!   type NAME n (CTOR T…)…        n type parameters; names as written
 //!   fn NAME n (T…) T BODY         n = the distinct type variables of the signature,
@@ -10,21 +10,21 @@
 //!   E   ::= #i | INT | 'sym | (NAME E…) | (match E (PAT E)…) | (let (E…) E) | (if E E E)
 //!   PAT ::= _ | NAME | (NAME PAT…) | INT | 'sym
 //!
-//! `#i` is the de Bruijn index as loaded: since phase 3's slice 3.2 this
-//! loader binds a `let` sequentially, as the V3 reader does (§5.4), so the
-//! index is printed as it stands. A bare type name that is neither a
-//! declared type of the closure nor `Int`/`Nat`/`Symbol` (the built-in E
-//! types, §8.1 rule 1) is a type variable —
-//! declared by a `(T Type)` binder (§8.1 rule 3) or auto-bound as the old
-//! spelling had it; either way numbered by first occurrence, as the V3
-//! dump numbers it. The measure clause is not in the AST (`load_fn_def`
-//! steps over it) and not in the text.
+//! `#i` is the de Bruijn index as loaded: both readers bind a `let`
+//! sequentially, so the index is printed as it stands. A type variable is a
+//! parameter of a `type` or the name of a `(T Type)` binder, numbered by
+//! first occurrence as the V3 dump numbers it. A bare type name that is
+//! neither a declared type of the closure nor `Int` / `Nat` / `Symbol` prints
+//! as a type variable too: it is a type the closure does not declare (in an
+//! ordinary file, Init's `Bool` or `String`), for which this reader has no
+//! identity. The measure clause is not in the AST (`load_fn_def` steps over
+//! it) and not in the text.
 //!
-//! The text is a projection (dump.shard's header; GPT-6 R53): last name
-//! components, one rendering for a constructor, a call and an extern, no
-//! measure clause, one literal kind. The parity harness checks each closure
-//! for one declaration per short name per kind before comparing, so byte
-//! agreement is evidence where the projection is injective.
+//! The text is a projection (dump.shard's header): last name components,
+//! one rendering for a constructor, a call and an extern, no measure clause,
+//! one literal kind. The parity test checks each closure for one declaration
+//! per short name per kind before comparing, so byte agreement is evidence
+//! where the projection is injective.
 
 use crate::ast::{Expr, ExternDef, FnDef, Module, Pat, Type, TypeDef};
 use std::collections::HashSet;
@@ -82,9 +82,9 @@ fn ty(t: &Type, vars: &mut Vec<String>, types: &HashSet<&str>) -> String {
     match t {
         Type::TVar(n) => var(n, vars),
         Type::TCon(n, args) if args.is_empty() => {
-            // the built-in E types (v3/LANGUAGE.md §8.1 rule 1) print as
-            // themselves; a declared type by its last component, as the V3
-            // dump prints an identity (a dotted citation, `lib.Stack`)
+            // the built-in types print as themselves; a declared type by
+            // its last component, as the V3 dump prints an identity (a
+            // dotted citation, `lib.Stack`); any other name as a variable
             let short = short_name(n);
             if types.contains(short) || n == "Int" || n == "Nat" || n == "Symbol" {
                 short.to_string()

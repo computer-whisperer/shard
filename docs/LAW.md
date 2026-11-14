@@ -105,7 +105,7 @@ The detail, file by file, is in `KERNEL.md`.
 - K (`v3/kernel/k/`, about 5,800 lines, and the data types it is written over). It is reviewed
   source, not proven. The evidence is the replay of all of `Init` against Lean's own verdicts and a
   battery of hostile declarations that must be refused.
-- The engine that runs K: the Rust bootstrap (about 3,500 lines and the Rust compiler). When K runs
+- The engine that runs K: the Rust bootstrap (about 3,200 lines and the Rust compiler). When K runs
   as a native binary, also the unproven compiler, its runtime and the C compiler; the binaries are
   compared with the bootstrap, not proven equal to it.
 - That the imported library is Lean's genuine `Init`. The export is fetched and built, not stored in

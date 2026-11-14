@@ -1,21 +1,17 @@
-//! Rust mirror of the narrow object-language ADTs. Kept in lockstep
-//! with kernel/{term,module,proof}.shard.
+//! The program AST: what the reader builds and the evaluator runs.
+//! `v3/kernel/prog.shard` has the same shape with every name resolved to an
+//! identity; `eval dump` and `load.shard --dump` print the two as one text
+//! (`dump.rs`).
 //!
-//! Locally-nameless: `FVar(name)` is a free variable by name;
-//! `BVar(idx)` is a bound variable as a 0-based de Bruijn index,
-//! 0 = innermost.
-//!
-//! MVP scope note: every variant is defined so the AST is complete,
-//! but only the subset used by the first slice is exercised by the
-//! evaluator. The unused variants are placeholders for upcoming
-//! slices and will be wired through eval/load as we grow.
+//! Locally nameless: `BVar(idx)` is a bound variable as a 0-based de Bruijn
+//! index, 0 = innermost; `FVar(name)` is a bare identifier that names
+//! neither a binding nor a constructor, and evaluates to itself.
 
 pub type Symbol = String;
 
-/// Integer values: arbitrary-precision, matching the documented
-/// mathematical `Int` semantics. The earlier `i64` MVP could silently
-/// wrap in release mode — a soundness hole for LIA/Farkas multiplier
-/// arithmetic, which runs through these primitives at proof-check time.
+/// Integer values are arbitrary-precision. A machine integer wraps silently
+/// in a release build, and the checker's arithmetic runs through these
+/// primitives: a wrapped result there is a wrong verdict.
 pub type IntLit = num_bigint::BigInt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,10 +80,4 @@ pub struct Module {
     pub types: Vec<TypeDef>,
     pub fns: Vec<FnDef>,
     pub externs: Vec<ExternDef>,
-}
-
-impl Module {
-    pub fn lookup_fn(&self, name: &str) -> Option<&FnDef> {
-        self.fns.iter().find(|f| f.name == name)
-    }
 }

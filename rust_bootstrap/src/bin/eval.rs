@@ -1,16 +1,12 @@
-//! `eval` — the bootstrap's executable: E programs run directly.
+//! `eval` — the bootstrap's executable.
 //!
-//! The Rust side is *only* a host: it loads an E program's import closure
-//! into the VM (load.rs), installs the World file-I/O extern handlers, and
-//! runs `(main world0)` on the evaluator (eval.rs).
+//! The Rust side is *only* a host: it loads a program's import closure
+//! (load.rs), installs the handler of the host calls, and runs
+//! `(main (World 0))` on the evaluator (eval.rs).
 //!
 //!   eval direct <app.shard> [args…]   load the app's closure, run its `main`
 //!   eval dump <file.shard>            the closure as `direct` loads it, printed
-//!                                     as the canonical text of frontend parity
-//!
-//! Until slice 5.0 (v3/LANGUAGE.md §8.7) a third mode loaded the old tree's
-//! evaluator (`kernel/eval.shard`) and interpreted a program through it — the
-//! tower. That kernel is deleted and the mode with it.
+//!                                     as the canonical text (dump.rs)
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,21 +15,18 @@ use std::process::ExitCode;
 use lexpr::Value;
 use lexpr::parse::Parser;
 use num_traits::ToPrimitive;
-use proving_bootstrap_v2::{ast, eval, load};
+use shard_bootstrap::{ast, eval, load};
 
 /// Resolve the entrypoint's import closure: each `(import "X")` is followed
 /// relative to the importing file's directory, post-order (deps before
 /// dependents), deduped by canonical path, with the entrypoint itself last.
-/// A directory module (v3/LANGUAGE.md §3, §6.6; phase 3 slice 3.2) is its
-/// view — `DIR/mod.req.shard` or `DIR/mod.req/mod.req.shard`, whose
-/// transparent `type`s are the module's own — and then its implementation
-/// `DIR/BASE.shard`, each with its own closure; the view's `sig` forms are
-/// skipped by the loader as before, so a consumer's call resolves flat to
-/// the implementation's `fn` of the same name (the substitution the V3
-/// loader performs by identity, §6.7 "Views at run time"). `(import Init
-/// NAME)` names no file and is not followed. This is host-side bootstrap
-/// (the VM doesn't exist yet) — the analogue of a linker resolving a
-/// binary's deps.
+/// A directory module is its view — `DIR/mod.req.shard` or
+/// `DIR/mod.req/mod.req.shard`, whose `type`s are the module's own — and
+/// then its implementation `DIR/BASE.shard`, each with its own closure; the
+/// reader skips the view's `sig` forms, so a consumer's call resolves flat
+/// to the implementation's `fn` of the same name (the V3 loader makes that
+/// substitution by identity; docs/LANGUAGE.md "Views"). `(import Init
+/// NAME)` names no file and is not followed.
 fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
     fn import_of(form: &Value) -> Option<String> {
         let items: Vec<&Value> = form.list_iter()?.collect();
@@ -92,16 +85,12 @@ fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn main() -> ExitCode {
-    // The bootstrap interpreter (eval.rs) and the shard reader it hosts are
-    // recursive tree-walkers; folding a large closure (e.g. an app whose
-    // imports pull in the whole kernel, like check.shard) recurses deep enough
-    // to blow the default 8 MiB main-thread stack. Run on a thread with a big
-    // stack. This is purely a host concern — once compiled, the depth is bounded
-    // by the program, not the interpreter. (The reserve is virtual memory; only
-    // touched pages commit. The parse path's once-O(input-bytes) recursion is
-    // fixed — the kernel's list-builders are accumulator-style now — so depth
-    // scales with STRUCTURE (nesting, single-literal size), not file size.
-    // SHARD_STACK_MIB overrides the reserve — used to probe depth ceilings.)
+    // The evaluator (eval.rs) recurses on every sub-evaluation that is not in
+    // tail position, and the programs it runs — the reader, the checker — are
+    // recursive tree walkers: a large closure goes deeper than the default
+    // 8 MiB main-thread stack. Run on a thread with a big stack. The reserve is
+    // virtual memory; only touched pages commit. SHARD_STACK_MIB overrides it
+    // (to probe how deep a run goes).
     let stack = std::env::var("SHARD_STACK_MIB")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -118,15 +107,8 @@ fn main() -> ExitCode {
 fn run() -> ExitCode {
     let mut prog_args: Vec<String> = std::env::args().skip(1).collect();
 
-    // --- bootstrap the VM: resolve the entrypoint's import closure ----------
-    // `eval direct <app.shard> [args…]` loads the APP's closure and runs its
-    // `main` on this evaluator. The app must be E as load.rs reads it
-    // (v3/LANGUAGE.md §8.1); its import closure is followed by
-    // `resolve_closure` above, a directory module as its view and
-    // implementation (slice 3.2).
     // `eval dump <file.shard>`: the file's closure loaded exactly as `direct`
-    // loads it and printed as the canonical text of frontend parity
-    // (v3/LANGUAGE.md §10 item 1; dump.rs) — nothing is run.
+    // loads it and printed as the canonical text (dump.rs) — nothing is run.
     if prog_args.first().map(String::as_str) == Some("dump") {
         if prog_args.len() != 2 {
             eprintln!("usage: eval dump <file.shard>");
@@ -139,16 +121,18 @@ fn run() -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let vm = match load::module_from_paths_with_base(&paths, None) {
+        let vm = match load::module_from_paths(&paths) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("error loading entrypoint closure: {}", e);
                 return ExitCode::from(2);
             }
         };
-        print!("{}", proving_bootstrap_v2::dump::dump(&vm));
+        print!("{}", shard_bootstrap::dump::dump(&vm));
         return ExitCode::SUCCESS;
     }
+    // `eval direct <app.shard> [args…]`: the app's closure (`resolve_closure`
+    // above) loaded and its `main` run on this evaluator.
     let entry = if prog_args.first().map(String::as_str) == Some("direct") {
         if prog_args.len() < 2 {
             eprintln!("usage: eval direct <app.shard> [args…]");
@@ -168,7 +152,7 @@ fn run() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let vm = match load::module_from_paths_with_base(&paths, None) {
+    let vm = match load::module_from_paths(&paths) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error loading entrypoint closure: {}", e);
@@ -176,7 +160,7 @@ fn run() -> ExitCode {
         }
     };
 
-    // --- run `(main (World 0))` under the file-I/O handler ------------------
+    // --- run `(main (World 0))` under the handler of the host calls ---------
     eval::set_effect_handler(Some(Box::new(make_handler(prog_args))));
     let call = ast::Expr::Call("main".into(), vec![world(0.into())]);
     let result = eval::eval(&vm, &call);
@@ -192,15 +176,16 @@ fn run() -> ExitCode {
     }
 }
 
-/// The World effect handler: performs the real I/O for each stuck extern call.
-/// World = (World clock); it is each extern's LAST argument, returned bumped by
-/// one (matching the `*_ticks` clock axioms). Covers the eval app's surface —
-/// get_args / read_file / read_range / write / exit.
+/// The handler of the host calls: it performs the I/O of each call to one of
+/// the seven externs v3/kernel/host.shard declares — get_args, read_file,
+/// read_range, write, write_line, write_file, exit. World = (World clock); it
+/// is each extern's LAST argument and is returned with the clock advanced by
+/// one.
 ///
-/// The extern boundary speaks RAW BYTES (issue #2 Phase 3): every `(List Int)`
-/// payload is a byte sequence (each element 0..256), not Unicode codepoints.
-/// The host performs no encoding or decoding — reads are binary-safe, writes
-/// emit the list verbatim (elements masked mod 256, mirroring `bytes_of_list`).
+/// The extern boundary speaks RAW BYTES: every `(List Int)` payload is a byte
+/// sequence (each element 0..256), not Unicode codepoints. The host performs
+/// no encoding or decoding — reads are binary-safe, writes emit the list
+/// verbatim (elements masked mod 256).
 fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Result<ast::Expr, String> {
     use std::io::Write as _;
     move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
@@ -228,7 +213,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
             // a byte range of a file: at most n bytes from offset off, as
             // (Some bytes) — fewer at the file's end, an empty list past it —
             // or None on any read error or a negative offset or count
-            // (v3/kernel/host.shard read_range; LANGUAGE.md §8.4 slice 3.26).
+            // (v3/kernel/host.shard `read_range`).
             "read_range" => {
                 let off = match &args[1] { ast::Expr::IntLit(n) => n.to_u64(), _ => None };
                 let n = match &args[2] { ast::Expr::IntLit(n) => n.to_usize(), _ => None };
@@ -258,8 +243,8 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
             }
             // persist bytes at a path, verbatim — the dual of read_file.
             // (Pair True World) on success, (Pair False World) on any I/O
-            // error. Backs tools that emit artifacts (tools/prove writes
-            // proof sidecars).
+            // error. The toolchain writes its artifacts through it (the Init
+            // index, a proof sidecar).
             "write_file" => {
                 let ok = std::fs::write(path_of_bytes(&args[0]), list_bytes(&args[1])).is_ok();
                 Ok(ctor(
@@ -292,7 +277,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
     }
 }
 
-// --- small value helpers (build/decode narrow Exprs) -----------------------
+// --- small value helpers (build and decode `Expr` values) ------------------
 
 fn world(clk: ast::IntLit) -> ast::Expr {
     ctor("World", vec![ast::Expr::IntLit(clk)])
@@ -302,7 +287,7 @@ fn ctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
     ast::Expr::Ctor(name.into(), args)
 }
 
-/// A byte slice as the narrow `(List Int)` of its bytes.
+/// A byte slice as the `(List Int)` of its bytes.
 fn byte_list(bytes: &[u8]) -> ast::Expr {
     let mut acc = ctor("Nil", vec![]);
     for b in bytes.iter().rev() {
@@ -311,8 +296,8 @@ fn byte_list(bytes: &[u8]) -> ast::Expr {
     acc
 }
 
-/// A narrow `(List Int)` back to raw bytes; elements are masked mod 256
-/// (`bytes_of_list` semantics — the wire never widens past a byte).
+/// A `(List Int)` back to raw bytes; elements are masked mod 256 (the
+/// boundary never widens past a byte).
 fn list_bytes(e: &ast::Expr) -> Vec<u8> {
     let mut out = Vec::new();
     let mut cur = e;
@@ -336,7 +321,7 @@ fn path_of_bytes(e: &ast::Expr) -> std::path::PathBuf {
     std::ffi::OsStr::from_bytes(&list_bytes(e)).into()
 }
 
-/// Build the narrow list `(Cons x0 (Cons x1 … Nil))` from items.
+/// Build the list `(Cons x0 (Cons x1 … Nil))` from items.
 fn list_of(items: Vec<ast::Expr>) -> ast::Expr {
     let mut acc = ctor("Nil", vec![]);
     for it in items.into_iter().rev() {

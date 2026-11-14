@@ -44,7 +44,7 @@ authority) and as native binaries it compiles from itself.
 and answers accepted, rejected with a reason, or exhausted (a budget ran out; neither a yes nor a
 no). It sits behind one interface of 63 operations, so no other code can build an environment
 except by having K check each declaration. Evidence that it is right: it accepts all 57,977
-declarations of Lean's `Init` export with Lean's own axiom lists, and passes a battery of 72 cases
+declarations of Lean's `Init` export with Lean's own axiom lists, and passes a battery of 76 cases
 built to break it. It is not proven.
 
 **Init, Lean's library as the base.** `v3/export.sh` builds Lean v4.33.1 and exports its `Init`
@@ -97,13 +97,13 @@ the development machine and about 65 in CI.
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 53,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 57 files | the test scripts and drivers |
-| `v3/pins/` | 456 files | small sources, each stating the outcome it expects; 311 for the loader |
+| `v3/kernel/test/` | 60 files | the test scripts and drivers |
+| `v3/pins/` | 510 files | small sources, each stating the outcome it expects; 338 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
-| `v3/examples/` | 2,300 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
+| `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
-| `rust_bootstrap/` | 3,500 lines of Rust | the bootstrap evaluator |
+| `rust_bootstrap/` | 3,200 lines of Rust | the bootstrap evaluator |
 | `tools/zed-shard/` | | an editor grammar |
 | `shard-viewer/` | | a viewer for the previous generation's proofs; unused by this tree |
 
@@ -163,7 +163,6 @@ host calls.
 - The full gate is 35 minutes, so each change to the toolchain costs that much before it lands.
 
 *Hygiene.*
-- Source comments and many refusal messages cite sections of documents that no longer exist.
 - The session machinery (prepared programs, revisions, handles) has no user but the loader's own
   `--run` and its tests.
 

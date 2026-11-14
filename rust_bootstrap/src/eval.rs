@@ -1,15 +1,14 @@
-//! Evaluator over the narrow object language — an ENVIRONMENT MACHINE.
+//! The evaluator: an ENVIRONMENT MACHINE over the program AST.
 //!
-//! Call-by-value. Rather than substituting argument values into a fn
-//! body (the old `open_many`, which deep-copied the body *and* every
-//! captured value on each call → O(n²) on programs that thread a long
-//! list, like the self-hosted parser), we evaluate the body in place
-//! against an environment of values. Values are reference-counted
-//! (`Rc`), so capturing a list tail in a pattern or looking up a
-//! variable is O(1) — no structural copying on the hot path.
+//! Call-by-value. A fn body is evaluated in place against an environment
+//! of values, never by substituting the arguments into it: substitution
+//! copies the body and every captured value on each call, which is O(n²)
+//! on a program that threads a long list, as the reader does. Values are
+//! reference-counted, so capturing a list tail in a pattern or looking up
+//! a variable is O(1) — no structural copying on the hot path.
 //!
-//! Binding convention (unchanged at the loader, locally-nameless / de
-//! Bruijn): `BVar 0` = the most recently bound value. Values live on ONE
+//! Binding convention (the loader's, locally nameless / de Bruijn):
+//! `BVar 0` = the most recently bound value. Values live on ONE
 //! STACK (see `Stack` below); entering a binder PUSHES its freshly-bound
 //! values, which reproduces the de Bruijn shift without any renumbering,
 //! and the lowerer turns each index into the physical slot past the
@@ -17,11 +16,9 @@
 //! parameters, so a call evaluates the body in a frame of just the
 //! argument values (the last one on top).
 //!
-//! There are no lambdas in the narrow language (calls are saturated,
-//! functions are top-level), so no closures are needed: a `Val` is
-//! always a fully-evaluated, CLOSED term — note it has no `BVar`
-//! variant, so a value structurally cannot carry a free index. That is
-//! exactly the invariant the substitution machine relied on by hand.
+//! There are no lambdas (calls are saturated, functions are top-level),
+//! so no closures are needed: a `Val` is always a fully evaluated, CLOSED
+//! term — it has no `BVar` variant, so a value cannot carry a free index.
 
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::cell::{Cell, RefCell};
@@ -36,9 +33,9 @@ use crate::prim;
 // Entering a binder PUSHES its freshly-bound values, and values in flight
 // — a call's arguments, a let's RHSs, a constructor's fields — are pushed
 // onto the same stack as they are computed: NO ALLOCATION per binding (an
-// Rc-consed list here was half the run time of a kernel replay: malloc/free
+// Rc-consed list of bindings is half the run time of a replay: malloc/free
 // = 49% of samples, ~5 nodes per dispatch) and NO MOVE per call (a separate
-// operand stack, tried next, spent 8% moving arguments onto the frame).
+// operand stack spends 8% moving arguments onto the frame).
 // The loader's de Bruijn index counts BINDINGS only, so the lowerer turns
 // it into a PHYSICAL slot from the top — the binding's distance plus the
 // temporaries in flight above it at that point in the expression, known
@@ -65,16 +62,14 @@ pub enum EvalError {
     NoMatchArm(String),
     IfNonBool(String),
     Effect(String),
-    Unimplemented(&'static str),
 }
 
-// A run-time EFFECT HANDLER: performs real I/O for a stuck call to a declared
-// `extern` symbol with no body. Installed ONLY while a program runs (see
-// eval::set_effect_handler / bin/check.rs run_program); proof-checking never
-// installs one, so during `check` an extern call falls through to UnknownCall
-// here and is never reached — the proof reducer treats it as data, leaving it
-// stuck/uninterpreted. So this hook is completely inert during checking and
-// cannot affect soundness. The handler is a trusted boundary (docs/BOUNDARIES.md).
+// The run-time EFFECT HANDLER performs the I/O of a host call: a call whose
+// head is neither a declared `fn` nor a primitive the table applies.
+// `bin/eval.rs` installs it around the run of `main`; with none installed
+// (the unit tests) such a call is `UnknownCall`. The handler is trusted: a
+// host call must do what the program's axioms about it state
+// (docs/KERNEL.md "The trust base, file by file").
 type EffectHandler = Box<dyn FnMut(&str, &[Expr]) -> Result<Expr, String>>;
 thread_local! {
     static EFFECTS: RefCell<Option<EffectHandler>> = const { RefCell::new(None) };
@@ -87,10 +82,11 @@ pub fn set_effect_handler(handler: Option<EffectHandler>) {
 
 // ---- SHARD_PROF: opt-in shard-level call attribution (measurement only). ---
 // With SHARD_PROF set, every user-fn dispatch and every primitive application
-// is counted by name; `prof_dump` prints the top counts. This is the host's
-// view of WHICH SHARD FNS the run consists of — when the program being run is
-// eval.shard hosting an app, the counts attribute the engine's own cost
-// (ev / match_val / trie_lookup / …), which no native profiler can see.
+// is counted by name — a primitive as `prim:NAME`, NAME as the source spells
+// it; `prof_dump` prints the top counts (40, or SHARD_PROF_TOP). This is the
+// host's view of WHICH SHARD FNS the run consists of — when the program is
+// the loader running another program under `ev`, the counts attribute `ev`'s
+// own cost, which no native profiler can see.
 thread_local! {
     static PROF: RefCell<Option<HashMap<String, u64>>> =
         RefCell::new(std::env::var("SHARD_PROF").is_ok().then(HashMap::new));
@@ -154,7 +150,6 @@ impl std::fmt::Display for EvalError {
             EvalError::NoMatchArm(v) => write!(f, "no match arm fired for value {v}"),
             EvalError::IfNonBool(v) => write!(f, "if condition not True/False: {v}"),
             EvalError::Effect(msg) => write!(f, "effect error: {msg}"),
-            EvalError::Unimplemented(what) => write!(f, "not yet implemented: {what}"),
         }
     }
 }
@@ -162,8 +157,8 @@ impl std::fmt::Display for EvalError {
 impl std::error::Error for EvalError {}
 
 // Inside the machine an error is boxed: `Result<Val, Box<EvalError>>` is
-// 40 bytes (Val's niche holds the discriminant) where the unboxed one was
-// 56, and every sub-evaluation returns one. Errors are rare and terminal.
+// 16 bytes (Val's niche holds the discriminant) where the unboxed one is
+// 40, and every sub-evaluation returns one. Errors are rare and terminal.
 type EResult<T> = Result<T, Box<EvalError>>;
 
 #[cold]
@@ -176,7 +171,7 @@ fn fail<T>(e: EvalError) -> EResult<T> {
 /// Every result of the machine is one of these, so it comes back in two
 /// registers and goes onto the stack with one store (at 40 bytes — two
 /// fat pointers in the constructor arm — the moves through returns and
-/// pushes were a quarter of the samples). Recursive children are
+/// pushes are a quarter of the samples). Recursive children are
 /// refcount-shared so cloning a value (variable lookup, pattern capture)
 /// is O(1) — the shared structure that makes this an environment machine
 /// rather than a substitution machine.
@@ -201,7 +196,7 @@ const _: () = assert!(std::mem::size_of::<Val>() == 16);
 /// A constructor value: ONE allocation holding a header (refcount, name
 /// id, field count) with the fields inline after it, reached through a
 /// thin pointer. `Rc<[Val]>` would be a fat pointer (and the name a second
-/// one), which is what kept `Val` at 40 bytes. Non-atomic refcount, like
+/// one), which makes `Val` 40 bytes. Non-atomic refcount, like
 /// `Rc`; `!Send` like `Rc` (NonNull). Dropping the last reference drops
 /// the fields in order and frees the block.
 struct CtorRef {
@@ -319,15 +314,15 @@ fn int_val(n: crate::ast::IntLit) -> Val {
 // LOWERED PROGRAM. The ast::Expr tree is lowered ONCE per `eval` into an IR
 // where everything per-step-expensive is precomputed:
 //   - integer literals are prebuilt `Val`s — evaluating one is a clone (a
-//     word copy for an i64), where the AST walk cloned the BigInt every time;
+//     word copy for an i64), where a walk of the AST clones the BigInt every
+//     time;
 //   - ctor / symbol names are INTERNED ids (`intern`) — evaluating a Ctor
 //     or a symbol carries a u32, and every pattern-match name test is an
 //     integer compare;
 //   - call heads are RESOLVED: a user fn becomes an index into the lowered
 //     fn table (no per-call HashMap+SipHash lookup), and the measured-hot
 //     primitives carry a PrimTag so dispatch is a jump, not a strcmp chain.
-// First definition wins on duplicate fn names (matches the old
-// `build_fn_index` / `Module::lookup_fn` semantics).
+// First definition wins on duplicate fn names.
 // -----------------------------------------------------------------------------
 
 enum IExpr {
@@ -336,7 +331,7 @@ enum IExpr {
     FVar(u32),
     BVar(u32),
     /// A zero-argument constructor, built once at lowering: evaluating it
-    /// is a clone (the general arm allocated an empty Rc slice per visit).
+    /// is a clone (the general arm allocates a block per visit).
     Ctor0(Val),
     Ctor(u32, Box<[IExpr]>),
     CallFn(u32, Box<[IExpr]>),
@@ -403,7 +398,7 @@ struct Prog {
 // name is an id from here: the lowerer (ctor/sym names + patterns),
 // `val_of_value_expr` (primitive + effect-handler results), and the cached
 // Bool values. Equal name strings are the same id, so every name test in
-// the machine is an integer compare. The six names the machine itself
+// the machine is an integer compare. The four names the machine itself
 // knows are interned first, at fixed ids.
 struct Names {
     ids: HashMap<Rc<str>, u32>,
@@ -412,15 +407,13 @@ struct Names {
 
 const TRUE_ID: u32 = 0;
 const FALSE_ID: u32 = 1;
-const Z_ID: u32 = 2;
-const S_ID: u32 = 3;
-const CONS_ID: u32 = 4;
-const NIL_ID: u32 = 5;
+const CONS_ID: u32 = 2;
+const NIL_ID: u32 = 3;
 
 impl Names {
     fn new() -> Names {
         let mut n = Names { ids: HashMap::new(), strs: Vec::new() };
-        for (i, s) in ["True", "False", "Z", "S", "Cons", "Nil"].iter().enumerate() {
+        for (i, s) in ["True", "False", "Cons", "Nil"].iter().enumerate() {
             assert_eq!(n.intern(s), i as u32);
         }
         n
@@ -500,9 +493,6 @@ impl<'a> Lowerer<'a> {
             Expr::SymLit(s) => IExpr::Sym(self.intern(s)),
             Expr::FVar(s) => IExpr::FVar(self.intern(s)),
             Expr::BVar(k) => IExpr::BVar(self.slot(*k)),
-            // Nat former (kernel/stdlib.shard): a bare `Z` IS the literal 0
-            // (the eval arm's packing rule, decided here once).
-            Expr::Ctor(n, args) if args.is_empty() && n == "Z" => IExpr::Int(Val::Int(0)),
             Expr::Ctor(n, args) if args.is_empty() => IExpr::Ctor0(ctor0(self.intern(n))),
             Expr::Ctor(n, args) => IExpr::Ctor(self.intern(n), self.lower_args(args)),
             Expr::Call(n, args) => {
@@ -579,10 +569,10 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 IExpr::Match(scrut, arms)
             }
-            // Sequential let (v3/LANGUAGE.md §5.4): each right-hand side is
-            // lowered with the earlier ones on the stack AS BINDINGS — the
-            // loader scoped it so — and the values pushed are the bindings
-            // in place, the last on top (BVar 0).
+            // Sequential let: each right-hand side is lowered with the
+            // earlier ones on the stack AS BINDINGS — the loader scoped it
+            // so — and the values pushed are the bindings in place, the
+            // last on top (BVar 0).
             Expr::Let(rhss, body) => {
                 let depth = self.layout.len();
                 let rhs: Box<[IExpr]> = rhss
@@ -671,18 +661,17 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
     Ok(val_to_expr(&v))
 }
 
-// Tail-call optimized: the iteration of a tail-recursive shard fn (e.g. the
-// app reducer's `compute_expr` loop, or any direct-style loop) reduces to a
-// `continue` here, NOT a Rust recursive call. Without this, a long shard
-// reduction chain keeps one Rust stack frame per step alive — and each frame
-// pins its bindings, so every intermediate term stays reachable → O(steps)
-// stack AND heap. Sub-evaluations that are NOT in tail position (a Call's
-// args, an If condition, a Match scrutinee, a Let's RHSs) still recurse,
-// bounded by term depth. The four tail positions — user-fn body, taken If
-// branch, fired Match arm, Let body — loop instead; a user-fn call truncates
-// the binding stack to this invocation's entry height first, so the frame
-// it replaces (and the terms only it reached) is dropped before the next
-// step.
+// Tail-call optimized: the iteration of a tail-recursive shard fn (any
+// direct-style loop) reduces to a `continue` here, NOT a Rust recursive
+// call. Without this, a long shard reduction chain keeps one Rust stack
+// frame per step alive — and each frame pins its bindings, so every
+// intermediate term stays reachable → O(steps) stack AND heap.
+// Sub-evaluations that are NOT in tail position (a Call's args, an If
+// condition, a Match scrutinee, a Let's RHSs) still recurse, bounded by
+// term depth. The four tail positions — user-fn body, taken If branch,
+// fired Match arm, Let body — loop instead; a user-fn call truncates the
+// binding stack to this invocation's entry height first, so the frame it
+// replaces (and the terms only it reached) is dropped before the next step.
 fn eval_ir<'a>(prog: &'a Prog, st: &mut Stack, e0: &'a IExpr) -> EResult<Val> {
     let base = st.len();
     let r = eval_loop(prog, st, base, e0);
@@ -746,27 +735,6 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
             IExpr::Ctor(name, args) => {
                 let mark = st.len();
                 push_args(prog, st, args)?;
-                // Nat former (kernel/stdlib.shard): ground Z/S packs to its
-                // nonneg literal — the unique ground Nat value (`Z` itself is
-                // lowered to the literal). This engine is flat-core (names ARE
-                // identity, cf. the True/False tests below), so the gate is the
-                // bare name. A symbolic or negative argument never packs. (An
-                // early return leaves the field on the stack; `eval_ir` pops
-                // it.)
-                if *name == S_ID && args.len() == 1 {
-                    match &st[mark] {
-                        Val::Int(n) if *n >= 0 => {
-                            return Ok(match n.checked_add(1) {
-                                Some(m) => Val::Int(m),
-                                None => int_val(crate::ast::IntLit::from(*n) + 1),
-                            });
-                        }
-                        Val::Big(n) if !num_traits::Signed::is_negative(&**n) => {
-                            return Ok(int_val((**n).clone() + 1));
-                        }
-                        _ => {}
-                    }
-                }
                 // One allocation, the fields moved off the stack.
                 return Ok(Val::Ctor(CtorRef::new(*name, st.drain(mark..))));
             }
@@ -813,15 +781,15 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                 push_args(prog, st, ab)?;
                 let cond = match (tag, &st[mark..]) {
                     (PrimTag::IntEq, [Val::Int(x), Val::Int(y)]) => {
-                        prof_count_prim("int_eq");
+                        prof_count_prim("=");
                         x == y
                     }
                     (PrimTag::Lt, [Val::Int(x), Val::Int(y)]) => {
-                        prof_count_prim("lt");
+                        prof_count_prim("<");
                         x < y
                     }
                     (PrimTag::Le, [Val::Int(x), Val::Int(y)]) => {
-                        prof_count_prim("le");
+                        prof_count_prim("<=");
                         x <= y
                     }
                     (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
@@ -859,7 +827,7 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                     Some(body) => e = body,
                     None => {
                         // the scrutinee rendered, truncated: a value the size of an environment
-                        // once produced a 3.2 GB error line (slice 3.26 landing 2)
+                        // renders as gigabytes of error line
                         let mut shown = format!("{:?}", val_to_expr(&v));
                         if shown.len() > 4000 {
                             shown.truncate(4000);
@@ -882,10 +850,6 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
     }
 }
 
-// A Call whose head is NOT a user fn: a primitive, an effectful extern, or an
-// unknown. Leaf operation (no tail position), so the eval loop returns its
-// result directly. The user-fn case is handled inline in `eval_ir` so it can
-// tail-loop into the body.
 thread_local! {
     // The two Bool values, built once (the general path builds a fresh
     // constructor block per comparison result — millions per checking run).
@@ -938,6 +902,10 @@ fn encode_byte_list(s: &str) -> Val {
     acc
 }
 
+// A Call whose head is NOT a user fn: a primitive, a host call, or an
+// unknown. Leaf operation (no tail position), so the eval loop returns its
+// result directly. The user-fn case is handled inline in `eval_loop` so it
+// can tail-loop into the body.
 fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
     // FAST PATH: the measured-hottest primitives on two machine integers,
     // dispatched by the PrimTag assigned at lowering (no strcmp). Each arm
@@ -945,8 +913,8 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
     // table's own BigInt operator through `int_val`, so results are the
     // table's bit for bit. The guarded prims (`mod`'s b≠0, the shifts'
     // 0..64 amount) repeat their table guard as an arm guard, so a guard
-    // failure falls through to the general path and stays stuck exactly as
-    // before. Anything not two `Val::Int`s — a `Big` operand, a non-integer,
+    // failure falls through to the general path and stays stuck as the table
+    // decides. Anything not two `Val::Int`s — a `Big` operand, a non-integer,
     // an untagged name — takes the general path below, which converts every
     // argument Val→Expr and the result back (allocating; the reason the hot
     // arms exist). The bitwise ops on i64 are exact for every i64 pair (the
@@ -955,15 +923,15 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
     use crate::ast::IntLit as Big;
     match (tag, args) {
         (PrimTag::IntEq, [Val::Int(x), Val::Int(y)]) => {
-            prof_count_prim("int_eq");
+            prof_count_prim("=");
             return Ok(bool_val(x == y));
         }
         (PrimTag::Le, [Val::Int(x), Val::Int(y)]) => {
-            prof_count_prim("le");
+            prof_count_prim("<=");
             return Ok(bool_val(x <= y));
         }
         (PrimTag::Lt, [Val::Int(x), Val::Int(y)]) => {
-            prof_count_prim("lt");
+            prof_count_prim("<");
             return Ok(bool_val(x < y));
         }
         (PrimTag::Add, [Val::Int(x), Val::Int(y)]) => {
@@ -1049,10 +1017,8 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
         prof_count_prim(name);
         return Ok(val_of_value_expr(&out));
     }
-    // Effectful extern: a registered run-time handler performs the real I/O
-    // (read a line, write bytes, …) and returns the result value. Present only
-    // during `run`; absent during `check`, where this point isn't reached for
-    // externs (the proof reducer keeps them stuck as data). See EFFECTS above.
+    // A host call: the installed handler performs the I/O and returns the
+    // result value. See EFFECTS above.
     if let Some(result) = EFFECTS.with(|e| {
         e.borrow_mut().as_mut().map(|h| h(name, &arg_exprs))
     }) {
@@ -1062,7 +1028,7 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
 }
 
 // -----------------------------------------------------------------------------
-// Pattern matching. Mirrors kernel/reduce.shard:match_pat.
+// Pattern matching.
 //
 // Convention: bindings are pushed onto the value stack in CAPTURE order
 // (leftmost PVar first), which leaves the LAST (rightmost) PVar on top —
@@ -1100,33 +1066,6 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
                     return true;
                 }
             }
-            // Nat former VIEW: a nonneg literal IS a ground Nat, so it
-            // matches Z/S structurally (0 is Z, n>=1 is (S (n-1)), recursing
-            // for deep patterns). Negatives are ill-typed garbage: no match
-            // (this closed-world engine reports NoMatchArm, loudly).
-            match v {
-                Val::Int(m) => {
-                    if *cn == Z_ID {
-                        return sub_pats.is_empty() && *m == 0;
-                    }
-                    if *cn == S_ID && sub_pats.len() == 1 {
-                        return *m > 0 && match_pat(&sub_pats[0], &Val::Int(m - 1), acc);
-                    }
-                }
-                // A Big is never zero (canonical), so only S can match it.
-                Val::Big(m) => {
-                    if *cn == Z_ID {
-                        return false;
-                    }
-                    if *cn == S_ID && sub_pats.len() == 1 {
-                        if num_traits::Signed::is_positive(&**m) {
-                            return match_pat(&sub_pats[0], &int_val((**m).clone() - 1), acc);
-                        }
-                        return false;
-                    }
-                }
-                _ => {}
-            }
             false
         }
     }
@@ -1154,7 +1093,7 @@ fn val_of_value_expr(e: &Expr) -> Val {
     match e {
         Expr::IntLit(n) => int_val(n.clone()),
         // Names are INTERNED — pattern matching relies on every runtime name
-        // being canonical (pointer compares, no string fallback).
+        // being canonical (integer compares, no string fallback).
         Expr::SymLit(s) => Val::Sym(intern(s)),
         Expr::FVar(s) => Val::FVar(intern(s)),
         Expr::Ctor(n, args) => Val::Ctor(CtorRef::new(intern(n), args.iter().map(val_of_value_expr))),
