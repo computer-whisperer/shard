@@ -4,8 +4,6 @@ This file holds the rules the system and the work are held to. It is short on pu
 reads it and ratifies it. Every other document describes what exists; this one prescribes. A change
 here is the owner's decision, recorded in §6 in their words.
 
-Status: **draft for ratification.**
-
 ## 1. What shard is for, and the bar
 
 shard is a system for writing programs whose behaviour is proven, down to the code that runs.
@@ -174,6 +172,9 @@ admitted that the logic does not derive.
    for us to do things over cleanly, and IMO the best information to carry forward is the basic
    shape we ended up with and what pros and cons remained at that state." (§5, "Documents describe
    the present".)
+9. *This file and `SHAPE.md`.* "I read through and can ratify that those match what we built so far.
+   There are some details there that I think are worth reviewing and potentially reworking now".
+   (Ratified as a description of what exists; the details stay open to rework.)
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.

@@ -3,8 +3,6 @@
 What the system is today, what is solid in it, and what is weak or missing. Read this first; the
 rules are in `LAW.md`, the reference in `LANGUAGE.md` and `KERNEL.md`.
 
-Status: **draft for ratification.**
-
 ## 1. In one page
 
 shard is a language for programs and for proofs about them, and the toolchain that checks both.
