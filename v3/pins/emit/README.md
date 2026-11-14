@@ -1,33 +1,46 @@
 # v3/pins/emit — the native toolchain's discriminating cases
 
-Each case is a self-contained toolchain-profile program (`main.shard`, a `main` over the
-World, printing to its streams) that `v3/kernel/test/native_tie_test.sh` builds through
-route 1 (`v3/build.sh`: `load.shard --emit` — kernel/lower.shard, kernel/cgen.shard — then `cc`)
-and runs under both engines — the Rust bootstrap's `eval direct` and the binary — tying
-stdout, stderr and the exit status byte for byte (LANGUAGE.md §8.6 slice 4.1 rule 3; R84,
-records §4.12; §8.7 slice 5.0). A case is what the back end must get right, or what its
-runtime must agree with the bootstrap on; no case carries an expected
-text — the bootstrap is the authority, the comparison is the verdict — except a `refused_*`
-case, whose first line `;; emit refused: MESSAGE` is the back end's refusal the tie expects
-in place of a binary (the bootstrap runs such a program; no C is written for it). A case at the root with no `kernel/` directory is a naming-law program (slice 4.4 landing 1): the tie loads it with Init and takes the V3 driver's `--run` as its reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an effect, `-` at `Nat` the integer's.
+Each case is a self-contained program (`main.shard`, a `main` over the World, printing to its
+streams) that `v3/kernel/test/native_tie_test.sh` builds into a binary (`v3/build.sh`:
+`load.shard --emit` — `kernel/lower.shard`, `kernel/cgen.shard` — then `cc`) and runs under both
+engines — the Rust bootstrap's `eval direct` and the binary — tying standard output, standard
+error and the exit status byte for byte. A case is what the back end must get right, or what its
+runtime must agree with the bootstrap on. No case carries an expected text: the bootstrap is the
+authority and the comparison is the verdict.
+
+A case is one of two kinds by where its file lives, and a name marks a refusal:
+
+- **A toolchain case** (`CASE/kernel/main.shard`): a file written as the system's own sources
+  are — no Init, its own `List`, `Bool` and `World`. Its reference is the bootstrap's
+  `eval direct` on the file.
+- **An ordinary case** (`CASE/main.shard`, no `kernel/` directory): a program that imports Init.
+  The tie loads it with Init and takes the V3 driver's run (`load.shard --run main.main`) as its
+  reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an
+  effect, `-` at `Nat` the integer's.
+- **A `refused_*` case** states the back end's refusal in its first line,
+  `;; emit refused: MESSAGE`. The tie expects the build to fail with `EMIT: MESSAGE` in place of
+  a binary; nothing is run.
 
 | case | discriminates |
 |---|---|
-| `record_with` | a record built with `make`, read through its accessors, updated with `with`: the loader's expansion reaches the chain, never the record form |
+| `record_with` | a record built with `make`, read through its accessors, updated with `with`: the loader's expansion reaches the back end, never the record form |
 | `cap_local` | capitalised locals — a parameter, a let binding, a match variable — beside a type whose constructors share their spelling: every local printed by its depth |
-| `nested_shadow` | a let rebinding one name three times, a match variable shadowing a parameter, a let inside an arm: the sequential let (R44) and the de Bruijn depths |
-| `quoted_cap` | a capitalised symbol literal in a term and a pattern, a symbol the old reader cannot lex as one atom (`t'`), operator-spelled symbols, the symbol primitives |
-| `dotted_last` | two records' accessors sharing a last component (`A.x`, `B.x`) and a plain fn spelled `A_x`: the mangled heads distinct or the emit refused |
-| `sealed_client` | a consumer of a directory module's view, the implementation linked by the directory's check (`lib` as a second root): the linked program is what the chain receives |
+| `nested_shadow` | a let rebinding one name three times, a match variable shadowing a parameter, a let inside an arm: the sequential let and the de Bruijn depths |
+| `quoted_cap` | a capitalised symbol literal in a term and a pattern, a symbol with a quote character in it (`t'`) compared with `sym_eq`, operator-spelled symbols in patterns, the symbol primitives |
+| `dotted_last` | two records' accessors and updaters sharing a last component (`A.x`, `B.x`): distinct identities, distinct C names |
+| `sealed_client` | a consumer of a directory module's view, the implementation linked by the directory's check (`lib` as a second root): the linked program is what the back end receives |
 | `program_exit` | a nonzero exit after output: the status and the streams tied, never the output alone |
-| `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: re-escaped for the old reader |
-| `symbol_pattern` | a symbol with a quote character in it, in a pattern: a static of the generated text, compared by identity (refused until slice 5.0 as `refused_symbol_pattern`: the old reader could not lex it) |
-| `mangle_injective` | a record's accessor `A.x` beside a plain fn `A_x`: two identities, two C names (refused until slice 5.0 as `refused_mangle_collision`: the text projection mangled both to one spelling) |
-| `refused_numeral_pattern` | a numeral pattern past 2^62: no C case label for it, the emit refused with its message (the first line's `;; emit refused:`), nothing built — the refusal path |
-| `init_list` | a program under the naming law through the bridge (slice 4.4 landing 1; refused until then as `refused_init_list`): its World, an extern over `ByteArray`, a string literal over Init's `List` — Init's four wire types identified with the chain's prelude by the emitter, so the literal needs no rewrite; the reference the V3 driver's `--run` |
-| `init_prim` | the bridge's primitive rows at their edges (refused until slice 4.4 as `refused_init_prim`): `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble` — each row silent when the naming law's result holds, its name printed otherwise, the last line always; the driver under `ev` the authority (its entries K's), the binary agreeing byte for byte |
-| `prims` | the profile's integer and symbol primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the chain's runtime against the bootstrap's |
+| `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: each literal's bytes the same in the binary |
+| `symbol_pattern` | a symbol with a quote character in it, in a pattern: a static of the generated text, compared by identity |
+| `mangle_injective` | a record's accessor `A.x` beside a plain fn `A_x`: two identities, two C names |
+| `refused_numeral_pattern` | a numeral pattern past 2^62: no C case label for it, the emit refused with its message, nothing built — the refusal path |
+| `init_list` | an ordinary case: its own World, an extern over `ByteArray`, a string literal. Init's `Bool`, `List`, `Option` and `Prod` are the cells the runtime's externs build and read, so the literal needs no rewrite |
+| `init_prim` | an ordinary case: Init's arithmetic at the values where the runtime's own operations differ — `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble`. Each row is silent when Init's result holds and prints its name otherwise; the last line is always printed |
+| `prims` | the toolchain's integer primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the binary's runtime against the bootstrap's |
 
-The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a
-sidecar written by `prove`, a store written and verified — are the tie script's workloads
-over the drivers, not programs here.
+`v3/kernel/test/lower_test.sh` also runs the two ordinary cases, each as loaded and in its lowered
+form, and requires the same output.
+
+The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a sidecar
+written by `prove`, a store written and verified — are the tie script's workloads over the
+drivers, not programs here.

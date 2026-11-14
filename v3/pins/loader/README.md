@@ -1,340 +1,153 @@
-# v3/pins/loader — the loader's corpus (phase 2, slices 3–7)
+# `v3/pins/loader` — the loader's cases
 
-Each directory is a **package root**; `CASE/main.shard` is the file the
-loader is given (`v3/kernel/load.shard --root v3/pins/loader/CASE …`),
-its imports resolve under that root, and `(import Init NAME)` reaches
-into the export fixtures (`v3/kernel/test/fixtures/`), which the test
-streams once for every case (slice 3.25) — a module sees Init below its
-own horizon, whatever the process has streamed. The header
-line of `main.shard` states the load's expected outcome — the first
-record that is not a module, an Init load or an acceptance:
+Each directory is a small package. `CASE/main.shard` is the file the loader is given, its imports
+resolve under `CASE/`, and its first line states the outcome the load must have. A case that imports
+Init reads the pinned export on demand, up to the horizon its `(import Init NAME)` sets.
 
-```
-;; expect: ok                          every record accepted (at least one; parameters, RUNNABLE declarations
-;;                                     and the implementation's own declarations count)
-;; expect: NAME refused REASON         K refused NAME for REASON
-;; expect: NAME policy AXIOM…          NAME's axiom closure reaches AXIOM… outside the file's policy (§9)
-;; expect: NAME pending sorry          read, admits nothing (a theorem's proof, or a fulfills)
-;; expect: NAME refused REASON         also the classifier's refusal (slice 5): unsaturated, function_value,
-;;                                     nonexhaustive, private_match, unknown_head, ambiguous_head, ambiguous_type, unbound_name,
-;;                                     unknown_type,
-;;                                     pattern_type, pattern_name, nat_constructor, name_taken, private_if, if_type (slice 10), no_list, …; a realize's (§7.5): unknown_constant,
-;;                                     realize_kind, realize_primitive, realize_signature, realize_descent, realize_recursion, realize_order, no_l_meaning,
-;;                                     no_l_identity, untyped_subterm, equation_form, equations_count, recursion_structure,
-;;                                     no_realization, erased_in_runtime, noncomputable; an equation K refused is
-;;                                     NAME.realize_N refused conversion
-;; expect: NAME pending measure        a realization attached under a measure other than struct (§7.2): the obligation reported
-;; expect: NAME runnable REASON       every record accepted, and the fn NAME is RUNNABLE with that obstacle to L meaning
-;; expect: NAME param KIND            every record accepted, and NAME is a declared parameter of KIND (axiom: a trusted
-;;                                     axiom, slice 4.2 landing 2)
-;; expect: NAME threaded               every record accepted, and the fn NAME's threading verdict is ok (slice 4.3 landing 0)
-;; expect: NAME unthreaded REASON      every record accepted, and NAME's verdict is REASON: world_twice, world_unsupported, world_forged
-;; expect: NAME bin ok                 every record accepted, and the bin NAME's record has every requirement met (slice 4.3 landing 1)
-;; expect: NAME bad-bin REASON         some record is the bin NAME's failure REASON, not necessarily the first bad one: unmet, unthreaded,
-;;                                     bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
-;; expect: NAME refuses REASON         some record refuses NAME for REASON, not necessarily the first bad one (slice 3.16: a refused discharge after a PENDING measure)
-;;                                     named (§8.4 rule 1, slice 3.13): e_only_type, no_l_meaning, no_l_identity, unknown_constant,
-;;                                     measure_pending, numeral_pattern, recursion_depth
-;; expect: NAME impl-error REASON      the implementation check (§6.6): impl_missing_type, impl_missing_fn,
-;;                                     impl_missing_fulfills, impl_type_arity, impl_signature, fulfills_unknown
-;; expect: read-error REASON           the reader refused (the file's reading ends there)
-;; expect: load-error REASON           the loader refused: import_cycle, missing_file, missing_interface,
-;;                                     import_outside_root, init_name_not_found, export_pin_mismatch,
-;;                                     req_scope, view_form, sig_outside_view, duplicate_name,
-;;                                     module_collision, fulfills_outside_impl, fulfills_not_obligation, …
-;; expect: load-error-after REASON     some record is the load error REASON, not necessarily the first bad one
-;;                                     (slice 3.30 landing 2: fulfills_refused after the refusal it names)
-;; roots: FILE…                        what the loader is given, in order (default main.shard);
-;;                                     a directory (lib) is its view and then its implementation checked
-```
+`v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome
+with the header; `v3/test.sh` runs it. `v3/kernel/test/loader_test.shard` holds the cases a header
+cannot state (two root files in order, a wrong export, the records' text, a loaded program run).
+Some shell tests read the records of a case: `define_test.sh` (`route_callee`, `discharge_measure`,
+`registry_native`, `decidable_cells`, `mutual_measure`, `derive_refusals`), `derive_test.sh`
+(`derive_size`, `derive_size_plain`), `wire_test.sh` (`wire_*`), `template_test.sh`
+(`template_e_first`), `store_test.sh` (`auto_core`, `auto_strategy_free`, `discharge_measure`),
+`parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh` and `lower_test.sh` (`basic`,
+`refused`, `read_error`, `view_basic`). Some harnesses run a case's program and compare values:
+`entry_test.shard` (`entry`, `entry_s`, `entry_shape`), `handle_test.shard` (`handle_door`, `entry`,
+`entry_s`, `row_types`), `rows_test.shard` (`ev_string`, `row_types`, `struct_proj`),
+`project_test.shard` (`project_bool`), `matcher_test.shard` (`match_def`, `match_imposter`,
+`match_poly`).
 
-A `REALIZE` record (a realization attached, §7.5) counts as accepted, as `RUNNABLE` does,
-and so does `DEFINE` (a fn defined with its equations, §8.4), and so do `TEMPLATE` (a fn or a
-supplied realize with a function-typed binder defined, §8.4 slice 3.28) and `INSTANCE` (the
-template at a tuple of shapes, built and defined). The cases load Init on demand
-from the pinned export and its index (slice 3.26): a case's `(import Init NAME)` sets its
-horizon to NAME's ordinal and what it cites below that is loaded, once in the run;
-`init_not_found` asks for a name the export does not declare. The slice-3.13 refusals a header may state: `nat_operator`,
-`recursion_depth` (as an obstacle), `define_matrix`, `realize_recursion` and
-`realize_descent` for a fn.
+## The header
 
-Slice 3.19's cases (deriving, `LANGUAGE.md` §8.4): `derive_eq` and `derive_containers`
-(equality generated and used by an `if`; Init's `List`, `Option`, `Prod` at closed
-arguments), the refusals `derive_field`, `derive_nested` (`derive_shape`), `derive_params`
-(`derive_needs`), `derive_policy`, `derive_duplicate`, `derive_by`, `derive_needs`,
-`derive_sig` (`derive_type`: a view's sig type in a consumer, after the decision its view
-exports is registered and used) — each stated as
-`main.derive refused REASON` — and `derive_e_first` (`prim_type`: an integer comparison at
-an inductive in an E-first body); `match_dependent` (a match generalizes a local
-scrutinee in its expected type), `if_rec_call` and `measure_if_call` (an `if` whose
-condition is a self-call; one obligation per statement), `bool_ops` (`and`, `not` on
-`Bool`s). From the second reader's findings: `registry_native` (a registry row never
-speaks for a native declaration bearing its name — under this test's one load of the whole
-export the declaration is the refusal `Bool.or refused name_taken`, Init's names being
-Init's, slice 3.25 rule 2; `define_test.sh`'s lazy load reads the finding's dump), `decidable_cells` (a `Decidable` value
-is the type's cells off an `if`'s condition; `define_test.sh` runs it), `derive_name_taken`
-(`NAME refused name_taken`), `derive_refusals` (what has no derivation; `define_test.sh`
-reads its five records), `derive_visible` (an entry is visible where its deriving module
-is; two roots). Orderings and renderings need Init past this fixture and the library:
-`kernel/test/derive_test.sh`.
+| line | the load's outcome |
+|---|---|
+| `;; expect: ok` | every record is an acceptance (a declaration accepted, a parameter, a function defined or left a program, a realization, a template, an instance); at least one |
+| `;; expect: NAME refused REASON` | the first record that is not an acceptance refuses `NAME` for `REASON` |
+| `;; expect: NAME refuses REASON` | some record refuses `NAME` for `REASON`, not necessarily the first bad one |
+| `;; expect: NAME policy AXIOM…` | `NAME`'s assumptions reach `AXIOM…`, outside the file's policy |
+| `;; expect: NAME pending REASON…` | `NAME` is pending: `sorry` (with `goals=N` and the goals), `measure`, `auto_missing fp=…`, `auto_stale PART fp=…` |
+| `;; expect: NAME runnable REASON` | every record accepted, and the function `NAME` is a program without a definition for `REASON` |
+| `;; expect: NAME param KIND` | every record accepted, and `NAME` is a declared parameter of `KIND` |
+| `;; expect: NAME threaded` | every record accepted, and `NAME`'s use of the `World` is judged `ok` |
+| `;; expect: NAME unthreaded REASON` | every record accepted, and the verdict is `world_twice`, `world_unsupported` or `world_forged` |
+| `;; expect: NAME bin ok` | every record accepted, and the bin `NAME` has every requirement met |
+| `;; expect: NAME bad-bin REASON` | some record is the bin's failure: `unmet`, `unthreaded`, `bad_entry`, `extern_outside`, `untrusted` |
+| `;; expect: NAME impl-error REASON` | a view's implementation fails its check |
+| `;; expect: read-error REASON` | a file's reading ends in `REASON` |
+| `;; expect: load-error REASON` | the loader refuses; `load-error-after REASON` when another bad record stands before it |
+| `;; roots: FILE…` | what the loader is given, in order (default `main.shard`); a directory is its view, then its implementation checked |
+| `;; root: DIR` | the package root (default the case's directory) |
 
-Slice 3.20's cases (I's opener, `LANGUAGE.md` §8.4): `by_core` (every form on a small type
-and two list functions: the plain forms, `apply` with a premise block and with the middle
-term given through the first premise, `cases` with its arms in one list, `unfold` and
-`reduce`, `induction` with the hypothesis rewritten in, `decide`, `cases` on a term, a
-reversed `rw` and an occurrence selector, a conditional lemma's premise as a block),
-`by_wf` (a measured function's equation by `WellFounded.fix_eq`, the theorem by `wf` with
-the hypothesis at `n - 1`, the descent obligation discharged by a block — the export's
-second fixture, which holds `fix_eq`), `by_sorry` (`NAME pending sorry goals=2`), and the
-refusals, each `read-error REASON`: `by_goal_open`, `by_goal_closed`, `by_unknown_step`,
-`by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness` (`by_apply_unsolved` until
-slice 3.22: the witness goal is built, the pin expects `ok`), `by_cases_rows`, `by_cases_fields` (`induction_fields`), `by_rw_no_match`
-(syntactic matching: `a + b` finds no `b + a`), `by_rw_occ` (`(occ K)` past the count),
-`by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`, `by_reduce` (`reduce_stuck`: an
-unfolding equation is not a computation rule). The consumer is `kernel/test/tactic_test.sh`
-over calc's files.
+## The cases
 
-Slice 3.21's cases (`arith` and `simp_only`, `LANGUAGE.md` §8.4): `arith_core` (`Int` and
-`Nat` rows, a certificate given and one reconstructed, an equation by one normal form and by
-`≤` both ways, a goal `¬ P` and `False`, a fact as a term, Init's spelling), `arith_div` (a
-product with a literal, the quotient and the remainder by one: the second fixture to its
-end), and the refusals `arith_failed` (the rows shown in normal form), `arith_certificate`,
-`arith_goal`, `arith_fact`, `arith_unreached` (the product's lemma past the prefix);
-`simp_core` (list order, premises by assumption, a hypothesis and its reverse as rules),
-`simp_no_progress`, `simp_budget`. What 3.20's second reader found, pinned: 
-`by_cases_local_eq`, `by_induction_eq` (`induction_eq`), `by_rw_occ_spine`. What calc's
-claims needed: `by_case_step` (a matcher at a constructor whose row is an open `if`; a
-comparison left as it is by `reduce`), `define_match_eq` (a measured function's matcher
-carries its equation: the descent obligation under `tail2 xs = cons x r`, discharged, and a
-ground run by `reduce`), `type_ctor_theorem` (a type and its constructor of one name in a
-theorem's binder). `by_sorry`'s record carries the sorried goals. What the slice's own second
-reader found: `simp_self` (a rule whose right side holds its left never reaches a fixpoint),
-`by_ne_level` (`Ne` at a universe other than 1), and `define_match_eq`'s second function (a
-descent obligation as the comparison at `Nat` under the source's names).
+A case expects `ok` unless it is listed as refused. A reason in parentheses belongs to the cases
+named before it, back to the previous `;` or `)`. A refused case with no reason shown is refused for
+the reason its name spells, less a leading `by_`.
 
-Slice 3.21b (GPT-6's trajectory review, findings 1–3): `op_expected` (an arithmetic
-operator under an expected `Nat` or `Int` takes that type's identity — `(- 1 2)` at `Int` is
-`Int.sub 1 2`, -1, where it was `Int.ofNat (Nat.sub 1 2)`, 0 — and a comparison's operands
-decide by the first that is not numeric-closed), `init_horizon` (a module sees Init below
-its own horizon whatever an earlier root admitted: the review's failing load order),
-`init_horizon_beyond` (a declaration past the horizon, admitted by another module, is
-`unknown_constant`); `by_reduce` expects `ok` (reduce leaves a target with nothing to
-reduce as it is).
+### Modules, names and Init
 
-Slice 3.22, landing 1 (the producers' ground): `arith_only` (`(arith only FACT… (farkas K…))`:
-the rows are the goal and the facts named — the review's probe, an unrelated `have` before an
-explicit certificate, and a context hypothesis that is no row until named), `by_witness`
-(`apply Eq.trans` with its middle term assigned by the first premise's `exact`) and
-`by_witness_open` (both premises sorried: `witness_open` names the argument), `auto_core` (a
-theorem whose proof is `auto` or `(auto HINT…)` replays the block of `main.auto.shard`'s
-entry for it), `auto_stale` (an entry made for another statement: `pending auto_stale
-statement fp=…`, the part of the key that differs named and the fingerprint an entry needs
-— slice 4.5 landing 1), `auto_missing` (no sidecar: `pending auto_missing
-fp=…`), `auto_malformed` (a form of another shape in the sidecar: the file's
-`sidecar_malformed`, the theorem pending). The build never searches.
+| cases | what they pin |
+|---|---|
+| `basic`; refused: `no_open`, `selective` (`unknown_constant`) | an import makes names citable in full and opens nothing; `(use a)` opens a prefix, `(use a Nat)` opens it for one name |
+| refused: `ambiguous` (`ambiguous_name`); `same_spelled` (`ambiguous_type`) | a bare name two opened prefixes declare is never chosen silently; Init's `Bool` beside the file's own |
+| `visible` | a file sees what its own imports reach, whatever else the load has admitted |
+| refused: `cycle` (`import_cycle`), `missing` (`missing_file`), `outside` (`import_outside_root`), `collision` (`module_collision`) | the import errors; a file `lib.shard` beside a directory `lib/` |
+| refused: `ev_duplicate`, `qualified_collision` (`duplicate_name`); `qualified_collision_l` (`already_declared`) | one name declared twice: in a file, by two modules that build the same name, and in K |
+| `type_opens`, `type_ctor_name`, `type_ctor_theorem` | a `type` opens its constructors for its file; a type whose constructor bears its name |
+| refused: `read_error` (`unterminated_list`); `retry` (`bad_constructor`) | a file that does not read; a file whose reading failed is loaded once |
+| `init`, `init_nested`; refused: `init_not_found` (`init_name_not_found`) | Init's names are bare; two horizons in one load; a name the export does not declare |
+| `init_horizon`; refused: `init_horizon_beyond`, `init_above_horizon`, `init_above_horizon_by` (`above_horizon`) | a module sees Init up to its own horizon whatever an earlier file loaded; a name past it is refused with the import to write, also inside a `by` block |
+| refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
+| `type_flip`; refused: `type_e_only` (`unknown_constant`) | the same type is a logical type in a file that imports Init and a runtime-only type in one that does not |
+| `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
+| `policy_axiom` (`policy`), `policy_trusts` (`param axiom`), `policy_cross` (`policy`) | an axiom needs `(trusts …)`; the policy is per file |
 
-`v3/kernel/test/loader_pins_test.shard` replays every case in its list;
-`loader_test.shard` holds the cases a header cannot state (two root
-files, the wrong-pin fixture, the records' text, a loaded program run
-under `ev`). `v3/test.sh` runs both. The `ev_*` cases are the
-classifier's (slice 5); `ev_profile` has its files under `kernel/` — a
-file without `Init`, E only, formerly the toolchain profile (§8, slice
-3.4); the `realize_*` cases are slice 5b's (§7.5). Slice
-7's: `entry` (a kernel-like file: a checked entry with `Int`, a byte list and
-the World, run by `entry_test`) and `entry_s` (S: `Nat`, Init's `(List
-Nat)`), `same_spelled` (T5: Init's `Bool` beside `main.Bool`, the bare
-name ambiguous, `Init.Bool` the explicit citation) and
-`realize_theorem` (T5: a theorem about `List.append` stated before its
-realization, cited after). The ratification pass's (§13 item 35,
-2026-09-15): `type_e_only` (no `Init`: `(type Foo (MkFoo Nat))` is E
-only by its field and a `def` citing it is `unknown_constant`) and
-`type_flip` (the same type with `(import Init Nat.add)` enters K, the
-`def` accepted) — the same text, decided by its file's scope. The K
-seal's (slice 3.8): `private_module` (a direct import of a file inside
-a directory that has a view, from outside it, refused) and
-`private_inside` (the implementation importing its private helper from
-inside, the consumer importing the directory); landing 2's:
-`sealed_module` (one module across the directory: the view's type and
-fn implemented in two private files, the implementation file only
-importing them), `impl_e_only` (an E-only implementation type stands
-for a sig type as an E parameter), `view_req_scope` now imports the
-view's own implementation file (a plain file outside the directory is
-allowed). `ev_private_match` and `ev_launder` are retired: the seal
-closes the case — outside, the import is refused first; inside, the
-type is concrete. Landing 3's `k_client_reach`: a client of K's view
-naming `CheckedEnv`'s constructor, refused `unknown_head` — the first
-case under the package root, by the `;; root:` header (the case's
-files then sit where a client of `kernel/k` must). Slice 3.9's records:
-`record_basic` (a plain, a `(ctor …)` and a parametric record; `make`
-in any order; `with` chained; the closure also tied by parity) and
-`record_make` (a `make` missing a field: `record_make`). Slice 3.13's
-(`fn` = `def` + `realize`, §8.4): `define_basic` (a non-recursive fn
-and a structurally recursive one defined with `eq_N`, theorems citing
-the equations, an accumulator through the abstracted motive, `+` and
-`lt` by operand type, a `let` and an `if` in tail position),
-`define_depth` (a self-call two constructors down: `RUNNABLE …
-why=recursion_depth`), `define_nat_operator` (`-` at `Nat` refused),
-`define_runnable` (the obstacles named: a `Symbol` binder, a call to
-such a fn, an extern, a measure, a numeral pattern — beside a fn that
-is defined), `define_refused` (an eligible fn refused: a self-call
-without a measure), `def_match` (a `def` in the E forms, rule 5), and
-§8.5's `view_eq_hidden` (a consumer citing `lib.step.eq_1`:
-`unknown_constant`) and `view_rfl` (a consumer's `Eq.refl` through
-the implementation's body: K's `conversion` refusal) — both with the
-directory as a second root, where the implementation's own check
-shows `DEFINE lib.step` and `DISCHARGE lib.step defined`.
-Slice 3.14's (course-of-values, measures, §8.4): `define_depth` now
-defined by `brecOn`, its third equation cited; `define_below` (a native
-`Tree` gets `Tree.below` and `Tree.brecOn` generated, two `ACCEPT`
-lines, then an immediate and a deep recursion over it, equations
-cited), `define_measure` (a measured fn: `PARAM main.count.dec_1
-obligation`, `DEFINE … pending=main.count`, `PENDING main.count
-measure`, a theorem citing it), `define_measure_int` (`RUNNABLE …
-why=measure_type`) and `define_mutual` (`why=mutual_recursion`).
+### Views and sealed directories
 
-Slice 3.15's (the elaborator, §5.1, §8.4): every pin rewritten to
-Stage 1's spelling — an implicit argument never written (`(Eq a b)`,
-`(Eq.refl a)`, `(List.cons x t)`; `(len xs)` and `(Pair2.mk a b)` in
-a theorem as in a body, a `type`'s parameters and a `fn`'s type
-parameters being implicit now), a universe not written inferred,
-`@NAME` the explicit application; `refused` and `view_rfl` are
-`read-error type_mismatch` (the elaborator refuses a false theorem's
-proof, and a consumer's `Eq.refl` through a view parameter, before K).
-The new cases: `elab_implicit` (`List.append`, `List.cons`, `Eq` bare;
-`Eq.refl`'s and `Or.inl`'s implicits from the expected type; `List
-Type` at level 1; `@Eq.{1}`; `exists`), `elab_numeral` (`5` and `-3`
-at `Int`, a `Nat` coerced by `Int.ofNat` where an `Int` is expected,
-`(+ n 0)` at `Nat`, `(- n n)` at `Nat` as `Nat.sub` in a statement,
-`(+ a b)` at `Int`, `if` as `ite` with `Nat.decLt`, `(< a b)` the
-proposition), `elab_unsolved` (`(= List.nil List.nil)`: the element
-type undetermined, `unsolved_implicit`), `elab_instance` (`ite True`:
-`instance_needed`), `elab_no_decision` (`(if True …)`: `no_decision`),
-`elab_mismatch` (an `Int` where a `Nat` is expected: `type_mismatch`,
-no `Int.toNat`).
-`define_forward` (a fn calling one defined later in the file: parked,
-defined once the callee is, its equation cited) and `elab_confusion`
-(the constructor-structure bundle of two native types cited: `Color.
-noConfusion` at `False`, `Tree.Node.inj`, `Tree.casesOn` with the
-motive from the expected type) close slice 3.15.
-Slice 3.16 landing 1 (matchers; §8.4 rule 1, 5): `match_def` (a `match`
-in a `def` as a generated matcher admitted before its owner; nested
-patterns with a fall-through row; the theorems `Eq.refl` through it),
-`match_statement` (the same form in a statement, the theorem owning
-the matcher), `match_poly` (the matcher abstracts the type parameter
-its scrutinee's type mentions), `match_imposter` (a hand-written
-matcher and an imposter of the same type, for
-`kernel/test/matcher_test.shard`), `match_not_exhaustive`,
-`match_literal` (`literal_pattern`), `match_motive` (the type not
-determined at the position), `ctor_expected` (`Add` at an expected
-`Exp` beside Init's class). Landing 2: `project_bool` (definitions
-erased by the derived view and run by `kernel/test/project_test.shard`:
-both values of a `decide` returned, matched, stored, used as a
-condition; a matcher's chosen arm only) and `elab_bridge` (`decide`,
-`if` on a `Bool` and on a two-constructor type, an operator past a
-numeral operand, `(list …)`, an untyped `let`; the theorems `Eq.refl`). Landing 3 (the flip): `route_callee` (G8: a `RUNNABLE` callee as a
-callee-local — `callee_runnable route=typed`; `define_test.sh` compares
-the two programs' dumps), `one_meaning` (G1: one expression as a `fn`'s
-body and a `def`'s value, equal by `Eq.refl`; `-` at `Int` with a
-`Nat` operand cast at the leaf since slice 3.21b), `discharge_measure` (G4: three obligations with their branch
-proof discharged by `Nat.sub_lt`, the account read in
-`define_test.sh`), `discharge_self_cycle` and `discharge_two_cycle` (G7:
-`fulfills_cycle`), `match_in_impl` (G9: a matcher generated and read
-back inside an implementation check), `define_arg_match` (a self-call
-under a `match` in an argument and a `let`; no equation where K cannot
-decide it). Moved by the flip, each with its cause in its header:
-`ev_unsaturated` and `ev_fn_value` (`type_mismatch`), `ev_nonexhaustive`
-(`match_not_exhaustive`), `ev_ambiguous` (`ambiguous_name`),
-`ev_pattern_type` (`pattern_constructor`), `k_client_reach`
-(`function_expected`), `define_nat_operator` (`ok`: rule 4),
-`define_mutual` (`callee_runnable`), `realize_order`
-(`no_realization`), `ev_no_l_meaning` and `realize_fn` (a new obstacle:
-the old one, a measure without a self-call, is now a plain
-definition).
+| cases | what they pin |
+|---|---|
+| `directory`, `view_basic`, `view_dir_form`, `view_helper` | a directory's view, its implementation checked as a second root, the `mod.req/mod.req.shard` form, a private helper type |
+| `view_fulfills_obligation`; `view_pending` (`pending sorry`) | a measured function inside an implementation discharging its own obligation; a requirement fulfilled by `sorry` |
+| `view_missing_type`, `view_missing_fn`, `view_missing_fulfills`, `view_signature`, `view_arity`, `view_fulfills_unknown` (each an `impl-error`) | each way an implementation can fail its view |
+| refused: `view_form`; `view_no_interface` (`missing_interface`), `view_sig_outside` (`sig_outside_view`), `view_req_scope` (`req_scope`) | the view file's own errors |
+| refused: `view_eq_hidden` (`unknown_constant`), `view_rfl` (`type_mismatch`) | a consumer cannot cite an implementation's equation or compute through its body |
+| `private_inside`, `sealed_module`; refused: `private_module` | files behind a view are private to their directory, which is one module across its files |
+| `impl_e_only`, `match_in_impl`; `route_sig_callee` (`runnable no_l_meaning`); refused: `if_private` (`private_if`), `derive_sig` (`derive_type`) | a runtime-only implementation type; a matcher inside an implementation; a view function with no logical reading as a callee; an `if` and a derivation on a view's type |
+| refused: `k_client_reach` (`function_expected`), `k_client_admit`, `k_client_transfer` (`unknown_head`) | a client of the checker's view cannot name what the view does not export |
 
-Slice 3.17's (§8.4, the porting facilities): `literal_pattern` (numeral
-rows at `Int` and `Nat` on the typed route, in a `fn` and a `def`, the
-rows computing in K), `literal_open` (`match_not_exhaustive`: no last
-row), `literal_type` (`pattern_type`: a numeral row at a `Bool`),
-`literal_rows` (a row after the catch-all), `literal_nested` (a numeral
-under a constructor: E-first, `no_l_identity`); `match_literal` is
-narrowed to that nested case in a `def`. `rename_ok` (`< <= =` on both
-routes), `rename_refused` and `rename_refused_e` (`renamed_primitive`
-from the elaborator and from the classifier: `lt le int_eq`; slice 4.4
-landing 2 adds `rename_refused_kernel`, the same refusal in a module under
-`kernel`, the toolchain's exception retired). `record_laws` (v2's law family as `Eq.refl`),
-`struct_make` (`make` and `with` over a structure, the dependent field
-supplied), `dependent_update` (it is not: a read error naming the field),
-`struct_params` (a structure with parameters: `record_make`).
-`measure_natabs` (a measure through `Int.natAbs`, erased by the
-registry's expression row; `pending measure`). `route_sig_callee` (a
-view's `sig fn` with no L reading as a callee: `no_l_meaning`). A header
-may now also state `renamed_primitive`, `literal_rows`, `pattern_type`
-(the elaborator's) and `read-error dependent_update`. Slice 3.18's:
-`row_types` (the registry's type rows: a constructor its argument, a
-projection its subject, a constructor pattern binding the field),
-`row_e_first` and `row_e_match` (an E-first body cannot cite a row's
-constructor, `unknown_head`, nor take its value apart with the
-representation's, `pattern_type`), `struct_proj` (a projection function is its
-projection), `ev_string` rewritten (a literal is a `String`, its
-program its bytes), `str_e_first` (the same literal in an E-first
-body), `str_no_string` and `str_bad_utf8` (`no_string`; `read-error
-bad_string`), `wire_s`, `wire_bad` and `wire_bad_result` (the externs under
-the naming law; one declared over a type the wire has no codec for;
-two with a result the extern does not return; run by
-`kernel/test/wire_test.sh`). `kernel/test/rows_test.shard` runs
-`ev_string`, `row_types` and `struct_proj` under `ev` and compares
-the values. Every test reads the one export through its index; a
-case's horizon (through `UInt8.toNat` for the libraries, through
-`Int.lt_mul_ediv_self_add` for `arith`'s product and quotient) is its
-import's, and its demand is loaded on it.
+### Programs: the forms and their refusals
 
-Slice 3.27 landing 1 (the library arc's seams, §8.4 slice 3.27 rules
-2–5): `op_int_div` (`/` at `Int` is `Int.ediv`, `%` is `Int.emod`, at
-`Nat` the pair is `Nat.div`/`Nat.mod`), `one_spelling` (a lemma Init
-states through a class method under its instance — `0 &&& b = 0` —
-applies to V3's `Nat.land 0 b` under `apply`, `rw` and `simp_only`;
-`List.length_append` and `List.append_nil` at `List.append`: the
-unifier reads the method as its function before K's whnf, which would
-compute the closed side), `instance_table` (`List.sum` at `Int` and
-`Nat`, `min`/`max` as `Min.min`/`Max.max` under the table's instance,
-`List.length_take`'s right side), `init_above_horizon` (a name never
-loaded, cited bare under an opened namespace, above the module's
-horizon: `read-error above_horizon`, the refusal naming the qualified
-declaration, its ordinal and the import to write); `init_horizon_beyond`
-now expects `above_horizon` too.
+| cases | what they pin |
+|---|---|
+| `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_symbol`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, a symbol, `(list …)`, nested patterns, a string literal |
+| `ev_profile`; refused: `ev_profile_form` (`unknown_constant`) | a file that sees no Init is a program only; a `def` there cannot cite `Int` |
+| refused: `ev_unknown_head` (`unknown_head`), `ev_unsaturated`, `ev_fn_value` (`type_mismatch`), `ev_ambiguous` (`ambiguous_name`), `ev_nonexhaustive` (`match_not_exhaustive`), `ev_pattern_type` (`pattern_constructor`), `ev_no_l_meaning` (`unknown_constant`) | the refusals of a body |
+| `if_ok`; refused: `if_one`, `if_type` (`if_type`) | an `if` takes a `Bool`, a two-constructor type or a comparison; not a one- or three-constructor type, not a `Nat` |
+| `dif_ok`; refused: `dif_needs_init`, `dif_type`; `dif_scope` (`unknown_type`) | the dependent `if` and its hypothesis's scope |
+| `bool_ops`, `op_expected`, `op_int_div`, `define_nat_operator`, `rename_ok` | `and`, `or`, `not` at `Bool`; an operator takes the expected type's meaning; `/` and `%`; `-` at `Nat`; `< <= =` |
+| refused: `rename_refused`, `rename_refused_e`, `rename_refused_kernel` (`renamed_primitive`) | `lt`, `le`, `int_eq` are refused with the spelling to write |
+| `literal_pattern`; `literal_nested` (`runnable no_l_identity`); refused: `literal_rows`; `literal_open` (`match_not_exhaustive`), `literal_type` (`pattern_type`), `match_literal` (`literal_pattern`) | numeral rows in a `match` |
+| refused: `str_no_string` (`no_string`), `str_bad_utf8` (`bad_string`) | a string literal needs Init's `String` and valid UTF-8 |
+| `row_types`, `struct_proj`, `refined_row`; refused: `row_e_first` (`unknown_head`), `row_e_match` (`pattern_type`) | Init's types that run as their one field (`Fin`, `UInt8`, `ByteArray`, `String`, `Subtype`); a projection |
+| refused: `lean_form`, `lean_notation` (`lean_form`), `lean_symbol`, `lean_by_term` (`lean_symbol`), `infix_form`; `inhabited_default`, `inhabited_default_by` (`inhabited_default`), `absurd_e_first` (`absurd_needs_init`) | Lean spellings refused with a pointer: `partial`, `notation`, `==`, a `by` term, `(n + 1)`, `List.get!` |
+| `zero_arity_bare` | a function of no parameters written bare is its call |
 
-Slice 3.27 landing 2 (2026-10-10): `arith_eq_bare` — an equation whose two sides have the same linear combination with coefficient lists of different lengths (a bare variable against a sum whose atoms were collected after it) is proved as two inequalities; before the fix the elaborator's `Eq.trans` of the two evaluations was ill-typed and K refused it. `instance_table` gains `BEq.beq` at `Int` and `Nat`: the any-type row is reached after the type's own rows.
+### Records, structures, elaboration and matchers
 
-Slice 3.27 landing 3 (2026-10-10): `dependent_match` — a `match` generalizes the locals whose types mention the scrutinee (a fn with a `Fin` index bounded by the list's length and its equation, a term-level match on a `Fin`'s value under its bound, `List.get` realized with its nil row refuted by Init's `absurd` and its cons row under `dif`); `matcher_view` — `(realize Option.getD (view))` through the matcher's own definition; `refined_row` — `Subtype` as a row of the registry, a refinement running as its value, the carrier named by a `def`; `absurd_e_first` — a body read E-first cannot write a refuted row (`absurd_needs_init`).
+| cases | what they pin |
+|---|---|
+| `record_basic`, `record_laws`; refused: `record_make` | `record`, `make`, `with`, the accessors and updaters; get-after-set by `Eq.refl`; a `make` missing a field |
+| `struct_make`; refused: `dependent_update`; `struct_params` (`record_make`) | `make` and `with` on a structure; one with parameters; an update that would need a cast |
+| `elab_implicit`, `elab_numeral`, `elab_bridge`, `elab_confusion`, `ctor_expected`, `one_meaning`, `one_spelling`, `instance_table` | implicit arguments, numerals, a proposition where a `Bool` is expected, `noConfusion` and injectivity, a constructor at an expected type, one expression as a `fn` body and a `def`, class methods read as their functions |
+| refused: `elab_unsolved` (`unsolved_implicit`), `elab_instance` (`instance_needed`), `elab_no_decision` (`no_decision`), `elab_mismatch` (`type_mismatch`) | the elaborator's refusals |
+| `match_def`, `match_statement`, `match_poly`, `match_imposter`, `match_dependent`, `dependent_match`, `nested_match`, `def_match`, `matcher_view`, `project_bool`, `decidable_cells` | a `match` as a generated matcher: in a `def`, in a statement, over a type parameter, recognized by regeneration, with dependent locals, on a nested type; a decision as a value |
+| refused: `match_not_exhaustive`, `match_motive` | the matcher's refusals |
 
-Slice 3.27 landing 4 (2026-10-10): the refused Lean forms with their pointer (`docs/LEAN.md`, law §5.4's T9): `lean_form` (`partial` → the measure), `lean_notation` (`notation` → a fn, a def or a tactic; law §5.3 departure 6), `inhabited_default` (`List.get!` in a fn, on the E-first route after the typed route's `unknown_constant` → `List.get?`/`List.getD`), `inhabited_default_by` (the same name in a theorem's statement: the typed route, before the horizon's refusal), `infix_form` (`(n + 1)` → `(+ n 1)`, where it was `function_expected`), `lean_symbol` (`==` in a fn → `BEq.beq` or the proposition; the same table answers `&&`, `||`, a `!`-prefixed name and Lean's `∀ ∃ λ → ↔ ¬ ∧ ∨ ≤ ≥ ≠ ℕ ℤ ×`), `lean_by_term` (`(Fin.mk 3 (by (decide)))`: `by` is no term → a named theorem), `zero_arity_bare` (T9's finding: a fn of no parameters written bare in argument position is its call on the E-first route as on the typed route; `main` is RUNNABLE, no `function_value`).
+### A function as a definition
 
-Slice 3.28 landing 1 (2026-10-11; §8.4 slice 3.28 rules 1–3, the lambda profile): `template_lift` (a fn with a function-typed binder is a template — `TEMPLATE main.twice static=f`; a closed lambda as its static argument is lifted to `main.add_off.lam_1` with the captured `off` leading, the call takes the instance `main.main_twice.of.main_add_off_lam_1_1`, definitionally the specialized body — a theorem over the caller by `Eq.refl`; the recursive template `mapi` the same, its self-call the same instance), `template_named` (a name with a program as a static argument, the shape `main.inc/0`, one instance for two callers; a theorem proven once over the template applied at the instance), `template_partial` (a named partial application `(addk 3)`: the shape `main.addk/1`, the value captured as the instance's leading parameter and never part of the key — `(addk 3)` and `(addk k)` take one instance), `template_passed` (a static parameter passed on inside a template, `mapi2`'s instance calling `mapi`'s), `template_escape` (a lambda as a let's value: `function_value` with the pointer, law §4.3), `template_transform` (a lambda over a static parameter inside a template: `function_value` at the template's declaration — rule 4, the shape set closed).
+| cases | what they pin |
+|---|---|
+| `define_basic`, `define_below`, `define_depth`, `define_forward`, `define_arg_match`, `if_rec_call`, `def_struct` | a function defined with its equations: non-recursive, structural, two constructors deep, calling one declared later, a self-call under a `match` or in an `if`'s condition; a `def` with a recursion clause |
+| `define_runnable`; `route_callee` (`runnable callee_runnable`); refused: `define_refused` (`realize_recursion`) | a function left a program with the obstacle named; a caller of one; a self-call without a measure |
+| `define_measure`, `measure_natabs`, `measure_if_call` (`pending measure`); `define_measure_int` (`runnable measure_type`) | a measured function and its obligation; a measure through `Int.natAbs`; an `Int` measure |
+| `discharge_measure`, `define_match_eq`; refused: `discharge_self_cycle`, `discharge_two_cycle` (`fulfills_cycle`) | obligations discharged; an obligation stated under its match's equation; a discharge that rests on itself |
+| `mutual_measure`, `mutual_forward`, `mutual_three`; `mutual_pending` (`pending measure`); `mutual_no_measure`, `define_mutual` (`runnable group_measure`), `mutual_shape` (`runnable group_shape`) | functions that call each other as one definition; what leaves them programs |
+| `fulfills_refused`, `fulfills_not_obligation`, `fulfills_outside` (each a load error) | a `fulfills` of a refused function's obligation, of a declaration, of nothing |
+| `realize_supplied`, `realize_native`, `realize_view`, `realize_equations`, `realize_param_use`, `realize_theorem`, `realize_imported` | a program attached to a declaration of Init: by a supplied body, by Init's own definition, with named equation theorems; theorems cited before and after |
+| `realize_pending`, `realize_pending_via` (`pending measure`) | a realization under a measure not yet discharged, and a caller of one |
+| refused: `realize_recursion`, `realize_primitive`, `realize_signature`; `realize_wrong` (`conversion`), `realize_loop`, `realize_measure_loop` (`realize_descent`), `realize_brecon` (`recursion_structure`), `realize_order` (`no_realization`), `realize_fn` (`no_l_meaning`), `realize_no_l_identity` (`no_l_identity`), `realize_prop` (`realize_signature`), `realize_unknown` (`unknown_constant`), `realize_dup` (`duplicate_name`) | each way a realization is refused |
 
-Slice 3.28 landing 2 (2026-10-11; rule 5): `template_package` (a structure with a function-typed field is a package type, never an E type; a package constant is a def whose value is the constructor applied; a binder of a package type is a static parameter of arity 0 with the constant's identity as its shape — `main.IntAdd/0`; in the template `(Monoid.op m x y)` erases at the instance as the field applied and `(Monoid.unit m)` as the field's closed term; the generic theorem over `m` applies at the constant by unification; a package constant's projection outside a template erases the same way).
+### Deriving and templates
 
-Slice 3.28 landing 3 (2026-10-11; rules 3 and 4, the close-out): `template_growth` (`f[A]` recursing at `f[List A]` — a template calling itself at a type built from its own type parameter is refused `realize_descent` at its declaration, T3's canonical refusal, before any instance is built); `template_budget` (`instance_budget` instances of one template per load — 1,024, or the driver's `--instance-budget N` — past which a demand is refused `specialization_budget` under the taker's name; the harness loads this case at a budget of 2, `loader_pins_test.shard`'s `case_budget`, so the third shape of `twice` is refused under `c`); `template_e_first` (a template called in a body with no L reading — `main` performs an extern — takes an instance with a program and no generated definition, `INSTANCE … equations=` with none: `twice` at a fn by name and at a named partial application, the polymorphic `mapi` at `Int` with its type argument read off the arguments' E types; a lambda, a registry constant or a polymorphic fn as a static argument there is refused with its pointer).
+| cases | what they pin |
+|---|---|
+| `derive_eq`, `derive_containers` | equality derived and used by an `if`; Init's `List`, `Option`, `Prod` at closed arguments |
+| refused: `derive_field`, `derive_needs`, `derive_policy`, `derive_duplicate`, `derive_by`; `derive_nested`, `derive_refusals` (`derive_shape`), `derive_params` (`derive_needs`), `derive_e_first` (`prim_type`), `derive_visible` (`no_decision`) | the derivation's refusals; a derivation is visible where its module is |
+| `derive_size`, `derive_size_plain`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`) | a size derived for a type nested through `List` and for a plain type, used as a measure |
+| `template_lift`, `template_named`, `template_partial`, `template_passed`, `template_package` | a function-typed binder: a lambda lifted, a named function, a partial application, a parameter passed on, a structure of functions |
+| `template_e_first` (`runnable no_l_identity`); refused: `template_escape`, `template_transform` (`function_value`), `template_growth` (`realize_descent`), `template_budget` (`specialization_budget`) | a lambda elsewhere; a template calling itself at a growing type; the instance budget; an instance taken by a body with no logical reading |
 
-Slice 3.29 landing 1 (2026-10-12; §8.4 slice 3.29 rules 3–7, law §12.5's T10 row): `by_cases_dependent` (the dependent motive — `cases` and `induction` revert every local whose type mentions the eliminated local and re-introduce it per arm after the fields, so the zero arm of `(n : Nat) (h : (< 0 n)) ⊢ (<= 1 n)` faces `h : (< 0 Nat.zero)` and `(arith h)` refutes it; three theorems); `by_sibling_names` (two arms naming the same field and the same `have`, each filling closing over its own locals — scope-safe by construction, nothing built); `by_exact_external` (an external P through `exact`: Init's `Nat.le_refl`, `Nat.add_comm`, `Nat.le_succ` applied, through the one check); `by_rw_occ_guard` (`(rw LEMMA (occ K EXPECT))`: `ok` rewrites the expected instances, `moved` — the same block over a source whose terms swapped — is refused `rw_occ_changed` showing the instance found and the one expected); `auto_schema_old` (a sidecar with no schema form is schema 1 — slice 3.22's `prove` wrote it — replayed and reported `SIDECAR main.shard schema=1 current=2`, never refused); `auto_schema_future` (`(sidecar 3)` past this loader's 2 is the load error `sidecar_schema`); `auto_hints_changed` (an entry written under `(auto (induct n))` replays with the source now saying `(auto (budget 1))`: hints are the producer's and unread at replay). The list's duplicated `arith_eq_bare` entry removed: 259 cases.
+### Proof steps and sidecars
 
-Slice 3.29 landing 2 (2026-10-12; §8.4 slice 3.29 rule 2): `auto_tactic` (a theorem delegated `(auto (tactic split.solve))`, the tactic a `fn` of the pin's root answering the constant block `(rfl)`; `main.auto.shard` was written by `prove.shard` running it under `ev`; the build replays the entry and never runs the library — the delegation unread as the hints are). 260 cases.
+| cases | what they pin |
+|---|---|
+| `by_core`, `by_wf`, `by_witness`, `by_case_step`, `by_cases_local_eq`, `by_cases_dependent`, `by_sibling_names`, `by_exact_external`, `by_rw_occ_spine`, `by_ne_level`, `by_reduce` | every step on small goals; well-founded induction; a witness given by a premise; `cases` on a term and with dependent hypotheses; an external term through `exact` |
+| `by_sorry` (`pending sorry goals=2 …`) | the open goals are shown in the record |
+| refused: `by_goal_open`, `by_goal_closed`, `by_unknown_step`, `by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness_open`, `by_cases_rows`, `by_induction_eq`, `by_rw_no_match`, `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`; `by_cases_fields` (`induction_fields`), `by_rw_occ` (`rw_no_match`), `by_rw_occ_guard` (`rw_occ_changed`) | each step's refusal, a read error |
+| `arith_core`, `arith_div`, `arith_only`, `arith_eq_bare`; refused: `arith_failed`, `arith_certificate`, `arith_goal`, `arith_fact`, `arith_unreached` | linear arithmetic and its refusals |
+| `simp_core`; refused: `simp_no_progress`, `simp_budget`, `simp_self` | `simp_only` and its refusals |
+| `reduce_using`, `reduce_dependent`; refused: `reduce_rule_unused`, `reduce_rule_open`; `reduce_rule_fn` (`rw_not_eq`), `rw_dependent` (`rw_motive`) | `reduce` with facts; a rewrite at an occurrence beside a proof that states it |
+| `auto_core`, `auto_tactic`, `auto_hints_changed`, `auto_strategy_free` | a theorem proven by `auto` replays its sidecar's entry; hints and binder names are outside the key |
+| `auto_missing`, `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env` (`pending`) | no entry; an entry made for another statement, dependency, policy or horizon |
+| `auto_schema_old`, `auto_schema_2`, `auto_recon_old`; refused: `auto_schema_future` (`sidecar_schema`), `auto_malformed` (`sidecar_malformed`) | older sidecar formats replay and are reported; a newer or malformed one is a load error |
 
-Slice 3.30 landing 1 (2026-10-13; §8.4 slice 3.30 rule 2, law §12.5's T5 row): `realize_imported` (T5's imported-theorem form, `LANGUAGE.md` §11's row closed: Init's `List.append_nil` is cited before a supplied realization of `List.append` is attached, and the same theorem and a theorem that cited it before are cited after it — every record `ACCEPT`, the three statements one fingerprint; `(realize List.append (view))` is refused `recursion_structure`, a recursive Init body being supplied as `examples/path` supplies `List.length`'s).
+### Entries, host calls and binaries
 
-Slice 3.30 landing 2 (2026-10-13; §8.4 slice 3.30 rule 5 — T9 again's finding): `fulfills_refused` (a `fulfills` of an obligation of a `fn` refused above: the refusal named as the cause, under `load-error-after` since the refusal stands first), `fulfills_not_obligation` (a declaration under `fulfills`, with where obligations come from), `view_fulfills_obligation` (a measured `fn` inside an implementation directory discharges its own obligation; before the landing the implementation path matched a `fulfills` against the view's requirements only — `fulfills_unknown`, the obligation pending); `fulfills_outside` keeps its code, its message naming the cause.
-
-Slice 4.0 landing 2 (2026-10-14; §8.6 slice 4.0 rule 4 — GPT-6 R78): `k_client_admit` (a client of K's view naming `run_admitting`, the admit mode deleted with the checked transfer, refused `unknown_head`; `k_client_test`'s seven transfer cases run through `k_clients_test`).
-
-One environment, one counter (2026-11-11; §8.6 — the defect of that day, `docs/records/FOUNDATION.md` §5): `k_client_transfer` (a client of K's view naming `env_transfer`, the checked transfer removed with `run_with_env` — through each a client had put two counters' nodes in one environment —, refused `unknown_head`; `k_client_test`'s seven transfer cases went with the operation, and what a second source can still do is `hostile_test`'s case 18).
-
-Slice 4.3 landing 1 (2026-10-16; §8.6 slice 4.3 rules 3–4): `thread_proof_ref` — the law's erased proof reference (§12.4 item 4), a proof about the token under a typed `let`, erased, the token used once (deferred from landing 0: the extern now an opaque constant in L, an extern-calling body takes the typed route); the bin form — `bin_ok` (the entry, the roster, the bolt trusted, the requirement proven through the entry's equation: `BIN main.hello entry main.main externs 1 trusts 1 requires 1/1`), `bin_unmet` (the requirement `sorry`: `UNMET`), `bin_unthreaded` (two writes through one token: `UNTHREADED`), `bin_extern_outside` (an extern the closure calls outside the roster, named with its function), `bin_bad_entry` (no World last), `bin_untrusted` (the requirement rests on a bolt the bin does not list); `template_e_first` (slice 3.28 rule 3's last sentence: an instance taken by an E-first body — through a fn over a `Symbol` — has a program and no equations; `template_main`'s fixture until its main took the typed route). The pins whose E-first route an extern call supplied — `row_e_first`, `derive_e_first` — now call a fn over a `Symbol` for it; `str_e_first` expects `ok` (its function defined).
-
-Slice 4.5 landing 1 (2026-10-23; §8.6 slice 4.5 rule 1, law §5.2, R82): the sidecar's key is the resolved requirement — `(proof-for NAME (req S D P E) (by STEP…))` under `(sidecar 3)`: the closed statement's fingerprint, the referenced declarations' identity closure through the load's own declarations, the policy (the trusts' candidates and the load's parameters), the environment (the module's Init horizon and the export's identity) — and a stale entry names the parts that differ: `auto_stale_deps` (the cited `f`'s body changed under its name, the statement unchanged: `pending auto_stale deps fp=…`, the old block never replayed though it would succeed), `auto_stale_policy` (`(trusts propext)` added: `auto_stale policy`), `auto_stale_env` (the Init import's target moved: `auto_stale env`), `auto_strategy_free` (the statement's binders renamed and the hints changed: the entry fits and replays, binder names and strategy being outside the key), `auto_schema_2` (a schema-2 sidecar, each entry keyed by its statement alone, replays by the statement and is reported `SIDECAR main.shard schema=2 current=3`; `prove` restamps such a file whole). `auto_stale`'s expectation names the part (`auto_stale statement fp=…`); `auto_schema_future`'s sidecar says `(sidecar 4)`. The sidecars of `auto_core`, `auto_hints_changed` and `auto_tactic` were regenerated by `prove` at schema 3 (the stale and strategy-free fixtures from scratch copies of the programs as they were when the entry was made; `auto_stale`'s hand-written schema-1 fixture kept).
-
-Slice 4.5 landing 2 (2026-10-23; §8.6 slice 4.5 rule 2, law §7.2): `auto_recon_old` — a sidecar whose form names another reconstruction version, `(sidecar 3 0)` against `tactic.shard`'s current version (1 at the landing; 2 since 2026-11-10, `docs/records/REDUCE-2026-11-10.md`, the nine sidecars at `(sidecar 3 2)`), replays as any sidecar does and is reported `RECON main.shard version=0 current=1` (a report, never a refusal; `prove` restamps the form). Every sidecar of the tree now reads `(sidecar 3 1)`, regenerated by `prove`; the version-0 fixture is `prove`'s file with the form's second number set back, as `auto_schema_future`'s is a fixture of a schema that never was.
-
-The run with its facts (2026-11-10; `LANGUAGE.md` §8.6 "The run with its facts", outside the slice sequence): `reduce_using` — `(reduce SIDE? (using RULE…))` over a two-function fixture: a fact about a call fires once the call's argument has been rewritten to the form the fact states (`direct`); the same with the call under another function in the fact's left side, the reproduction of the first hold's limit — every function a left side applies is held (`wrapped`); a lemma given its premise decides a case analysis and the rest computes (`premise`); a reversed rule with no side named (`reversed`). The refusals, each `read-error REASON`: `reduce_rule_unused` (a rule that rewrote nothing), `reduce_rule_open` (`if_pos` without its premise: nothing is looked for), `reduce_rule_fn` (`rw_not_eq`: a function's name is no rule, its equations are applied unnamed). No pin for the order's stated limit (a held call inside a held call's argument, no fact for the inner one: the outer steps first and its fact is refused unused) — it is a limit, not a rule to keep.
-
-Slice 4.6 landing 2 (2026-11-12; §8.6 "As built, landing 2"), two defects of the loader its review found: `def_takes_fn` — a `def` under the name of a fn with no L meaning is refused `name_taken` (§7.5's rule in the other direction: until then a typed fn citing the name was defined against the def and ran the fn); `init_name_taken_l` — a module `Classical` declaring an axiom `choice` is refused `name_taken` (§8.4 slice 3.26 rule 5 for an L declaration: until then the axiom took the identity of Init's standard axiom and passed the policy by its name).
-
-Slice 4.6 landing 1 (2026-11-11; §8.6 slice 4.6 rule 1, law §9.3): `handle_door` — the checked door's stated limit, shown in the program's dump: an evidence binder of an entry's own signature (`(fn small ((n Nat) (h (Nat.lt n 10))) Nat n)` is `fn small 0 (Nat) Nat #0`) and a constructor's proposition field (`(structure Span () (lo Nat) (hi Nat) (ok (Nat.le lo hi)))` is `type Span 0 (mk Nat Nat)`) are not in the erased program, so a handle prepared as checked validates the runtime parameters alone; `handle_test`'s last two cases hold both as they stand (`small` takes 99, `width` takes `Span.mk 9 3`), to flip when landing 2's session reads the two from the revision's environment. Pin `entry` gained `poly` (a type parameter no parameter states: the entry runs) and `polyx` (a parameter stating it: `preconditioned`), run by `entry_test`.
+| cases | what they pin |
+|---|---|
+| `entry`, `entry_s`, `entry_shape`, `handle_door` | functions run from outside with checked arguments; what the check does not cover (an evidence binder, a proposition field) |
+| `wire_s`, `wire_bad`, `wire_bad_result` | host calls over Init's types; one over a type with no encoding; two with a wrong result |
+| `thread_branches`, `thread_helper_ok`, `thread_unused`, `thread_proof_ref` (`threaded`) | a `World` used once per branch, through a helper, left unused, named only in an erased proof |
+| `thread_sequential`, `thread_pair_twice`, `thread_helper_twice` (`world_twice`); `thread_match_world`, `thread_poly` (`world_unsupported`); `thread_forged` (`world_forged`) | a `World` used twice, taken apart, passed to a polymorphic function, or built by a program |
+| `bin_ok` (`bin ok`); `bin_unmet`, `bin_unthreaded`, `bin_bad_entry`, `bin_extern_outside`, `bin_untrusted` (`bad-bin`) | the `bin` form and each way it fails |
