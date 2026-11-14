@@ -29,6 +29,9 @@
 #       requirements met — `fmt_gate` and `fmt_main_contract` —, the program's four effectful
 #       functions threaded, and each requirement's assumptions are exactly the views'
 #       parameters (the printer, the reader) and the bolts it uses: nothing else is assumed.
+#       And the printer behind its view is a definition (LANGUAGE.md §8.7 slice 5.2 landing 4):
+#       `DISCHARGE … print defined`, no function of it a program without a definition, its
+#       three groups fixpoints, every descent obligation discharged.
 #
 # The gate's refusal itself has no fixture: provoking it needs a printer that changes a
 # reading. Exit code = the number of failed checks.
@@ -150,7 +153,18 @@ want_gate="tools.shardfmt.print.print tools.shardfmt.reads.reads_same "
 want_main="tools.shardfmt.print.print tools.shardfmt.reads.read_error tools.shardfmt.reads.reads_same $B.exit_exit $B.exit_output $B.exit_reads $B.get_args_output $B.get_args_reads $B.read_file_output $B.read_file_reads $B.write_output $B.write_reads "
 checks=$((checks+1)); [ "$(closure $B.fmt_gate)" = "$want_gate" ] || { bad "fmt_gate's assumptions are not the printer and the reader alone"; closure $B.fmt_gate; }
 checks=$((checks+1)); [ "$(closure $B.fmt_main_contract)" = "$want_main" ] || { bad "fmt_main_contract's assumptions are not the views' three parameters and the nine bolts"; closure $B.fmt_main_contract; }
-echo "shardfmt_test: the contract loaded in $(( $(date +%s) - s )) s — BIN $B.shardfmt requires 2/2, each requirement on the views' parameters and its bolts alone"
+# the printer behind its view is a definition (slice 5.2 landing 4): the view's function is
+# discharged by it, not linked; none of the printer's functions is a program without a
+# definition; its three groups are fixpoints; every descent obligation is discharged
+P=tools.shardfmt.print
+checks=$((checks+1)); grep -qx "DISCHARGE $P.print defined" "$OUT/bin.txt" || { bad "the printer's view function is not DISCHARGE … defined"; grep "^DISCHARGE $P.print " "$OUT/bin.txt" | cut -c1-200; }
+checks=$((checks+1)); [ "$(grep -c "^IMPL RUNNABLE fn $P\\." "$OUT/bin.txt")" = 0 ] || { bad "a function of the printer has no definition"; grep "^IMPL RUNNABLE fn $P\\." "$OUT/bin.txt" | head -4 | cut -c1-200; }
+for g in flat_w em_flat em_kids; do
+  checks=$((checks+1)); grep -q "^IMPL ACCEPT $P.$g.mutual " "$OUT/bin.txt" || bad "the group of $g has no fixpoint ($P.$g.mutual)"
+done
+n_obl=$(grep -c "^IMPL PARAM $P\\..*\\.dec_[0-9]* obligation" "$OUT/bin.txt"); n_dis=$(grep -c "^DISCHARGE $P\\..*\\.dec_[0-9]* proved" "$OUT/bin.txt")
+checks=$((checks+1)); [ "$n_obl" -gt 0 ] && [ "$n_obl" = "$n_dis" ] || bad "the printer's descent obligations: $n_obl stated, $n_dis discharged"
+echo "shardfmt_test: the contract loaded in $(( $(date +%s) - s )) s — BIN $B.shardfmt requires 2/2, each requirement on the views' parameters and its bolts alone; the printer a definition, $n_dis descents discharged"
 
 echo "shardfmt_test: $checks checks, $fail failed"
 exit $fail

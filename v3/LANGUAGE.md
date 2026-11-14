@@ -6959,7 +6959,7 @@ family is taken up).
 |---|---|---|
 | 5.0 | the cut: `kernel/` deleted whole under the tag `v2-kernel-last`; V3's own back end in the old chain's design — `kernel/lower.shard` (a `Prog` to a `Prog` in the restricted form) and `kernel/cgen.shard` (the restricted form to C over `kernel/rt.h`) inside the loader's process, the text projection (`kernel/emit.shard`) and the two old tools gone; the calc test's reference a recorded file; the old evaluator's mode out of the bootstrap; the old tree's CI jobs removed — **designed and ratified 2026-11-13 (the user: "Agreed with this approach. I would opt to delete kernel/ for now and leave the rest of v2 as unchecked text until we migrate each piece. The compiler should be the same idea as the v2 one, with proven lowering replacing it later. shard-viewer can be left alone for now. Proceed."); built 2026-11-13 on the full local gate — the build of 31 roots 222 s where it was 2,826 s, both suites 50 entrypoints with 0 failed, the tie 0 differ, the full replay equal to its pin; green on pipeline 678** | every native binary of the toolchain; the port's programs |
 | 5.1 | the formatter: the old tree's `tools/shardfmt` and `meta/format` migrated to `tools/shardfmt` as an ordinary program under the naming law — `fmt` = the printer, then the gate (the loader's own reader decides whether the output reads as the input did); the printer and the reader each behind a view, so `fmt` and `main` are definitions; the old printer carried function for function, the universe list and V3's heads added; `shardfmt [--check] FILE` a native binary by route 1 — **taken up 2026-11-13 on the user's "Good. Let's migrate the formatter first."; landing 1 (the program, the binary, its test) built 2026-11-13, green on pipeline 681; landing 2 (the contract as theorems: `BIN … requires 2/2`) built 2026-11-13, green on pipeline 684, on the user's "I would agree with proving the contract, then V3 mutual recursion as the task order"; landing 3 (the layout ruled anew — 100 columns, structure first —, the tree reformatted, the gate on) built 2026-11-13 on the user's "Agreed with your recommendations at 100 columns" (`CANON.md` §3, §9 item 13), green on pipeline 686 (one job retried after a failed clone); the design's other leans below stand as built and are not ruled** | the fmt gate on V3's sources (`CANON.md` §8 stages 2–3); an author's command |
-| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a type generated for the group — a constructor per member over its arguments —, each member the fixpoint at its constructor, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13, green on pipeline 690; landing 2 (the group's definition: `define.shard` `define_group`, the loader's `settle_groups`, six pins) built 2026-11-13 on the full local gate — the domain a generated type, not the design's `PSum`; landing 3 (`(derive TYPE size)` and a program's clause for a measure that has no program, four pins) built 2026-11-13 on the full local gate** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
+| 5.2 | a group of functions that call each other gets a definition, by the well-founded route: one fixpoint over a type generated for the group — a constructor per member over its arguments —, each member the fixpoint at its constructor, a measure on every member and one decrease fact per call, the group found by the loader when its last member is read; `(derive TYPE size)` for the measure of a data value; and the `reduce` defect of slice 5.1 landing 2 — a rewrite's motive checked, not only typed — **designed 2026-11-13; the route ruled on the user's "Agreed, let's proceed with the well-founded route."; the other rules for ratification; its four decisions ruled 2026-11-13 ("1: no new syntax, 2: agreed, 3: agreed, 4: agreed. Proceed."); landing 1 (the rewrite's motive checked: the `reduce` defect fixed, pins `reduce_dependent` and `rw_dependent`) built 2026-11-13, green on pipeline 690; landing 2 (the group's definition: `define.shard` `define_group`, the loader's `settle_groups`, six pins) built 2026-11-13 on the full local gate — the domain a generated type, not the design's `PSum`; green on pipeline 698; landing 3 (`(derive TYPE size)` and a program's clause for a measure that has no program, four pins) built 2026-11-13 on the full local gate; landing 4 (the consumer: the printer's three groups measured and their 43 obligations discharged — `DISCHARGE tools.shardfmt.print.print defined`) built 2026-11-13 on the full local gate** | the formatter's printer: 16 functions without a definition, its view's function linked and not discharged |
 
 **Slice 5.0 — the cut: the old kernel deleted, V3's own back end**
 (designed 2026-11-13 on the measurement of §8.6 "Slice 4.6 closed";
@@ -7693,7 +7693,9 @@ its measure is K's alone. *The gate, on the dev box:* `v3/build.sh
 the suite on the bootstrap 51 entrypoints, 0 failed, 940 s, the native
 tie among them, the pins' harness 308 cases; on the binaries 51
 entrypoints, 0 failed, 541 s; `suite_tie` 51 entrypoints, 0 differ;
-no authored file changed under the round.
+no authored file changed under the round. *On CI:* pipeline 698 green
+on `d65956f` — `host` 33 s, `v3` 3,785 s, `native` 2,041 s,
+`suite_tie` 44 s; no job retried.
 
 **As built, landing 3 (2026-11-13) — rule 6, the size of a data
 value.** *`(derive TYPE size)`* is a form of its own in
@@ -7733,6 +7735,63 @@ accepted 57,977; the suite on the bootstrap 51 entrypoints, 0 failed,
 901 s, the native tie among them, the pins' harness 312 cases; on the
 binaries 51 entrypoints, 0 failed, 524 s; `suite_tie` 51 entrypoints,
 0 differ; no authored file changed under the round.
+
+**As built, landing 4 (2026-11-13) — the consumer: the formatter's
+printer is a definition.** The loader's line for the printer's view
+is `DISCHARGE tools.shardfmt.print.print defined`; it was `DISCHARGE …
+print fn`, linked. Of the printer's functions none is a program
+without a definition, where 16 were; the formatter's closure loads
+with 68 `RUNNABLE` records where it had 84 — the host's externs and
+the reader's toolchain code are what is left — and 101 definitions
+where it had 85. *In `print/cst.shard`:* `(derive CNode size)`, the
+fact `size_of_cons` (a list known by an equation to be a cons has
+that size) and `drop_blanks_le`. *In `print/layout.shard`:* three
+groups — the width probe with its list half, the flat printer with
+its, and the seven renderers; a measure on each of the eleven members:
+the size of the node or list it is given for the two pairs, three
+times the size plus a rank for the renderers (`em_kids` 0, `em_head`
+1, `em_if` 2; `em_pp` 0, `em_chain` 1; `em_if_deep` over the sum of
+its two nodes, 2), written as sums — a product with a literal wants a
+later Init horizon of `arith`. 43 obligations, each a `fulfills` under
+its group: 30 close by the equation of the match the call stands
+under, the size's equation and `arith`; 13 take a fact — that a list
+another function handed back is no larger (`opt_trail_rest`,
+`em_keep_rest`, `drop_blanks_le`) or `size_of_cons` at the equations
+in scope; `em_if`'s four descents to the then- and else-nodes take
+five facts each and no rewriting. The two lemmas about `opt_trail`
+and `em_keep` are shown of the function's value through a projection
+(`trail_rest`, `emk_rest`: `def`s) by cases, `em_keep`'s by induction
+on the list, and then restated under the equation of the match by
+`show`, `rw (<- h)` and the first form — no injectivity. *Three
+functions were written again to suit and print as before* (the
+tree's 588 gated sources are canonical under the rebuilt binary, the
+17 scenarios unchanged): `em_keep`'s match leads where its `if` did —
+a function whose body opens with an `if` has no equation K decides;
+`em_kids` and `em_if_deep` name no binding that holds a call to a
+member with another such call under it, since an obligation is stated
+over the bindings in scope and cannot cite the recursion (slice 3.19's
+limit, met again). *The test:* `shardfmt_test.sh` gains the view's
+line, "no function of the printer without a definition", the three
+fixpoints and "as many obligations discharged as stated" — 68 checks.
+*Found on the way:* an `(intro …)` takes no name for a `let` in an
+obligation's statement — `whnf` removes it; `reduce` does not open a
+`def` at an open term (`(unfold NAME)` does); and both are in the
+library's note for authors. *The cost:* the formatter's contract loads
+natively in 3 s (2.7 s at landing 2) and its binary builds in 54 to
+57 s. *The gate, on the dev box:* `v3/build.sh --all` 31 roots
+current; T0 FULL == PINNED, accepted 57,977; the suite on the
+bootstrap 51 entrypoints, 0 failed, 874 s, the native tie among them;
+on the binaries 51 entrypoints, 0 failed, 516 s; `suite_tie` 51
+entrypoints, 0 differ; no authored file changed under the round.
+
+**Slice 5.2 as it stands (2026-11-13).** Built as designed, with one
+change at the build (rule 1's domain): a rewrite's motive checked; a
+group one definition by well-founded recursion, found when its last
+member is read; the size of a data value derived on request; the
+formatter's printer a definition. Not built, by the rulings: the
+formatter's scenarios as theorems, which wait on the evaluation of a
+closed call at size, and the structural route — both rows of §11 with
+no phase.
 
 ## 9. Assumption policy and entries
 

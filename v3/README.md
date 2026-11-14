@@ -2623,8 +2623,26 @@ measure is K's alone (`RecLogical`). With this the tree-and-forest
 pair over a nested type is a definition: the pin's three obligations
 each close in three steps. Green on the full local gate: 31 roots
 rebuilt, the full replay equal to its pin, both suites 51 entrypoints
-with 0 failed, 0 differ between the engines. Next: landing 4, the
-formatter's printer.
+with 0 failed, 0 differ between the engines. Pipeline 698 green on
+`d65956f` (landing 2): `host` 33 s, `v3` 3,785 s, `native` 2,041 s,
+`suite_tie` 44 s.
+
+**Slice 5.2 landing 4 built 2026-11-13 — the formatter's printer is a
+definition** (`LANGUAGE.md` §8.7 "As built, landing 4";
+`tools/shardfmt/README.md`). The printer's three groups of functions
+— the width probe and the flat printer with their list halves, the
+seven renderers — each state a measure over the derived size of the
+tree, and their 43 obligations are discharged in
+`tools/shardfmt/print/layout.shard`. The loader now records the
+printer's view function as discharged by a definition
+(`DISCHARGE tools.shardfmt.print.print defined`) where it was linked:
+none of the printer's functions is a program without a definition,
+where 16 were. Three functions were written again to suit and print
+as before — every gated source of the tree is still canonical under
+the rebuilt binary. Green on the full local gate: the full replay
+equal to its pin, both suites 51 entrypoints with 0 failed, 0 differ
+between the engines. The slice is built as designed; the formatter's
+scenarios as theorems and the structural route are deferred rows.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
