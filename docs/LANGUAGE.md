@@ -10,8 +10,7 @@ The order follows a file through the system: the source text and how files becom
 declarations, terms, and how a function becomes a definition and a program; running a program;
 proofs; what makes a result accepted; and, last, every record the loader prints.
 
-Refusal texts are quoted as the system prints them. Some still cite section numbers of documents
-that no longer exist: read the text, not the number.
+Refusal texts are quoted as the system prints them.
 
 ## Source text
 
@@ -751,16 +750,16 @@ into a definition:
 |---|---|---|
 | `realize_recursion` | `NAME calls itself without a measure` | add `(measure (struct x))` or `(measure M)` |
 | `realize_descent` | `NAME: a recursive call does not pass a proper subterm of the structural parameter — ARG` | pass a pattern variable of a match on the parameter, or use `(measure M)` |
-| `realize_descent` | `NAME calls itself on its own parameters — no measure decreases (§7.5)` | change an argument |
+| `realize_descent` | `NAME calls itself on its own parameters — no measure decreases` | change an argument |
 | `realize_descent` | `NAME: a recursive call at other type arguments (polymorphic recursion)` | keep the type arguments |
 | `bad_measure` | `X is not a parameter` | `(struct x)` names a binder |
 | `untyped_subterm` | `the structural parameter's type is not an inductive type` | use `(measure M)` |
-| `equation_form` | `T: a nested inductive's recursor has no Stage-0 translation`; `T eliminates into Prop only`; `T has no recursor` | `(measure (T.size x))` after `(derive T size)` |
-| `function_value` | `NAME: its own name is not applied to its structural argument (no function values, §4)`; `… not applied to all its arguments …`; `the function's own name in a type` | apply the function fully |
+| `equation_form` | `T: a nested inductive's recursor has a motive per auxiliary type, and structural recursion takes one — write a Nat measure: (derive TYPE size) gives a size to measure by`; `T eliminates into Prop only`; `T has no recursor` | `(measure (T.size x))` after `(derive T size)` |
+| `function_value` | `NAME: its own name is not applied to its structural argument (no function values)`; `… not applied to all its arguments …`; `the function's own name in a type` | apply the function fully |
 | `nested_recursion` | `NAME: the argument of a recursive call is computed by the recursion itself — it cites X, a let bound to the result of a recursive call`; `… — a recursive call stands inside it` | pass an argument computed without a recursive call; nested recursion gets no definition |
 | `definition_refused` | `NAME: K refused the definition (WHY)`; for a group also `… the group's argument type`, `… the group's fixpoint`, `… the fixpoint's unfolding` | a defect of the definer: report it |
 | `define_matrix`, `define_depth`, `define_loop` | internal shapes; `a body too deep`; `the auxiliaries did not settle` | split the function; report |
-| `name_taken` | `NAME is an admitted constant: realize it, or declare another name (§7.5)` | rename, or `realize` |
+| `name_taken` | `NAME is an admitted constant: realize it, or declare another name` | rename, or `realize` |
 
 Two more families refuse a `fn`: any refusal of the elaborator on the signature, the measure or
 the body (*Terms*) — `type_mismatch`, `match_not_exhaustive`, `unsolved_implicit`, … — and any
@@ -808,7 +807,7 @@ are types or propositions and whose fields are such types or propositions.
 and every function of Init that is neither a primitive nor given a body by a `realize`. A measure
 may cite one freely:
 a measure is never run. A function body that calls one in a runtime position cannot be erased:
-`no_realization: NAME: no realization attached — realize it first (§7.1)`. The body is then read
+`no_realization: NAME: no realization attached — realize it first, or import the file that does`. The body is then read
 as a program, where the name is unknown, so the usual record is `REFUSE … unknown_head … — read
 E-first after the typed route's no_realization …`. `v3/std/list.shard` realizes the list
 functions: import it. `Classical.choice`, `Acc.rec` and the `Quot` primitives in a runtime
@@ -1214,21 +1213,21 @@ two `(farkas …)` forms.
 
 | Reason | Step | Message |
 |---|---|---|
-| `unknown_step` | block | `NAME: not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)` |
+| `unknown_step` | block | `NAME: not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry); a new tactic is an E library producing these forms, named by (auto (tactic M.FN))` |
 | `bad_step` | block | the form's shape: `(exact TERM)`; `(have NAME PROP STEP…): the block that proves PROP is empty`; `an arm is (CTOR (NAME…) STEP…), with the names in a list`; … |
 | `goal_open` | block | `the block ends with the goal open: GOAL`; `a child goal has no block: GOAL` |
 | `goal_closed` | block | `step N closed the goal and steps follow it` |
 | `intro_no_pi` | intro | `the target is not a forall or an implication after whnf` |
 | `rfl_not_eq` | rfl | `rfl closes an equation; the target is T` |
 | `rfl_failed` | rfl | `the sides are not convertible: A and B`; after `convertible` there may stand ` — a case analysis waits at C` |
-| `unify_stuck` | rfl, apply | `blocked on NAME: an argument the elaborator cannot solve first-order — write the application with @ (law §5.1)` |
+| `unify_stuck` | rfl, apply | `blocked on NAME: an argument the elaborator cannot solve first-order — write the application with @` |
 | `show_mismatch` | show | `not convertible to the target: PROP` |
 | `apply_mismatch` | apply | `the conclusion C does not unify with the target T` |
 | `apply_goals`, `rw_goals` | apply, rw | `apply opens N goal(s) and the step gives M block(s): [GOAL] …` |
 | `witness_open` | apply, rw | `the argument NAME is not determined by the goal and no block assigned it: give it through a premise's exact` |
-| `instance_needed` | apply, rw | `the instance argument NAME has no resolution at Stage 1: write the application with @ and the instance (law §5.1 Stage 3)` |
+| `instance_needed` | apply, rw | `the instance argument NAME is not filled by the instance table (there is no instance search): write the application with @ and the instance` |
 | `cases_type` | cases, induction | `NAME is not an inductive type`; `not an inductive type: T`; `K could not type NAME.casesOn at this motive` |
-| `cases_indexed` | cases, induction | `NAME is an indexed family: cases on it is a later form (injection, subst)` |
+| `cases_indexed` | cases, induction | `NAME is an indexed family: cases and induction take a type without indices (there is no injection or subst step) — use Init's lemmas (T.CTOR.inj, Eq.subst) in a term` |
 | `cases_rows`, `induction_rows` | | `no arm for the constructor C`; `C is not a constructor of the type, or is named twice` |
 | `cases_fields`, `induction_fields` | | `C's arm names N binder(s) and its case has M: name the constructor's K field(s) — (x : T) …`; under `induction`, `…, then J induction hypothesis name(s), one for each recursive field — (x : T) … (_ : P)`. The binders listed are the case's, each under the arm's name for it, `_` where the arm gave none |
 | `induction_eq` | induction | `induction takes no equation name: the hypotheses would be guarded by it (Lean has none either); name the equation under cases, or state the equation and induct on the local` |
@@ -1295,7 +1294,7 @@ of refusals and errors, does not. What rests on a pending proof is reported, nev
 
 | Dependent | What happens |
 |---|---|
-| A term that cites a pending theorem | `READ-ERROR FILE pending_obligation: NAME was read with sorry: it admits nothing, and citing it is the obligation`, and the file's reading ends (v3/pins/loader/sorry). The text says `sorry` whatever the cause. In a `fn` the same citation is `REFUSE F pending_obligation: …`, and the file goes on. |
+| A term that cites a pending theorem | `READ-ERROR FILE pending_obligation: NAME is pending: it admits nothing, and citing it is the obligation`, and the file's reading ends (v3/pins/loader/sorry). The text is the same whatever the cause, which the name's `PENDING` record states. In a `fn` the same citation is `REFUSE F pending_obligation: …`, and the file goes on. |
 | A view's requirement whose `fulfills` is pending | `PENDING NAME sorry`, then `DISCHARGE NAME pending`. The requirement stays a parameter; every theorem that rests on it lists it in `params=` (v3/pins/loader/view_pending). |
 | A measured function | Each descent is a parameter, `PARAM f.dec_N obligation`. The function is defined, with its equations; its record and those of its callers carry `pending=f`; a theorem that cites it is accepted with `params=f.dec_N`. `(fulfills f.dec_N PROOF)` proves the descent as the theorem `f.dec_N.proof`: `DISCHARGE f.dec_N proved`, and the load's records are rewritten so that `PENDING f measure`, `pending=f` and the `params=` entry are gone (v3/pins/loader/discharge_measure). |
 | A `bin` that `requires` a pending theorem | `UNMET NAME`, an error: the load fails (v3/pins/loader/bin_unmet). This is the one place where pending fails a load. |
@@ -1607,7 +1606,7 @@ on them. When an obligation is discharged the account is recomputed: every recor
 names what its proof rests on instead, and a proof that rests on its own obligation is refused
 (`fulfills_cycle`). Class 4 admits nothing: after `(theorem t3 () (Eq two Nat.zero) sorry)`
 (v3/pins/loader/sorry/main.shard) `t3` is not in the environment. A citation of it is
-`READ-ERROR FILE pending_obligation: t3 was read with sorry: …`, a `fulfills` by `sorry` is
+`READ-ERROR FILE pending_obligation: main.t3 is pending: …`, a `fulfills` by `sorry` is
 `DISCHARGE NAME pending`, and a `bin` requirement left pending fails the load with `UNMET`.
 
 The release gate (`verify_release.shard`) reports the same classes over a stored bundle with K

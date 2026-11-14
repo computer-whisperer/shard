@@ -1,20 +1,17 @@
-;; Highlights for shard (object language + proof DSL + module/artifact
-;; forms), over tree-sitter-scheme's s-expression grammar.
+;; Highlights for shard, over tree-sitter-scheme's s-expression grammar.
 ;;
-;; Vocabulary source: the kernel readers — kernel/reader.shard (top-level
-;; and object forms, loader sugars, bin/lib clauses), kernel/proof_reader.shard
-;; (proofs, steps, eqrefs), kernel/types.shard (the native prim table).
-;; docs/LANGUAGE.md is the prose spec.
-;;
-;; V3 (2026-09-13, FOUNDATION §10.5 phase 2): the V3 surface keywords and
-;; forms of v3/LANGUAGE.md §4–§5 are folded in beside the old tree's —
+;; Two vocabularies. V3's (docs/LANGUAGE.md): the keywords
 ;; `inductive structure def abbrev opaque theorem axiom realize derive trusts`,
-;; the explicit-L term heads `fun forall -> Sort proj`, `exact`/`sorry`
-;; proofs, `(view)` in a realize, the binder markers — since both trees
-;; live in this repository until the flip. Dotted names whose last
-;; component is lowercase (`Nat.add`, `List.cons`) read as functions; the
-;; universe suffix `.{u}` parses as a trailing brace list under the Scheme
-;; grammar and is left uncolored.
+;; the term heads `fun forall -> Sort proj`, `exact`/`sorry` proofs, `(view)`
+;; in a realize, the binder markers, the proof steps. And the previous
+;; generation's (docs/V2.md): object language, proof DSL, module/artifact
+;; forms, as its kernel readers took them (at the tag v2-kernel-last:
+;; kernel/reader.shard — top-level and object forms, loader sugars, bin/lib
+;; clauses; kernel/proof_reader.shard — proofs, steps, eqrefs;
+;; kernel/types.shard — the native prim table).
+;; Dotted names whose last component is lowercase (`Nat.add`, `List.cons`)
+;; read as functions; the universe suffix `.{u}` parses as a trailing brace
+;; list under the Scheme grammar and is left uncolored.
 ;;
 ;; ORDERING: Zed applies the LAST pattern that captures a node, so this
 ;; file goes generic → specific. Catch-alls (plain symbol, list head,
@@ -27,7 +24,7 @@
 
 (comment) @comment
 
-;; `;;;` = file-header / section docstrings (LANGUAGE.md §1).
+;; `;;;` = file-header / section docstrings.
 ((comment) @comment.doc
   (#match? @comment.doc "^;;;"))
 
@@ -87,8 +84,8 @@
   (#match? @operator "^(=|::)$"))
 
 ;; -----------------------------------------------------------------
-;; Native primitives (kernel/types.shard tc_builtin_sig) + the literal
-;; sugars that read like calls (`list`, `refine_val`, `refine_try`).
+;; Native primitives + the literal sugars that read like calls (`list`,
+;; `refine_val`, `refine_try`).
 ;; -----------------------------------------------------------------
 
 ((list
@@ -97,15 +94,15 @@
   (#match? @function.builtin "^([-+*/]|mod|tmod|ediv|band|bor|bxor|bshl|bshr|int_eq|lt|le|sym_eq|gen_fresh|sym_of_chars|chars_of_sym|list|refine_val|refine_try)$"))
 
 ;; -----------------------------------------------------------------
-;; Object language + module system + artifacts (reader.shard).
+;; Object language + module system + artifacts.
 ;;   definitional: type fn extern sig record
 ;;   expressions:  match let if quote
 ;;   modules:      import use use-module
 ;;   artifacts:    bin lib app cli returns
 ;;   sugars:       make with refine S^ inline chain measure
-;;   V3 (v3/LANGUAGE.md §4–§5): inductive structure def abbrev opaque
+;;   V3:           inductive structure def abbrev opaque
 ;;                 theorem realize derive trusts; exact; fun forall -> Sort proj;
-;;                 I's forms (slices 3.20, 3.21, 3.22): by intro rfl have show apply cases induction wf decide unfold reduce rw occ simp_only arith only farkas auto proof-for
+;;                 proof steps: by intro rfl have show apply cases induction wf decide unfold reduce rw occ simp_only arith only farkas auto proof-for
 ;; -----------------------------------------------------------------
 
 ((list
@@ -134,7 +131,7 @@
   (#eq? @keyword "as"))
 
 ;; -----------------------------------------------------------------
-;; Proof language (proof_reader.shard).
+;; The previous generation's proof language.
 ;;   declarations: claim axiom requirement fulfills proof-for goal
 ;;   proofs:       refl steps induct case-on case wf-induct subterm-induct
 ;;                 below refine-fact have fin-split div-facts inject

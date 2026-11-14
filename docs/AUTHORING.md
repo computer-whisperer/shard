@@ -304,7 +304,7 @@ speaks of rests on building it from the file the contract imports. The contract
 | `RUNNABLE fn F why=wf_unreached`; its `fulfills` is then `LOAD-ERROR FILE fulfills_outside_impl` | `WellFounded.fix`, `InvImage.wf` or `Nat.lt_wfRel` is past the horizon: importing through `arith`'s lemma alone does not reach them | `(import Init WellFounded.fix_eq)` |
 | `RUNNABLE fn F why=callee_runnable` | it calls a function that is a program only | repair the callee, or put it behind a view |
 | `REFUSE F realize_recursion: F calls itself without a measure` | no recursion clause | add `(measure …)` |
-| `REFUSE F equation_form: T: a nested inductive's recursor has no Stage-0 translation` | structural recursion into a type nested through `List` | `(derive T size)` and a `Nat` measure |
+| `REFUSE F equation_form: T: a nested inductive's recursor has a motive per auxiliary type, and structural recursion takes one — write a Nat measure: (derive TYPE size) gives a size to measure by` | structural recursion into a type nested through `List` | `(derive T size)` and a `Nat` measure |
 | `DEFINE F equations=` with no name after it; then `READ-ERROR FILE unknown_constant: F.eq_1`, and `(unfold F)` is `unfold_stuck` | a structurally recursive body that starts with `if` has no equation | let the `match` on the recursion parameter lead (`em_keep`) |
 | `REFUSE F nested_recursion: F: the argument of a recursive call is computed by the recursion itself — it cites R, a let bound to the result of a recursive call: …` (or `— a recursive call stands inside it`) | a recursive call's argument depends on another recursive call's result: no obligation can state that it decreases. A `let` bound to a recursive call is fine while later calls do not take it as an argument (`pins/loader/define_let_call`) | pass an argument computed without a recursive call |
 | `REFUSE F unreachable_arm: the row X binds a variable and matches every value, so the N row(s) after it can never be taken: no constructor of T named X is in scope — …` | a row that is a bare name which is no constructor of the matched type — a misspelt or unopened constructor — or `_`, with rows after it | write the constructor as its type spells it (`T.C`, or `(use MODULE.T)`); a catch-all is the last row |
@@ -341,8 +341,8 @@ long by itself may run past it.
 
 | command | does |
 |---|---|
-| `v3/fmt.sh --fix FILE…` | rewrites each file in place: `rewritten: FILE`, then `v3/fmt.sh: N files, K rewritten, 0 refused` |
-| `v3/fmt.sh FILE…` | checks and writes nothing: `not canonical: FILE`, then `v3/fmt.sh: N files, K not canonical, 0 refused`; exit 1 when a file is not canonical |
+| `v3/fmt.sh --fix FILE…` | rewrites each file in place: `rewritten: FILE`, then `v3/fmt.sh: N files, K rewritten, 0 refused`; exit 1 when a file is refused |
+| `v3/fmt.sh FILE…` | checks and writes nothing: `not canonical: FILE`, then `v3/fmt.sh: N files, K not canonical, 0 refused — v3/fmt.sh --fix` (the tail only when K is not 0); exit 1 when a file is not canonical or is refused |
 | `v3/fmt.sh`, `v3/fmt.sh --fix` | the same over every gated file |
 
 The gate sees a file once git tracks it; a file not yet tracked is checked by naming it. The proof
@@ -428,7 +428,7 @@ bytes.
 **`v3/std/list.shard`**: the programs of Init's list functions. They keep Init's names, so they
 need the import and no `use`; without the import a `fn` that calls one is refused: `REFUSE F
 unknown_head: List.length — read E-first after the typed route's no_realization: List.length: no
-realization attached — realize it first`.
+realization attached — realize it first, or import the file that does`.
 
 | name | binders, result | does |
 |---|---|---|

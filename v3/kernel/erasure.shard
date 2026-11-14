@@ -1,5 +1,4 @@
-;;; v3/kernel/erasure.shard — the E projection (v3/LANGUAGE.md §7.1, §7.5; §8.4 slice
-;;; 3.16 "the shape", rules 3 and 4; law §4.4). An L term erased to an E term by the roles of
+;;; v3/kernel/erasure.shard — the E projection. An L term erased to an E term by the roles of
 ;;; erase.shard: types, proofs and erased binders dropped; a constructor and a call at their
 ;;; runtime arguments; `casesOn` and a recursor without its hypotheses as a match, a
 ;;; two-constructor case analysis that ignores its fields as the `if` it was written as;
@@ -8,15 +7,15 @@
 ;;; resolved operation as its entry of the realization registry; a row of the registry's
 ;;; types (erase.shard's rep_row) as its one runtime field — the constructor its argument,
 ;;; the projection its subject —, a projection function as its projection, a string literal
-;;; as its bytes (slice 3.18). Two callers: a constant's
+;;; as its bytes. Two callers: a constant's
 ;;; derived view (realize.shard) and a pre-definition (predef.shard), whose erasure **is** the
-;;; function's program — the self-local and a callee-local a call. A template's call (§8.4
-;;; slice 3.28: a fn with a function-typed binder) is a call of its instance at the static
+;;; function's program — the self-local and a callee-local a call. A template's call (of a fn
+;;; with a function-typed binder) is a call of its instance at the static
 ;;; arguments' shapes — a lambda lifted to a generated fn on the way —, the instance demanded
 ;;; of the loader, which builds it (template.shard). The walk's state `Tr` and
 ;;; its K procedures are here, under the three files that build terms over it (this one,
-;;; realize.shard, define.shard). Untrusted: the erasure rule's implementation is a stated
-;;; bring-up trust dependency (§7.1, GPT-6 R58) until route 1's proof covers it.
+;;; realize.shard, define.shard). Untrusted for what K accepts. For what a binary does, the
+;;; erasure rule's implementation is a stated trust dependency: reviewed and tested, not proven.
 (import "predef.shard")
 (import "erase.shard")
 (import "prog.shard")
@@ -69,13 +68,13 @@
 (use kernel.prog.EType)
 (use kernel.scope.Scope)
 
-;; ---- templates and instances (§8.4 slice 3.28 rule 3) --------------------------------------
+;; ---- templates and instances --------------------------------------
 ;; the shape of a static argument: the identity it names as the L term it is (a fn with a
 ;; program, a realized constant, an instance, a lifted lambda; a constant of the realization
 ;; registry), the primitive the registry realizes it to (None for a program), its arity, its
 ;; leading arguments — Some a type or erased argument kept in the L term (closed), None a
 ;; captured runtime value — and the captured values' L types (closed). The captured count is
-;; their number; the values themselves are never part of a shape (law §4.3)
+;; their number; the values themselves are never part of a shape: they are passed at run time
 (type Shape (Shape Expr (Option Name) Int (List (Option Expr)) (List Expr)))
 (fn shape_head ((s Shape)) Expr
   (match s
@@ -116,7 +115,7 @@
 ;; defined constant's identity and its type parameters' locals (an ETVar of the body is one of
 ;; them); for a definition (define.shard) the value once built and the descent obligations
 ;; collected on the way, newest first
-;; (§8.4 slice 3.28) the lambdas lifted so far (a counter for their names), the generated fns
+;; the lambdas lifted so far (a counter for their names), the generated fns
 ;; and the instances the body demands, in order; `owner` when the body is a template's — at
 ;; an instance, or at the check of its declaration: the template and the instance's name (a
 ;; self-call at other shapes is refused), with the template's binders (its self-call's roles,
@@ -148,7 +147,7 @@
   (match (Tr.owner t)
     ((Some _) True)
     (None False)))
-;; the owner's self-call at one of its own type parameters (rule 4: a template calls itself at its
+;; the owner's self-call at one of its own type parameters (a template calls itself at its
 ;; own types; at a type built from them — f at (List a) — the shape set would grow)
 (fn own_tparam ((t Tr) (a Expr)) Bool
   (match a
@@ -225,11 +224,6 @@
     ((TeleErr _ _) (Pair t None))
     ((TeleOk w1 es1 tele) (Pair (with Tr t (w w1) (es es1)) (Some tele)))))
 (fn level_one () Level (LSucc LZero))
-;; the result type against the expected type binds type parameters too
-;; let: sequential, each value's type inferred
-;; if: the condition's two-constructor inductive's recursor with a constant motive
-;; a match not on a variable: the recursor over flat constructor patterns, a variable arm expanded
-;; the scrutinee's inductive, levels and parameters from its inferred type
 (fn ind_ctor_names ((t Tr) (ind Name)) (List Name)
   (match (es_info (Tr.es t) ind)
     ((Some (EIInd _ cs)) cs)
@@ -260,7 +254,7 @@
                 ((Pair t1 (Some fields))
                  (match (tr_apps t1 (mk_const c ls) (append largs (field_fvars fields)))
                    ((Pair t2 cterm) (Pair t2 (Some (Pair fields cterm))))))))))))
-       (_ (Pair t None))))  ; not a constructor: the wildcard arm belongs to `info`'s match (it sat one level too deep until the parity test classified the driver's closure, slice 6)
+       (_ (Pair t None))))  ; not a constructor
     (None (Pair t None))))
 (fn open_fields ((t Tr) (ind Name) (ty Expr) (acc (List Field)) (fuel Int))
   (Pair Tr (Option (List Field)))
@@ -291,10 +285,6 @@
   (match (get_app_fn e)
     ((Const _ c _) (name_eq c n))
     (_ False)))
-;; the arm's variables: a constructor pattern binds the runtime fields in order, a variable arm
-;; binds the constructor term; an if's branches bind nothing
-;; the minors' shared result type: the expected E type's L form, else the first body's inferred type,
-;; which must not mention the fields
 (fn mentions_any ((e Expr) (ids (List Int))) Bool
   (measure (struct e))
   (if (bool_not (has_fvar e)) False
@@ -319,7 +309,6 @@
     (Nil Nil)
     ((Cons (TBind _ BType fv) r) (Cons fv (tbind_types r)))
     ((Cons _ r) (tbind_types r))))
-;; the equations: the leaves of the case tree over the data binders, each a theorem
 (fn count_data ((binds (List TBind))) Int
   (measure (struct binds))
   (match binds
@@ -345,12 +334,12 @@
          (match (tr_apps t e (list v))
            ((Pair t1 e1) (pj_inst_lams t1 e1 r))))))))
 
-;; ---- the erasure (§7.1, §7.5) ---------------------------------------------------------------
+;; ---- the erasure ---------------------------------------------------------------
 ;; the body's variables in the erasure: a local is a runtime variable (its E index counted among
-;; those), a static or erased one, or an induction hypothesis
-;; (slice 3.16) or a function standing for a call — the pre-definition's self-local, its
-;; identity and its binders' runtime flags
-;; (§8.4 slice 3.28) EKShape: a static parameter at an instance — its shape, and the captured
+;; those), a static or erased one, an induction hypothesis,
+;; or a function standing for a call — the pre-definition's self-local, its
+;; identity and its binders' runtime flags;
+;; EKShape: a static parameter at an instance — its shape, and the captured
 ;; slots' entries (EKVar each, under ids no local has: the instance's leading parameters);
 ;; EKTemplate: a template's own name — the self-local at an instance, a call of the template
 (type EKind
@@ -394,7 +383,7 @@
            ((BData _) EKVar)
            ((BStatic _) EKErased)))
        (binder_ents_fwd r)))))  ; a static binder is bound by template.shard (a fn's or a realize's template), never here: erased, so a use is loud
-;; the erasure of an L term in a runtime position (§7.5)
+;; the erasure of an L term in a runtime position
 (fn erase ((t Tr) (env (List ErEnt)) (e Expr) (fuel Int)) ErRes
   (measure fuel)
   (if (< fuel 0) (ErErr (quote erased_in_runtime) "the body is too deep")
@@ -404,32 +393,34 @@
        ((Some (Pair EKVar i)) (ErOk t (EBVar i)))
        ((Some (Pair EKIH _))
         (ErErr (quote recursion_structure)
-          "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
+          "a recursive definition's executable structure is not readable off the recursor: supply the body"))
        ((Some (Pair (EKCall c roles) _))
         (match roles
           (Nil (ErOk t (ECall c Nil)))
-          (_ (ErErr (quote function_value) (append (show_name c) " unapplied (law §4.3)")))))
+          (_
+            (ErErr (quote function_value)
+              (append (show_name c) " unapplied: a function is no value")))))
        ((Some (Pair (EKShape sh _) _))
         (ErErr (quote function_value)
           (append "a static parameter (at "
             (append (show_name (shape_id sh))
-              ") unapplied: it is called at its arity, or passed on as a static argument (§8.4 slice 3.28 rule 2; law §4.3)"))))
+              ") unapplied: it is called at its arity, or passed on as a static argument"))))
        ((Some (Pair (EKTemplate c) _))
         (ErErr (quote function_value)
-          (append (show_name c)
-            " unapplied: a template is called at its full arity (§8.4 slice 3.28 rule 2; law §4.3)")))
+          (append (show_name c) " unapplied: a template is called at its full arity")))
        ((Some (Pair _ _))
-        (ErErr (quote erased_in_runtime) "a type or a proof in a runtime position (law §4.2)"))
+        (ErErr (quote erased_in_runtime)
+          "a type or a proof in a runtime position: both are erased from a program"))
        (None (ErErr (quote erased_in_runtime) "a variable the erasure does not know"))))
     ((Lit _ (LitNat n)) (ErOk t (ELit (LNat n))))
-    ((Lit _ (LitStr bs))  ; String's representation is its bytes (rule 1 of slice 3.18): Init's List cells, built once at link
+    ((Lit _ (LitStr bs))  ; a String is its bytes: Init's List cells, built once at link
      (if (utf8_ok bs) (ErOk t (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
      (ErErr (quote bad_string)
-       "a string literal's bytes are not UTF-8: K reads the literal by decoding it (§8.4 slice 3.18 rule 3)")))
+       "a string literal's bytes are not UTF-8: K reads the literal by decoding it")))
     ((Let _ n ty v b) (erase_let t env n ty v b fuel))
     ((Lam _ _ _ _ _)
      (ErErr (quote function_value)
-       "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result (§8.4 slice 3.28 rule 2; law §4.3)"))
+       "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result"))
     ((Pi _ _ _ _ _) (ErErr (quote erased_in_runtime) "a type in a runtime position"))
     ((Sort _ _) (ErErr (quote erased_in_runtime) "a sort in a runtime position"))
     ((BVar _ _) (ErErr (quote erased_in_runtime) "a loose variable"))
@@ -511,7 +502,7 @@
                        (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))))))
               (_ (ErErr (quote no_realization) (append (show_name sn) " is not a structure")))))))))))
 ;; a row's constructor and its fields' roles, when the structure is what the row says: one
-;; constructor, exactly one runtime field (§8.4 slice 3.18 rule 1)
+;; constructor, exactly one runtime field
 (fn row_field ((t Tr) (ind Name)) (Pair Tr (Option (Pair Name (List Bool))))
   (match (env_find (tr_env t) ind)
     ((Some (InductInfo _ _ _ _ (Cons c Nil) _ _ _ _))
@@ -521,8 +512,8 @@
        ((Pair t1 None) (Pair t1 None))))
     (_ (Pair t None))))
 ;; a projection function — a constant whose value is λ params self. self.i —, applied at least
-;; to its lambdas: the structure, the field, the subject and the arguments past it (rule 2; a
-;; package's function field takes them, §8.4 slice 3.28 rule 5)
+;; to its lambdas: the structure, the field, the subject and the arguments past it (a
+;; package's function field takes them)
 (fn proj_fn_app ((info ConstantInfo) (args (List Expr)))
   (Option (Pair (Pair Name Int) (Pair Expr (List Expr))))
   (match info
@@ -550,7 +541,7 @@
     (match e
       ((Lam _ _ _ _ b) (under_lams b (- k 1)))
       (_ None))))
-;; ---- a package (§8.4 slice 3.28 rule 5) ---------------------------------------------------------
+;; ---- a package ---------------------------------------------------------
 ;; a package type by erase.shard's reading, over the walk
 (fn tr_package ((t Tr) (sn Name)) (Pair Tr (Option (Pair Name (List BRole))))
   (match (package_of (Tr.w t) (Tr.es t) (Tr.sc t) sn)
@@ -573,12 +564,12 @@
        (_
          (Pair t
            (PkErr (quote function_value)
-             "a package in a runtime position: a package is a static parameter, its fields read at the instance (§8.4 slice 3.28 rule 5; law §4.1)")))))
+             "a package in a runtime position: a package is a static parameter, its fields read at the instance")))))
     (_
       (if (has_fvar x)
         (Pair t
           (PkErr (quote function_value)
-            "a package built from locals of the caller: a package constant is closed (§8.4 slice 3.28 rule 5)"))
+            "a package built from locals of the caller: a package constant is closed"))
         (package_fields_of t x)))))
 (fn fill_somes ((ls (List (Option Expr)))) (List Expr)
   (measure (struct ls))
@@ -600,11 +591,11 @@
           (_
             (Pair t1
               (PkErr (quote no_realization)
-                "a package constant whose value is not its constructor applied (§8.4 slice 3.28 rule 5)")))))
+                "a package constant whose value is not its constructor applied")))))
        (_
          (Pair t1
            (PkErr (quote no_realization)
-             "a package constant whose value is not its constructor applied (§8.4 slice 3.28 rule 5)")))))))
+             "a package constant whose value is not its constructor applied")))))))
 ;; a package's field i applied to `args`: the field's term applied and erased — a function field
 ;; a call head (a name, a partial application, a lambda the erasure beta-reduces or lifts), a value
 ;; field its closed E term, a law field never in a runtime position. At the declaration's check
@@ -628,8 +619,7 @@
         (match (nth roles i)
           ((Some BErased)
            (ErErr (quote erased_in_runtime)
-             (append (show_name sn)
-               ": a package's law in a runtime position (§8.4 slice 3.28 rule 5; law §4.2)")))
+             (append (show_name sn) ": a package's law in a runtime position")))
           ((Some (BStatic k))
            (if (bool_not (= (len args) k))
              (ErErr (quote function_value)
@@ -637,7 +627,7 @@
                  (append ": a package's function field applied to "
                    (append (show_nat (len args))
                      (append " arguments, its arity "
-                       (append (show_nat k) " (§8.4 slice 3.28 rule 2; law §4.3)"))))))
+                       (append (show_nat k) ": it is called at its arity"))))))
              (match (erase_all t2 env args fuel Nil)
                ((Pair (Some (Pair e m)) _) (ErErr e m))
                ((Pair None (Pair t3 as)) (ErOk t3 (ECall (package_field_name pn i) as))))))
@@ -646,7 +636,8 @@
              (Nil (ErOk t2 (ECall (package_field_name pn i) Nil)))
              (_
                (ErErr (quote function_value)
-                 (append (show_name sn) ": a package's value field applied (law §4.3)")))))
+                 (append (show_name sn)
+                   ": a package's value field applied: it is a value, not a function")))))
           (_
             (ErErr (quote no_realization)
               (append (show_name sn) ": a projection past the constructor's fields")))))))))
@@ -692,10 +683,11 @@
        ((Some (Pair EKVar i)) (erase_erased_args t env (EBVar i) args fuel))
        ((Some (Pair EKIH _))
         (ErErr (quote recursion_structure)
-          "a recursive definition's executable structure is not readable off the recursor: supply the body (§7.1, §7.3)"))
+          "a recursive definition's executable structure is not readable off the recursor: supply the body"))
        ((Some (Pair (EKCall c roles) _))
         (if (bool_not (= (len args) (len roles)))
-          (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+          (ErErr (quote function_value)
+            (append (show_name c) " partially applied: a function is no value"))
           (match (erase_roles t env roles args fuel Nil)
             ((Pair (Some (Pair e m)) _) (ErErr e m))
             ((Pair None (Pair t1 as)) (ErOk t1 (ECall c as))))))
@@ -703,17 +695,19 @@
        ((Some (Pair (EKTemplate c) _)) (erase_template_call t env c args fuel))
        (_
          (ErErr (quote function_value)
-           "an application whose head is not a constant: a function is no value (§8.4 slice 3.28 rule 2; law §4.3)"))))
+           "an application whose head is not a constant: a function is no value"))))
     ((Lam _ _ _ _ _)
      (match (beta_head (w_st (Tr.w t)) head args)
        ((Pair st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1)))))
-    ((Proj _ sn i x)  ; a package's function field applied (rule 5)
+    ((Proj _ sn i x)  ; a package's function field applied
      (match (tr_package t sn)
        ((Pair t1 (Some _)) (erase_package_proj t1 env sn i x args fuel))
        ((Pair t1 None)
         (ErErr (quote function_value)
-          "an application whose head is a projection: a function is no value (law §4.3)"))))
-    (_ (ErErr (quote function_value) "an application whose head is not a constant (law §4.3)"))))
+          "an application whose head is a projection: a function is no value"))))
+    (_
+      (ErErr (quote function_value)
+        "an application whose head is not a constant: a function is no value"))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
 (fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
   (measure (struct args))
@@ -726,7 +720,7 @@
           ((Pair w2 (Some True)) (erase_erased_args (tr_set_w t1 w2) env v r fuel))
           ((Pair w2 _)
            (ErErr (quote function_value)
-             "a variable applied to a runtime value: a function is no value — a function-typed binder is a static parameter of a template (§8.4 slice 3.28 rules 1–2; law §4.3)"))))
+             "a variable applied to a runtime value: a function is no value — a function-typed binder is a static parameter of a template"))))
        ((Pair t1 None)
         (ErErr (quote function_value) "a variable applied to an argument K could not type"))))))
 (fn last_component ((n Name)) Symbol
@@ -757,13 +751,13 @@
     (_ False)))
 ;; `k`: the constant where a row of the registry may speak for it — Init's; a native declaration
 ;; that bears a row's name (a module `Bool` declaring `or` under a prefix that stops before
-;; Init's) is its own program, never the row's (slice 3.19: the second reader's probe)
+;; Init's) is its own program, never the row's
 (fn erase_const ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
   (erase_const_at t env c (if (native_decl (Tr.sc t) c) Anon c) args fuel))
 (fn erase_const_at ((t Tr) (env (List ErEnt)) (c Name) (k Name) (args (List Expr)) (fuel Int)) ErRes
   (let ((lc (last_component c)))
     (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim))))
-      (ErOk t EAbsurd)  ; a refuted row (slice 3.27 landing 3)
+      (ErOk t EAbsurd)  ; a refuted row
     (if (name_eq k (n2 (quote OfNat) (quote ofNat)))
       (match args
         ((Cons (Const _ nn _) (Cons (Lit _ (LitNat n)) _))
@@ -778,7 +772,7 @@
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (quote Nat) (quote add)) (list x1 (ELit (LNat 1))))))))
         (_ (ErErr (quote function_value) "Nat.succ unapplied")))
-    (if (name_eq k (nm_int_of_nat))  ; Nat and Int share the integer (INVENTORY): the coercion is the identity
+    (if (name_eq k (nm_int_of_nat))  ; Nat and Int share the integer: the coercion is the identity
       (match args
         ((Cons x Nil) (erase t env x (- fuel 1)))
         (_ (ErErr (quote function_value) "Int.ofNat unapplied")))
@@ -795,7 +789,7 @@
         (_ (ErErr (quote function_value) "Int.negSucc unapplied")))
     (if (name_eq k (n2 (quote Decidable) (quote decide)))
       ;; decide p inst: Bool and Decidable have different cells (ev.shard), so the conversion is
-      ;; explicit — (if ⟦inst⟧ true false) over Init's Bool (slice 3.16 rule 3; GPT-6 R66)
+      ;; explicit — (if ⟦inst⟧ true false) over Init's Bool
       (match args
         ((Cons _ (Cons inst Nil))
          (match (erase_cond t env inst (- fuel 1))
@@ -826,13 +820,14 @@
           (if (rec_generated (tr_env t) c)
             (ErErr (quote recursion_structure)
               (append (show_name c)
-                ": a recursive definition's executable structure is not readable off the kernel term — supply the body (§7.1, §7.3)"))
+                ": a recursive definition's executable structure is not readable off the kernel term — supply the body"))
           (if
             (bool_or (name_eq k (n2 (quote Classical) (quote choice)))
               (bool_or (name_eq k (n2 (quote Acc) (quote rec)))
                 (bool_or (name_eq k (nm_quot_lift))
                   (bool_or (name_eq k (nm_quot_mk)) (name_eq k (nm_quot_ind))))))
-            (ErErr (quote noncomputable) (append (show_name c) " in a runtime position (law §4.2)"))
+            (ErErr (quote noncomputable)
+              (append (show_name c) " in a runtime position: it has no program"))
             (match (env_find (tr_env t) c)
               (None (ErErr (quote unknown_constant) (show_name c)))
               ((Some info)
@@ -843,7 +838,9 @@
                  (_
                    (if (bool_and (sym_eq lc (quote casesOn)) (of_inductive (tr_env t) c))
                      (erase_cases t env c args fuel)
-                   (if (bool_or (is_template (Tr.es t) c) (owner_is t c))  ; a template's call is a call of its instance (§8.4 slice 3.28 rule 3); a realize template's self-call names its constant
+                   (if (bool_or (is_template (Tr.es t) c) (owner_is t c))
+                     ;; a template's call is a call of its instance; a realize template's
+                     ;; self-call names its constant
                      (erase_template_call t env c args fuel)
                      (match
                        (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0)))
@@ -868,7 +865,8 @@
                                    (ErOk t1 (ELet (list a) body)))
                                   ((Pair None _)
                                    (ErErr (quote function_value)
-                                     (append (show_name c) " partially applied (law §4.3)")))))
+                                     (append (show_name c)
+                                       " partially applied: a function is no value")))))
                                (None
                                  (match (prim_l_identity k)
                                    ((Some _)
@@ -889,11 +887,11 @@
                                               ((Pair t1 None)
                                                (ErErr (quote function_value)
                                                  (append (show_name c)
-                                                   ": a projection applied past its structure — a function is no value (law §4.3)")))))
+                                                   ": a projection applied past its structure — a function is no value")))))
                                            (None (erase_unfold_matcher t env c info args fuel)))))))))))))))))))))))))))))))))
 ;; a definition without a realization: Lean's own matcher (`NAME.match_N`, no descriptor of this
 ;; run) is a definition over `casesOn` — unfolded at its arguments and erased as any definition's
-;; value (slice 3.27 rule 6); anything else has no realization
+;; value; anything else has no realization
 (fn erase_unfold_matcher
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int))
   ErRes
@@ -903,10 +901,12 @@
        (match (beta_head (w_st (Tr.w t)) v args)
          ((Pair st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1))))
        (ErErr (quote no_realization)
-         (append (show_name c) ": no realization attached — realize it first (§7.1)"))))
+         (append (show_name c)
+           ": no realization attached — realize it first, or import the file that does"))))
     (_
       (ErErr (quote no_realization)
-        (append (show_name c) ": no realization attached — realize it first (§7.1)")))))
+        (append (show_name c)
+          ": no realization attached — realize it first, or import the file that does")))))
 (fn is_match_name ((c Name)) Bool
   (match c
     ((Str _ s) (is_match_prefix (chars_of_sym s)))
@@ -919,14 +919,14 @@
          (bool_and (= c3 116) (bool_and (= c4 99) (bool_and (= c5 104) (= c6 95)))))))
     (_ False)))
 
-;; ---- decisions: a value and a condition (slice 3.19) -------------------------------------------
+;; ---- decisions: a value and a condition -------------------------------------------
 ;; A `Decidable` value is one of the type's two cells — a match by constructor reads it, a
 ;; function returns it, a derived decision is built of them. The registry's decisions answer a
 ;; test instead (the integer comparison's cell, a Bool), which is all an `if` reads: so where a
 ;; decision is an `if`'s condition — `ite`, `dite`, `decide`, a `casesOn` read back as an `if` —
 ;; erase_cond gives the bare test, and everywhere else the constant erases to
-;; (if TEST isTrue isFalse). Before this slice the bare test stood in every position, and a
-;; match on `(Nat.decEq a b)` by constructor took the wrong row (the second reader's probe)
+;; (if TEST isTrue isFalse): with the bare test in every position, a
+;; match on `(Nat.decEq a b)` by constructor would take the wrong row
 (fn erase_dec_value ((t Tr) (env (List ErEnt)) (test ETerm) (fuel Int)) ErRes
   (let ((tt (mk_const (n1 (quote True)) Nil)) (pf (mk_const (n2 (quote True) (quote intro)) Nil)))
     (match
@@ -983,7 +983,7 @@
            (None (erase t env h fuel)))
          (erase t env h fuel))))))
     (_ (erase t env h fuel))))
-;; the registry's Bool rows (slice 3.19): Init's connectives as the `if` their definitions are —
+;; the registry's Bool rows: Init's connectives as the `if` their definitions are —
 ;; `Bool.and a b` is (if a b false), `Bool.or a b` (if a true b), `Bool.not a` (if a false true),
 ;; the second operand not evaluated where the first decides (Init marks them macro_inline)
 (fn erase_bool_op ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
@@ -997,14 +997,16 @@
     ((Pair (Some (Pair e m)) _) (ErErr e m))
     ((Pair None (Pair t1 (Cons a (Cons tt (Cons ff Nil)))))
      (if (name_eq c (n2 (quote Bool) (quote not))) (ErOk t1 (EIf a ff tt))
-     (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))))
+     (ErErr (quote function_value)
+       (append (show_name c) " partially applied: a function is no value"))))
     ((Pair None (Pair t1 (Cons a (Cons b (Cons tt (Cons ff Nil))))))
      (if (name_eq c (n2 (quote Bool) (quote and))) (ErOk t1 (EIf a b ff))
      (if (name_eq c (n2 (quote Bool) (quote or))) (ErOk t1 (EIf a tt b))
      (ErErr (quote function_value) (append (show_name c) " over-applied")))))
     ((Pair None _)
-     (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)")))))
-;; the realization registry's Int rows (slice 3.16 rule 4): a resolved L operation → the table's
+     (ErErr (quote function_value)
+       (append (show_name c) " partially applied: a function is no value")))))
+;; the realization registry's Int rows: a resolved L operation → the table's
 ;; entry. ev's integer operation and K's constant agree on every input for these; the
 ;; decisions answer a two-constructor cell, which is all an `if` reads (decide converts)
 (fn realization_of ((c Name)) (Option Name)
@@ -1017,14 +1019,14 @@
     (Some (n1 (quote <=)))
     ;; Nat's five that are the integer entry's own operation on naturals: one entry, the
     ;; spelling the classifier gives `+ * = < <=` (frontend parity stays byte for byte);
-    ;; Nat.sub, Nat.div, Nat.mod differ from `- / mod` and keep their own entries (rule 4)
+    ;; Nat.sub, Nat.div, Nat.mod differ from `- / mod` and keep their own entries
     (if (name_eq c (n2 (quote Nat) (quote add))) (Some (n1 (quote +)))
     (if (name_eq c (n2 (quote Nat) (quote mul))) (Some (n1 (quote *)))
     (if (name_eq c (n2 (quote Nat) (quote decEq))) (Some (n1 (quote =)))
     (if (name_eq c (n2 (quote Nat) (quote decLt))) (Some (n1 (quote <)))
     (if (name_eq c (n2 (quote Nat) (quote decLe))) (Some (n1 (quote <=)))
     None))))))))))))
-;; the registry's expression rows (slice 3.17 rule 7): a one-argument L operation with no
+;; the registry's expression rows: a one-argument L operation with no
 ;; table entry of its own, as an E expression over the existing entries with the argument
 ;; bound once (#0) — it agrees with K's constant on every input, as the rows above do
 (fn realization_expr ((c Name)) (Option ETerm)
@@ -1035,11 +1037,11 @@
         (EBVar 0)))
     None))
 
-;; ---- a matcher application (slice 3.16 rule 1) ------------------------------------------------
+;; ---- a matcher application ------------------------------------------------
 ;; OWNER.match_N params motive scrutinee alternatives: the E match of the rows read back off
 ;; the matcher's own type (mt_is_matcher has regenerated and compared it), each alternative's
 ;; lambdas the row's variables — control flow in E: the scrutinee once, then the first
-;; matching row's arm only (§6.2)
+;; matching row's arm only
 (fn erase_matcher ((t Tr) (env (List ErEnt)) (c Name) (desc MtDesc) (args (List Expr)) (fuel Int))
   ErRes
   (match desc
@@ -1048,7 +1050,8 @@
        (ErErr (quote no_realization)
          (append (show_name c) ": a match on several scrutinees has no E form"))
      (if (< (len args) (+ np (+ 2 (len rows))))
-       (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+       (ErErr (quote function_value)
+         (append (show_name c) " partially applied: a function is no value"))
        (match (nth args (+ np 1))
          (None (ErErr (quote function_value) (show_name c)))
          ((Some scrut)
@@ -1101,8 +1104,8 @@
     (_
       (Pair (Some (Pair (quote no_realization) "a match on several scrutinees has no E form"))
         (Pair t Nil)))))
-;; an alternative under a matcher applied past its alternatives (the dependent match, slice 3.27
-;; landing 3): its field lambdas opened, the lambdas after them instantiated at the extra arguments
+;; an alternative under a matcher applied past its alternatives (the dependent match):
+;; its field lambdas opened, the lambdas after them instantiated at the extra arguments
 ;; — the generalized locals, re-bound in the arm —, the fields closed again
 (fn alt_with_extra ((t Tr) (a Expr) (k Int) (extra (List Expr)) (fvs (List Expr))) (Pair Tr Expr)
   (measure k)
@@ -1197,11 +1200,11 @@
        ((Pair t1 (Some (Pair fv body)))
         (erase_alt t1 (Cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r fuel))))))
 
-;; ---- the E projection of a pre-definition (slice 3.16; predef.shard) ---------------------------
+;; ---- the E projection of a pre-definition (predef.shard) ---------------------------
 ;; the binders' roles from their locals' types, the self-local a call of the function with
 ;; those roles; the body erased. The function's E signature with it
-;; PdEraseOk carries the lambdas the body lifted and the instances it demands (§8.4 slice
-;; 3.28 rule 3); PdEraseTemplate: a binder is a static parameter (rule 1) — the fn is a
+;; PdEraseOk carries the lambdas the body lifted and the instances it demands;
+;; PdEraseTemplate: a binder is a static parameter — the fn is a
 ;; template, with no program of its own: its binders' roles and its result's E type for the
 ;; instances (template.shard)
 (type PdErase
@@ -1216,7 +1219,7 @@
      (match (predef_ret w1 es1 sc pd binds)
        ((Pair (Pair w2 es2) None)
         (PdEraseErr (quote no_l_identity)
-          "a result type that is not an E type (a function returned is no value: §8.4 slice 3.28 rule 2; law §4.3)"))
+          "a result type that is not an E type (a function returned is no value)"))
        ((Pair (Pair w2 es2) (Some rt))
         (if (has_static binds) (PdEraseTemplate es2 binds rt)
         (let
@@ -1247,7 +1250,7 @@
     (Nil 0)
     ((Cons (TBind _ (BStatic _) _) r) (+ 1 (count_static r)))
     ((Cons _ r) (count_static r))))
-;; a callee-local is a call of the callee (rule 6)
+;; a callee-local is a call of the callee
 (fn callee_ents ((cs (List CalleeLocal))) (List ErEnt)
   (measure (struct cs))
   (match cs
@@ -1266,7 +1269,7 @@
        (None
          (Pair t (Left5r (quote bad_measure) "the structural parameter is not a data parameter")))))
     ;; a measure that cites a function with no program — a definition and nothing more, a
-    ;; derived size — is K's alone (slice 5.2 rule 6): the program's clause says so and holds
+    ;; derived size — is K's alone: the program's clause says so and holds
     ;; no term. Any other obstacle of the measure's erasure is the function's
     ((PdMeasure m)
      (match (erase t env m (budget_depth))
@@ -1316,21 +1319,23 @@
            ": the registry's row does not describe this structure (one constructor, one runtime field)")))
       ((Pair t1 (Some (Pair _ roles)))
        (if (bool_not (= (len args) (+ nparams (len roles))))
-         (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+         (ErErr (quote function_value)
+           (append (show_name c) " partially applied: a function is no value"))
          (match (erase_roles t1 env roles (drop nparams args) fuel Nil)
            ((Pair (Some (Pair e m)) _) (ErErr e m))
            ((Pair None (Pair t2 (Cons a Nil))) (ErOk t2 a))
            ((Pair None _) (ErErr (quote no_realization) (show_name c)))))))
     (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
       ((Pair (Pair w1 es1) False)
-       (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
+       (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
       ((Pair (Pair w1 es1) True)
        (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
          (match (field_roles t1 c)
            ((Pair t2 None) (ErErr (quote no_realization) (show_name c)))
            ((Pair t2 (Some roles))
             (if (bool_not (= (len args) (+ nparams (len roles))))
-              (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+              (ErErr (quote function_value)
+                (append (show_name c) " partially applied: a function is no value"))
               (match (erase_roles t2 env roles (drop nparams args) fuel Nil)
                 ((Pair (Some (Pair e m)) _) (ErErr e m))
                 ((Pair None (Pair t3 as)) (ErOk t3 (ECtor c as))))))))))))
@@ -1354,8 +1359,8 @@
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int))
   ErRes
   (erase_call_as t env c info args fuel False))
-;; an extern's call is the effect, EExt (§8.6 slice 4.3 landing 1 rule 3: the extern an opaque
-;; constant in L, its program the extern — `ev` stops there, `run` performs it)
+;; an extern's call is the effect, EExt: the extern is an opaque
+;; constant in L, its program the extern — `ev` stops there, `run` performs it
 (fn erase_call_as
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int) (ext Bool))
   ErRes
@@ -1364,7 +1369,8 @@
     ((Pair t1 (Some (Tele _ binds _ _)))
      (let ((roles (data_flags binds)))
        (if (bool_not (= (len args) (len roles)))
-         (ErErr (quote function_value) (append (show_name c) " partially applied (law §4.3)"))
+         (ErErr (quote function_value)
+           (append (show_name c) " partially applied: a function is no value"))
          (match (erase_roles t1 env roles args fuel Nil)
            ((Pair (Some (Pair e m)) _) (ErErr e m))
            ((Pair None (Pair t2 as)) (ErOk t2 (if ext (EExt c as) (ECall c as))))))))))
@@ -1400,7 +1406,7 @@
             fuel)
           (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
             ((Pair (Pair w1 es1) False)
-             (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
+             (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
             ((Pair (Pair w1 es1) True)
              (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
                (if (bool_not (= (len args) (+ nparams (+ 2 (len ctors)))))
@@ -1424,7 +1430,7 @@
        (_ (ErErr (quote no_realization) (show_name c)))))
     (_ (ErErr (quote no_realization) (show_name c)))))
 ;; a case analysis of a row of the registry's types: its one alternative with the runtime
-;; field bound to the scrutinee, a let (rule 1 of slice 3.18)
+;; field bound to the scrutinee, a let
 (fn erase_row_cases
   ((t Tr)
    (env (List ErEnt))
@@ -1453,7 +1459,7 @@
                ((Pair None (Pair t3 body)) (ErOk t3 (ELet (list mj1) body))))))))))
     (_ (ErErr (quote function_value) (append (show_name c) " partially applied")))))
 ;; a case analysis over a two-constructor inductive whose alternatives ignore their fields is
-;; the `if` it was written as (§6.2's tag rule: the second constructor takes the then-branch;
+;; the `if` it was written as (the second constructor takes the then-branch;
 ;; elab.shard's elab_if_cases): the two bodies, first constructor's first
 (fn if_branches ((t Tr) (ctors (List Name)) (minors (List Expr))) (Option (Pair Expr Expr))
   (match ctors
@@ -1509,7 +1515,7 @@
               fuel)
             (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind Nil)
               ((Pair (Pair w1 es1) False)
-               (ErErr (quote no_realization) (append (show_name ind) " is not an E type (§7.5)")))
+               (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
               ((Pair (Pair w1 es1) True)
                (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
                  (if (bool_not (= (len args) (+ nparams (+ 2 nminors))))
@@ -1631,13 +1637,13 @@
     ((Pair t1 (Some (Pair fv body)))
      (open_ihs_lams t1 (Cons (ErEnt (fvar_id_of fv) EKIH) env) body (- k 1) fuel)))))
 
-;; ---- a template's call, the shapes of its static arguments, the lifted lambda (§8.4 slice 3.28 rule 3) ----
+;; ---- a template's call, the shapes of its static arguments, the lifted lambda -----------------
 ;; a template is called at its full arity: its type arguments closed E types (an instance is
-;; at closed types — a polymorphic taker is this landing's limit), its static arguments
+;; at closed types — a polymorphic taker is refused), its static arguments
 ;; shapes, its data arguments erased; the call is the instance's, at the captured values
 ;; group by group then the data, and the instance is demanded of the loader. In a template's
 ;; body at an instance (owner), a call of the template itself at another name is the
-;; type-growing recursion (rule 4)
+;; type-growing recursion, refused
 (fn is_template ((es ESt) (c Name)) Bool
   (match (es_info es c)
     ((Some (EITemplate _ _ _ _)) True)
@@ -1663,7 +1669,7 @@
         (append " applied to "
           (append (show_nat (len args))
             (append " arguments: a template is called at its full arity of "
-              (append (show_nat (len binds)) " (§8.4 slice 3.28 rule 2; law §4.3)"))))))
+              (append (show_nat (len binds)) " arguments"))))))
     (match (template_args t env c binds args fuel Nil Nil Nil Nil Nil)
       ((Pair t2 (TaErr e m)) (ErErr e m))
       ((Pair t2 (TaOk tyl tye shapes caps data))
@@ -1671,7 +1677,7 @@
          (if (other_shape (Tr.owner t2) c name)
            (ErErr (quote realize_descent)
              (append (show_name c)
-               ": a recursive call at other static arguments or type arguments — a template calls itself at its own shapes (§8.4 slice 3.28 rule 4)"))
+               ": a recursive call at other static arguments or type arguments — a template calls itself at its own shapes"))
            (ErOk (tr_demand t2 (Demand name c tyl tye shapes)) (ECall name (append caps data)))))))))
 (fn other_shape ((owner (Option (Pair Name Name))) (c Name) (name Name)) Bool
   (match owner
@@ -1701,14 +1707,15 @@
        (Nil
          (Pair t
            (TaErr (quote function_value)
-             (append (show_name c) " partially applied (§8.4 slice 3.28 rule 2; law §4.3)"))))
+             (append (show_name c) " partially applied: a function is no value"))))
        ((Cons a ar)
         (match role
           (BType
             ;; an open type argument: inside a template (the declaration's check, at placeholders) a
-            ;; template is taken at the enclosing template's own type parameters — the instance is at
-            ;; closed types —, but the template itself only at its parameters exactly (rule 4: at a type
-            ;; built from them the shape set grows); outside a template, a polymorphic taker is landing 1's limit
+            ;; template is taken at the enclosing template's own type parameters — the instance is
+            ;; at closed types —, but the template itself only at its parameters exactly (at a type
+            ;; built from them the shape set grows); outside a template a polymorphic taker is
+            ;; refused
             (if
               (bool_and (has_fvar a)
                 (bool_or (bool_not (in_template t))
@@ -1717,10 +1724,10 @@
                 (if (in_template t)
                   (TaErr (quote realize_descent)
                     (append (show_name c)
-                      ": a recursive call at a type built from a type parameter — a template calls itself at its own types, or the shape set grows (§8.4 slice 3.28 rule 4)"))
+                      ": a recursive call at a type built from a type parameter — a template calls itself at its own types, or the shape set grows"))
                   (TaErr (quote function_value)
                     (append (show_name c)
-                      ": a template taken at an open type — a type parameter of the caller; an instance is at closed types (§8.4 slice 3.28 rule 3, landing 1)"))))
+                      ": a template taken at an open type — a type parameter of the caller; an instance is at closed types"))))
               (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a (Tr.tps t) Nil)
                 ((Pair (Pair w1 es1) None)
                  (Pair (tr_set_es (tr_set_w t w1) es1)
@@ -1753,7 +1760,7 @@
           (append ") applied to "
             (append (show_nat (len args))
               (append " arguments, its arity "
-                (append (show_nat (shape_arity sh)) " (§8.4 slice 3.28 rule 2; law §4.3)")))))))
+                (append (show_nat (shape_arity sh)) ": it is called at its arity")))))))
     (match (erase_all t env args fuel Nil)
       ((Pair (Some (Pair e m)) _) (ErErr e m))
       ((Pair None (Pair t1 as))
@@ -1773,13 +1780,13 @@
          ((Some (Pair _ i)) (EBVar i))
          (None (EBVar 0)))
        (captured_bvars env r)))))
-;; the shape of a static argument (rule 3): (a) a name with a program; (b) such a name applied —
+;; the shape of a static argument: (a) a name with a program; (b) such a name applied —
 ;; type and erased arguments kept, runtime arguments captured; (c) a closed lambda, lifted; (d)
-;; a static parameter passed on; (e) a package constant (rule 5). Anything else — a static
-;; parameter applied (rule 4), a runtime variable, a let-bound function — is refused
+;; a static parameter passed on; (e) a package constant. Anything else — a static
+;; parameter applied, a runtime variable, a let-bound function — is refused
 (type SsRes (SsOk Shape (List ETerm)) (SsErr Symbol (List Int)))
 (fn static_pointer () (List Int)
-  "a static argument is the name of a fn with a program, a realized constant or an instance, such a name applied to runtime values of the caller, a closed lambda, or a static parameter passed on (§8.4 slice 3.28 rule 3; law §4.3)")
+  "a static argument is the name of a fn with a program, a realized constant or an instance, such a name applied to runtime values of the caller, a closed lambda, or a static parameter passed on")
 (fn static_shape ((t Tr) (env (List ErEnt)) (a Expr) (k Int) (fuel Int)) (Pair Tr SsRes)
   (match a
     ((Lam _ _ _ _ _) (lift_lambda t env a k fuel))
@@ -1790,7 +1797,9 @@
          (if (= k 0) (package_shape t env (Const d g ls) g (get_app_args a))
          (match (env_find (tr_env t) g)
            ((Some info)
-            (match (proj_fn_app info (get_app_args a))  ; a package's function field passed on (rule 5): the field's term at the constant, a placeholder at the check
+            (match (proj_fn_app info (get_app_args a))
+              ;; a package's function field passed on: the field's term at the constant, a
+              ;; placeholder at the check
               ((Some (Pair (Pair sn i) (Pair x rest)))
                (package_field_shape t env sn i x rest k fuel))
               (None (named_shape t env (Const d g ls) g (get_app_args a) k fuel))))
@@ -1802,14 +1811,14 @@
               (SsErr (quote function_value)
                 (append "a static parameter (at "
                   (append (show_name (shape_id sh))
-                    ") applied as a static argument: a static parameter is passed on, never transformed (§8.4 slice 3.28 rule 4; law §4.3)")))))
+                    ") applied as a static argument: a static parameter is passed on, never transformed")))))
            (_ (Pair t (SsErr (quote function_value) (static_pointer))))))
         ((Proj _ sn i x) (package_field_shape t env sn i x (get_app_args a) k fuel))
         ((Lam _ _ _ _ _)  ; a lambda applied (a package's lambda field at its captured values): reduced, then read as any static argument
          (match (beta_head (w_st (Tr.w t)) (get_app_fn a) (get_app_args a))
            ((Pair st r) (static_shape (tr_set_w t (w_set_st (Tr.w t) st)) env r k (- fuel 1)))))
         (_ (Pair t (SsErr (quote function_value) (static_pointer))))))))
-;; (e) a package constant (rule 5): a closed term whose value whnf reads as a package type's
+;; (e) a package constant: a closed term whose value whnf reads as a package type's
 ;; constructor applied — the shape its identity with its arguments, nothing captured
 (fn package_shape ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)))
   (Pair Tr SsRes)
@@ -1817,7 +1826,7 @@
     (Pair t
       (SsErr (quote function_value)
         (append (show_name g)
-          ": a package constant applied to a local of the caller — a package is closed (§8.4 slice 3.28 rule 5)")))
+          ": a package constant applied to a local of the caller — a package is closed")))
     (match (package_fields_of t (mk_app_n head gargs))
       ((Pair t1 (PkFields _ _)) (Pair t1 (SsOk (Shape head None 0 (somes_of gargs) Nil) Nil)))
       ((Pair t1 (PkPlaceholder _)) (Pair t1 (SsErr (quote no_realization) (show_name g))))
@@ -1825,7 +1834,7 @@
        (Pair t1
          (SsErr (quote no_realization)
            (append (show_name g)
-             ": a static argument of a package type names a package constant — a def whose value is the structure's constructor applied (§8.4 slice 3.28 rule 5)")))))))
+             ": a static argument of a package type names a package constant — a def whose value is the structure's constructor applied")))))))
 (fn somes_of ((es (List Expr))) (List (Option Expr))
   (measure (struct es))
   (match es
@@ -1870,12 +1879,12 @@
      (Pair t
        (SsErr (quote no_l_meaning)
          (append (show_name g)
-           ": a function with a program and no K constant, or the enclosing function itself, as a static argument — its instance would have no L reading (§8.4 slice 3.28 rule 3)"))))
+           ": a function with a program and no K constant, or the enclosing function itself, as a static argument — its instance would have no L reading"))))
     ((Some (Pair (EKTemplate g) _))
      (Pair t
        (SsErr (quote function_value)
          (append (show_name g)
-           ": a template as a static argument — an instance is taken where the template is called (§8.4 slice 3.28 rule 3)"))))
+           ": a template as a static argument — an instance is taken where the template is called"))))
     (_ (Pair t (SsErr (quote function_value) (static_pointer))))))
 (fn named_shape
   ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)) (k Int) (fuel Int))
@@ -1884,13 +1893,13 @@
     (Pair t
       (SsErr (quote function_value)
         (append (show_name g)
-          ": a template as a static argument — an instance is taken where the template is called (§8.4 slice 3.28 rule 3)")))
+          ": a template as a static argument — an instance is taken where the template is called")))
     (match (shape_kind t g)
       (None
         (Pair t
           (SsErr (quote no_realization)
             (append (show_name g)
-              ": no program — a static argument names a fn with a program, a realized constant or an instance (§8.4 slice 3.28 rule 3)"))))
+              ": no program — a static argument names a fn with a program, a realized constant or an instance"))))
       ((Some prim)
        (match (env_find (tr_env t) g)
          (None (Pair t (SsErr (quote unknown_constant) (show_name g))))
@@ -1936,8 +1945,7 @@
               (append " applied to "
                 (append (show_nat (len leading))
                   (append " arguments does not leave "
-                    (append (show_nat k)
-                      " runtime binders, the static parameter's arity (§8.4 slice 3.28 rule 3; law §4.3)")))))))))
+                    (append (show_nat k) " runtime binders, the static parameter's arity")))))))))
     ((Cons a ar)
      (match binds
        (Nil (Pair t (SsErr (quote function_value) (append (show_name g) " over-applied"))))
@@ -1948,14 +1956,14 @@
               (Pair t
                 (SsErr (quote function_value)
                   (append (show_name g)
-                    ": a type argument of a static argument mentions a local of the caller (§8.4 slice 3.28 rule 3, landing 1)")))
+                    ": a type argument of a static argument mentions a local of the caller — it must be closed")))
               (shape_args t env head g br ar k fuel (Cons (Some a) leading) ctys cvals prim)))
           (BErased
             (if (has_fvar a)
               (Pair t
                 (SsErr (quote function_value)
                   (append (show_name g)
-                    ": an erased argument of a static argument mentions a local of the caller (§8.4 slice 3.28 rule 3, landing 1)")))
+                    ": an erased argument of a static argument mentions a local of the caller — it must be closed")))
               (shape_args t env head g br ar k fuel (Cons (Some a) leading) ctys cvals prim)))
           ((BData _)
            (match (tr_infer t a)
@@ -1968,7 +1976,7 @@
                 (Pair t1
                   (SsErr (quote function_value)
                     (append (show_name g)
-                      ": a captured value whose type mentions a local of the caller (§8.4 slice 3.28 rule 3, landing 1)")))
+                      ": a captured value whose type mentions a local of the caller — its type must be closed")))
                 (match (erase t1 env a (- fuel 1))
                   ((ErErr e m) (Pair t1 (SsErr e m)))
                   ((ErOk t2 a1)
@@ -1978,14 +1986,15 @@
           ((BStatic _)
            (Pair t
              (SsErr (quote function_value)
-               (append (show_name g) ": a template as a static argument (§8.4 slice 3.28 rule 3)"))))))))))
+               (append (show_name g)
+                 ": a template as a static argument — an instance is taken where the template is called"))))))))))
 (fn trailing_data ((binds (List TBind)) (k Int)) Bool
   (measure (struct binds))
   (match binds
     (Nil (= k 0))
     ((Cons (TBind _ (BData _) _) r) (trailing_data r (- k 1)))
     (_ False)))
-;; a closed lambda lifted to CALLER.lam_N (rule 3(c)): the caller's runtime locals it mentions
+;; a closed lambda lifted to CALLER.lam_N: the caller's runtime locals it mentions
 ;; are captured, in order of first occurrence, as its leading parameters; its own binders
 ;; follow (opened at the static parameter's arity — eta past the lambdas written); its body
 ;; erased over them; its L definition the same lambda over the captured locals. A lambda over
@@ -2006,7 +2015,7 @@
               ((Pair t2 None)
                (Pair t2
                  (SsErr (quote function_value)
-                   "a lambda whose binder or captured local has no closed E type — over a type parameter, a proof or a dependent type (§8.4 slice 3.28 rule 3, landing 1)")))
+                   "a lambda whose binder or captured local has no closed E type — over a type parameter, a proof or a dependent type")))
               ((Pair t2 (Some ptys))
                (match (tr_infer t2 body)
                  ((Pair t3 None)
@@ -2016,7 +2025,7 @@
                     ((Pair (Pair w4 es4) None)
                      (Pair (tr_set_es (tr_set_w t3 w4) es4)
                        (SsErr (quote function_value)
-                         "a lambda whose result is no E type (§8.4 slice 3.28 rule 2; law §4.3)")))
+                         "a lambda whose result is no E type (a function returned is no value)")))
                     ((Pair (Pair w4 es4) (Some rty))
                      (match
                        (erase (tr_set_es (tr_set_w t3 w4) es4) (lifted_env env captured bfvs) body
@@ -2030,7 +2039,7 @@
                               (if (has_fvar ty)
                                 (Pair t7
                                   (SsErr (quote function_value)
-                                    "a lambda whose type mentions a local of the caller (§8.4 slice 3.28 rule 3, landing 1)"))
+                                    "a lambda whose type mentions a local of the caller — its type must be closed"))
                                 (match (local_ltypes t7 captured Nil)
                                   ((Pair t8 ctys)
                                    (Pair
@@ -2054,25 +2063,24 @@
        ((Some (Pair EKVar _)) (captured_of env r (Cons fv acc)))
        ((Some (Pair EKStatic _))
         (Left6 (quote function_value)
-          "a lambda over a type parameter of the caller — a polymorphic lambda (§8.4 slice 3.28 rule 3, landing 1)"))
+          "a lambda over a type parameter of the caller — a polymorphic lambda is not supported"))
        ((Some (Pair EKErased _))
         (Left6 (quote function_value)
-          "a lambda mentioning a proof or a type of the caller (§8.4 slice 3.28 rule 3, landing 1)"))
+          "a lambda mentioning a proof or a type of the caller is not supported"))
        ((Some (Pair EKIH _))
         (Left6 (quote recursion_structure) "a lambda over an induction hypothesis"))
        ((Some (Pair (EKCall g _) _))
         (Left6 (quote function_value)
           (append (show_name g)
-            ": a lambda calling a function with a program and no K constant, or its enclosing function — the lifted fn would have no L definition (§8.4 slice 3.28 rule 3)")))
+            ": a lambda calling a function with a program and no K constant, or its enclosing function — the lifted fn would have no L definition")))
        ((Some (Pair (EKShape sh _) _))
         (Left6 (quote function_value)
           (append "a lambda over a static parameter (at "
             (append (show_name (shape_id sh))
-              "): a static parameter is passed on, never transformed (§8.4 slice 3.28 rule 4; law §4.3)"))))
+              "): a static parameter is passed on, never transformed"))))
        ((Some (Pair (EKTemplate g) _))
         (Left6 (quote function_value)
-          (append (show_name g)
-            ": a lambda calling the template it stands in (§8.4 slice 3.28 rule 3)")))
+          (append (show_name g) ": a lambda calling the template it stands in")))
        (None (Left6 (quote erased_in_runtime) "a variable the erasure does not know"))))))
 ;; the free locals of a term, first occurrence first
 (fn fvars_of ((e Expr)) (List Expr) (rev (fvars_acc e Nil)))

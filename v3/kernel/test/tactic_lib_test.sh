@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# v3/kernel/test/tactic_lib_test.sh — the tactic library (v3/LANGUAGE.md §8.4 slice 3.29 rules
-# 2, 4, 7, 8 and 9; law §12.5's T10 row) over v3/examples/tactic: bool_split.shard, an ordinary
+# v3/kernel/test/tactic_lib_test.sh — the tactic library over v3/examples/tactic:
+# bool_split.shard, an ordinary
 # E library whose `solve` reads a goal as text and answers a block of I, and use_split.shard,
 # six theorems delegated `(auto (tactic examples.tactic.bool_split.solve))` with their committed
 # sidecar. (1) The replay: the build accepts every theorem from the sidecar, loads the library
@@ -8,11 +8,12 @@
 # loader reads repository-relative paths; the delegation renamed to the copy's module) without
 # its sidecar, prove.shard running the library — the sidecar it writes is byte-identical to the
 # committed one (the statements name Init's constants only, so the fingerprints are the same).
-# (3) Rule 8, one solution checked identically: the engine solves the same statements in a
+# (3) One solution checked identically: the engine solves the same statements in a
 # second copy delegated `auto`; the two sidecars differ, both replay to the same ACCEPT records
 # but for the axiom closure (the proof's: the engine's arith rests on propext and Quot.sound,
-# the library's exact term on nothing), both are stored and verified by K alone. (4) Rule 4: the copy's sidecar without its schema
-# form replays as schema 1, reported, never refused. (5) Rule 7: the delegation with a hint
+# the library's exact term on nothing), both are stored and verified by K alone.
+# (4) The copy's sidecar without its schema
+# form replays as schema 1, reported, never refused. (5) The delegation with a hint
 # added replays unchanged. (6) --measure runs both producers on every statement.
 # Exit code = the number of checks that failed.
 set -u
@@ -51,7 +52,7 @@ checks=$((checks+1)); cmp -s "$A/use_split.auto.shard" v3/examples/tactic/use_sp
 checks=$((checks+1)); cmp -s <(sed 's#"\.\./kernel/sexpr\.shard"#"../../kernel/sexpr.shard"#' "$A/bool_split.shard") v3/examples/tactic/bool_split.shard || bad "prove wrote into the library's source"
 echo "tactic_lib_test: prove regenerates the sidecar through the library, byte-identical"
 
-# ---- (3) rule 8: the engine's solution for the same statements, checked identically
+# ---- (3) the engine's solution for the same statements, checked identically
 lib "$B"
 sed 's/(auto (tactic [^)]*))/auto/' v3/examples/tactic/use_split.shard > "$B/use_split.shard"
 prove "$B/use_split.shard" > "$OUT/proveB.txt" 2>&1
@@ -76,13 +77,13 @@ checks=$((checks+1)); grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .*
 checks=$((checks+1)); [ "$(grep -c '^ACCEPT' "$OUT/vA.txt")" = "$(grep -c '^ACCEPT' "$OUT/vB.txt")" ] || bad "the two stores do not verify the same number of declarations"
 echo "tactic_lib_test: the engine's and the library's sidecars differ, replay to the same ACCEPT records, and both stores verify by K alone"
 
-# ---- (4) rule 4: the schema-1 copy reported
+# ---- (4) the schema-1 copy reported
 sed -i '/^(sidecar 3 2)$/d' "$A/use_split.auto.shard"
 load "$A/use_split.shard" > "$OUT/replayA1.txt" 2>&1
 checks=$((checks+1)); grep -q "^SIDECAR .*use_split.shard schema=1 current=3$" "$OUT/replayA1.txt" || bad "the schema-1 sidecar is not reported"
 checks=$((checks+1)); [ "$(acc "$OUT/replayA1.txt" "$MA" | wc -l)" = 6 ] || bad "the schema-1 sidecar does not replay 6 theorems"
 checks=$((checks+1)); grep -q 'pending 0 .*errors 0$' "$OUT/replayA1.txt" || bad "the schema-1 sidecar is refused"
-# ---- (5) rule 7: the delegation with a hint added replays unchanged
+# ---- (5) the delegation with a hint added replays unchanged
 sed -i "s/(auto (tactic \([^)]*\)))/(auto (tactic \1) (budget 1))/" "$A/use_split.shard"
 load "$A/use_split.shard" > "$OUT/replayA2.txt" 2>&1
 checks=$((checks+1)); [ "$(acc "$OUT/replayA2.txt" "$MA" | wc -l)" = 6 ] || { bad "the hints-changed copy does not replay 6 theorems"; grep -E 'PENDING|ERROR' "$OUT/replayA2.txt" | head -3 | cut -c1-300; }

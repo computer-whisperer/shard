@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# v3/kernel/test/lower_test.sh — the lowering's own gate (v3/LANGUAGE.md §8.7 slice 5.0 rules 2
-# and 5): the restricted form RS is a Prog, so `ev` runs it. Each program below is run twice by
+# v3/kernel/test/lower_test.sh — the lowering's own gate: the restricted form RS is a Prog,
+# so `ev` runs it. Each program below is run twice by
 # the loader's driver — as loaded, and under `--lowered`, its restricted form (kernel/lower.shard)
 # in its place — and the two runs must agree on stdout, stderr and the exit status, byte for
 # byte. The generator (kernel/cgen.shard) is not in this test: a difference here is the
 # lowering's; a difference between a binary and the interpreter that this test does not show is
 # the generator's or the runtime's (native_tie_test.sh).
 #
-# THE PROGRAMS: two naming-law pins of v3/pins/emit — a string literal over Init's List, the
-# bridge's primitive rows at their edges —; calc's main over the first inputs of the
+# THE PROGRAMS: two ordinary cases of v3/pins/emit — a string literal over Init's List,
+# Init's primitives at their edges —; calc's main over the first inputs of the
 # differential; two of the toolchain's harnesses; K's replay of the export's first 100 lines.
 # Small on purpose: each is run by `ev` on the engine under test, twice. Exit code = the number
 # of failed checks.

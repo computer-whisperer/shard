@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# v3/kernel/test/engine_test.sh — the producers (v3/LANGUAGE.md §8.4 slice 3.22, landing 2;
-# law §7.5). Four parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
+# v3/kernel/test/engine_test.sh — the producers.
+# Four parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
 # replays the committed sidecar (auto.auto.shard) — 11 theorems accepted by name, `beyond`
 # pending auto_missing, nothing searched —, and prove.shard regenerates the sidecar into a
 # scratch copy of the example under v3/ (the loader reads repository-relative paths), which
@@ -13,8 +13,8 @@
 # obligation: prove.shard given the directory writes one sidecar, beside the implementation
 # file; a load of a consumer with the directory replays it; a second prove, given the consumer
 # and the directory, searches nothing.
-# (2) The engine's reach over calc's 100 claims (the slice's third
-# ruling): prove.shard --measure over the five leaves of tactic_test.sh runs the engine on
+# (2) The engine's reach over calc's 100 claims:
+# prove.shard --measure over the five leaves of tactic_test.sh runs the engine on
 # every hand-written theorem's statement unaided; the names it closes must be exactly
 # engine_calc.txt's (a change either way is a report, not a silent drift) and the count is
 # printed. Exit code = the number of checks that failed.
@@ -22,7 +22,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "engine_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 OUT=$(mktemp -d)
 SCRATCH=$(mktemp -d -p v3 engine_scratch_XXXXXX)
 trap 'rm -rf "$OUT" "$SCRATCH"' EXIT

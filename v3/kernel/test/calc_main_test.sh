@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# calc's loop closed against the host (v3/LANGUAGE.md §8.4 slice 3.18 rule 6;
-# §12.6's "calc's app step"): v3/examples/calc/calc_main.shard, an S program
+# calc's loop closed against the host: v3/examples/calc/calc_main.shard, an S program
 # over v3/std/host.shard and v3/std/bytes.shard, run by the driver with one
 # line of the differential's inputs per argument. Its output must be the
 # model world's — `run_world`, the same loop against a world datum, which
-# calc_test.sh ties to the old tree — byte for byte: the harness prints the
+# calc_test.sh ties to the recorded reference — byte for byte: the harness prints the
 # model as `* run_world: (CalcWorld (Cons LINE …))`, each LINE a list of
 # codes, decoded here to the lines it stands for.
-# The libraries import Init through UInt8.toNat (line 263,515 of the export):
-# the prefix is two chunks, the pins' and its continuation.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "calc_main_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
 got=$(mktemp); want=$(mktemp); model=$(mktemp); trap 'rm -f "$got" "$want" "$model"' EXIT
 

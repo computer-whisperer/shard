@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# v3/kernel/test/path_test.sh — law §12.4's first connected path, assembled and broken
-# (LANGUAGE.md §8.4 slice 3.24; §13 item 58; GPT-6's R76). The path, in order, on
+# v3/kernel/test/path_test.sh — one connected path, assembled and broken. The path, in order, on
 # v3/examples/path: the program loads (two imported Init functions realized with their
 # equations proved, the caller `at` with its branch-local proof, the two claims through I);
 # the entry runs on a raw argument; the load's constants are stored; K alone replays the
-# store after the closure of Init it cites. Then the law's five breaks, each required to fail by name:
+# store after the closure of Init it cites. Then five breaks, each required to fail by name:
 # a wrong executable body in a realize (the equation refused), missing bound evidence (the
 # hypothesis cited outside its branch, or dropped from the Fin.mk), a mismatched revision
 # (the store's order line naming another declaration — MISTIED), a tampered result (a stored
@@ -15,7 +14,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "path_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 OUT=$(mktemp -d)
 SCRATCH=$(mktemp -d -p v3 path_scratch_XXXXXX)
 STORE=$(mktemp -d -p v3 path_store_XXXXXX)

@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# v3/kernel/test/derive_test.sh — deriving under a declared policy (v3/LANGUAGE.md
-# §8.4 slice 3.19; law §5.1) on real files, with the export through UInt8.toNat
-# (the pins' prefix and its continuation: Ordering and the bytes' structures lie
-# past the pins'):
+# v3/kernel/test/derive_test.sh — deriving under a declared policy, on real files:
 #   1. v3/std/derive.shard loads clean and registers the library's fourteen
 #      procedures — Bool's derived, UInt8's, ByteArray's and String's by hand,
 #      Nat's and Int's renderers;
@@ -18,7 +15,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "derive_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 fail=0; checks=0
 load() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$@" 2>&1; }
 want() {   # NAME TEXT PATTERN
@@ -65,7 +62,7 @@ want convention "$out" 'DERIVE examples.derive.convention.Urgency.first type=exa
 want convention "$out" 'DERIVE examples.derive.convention.Job.compare type=examples.derive.convention.Job cap=ord policy=structural fields=examples.derive.convention.Urgency.first,Nat.lt'
 want convention "$out" 'ACCEPT examples.derive.convention.urgent_first '
 
-# slice 5.2 landing 3: the size of a data value. A nested type's and its list's from the
+# the size of a data value: a nested type's and its list's from the
 # recursor, a group measured by them; a plain type's and Init's list's, one function measured
 # by a size whose program runs though the measure has none — exit 3, as K proves
 R=v3/pins/loader/derive_size

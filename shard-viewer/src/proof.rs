@@ -46,7 +46,7 @@ fn lower(e: &Sexpr) -> Region {
 }
 
 /// Append `e`'s rungs to the current ladder. The continuation-taking forms
-/// (§10.3: `steps` / `rewrite-with` / `have` / `div-facts` / `refine-fact` /
+/// (`steps` / `rewrite-with` / `have` / `div-facts` / `refine-fact` /
 /// `inject`) each contribute their own rung and *flatten* their trailing
 /// PROOF into the same ladder — sequential proofs stay one column instead of
 /// a nesting pyramid. `chain` (the reader sugar for exactly these spines)

@@ -1,5 +1,4 @@
-;;; v3/kernel/tactic.shard — I's opener: the certificate core (v3/LANGUAGE.md
-;;; §8.4 slice 3.20; law §7). A `theorem`'s proof may be `(by STEP…)`: the
+;;; v3/kernel/tactic.shard — the step elaborator. A `theorem`'s proof may be `(by STEP…)`: the
 ;;; block is I's concrete syntax, read into `Node` (one constructor per form)
 ;;; and elaborated to P — one closed proof term K checks as the theorem's
 ;;; value — without search: every step is a function of its node, the goal
@@ -9,7 +8,7 @@
 ;;; its named context (`Goal`: the id, the closed statement, the context's
 ;;; size); an occurrence of a goal in a term is the metavariable applied to
 ;;; the context's locals, so closing a binder abstracts the occurrence's
-;;; arguments and never the hole — R68's contextual hole, by construction.
+;;; arguments and never the hole — a contextual hole, by construction.
 ;;; `tac_step` opens the context as K locals, acts on the target and answers
 ;;; the goal's filling (a closed term over the subgoals' occurrences) with
 ;;; the subgoals; `tac_block` runs a block's nodes on one goal, the children
@@ -17,11 +16,11 @@
 ;;; `tac_prove` instantiates the root. `sorry` leaves its goal unassigned
 ;;; and the theorem pending.
 ;;;
-;;; Slice 3.21: `arith` (a Farkas certificate over the goal's rows, arith.shard)
-;;; and `simp_only` (a bounded rewriter over a rule list); every new goal's
+;;; `arith` is a Farkas certificate over the goal's rows (arith.shard) and
+;;; `simp_only` a bounded rewriter over a rule list; every new goal's
 ;;; statement and every lemma's equation enter in the source's spelling of
-;;; Init's class methods (spelling.shard's `sp_canon`), so a rewrite and an assumption match
-;;; across the two.
+;;; Init's class methods (spelling.shard's `sp_canon`), so a rewrite and an
+;;; assumption match across the two.
 ;;;
 ;;; Untrusted, as the elaborator is: K rechecks the closed term.
 
@@ -66,17 +65,17 @@
 (use kernel.sexpr.SExpr)
 (use kernel.unify.URes)
 
-;; the reconstruction version (law §7.2; §8.6 slice 4.5 rule 2): the version of the I → P
-;; elaboration this file performs. A sidecar's form `(sidecar SCHEMA RECON)` and a store's
-;; manifest line `recon N` name the version their evidence was produced under; a sidecar at
-;; another version is replayed and reported (loader.shard RECON), and `load.shard --reconstruct`
-;; compares a replay's P against the retained P across versions — law §7.2's evidence change,
-;; migrated by `--store` alone, never a silent overwrite. Version 2 (2026-11-10): `reduce`,
-;; `unfold` and `simp_only` compose their steps' equations under one Eq.mpr per step of I, where
-;; version 1 left K-convertible steps to conversion and nested an Eq.mpr per rewrite.
+;; the reconstruction version: the version of the I → P elaboration this file performs. A
+;; sidecar's form `(sidecar SCHEMA RECON)` and a store's manifest line `recon N` name the
+;; version their evidence was produced under; a sidecar at another version is replayed and
+;; reported (loader.shard RECON), and `load.shard --reconstruct` compares a replay's P against
+;; the retained P across versions — an evidence change is migrated by `--store` alone, never a
+;; silent overwrite. Version 2: `reduce`, `unfold` and `simp_only` compose their steps'
+;; equations under one Eq.mpr per step of I (evidence of version 1 has an Eq.mpr per rewrite,
+;; with K-convertible steps left to conversion).
 (fn reconstruction_version () Int 2)
 
-;; ---- I's data (rule 10) ------------------------------------------------------------------
+;; ---- I's data ----------------------------------------------------------------------------
 ;; a goal: its metavariable, its statement closed over the named context, the context's size
 (type Goal (Goal Int Expr Int))
 (fn goal_id ((g Goal)) Int
@@ -89,7 +88,7 @@
   (match g
     ((Goal _ _ n) n)))
 
-;; a node of I: the forms of rule 4, their arguments as data; a branching node carries its
+;; a node of I: one constructor per form, its arguments as data; a branching node carries its
 ;; children's blocks inline — an arm is a node of its own kind, never read at a block's head
 (type Node
   (NIntro (List Name))  ; (intro NAME…)
@@ -104,14 +103,14 @@
   (NDecide)  ; decide
   (NUnfold (List Name))  ; (unfold NAME…)
   (NReduce Symbol (List (Pair Bool SExpr)))  ; (reduce SIDE? (using RULE…)?): the side (both, lhs, rhs); the rules, each a lemma and whether it is reversed
-  (NRw Bool SExpr Int (Option SExpr) (List Node))  ; (rw LEMMA | (<- LEMMA)) (occ K EXPECT?)? (STEP…)…: K = 0 is every occurrence; EXPECT the instance expected at the occurrence (slice 3.29 rule 5: refused rw_occ_changed when another is found)
+  (NRw Bool SExpr Int (Option SExpr) (List Node))  ; (rw LEMMA | (<- LEMMA)) (occ K EXPECT?)? (STEP…)…: K = 0 is every occurrence; EXPECT the instance expected at the occurrence (refused rw_occ_changed when another is found)
   (NSorry)  ; sorry
-  (NArith Bool (List SExpr) (List (List Int)))  ; (arith only? FACT… (farkas K…)?): only (no context row; slice 3.22 rule 3), the facts, the certificates given (two for an equation)
+  (NArith Bool (List SExpr) (List (List Int)))  ; (arith only? FACT… (farkas K…)?): only (no context row), the facts, the certificates given (two for an equation)
   (NSimp (List (Pair Bool SExpr)))  ; (simp_only RULE…): each a lemma and whether it is reversed
   (NBlock (List Node))  ; a child block of apply or rw
   (NArm Name (List Name) (List Node)))  ; an arm of cases or induction
 
-;; ---- reading a block (rule 1) --------------------------------------------------------------
+;; ---- reading a block -----------------------------------------------------------------------
 (type NodeRes (NROk Node) (NRErr Symbol (List Int)))
 (type BlockRes (BROk (List Node)) (BRErr Symbol (List Int)))
 (fn read_block ((ss (List SExpr))) BlockRes (read_block_go ss Nil))
@@ -133,7 +132,7 @@
      (if (sym_eq x (quote arith)) (NROk (NArith False Nil Nil))
      (NRErr (quote unknown_step)
        (append (chars_of_sym x)
-         ": not a form of I (rfl, sorry, decide, reduce, arith, or a list); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)"))))))))
+         ": not a form of I (rfl, sorry, decide, reduce, arith, or a list); a new tactic is an E library producing these forms, named by (auto (tactic M.FN))"))))))))
     ((SList (Cons (SSym h) args))
      (if (sym_eq h (quote intro)) (read_names args Nil (quote intro))
      (if (sym_eq h (quote exact))
@@ -168,7 +167,7 @@
      (if (sym_eq h (quote simp_only)) (read_simp args Nil)
      (NRErr (quote unknown_step)
        (append (chars_of_sym h)
-         ": not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry); a new tactic is an E library producing these forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29)")))))))))))))))))))
+         ": not a form of I (intro exact rfl have show apply cases induction wf decide unfold reduce rw simp_only arith sorry); a new tactic is an E library producing these forms, named by (auto (tactic M.FN))")))))))))))))))))))
     (_ (NRErr (quote bad_step) "a step is a symbol or (FORM …)"))))
 (fn read_names ((ss (List SExpr)) (acc (List Name)) (form Symbol)) NodeRes
   (measure (struct ss))
@@ -389,11 +388,12 @@
     ((SList (Cons (SSym a) (Cons t Nil))) (if (sym_eq a (quote <-)) (Pair True t) (Pair False s)))
     (_ (Pair False s))))
 
-;; ---- goals: open, close, make, show (rules 2 and 10) -------------------------------------
+;; ---- goals: open, close, make, show ------------------------------------------------------
 ;; the context of a goal as K locals and its target: the first `nctx` binders of the
 ;; statement, each a fresh local under its binder's name
 (type Opened (Opened El (List Expr) Expr))
-(fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (el_zonk e (goal_stmt g)) (goal_nctx g) Nil))  ; zonked: a witness assigned by an earlier block shows (slice 3.22 rule 4)
+;; zonked: a witness assigned by an earlier block shows
+(fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (el_zonk e (goal_stmt g)) (goal_nctx g) Nil))
 (fn tac_open_go ((e El) (t Expr) (k Int) (acc (List Expr))) Opened
   (measure k)
   (if (< k 1) (Opened e (rev acc) t)
@@ -406,9 +406,9 @@
     (_ (Opened e (rev acc) t)))))
 ;; a new goal over the locals `ctx` with the target: its metavariable has the closed statement
 ;; as its type and no telescope; its occurrence is the metavariable applied to `ctx`. The
-;; statement enters in the one spelling (slice 3.21 rule 3: a hypothesis or a premise that came
-;; from one of Init's lemmas reads `Int.lt n 10` as the source's do, so a rewrite and an
-;; assumption match it; K converts the occurrence)
+;; statement enters in the one spelling (a hypothesis or a premise that came from one of
+;; Init's lemmas reads `Int.lt n 10` as the source's do, so a rewrite and an assumption match
+;; it; K converts the occurrence)
 (type Made (Made El Goal Expr))
 (fn tac_goal ((e El) (ctx (List Expr)) (target Expr)) Made
   (match (el_pis e ctx target)
@@ -421,7 +421,7 @@
 ;; its hypothesis's local; a dependent would be left speaking of the old local, so then it
 ;; stays); the occurrence of a goal over the smaller context still closes, K's mk_binding
 ;; abstracting only what the term mentions. cases and induction revert the dependents instead
-;; (slice 3.29 rule 6: ctx_dependents) and the eliminated local always leaves
+;; (ctx_dependents) and the eliminated local always leaves
 (fn ctx_without ((e El) (ctx (List Expr)) (x Expr)) (List Expr)
   (match x
     ((FVar _ id) (if (ctx_depends e ctx id) ctx (remove_local ctx id)))
@@ -476,9 +476,9 @@
     ((Cons o r) (Cons o (remove_local r id)))))
 ;; the filling of a goal: the term over its context, closed
 (fn tac_close ((e El) (ctx (List Expr)) (t Expr)) (Pair El Expr) (el_lams e ctx t))
-;; the goal's named context and target, rendered (rule 10's goal_of)
+;; the goal's named context and target, rendered
 (fn goal_of ((g Goal)) (List Int) (show_goal_go (goal_stmt g) (goal_nctx g) Nil))
-;; the goal as one S form for a tactic library (slice 3.29 rule 1): the named context in
+;; the goal as one S form for a tactic library: the named context in
 ;; order, the target, and the forms `applicable` answers — `(goal ((NAME TYPE)…) TARGET
 ;; (applicable SYM…))`; the terms as goal_of shows them
 (fn goal_sx ((e El) (g Goal)) (List Int)
@@ -526,8 +526,8 @@
       (Nil "x"))))
 ;; a term in S, bound variables by their binder names, locals by `?f`, Eq and the
 ;; comparisons under their operator spellings, the binders as source writes them —
-;; `(forall ((x T)) P)`, `(fun ((x T)) e)`, `(let ((x V)) e)` (slice 3.29 rule 1: one spelling,
-;; the goal a tactic reads is the one a refusal shows)
+;; `(forall ((x T)) P)`, `(fun ((x T)) e)`, `(let ((x V)) e)` (one spelling: the goal a tactic
+;; reads is the one a refusal shows)
 (fn tc_show ((t Expr) (names (List (List Int)))) (List Int)
   (measure (struct t))
   (match t
@@ -609,10 +609,10 @@
     (LZero True)
     (_ False)))
 
-;; the forms whose precondition the goal meets (rule 10's applicable; not a completeness
-;; claim): intro at a Pi, rfl and rw at an equation, cases/induction/wf where a local has an
-;; inductive type, decide where the target has a decision, arith where the target is a linear
-;; comparison; exact, apply, have, show, unfold, reduce, simp_only and sorry always
+;; the forms whose precondition the goal meets (not a completeness claim): intro at a Pi, rfl
+;; and rw at an equation, cases/induction/wf where a local has an inductive type, decide where
+;; the target has a decision, arith where the target is a linear comparison; exact, apply,
+;; have, show, unfold, reduce, simp_only and sorry always
 (fn applicable ((e El) (g Goal)) (List Symbol)
   (match (tac_open e g)
     ((Opened e1 ctx target)
@@ -650,7 +650,7 @@
        (None (ctx_has_inductive e r))))
     ((Cons _ r) (ctx_has_inductive e r))))
 
-;; ---- the steps (rules 3 and 4) ---------------------------------------------------------------
+;; ---- the steps -------------------------------------------------------------------------------
 ;; a step's answer: the state, the goal's filling (closed), the child goals with their blocks
 ;; (one each, in the goals' order), the continuation goal of a sequential step
 (type TStep
@@ -841,7 +841,7 @@
      (match (tac_close e1 ctx occ)
        ((Pair e2 filling) (StepOk e2 filling (list g) Nil None))))))
 
-;; ---- apply, cases, induction, wf, decide (rule 4) ---------------------------------------------
+;; ---- apply, cases, induction, wf, decide ------------------------------------------------------
 ;; the number of binders of a type, whnf at each
 (fn tac_arity ((e El) (t Expr) (fuel Int)) (Pair El Int)
   (measure fuel)
@@ -869,10 +869,10 @@
           ((Pair w3 body1) (open_mvars (el_set_w e2 w3) (mk_app v m) body1 (- k 1) (Cons m acc)))))))
     ((Pair e1 t1) (OpenedM e1 v t1 (rev acc))))))
 ;; the metavariables of an opening left unassigned: each a proposition is a child goal over ctx,
-;; assigned its occurrence; a datum is a witness (slice 3.22 rule 4) — closed over ctx as a goal
+;; assigned its occurrence; a datum is a witness — closed over ctx as a goal
 ;; is, its occurrence the closed metavariable applied to ctx, so a block that opens the context
 ;; afresh assigns it by pattern unification and the assignment closes; an instance argument is
-;; the table's (slice 3.27 rule 3), else the refusal `instance_needed` as everywhere
+;; the table's, else the refusal `instance_needed` as everywhere
 (type Premises (PrOk El (List Goal)) (PrErr Symbol (List Int)))
 (fn premise_goals ((e El) (ctx (List Expr)) (ms (List Expr)) (who Symbol) (acc (List Goal)))
   Premises
@@ -895,7 +895,7 @@
                 ((Pair w1 (Some True)) (witness_close (el_set_w e w1) ctx r))
                 ((Pair w1 _)
                  (if (sym_eq (md_kind d) (quote inst))
-                   (let ((ei (el_solve_one (el_set_w e w1) i)))  ; the table's instance (slice 3.27 rule 3), else the refusal
+                   (let ((ei (el_solve_one (el_set_w e w1) i)))  ; the table's instance, else the refusal
                      (match (mc_assigned (el_mc ei) i)
                        ((Some _) (witness_close ei ctx r))
                        (None
@@ -928,7 +928,7 @@
               ((Made e2 g occ)
                (premise_goals_go (el_set_mc e2 (mc_set (el_mc e2) i occ)) ctx r who (Cons g acc)))))))))
     ((Cons _ r) (premise_goals_go e ctx r who acc))))
-;; a witness left open when the step's blocks have run (slice 3.22 rule 4)
+;; a witness left open when the step's blocks have run
 (fn mvar_terms ((is (List Int))) (List Expr)
   (measure (struct is))
   (match is
@@ -956,15 +956,15 @@
           (append (show_nat (len gs))
             (append " goal(s) and the step gives "
               (append (show_nat nblocks) (append " block(s): " (goals_list gs)))))))))))
-;; the sorried goals of a pending theorem, in its record (rule 9): ` [GOAL] [GOAL]`
+;; the sorried goals of a pending theorem, in its record: ` [GOAL] [GOAL]`
 (fn goals_bracketed ((gs (List Goal))) (List Int)
   (measure (struct gs))
   (match gs
     (Nil "")
     ((Cons g r) (append " [" (append (goal_of g) (append "]" (goals_bracketed r)))))))
 ;; the same, bounded for a record's symbol: the native runtime's symbols hold 4 KB (rt.h's
-;; sym_of_chars), the bootstrap's any length — a pending theorem deep in a case split rendered its
-;; goals past the bound and trapped the binary where the bootstrap ran (slice 4.2 landing 1)
+;; sym_of_chars), the bootstrap's any length — a pending theorem deep in a case split renders
+;; its goals past that bound, and unbounded they trap the binary where the bootstrap runs
 (fn goals_bounded ((gs (List Goal))) (List Int)
   (let ((t (goals_bracketed gs))) (if (< 2000 (len t)) (append (take 2000 t) " …") t)))
 (fn goals_list ((gs (List Goal))) (List Int)
@@ -1037,7 +1037,7 @@
     (_ (Pair e (tc_replace target x d 0)))))
 
 ;; (cases X ARM…) and (induction X ARM…): the eliminator applied to the generalized motive —
-;; the locals whose types mention x reverted into it first (slice 3.29 rule 6: the motive is
+;; the locals whose types mention x reverted into it first (the motive is
 ;; `λ d. (h : T[d]) → … → target[d]`, the eliminator's result applied back to them, and each arm
 ;; re-introduces them after the constructor's fields, under their names, so an arm sees
 ;; `h : T[CTOR fields]` and an induction hypothesis quantifies over them; Lean's `cases` reverts
@@ -1066,7 +1066,7 @@
               (if (< 0 nindices)
                 (StepErr (quote cases_indexed)
                   (append (show_name iname)
-                    " is an indexed family: cases on it is a later form (injection, subst)"))
+                    " is an indexed family: cases and induction take a type without indices (there is no injection or subst step) — use Init's lemmas (T.CTOR.inj, Eq.subst) in a term"))
               (if
                 (bool_and ind
                   (match hn
@@ -1461,7 +1461,7 @@
               (append "the decision does not evaluate to true: "
                 (tc_show_closed (el_set_w e1 w2) ctx tz))))))))))
 
-;; ---- rewriting (rules 5, 6, 7) ---------------------------------------------------------------
+;; ---- rewriting -------------------------------------------------------------------------------
 ;; t with every occurrence of `pat` (or the sel-th, counting from 1) replaced by `r`: pre-order,
 ;; left to right, the function before its arguments; a subterm under a binder is compared as it
 ;; stands (`pat` is closed, so no occurrence mentions a bound variable)
@@ -1512,7 +1512,7 @@
     ((Pair _ k) k)))
 
 ;; the subterms of t without loose bound variables, pre-order, left to right, the function
-;; before its arguments (rule 7's traversal); an application is one subterm with its whole
+;; before its arguments; an application is one subterm with its whole
 ;; spine — a prefix of the spine (`ite α c h t` without its `e`) is no subterm, since K's whnf
 ;; of it is a lambda and a rewrite of it would leave a redex
 (fn tc_subterms ((t Expr) (acc (List Expr))) (List Expr)
@@ -1640,9 +1640,9 @@
         (let ((body (tc_replace target a d sel)))
           (match (el_lams e2 (list d) body)
             ((Pair e3 motive)
-             ;; the motive CHECKED, not only typed (slice 5.2 rule 7): abstracting an occurrence
-             ;; that stands beside a proof stating it gives an ill-typed lambda, which an
-             ;; infer-only pass types all the same — K then refused the whole certificate
+             ;; the motive CHECKED, not only typed: abstracting an occurrence that stands beside
+             ;; a proof stating it gives an ill-typed lambda, which an infer-only pass types all
+             ;; the same — K would then refuse the whole certificate
              (match (el_infer_checked e3 motive)
                ((Pair e4 None)
                 (RwEqErr (quote rw_motive)
@@ -1669,9 +1669,9 @@
 
 ;; (rw LEMMA (occ K EXPECT?)? BLOCK…): the lemma's left side matched against the target's subterms,
 ;; every occurrence of the instance rewritten (the K-th alone under occ); the premises left open
-;; are child goals. The guard (slice 3.29 rule 5): EXPECT names the instance the author saw at the
-;; occurrence — the instance found must be it, by structure or by K's conversion, else the step
-;; is refused rw_occ_changed showing both (the source moved under the guard, or the expectation is wrong)
+;; are child goals. The guard: EXPECT names the instance the author saw at the occurrence — the
+;; instance found must be it, by structure or by K's conversion, else the step is refused
+;; rw_occ_changed showing both (the source moved under the guard, or the expectation is wrong)
 (fn step_rw
   ((e El)
    (ctx (List Expr))
@@ -1751,7 +1751,7 @@
                           (append (tc_show_closed e1 ctx vz)
                             " — the source moved under the guard, or the expectation is wrong"))))))))))))))))
 
-;; ---- unfold and reduce (rule 6) --------------------------------------------------------------
+;; ---- unfold and reduce -----------------------------------------------------------------------
 ;; a redex found in the target: the subterm, its replacement, what shows K the step, and
 ;; whether it is an unfolding at a closed occurrence
 (type Evid
@@ -1763,9 +1763,8 @@
 
 ;; the equations of a constant, in order, until one is missing: a fn's `f.eq_k`; else a
 ;; realization's `M.f.realize_k` for the module M that attached it — this module, or one it
-;; opens (slice 3.27 landing 3: calc runs Init's List.length through std/list's realization
-;; and reduces by its equations, as it did by its own fn's; a use of the realizing module is
-;; needed for that, as the loader records)
+;; opens (calc runs Init's List.length through std/list's realization and reduces by its
+;; equations; a use of the realizing module is needed for that, as the loader records)
 (fn equations_of ((e El) (f Name)) (List Name)
   (match (equations_go e f "eq_" 1 Nil)
     (Nil
@@ -1905,10 +1904,10 @@
     ((Some _) True)
     (None False)))
 ;; a head constant's facts the scan asks at every subterm, found once and kept for the loop:
-;; its equations and whether K's whnf may unfold it. Unkept, equations_of built and looked up
+;; its equations and whether K's whnf may unfold it. Unkept, equations_of builds and looks up
 ;; `f.eq_k` — and for a head with none, every constructor, `M.f.realize_k` for the module and
 ;; each one it opens — at each of a goal's subterms on every step, each lookup a hash of the
-;; name's bytes: most of a whole-run reduction's time (measured 2026-11-10)
+;; name's bytes: most of a whole-run reduction's time
 (type HeadFacts (HeadFacts Name (List Name) Bool))
 (fn head_find ((hs (List HeadFacts)) (f Name)) (Option HeadFacts)
   (measure (struct hs))
@@ -2201,10 +2200,10 @@
     ((Some d) (append " — a case analysis waits at " (take 600 (tc_show_closed e ctx d))))))
 ;; the first redex among the subterms (pre-order): a `fn` by its equations only, a stuck
 ;; eliminator never, a case analysis at a decided scrutinee by its alternative, anything else by
-;; K's whnf or one delta step where it progresses — on a CLOSED subterm only (slice 4.2 landing
-;; 1): on an open term K's unfolding of an imported definition is no computation (`Nat.land a
-;; 1` to its well-founded internals, `a + 8` to eight successors) and buries the term a later
-;; rewrite must match; an open occurrence unfolds by its equations, by a case step, or by name.
+;; K's whnf or one delta step where it progresses — on a CLOSED subterm only: on an open term
+;; K's unfolding of an imported definition is no computation (`Nat.land a 1` to its
+;; well-founded internals, `a + 8` to eight successors) and buries the term a later rewrite
+;; must match; an open occurrence unfolds by its equations, by a case step, or by name.
 ;; `only` restricts to the named constants (unfold), open or closed
 (fn find_redex
   ((e El) (rules (List Rule)) (hs (List HeadFacts)) (subs (List Expr)) (only (List Name)))
@@ -2249,7 +2248,7 @@
                  ((Pair hs1 (Pair e1 (Some t))) (Pair hs1 (FoundOk e1 (Redex s t EvConv False))))
                  ((Pair hs1 (Pair e1 None)) (find_redex e1 rules hs1 r only)))
                (find_redex e rules hs r only)))))))))
-;; a case analysis at a decided scrutinee takes one step, to its alternative (slice 3.21). K's
+;; a case analysis at a decided scrutinee takes one step, to its alternative. K's
 ;; whnf goes on into the alternative's body — an `ite` on an open condition there is a stuck
 ;; Decidable.rec, which whnf_progress reads as no progress — so the alternatives (an `ite`'s
 ;; branches, a matcher's rows) are masked by locals while K picks one, and the one picked is
@@ -2275,7 +2274,7 @@
               ((Pair w1 _) (Pair (el_set_w e1 w1) None)))))))))
     (_ (Pair e None))))
 ;; the case step's discriminant — the instance of an `ite`/`dite`, the scrutinee of a matcher —
-;; when it is open and not constructor-headed (slice 4.2 landing 1): K's whnf there is no
+;; when it is open and not constructor-headed: K's whnf there is no
 ;; computation but a search through the definitions the discriminant is built from (a
 ;; well-founded `fn` over an open list to its accessibility proofs: ten minutes and the box's
 ;; memory on `len`'s tag test), so the step waits; the discriminant reduces by its equations as
@@ -2443,8 +2442,7 @@
        ((Pair e3 filling) (LoopOk (el_set_mc e3 (mc_set (el_mc e3) (goal_id cur) filling)) g))))))
 ;; reduce: the first redex of the target (or of one side), to a fixpoint under a budget of 2000
 ;; rewrites and 64 unfoldings of a function at closed arguments (a ground computation deeper
-;; than that — a condition no reduction decides, a long recursion — is the author's to unfold,
-;; until evaluation reflection)
+;; than that — a condition no reduction decides, a long recursion — is the author's to unfold)
 (fn reduce_loop
   ((e El)
    (ctx (List Expr))
@@ -2472,7 +2470,7 @@
          (match rules
            (Nil (Pair hs0 (FoundNone e0)))
            (_ (find_redex e0 Nil hs0 (rev (tc_subterms (side_of target side) Nil)) Nil)))  ; no rule and nothing beside what the rules hold: that steps
-         ((Pair _ (FoundNone e1))  ; a normalization: nothing to do is done (slice 3.21b rule 3; reduce_stuck before) — and every rule given was used
+         ((Pair _ (FoundNone e1))  ; a normalization: nothing to do is done — and every rule given was used
           (match (rule_unused rules fired)
             (None (loop_end e1 ctx cur start target legs))
             ((Some (Rule i _ _ _ sh _ _))
@@ -2615,7 +2613,7 @@
           ((Const _ c _) (resolve_consts e1 r (Cons c acc)))
           (_ (Pair e1 (Pair None (append (show_name n) " is not a constant"))))))))))
 
-;; ---- arith and simp_only (slice 3.21) ------------------------------------------------------
+;; ---- arith and simp_only -------------------------------------------------------------------
 ;; the facts elaborated: each term and its type
 (type FactsRes (FactsOk El (List (Pair Expr Expr))) (FactsErr Symbol (List Int)))
 (fn arith_facts ((e El) (facts (List SExpr)) (acc (List (Pair Expr Expr)))) FactsRes
@@ -2640,9 +2638,9 @@
        (None (arith_ctx e r acc))))
     ((Cons _ r) (arith_ctx e r acc))))
 ;; (arith only? FACT… (farkas K…)?): linear arithmetic over the goal's rows (arith.shard); under
-;; `only` the context brings no row (slice 3.22 rule 3: an engine names its facts, so a
-;; certificate's positions survive a changed context); K reads the term before it is the
-;; goal's filling, so a refusal names the step
+;; `only` the context brings no row (an engine names its facts, so a certificate's positions
+;; survive a changed context); K reads the term before it is the goal's filling, so a refusal
+;; names the step
 (fn step_arith
   ((e El)
    (ctx (List Expr))
@@ -2835,7 +2833,7 @@
        (None (assumption_of e r ty))))
     ((Cons _ r) (assumption_of e r ty))))
 
-;; ---- the block runner and the entry (rules 1, 3 and 9) ------------------------------------
+;; ---- the block runner and the entry -------------------------------------------------------
 ;; the blocks of apply's and rw's premises
 (fn blocks_of ((bs (List Node)) (acc (List (List Node)))) (List (List Node))
   (measure (struct bs))
@@ -2923,8 +2921,7 @@
           ((TacOk e2 sorried) (ProvePending e2 sorried))))
        ((Pair e1 _) (ProveErr (quote bad_shape) "no metavariable"))))))
 
-;; the constants the tactics construct by name (slice 3.26 rule 3; the WellFounded kit of
-;; wf_in_scope among them)
+;; the constants the tactics construct by name (the WellFounded kit of wf_in_scope among them)
 (fn tc_kit () (List Name)
   (list (n2 (quote WellFounded) (quote fix)) (n2 (quote InvImage) (quote wf))
     (n2 (quote Nat) (quote lt_wfRel))

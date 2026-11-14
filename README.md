@@ -35,7 +35,9 @@ generation's tree and every document written before the cleanup) and `v2-kernel-
 | `v3/tools/shardfmt/` | the source formatter |
 | `v3/pins/` | small sources, each stating the outcome it expects |
 | `rust_bootstrap/` | the Rust evaluator the toolchain runs on |
+| `bin/` | `ci_docs_only.sh`, which lets a push of documents alone skip the gates |
 | `tools/zed-shard/` | an editor grammar |
+| `shard-viewer/` | a graphical navigator of source files; it reads the previous generation's forms, so a V3 file shows as its functions and types, without its theorems |
 
 ## Build, run, gate
 

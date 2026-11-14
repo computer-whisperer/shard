@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # the T0 driver on the export's first 3,000 lines: every declaration accepted,
 # none mismatched, and every admitted constant's axiom closure identical to
-# the oracle's (init.axioms = v3/axioms.lean's lines for the whole export;
-# FOUNDATION §3.6)
+# the oracle's (init.axioms = v3/axioms.lean's lines for the whole export)
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}

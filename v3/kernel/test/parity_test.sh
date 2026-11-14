@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Frontend parity (v3/LANGUAGE.md §10 item 1, slice 6): over every toolchain
-# entrypoint — the driver, the T0 driver, the calc harness, every test — the
+# Frontend parity: over every toolchain entrypoint — the five drivers,
+# the calc harness, every test — the
 # V3 reader's Prog (`load.shard --dump`, kernel/dump.shard) and the Rust
 # bootstrap's Module over the same closure (`eval dump`, rust_bootstrap/src/
-# dump.rs) printed as one canonical text, compared byte for byte. Green, this
-# retires TCB bring-up item 2: the Rust loader still parses the toolchain for
-# route 3, and the V3 reader's agreement is what keeps it honest.
+# dump.rs) printed as one canonical text, compared byte for byte. The Rust
+# loader parses the toolchain's sources for the bootstrap's runs, and the V3
+# reader's agreement is what keeps it honest.
 #
-# The text is a PROJECTION (dump.shard's header, GPT-6 R53): names print as
+# The text is a PROJECTION (dump.shard's header): names print as
 # their last component and a constructor, a call and an extern print alike,
 # so the tie is evidence only where the projection is injective — each
 # closure is checked here for one declaration per short name among the
@@ -16,16 +16,16 @@
 # gate before its dumps are compared: byte agreement over an ambiguous
 # name would say nothing about which declaration either loader resolved.
 #
-# Since phase 3's slice 3.2 (the one E, LANGUAGE.md §8) the bootstrap also
-# follows a directory import to the module's view and implementation, reads
+# The bootstrap also follows a directory import to the module's view and
+# implementation, reads
 # explicit `(T Type)` binders, binds `let` sequentially, skips a file's L
 # forms and canonicalizes a dotted citation to the declared name it ends
-# in; the last block below ties one S closure with a directory module and
+# in; a block below ties one S closure with a directory module and
 # a theorem beside its E forms (v3/pins/loader/view_basic).
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "parity_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
@@ -46,7 +46,7 @@ for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/ke
           for (n in k) if (n in h) printf "ctor and head %s; ", n }' "$a")
   [ -z "$dups" ] || { echo "parity_test: $entry: the projection is not injective — $dups"; failed=$((failed+1)); continue; }
   # K's directory as a second root: the consumer sees the view, the directory's own check links the
-  # implementation (§6.6; the K seal) — as the bootstrap's flat closure holds both
+  # implementation (the K seal) — as the bootstrap's flat closure holds both
   # K's consumers only: the bootstrap's flat closure holds K's implementation (env_empty is its), a
   # test inside the directory sees it directly, a closure without K gets no extra declarations
   if grep -q '^fn env_empty ' "$a" && [ "${entry#v3/kernel/k/}" = "$entry" ]; then kroot=v3/kernel/k; else kroot=""; fi
@@ -67,7 +67,7 @@ if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
 else
   echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
 fi
-# an S closure with records (slice 3.9): the expansion — the type, the accessors and the
+# an S closure with records: the expansion — the type, the accessors and the
 # updaters, make and with rewritten — tied between the two readers
 n=$((n+1))
 root=v3/pins/loader/record_basic

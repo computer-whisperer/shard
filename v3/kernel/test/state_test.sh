@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The state's check as a gate (v3/LANGUAGE.md §8.6 "An id confirmed by its hash", rules 4–6;
+# The state's check as a gate (docs/KERNEL.md "The state discipline";
 # kernel/thread.shard): K's node ids are unique because inside a check no version of the
 # checker's state is advanced twice, and this is what holds K's own sources to it.
 # (1) K's implementation — kernel/t0.shard with the directory kernel/k — loaded under
@@ -14,7 +14,7 @@
 #     `reused`, each linear spelling beside it `ok`; what the walk cannot follow is
 #     `unsupported`; a source is counted; and every one of them is judged. One limit is
 #     pinned as it stands (`lim_lie_out`): a declared type is believed.
-# What this does not hold K to (LANGUAGE.md, the same section, rule 10): the declared types
+# What this does not hold K to (the same section, its limits): the declared types
 # themselves, the memo tables as values, a client's use of a run, the reading of a primitive.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.

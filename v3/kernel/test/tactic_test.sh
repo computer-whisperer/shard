@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# v3/kernel/test/tactic_test.sh — I on calc's claims (v3/LANGUAGE.md §8.4 slices 3.20 and
-# 3.21; law §7): the old tree's 100 claims are theorems by `(by STEP…)`, file for file.
-# Slice 3.20's are the ground tests (reduce, then Eq.refl) and the lexer's structural
-# lemmas (induction, cases with the equation hypothesis, rw, unfold, decide); slice 3.21's
-# are the ones that need arithmetic (arith: a Farkas certificate over the goal's rows,
+# v3/kernel/test/tactic_test.sh — I on calc's claims: calc's 100 claims are theorems by
+# `(by STEP…)`, file for file: the ground tests (reduce, then Eq.refl), the lexer's
+# structural lemmas (induction, cases with the equation hypothesis, rw, unfold, decide),
+# the ones that need arithmetic (arith: a Farkas certificate over the goal's rows,
 # reconstructed where the node gives none) or a chain of rewrites (simp_only), the
 # well-founded inductions over `show`, and the capstone run cs = spec_run cs. The three
 # measured functions (parse_tail, show, show_nat) have their descent obligations
 # discharged, so nothing a claim cites is pending.
 # Five loads cover the fourteen files (a leaf of the import graph loads its closure):
-# each loads with no error and nothing pending, every claim of the old tree (the list in
+# each loads with no error and nothing pending, every claim (the list in
 # calc_claims.txt, shared with engine_test.sh) is accepted under its name, and the descents
 # are DISCHARGE records.
 # Exit code = the number of checks that failed.
@@ -17,7 +16,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "tactic_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0; claims=0
@@ -52,6 +51,6 @@ discharged calc_app_world calc_spec.parse_tail.dec_1
 discharged calc_app_world calc_spec.parse_tail.dec_2
 discharged calc_app_world calc_app.show_nat.dec_1
 discharged calc_show_run calc_show.show.dec_1
-checks=$((checks+1)); [ "$claims" = 100 ] || bad "the test names $claims claims, the old tree has 100"
+checks=$((checks+1)); [ "$claims" = 100 ] || bad "the test names $claims claims, not calc's 100"
 echo "tactic_test: $checks checks ($claims claims), $fail failed"
 exit $fail

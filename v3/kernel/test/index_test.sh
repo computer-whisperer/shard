@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v3/kernel/test/index_test.sh — the Init index (LANGUAGE.md §8.4 slice 3.26 rule 1)
+# v3/kernel/test/index_test.sh — the Init index
 # over the export's first 20,000 lines: built by initindex.shard, read back by its
 # --verify (every record at its row with its kind and first ids, every name at its
 # ordinal and by its name id, the name table sorted without a duplicate, the sizes the

@@ -10,10 +10,10 @@
 #                                     exit = the cases that failed
 #
 # The push is $CI_COMMIT_BEFORE_SHA..$CI_COMMIT_SHA — the branch's head before the push and
-# after it — so a code commit pushed together with the commit that records it is one push and is
-# gated; a rename is read as a removal and an addition. What makes stepping aside sound: no gate
-# reads a `.md` file (checked 2026-11-11 over the v3 scripts and the shard sources;
-# a gate that starts to read one must name that file here as code).
+# after it — so a code commit pushed together with the commit that documents it is one push and
+# is gated; a rename is read as a removal and an addition. What makes stepping aside sound: no
+# gate reads a `.md` file — not the v3 scripts, not the shard sources (a gate that starts to
+# read one must name that file here as code).
 #
 # The answer is "no" whenever it cannot be had: not a push pipeline (a manual, API or scheduled
 # run — `glab ci run -b main` is how a full run is forced on a documentation head); no previous

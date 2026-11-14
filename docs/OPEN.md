@@ -17,7 +17,7 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | In a function that is only a program, `-` on parameters declared `Nat` is integer subtraction: a body `(- n k)` gives a negative number for 3 and 5, under the evaluator on both engines and in a binary. The same body in a defined function is `Nat.sub` and gives 0. Nothing false is proved — such a function has no meaning in the logic — but a value declared `Nat` is negative at run time. | reproduced: `(fn prog ((s Symbol) (n Nat) (k Nat)) Nat (- n k))` |
 | A wrong name of an Init lemma gets no suggestion: `unknown_constant: step 1: Nat.div_lt_slf`. | reproduced |
 | `v3/build.sh` names its log and its emit directory under `v3/bin/` by the output path's last component, wherever the output is: two builds of one name overwrite each other's. | reproduced |
-| About 180 refusal messages and the comments of 411 source files cite sections, slices and dates of documents that no longer exist. | counted |
+| The comments of the Rust evaluator cite sections, slices and dates of documents that no longer exist (46 lines of `rust_bootstrap/src/`), and so does the header comment of one stored sidecar of an older schema (`v3/pins/loader/auto_schema_old/main.auto.shard`). No refusal message and no other source does. | counted |
 | Code nothing uses, still in place: the Rust evaluator reads forms of the previous generation that no source under `v3/` writes (constructors `Z` and `S` packed as numbers, the `(ty …)` form, parameterized `fn` heads, a `base` module no caller passes); in the formatter `drop_lead_blanks` only renames `drop_blanks`, and two proofs cite its equation; the reader's `empty_atom` error cannot occur. | read from the code |
 
 ## 2. On the way to the trusted compile system
@@ -44,7 +44,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | instance search | instances come from a fixed table; anything else is `instance_needed` | nobody yet |
 | derive for more types | no types with parameters, no nested or mutual types | nobody yet |
 | injectivity of constructors for a type with parameters | exists for types without parameters only | nobody yet |
-| structural recursion for a group, or over a nested type | `equation_form: a nested inductive's recursor has no Stage-0 translation`; a measure is used instead | nobody yet |
+| structural recursion for a group, or over a nested type | `equation_form: T: a nested inductive's recursor has a motive per auxiliary type, and structural recursion takes one — …`; a measure is used instead | nobody yet |
 | a group with type parameters or a dependent result | stays a program (`group_shape`) | nobody yet |
 | two implementations of one view | one implementation per view directory | nobody yet |
 | rewriting in a hypothesis; case splits and cuts in arithmetic | not built | nobody yet |

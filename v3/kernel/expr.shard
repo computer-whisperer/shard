@@ -3,11 +3,11 @@
 ;;; Reconciled against src/kernel/expr.h, type_checker.cpp, inductive.h
 ;;; (v4.33.1). Line numbers are into type_checker.cpp unless said.
 ;;; Representation choices that are NOT rule departures:
-;;;   - MVar is the elaborator's (FOUNDATION §6; LANGUAGE.md §8.4 slice
-;;;     3.15): a term reaching K with one is Malformed (l. 342 "does not
-;;;     support meta variables") — infer refuses the node, the raw entry
-;;;     refuses the declaration. Its assignment lives in the elaborator's
-;;;     own state (unify.shard), never in a term K reads.
+;;;   - MVar is the elaborator's: a term reaching K with one is Malformed
+;;;     (l. 342 "does not support meta variables") — infer refuses the
+;;;     node, the raw entry refuses the declaration. Its assignment lives
+;;;     in the elaborator's own state (unify.shard), never in a term K
+;;;     reads.
 ;;;   - no MData: transparent to every rule (infer l. 339, whnf l. 742,
 ;;;     quick_is_def_eq); stripped at import (the exporter drops it).
 ;;;   - FVar is K-internal: locally nameless checking opens a binder with
@@ -15,7 +15,7 @@
 ;;;     Malformed (`check_no_metavar_no_fvar`).
 ;;;   - de Bruijn indices and projection indices are Int ≥ 0.
 ;;;
-;;; REPRESENTATION (ruled 2026-09-07; records §8): annotated nodes with
+;;; REPRESENTATION: annotated nodes with
 ;;; identity — the pin's own mechanism (expr.h `expr_data`: cached hash,
 ;;; loose-bvar range, has_fvar, has_univ_param; pointer identity as the
 ;;; equality fast path; expr_map memo tables keyed structurally). Every
@@ -28,15 +28,13 @@
 ;;;           K reuse states and a term of theirs can wear one id on two
 ;;;           nodes, so every reader of an id reads the hash with it
 ;;;           (expr_eq, same_node, ing_same, used_consts; store.shard's
-;;;           sw_same): LANGUAGE.md §8.6 "An id confirmed by its hash".
+;;;           sw_same): docs/KERNEL.md "The state discipline".
 ;;;           Only the constructors below build a D; a D is never copied.
-;;;   hash    the structural hash (binder names/infos ignored) — the same
-;;;           formulas as before this representation, so the accelerator
-;;;           identity pins (accel_pins.shard) are unchanged.
+;;;   hash    the structural hash (binder names/infos ignored).
 ;;;   range   get_loose_bvar_range: 0 for a closed term, else 1 + the
 ;;;           largest loose index — prunes every traversal to the open
 ;;;           part of a term (the export's sharing is walked once, not as
-;;;           a tree; the measurement of records §8).
+;;;           a tree).
 ;;;   fvar    has_fvar (prunes abstract); lparam has_univ_param (prunes
 ;;;           level instantiation); mvar has_mvar (prunes the elaborator's
 ;;;           instantiation of assignments; always false in K's terms).
@@ -67,7 +65,7 @@
 
 (type BinderInfo (BDefault) (BImplicit) (BStrictImplicit) (BInstImplicit))
 ;; Binder info never affects a judgment; it is display/elaboration data
-;; carried through for the exporter round trip and for I (§7). The C++
+;; carried through for the exporter round trip and for I. The C++
 ;; enum also has `Rec` (legacy); the exporter does not emit it — Malformed
 ;; if seen.
 
@@ -218,8 +216,8 @@
 ;;     compute (GMP); `beq`/`ble` yield Bool.true/false; results and
 ;;     inputs size-bounded; `pow`/`shiftLeft` count must fit 32 bits
 ;;     (else Exhausted, l. 671/686). K binds each op name to the
-;;     admitted declaration's fixed identity (FOUNDATION §3.2), validated
-;;     at phase 0/T0 against the export.
+;;     admitted declaration's fixed identity (k/add.shard `pin_if_matches`),
+;;     checked against the export by the replay gate (v3/t0_full.sh).
 ;;   reduce_native (l. 614): `Lean.reduceBool c` / `Lean.reduceNat c` run
 ;;     compiled code — sound only under axiom `Lean.ofReduceBool`, outside
 ;;     the standard profile: K returns Unsupported at that site.
@@ -275,21 +273,21 @@
 ;;                          (… (List.nil.{0} Char)))
 ;;   over the UTF-8-decoded scalar values c_i as Nat literals. The head
 ;;   is `String.ofList` (g_string_mk, inductive.cpp l. 1394) — the
-;;   logical String is `String.ofByteArray` (v3/INVENTORY.md); the
+;;   logical String is `String.ofByteArray`; the
 ;;   kernel's literal rule goes through `ofList`, whose body relates
 ;;   the two. Exactness means K expands to this term, not to `String.mk`.
 
 ;; ======================================================================
-;; THE FUNCTIONS (phase 1) — expr.cpp / instantiate.cpp / abstract.cpp.
+;; THE FUNCTIONS — expr.cpp / instantiate.cpp / abstract.cpp.
 ;; De Bruijn discipline: `instantiate` and `abstract` are the pin's
 ;; (instantiate.cpp l. 15/99, abstract.cpp l. 14) over the cached range
 ;; and flags of D: a subterm the operation cannot touch is returned as it
 ;; is (the same node, identity kept), never rebuilt.
 
-;; ---- structural hashing (identity pins, memo tables) --------------------------------
+;; ---- structural hashing (memo tables, fingerprints) ---------------------------------
 ;; A structural hash ignoring binder names and binder infos (like expr_eq),
-;; bounded by the prime M = 2^61 − 1. Not a security hash: it fixes an
-;; identity for the accelerator pins (FOUNDATION §3.2) and keys caches.
+;; bounded by the prime M = 2^61 − 1. Not a security hash: it keys caches
+;; and fingerprints reports (k/add.shard `identity_hash`).
 ;; Computed once per node at construction and cached in D. `hash_m`, `mix`
 ;; and `hash_name` are name.shard's (the environment's key, ev's tables).
 
@@ -370,9 +368,8 @@
 
 ;; did a traversal keep this node? the same identified node, or (for an
 ;; anonymous node — leaves always are) structural equality, which a touched
-;; node never has (every touch alters a leaf). An id is read with its hash
-;; (LANGUAGE.md §8.6 "An id confirmed by its hash"): a term from above K can
-;; wear one id on two nodes
+;; node never has (every touch alters a leaf). An id is read with its hash:
+;; a term from above K can wear one id on two nodes
 (fn same_node ((a Expr) (b Expr)) Bool
   (let ((ia (expr_id a)))
     (if (< 0 ia) (if (= ia (expr_id b)) (= (hash_expr a) (hash_expr b)) False) (expr_eq a b))))
@@ -455,24 +452,23 @@
   (match (st_fresh_node st)
     ((Pair st1 id) (Pair st1 (Proj (d_proj id s i x) s i x)))))
 
-;; ---- ingestion (FOUNDATION §3.5; GPT-6 R43, 2026-09-12; each structure once, 2026-11-11) ----
+;; ---- ingestion ------------------------------------------------------------------------
 ;; A raw term from outside K wears whatever node data its author wrote: its ids, hashes,
 ;; ranges and flags are CLAIMS. Every shortcut above — expr_eq's positive-id test, the memo
 ;; tables keyed on the hash, the range- and flag-pruned traversals — consumes them, so two
-;; different literals wearing one positive id made `0 = 1` a theorem through the raw entry
-;; (the hostile battery, case 16). Ingestion rebuilds every node from its structure and reads
-;; no claim; the raw entry `check` (add.shard) applies it to a submitted declaration before
-;; anything reads one. And it builds each distinct structure ONCE (LANGUAGE.md §8.6 "The raw
-;; entry builds each structure once"): a compound node is looked for, by its structural hash,
-;; in the table of the nodes this declaration has built — found when its children are the
-;; same nodes (compound children by the ids minted here, leaves by value) under the same
-;; binder name and binder info, so what the author wrote for display stands — and minted from
-;; the check's own state only when the table lacks it: no id is minted twice, the state is
-;; never taken back (§8.6 "An id confirmed by its hash", rule 2). A submitted graph
-;; leaves ingestion a graph whatever ids it wore, and K's check, the axiom pass and the store
-;; cost its size; the anonymous tree this walk left before cost them the tree's (a run lemma
-;; of 4.05 million nodes for 50 thousand distinct). The walk itself is still the tree's: the
-;; sharing of what is submitted cannot be seen without trusting its ids.
+;; different literals wearing one positive id would make `0 = 1` a theorem through the raw
+;; entry (the hostile battery, case 16). Ingestion rebuilds every node from its structure and
+;; reads no claim; the raw entry `check` (add.shard) applies it to a submitted declaration
+;; before anything reads one. And it builds each distinct structure ONCE: a compound node is
+;; looked for, by its structural hash, in the table of the nodes this declaration has built —
+;; found when its children are the same nodes (compound children by the ids minted here,
+;; leaves by value) under the same binder name and binder info, so what the author wrote for
+;; display stands — and minted from the check's own state only when the table lacks it: no id
+;; is minted twice, the state is never taken back. A submitted graph leaves ingestion a graph
+;; whatever ids it wore, and K's check, the axiom pass and the store cost its size, where an
+;; anonymous tree would cost them the tree's (a run lemma of 4.05 million nodes for 50
+;; thousand distinct). The walk itself is the tree's: the sharing of what is submitted cannot
+;; be seen without trusting its ids.
 (type Ingest (Ingest St (IntMap (List Expr))))
 (fn ingest_new ((st St)) Ingest (Ingest st IMEmpty))
 (fn ingest_st ((g Ingest)) St
@@ -668,9 +664,9 @@
 ;; binder info are NOT compared; levels structurally (level_eq). The
 ;; pin's order: pointer identity → true; hash mismatch → false; structural.
 ;; Here the hash is read first: an id stands for a pointer only among the nodes
-;; one counter minted, and a term from above K can wear one id on two nodes
-;; (LANGUAGE.md §8.6 "An id confirmed by its hash") — equal ids on unequal
-;; hashes are two nodes, and no answer changes where the ids are unique.
+;; one counter minted, and a term from above K can wear one id on two nodes —
+;; equal ids on unequal hashes are two nodes, and no answer changes where the
+;; ids are unique.
 (fn expr_eq ((a Expr) (b Expr)) Bool
   (match (expr_d a)
     ((D ia ha _ _ _ _)
@@ -743,9 +739,9 @@
 ;; identified nodes visited once); the axiom closure (axioms.shard) and the
 ;; identity closure of the accelerator pins (add.shard) are both over these edges.
 ;; The nodes seen are held by id with their hash: a node whose id stands there
-;; under another hash is another node and is read (§8.6 "An id confirmed by its
-;; hash" — the loader reads an elaborated body's constants with this, for a
-;; definition's height and a requirement's key)
+;; under another hash is another node and is read (the loader reads an
+;; elaborated body's constants with this, for a definition's height and a
+;; requirement's key)
 (fn used_consts ((e Expr) (seen (IntMap Int)) (acc (List Name))) (Pair (IntMap Int) (List Name))
   (measure (struct e))
   (let ((id (expr_id e)))

@@ -160,11 +160,10 @@ impl TypeDef {
     }
 }
 
-/// Per-file line tally by shard complexity category. A direct port of the
-/// column-0-head-atom state machine in `tools/loc/loc.shard`: canonical
-/// (shardfmt) layout starts every top-level form with `(` at column 0 and
-/// indents its body, so a line's category is the category of the form it sits
-/// in — no full parse needed.
+/// Per-file line tally by shard complexity category, by a column-0-head-atom
+/// state machine: canonical (shardfmt) layout starts every top-level form
+/// with `(` at column 0 and indents its body, so a line's category is the
+/// category of the form it sits in — no full parse needed.
 #[derive(Debug, Clone, Default)]
 pub struct Counts {
     pub impl_: u32,    // fn/type/import/use/sig/extern/bin — implementation
@@ -713,8 +712,8 @@ fn collect_refs(e: &Sexpr, params: &BTreeSet<String>, out: &mut BTreeSet<String>
 }
 
 /// Distill a form's lead-comment block into its docstring, per the corpus
-/// convention LANGUAGE.md §1 blesses: `;;` lines are the member docs (`;` is
-/// trailing-inline, `;;;` is file/section level). Walking backward from the
+/// convention: `;;` lines are the member docs (`;` is trailing-inline,
+/// `;;;` is file/section level). Walking backward from the
 /// form, contiguous `;;` lines are kept; a `;;;` line, a single-`;` line, or
 /// a section banner (`;; ----…`) ends the block — a banner directly above a
 /// fn titles the *section*, not the fn. Prefixes are stripped; the first

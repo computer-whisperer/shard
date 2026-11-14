@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# v3/fmt.sh — the formatter over sources of the tree (v3/tools/shardfmt; CANON.md §3, §8;
-# LANGUAGE.md §8.7 slice 5.1 landing 3). The gate itself is the formatter's test
+# v3/fmt.sh — the formatter over sources of the tree (v3/tools/shardfmt; the layout law is
+# docs/CANON.md). The gate itself is the formatter's test
 # (tools/shardfmt/test/shardfmt_test.sh, an entrypoint of v3/test.sh): it refuses a tracked
 # source that is not canonical. This script is the command that answers it.
 #
 #   v3/fmt.sh [FILE…]         check: the FILEs — the gated sources when none is named — that
 #                             are not their canonical text, one per line; exit 0 when there
-#                             is none, 1 otherwise
-#   v3/fmt.sh --fix [FILE…]   the same files rewritten in place with their canonical text
+#                             is none and none is refused, 1 otherwise
+#   v3/fmt.sh --fix [FILE…]   the same files rewritten in place with their canonical text;
+#                             exit 1 when one is refused
 #   v3/fmt.sh --list          the gated sources: every tracked .shard file under v3/ that an
 #                             author writes
 #
@@ -17,11 +18,13 @@
 # kernel/k/accel_pins.shard (kernel/gen_pins.sh writes its generated section).
 #
 # The binary never writes a file (its contract is one read and one write to standard output:
-# tools/shardfmt/shardfmt_bin.shard), so the rewrite is this script's: the text goes to a
-# temporary file beside the source and replaces it only when the binary exits 0 — it printed
-# a text the reader reads as it reads the source. A source the binary refuses (exit 2: it does
-# not read; exit 3: the gate's refusal) is reported and left as it is; the two pins broken on
-# purpose are such sources and are not listed when the whole tree is the argument.
+# tools/shardfmt/shardfmt_bin.shard), so the rewrite is this script's: `shardfmt --check`
+# prints the text into a temporary file beside the source, which replaces the source only on
+# exit 1 — the binary printed a text that differs from the source and that the reader reads
+# as it reads the source. On exit 0 the source already is that text. A source the binary
+# refuses (exit 2: it does not read; exit 3: the gate's refusal) is reported and left as it
+# is; the two pins broken on purpose are such sources and are not listed when the whole tree
+# is the argument.
 #
 # v3/bin/shardfmt is built here when it is missing or its stamp is stale (v3/build.sh; the
 # emit is ~30 s on the bootstrap).

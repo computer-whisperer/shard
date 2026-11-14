@@ -1,35 +1,31 @@
 #!/usr/bin/env bash
-# v3/tools/shardfmt/test/shardfmt_test.sh — the formatter's gate (v3/LANGUAGE.md §8.7 slice 5.1
-# rule 5; CANON.md §3). The binary is built here by route 1 (v3/build.sh over the program and
-# its two views' directories) and then:
+# v3/tools/shardfmt/test/shardfmt_test.sh — the formatter's gate (docs/CANON.md "Enforcement").
+# The binary is built here (v3/build.sh over the program and its two views' directories) and
+# then:
 #
 #   (1) THE SCENARIOS (test/scenarios/NAME.in, NAME.out): the layout's worked examples. The
 #       binary's text for NAME.in is NAME.out byte for byte, exit 0, and NAME.out is its own
-#       text (--check exits 0). The first nine sources are the old tree's requirements'
-#       (tools/shardfmt/mod.req's fmt_scenario_*) — their texts were the old ones until the
-#       layout was ruled anew on 2026-11-13, and `break` is the one that changed; the rest pin
-#       the V3 forms and the ruled rules (`keep`, `chain`). A `refuse_NAME` pair is a source
-#       that gets no text: exit 2, NAME.out the message.
+#       text (--check exits 0). A `refuse_NAME` pair is a source that gets no text: exit 2,
+#       NAME.out the message.
 #   (2) THE COMMAND LINE: the usage for no argument, two files, a flag after the file, three
 #       arguments; a missing file; --check on a file that is not canonical — exit 1, the
 #       canonical text written.
 #   (3) THE DRIVER'S RUN: the program under `ev` (load.shard --run, on the engine under test)
 #       over every scenario's source in one file — the binary's text, byte for byte.
-#   (4) THE TREE, AND THE GATE (CANON.md §8 stage 3, on since slice 5.1 landing 3): every
-#       tracked .shard file under v3/ that an author writes (v3/fmt.sh --list: a file a tool
-#       writes — a proof sidecar, the generated pins — is that tool's text and is not gated)
-#       is its own canonical text — a file that is not fails
-#       this test and is named, with the command that rewrites it (v3/fmt.sh --fix). The
+#   (4) THE TREE, AND THE GATE: every tracked .shard file under v3/ that an author writes
+#       (v3/fmt.sh --list: a file a tool writes — a proof sidecar, the generated pins — is that
+#       tool's text and is not gated) is its own canonical text — a file that is not fails this
+#       test and is named, with the command that rewrites it (v3/fmt.sh --fix). The
 #       sources that do not read are the pins broken on purpose and nothing else, and none is
 #       refused by the formatter's own gate (exit 3: the printer's output read differently — a
 #       printer defect). For a file that is not canonical the checks of the reformat still
 #       run: its text is its own text on a second pass, every comment kept.
 #
-#   (5) THE CONTRACT (shardfmt_bin.shard; landing 2): the load records the bin with both
+#   (5) THE CONTRACT (shardfmt_bin.shard): the load records the bin with both
 #       requirements met — `fmt_gate` and `fmt_main_contract` —, the program's four effectful
 #       functions threaded, and each requirement's assumptions are exactly the views'
 #       parameters (the printer, the reader) and the bolts it uses: nothing else is assumed.
-#       And the printer behind its view is a definition (LANGUAGE.md §8.7 slice 5.2 landing 4):
+#       And the printer behind its view is a definition:
 #       `DISCHARGE … print defined`, no function of it a program without a definition, its
 #       three groups fixpoints, every descent obligation discharged.
 #
@@ -153,7 +149,7 @@ want_gate="tools.shardfmt.print.print tools.shardfmt.reads.reads_same "
 want_main="tools.shardfmt.print.print tools.shardfmt.reads.read_error tools.shardfmt.reads.reads_same $B.exit_exit $B.exit_output $B.exit_reads $B.get_args_output $B.get_args_reads $B.read_file_output $B.read_file_reads $B.write_output $B.write_reads "
 checks=$((checks+1)); [ "$(closure $B.fmt_gate)" = "$want_gate" ] || { bad "fmt_gate's assumptions are not the printer and the reader alone"; closure $B.fmt_gate; }
 checks=$((checks+1)); [ "$(closure $B.fmt_main_contract)" = "$want_main" ] || { bad "fmt_main_contract's assumptions are not the views' three parameters and the nine bolts"; closure $B.fmt_main_contract; }
-# the printer behind its view is a definition (slice 5.2 landing 4): the view's function is
+# the printer behind its view is a definition: the view's function is
 # discharged by it, not linked; none of the printer's functions is a program without a
 # definition; its three groups are fixpoints; every descent obligation is discharged
 P=tools.shardfmt.print

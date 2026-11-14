@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# v3/kernel/test/native_tie_test.sh — the byte-tie gate of the native toolchain
-# (v3/LANGUAGE.md §8.6 slice 4.1 rule 3; R84, records §4.12): a fixed set of the suite's
-# workloads run under both engines — the Rust bootstrap (`eval direct`, route 3, the
-# authority) and the binaries route 1 built (v3/build.sh: kernel/lower.shard, kernel/cgen.shard) — and compared
-# on four things: stdout, stderr, the exit status and every artifact written (a sidecar, a
-# store's files, an index), byte for byte. Both runs use the same scratch paths (the first
-# engine's artifacts are set aside before the second runs), so a path printed is the same
-# text in both logs. A divergence is a miscompile or a semantic gap between the bootstrap
-# and the back end and fails the gate: the binary is never patched — the back end is fixed
-# and the build rerun.
+# v3/kernel/test/native_tie_test.sh — the byte-tie gate of the native toolchain: a fixed
+# set of the suite's workloads run under both engines — the Rust bootstrap (`eval direct`,
+# the authority) and the binaries v3/build.sh built (kernel/lower.shard, kernel/cgen.shard) —
+# and compared on four things: stdout, stderr, the exit status and every artifact written
+# (a sidecar, a store's files, an index), byte for byte. Both runs use the same scratch
+# paths (the first engine's artifacts are set aside before the second runs), so a path
+# printed is the same text in both logs. A divergence is a miscompile or a semantic gap
+# between the bootstrap and the back end and fails the gate: the binary is never patched —
+# the back end is fixed and the build rerun.
 #
 # THE NORMALIZATION, in full: none. No workload below prints a time or a size; a
 # scratch root is the same path for both engines. A verdict, an assumption closure, a
@@ -20,9 +19,9 @@
 # fallback to the bootstrap), and the shim v3/bin/eval present, running a current binary as
 # the bootstrap does and failing loudly on a missing binary and a stale stamp; (2) the discriminating
 # cases v3/pins/emit/* built fresh and tied, the refused_* cases refused with their first
-# line's message, a naming-law case (at its root, no kernel/ directory) tied against the V3
-# driver's run rather than the bootstrap's flat read; (2b) calc's main built through the
-# bridge (slice 4.4 landing 1) and tied to the driver's run over the differential's inputs; (2c)
+# line's message, an ordinary case (at its root, no kernel/ directory) tied against the V3
+# driver's run rather than the bootstrap's flat read; (2b) calc's main, a program over
+# Init's types, built and tied to the driver's run over the differential's inputs; (2c)
 # the back end's own text — the loader's emit of one closure under both engines, every file
 # of it byte for byte; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
 # view), a dump, an example, a program run under ev with and without fuel, a store written;
@@ -84,7 +83,7 @@ tie() {
   if [ -n "${VERDICT:-}" ]; then
     for side in a b; do grep -q "$VERDICT" "$OUT/$l/$side/out" || { bad "$l: no verdict line ($VERDICT) on side $side"; return; }; done
   fi
-  # the seconds of both sides: rule 7's measurement per driver, from every run of the gate
+  # the seconds of both sides, per driver, from every run of the gate
   compare "$l" "$OUT/$l/a" "$OUT/$l/b" && echo "   tie $l: exit $(cat "$OUT/$l/b/rc"), $(wc -l < "$OUT/$l/b/out") lines (bootstrap $ta s, native $tb s)" || bad "$l differs"
 }
 
@@ -124,7 +123,7 @@ while read -r name src; do
   elif [ -z "$st" ] || [ "$(cat "v3/bin/$name.stamp" 2>/dev/null)" != "$st" ]; then bad "v3/bin/$name is stale (v3/build.sh --all)"; fi
 done < <(v3/build.sh --list)
 echo "native_tie_test: $n_inv binaries of the inventory present and current"
-# the shim (rule 4): present; a current binary run as the bootstrap runs it; a missing binary and a
+# the shim: present; a current binary run as the bootstrap runs it; a missing binary and a
 # stale stamp each refused with exit 70 and a message — never a silent fallback
 checks=$((checks+1)); [ -x v3/bin/eval ] || bad "v3/bin/eval is missing (v3/build.sh --all)"
 checks=$((checks+1)); v3/bin/eval direct v3/kernel/no_such_binary_for_the_tie.shard > "$OUT/shim_missing.txt" 2>&1; rc=$?
@@ -136,14 +135,14 @@ run_into "$OUT/shim/a" "$BOOT" direct v3/kernel/test/json_test.shard; run_into "
 checks=$((checks+1)); compare "shim json_test" "$OUT/shim/a" "$OUT/shim/b" || bad "the shim's run of json_test differs from the bootstrap's"
 echo "native_tie_test: the shim runs a current binary and refuses a missing binary and a stale stamp"
 
-# ---- (2) the discriminating cases: each built fresh through route 1, run under both engines
+# ---- (2) the discriminating cases: each built fresh by v3/build.sh, run under both engines
 for d in v3/pins/emit/*/; do
   c=$(basename "$d"); extra=""; [ -d "$d/kernel/lib" ] && extra="$d/kernel/lib"
-  f="$d/kernel/main.shard"; law=0; [ -e "$f" ] || { f="$d/main.shard"; law=1; }   # a naming-law case lives at the root (slice 4.3 landing 2): the kernel module is the toolchain's scope
+  f="$d/kernel/main.shard"; law=0; [ -e "$f" ] || { f="$d/main.shard"; law=1; }   # an ordinary case lives at the root: the kernel module is the toolchain's scope
   checks=$((checks+1))
   if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
-    # a naming-law case's reference is the V3 driver's run (slice 4.4 landing 1): the bootstrap's flat
+    # an ordinary case's reference is the V3 driver's run: the bootstrap's flat
     # read dispatches by bare name — an unknown head an effect, `-` at Nat the integer's
     if [ "$law" = 1 ]; then run_into "$OUT/pin_$c/a" "$BOOT" direct v3/kernel/load.shard --root "$d" $INIT --run main.main "$f"; else run_into "$OUT/pin_$c/a" "$BOOT" direct "$f"; fi
     run_into "$OUT/pin_$c/b" "$OUT/bin_$c"
@@ -157,7 +156,7 @@ for d in v3/pins/emit/*/; do
 done
 echo "native_tie_test: the discriminating cases of v3/pins/emit tied, the refused ones refused"
 
-# ---- (2b) a naming-law program's binary (slice 4.4 landing 1): calc's main through the bridge,
+# ---- (2b) the binary of a program over Init's types: calc's main,
 # tied to the V3 driver's run over the differential's inputs — stdout, stderr and the exit status
 lines=(); while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < v3/kernel/test/fixtures/calc_inputs.txt
 checks=$((checks+1))
@@ -165,10 +164,10 @@ if v3/build.sh v3/examples/calc/calc_main.shard "$OUT/bin_calc_main" --root v3 >
   ta=$(date +%s); run_into "$OUT/calc/a" "$BOOT" direct v3/kernel/load.shard --root v3 $INIT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]}"; ta=$(( $(date +%s) - ta ))
   tb=$(date +%s); run_into "$OUT/calc/b" "$OUT/bin_calc_main" "${lines[@]}"; tb=$(( $(date +%s) - tb ))
   if compare "calc binary" "$OUT/calc/a" "$OUT/calc/b"; then echo "   tie calc binary: exit $(cat "$OUT/calc/a/rc"), $(wc -l < "$OUT/calc/a/out") lines (bootstrap $ta s, native $tb s)"; else bad "calc's binary differs from the driver's run"; fi
-else bad "calc's main did not build through the bridge"; grep -E 'EMIT|FAIL' "$OUT/build_calc_main.txt" | head -2 | cut -c1-200; fi
-echo "native_tie_test: a naming-law program's binary tied — calc's main through the bridge over ${#lines[@]} inputs"
+else bad "calc's main did not build"; grep -E 'EMIT|FAIL' "$OUT/build_calc_main.txt" | head -2 | cut -c1-200; fi
+echo "native_tie_test: the binary of a program over Init's types tied — calc's main over ${#lines[@]} inputs"
 
-# ---- (2c) the back end's own text (§8.7 slice 5.0 rule 4): one closure emitted by the loader
+# ---- (2c) the back end's own text: one closure emitted by the loader
 # under both engines — main.c, its parts, the map and the sources byte for byte, the line too
 mkdir -p "$SCRATCH/emit"
 ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' tie "load emit" load --root v3 --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard

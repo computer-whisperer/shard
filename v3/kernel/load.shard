@@ -1,48 +1,57 @@
 ;;; v3/kernel/load.shard — the loader's driver:
-;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--store DIR | --reconstruct DIR] [--instance-budget N] [--state] FILE…
-;;;   eval direct v3/kernel/load.shard --root DIR [--init EXPORT --init-index INDEX] [--fuel N] [--trace FILE] --run MODULE.FN FILE… [-- ARG…]
+;;;   eval direct v3/kernel/load.shard COMMON [--store DIR | --reconstruct DIR] FILE…
+;;;   eval direct v3/kernel/load.shard COMMON --dump FILE…
+;;;   eval direct v3/kernel/load.shard COMMON --emit DIR FILE…
+;;;   eval direct v3/kernel/load.shard COMMON --run MODULE.FN [--fuel N] [--trace FILE]
+;;;     [--lowered] FILE… [-- ARG…]
+;;;   COMMON = --root DIR [--init EXPORT --init-index INDEX] [--instance-budget N] [--state]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
-;;; its imports (loader.shard) and prints the records (LANGUAGE.md §3.2) —
-;;; one line per module, Init load and declaration — then the counts; the
-;;; exit code is refused + errors. `--init` names the pinned export in one
-;;; file and `--init-index` its index (kernel/test/init_index.sh; §8.4 slice
-;;; 3.26): `(import Init NAME)` sets a module's horizon to NAME's ordinal and
-;;; the declarations it cites are loaded from the export on demand.
-;;; `--run` (§6.7): after a clean load, the program the load yielded is run
+;;; its imports (loader.shard) and prints the records (docs/LANGUAGE.md "What
+;;; the loader prints") — one line per module, Init load and declaration —
+;;; then the counts; the exit code is refused + errors. `--dump` wins over
+;;; `--emit`, which wins over `--run`; `--reconstruct` over `--store`.
+;;; `--init` names the pinned export in one file and `--init-index` its index
+;;; (kernel/test/init_index.sh): `(import Init NAME)` sets a module's horizon
+;;; just past NAME's ordinal and the declarations it cites are loaded from the
+;;; export on demand.
+;;; `--state`: each function that takes or returns the checker's state is
+;;; judged as well (STATE records).
+;;; `--run`: after a clean load, the program the load yielded is run
 ;;; from MODULE.FN on the World with ARG… as its arguments, its externs
 ;;; performed (session.shard's run_load); nothing is printed but the program's
-;;; own output. ARG… are the checked entry's (§9, slice 7): validated
+;;; own output. ARG… are the checked entry's: validated
 ;;; against the entry's parameters before the World — Int, Nat, a byte list
 ;;; — before ev runs; a malformed one is refused by position and text
 ;;; (`RUN: argument N REASON: TEXT`), never by a file span. A load failure
 ;;; prints the records and exits 2 before any run; out of fuel exits 3,
 ;;; stuck 4, a link failure 5, a refused argument 6; the program's own
-;;; `exit` is the host's.
-;;; `--instance-budget N` (§8.4 slice 3.28 rule 4): the instances of one template
+;;; `exit` is the host's. `--fuel N` is the run's fuel (default_fuel unless
+;;; given); `--trace FILE` writes the run's effect trace to FILE.
+;;; `--instance-budget N`: the instances of one template
 ;;; this load may build, 1,024 unless given; past it a demand is refused
 ;;; `specialization_budget`, naming the template.
-;;; `--dump` (§10 item 1): after a clean load, the program the load yielded is
+;;; `--dump`: after a clean load, the program the load yielded is
 ;;; printed as dump.shard's canonical text — the V3 side of frontend parity
 ;;; (kernel/test/parity_test.sh) — and nothing else; a load failure prints the
 ;;; records and exits as above.
-;;; `--store DIR` (§8.4 slice 3.22 rule 7): after a clean load, every constant the
+;;; `--store DIR`: after a clean load, every constant the
 ;;; load admitted to K — each ACCEPT, and each PARAM K holds — is written under
 ;;; DIR as the records K ingests (store.shard): one file per declaration named by
 ;;; its content fingerprint, DIR/order listing the files in admission order, a
 ;;; file already holding the text shared. The records print as without the flag,
 ;;; then `STORE: DIR new=N shared=M`; a file that cannot be written is
 ;;; `STORE: cannot write PATH`, exit 2. A failed load writes nothing. The
-;;; implementation forks of views (§6.6) are checked, recorded under IMPL and
+;;; implementation forks of views are checked, recorded under IMPL and
 ;;; not stored (their constants live in the fork, not the load's environment).
 ;;; verify_release.shard replays a store with K alone. The manifest's `recon N` is the
-;;; reconstruction version (tactic.shard) the store's P was produced under; a store at another
-;;; version is refused (STORE: refused).
-;;; `--reconstruct DIR` (§8.6 slice 4.5 rule 2): after a clean load, the load's P of every
+;;; reconstruction version (tactic.shard) the store's proof terms were produced under; a store at
+;;; another version is refused (STORE: refused).
+;;; `--reconstruct DIR`: after a clean load, the load's proof term of every
 ;;; theorem DIR holds against the retained record, byte for byte — RECONSTRUCT NAME same or
 ;;; EVIDENCE-CHANGE NAME, recon=A→B across versions; nothing written; the exit the changes.
 ;;; `--lowered` with `--run`: the program's restricted form (lower.shard) is run in its place —
-;;; the same output or the lowering is wrong (§8.7 slice 5.0 rule 5).
-;;; `--emit DIR` (§8.7 slice 5.0 rule 4; §8.6 slice 4.1 rule 1): after a clean load, the
+;;; the same output or the lowering is wrong.
+;;; `--emit DIR`: after a clean load, the
 ;;; program the load yielded is lowered and written under DIR as the C text of its binary
 ;;; (emit.shard: lower.shard, then cgen.shard) — DIR/main.c and its parts, DIR/map (each
 ;;; declaration against its identity and source) and DIR/sources (each module's source file
@@ -94,7 +103,7 @@
     (List Int)
     (List Int)
     Bool
-    Bool))  ; root, the export, its index, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory, the trace file, the reconstruct directory (4.5 rule 2), the state check, the lowered run (5.0 rule 5)
+    Bool))  ; root, the export, its index, files, the entry to run, fuel, the program's arguments, dump, the store directory, the instance budget, the emit directory, the trace file, the reconstruct directory, the state check, the lowered run
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match a
@@ -228,7 +237,7 @@
                (None (main_records l0 files store recon w1))
                ((Some entry) (main_run l0 files entry argv fuel trace low w1))))))))))))))
 
-;; a clean load, then the canonical text of the program it yielded (§10 item 1)
+;; a clean load, then the canonical text of the program it yielded
 (fn main_dump ((l0 Load) (files (List (List Int))) (w World)) World
   (match (load_files l0 files w)
     ((Pair l w2)
@@ -241,7 +250,7 @@
   (match ls
     (Nil w)
     ((Cons x r) (print_lines r (write_line x w)))))
-;; a clean load, then the closure's C text written under DIR (§8.7 slice 5.0 rule 4)
+;; a clean load, then the closure's C text written under DIR
 (fn main_emit ((l0 Load) (files (List (List Int))) (dir (List Int)) (w World)) World
   (match (load_files l0 files w)
     ((Pair l w2)
@@ -343,11 +352,11 @@
            ((Pair (StoreFail path) w4)
             (exit 2 (write_line (append "STORE: cannot write " path) w4)))
            ((Pair (StoreRefused m) w4) (exit 2 (write_line (append "STORE: refused " m) w4))))))))))))
-;; `--reconstruct DIR` (§8.6 slice 4.5 rule 2; law §7.2, §7.5 `reconstruct`): every theorem DIR's
+;; `--reconstruct DIR`: every theorem DIR's
 ;; manifest lists that this load elaborated is rendered as the store would write it
-;; (store_records) and compared byte for byte with the retained record DIR/ID.ndjson — P's
-;; identity by its canonical serialization —: RECONSTRUCT NAME same, or EVIDENCE-CHANGE NAME (a
-;; different valid P; `missing` when the file is gone); recon=A→B names the manifest's
+;; (store_records) and compared byte for byte with the retained record DIR/ID.ndjson — a proof
+;; term's identity by its canonical serialization —: RECONSTRUCT NAME same, or EVIDENCE-CHANGE
+;; NAME (a different valid term; `missing` when the file is gone); recon=A→B names the manifest's
 ;; reconstruction version against this loader's when they differ, recon=A when they agree; a
 ;; theorem of the manifest the load did not elaborate is not-loaded. Nothing is written: the
 ;; store is rewritten by --store alone, the explicit migration. The exit is the number of
@@ -451,7 +460,7 @@
     ((Cons (RAccept n _ _ _ _ _ _) r) (Cons n (stored_names r)))
     ((Cons (RParam n _ _) r) (Cons n (stored_names r)))
     ((Cons _ r) (stored_names r))))
-;; the manifest's parameters (slice 4.0 rule 3): every PARAM record's name — a view parameter,
+;; the manifest's parameters: every PARAM record's name — a view parameter,
 ;; or an obligation the load did not discharge (a discharged one is a `discharge` line instead)
 (fn stored_params ((rs (List Rec)) (ds (List (Pair Name Name)))) (List Name)
   (measure (struct rs))
@@ -480,18 +489,13 @@
      (if (sym_eq k (quote proved)) (Cons (Pair n (Str n (quote proof))) (stored_discharges r))
      (stored_discharges r)))
     ((Cons _ r) (stored_discharges r))))
-;; the manifest's bins (slice 4.3 landing 1): every BIN record — its name, entry, externs and requirements
+;; the manifest's bins: every BIN record — its name, entry, externs and requirements
 (fn stored_bins ((rs (List Rec))) (List (Pair Name (Pair Name (Pair (List Name) (List Name)))))
   (measure (struct rs))
   (match rs
     (Nil Nil)
     ((Cons (RBin n f exts _ reqs _) r) (Cons (Pair n (Pair f (Pair exts reqs))) (stored_bins r)))
     ((Cons _ r) (stored_bins r))))
-;; a clean load, then the program run from the entry; a failed load prints its records and exits 2;
-;; `--trace FILE` writes the run's effect trace (§8.6 slice 4.3 landing 2). The run is the
-;; session's door on this load (session.shard run_load; slice 4.6 rule 2): ev.shard's checked
-;; entry, and what the load's environment shows of the entry that its program does not state —
-;; an evidence binder, a proposition field — refused `RUN: link preconditioned`
 ;; the program the load yielded, or under --lowered its restricted form (lower.shard) in its place:
 ;; the lowering's own gate — the two runs print the same (kernel/test/lower_test.sh)
 (fn run_as
@@ -514,6 +518,11 @@
          w))
       ((LwProg rs) (run_load_as l rs entry argv fuel trace w)))
     (run_load l entry argv fuel trace w)))
+;; a clean load, then the program run from the entry; a failed load prints its records and exits 2;
+;; `--trace FILE` writes the run's effect trace. The run is the session's door on this load
+;; (session.shard run_load): ev.shard's checked entry, and what the load's environment shows of
+;; the entry that its program does not state — an evidence binder, a proposition field —
+;; refused `RUN: link preconditioned`
 (fn main_run
   ((l0 Load)
    (files (List (List Int)))

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# K's tests through the V3 loader (phase 3, the third of the four follow-ups after the K
-# seal; v3/LANGUAGE.md §6.6, §13 item 26): every other entrypoint runs on the Rust
+# K's tests through the V3 loader: every other entrypoint runs on the Rust
 # bootstrap, which resolves flat and enforces no seal, so a test that reached around K's
 # view would still pass there. Here each K-facing test is loaded by the V3 loader and run
 # under `ev` (`load.shard --run`), the clients outside the directory with `v3/kernel/k` as

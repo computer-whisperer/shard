@@ -6,7 +6,7 @@
 ;; (fn NAME …) (extern NAME …) (type NAME …) (record NAME …)
 ;; (claim NAME …) (axiom NAME …) (requirement NAME …) (fulfills NAME …)
 ;; (proof-for NAME …) (returns NAME …) (bin NAME …) (lib NAME …) (app …) (cli …)
-;; V3 (v3/LANGUAGE.md §4): (def NAME …) (abbrev NAME …) (opaque NAME …)
+;; V3: (def NAME …) (abbrev NAME …) (opaque NAME …)
 ;; (theorem NAME …) (realize NAME …) (inductive NAME …) (structure NAME …)
 ((list
    .

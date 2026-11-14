@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The first bin (v3/LANGUAGE.md §8.6 slice 4.3 landing 1, rules 4–5; law §4.7, §9.3):
+# v3/kernel/test/bin_test.sh — calc's bin:
 # v3/examples/calc/calc_bin.shard declares calc's main as a bin over calc_main.shard —
 # three observables as opaque constants, nine bolt axioms, two requirements proven through
 # the model world (main_output, main_reads). The load records the bin (BIN … requires 2/2)
@@ -8,17 +8,16 @@
 # and the bolts they use; the program runs through the driver with the bin file as the
 # root file, byte-identical to the model world as calc_main_test.sh ties it; and two
 # negatives — the bin with a requirement left `sorry` fails the load with UNMET, and a
-# program with a write duplicated fails it with UNTHREADED — each a nonzero exit. Since
-# slice 4.4 landing 1, route 1's binary of calc's main (v3/build.sh over the naming-law
-# root, through the back end's bridge rows) runs over the same inputs and is the driver's byte for
-# byte.
+# program with a write duplicated fails it with UNTHREADED — each a nonzero exit. The
+# native binary of calc's main (v3/build.sh over a root that imports Init) runs over the
+# same inputs and is the driver's byte for byte.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "bin_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
 OUT=$(mktemp -d); ROOT=$(mktemp -d -p v3 bin_scratch_XXXXXX); trap 'rm -rf "$OUT" "$ROOT"' EXIT   # the scratch root inside the tree: the loader takes paths relative to the working directory
 mkdir -p "$OUT/store"
@@ -85,7 +84,7 @@ checks=$((checks+1)); [ "$(wc -l < "$OUT/want")" -eq "${#lines[@]}" ] || bad "th
 checks=$((checks+1)); cmp -s "$OUT/got" "$OUT/want" || { bad "the program's output through the bin is not the model world's"; diff "$OUT/got" "$OUT/want" | head -6; }
 echo "bin_test: the program through the bin in $((e-s)) s, byte-identical to the model world over ${#lines[@]} inputs"
 
-# ---- (3b) the effect trace (slice 4.3 landing 2; law §4.7 (iii)): the driver's --trace FILE —
+# ---- (3b) the effect trace: the driver's --trace FILE —
 # one host call per line, the arguments read then one write_line per input — against the
 # model's trace (calc_app_world.shard trace_of, rendered by the harness as `* trace:` lines
 # with the driver's own renderer): the call lists identical, byte for byte
@@ -96,7 +95,7 @@ checks=$((checks+1)); head -1 "$OUT/trace.txt" | grep -q '^get_args "' || { bad 
 checks=$((checks+1)); cmp -s "$OUT/trace.txt" "$OUT/model_trace.txt" || { bad "the driver's trace is not the model's"; diff "$OUT/trace.txt" "$OUT/model_trace.txt" | head -6 | cut -c1-200; }
 echo "bin_test: the trace — $(wc -l < "$OUT/trace.txt") host calls — is the model's, byte for byte"
 
-# ---- (3c) the bolt bundle on the model host (rule 6 (e); law §4.7 (ii)): the nine axioms the
+# ---- (3c) the bolt bundle on the model host: the nine axioms the
 # bin trusts, instantiated at calc_bin_model.shard's Host and proven, and a ground run computed
 s=$(date +%s)
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_bin_model.shard > "$OUT/model_load.txt" 2>&1; rc=$?
@@ -107,19 +106,19 @@ for t in get_args_output get_args_reads get_args_exit write_line_output write_li
 done
 echo "bin_test: the nine bolts hold on the model host, with the ground run, in $((e-s)) s"
 
-# ---- (3d) route 1's binary of the program (slice 4.4 landing 1): calc's main through the bridge
-# (v3/build.sh over the naming-law root), run over the same inputs — stdout byte for byte the
+# ---- (3d) the native binary of the program: calc's main
+# (v3/build.sh over a root that imports Init), run over the same inputs — stdout byte for byte the
 # driver's run through the bin, exit 0, nothing on stderr
 s=$(date +%s)
 v3/build.sh v3/examples/calc/calc_main.shard "$OUT/calc_native" --root v3 > "$OUT/build.txt" 2>&1; rc=$?
 e=$(date +%s)
-checks=$((checks+1)); [ "$rc" = 0 ] || { bad "calc's main did not build through the bridge (exit $rc)"; grep -E 'EMIT|FAIL' "$OUT/build.txt" | head -2 | cut -c1-200; }
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "calc's main did not build (exit $rc)"; grep -E 'EMIT|FAIL' "$OUT/build.txt" | head -2 | cut -c1-200; }
 if [ "$rc" = 0 ]; then
   s2=$(date +%s); "$OUT/calc_native" "${lines[@]}" > "$OUT/native_out" 2> "$OUT/native_err"; rc=$?; e2=$(date +%s)
   checks=$((checks+1)); [ "$rc" = 0 ] || bad "the binary failed (exit $rc)"
   checks=$((checks+1)); cmp -s "$OUT/native_out" "$OUT/got" || { bad "the binary's output is not the driver's"; diff "$OUT/native_out" "$OUT/got" | head -6; }
   checks=$((checks+1)); [ ! -s "$OUT/native_err" ] || { bad "the binary wrote to stderr"; head -2 "$OUT/native_err" | cut -c1-200; }
-  echo "bin_test: route 1's binary of calc's main ($(stat -c %s "$OUT/calc_native") bytes, built in $((e-s)) s) is the driver's byte for byte over ${#lines[@]} inputs, in $((e2-s2)) s"
+  echo "bin_test: the native binary of calc's main ($(stat -c %s "$OUT/calc_native") bytes, built in $((e-s)) s) is the driver's byte for byte over ${#lines[@]} inputs, in $((e2-s2)) s"
 fi
 
 # ---- (4) the negatives, over a scratch root that sees the library through a link

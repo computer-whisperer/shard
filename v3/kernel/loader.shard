@@ -1,18 +1,18 @@
-;;; v3/kernel/loader.shard — the loader (v3/LANGUAGE.md §3, §3.1, §3.2, §9).
-;;; Phase 2, slice 3. A package root and its files: each file is a module
+;;; v3/kernel/loader.shard — the loader.
+;;; A package root and its files: each file is a module
 ;;; named by its path from the root; `import` loads a file once (a cycle is
 ;;; refused) and makes the imported module's closure visible, opening
-;;; nothing; `(import Init NAME)` sets the module's Init horizon to NAME's
-;;; ordinal in the pinned export, whose declarations the module cites are
-;;; loaded on demand from the export's index (initload.shard; §8.4 slice
-;;; 3.26), the meta line checked against the pin; `use` opens a prefix for the rest of
+;;; nothing; `(import Init NAME)` sets the module's Init horizon just past
+;;; NAME's ordinal in the pinned export, whose declarations the module cites are
+;;; loaded on demand from the export's index (initload.shard), the meta
+;;; line checked against the pin; `use` opens a prefix for the rest of
 ;;; the file; `trusts` widens the file's assumption policy; every declared
 ;;; form goes through the reader (reader.shard) into K's raw entry
-;;; (add.shard `check`, which ingests), and an admitted declaration's
-;;; axiom closure (axioms.shard) is checked against the file's policy —
+;;; (k/add.shard `check`, which ingests), and an admitted declaration's
+;;; axiom closure (k/axioms.shard) is checked against the file's policy —
 ;;; outside it, the declaration is reported and dropped, the environment
-;;; kept as it was. What the loader records per declaration is §3.2's
-;;; acceptance record at phase 2 (the driver load.shard prints it): the
+;;; kept as it was. What the loader records per declaration is the
+;;; acceptance record (the driver load.shard prints it): the
 ;;; identity (K name and content fingerprint), the module, the axiom
 ;;; closure, and the environment revision (the Init prefix, the visible
 ;;; modules and their hashes on their MODULE lines). Nothing here is
@@ -168,11 +168,11 @@
     None))))
 
 ;; the module path of a root-relative file: `.shard` dropped from the last
-;; component, each component one name component (§3). A path whose last
-;; component lacks `.shard` names a directory module (§6.6: its view);
+;; component, each component one name component. A path whose last
+;; component lacks `.shard` names a directory module (its view);
 ;; `DIR/mod.req.shard` and the dir form `DIR/mod.req/mod.req.shard` are
 ;; DIR's view and carry DIR's path (MPView); other files under `mod.req/`
-;; wait for a consumer.
+;; are refused.
 (type ModPath (MPOk Name) (MPView Name) (MPDir) (MPBad (List Int)))
 (fn module_of ((parts (List (List Int)))) ModPath (module_rest Anon parts))
 (fn module_rest ((m Name) (parts (List (List Int)))) ModPath
@@ -199,7 +199,7 @@
     ((Cons p r) (module_step m p r))))
 (fn module_step ((m Name) (p (List Int)) (r (List (List Int)))) ModPath
   (if (int_list_eq p "mod.req")
-    (MPBad "a file under mod.req/ other than mod.req.shard: not at slice 4")
+    (MPBad "a file under mod.req/ other than mod.req.shard: mod.req/ holds the view file alone")
     (match (module_comp m p Nil)
       ((MPOk m2) (module_rest m2 r))
       (x x))))
@@ -220,7 +220,7 @@
 ;; the view file of a directory module, dir form first, then flat
 (fn view_candidates ((dir (List (List Int)))) (List (List (List Int)))
   (list (append dir (list "mod.req" "mod.req.shard")) (append dir (list "mod.req.shard"))))
-;; the implementation file: DIR/BASE.shard (the old tree's rule; §6.6)
+;; the implementation file: DIR/BASE.shard, BASE being DIR's last component
 (fn impl_file ((dir (List (List Int)))) (Option (List (List Int)))
   (match (rev dir)
     (Nil None)
@@ -243,8 +243,8 @@
 ;; ---- the state -------------------------------------------------------------------------
 ;; a loaded module: path, root-relative file, hash (over its accepted
 ;; declarations' fingerprints, in order), its closure (the module paths
-;; visible in it, itself included), whether the Init prefix is visible in it
-;; a view's module also keeps its fork point (§6.6) for the implementation
+;; visible in it, itself included), its Init horizon (-1: none);
+;; a view's module also keeps its fork point for the implementation
 ;; check, which may come after a consumer loaded the view
 (record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int)
   (fork (Option ForkPt))
@@ -265,51 +265,51 @@
 ;; table. While a load has declared nothing its environment IS the base, and a demand enters
 ;; both; after the first declaration a demand enters the load's environment alone
 (type InitBase (InitBase CheckedEnv OdDone (IntMap (List (Pair Name Int)))))
-;; the Init load (§8.4 slice 3.26; §8.6 "One environment, one counter"): none given; the export
+;; the Init load: none given; the export
 ;; and its index the driver named, opened at the first need; opened — the export and index
 ;; handle, the records the load's environment holds, and the base a re-rooted load starts from
 (type InitSt (InitNone) (InitPaths (List Int) (List Int)) (InitSt OdIx OdDone InitBase))
 
 (type Rec
   (RModule Name (List Int) Int (List Name))  ; a module loaded: path, file, hash, its closure
-  (RInit Name Int Int)  ; the Init load (slice 3.26): the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
-  (RAccept Name Name Int (List Name) Int (List Name) (Option Req))  ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on, a theorem's resolved requirement (4.5 rule 1)
-  (RParam Name Symbol Int)  ; a parameter admitted: a view's (kind type / fn / requirement; a sig type's arity), a measured fn's obligation, a trusted axiom (kind axiom; slice 4.2 landing 2)
+  (RInit Name Int Int)  ; the Init load: the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
+  (RAccept Name Name Int (List Name) Int (List Name) (Option Req))  ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on, a theorem's resolved requirement
+  (RParam Name Symbol Int)  ; a parameter admitted: a view's (kind type / fn / requirement; a sig type's arity), a measured fn's obligation, a trusted axiom (kind axiom)
   (RRefuse Name Symbol)  ; K refused
   (RPolicy Name (List Name))  ; outside the file's policy: the axioms it reaches that the policy lacks
-  (RPending Name Symbol)  ; sorry: read, admits nothing
-  (RRun Symbol Name Symbol Symbol)  ; an E declaration without a definition (§6.7): kind (fn / extern / type), R45's runnable status; a fn's obstacle to L meaning (§8.4 rule 1; none = not applicable); its route (slice 3.16 rule 6: typed — the program the erasure —, e_first — the classifier's —, none)
-  (RDefine Name (List Name) (List Name))  ; a fn defined (§8.4): its equations' identities, the pending roots it carries (R58)
+  (RPending Name Symbol)  ; a pending proof and its cause (sorry, auto_missing, …): read, admits nothing
+  (RRun Symbol Name Symbol Symbol)  ; an E declaration without a definition, RUNNABLE: kind (fn / extern / type); a fn's obstacle to L meaning (none = not applicable); its route (typed — the program the erasure —, e_first — the classifier's —, none)
+  (RDefine Name (List Name) (List Name))  ; a fn defined: its equations' identities, the pending roots it carries
   (RClassify Name Symbol (List Int))  ; the classifier refused: reason, message (counts as refused)
-  (RRealize Name Symbol (List Name) (List Name))  ; a realization attached (§7.5): kind (supplied / view), its equations' identities, the pending roots it carries (R58)
+  (RRealize Name Symbol (List Name) (List Name))  ; a realization attached: kind (supplied / view), its equations' identities, the pending roots it carries
   (RDischarge Name Symbol)  ; the implementation check: a parameter discharged (type / fn / proved) or pending
   (RImplErr Name Symbol (List Int))  ; the implementation check: a parameter without its implementation, a mismatch
   (RImplRec Rec)  ; a record of the implementation's fork (its own declarations)
   (RReadErr (List Int) Symbol (List Int))  ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))  ; file, reason, detail — the file's loading ends here
-  (RUnused Name (List Name))  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
+  (RUnused Name (List Name))  ; the file's `use` lines no citation could need: module, prefixes
   (RProved Name Name (List Int) Req (List SExpr))  ; mode solve: the engine's block for an auto proof — the theorem, the name its sidecar entry bears (the theorem's, or the obligation's a discharge proves, as the source writes it), the file the proof stands in (its sidecar is beside it), the requirement's key, the block
-  (RSidecar (List Int) Int Int)  ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
-  (RRecon (List Int) Int Int)  ; a sidecar replayed under another reconstruction version (4.5 rule 2): the file, its version (-1: none stated), the current one
+  (RSidecar (List Int) Int Int)  ; a sidecar of an older schema replayed: the file, its schema, the current one
+  (RRecon (List Int) Int Int)  ; a sidecar replayed under another reconstruction version: the file, its version (-1: none stated), the current one
   (REngine Name Bool)  ; mode measure: the engine closes the statement unaided, or not
-  (RTactic Name Name Bool)  ; mode measure (slice 3.29 rule 2): the tactic the delegation names closes the statement, or not
-  (RDerive Name Expr Symbol Symbol (List Name))  ; a derivation registered (§8.4 slice 3.19): the procedure, the type, the capability, the policy, the field procedures it selected
-  (RTemplate Name (List Name) (List Name))  ; a template defined (§8.4 slice 3.28 rule 1): its static parameters, its equations' identities — no program of its own
-  (RInstance Name Name (List (List Int)) (List Name))  ; an instance built (rule 3): the template, the shapes (identity/captured count), its equations' identities
-  (RThread Name Symbol (List Int))  ; the well-threadedness verdict of a token-handling function (slice 4.3 landing 0): ok, or world_twice / world_unsupported / world_forged with its detail
-  (RState Name Symbol (List Int))  ; the state's check on a function that takes or returns the checker's state, under --state (§8.6 "An id confirmed by its hash" rule 5): ok (with its resumptions), primitive, reused or unsupported with its detail
-  (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked (slice 4.3 landing 1): its name, entry, externs, trusted axioms' count, requirements, requirements met
+  (RTactic Name Name Bool)  ; mode measure: the tactic the delegation names closes the statement, or not
+  (RDerive Name Expr Symbol Symbol (List Name))  ; a derivation registered: the procedure, the type, the capability, the policy, the field procedures it selected
+  (RTemplate Name (List Name) (List Name))  ; a template defined: its static parameters, its equations' identities — no program of its own
+  (RInstance Name Name (List (List Int)) (List Name))  ; an instance built: the template, the shapes (identity/captured count), its equations' identities
+  (RThread Name Symbol (List Int))  ; the well-threadedness verdict of a token-handling function: ok, or world_twice / world_unsupported / world_forged with its detail
+  (RState Name Symbol (List Int))  ; the state's check on a function that takes or returns the checker's state, under --state: ok (with its resumptions), primitive, reused or unsupported with its detail
+  (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked: its name, entry, externs, trusted axioms' count, requirements, requirements met
   (RBinErr Name Symbol (List Int)))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
 
 ;; root, environment, closure memo, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
-;; the view parameters admitted (§6.6),
-;; the E table (classify.shard: every E declaration by identity and suffix),
-;; the pending roots each realization carries (§7.5; R58)
+;; the view parameters admitted,
+;; the E table (etable.shard: every E declaration by identity and suffix),
+;; the pending roots each realization carries
 (record Load (root (List (List Int))) (env CheckedEnv) (memo AxMemo) (mods (List Mod)) (init InitSt)
   (tbl (IntMap (List (Pair Name Name))))
-  (inits (IntMap (List (Pair Name Int))))  ; declaration → ordinal for every imported declaration (slice 3.21b rule 2)
-  (mode Symbol)  ; the proofs' mode (slice 3.22 rule 6): off (the build), solve (prove), measure
+  (inits (IntMap (List (Pair Name Int))))  ; declaration → ordinal for every imported declaration
+  (mode Symbol)  ; the proofs' mode: off (the build), solve (prove), measure
   (pending (List Name))
   (stack (List Name))
   (recs (List Rec))
@@ -318,14 +318,14 @@
   (parked (List Parked))
   (pm (List (Pair Name (List Name))))
   (forms (IntMap (List (Pair Name (Pair Scope SExpr)))))
-  (discharged (List (Pair Name (List Name))))  ; a descent obligation proved (slice 3.16 rule 8): the axioms and parameters its proof rests on, which stand in its place in every closure
-  (typed (List (Pair Name (Pair Scope SExpr))))  ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local (slice 3.16 rule 6)
-  (derived (List Derived))  ; the derivation table (slice 3.19 rule 6): an entry is visible where its procedure is
-  (templates (List (Pair Name Template)))  ; the templates defined (slice 3.28 rule 1), for the instances a body demands
-  (instances (List Demand))  ; the instances built (rule 3), by name — a second taking at other arguments under one name is refused
-  (budget Int)  ; the instances of one template this load may build (rule 4): instance_budget, or the driver's --instance-budget
-  (fuel Int)  ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove (slice 3.29 rule 2); default_fuel, or the driver's --fuel
-  (states (Option (IntMap (List (Pair Name Int))))))  ; the state's check (thread.shard, §8.6 "An id confirmed by its hash" rule 5): None in a plain load; under the driver's --state the modes of the functions judged so far
+  (discharged (List (Pair Name (List Name))))  ; a descent obligation proved: the axioms and parameters its proof rests on, which stand in its place in every closure
+  (typed (List (Pair Name (Pair Scope SExpr))))  ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local
+  (derived (List Derived))  ; the derivation table: an entry is visible where its procedure is
+  (templates (List (Pair Name Template)))  ; the templates defined, for the instances a body demands
+  (instances (List Demand))  ; the instances built, by name — a second taking at other arguments under one name is refused
+  (budget Int)  ; the instances of one template this load may build: instance_budget, or the driver's --instance-budget
+  (fuel Int)  ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove; default_fuel, or the driver's --fuel
+  (states (Option (IntMap (List (Pair Name Int))))))  ; the state's check (thread.shard): None in a plain load; under the driver's --state the modes of the functions judged so far
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone)
     (tbl IMEmpty)
@@ -347,7 +347,7 @@
     (budget (instance_budget))
     (fuel (default_fuel))
     (states None)))
-;; a fresh root load from a load's Init state (slice 3.25 rule 1): the Init load carried — the
+;; a fresh root load from a load's Init state: the Init load carried — the
 ;; base's environment of Init alone, its records and ordinals, the export and index handle;
 ;; everything of the old root reset to load0's, the old root's own declarations gone, and with
 ;; them what the old root demanded of Init after its first declaration (demanded again, it is
@@ -398,9 +398,9 @@
          (None (ld_rec l (REngine n ok))))
        (RDOk ds)))
     (_ (Pair l rd))))
-;; the producers' inputs for a file's proofs (slice 3.29 rule 2): its sidecar's entries, the
+;; the producers' inputs for a file's proofs: its sidecar's entries, the
 ;; programs loaded so far (a named tactic runs on them under prove), the fuel, and the file's
-;; parts of the requirement's key (4.5 rule 1)
+;; parts of the requirement's key
 (fn producers_of ((l Load) (f Fx)) Producers
   (Producers (Fx.autos f) (Load.etab l) (Load.fuel l) (req_ctx l f)))
 ;; the file's parts of the key: its scope, the policy's fingerprint — the trusts' candidates
@@ -438,13 +438,13 @@
 ;; file, or the implementation file of a view, read where its check begins (check_impl):
 ;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
 ;; that does not read, or a form of another shape, is the file's load error and no entries.
-;; Its first form may be the schema (sidecar N) — I's schema the entries are written in (slice
-;; 3.29 rule 4; no form = schema 1, the form before the slice): an older schema is replayed and
-;; reported SIDECAR; a newer one is the load error sidecar_schema (this loader cannot read it).
-;; Schema 3 (4.5 rule 1): an entry's key is (req S D P E), the resolved requirement's; a bare
+;; Its first form may be the schema (sidecar N) the entries are written in (no form = schema
+;; 1): an older schema is replayed and reported SIDECAR; a newer one is the load error
+;; sidecar_schema (this loader cannot read it).
+;; At schema 3 an entry's key is (req S D P E), the resolved requirement's; a bare
 ;; FINGERPRINT (schemas 1 and 2) is the statement's alone and still stands on replay. The form's
 ;; second number, (sidecar N RECON), is the reconstruction version the entries were last replayed
-;; under (4.5 rule 2; tactic.shard): another one is replayed and reported RECON
+;; under (tactic.shard): another one is replayed and reported RECON
 (fn sidecar_schema () Int 3)
 (fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World))
   (Pair (Pair Load (List Auto)) World)
@@ -497,8 +497,8 @@
                           (append path (append ": " m))))
                       Nil)
                     w1)))))))))))))
-;; the reports of a sidecar read — an older schema (3.29 rule 4); at the current schema, another
-;; reconstruction version (4.5 rule 2) —: reports, never refusals, the entries standing on replay
+;; the reports of a sidecar read — an older schema; at the current schema, another
+;; reconstruction version —: reports, never refusals, the entries standing on replay
 (fn sidecar_reports ((l Load) (file (List Int)) (schema Int) (recon Int)) Load
   (if (< schema (sidecar_schema)) (ld_rec l (RSidecar file schema (sidecar_schema)))
   (if (= recon (reconstruction_version)) l
@@ -578,7 +578,7 @@
   (with Load l (templates (Cons (Pair n tm) (Load.templates l)))))
 (fn ld_add_instance ((l Load) (d Demand)) Load
   (with Load l (instances (Cons d (Load.instances l)))))
-;; rule 4's budget (law §4.3): the instances of one template a load may build, past which a
+;; the instance budget: the instances of one template a load may build, past which a
 ;; demand is refused naming the template — a refusal, never a proof; the driver's
 ;; --instance-budget N sets another for a load (the pins harness runs one case at 2)
 (fn instance_budget () Int 1024)
@@ -591,8 +591,8 @@
     (Nil 0)
     ((Cons d r) (+ (if (name_eq (demand_template d) c) 1 0) (instances_of c r)))))
 (fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
-;; a fn whose definition waits on a callee not yet defined (slice 3.15: a forward reference, or a
-;; callee itself parked): the fn, its form, its E declaration, the obstacle and the callee named
+;; a fn whose definition waits on a callee not yet defined (a forward reference, or a
+;; callee itself parked): the fn, its form, the obstacle and the callee named
 (type Parked (Parked Name SExpr Symbol (List Int)))
 (fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (with Load l (recs rs)))
 (fn ld_add_form ((l Load) (n Name) (sc Scope) (s SExpr)) Load
@@ -604,7 +604,8 @@
             (match (im_find fo k)
               ((Some b) b)
               (None Nil))))))))
-;; a private file's (fn NAME …) / (type NAME …) form by its identity, with the scope it was read in
+;; a private file's (fn NAME …) / (type NAME …) form by its identity, with the scope it was
+;; read in
 (fn form_for ((l Load) (n Name)) (Option (Pair Scope SExpr))
   (match (im_find (Load.forms l) (name_key n))
     (None None)
@@ -624,7 +625,7 @@
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
 ;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
-;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate), the sidecar's
+;; far, whether it is a view (the forms it may hold, the req-scope gate), the sidecar's
 ;; entries (FILE.auto.shard beside the file, read when a theorem or a fulfills says auto),
 ;; the import that set its horizon — the target of an `(import Init NAME)` (initname), or the
 ;; file whose import handed its own on (initvia; Anon and empty: no horizon) —, the horizon its
@@ -646,7 +647,7 @@
   (ecount Int)
   (bins (List SExpr)))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
-;; directly inside one (the K seal: one module across the directory's files, §13 item 26)
+;; directly inside one (the K seal: one module across the directory's files)
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
 (fn fx_file ((f Fx)) (List Int) (join_path (Fx.parts f)))
 (fn fx_open ((f Fx) (o Open)) Fx (with Fx f (opened (append (Fx.opened f) (list o)))))
@@ -724,7 +725,7 @@
     (_ (FBad (quote bad_import) "(import \"FILE\") or (import Init NAME)"))))
 ;; (use P) opens P; (use P a b) opens P for the names a… and b…; a leading
 ;; `Init` is dropped (reader.shard's drop_init) — imported names are bare in
-;; K (§3), so (use Init) opens nothing new and (use Init.List) opens `List`
+;; K, so (use Init) opens nothing new and (use Init.List) opens `List`
 (fn use_form ((args (List SExpr))) Form
   (match args
     ((Cons (SSym p) ms)
@@ -762,11 +763,11 @@
        (None Anon)))
     (_ Anon)))
 
-;; ---- the policy (§9) -----------------------------------------------------------------------
+;; ---- the policy ----------------------------------------------------------------------------
 (fn std_axioms () (List Name)
   (list (n1 (quote propext)) (n2 (quote Quot) (quote sound)) (n2 (quote Classical) (quote choice))))
-;; the axioms of a closure the file's policy lacks; a view parameter is the
-;; third class (§9, §6.6): permitted, named on the record
+;; the axioms of a closure the file's policy lacks; a view parameter is a
+;; parameter of the load: permitted, named on the record
 (fn outside_policy ((sc Scope) (trusts (List Name)) (params (List Name)) (axs (List Name)))
   (List Name)
   (measure (struct axs))
@@ -825,8 +826,8 @@
     ((Cons n r) (tbl_add_all (tbl_add tbl n m) r m))))
 
 (type Admit (AdOk CheckedEnv) (AdRefused Name Symbol))
-;; an exhaustion's refusal symbol: the budget and K's site (slice 4.2 landing 1: a theorem refused
-;; `exhausted` said nothing of which budget, nor where)
+;; an exhaustion's refusal symbol names the budget and K's site: a bare `exhausted` says
+;; nothing of which budget, nor where
 (fn resource_chars ((res Resource)) (List Int)  ; the constructors by their `use`: unresolved, they read as variable patterns (the arms all irrefutable, the C of the dead ones uncompilable)
   (match res
     (RHeartbeats "heartbeats")
@@ -845,13 +846,13 @@
        ((Accepted e2) (admit_decls e2 r))
        ((Rejected reason subject) (AdRefused subject (reason_of reason)))
        ((Exhausted res site) (AdRefused (decl_name d) (exhausted_sym res site)))))))
-;; K's admission of a file's declarations into the load's environment, then slice 3.26 rule 5
+;; K's admission of a file's declarations into the load's environment, then the naming law
 ;; for every name they declare — a constructor's and a recursor's with the rest: none is a
 ;; name of Init under the file's identity (Fx.taken), whether or not the load holds Init's
 ;; constant yet. A `fn`, an `extern` and a derivation are refused by their form's name before
-;; (name_taken); this is every other declaration's, and until 2026-11-12 nothing was: a file
-;; `Classical.shard` declaring `(axiom choice …)` below the horizon of Init's took the standard
-;; axiom's identity and passed the policy by its name (pin init_name_taken_l)
+;; (name_taken); this is every other declaration's. Without it a file `Classical.shard`
+;; declaring `(axiom choice …)` below the horizon of Init's takes the standard axiom's
+;; identity and passes the policy by its name (pin init_name_taken_l)
 (fn admit_under ((l Load) (f Fx) (ds (List Declaration))) Admit
   (match (admit_decls (Load.env l) ds)
     ((AdRefused subj reason) (AdRefused subj reason))
@@ -929,16 +930,11 @@
     (Nil l)
     ((Cons x r) (recs_add (ld_rec l x) r))))
 
-;; one declared form: read, admit, check the policy, record. A view holds
-;; L forms and parameters, never E bodies; a parameter belongs in a view. `fn`
-;; and `extern` are read by the classifier (§6.7); `type` and `sig` gain their E
-;; twins beside K's — a `type` over E's built-in types alone is E only
-;; (type_is_e_only, §8.1 rule 1). K checks any L form in any file.
-;; a `fulfills` naming no obligation of the load (slice 3.30 landing 2; T9 again's finding — the
-;; one message "give the loader the directory" sent an author whose fn had been refused above to
-;; restructure the root): the cause is named — a declaration that is no obligation, a prefix of
-;; the name refused above (its obligations were never stated), or nothing of the load, where a
-;; requirement's fulfills belongs to an implementation (§6.6)
+;; a `fulfills` naming no obligation of the load: the cause is named — a declaration that is no
+;; obligation, a prefix of the name refused above (its obligations were never stated), or
+;; nothing of the load, where a requirement's fulfills belongs to an implementation. One
+;; message for the three ("give the loader the directory") sends an author whose fn was
+;; refused above to restructure the root
 (fn fulfills_misnamed ((l Load) (f Fx) (sc Scope) (s SExpr)) Load
   (match s
     ((SList (Cons _ (Cons (SSym x) (Cons _ Nil))))
@@ -950,7 +946,7 @@
            (ld_rec l
              (RLoadErr (fx_file f) (quote fulfills_not_obligation)
                (append (show_name k)
-                 " is a declaration, not an obligation: a measured fn's obligations are its PARAM NAME.dec_N obligation records; a requirement's fulfills belongs to an implementation — give the loader the directory (§6.6)"))))
+                 " is a declaration, not an obligation: a measured fn's obligations are its PARAM NAME.dec_N obligation records; a requirement's fulfills belongs to an implementation — give the loader the directory"))))
           (_
             (let ((q (qualify sc n)))
               (match (refused_parent (Load.recs l) q)
@@ -965,7 +961,7 @@
                   (ld_rec l
                     (RLoadErr (fx_file f) (quote fulfills_outside_impl)
                       (append (show_name q)
-                        ": no obligation of that name in this load — a measured fn states its obligations as PARAM NAME.dec_N records above its definition; a requirement's fulfills belongs to an implementation — give the loader the directory (§6.6)")))))))))))
+                        ": no obligation of that name in this load — a measured fn states its obligations as PARAM NAME.dec_N records above its definition; a requirement's fulfills belongs to an implementation — give the loader the directory")))))))))))
     (_ (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) "(fulfills NAME PROOF)")))))
 ;; the nearest prefix of k that a REFUSE record of the load names
 (fn refused_parent ((rs (List Rec)) (k Name)) (Option Name)
@@ -981,6 +977,11 @@
     ((Cons (RRefuse n _) r) (if (name_eq n k) True (refused_named r k)))
     ((Cons (RClassify n _ _) r) (if (name_eq n k) True (refused_named r k)))
     ((Cons _ r) (refused_named r k))))
+;; one declared form: read, admit, check the policy, record. A view holds
+;; L forms and parameters, never E bodies; a parameter belongs in a view. `fn`
+;; and `extern` are read by the classifier; `type` and `sig` gain their E
+;; twins beside K's — a `type` over E's built-in types alone is E only
+;; (type_is_e_only). K checks any L form in any file.
 (fn load_decl ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (let ((sc (fx_scope l f)) (h (form_head s)))
     (load_decl_go
@@ -1026,9 +1027,9 @@
             (ld_rec l
               (RClassify (form_name sc s) (quote name_taken)
                 (append (show_name (form_name sc s))
-                  " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have (§7.5) — declare another name")))
+                  " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have — declare another name")))
             f)
-        (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half (slice 4.2 landing 0)
+        (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half
         (match
           (rd_plain l sc (fx_file f) Anon
             (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
@@ -1046,9 +1047,9 @@
                (Pair (ld_rec l (RLoadErr (fx_file f) (quote bad_directive) "an unhandled reading"))
                  f)))))))))))))))))
 ;; a name the E table holds a program for — a fn, an extern — while K holds no constant of it:
-;; a fn with no L meaning (§8.4 rule 1). The other direction is name_taken's: a fn or an extern
-;; may not take an admitted constant's name. Until 2026-11-12 a `def` after such a fn took its
-;; name, and a typed fn citing it was defined against the def and ran the fn (pin def_takes_fn)
+;; a fn with no L meaning. The other direction is name_taken's: a fn or an extern may not take
+;; an admitted constant's name. Were a `def` after such a fn to take its name, a typed fn
+;; citing it would be defined against the def and run the fn (pin def_takes_fn)
 (fn program_named ((l Load) (n Name)) Bool
   (if (env_has (Load.env l) n) False
   (match (es_find_decl (Load.etab l) n)
@@ -1056,7 +1057,7 @@
     ((Some (EExtern _ _ _ _)) True)
     (_ False))))
 
-;; ---- a derivation (§8.4 slice 3.19; derive.shard) -----------------------------------------------
+;; ---- a derivation (derive.shard) -----------------------------------------------------------
 ;; the forms a capability generated are loaded as the file's own at this point — the one front
 ;; end, their ordinary records — and the procedure is registered once K has its definition:
 ;; the table's entry and the DERIVE record. A generated function that was not defined (its own
@@ -1091,11 +1092,11 @@
     ((Some (DefnInfo _ _ _ _ _)) True)
     ((Some _) by)
     (None False)))
-;; a generated form's head is registered as the file's own heads were before its first body
-;; (§6.7), so an E-first body finds the function too
+;; a generated form's head is registered as the file's own heads were before its first body,
+;; so an E-first body finds the function too
 ;; False: a form's name is taken — a constant of the file's already bears it, which is never
-;; the derivation's (the second reader's probe: a hand-written `T.compare` was registered as the
-;; structural ordering) — or its head could not be registered
+;; the derivation's (else a hand-written `T.compare` is registered as the structural
+;; ordering) — or its head could not be registered
 (fn load_derived_forms ((l Load) (f Fx) (forms (List SExpr))) (Pair (Pair Load Fx) Bool)
   (measure (struct forms))
   (match forms
@@ -1116,7 +1117,7 @@
             (match (load_decl (ld_with_e l es) f s)
               ((Pair l1 f1) (load_derived_forms l1 f1 r))))))))))
 
-;; ---- a descent obligation discharged (§8.4 slice 3.16 rule 8; GPT-6 R65, R69) ---------------
+;; ---- a descent obligation discharged -------------------------------------------------------
 ;; (fulfills f.dec_N PROOF) after the function, outside a view: PROOF elaborated against the
 ;; obligation's statement and checked by K as the theorem f.dec_N.proof. Its axiom closure —
 ;; every discharged obligation in it already replaced by what *its* proof rests on — is the
@@ -1249,12 +1250,11 @@
   (match pm
     (Nil Nil)
     ((Cons (Pair n roots) r) (Cons (Pair n (names_without roots g)) (pm_without r g)))))
-;; an axiom the file trusts is a declared parameter (§8.6 slice 4.2 landing 2; the release gate's
-;; policy, slice 4.0 rule 3): recorded PARAM NAME axiom — the manifest's `param` line, every theorem
-;; resting on it verified conditional on a named parameter, its discharge an obligation's — and not
-;; entered in the load's parameters, so the policy stays per file (pin policy_cross: a file that
-;; rests on it trusts it). An axiom the file does not trust takes the ordinary path and is refused
-;; by the policy (pin policy_axiom).
+;; an axiom the file trusts is a declared parameter: recorded PARAM NAME axiom — the manifest's
+;; `param` line, every theorem resting on it verified conditional on a named parameter, its
+;; discharge an obligation's — and not entered in the load's parameters, so the policy stays
+;; per file (pin policy_cross: a file that rests on it trusts it). An axiom the file does not
+;; trust takes the ordinary path and is refused by the policy (pin policy_axiom).
 (fn admit_read ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load Fx)
   (match ds
     ((Cons (AxiomDecl cv u) Nil)
@@ -1301,7 +1301,7 @@
             recs)
           (Some recs)))))))
 ;; a native inductive just admitted gets its constructor-structure bundle (define.shard's
-;; confusion_bundle, slice 3.15): casesOn, and with Init's Eq in scope noConfusionType,
+;; confusion_bundle): casesOn, and with Init's Eq in scope noConfusionType,
 ;; noConfusion and the c.inj theorems — ACCEPT records of their own, checked by K
 (fn bundle_after ((l Load) (f Fx) (ds (List Declaration))) (Pair Load Fx)
   (match (inducts_in ds)
@@ -1319,7 +1319,7 @@
     (Nil Nil)
     ((Cons (InductDecl _ _ (Cons (InductiveType n _ _) Nil) _) r) (Cons n (inducts_in r)))
     ((Cons _ r) (inducts_in r))))
-;; a realization (§7.5): the E body under an admitted constant's identity; its equations admitted
+;; a realization: the E body under an admitted constant's identity; its equations admitted
 ;; as theorems through the same path as any declaration — one refused, nothing attached
 (fn load_realize ((l0 Load) (f Fx) (s SExpr)) Load
   (let ((l (scan_form l0 f s)) (sc (fx_scope l0 f)))
@@ -1364,7 +1364,7 @@
             recs)
           env1))))))
 ;; the lambdas a realize body lifted and the instances it demands are built before its program
-;; is added (as a fn's, §8.4 slice 3.28 rule 3); a demand refused leaves the realization unrecorded
+;; is added (as a fn's); a demand refused leaves the realization unrecorded
 (fn load_realized
   ((l Load)
    (f Fx)
@@ -1395,7 +1395,7 @@
                           d))
                       (RRealize k (realize_kind s) (decls_declare env1 thms) roots))))
                  (if pending (ld_rec l2 (RPending k (quote measure))) l2)))))))))))
-;; a realize template (rule 6): the body checked once at placeholder shapes, its equations
+;; a realize template: the body checked once at placeholder shapes, its equations
 ;; admitted, the template registered with its binders' roles; no program, no REALIZE: TEMPLATE
 (fn load_realize_template ((l Load) (f Fx) (tm Template) (thms (List Declaration)) (pending Bool))
   Load
@@ -1408,7 +1408,7 @@
           ((AtOk l1 env1)
            (match (register_template l1 (Fx.module f) (fx_scope l f) tm (decls_declare env1 thms))
              ((Pair l2 ok) (if (bool_and ok pending) (ld_rec l2 (RPending k (quote measure))) l2)))))))))
-;; the pending obligations a realization carries (§7.5; GPT-6 R58, slice 10): its own measure when
+;; the pending obligations a realization carries: its own measure when
 ;; it is not structural, and every root a callee's realization already carries — an obligation is
 ;; recorded once, at its constant (PENDING), and every realization that reaches it names it
 ;; (REALIZE … pending=), so a retained candidate is never mistaken for a completed realization
@@ -1430,7 +1430,7 @@
      (roots_of pm r
        (match (pm_find pm c)
          ((Some rs) (names_union acc rs))
-         (None acc))))))  ; axioms.shard's union
+         (None acc))))))  ; k/axioms.shard's union
 (fn pm_find ((pm (List (Pair Name (List Name)))) (n Name)) (Option (List Name))
   (measure (struct pm))
   (match pm
@@ -1457,7 +1457,7 @@
     ((SList (Cons _ (Cons _ (Cons (SList (Cons (SSym v) Nil)) Nil))))
      (if (sym_eq v (quote view)) (quote view) (quote supplied)))
     (_ (quote supplied))))
-;; ---- declarations built as data (§8.6 slice 4.6 rule 2; law §9.3; GPT-6 R61) -----------------
+;; ---- declarations built as data ------------------------------------------------------------
 ;; A client that holds a load hands K a declaration it built as data — no source, no reader, no
 ;; elaborator. `load_data` admits it through the raw entry (`check`) as a file's own are
 ;; admitted: into a module `m` the load holds, under the standard policy — no trust clause —
@@ -1468,7 +1468,7 @@
 ;; constant behind it (`name_taken`, both). A quotient and a mutual block are no declaration of
 ;; a module (`data_kind`). Nothing is generated beside it: an inductive's auxiliaries are the
 ;; reader's, not K's. `load_data_view` then gives an admitted definition its program by the
-;; derived view (§7.1), as a file's `(realize NAME (view))` does — REALIZE, or the classifier's
+;; derived view, as a file's `(realize NAME (view))` does — REALIZE, or the classifier's
 ;; refusal. What the declaration cites is in the load's environment or K refuses it
 ;; (`unknown_constant`): no demand is made of Init on its behalf.
 (fn fx_plain ((m Name) (init Int) (taken (List (List Int)))) Fx
@@ -1512,7 +1512,7 @@
                (ld_rec l
                  (RClassify n (quote name_taken)
                    (append (show_name n)
-                     " is a fn or an extern of the program with no constant of K behind it (§7.5)"))))
+                     " is a fn or an extern of the program with no constant of K behind it: declare another name"))))
               (None
                 (match (admit_core l (fx_data l m) (list d))
                   ((Pair l1 _) l1)))))))))))
@@ -1567,7 +1567,7 @@
           (ld_rec l
             (RClassify k (quote realize_signature)
               (append (show_name k) ": a template has no derived view"))))))))
-;; the parts of slice 4.5's key for a declaration of the module m, read after the load (a
+;; the parts of the requirement's key for a declaration of the module m, read after the load (a
 ;; session's key for an entry): the scope by the declaration table, the policy's part without a
 ;; trust clause, the environment's under the module's Init horizon
 (fn data_ctx ((l Load) (m Name)) ReqCtx (req_ctx l (fx_data l m)))
@@ -1579,10 +1579,10 @@
     ((Str p _) (if (name_eq p m) True (name_within m p)))
     ((Num p _) (if (name_eq p m) True (name_within m p)))))
 ;; an E declaration. An extern or an E-only type is classified and RUNNABLE. A `fn` is read
-;; once as a pre-definition (predef.shard; §8.4 slice 3.16): its program is the erasure, its
+;; once as a pre-definition (predef.shard): its program is the erasure, its
 ;; definition K's projection — DEFINE with its equations, RUNNABLE `route=typed` with the
 ;; obstacle named when K's half cannot be reached, or refused. A `fn` whose signature has no L
-;; reading never enters the route: the classifier's program, `route=e_first` (rule 6)
+;; reading never enters the route: the classifier's program, `route=e_first`
 (fn load_e_form ((l Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (let ((sc (fx_scope l f)) (l1 (scan_form l f s)))
     (if (name_taken l1 f (form_name sc s))
@@ -1590,7 +1590,7 @@
         (ld_rec l1
           (RClassify (form_name sc s) (quote name_taken)
             (append (show_name (form_name sc s))
-              " is an admitted constant: realize it, or declare another name (§7.5)")))
+              " is an admitted constant: realize it, or declare another name")))
         f)
     (if (sym_eq (form_head s) (quote fn))
       (match (load_fn l1 f s 2)
@@ -1601,10 +1601,10 @@
            (settle_groups l2 f2 (+ 1 (len (Load.parked l2)))))))
       (load_extern l1 f s)))))
 ;; an extern: its L constant first — an opaque of the declared type with the type's default
-;; witness (reader.shard read_extern; §8.6 slice 4.3 landing 1 rule 3), an ACCEPT — then the
-;; classifier's EExtern, RUNNABLE, as before. A file without Init has no L reading by
-;; construction: E only. The L reading refused — a binder's type unknown to L, no witness —
-;; keeps the extern E-only with the obstacle on its record, its callers E-first as before
+;; witness (reader.shard read_extern), an ACCEPT — then the classifier's EExtern, RUNNABLE. A
+;; file without Init has no L reading by construction: E only. The L reading refused — a
+;; binder's type unknown to L, no witness — keeps the extern E-only with the obstacle on its
+;; record, its callers E-first
 (fn load_extern ((l1 Load) (f Fx) (s SExpr)) (Pair Load Fx)
   (if (bool_not (init_seen (fx_scope l1 f))) (load_e_first l1 f s (quote none) (quote none))
   (match (read_extern (fx_scope l1 f) (Load.env l1) (form_args s))
@@ -1627,7 +1627,7 @@
        (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d))
          (RRun (form_head s) (edecl_name d) why route))
        f))
-    ((COkT d eds)  ; the instances the body takes (rule 3, landing 3) built first — programs, no L half
+    ((COkT d eds)  ; the instances the body takes built first — programs, no L half
      (match (build_e_demands l1 f (edecl_name d) eds)
        ((Pair l2 None) (Pair l2 f))
        ((Pair l2 (Some f2))
@@ -1636,7 +1636,7 @@
             (RRun (form_head s) (edecl_name d) why route))
           f2))))))
 ;; the classifier's program for a fn whose signature did elaborate: a later body may still bind
-;; it as a callee-local and stay on the typed route (rule 6)
+;; it as a callee-local and stay on the typed route
 (fn load_e_sig ((l1 Load) (f Fx) (s SExpr) (why Symbol)) (Pair Load Fx)
   (match (load_e_first l1 f s why (quote e_first))
     ((Pair l2 f2)
@@ -1644,10 +1644,10 @@
        (if (ld_last_runnable l2) (ld_add_typed l2 (form_name (fx_scope l1 f) s) (fx_scope l1 f) s)
        l2)
        f2))))
-;; the same after an obstacle on the typed route (rule 6; `no_l_reading`). When the classifier
+;; the same after an obstacle on the typed route (`no_l_reading`). When the classifier
 ;; refuses the body too, its refusal carries the obstacle: the body was read E-first only
 ;; because of it, and the classifier's own reason may be a consequence (a row's constructor,
-;; which no E-first body cites — slice 3.18 rule 1 — behind a callee with no realization)
+;; which no E-first body cites, behind a callee with no realization)
 (fn load_e_after ((l1 Load) (f Fx) (s SExpr) (r Symbol) (m (List Int))) (Pair Load Fx)
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
     ((CErr e m2)
@@ -1663,10 +1663,10 @@
        f))
     ((COk _) (load_e_sig l1 f s (quote no_l_identity)))
     ((COkT _ _) (load_e_sig l1 f s (quote no_l_identity)))))
-;; a signature with no L reading: the classifier's program alone (rule 6). When the classifier
+;; a signature with no L reading: the classifier's program alone. When the classifier
 ;; refuses the form too, its refusal carries what the signature's reading met — a result type
 ;; the elaborator could not read is `unknown_type` to the classifier, which names the symbol
-;; and not the cause (slice 3.19)
+;; and not the cause
 (fn load_e_skipped ((l1 Load) (f Fx) (s SExpr) (r Symbol) (m (List Int))) (Pair Load Fx)
   (match (classify_form (Load.etab l1) (fx_scope l1 f) (Load.env l1) s)
     ((CErr e m2)
@@ -1685,8 +1685,8 @@
   (match (ld_recs_head l)
     ((Some (RRun _ _ _ _)) True)
     (_ False)))
-;; a `def` with a recursion clause — `(def NAME ((x TYPE)…) TYPE (measure (struct x)) BODY)` — is
-;; the fn pipeline's K half alone (§8.4 slice 4.2 landing 0): read once as a pre-definition with
+;; a `def` with a recursion clause — `(def NAME ((x TYPE)…) TYPE (measure (struct x)) BODY)` —
+;; is the fn pipeline's K half alone: read once as a pre-definition with
 ;; its self-local, defined by K's projection with its equations — structural recursion by brecOn,
 ;; a measure by WellFounded.fix with its obligations —, its matchers and the auxiliaries a native
 ;; inductive needs admitted as a fn's are; no classifier, no program, no callee-locals: an L
@@ -1744,13 +1744,13 @@
                (mix_recs (mix_recs f recs) recs2))))))))))
 ;; one attempt at a fn. A callee that is not loaded yet or is itself parked (the elaborator's
 ;; unknown_constant on a function head of the E table without a declaration) parks the fn — no
-;; record yet; it is retried after every later fn and settled at the file's end (slice 3.15's
-;; retry, rule 6). The auxiliaries a native inductive needs (its below and brecOn; ACCEPT
-;; records) are admitted first and the fn read again, at most twice
+;; record yet; it is retried after every later fn and settled at the file's end. The
+;; auxiliaries a native inductive needs (its below and brecOn; ACCEPT records) are admitted
+;; first and the fn read again, at most twice
 (fn load_fn ((l1 Load) (f Fx) (s SExpr) (fuel Int)) (Pair Load Fx)
   (load_fn_with l1 f s fuel Nil 16))
 ;; `callees`: the RUNNABLE callees bound as locals so far — the body is read again with one
-;; more each time the elaborator names one (never by the classifier: rule 6)
+;; more each time the elaborator names one (never by the classifier)
 (fn load_fn_with ((l1 Load) (f Fx) (s SExpr) (fuel Int) (callees (List Callee)) (cfuel Int))
   (Pair Load Fx)
   (measure cfuel)
@@ -1783,7 +1783,7 @@
           (if (no_l_reading r) (load_e_after l1 f s r m) (Pair (ld_rec l1 (RClassify k r m)) f)))
          ((PdEraseTemplate es1 binds rt) (load_template l1 f s pd es1 binds rt fuel callees cfuel))
          ((PdEraseOk es1 d lifted demands)
-          ;; the lambdas the body lifted and the instances it demands first (§8.4 slice 3.28 rule 3):
+          ;; the lambdas the body lifted and the instances it demands first:
           ;; their definitions in K, their programs in the table — the body's program calls them
           (match (admit_lifted (ld_with_e l1 es1) f lifted)
             ((Pair l1a None) (Pair l1a f))
@@ -1812,7 +1812,7 @@
                    (match (admit_matchers (ld_with_e l1b (es_add_decl es2 d)) f1b s (pd_aux pd))
                      ((Pair l2 (Some f2)) (load_defined l2 f2 d obls dd eqs wf))
                      ((Pair l2 None) (Pair l2 f1b)))))))))))))))
-;; a template (§8.4 slice 3.28 rule 1): defined in K as any fn — the definition, its equations
+;; a template: defined in K as any fn — the definition, its equations
 ;; — and kept with its binders' roles for the instances later bodies demand; no program of its
 ;; own, so no RUNNABLE and no DEFINE: TEMPLATE. One that K cannot define has no L half to
 ;; instantiate from and is refused with the obstacle
@@ -1838,7 +1838,7 @@
              (ld_rec l1
                (RClassify k why
                  (append m
-                   " — a template (a fn with a function-typed binder) needs its definition in K, which its instances unfold to (§8.4 slice 3.28 rule 1)")))
+                   " — a template (a fn with a function-typed binder) needs its definition in K, which its instances unfold to")))
              f))
           ((DfErr e m) (Pair (ld_rec l1 (RClassify k e m)) f))
           ((DfAux es2 auxs)
@@ -1868,7 +1868,7 @@
                             (Pair (if (bool_and ok wf) (ld_rec l6 (RPending k (quote measure))) l6)
                               (mix_recs (mix_recs f3 recs) recs2)))))))))))))))))))
 ;; a template registered in the E table with its written binders' E signatures (template.shard's
-;; tm_ebinds) — for the instances an E-first body takes (landing 3) — and recorded TEMPLATE; one
+;; tm_ebinds) — for the instances an E-first body takes — and recorded TEMPLATE; one
 ;; whose static parameter's E signature cannot be read is refused (binder_role read the same type)
 (fn register_template ((l Load) (m Name) (sc Scope) (tm Template) (eqs (List Name)))
   (Pair Load Bool)
@@ -1891,7 +1891,7 @@
              tm)
            (RTemplate k (template_statics tm) eqs))
          True)))))
-;; the lambdas a body lifted (rule 3(c)): each generated fn's definition admitted — once; a
+;; the lambdas a body lifted: each generated fn's definition admitted — once; a
 ;; body read again regenerates the same — and its program added, DEFINE with no equation
 (fn admit_lifted ((l Load) (f Fx) (ls (List Lifted))) (Pair Load (Option Fx))
   (measure (struct ls))
@@ -1909,11 +1909,11 @@
             (RDefine n Nil Nil))
           (mix_recs f recs)
           r)))))))
-;; the instances a body demands (rule 3): each built from its template (template.shard) — its
+;; the instances a body demands: each built from its template (template.shard) — its
 ;; definition and its equations admitted, its program added, INSTANCE recorded —, then the
 ;; lambdas and instances its own body lifted and demanded, to a fixpoint. One already built
 ;; is reused when the demand's arguments are the same, refused when they differ — under the
-;; taker's name, the body that demanded it; a template at its budget refuses the next (rule 4)
+;; taker's name, the body that demanded it; a template at its budget refuses the next
 (fn build_demands ((l Load) (f Fx) (taker Name) (ds (List Demand)) (fuel Int))
   (Pair Load (Option Fx))
   (measure fuel)
@@ -1972,8 +1972,8 @@
 (fn instance_clash ((taker Name) (name Name)) Rec
   (RClassify taker (quote instance_clash)
     (append (show_name name)
-      " is built at other arguments — a static argument's type arguments or captured types differ under the same shapes (§8.4 slice 3.28 rule 3)")))
-;; rule 4's budget at a demand: the load with the refusal recorded when the template is at it
+      " is built at other arguments — a static argument's type arguments or captured types differ under the same shapes")))
+;; the instance budget at a demand: the load with the refusal recorded when the template is at it
 (fn over_budget ((l Load) (taker Name) (c Name)) (Option Load)
   (if (<= (Load.budget l) (instances_of c (Load.instances l)))
     (Some
@@ -1982,9 +1982,9 @@
           (append (show_name c)
             (append ": "
               (append (show_nat (Load.budget l))
-                " instances in this load already — the budget is a refusal, never a proof of anything (§8.4 slice 3.28 rule 4; law §4.3); take fewer shapes, or raise it with --instance-budget"))))))
+                " instances in this load already — the budget is a refusal, never a proof of anything; take fewer shapes, or raise it with --instance-budget"))))))
     None))
-;; the instances an E-first body takes (rule 3's last sentence, landing 3): each a program alone —
+;; the instances an E-first body takes: each a program alone —
 ;; no definition, no equations — built from its template at the demand's E types; one already
 ;; built under the name is reused when the arguments agree (as the typed route's), the budget
 ;; holds, and what the template's body lifts or demands is built as any
@@ -2049,10 +2049,9 @@
   (match ss
     (Nil Nil)
     ((Cons s r) (Cons (shape_record s) (shape_records r)))))
-;; the body's heads that have no L reading — a symbol (slice 3.18 rule 5), a string in the
-;; toolchain's own sources (rule 3), a literal
-;; under a constructor pattern, a toolchain spelling: the function falls to the E-first route
-;; whole, flagged (slice 3.16 rule 6; slice 3.17 rules 1 to 3)
+;; the body's heads that have no L reading — a symbol, a string in the toolchain's own
+;; sources, a literal under a constructor pattern, a toolchain spelling: the function falls to
+;; the E-first route whole, flagged
 (fn no_l_reading ((r Symbol)) Bool
   (bool_or (sym_eq r (quote no_l_identity))
     (bool_or (sym_eq r (quote literal_pattern))
@@ -2086,7 +2085,7 @@
   (match xs
     (Nil None)
     ((Cons (Pair n v) r) (if (name_eq n id) (Some v) (assoc_typed id r)))))
-;; the matchers a body generated, admitted before their owner (ACCEPT records; rule 1)
+;; the matchers a body generated, admitted before their owner (ACCEPT records)
 (fn admit_matchers ((l Load) (f Fx) (s SExpr) (ds (List Declaration))) (Pair Load (Option Fx))
   (match ds
     (Nil (Pair l (Some f)))
@@ -2138,12 +2137,12 @@
             (match (load_e_first (ld_with_parked l1 Nil) f s why (quote e_first))
               ((Pair l2 _) (flush_each l2 f r))))))))))
 ;; ---- a group of functions that call each other, settled when its last member is read ------
-;; (§8.7 slice 5.2 rule 3.) After every fn the parked are looked at once more: a parked fn whose
+;; After every fn the parked are looked at once more: a parked fn whose
 ;; wait leads round to itself is read with the parked as callee-locals, and so is every parked
 ;; fn it reaches; when all of them read, and none calls a fn outside them that has no
 ;; definition, the set is closed. Its lowest cycle is then one definition by well-founded
 ;; recursion (define.shard define_group) — DEFINE for each member — or, where the group does
-;; not compile (rule 4), RUNNABLE for each with the reason. The retry settles their callers.
+;; not compile, RUNNABLE for each with the reason. The retry settles their callers.
 
 ;; a parked fn as the settlement reads it: its name, its form, the parked callees its body binds
 (type Probe (Probe Name SExpr (List Callee)))
@@ -2404,7 +2403,7 @@
     ((Cons pd Nil) (pd_aux pd))
     ((Cons _ r) (group_aux r))))
 ;; every member carries every member's measure until its obligations are discharged: the
-;; fixpoint is one, and each member's closure holds it (slice 5.2 rule 2)
+;; fixpoint is one, and each member's closure holds it
 (fn group_roots ((l Load) (ks (List Name)) (all (List Name))) Load
   (measure (struct ks))
   (match ks
@@ -2448,7 +2447,7 @@
                dr
                r)))))
        (Nil (Pair l f))))))
-;; the group does not compile (rule 4): each member its program, RUNNABLE with the reason, a
+;; the group does not compile: each member its program, RUNNABLE with the reason, a
 ;; callee-local of later bodies as any typed fn without a definition
 (fn group_runnable ((l Load) (sc Scope) (g (List Probe)) (ds (List EDecl)) (why Symbol)) Load
   (measure (struct g))
@@ -2492,8 +2491,8 @@
   (match (ld_recs_head l)
     ((Some (RAccept _ _ _ _ _ _ _)) True)
     (_ False)))
-;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters of the
-;; fourth class, the definition admitted and checked against the policy, then its equations
+;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters,
+;; the definition admitted and checked against the policy, then its equations
 ;; the same way, the program (the erasure, already in the E table) its realization; DEFINE
 ;; recorded, PENDING for a measure
 (fn load_defined
@@ -2521,8 +2520,8 @@
                       (RDefine k (decls_declare (Load.env l2) thms) roots))))
                  (Pair (if wf (ld_rec l3 (RPending k (quote measure))) l3)
                    (mix_recs (mix_recs f recs) recs2))))))))))))
-;; a measured fn's decreasing facts: each an axiom-kind constant, a parameter of the fourth
-;; policy class (§8.4 slice 3.14 rule 2; §9) — PARAM NAME obligation
+;; a measured fn's decreasing facts: each an axiom-kind constant, a parameter of the
+;; load — PARAM NAME obligation
 (fn admit_obligations ((l Load) (f Fx) (obls (List Declaration))) (Pair Load Fx)
   (measure (struct obls))
   (match obls
@@ -2530,9 +2529,9 @@
     ((Cons d r)
      (match (admit_param l f d (quote obligation) 0)
        ((Pair l1 f1) (admit_obligations l1 f1 r))))))
-;; a fn or extern may not take an admitted constant's identity (§7.5): only a realize attaches
+;; a fn or extern may not take an admitted constant's identity: only a realize attaches
 ;; an E body under one, and the equations are its warrant
-;; a name a declaration of the file may not take (slice 3.26 rule 5): an Init constant's the
+;; a name a declaration of the file may not take: an Init constant's the
 ;; name table holds under the file's identity (Fx.taken), or one the environment holds
 (fn name_taken ((l Load) (f Fx) (n Name)) Bool
   (if (env_has (Load.env l) n) True (taken_has (Fx.taken f) (show_name n))))
@@ -2545,13 +2544,13 @@
   (match ts
     (Nil False)
     ((Cons t r) (if (int_list_eq t s) True (taken_has r s)))))
-;; an S form's citations of the environment's E-eligible inductives enter the E table first (§7.5)
+;; an S form's citations of the environment's E-eligible inductives enter the E table first
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
   (if (< (Fx.init f) 0) l (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s))))  ; an optimization: Init's inductives are citable only where Init is visible
-;; a `type` enters K when its field types are L types (§4); it is E only when a field cites a
-;; built-in E type with no L constant in scope — Int or Nat without Init, Symbol until its String
-;; identity (phase 3) — or another E-only type, transitively (§8.1 rule 1; §13 item 35). Never
-;; the directory and never the file's imports: K checks any L form in any file.
+;; a `type` enters K when its field types are L types; it is E only when a field cites a
+;; built-in E type with no L constant in scope — Int or Nat without Init, Symbol — or another
+;; E-only type, transitively. Never the directory and never the file's imports: K checks any
+;; L form in any file.
 (fn type_is_e_only ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) Bool
   (match s
     ((SList (Cons _ (Cons hd ctors))) (ctors_e_only es sc env (type_name sc s) ctors))
@@ -2582,8 +2581,8 @@
     ((SList (Cons (SSym x) args))
      (if (head_e_only es sc env self x) True (fields_e_only es sc env self args)))
     (_ False)))
-;; a field type's head: Symbol has no L constant at Stage 0; Int and Nat have one iff Init is in
-;; scope; a type of the E table is E-only iff K does not hold it — the type being declared excepted
+;; a field type's head: Symbol has no L constant; Int and Nat have one iff Init is in scope; a
+;; type of the E table is E-only iff K does not hold it — the type being declared excepted
 (fn head_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (x Symbol)) Bool
   (match (name_of_sym x)
     (None False)
@@ -2600,7 +2599,7 @@
             (None True)
             (_ False))))
          (_ False)))))))
-;; the E twin of an admitted type / sig fn / sig type (§4's table: K and E)
+;; the E twin of an admitted type / sig fn / sig type
 (fn add_e_twin ((l Load) (f Fx) (s SExpr)) Load
   (let ((h (form_head s)))
     (if (bool_or (sym_eq h (quote type)) (sym_eq h (quote sig)))
@@ -2615,9 +2614,9 @@
       ((CErr e m) (ld_rec l (RLoadErr (fx_file f) e m)))
       ((COk d) (ld_with_e l (es_add_decl (Load.etab l) d)))
       ((COkT _ _) (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) "a twin takes no instance"))))))
-;; a view's `sig fn` whose signature names an E-only type (§8.1 rule 1: K holds no constant
+;; a view's `sig fn` whose signature names an E-only type (K holds no constant
 ;; for it) is an E parameter only — the head `run` links to the implementation's fn, no
-;; axiom in K (a fn has no L meaning at Stage 0, §0); the K seal's view is such a view
+;; axiom in K; the K seal's view is such a view
 ;; (`Expr`, `Name`, `Declaration` are E-only data). Recorded as PARAM NAME fn like any.
 (fn sig_e_only ((l0 Load) (f Fx) (s SExpr) (e Symbol) (m (List Int))) (Pair Load Fx)
   (let ((l (scan_form l0 f s)))
@@ -2629,7 +2628,7 @@
       ((COk _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((COkT _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((CErr _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f)))))
-;; a view parameter: an axiom-kind constant to K, the third class to the policy
+;; a view parameter: an axiom-kind constant to K, a parameter of the load to the policy
 (fn admit_param ((l Load) (f Fx) (d Declaration) (kind Symbol) (arity Int)) (Pair Load Fx)
   (let ((n (decl_name d)))
     (match (check (Load.env l) (st_init) d)
@@ -2647,7 +2646,7 @@
       ((Rejected reason subject) (Pair (ld_rec l (RRefuse subject (reason_of reason))) f))
       ((Exhausted res site) (Pair (ld_rec l (RRefuse n (exhausted_sym res site))) f)))))
 
-;; ---- the Init load on demand (§3.1; §8.4 slice 3.26) --------------------------------------
+;; ---- the Init load on demand ---------------------------------------------------------------
 ;; The export and its index are opened at the first need from the paths the driver gave
 ;; (initload.shard od_open: the meta line against the pin, the index's header, the export's
 ;; size the header's). The base holds Init alone — its environment never a native
@@ -2671,8 +2670,8 @@
           w1))))))
 ;; a reading error as the file's record; `unknown_constant` on a name the name table places at
 ;; or above the module's horizon (one of the file's tokens, resolved at init_prepare: Fx.above)
-;; is `above_horizon` with the ordinal, the horizon and the import to write (slice 3.27 rule
-;; 5). The elaborator shows the name as written, alone or inside a tactic step's message
+;; is `above_horizon` with the ordinal, the horizon and the import to write. The
+;; elaborator shows the name as written, alone or inside a tactic step's message
 ;; (`step 1: NAME — the goal: …`): the entry matched is a token of the message, itself or
 ;; under a prefix an opened namespace supplies
 (fn horizon_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
@@ -2773,12 +2772,11 @@
      (if (bool_or (env_has env n) (mem_name n own)) (all_unknown env own r)
      (Cons n (all_unknown env own r))))))
 ;; Lean's spellings the elaborator does not know, each refused with its pointer whatever the
-;; horizon (slice 3.27 landing 4; docs/LEAN.md lists the rows). The name is the first token of
-;; the elaborator's `unknown_constant` message. A name ending in `!` reads a default from an
-;; Inhabited instance — get!-style sugar, refused by law §5.3 departure 4: inhabited_default
-;; with the Option form and the supplied-default form; `==`, `&&`, `||` are lexed as symbols
-;; and are no operators (law §5.3 (3)); `by` inside a term is no term (slice 3.20 rule 12):
-;; lean_symbol with the spelling
+;; horizon (docs/LEAN.md "Refused, and what to write instead" lists the rows). The name is the
+;; first token of the elaborator's `unknown_constant` message. A name ending in `!` reads a
+;; default from an Inhabited instance — get!-style sugar: inhabited_default with the Option
+;; form and the supplied-default form; `==`, `&&`, `||` are lexed as symbols and are no
+;; operators; `by` inside a term is no term: lean_symbol with the spelling
 (fn lean_pointer ((m (List Int))) (Option (Pair Symbol (List Int)))
   (match (msg_tokens m Nil Nil)
     (Nil None)
@@ -2793,8 +2791,7 @@
          (Some
            (Pair (quote inhabited_default)
              (append t
-               (append
-                 " reads a default from an Inhabited instance (law §5.3 departure 4): write the Option form "
+               (append " reads a default from an Inhabited instance: write the Option form "
                  (append base
                    (append "? where the export declares it (List's is List.get?Internal), or "
                      (append base "D with a supplied default"))))))))
@@ -2807,7 +2804,7 @@
              33))
          (Some
            (Pair (quote lean_symbol)
-             (append t " is Lean's spelling: write (not a) at a Bool operand — Bool.not (§5.1)")))
+             (append t " is Lean's spelling: write (not a) at a Bool operand — Bool.not")))
          (match (lean_symbol_pointer t)
            ((Some p)
             (Some (Pair (quote lean_symbol) (append t (append " is Lean's spelling: write " p)))))
@@ -2822,22 +2819,22 @@
                            (append t ", or open the namespace with (use Init.Bool)")))))))
                None))))))))
 (fn lean_symbol_pointer ((t (List Int))) (Option (List Int))
-  (if (int_list_eq t "==") (Some "(BEq.beq a b) at Nat or Int, or the proposition (= a b) (§5.1)")
-  (if (int_list_eq t "&&") (Some "(and a b) at Bool operands — Bool.and (§5.1)")
-  (if (int_list_eq t "||") (Some "(or a b) at Bool operands — Bool.or (§5.1)")
+  (if (int_list_eq t "==") (Some "(BEq.beq a b) at Nat or Int, or the proposition (= a b)")
+  (if (int_list_eq t "&&") (Some "(and a b) at Bool operands — Bool.and")
+  (if (int_list_eq t "||") (Some "(or a b) at Bool operands — Bool.or")
   (if (int_list_eq t "by")
-    (Some "a named theorem and cite it — by is a theorem's proof, not a term (§8.4 slice 3.20)")
-  (if (int_list_eq t "∀") (Some "(forall ((x T)) P) (§5.1)")
-  (if (int_list_eq t "∃") (Some "(exists ((x T)) P) (§5.1)")
-  (if (int_list_eq t "λ") (Some "(fun ((x T)) e) (§5.1)")
-  (if (int_list_eq t "→") (Some "(-> A B) (§5.1)")
-  (if (int_list_eq t "↔") (Some "(iff P Q) (§5.1)")
-  (if (int_list_eq t "¬") (Some "(not P) (§5.1)")
-  (if (int_list_eq t "∧") (Some "(and P Q) (§5.1)")
-  (if (int_list_eq t "∨") (Some "(or P Q) (§5.1)")
-  (if (int_list_eq t "≤") (Some "(<= a b) (§5.1)")
-  (if (int_list_eq t "≥") (Some "(>= a b) (§5.1)")
-  (if (int_list_eq t "≠") (Some "(!= a b) (§5.1)")
+    (Some "a named theorem and cite it — by is a theorem's proof, not a term")
+  (if (int_list_eq t "∀") (Some "(forall ((x T)) P)")
+  (if (int_list_eq t "∃") (Some "(exists ((x T)) P)")
+  (if (int_list_eq t "λ") (Some "(fun ((x T)) e)")
+  (if (int_list_eq t "→") (Some "(-> A B)")
+  (if (int_list_eq t "↔") (Some "(iff P Q)")
+  (if (int_list_eq t "¬") (Some "(not P)")
+  (if (int_list_eq t "∧") (Some "(and P Q)")
+  (if (int_list_eq t "∨") (Some "(or P Q)")
+  (if (int_list_eq t "≤") (Some "(<= a b)")
+  (if (int_list_eq t "≥") (Some "(>= a b)")
+  (if (int_list_eq t "≠") (Some "(!= a b)")
   (if (int_list_eq t "ℕ") (Some "Nat")
   (if (int_list_eq t "ℤ") (Some "Int")
   (if (int_list_eq t "×") (Some "(Prod A B)")
@@ -2885,7 +2882,7 @@
 (fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) Load
   (ld_rec l (RLoadErr file reason detail)))
 ;; `(import Init NAME)`: NAME's ordinal from the name table, the module's horizon the ordinal
-;; past it (slice 3.21b rule 2); a name the export does not declare is init_name_not_found
+;; past it; a name the export does not declare is init_name_not_found
 (fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load (Option Int)) World)
   (match (init_opened l w)
     ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 "Init" e m) None) w1))
@@ -2903,7 +2900,7 @@
           ((Pair (Pair x1 (Some o)) w2)
            (Pair (Pair (ld_with_init l1 (InitSt x1 done base)) (Some (+ o 1))) w2))))
        (_ (Pair (Pair l1 None) w1))))))
-;; a file prepared after its directives (slice 3.26 rules 3 and 5): the names of Init under
+;; a file prepared after its directives: the names of Init under
 ;; its identity, which none of its declarations may take; then, where it sees Init, its
 ;; demand loaded — every token of its forms under the candidates resolution tries
 ;; (scope_candidates), the gates' kits, an inductive block's names with their satellites —
@@ -3004,7 +3001,7 @@
        ((Pair (Pair x1 False) w1) (init_empty x1 r (Cons (append (show_name p) ".") acc) w1))))))
 ;; the ordinals the table places below the horizon, the names among them of inductive
 ;; blocks (kind i), and the names it places at or above the horizon with their ordinals
-;; (slice 3.27 rule 5: a citation of one is refused above_horizon, the import to write named)
+;; (a citation of one is refused above_horizon, the import to write named)
 (fn init_resolve
   ((x OdIx)
    (ns (List Name))
@@ -3038,7 +3035,7 @@
            (name_append n (n1 (quote brecOn)))
            (name_append n (n1 (quote inj))))
          acc)))))
-;; the names the gates construct (slice 3.26 rule 3): K's own and the pins, the elaborator's,
+;; the names the gates construct: K's own and the pins, the elaborator's,
 ;; the tactics', arith's, the derivations', the definer's — demanded wherever a module sees
 ;; Init, loaded where the table places them below its horizon
 (fn init_kit () (List Name)
@@ -3070,7 +3067,7 @@
       (nm_int_of_nat)
       (nm_int_neg_succ))))
 ;; the demanded records' closure through K (initload.shard od_load): checked into the load's own
-;; environment on a fresh run over it (§8.6 "One environment, one counter": no second
+;; environment on a fresh run over it (one environment, one counter: no second
 ;; environment, nothing transferred); every constant admitted entered in the ordinal table with
 ;; its ordinal. While the load has declared nothing, what it holds is Init alone and becomes the
 ;; base (ld_reroot)
@@ -3126,7 +3123,7 @@
        ((Pair (Pair l1 _) w1) (Pair l1 w1))))))
 
 ;; one file as the module `mp`; a view when `view`. Returns, for a view, the
-;; fork point of §6.6: the loader's state after the view's leading
+;; fork point: the loader's state after the view's leading
 ;; directives, the file's context then, and the forms after them
 (type ForkPt (ForkPt Load Fx (List SExpr)))
 (fn load_file_module ((l Load) (rel (List (List Int))) (mp Name) (view Bool) (fuel Int) (w World))
@@ -3191,7 +3188,7 @@
                                 (above Nil)
                                 (bins Nil))
                               rest)
-                            ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed (found by the threading check, slice 4.3 landing 0)
+                            ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed
                             ((Pair (Some f0) l0)
                              (match
                                (load_forms (ld_with_stack l0 (Cons mp (Load.stack l))) f0 dirs fuel
@@ -3206,7 +3203,7 @@
                                   (init_prepare l1p
                                     (with Fx f1p (ecount (es_count (Load.etab l1p))))
                                     rest
-                                    w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names (slice 3.26)
+                                    w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names
                                   ((Pair (Pair l1 None) w2)
                                    (Pair
                                      (Pair (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
@@ -3277,22 +3274,22 @@
              ((MPOk dm) (Pair dm w1))
              (_ (Pair mp w1))))
           ((Pair False w1) (Pair mp w1))))))))
-;; the realize heads, once the directives made their targets visible (§7.5)
+;; the realize heads, once the directives made their targets visible
 (fn pre_register_late ((l Load) (f Fx) (forms (List SExpr))) (Pair (Option Fx) Load)
   (match (pre_register_realize (Load.etab l) (fx_scope l f) (Load.env l) forms)
     ((PreErr e m) (Pair None (ld_rec l (RLoadErr (fx_file f) e m))))
     ((PreOk es) (Pair (Some f) (ld_with_e l es)))))
-;; the file's E heads registered before any body (§6.7); a duplicate ends the file
+;; the file's E heads registered before any body; a duplicate ends the file
 (fn pre_register_file ((l Load) (f Fx) (forms (List SExpr))) (Pair (Option Fx) Load)
   (match (pre_register (Load.etab l) (fx_scope l f) (Load.env l) forms)
     ((PreErr e m) (Pair None (ld_rec l (RLoadErr (fx_file f) e m))))
     ((PreOk es) (Pair (Some (open_types f (fx_scope l f) forms)) (ld_with_e l es)))))
-;; every `type` of the file opens its constructors for the whole file (§13 item 7, amended at
-;; slice 3.4 and at 3.9): they are pre-registered like the file's heads, so a body cites them
-;; before the declaration as it calls a function declared later. The constructors only — not
-;; every declaration under the type's prefix: a record's accessors (`Load.env`, slice 3.9) are
-;; cited qualified, or opened by `(use M.T)` where a file wants them bare, else every field
-;; name would be refused as a pattern variable of the file (pattern_name)
+;; every `type` of the file opens its constructors for the whole file: they are pre-registered
+;; like the file's heads, so a body cites them before the declaration as it calls a function
+;; declared later. The constructors only — not every declaration under the type's prefix: a
+;; record's accessors (`Load.env`) are cited qualified, or opened by `(use M.T)` where a file
+;; wants them bare, else every field name would be refused as a pattern variable of the file
+;; (pattern_name)
 (fn open_types ((f Fx) (sc Scope) (forms (List SExpr))) Fx
   (measure (struct forms))
   (match forms
@@ -3325,22 +3322,10 @@
        (FDecl (Pair (rev acc) forms))
        (_ (split_directives r (Cons s acc)))))))
 
-;; ---- unused use lines (§8.1 rule 4; the prune, slice 3.7) --------------------------------
-;; A `(use P)` no citation of the file could need: no symbol token of the file's forms
-;; names, under P, a declaration K or the E table holds once the file is loaded. The test
-;; is the flat mirror of resolution — a citation is a suffix of its identity and the opened
-;; prefix is what stands above it (etable.shard cited_in_scope) — over every token rather
-;; than every citation, so a binder or a pattern variable spelled like a declaration can
-;; keep a line, never drop one; a line for the file's own module is never needed. Selective
-;; opens `(use P a b)` are not judged. Recorded as UNUSED, never a refusal.
-;; Cost: the E table's suffix index answers each token with its hits, and the native K
-;; declarations are bucketed by last component once per file; only a prefix neither marks
-;; pays the token scan against K's environment (`Init`'s bare names under `(use Init.T)`,
-;; a view's parameters) — nothing in a file whose lines are all needed.
-;; ---- the well-threadedness verdicts (slice 4.3 landing 0; thread.shard) --------------------
+;; ---- the well-threadedness verdicts (thread.shard) -----------------------------------------
 ;; the file's own E functions (those the table gained since the file began), each that handles
-;; a token recorded THREAD with its verdict — a report at this landing; the refusal on a bin's
-;; closure comes with the bin form (landing 1)
+;; a token recorded THREAD with its verdict — a report; the refusal is the bin form's, on its
+;; closure (bin_threads)
 (fn rec_threads ((l Load) (f Fx)) Load
   (let ((es (Load.etab l)))
     (rt_go es (th_kinds es) (rev (es_newest es (- (es_count es) (Fx.ecount f)))) l)))
@@ -3353,7 +3338,7 @@
        (match (th_fn es wk d)
          (None l)
          ((Some (Pair k m)) (ld_rec l (RThread (edecl_name d) k m))))))))
-;; ---- the state's check (§8.6 "An id confirmed by its hash" rules 4–5; thread.shard) -----------
+;; ---- the state's check (thread.shard) --------------------------------------------------------
 ;; under --state: the file's own E functions judged with the modes of the files before, a
 ;; STATE record for each that takes or returns the checker's state; the modes kept for the
 ;; files after. A fork carries its fork point's modes and its own are dropped with it
@@ -3369,17 +3354,17 @@
   (match vs
     (Nil l)
     ((Cons (Pair n (Pair k m)) r) (rs_go (ld_rec l (RState n k m)) r))))
-;; ---- the bin form (§8.6 slice 4.3 landing 1, rule 4) ------------------------------------------
-;; (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)), stashed at its form and checked
-;; at the file's end once every fn settled: the entry a fn in scope with a World last and
-;; checked parameters before it (§9); the roster every extern the entry's E closure calls, each
+;; ---- the bin form ----------------------------------------------------------------------------
+;; (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)), stashed at its form and
+;; checked at the file's end once every fn settled: the entry a fn in scope with a World last
+;; and checked parameters before it; the roster every extern the entry's E closure calls, each
 ;; listed one declared; the trusts the axioms beyond the standard profile that the requirements
 ;; and the closure's definitions rest on; each requirement an accepted theorem (or a discharged
 ;; requirement's proof), MET, a pending one UNMET; every function of the closure THREAD ok, else
 ;; UNTHREADED. The record `BIN NAME entry F externs N trusts N requires MET/TOTAL`, then the
 ;; `UNMET`, `UNTHREADED` and `BAD-BIN` lines, each an error: an unmet requirement, an unthreaded
-;; function, an extern outside the roster or an untrusted axiom fails the load (the old form's
-;; rule: pending is never silent). The verdicts are re-derived by every load of the file; the
+;; function, an extern outside the roster or an untrusted axiom fails the load (pending is
+;; never silent). The verdicts are re-derived by every load of the file; the
 ;; store's manifest carries the bin line and the release gate its BIN check (verify_release)
 (fn rec_bins ((l Load) (f Fx)) Load (rb_go l f (Fx.bins f)))
 (fn rb_go ((l Load) (f Fx) (ss (List SExpr))) Load
@@ -3482,7 +3467,7 @@
     ((Cons (EHit _ _ (EIFn _)) _)
      (Pair None (append (show_name fw) " is ambiguous: write the qualified name")))
     ((Cons (EHit id _ _) _) (Pair None (append (show_name id) " is not a fn")))))
-;; the entry's shape (§9): the World last, every parameter before it one a command-line
+;; the entry's shape: the World last, every parameter before it one a command-line
 ;; argument supplies — Int, Nat, a byte-list codec by identity
 (fn bin_shape ((es ESt) (wk Wk) (fid Name)) (Option (List Int))
   (match (es_find_decl es fid)
@@ -3504,7 +3489,8 @@
        (append "parameter "
          (append (show_nat i)
            (append " has the type "
-             (append (flat_ety t) ", which no command-line argument supplies (§9)")))))))))
+             (append (flat_ety t)
+               ", which no command-line argument supplies (one supplies Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)")))))))))
 (fn bin_entry_param ((t EType)) Bool
   (match t
     ((ETCon n _)
@@ -3605,7 +3591,7 @@
            (append " is called in " (append (show_name g) " and is not in the roster"))))
        (bin_outside_x g r ids))))))
 ;; the requirements: each an accepted theorem in scope — its own name, or a discharged
-;; requirement's proof NAME.proof — MET; one read and pending (sorry) UNMET, counted; else unknown
+;; requirement's proof NAME.proof — MET; one read and pending UNMET, counted; else unknown
 (fn bin_requires
   ((l Load)
    (sc Scope)
@@ -3649,8 +3635,7 @@
     ((Cons c r) (if (mem_name c pending) (Some c) (bin_pending pending r)))))
 ;; the trusts: each an axiom in scope; then every named declaration's assumption closure within
 ;; the policy the roster states — the standard profile, the load's parameters (a view's, a
-;; measured function's pending descent: §9's third and fourth classes, the manifest's `param`
-;; lines) and the roster's axioms
+;; measured function's pending descent: the manifest's `param` lines) and the roster's axioms
 (fn bin_trusts ((l Load) (sc Scope) (ts (List Name)) (decls (List Name)))
   (List (Pair Symbol (List Int)))
   (match (bin_axioms (Load.env l) sc ts Nil Nil)
@@ -3726,6 +3711,18 @@
          (None Nil))
        (bin_threads es wk r)))))
 
+;; ---- unused use lines ------------------------------------------------------------------------
+;; A `(use P)` no citation of the file could need: no symbol token of the file's forms
+;; names, under P, a declaration K or the E table holds once the file is loaded. The test
+;; is the flat mirror of resolution — a citation is a suffix of its identity and the opened
+;; prefix is what stands above it (etable.shard cited_in_scope) — over every token rather
+;; than every citation, so a binder or a pattern variable spelled like a declaration can
+;; keep a line, never drop one; a line for the file's own module is never needed. Selective
+;; opens `(use P a b)` are not judged. Recorded as UNUSED, never a refusal.
+;; Cost: the E table's suffix index answers each token with its hits, and the native K
+;; declarations are bucketed by last component once per file; only a prefix neither marks
+;; pays the token scan against K's environment (`Init`'s bare names under `(use Init.T)`,
+;; a view's parameters) — nothing in a file whose lines are all needed.
 (fn rec_unused ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) Load
   (match (unused_uses l f dirs forms)
     (Nil l)
@@ -3764,7 +3761,7 @@
     ((Cons t r) (if (env_has (Load.env l) (name_append p t)) True (use_needed l p r)))))
 ;; E: every hit of a token by suffix marks the prefix above the token in its identity, and the
 ;; module that registered the entry — a realization of Init's `List.append` is `std.list`'s, and
-;; a program that runs it needs that module open (slice 3.27 landing 3)
+;; a program that runs it needs that module open
 (fn needed_e ((es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct toks))
   (match toks
@@ -3859,7 +3856,7 @@
     (Nil t)
     ((Cons s r) (sexprs_tokens r (sexpr_tokens s t)))))
 
-;; ---- directory modules (§6.5, §6.6) ------------------------------------------------------
+;; ---- directory modules ------------------------------------------------------------------
 ;; (import "DIR"): the view — DIR/mod.req/mod.req.shard, else DIR/mod.req.shard
 (fn load_dir ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Pair Load World)
   (match (load_dir_view l dir fuel w)
@@ -3889,7 +3886,7 @@
        ((Pair (Some _) w1) (load_file_module l c mp True fuel w1))))))
 
 ;; the loader given DIR itself: the view, then the implementation checked
-;; against it in a fork from the view's fork point (§6.6)
+;; against it in a fork from the view's fork point
 (fn load_dir_checked ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Pair Load World)
   (match (load_dir_view l dir fuel w)
     ((Pair (Pair l1 fp) w1)
@@ -4050,7 +4047,7 @@
         (if (im_marked im1 k n) (Pair (Pair l1 im1) w1)
         (Pair (Pair (ld_rec l1 (RImplErr n (missing_reason k) (im_file im1))) im1) w1)))))))))
 ;; a parameter implemented by a private file of the sealed directory (its form recorded at load,
-;; ld_forms): the same checks as for the implementation file's own form
+;; ld_add_form): the same checks as for the implementation file's own form
 (fn match_private ((l Load) (im Im) (k Symbol) (n Name) (sig SExpr)) (Pair Load Im)
   (if (bool_not (bool_or (sym_eq k (quote type)) (sym_eq k (quote fn)))) (Pair l im)
   (match (form_for l n)
@@ -4138,7 +4135,7 @@
                ((Some short)
                 (let ((n (qualify sc short)))
                   (match (find_sig (Im.all im) sc (quote requirement) n)
-                    (None  ; no requirement: an obligation of a measured fn of the implementation discharges as in a plain file (slice 3.30 landing 2)
+                    (None  ; no requirement: an obligation of a measured fn of the implementation discharges as in a plain file
                       (match (obligation_named l sc s)
                         ((Some (Pair k proof))
                          (let ((l1 (load_discharge l (im_fx_impl im) k proof)))
@@ -4181,9 +4178,9 @@
        (if (bool_and (sym_eq h (quote requirement)) (sym_eq k (quote requirement)))
          (if (name_eq (form_name sc s) n) (Some s) (find_sig r sc k n))
          (find_sig r sc k n)))))))
-;; (sig type (NAME T…)) against the implementation's (type (NAME T…) …): the parameter count —
-;; of the admitted inductive, or of the E-only type where the fields cite a built-in with no L
-;; constant in scope (§8.1 rule 1): such a type is an E parameter, as the sealed types of K are
+;; (sig type (NAME T…)) against the implementation's (type (NAME T…) …): the parameter count
+;; — of the admitted inductive, or of the E-only type where the fields cite a built-in with no
+;; L constant in scope: such a type is an E parameter, as the sealed types of K are
 (fn check_arity ((l Load) (n Name) (sig SExpr)) Load
   (match sig
     ((SList (Cons _ (Cons _ (Cons hd _))))
@@ -4224,7 +4221,7 @@
               ((RDParam d k a)
                (match (env_find (Load.env l) n)
                  ((Some _)
-                  (Pair (ld_rec l (RDischarge n (quote defined))) (im_mark im (quote fn) n)))  ; the implementation's definition stands in the parameter's place (§8.5)
+                  (Pair (ld_rec l (RDischarge n (quote defined))) (im_mark im (quote fn) n)))  ; the implementation's definition stands in the parameter's place
                  (None
                    (match (admit_param l (im_fx_view im) d k a)
                      ((Pair l1 f1)

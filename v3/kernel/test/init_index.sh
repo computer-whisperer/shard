@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# v3/kernel/test/init_index.sh — the Init index current, its paths printed
-# (LANGUAGE.md §8.4 slice 3.26 rule 1): v3/.cache/init.index, the record table, the
-# name table and the declaration table over the export (V3_EXPORT_DIR/init.ndjson,
-# v3/export.sh's) in one file, rebuilt by initindex.shard when the export's pin or
+# v3/kernel/test/init_index.sh — the Init index current, its paths printed:
+# v3/.cache/init.index, the record table, the name table and the declaration table
+# over the export (V3_EXPORT_DIR/init.ndjson, v3/export.sh's) in one file, rebuilt by
+# initindex.shard when the export's pin or
 # size or the index's sources changed since it was written (the stamp beside it),
 # never committed (v3/.cache/ is ignored). The index is a property of the export's
 # text, not of K: a kernel edit does not stale it; another export does, and the
@@ -10,7 +10,7 @@
 #   read EXPORT INDEX < <(v3/kernel/test/init_index.sh)
 #   v3/kernel/test/init_index.sh --current   the paths when the index is current, exit 1 otherwise;
 #       never a build (v3/build.sh's per-root lookup: CI builds the driver before the index, and the
-#       bootstrap's build of the index is 14× the native one — pipeline 629 paid ~1,950 s in each job)
+#       bootstrap's build of the index takes 14× the native one's time)
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -23,7 +23,7 @@ if [ -s "$IDX" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$x" ]; then echo "$EXPORT
 [ "${1:-}" != "--current" ] || { echo "init_index.sh: the index is not current, and --current never builds it" >&2; exit 1; }
 mkdir -p v3/.cache
 tmp=$(mktemp "v3/.cache/init.index.XXXXXX")
-# the driver compiled by route 1 (v3/build.sh v3/kernel/initindex.shard v3/bin/initindex) when it
+# the compiled driver (v3/build.sh v3/kernel/initindex.shard v3/bin/initindex) when it
 # is newer than the index's sources; the bootstrap otherwise (14× slower over the export)
 BIN=v3/bin/initindex
 if [ -x "$BIN" ] && [ "$BIN" -nt v3/kernel/index.shard ] && [ "$BIN" -nt v3/kernel/initindex.shard ]; then

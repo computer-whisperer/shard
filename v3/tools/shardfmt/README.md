@@ -1,6 +1,6 @@
 # v3/tools/shardfmt — the formatter
 
-`shardfmt [--check] FILE` prints a source file in the one canonical layout (`docs/CANON.md` §1).
+`shardfmt [--check] FILE` prints a source file in the one canonical layout (`docs/CANON.md` "Layout").
 It is an ordinary V3 program: Init's types, the host's World (`v3/std/host.shard`), built by
 `v3/build.sh` like any other.
 
@@ -78,7 +78,7 @@ the logic.
 ## The gate, and the command
 
 Every source of `v3/` that an author writes is kept in its canonical layout: the formatter's test —
-one of the tests `v3/test.sh` runs — fails on one that is not and names it (`docs/CANON.md` §3).
+one of the tests `v3/test.sh` runs — fails on one that is not and names it (`docs/CANON.md` "Enforcement").
 
 ```
 v3/fmt.sh                 # list the sources that are not canonical
@@ -92,6 +92,6 @@ the binary's: the script runs `shardfmt --check` and replaces the file with the 
 source the binary refuses (exit 2 or 3) is reported and left as it is. Files a tool writes — the
 proof sidecars (`*.auto.shard`) and `kernel/k/accel_pins.shard` — are not gated.
 
-The layout rules are `docs/CANON.md` §1: 100 columns as the backstop; a form that breaks keeps
+The layout rules are `docs/CANON.md` "Layout": 100 columns as the backstop; a form that breaks keeps
 arguments on its head line while they fit, the rest one a line; a `match` and an `if` chain never
 print on one line.

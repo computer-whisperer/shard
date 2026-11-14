@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The wire by declared type (v3/LANGUAGE.md §6.7, §8.4 slice 3.18 rule 4): an S
+# The wire by declared type: an S
 # program whose six externs are declared under the naming law — ByteArray,
 # Init's List, Option, Prod and Bool (v3/pins/loader/wire_s) — run by the
 # driver against the real host, its output and the file it writes compared
@@ -12,7 +12,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "wire_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 P=v3/pins/loader
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 fail=0; n=0

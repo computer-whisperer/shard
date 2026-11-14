@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v3/kernel/test/t0_gate_test.sh — the positive byte-tie of v3/t0_full.sh under
-# stub engines (GPT-6 R54): the gate must require each engine to complete, not
+# stub engines: the gate must require each engine to complete, not
 # only the two logs to agree. Both engines are shell stubs printing one canned
 # log (a verdict line, an axiom line, a pins line) and exiting as told; the
 # export directory is a throwaway with a one-line init.ndjson and the matching

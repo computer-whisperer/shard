@@ -129,8 +129,8 @@ new file is gated once it is added to git.
 **The command.** `v3/fmt.sh` builds `v3/bin/shardfmt` when it is missing or stale. A file the
 formatter refuses is reported (`refused (exit N): FILE: …`) and left as it is.
 ```
-v3/fmt.sh [FILE…]         # list the files that are not canonical; exit 1 if there is one
-v3/fmt.sh --fix [FILE…]   # rewrite them in place
+v3/fmt.sh [FILE…]         # list the files that are not canonical; exit 1 if there is one or a file is refused
+v3/fmt.sh --fix [FILE…]   # rewrite them in place; exit 1 if a file is refused
 ```
 With no FILE, both forms take every gated file.
 

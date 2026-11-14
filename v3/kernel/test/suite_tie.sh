@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# v3/kernel/test/suite_tie.sh A B — the suite's two runs compared entrypoint by entrypoint
-# (v3/LANGUAGE.md §8.6 slice 4.1 rule 4). A and B are V3_TEST_OUT directories of `bash v3/test.sh`
+# v3/kernel/test/suite_tie.sh A B — the suite's two runs compared entrypoint by entrypoint.
+# A and B are V3_TEST_OUT directories of `bash v3/test.sh`
 # (DIR/NAME.out, .rc, .secs; DIR/engine, DIR/wall), one on the bootstrap — the authority — and one
 # on the binaries: the same entrypoints on both sides, each with the same exit status and the same
 # output under THE NORMALIZATION, in full: a count of seconds or milliseconds (`N s`, `N ms` — the
-# second since slice 4.6 landing 1, for handle_cost_test's link-once ratio), a store's size (`N kB`), a
+# second for handle_cost_test's link-once ratio), a store's size (`N kB`), a
 # scratch path's generated name (mktemp's /tmp/tmp.XXXXXXXXXX, v3/NAME_XXXXXX,
 # v3/.cache/init.index.XXXXXX). A verdict, a count of checks or declarations, an assumption
 # closure, a fingerprint, a record are never normalized. The seconds of both sides are printed per
-# entrypoint and summed — the native run's time is the measurement (rule 7). Exit = the entrypoints
+# entrypoint and summed — the native run's time is the measurement. Exit = the entrypoints
 # that differ. Not an entrypoint of v3/test.sh (it compares two of its runs); CI's suite_tie job runs
 # it over the v3 and native jobs' kept outputs, and native_tie_test.sh tests it on a fabricated pair.
 set -u

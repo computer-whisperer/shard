@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# v3/t0_full.sh [LOG] — T0 over the WHOLE export on compiled K (v3/build.sh),
-# gated twice: (1) the interpreter byte-tie — `eval direct` and the binary
-# print byte-identical verbose per-declaration output on the export's first chunks
-# and on the export's first 100,000 lines (the authority confirming the
-# engine, FOUNDATION §9.1) — each engine required to EXIT 0 and to print its
-# verdict line before the logs are compared (GPT-6 R54: two engines can agree
-# on a failure, and a truncated log is not a replay; kernel/test/
-# t0_gate_test.sh drives this script with stub engines); (2) the verdict line of the full replay equals the
-# pinned line in v3/t0_expected.txt, and (3) every admitted constant's axiom
-# closure (the driver's -a lines) is identical to the oracle's (init.axioms,
-# v3/axioms.lean; v3/t0_axioms_cmp.sh), and (4) every accelerator candidate
-# present is pinned (the driver's -p line; all 20 on the full export). The replay is one process over the
-# 20,000-line chunks; its peak resident set is reported (the export tables hold
-# every referenced node: 30 GB at 2026-09-07's export, 745 s) and capped by
-# V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 runs the byte-ties only
-# (the local smoke; the dev box does not replay the whole export routinely).
+# v3/t0_full.sh [LOG] — the replay gate: the whole Init export on compiled K (v3/bin/t0,
+# v3/build.sh), gated four times; LOG (default v3_t0_full.log) holds the replay's output.
+#  (1) the tie: on the export's first 100,000 lines the bootstrap (`eval direct`) and the
+#      binary must each EXIT 0 and print a verdict line, and then their verbose
+#      per-declaration outputs must be byte-identical — two engines can agree on a failure,
+#      and a truncated log is not a replay (kernel/test/t0_gate_test.sh drives this script
+#      with stub engines);
+#  (2) the verdict line of the full replay equals the pinned line in v3/t0_expected.txt;
+#  (3) every admitted constant's axiom closure (the driver's -a lines) is identical to the
+#      oracle's (init.axioms, v3/axioms.lean; v3/t0_axioms_cmp.sh);
+#  (4) every accelerator candidate present is pinned (the driver's -p line; all 20 on the
+#      full export).
+# The replay is one process over the 20,000-line chunks; its peak resident set is reported
+# (the export tables hold every referenced node: 30 GB, 745 s) and capped by
+# V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 stops after the tie, with (3) and (4)
+# checked on its 100,000 lines (the local smoke; the dev box does not replay the whole
+# export routinely).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}
@@ -35,8 +36,8 @@ if [ ! -d "$CH" ] || [ -z "$(ls "$CH" 2>/dev/null)" ]; then
 fi
 
 # the driver's -p line: every candidate present in the environment pinned (its
-# identity closure matched accel_pins.shard's reference rows — FOUNDATION §3.2,
-# GPT-6 R42); with a count, that many pinned
+# identity closure matched accel_pins.shard's reference rows); with a count,
+# that many pinned
 pins_ok() {
   local line; line=$(grep '^PINS ' "$1" | tail -1)
   [ -n "$line" ] || { echo "NO PINS LINE in $1"; return 1; }
@@ -49,7 +50,7 @@ pins_ok() {
 }
 
 # tie LABEL ARGS…: both engines over ARGS; each must exit 0 and print a verdict
-# line (`T0: …`), then the logs must be byte-identical (R54)
+# line (`T0: …`), then the logs must be byte-identical
 tie() {
   local label=$1; shift
   local si=0 sn=0

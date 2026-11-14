@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v3/kernel/test/imp_test.sh — the tb_len rung (LANGUAGE.md §8.6 slice 4.2, rules 3, 4 and 5): the
+# v3/kernel/test/imp_test.sh — the imp machine model, loaded, stored and replayed: the
 # model root v3/models/imp — the call-tier imp machine, the counted-heap runtime's table, the
 # ghost heap with its operations and invariant, the readbacks and the post-predicate, the word,
 # cell and ghost kits, the evaluator's step laws, the runtime's laws as parameters, the sources
@@ -7,12 +7,13 @@
 # loader with Init on demand from its two roots len.shard and app.shard: every function and every
 # recursive specification DEFINE with its equations, no RUNNABLE, no refusal, nothing pending; the
 # evaluator one function over the task type on the structural fuel, its fuel's descent discharged;
-# `tb_len` ACCEPTED through I on Init's three axioms (landing 1); `tb_app` ACCEPTED through I on
+# `tb_len` ACCEPTED through I on Init's three axioms; `tb_app` ACCEPTED through I on
 # Init's three and the six declared parameters — the runtime's allocation, fill, seal and increment
-# laws, each PARAM NAME axiom (landing 2) — the run lemmas, the cell, word and ghost laws and
-# step.shard's three with them. The root is then stored and the store verified by K alone (verify_release, rule 4), the
+# laws, each PARAM NAME axiom — the run lemmas, the cell, word and ghost laws and
+# step.shard's three with them. The root is then stored and the store verified by K alone
+# (verify_release), the
 # parameters its six PARAM lines, the three measured descents its DISCHARGE lines. The two library
-# files the rung added, std/map and std/mem, load with
+# files the model rests on, std/map and std/mem, load with
 # it. The load's seconds are printed on the engine that runs it.
 # Exit code = the number of checks that failed.
 set -u
@@ -39,7 +40,7 @@ for t in tb_len tb_len_aux len_ofNat len_call_one len_call_fail len_call_ov len_
   checks=$((checks+1)); accepted models.imp.len.$t || bad "models.imp.len.$t is not accepted"
 done
 checks=$((checks+1)); grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | grep -q 'axioms=\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\),\(Classical.choice\|Quot.sound\|propext\) ' || { bad "tb_len does not rest on Init's three axioms alone"; grep '^ACCEPT models.imp.len.tb_len ' "$OUT/load.txt" | cut -c1-200; }
-# tb_app (landing 2): its general form, the two lemmas of the cons case and the run lemmas (one per
+# tb_app: its general form, the two lemmas of the cons case and the run lemmas (one per
 # outcome of a call) accepted; the
 # theorem on Init's three axioms and the six declared parameters, nothing else (the closure sorted under
 # the C locale: the runner's collation, not the dev box's)
@@ -48,13 +49,13 @@ for t in tb_app tb_app_aux app_cons_ok app_ghost app_call_nil app_call_nil_fail 
 done
 axs=$(grep '^ACCEPT models.imp.app.tb_app ' "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
 checks=$((checks+1)); [ "$axs" = "Classical.choice Quot.sound models.imp.rtlaw.hinv_fill models.imp.rtlaw.hinv_seal models.imp.rtlaw.hr_fill models.imp.rtlaw.hr_seal models.imp.rtlaw.rt_alloc_run models.imp.rtlaw.rt_inc_run propext " ] || bad "tb_app does not rest on Init's three axioms and the six parameters alone: $axs"
-# the parameters: the runtime's laws, each a trusted axiom recorded PARAM NAME axiom (rule 5; the loader's record)
+# the parameters: the runtime's laws, each a trusted axiom recorded PARAM NAME axiom (the loader's record)
 for t in rt_alloc_run hr_fill hinv_fill hr_seal hinv_seal rt_inc_run; do
   checks=$((checks+1)); grep -q "^PARAM models.imp.rtlaw.$t axiom\$" "$OUT/load.txt" || bad "the runtime law models.imp.rtlaw.$t is not a declared parameter"
 done
 checks=$((checks+1)); [ "$(grep -c '^PARAM models.imp.rtlaw.' "$OUT/load.txt")" = 6 ] || bad "the model declares other parameters than the six runtime laws"
 checks=$((checks+1)); [ "$(grep -c '^ACCEPT models.imp.rtlaw.' "$OUT/load.txt")" = 0 ] || bad "a runtime law was admitted as a declaration instead of a parameter"
-# the ghost kit (landing 2): the operations' effects on the cells, the end and the raw cell, the readbacks
+# the ghost kit: the operations' effects on the cells, the end and the raw cell, the readbacks
 # preserved by the increment and the seal, the raw cell fresh and inside the window, the roots' algebra,
 # the table's entries
 for t in gcells_with_graw gend_with_graw graw_with_graw gcells_with_gcells gend_with_gcells graw_with_gcells gh_fill_some gcells_fill gend_fill graw_fill \
@@ -115,7 +116,7 @@ checks=$((checks+1)); accepted std.map.map_insert_shadow || bad "std/map's four 
 checks=$((checks+1)); [ "$(grep -c '^DISCHARGE std.mem.\(load_le\|store_le\).dec_1 proved$' "$OUT/load.txt")" = 2 ] || bad "std/mem's two word operations' descents are not discharged"
 n=$(grep -c '^ACCEPT ' "$OUT/load.txt"); d=$(grep -c '^DEFINE ' "$OUT/load.txt")
 echo "imp_test: the model root — 14 modules, $n declarations accepted, $d defined — loaded and stored in $((e-s)) s; tb_len and tb_app accepted"
-# the store, replayed by K alone (rule 4): every declaration the load admitted, accepted again
+# the store, replayed by K alone: every declaration the load admitted, accepted again
 stored=$(sed -nE 's/^STORE: .* new=([0-9]+) .*/\1/p' "$OUT/load.txt" | head -1)
 checks=$((checks+1)); [ -n "$stored" ] || { bad "no store was written"; grep '^STORE' "$OUT/load.txt" | head -2; stored=0; }
 s=$(date +%s)
@@ -123,7 +124,7 @@ s=$(date +%s)
 e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "verify_release failed on the model root's store (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^RELEASE: declarations $stored  accepted $stored " "$OUT/verify.txt" || { bad "K did not accept every one of the store's $stored declarations"; tail -1 "$OUT/verify.txt" | cut -c1-300; }
-# the release conditional on the six named parameters and nothing else (slice 4.0 rule 3's PARAM lines)
+# the release conditional on the six named parameters and nothing else (the PARAM lines)
 checks=$((checks+1)); [ "$(grep -c '^PARAM models.imp.rtlaw.' "$OUT/verify.txt")" = 6 ] || { bad "the release does not name the six runtime laws as its parameters"; grep '^PARAM\|^UNDECLARED\|^CONDITIONAL' "$OUT/verify.txt" | head -8; }
 checks=$((checks+1)); [ "$(grep -c '^PARAM ' "$OUT/verify.txt")" = 6 ] || { bad "the release names other parameters than the six runtime laws"; grep '^PARAM' "$OUT/verify.txt"; }
 checks=$((checks+1)); [ "$(grep -c '^DISCHARGE ' "$OUT/verify.txt")" = 3 ] || { bad "the release does not verify the three measured descents as discharged"; grep '^DISCHARGE\|^BAD-DISCHARGE' "$OUT/verify.txt"; }

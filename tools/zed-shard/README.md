@@ -1,11 +1,12 @@
 # Zed extension: Shard
 
-Editor support for the shard language — object language, proof DSL,
-module and artifact forms — for every `*.shard` file. The prose spec
-is `docs/LANGUAGE.md`; the vocabulary this extension highlights is
-taken from the kernel readers (`kernel/reader.shard`,
-`kernel/proof_reader.shard`, `kernel/types.shard`), which are the
-authority on what the language accepts.
+Editor support for every `*.shard` file. It highlights two
+vocabularies: V3's forms (`docs/LANGUAGE.md` is the reference; the
+loader is the authority on what the language accepts) and the previous
+generation's object language, proof DSL, module and artifact forms
+(`docs/V2.md`), taken from that generation's kernel readers
+(`kernel/reader.shard`, `kernel/proof_reader.shard`,
+`kernel/types.shard` at the tag `v2-kernel-last`).
 
 ## Install as a dev extension
 
@@ -17,11 +18,6 @@ authority on what the language accepts.
 Zed fetches the tree-sitter-scheme grammar pinned in `extension.toml`,
 compiles it, and loads `languages/shard/`. After editing the query
 files run **`zed: rebuild dev extension`** (or reinstall).
-
-If you had the old `narrow` dev extension installed from
-`tools/zed-narrow/`, uninstall it (**`zed: extensions`**, find
-"Narrow") and install this one — the directory and extension id both
-changed.
 
 ## What you get
 
@@ -77,9 +73,7 @@ never writes the file — so it is **not** usable as Zed's on-save
 formatter, which hands the unsaved buffer to the command's standard
 input: wired that way it would replace the buffer with the formatted
 text of the last save. Run it as a task on a saved file instead
-(`shardfmt FILE > FILE.new && mv FILE.new FILE`). (This section used to
-give an on-save setting and said the tool rewrites in place; neither
-was right for the old formatter either.)
+(`shardfmt FILE > FILE.new && mv FILE.new FILE`).
 
 ## Caveats
 
@@ -88,9 +82,10 @@ was right for the old formatter either.)
 - **The grammar is tree-sitter-scheme.** It parses generic
   s-expressions; the whole hand-written corpus (636 files) parses with
   no error nodes, but arity mistakes and unknown forms are not flagged —
-  `bin/check` is the syntax authority. Scheme-only lexemes (`#t`,
-  `#\a`, `[ ]`, `{ }`, `#| |#`) never appear in shard source, so their
-  rules are dormant.
+  the loader (`v3/kernel/load.shard`) is the syntax authority. A
+  universe list (`Prod.{u v}`) parses as a trailing brace list and is
+  left uncolored; the other Scheme-only lexemes (`#t`, `#\a`, `[ ]`,
+  `#| |#`) do not appear in shard source, so their rules are dormant.
 - **Capitalized = type is a heuristic.** Types and constructors share
   one color; a capitalized `use … as ALIAS` gets it too.
 - **Head-keyed rules.** A keyword is only colored in head position, so

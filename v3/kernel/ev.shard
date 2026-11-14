@@ -1,11 +1,10 @@
-;;; v3/kernel/ev.shard — `ev`, the definition of "run" (v3/LANGUAGE.md §6.2,
-;;; §6.7; FOUNDATION §4.4), `run_prog`, the effectful driver with the
-;;; checked entry of §9 (slice 7), and the prepared handle both stand on
-;;; (slice 4.6). Phase 2, slice 5.
+;;; v3/kernel/ev.shard — `ev`, the definition of "run"; `run_prog`, the
+;;; effectful driver with the checked entry; and the prepared handle both
+;;; stand on.
 ;;;
 ;;; `ev : Prog → Name → List Val → Int → EvRes` is pure: a Prog is linked
 ;;; into this file's own representation — constructors as integer tags
-;;; whose low bit says "second constructor of its type" (§6.2's `if` rule
+;;; whose low bit says "second constructor of its type" (the `if` rule
 ;;; is one bit test), functions and externs as indices, primitives as
 ;;; operation codes (prog.shard's table), literals built once — and run as
 ;;; a machine with an explicit continuation: two tail-recursive steps,
@@ -16,25 +15,24 @@
 ;;; No function of the machine takes more than six parameters: compiled
 ;;; through C, a call in tail position is a jump only where the callee's
 ;;; arguments fit where the caller's came in — in registers, six of them.
-;;; With functions of seven and nine among them the compiled machine took
+;;; With a function of seven or more among them the compiled machine takes
 ;;; host stack at every application, from one extern to the next: 2.5 GB
-;;; on K's nested_test, 12 MB with six (measured 2026-11-10,
-;;; docs/records/REDUCE-2026-11-10.md).
+;;; on K's nested_test, against 12 MB with six.
 ;;; `run_prog` performs each extern through the host's own extern of the
-;;; same short name (kernel/host.shard's six) and resumes: §6.2's frontier
-;;; loop without a search. No other file sees the linked representation.
-;;; Linking happens in one place, `prepare` (§8.6 slice 4.6 rule 1; law
-;;; §9.3): a program linked once and one entry bound as a handle, which
+;;; same short name (six of kernel/host.shard's) and resumes. No other file
+;;; sees the linked representation.
+;;; Linking happens in one place, `prepare`:
+;;; a program linked once and one entry bound as a handle, which
 ;;; `invoke` runs on arguments built as data as often as the client likes —
 ;;; validated against the entry's E types at the checked door, taken on the
 ;;; caller's word at the assumed one. `ev` and `run_prog` are one
 ;;; preparation and one invocation each. What a program does not state of
 ;;; an entry — an evidence binder, a constructor's proposition field — is
-;;; read where the environment is held: session.shard's door (rule 2).
-;;; A primitive's outcome is three-valued (GPT-6 R51, 2026-09-13): a value, a
+;;; read where the environment is held: session.shard's door (`prepare_on`).
+;;; A primitive's outcome is three-valued: a value, a
 ;;; GUARD failure (the input outside the operation's domain: a negative Nat, a
 ;;; zero divisor) or an EXHAUSTED resource (K's literal limits, `nat_size` and
-;;; `nat_count`, checked BEFORE the work as tc.shard's `nat_apply` checks them)
+;;; `nat_count`, checked BEFORE the work as k/tc.shard's `nat_apply` checks them)
 ;;; — distinct through `EvRes` (`EvStuck` against `EvExhausted`) and the
 ;;; driver, since a result past a limit says nothing about the input's validity.
 
@@ -86,7 +84,7 @@
   (LExtern Name Symbol Int (List EType) EType)  ; an extern: identity, its short name (the host's), parameter count, the declared types (the wire's codec reads them)
   (LUnlinked Name))  ; a sig fn no implementation was linked to
 ;; the wire's tags: nil cons none some pair false true — and, for the table's Nat set
-;; (§7.5), Init's Bool.false Bool.true and Decidable.isFalse Decidable.isTrue
+;; Init's Bool.false Bool.true and Decidable.isFalse Decidable.isTrue
 (type Wire (Wire Int Int Int Int Int Int Int Int Int Int Int))
 (fn wire_nil ((w Wire)) Int
   (match w
@@ -189,8 +187,8 @@
        (None
          (match (intern_ctor t c ordinal)
            ((Tags k2 nt2 t2) (Pair (Tags k2 nt2 t2) (tag_of (- k2 1) ordinal)))))))))
-;; Init's cells, which the wire builds for a program under the naming law (§6.7; §8.4 slice
-;; 3.18 rule 4) and a string literal is made of: interned like the prelude's, found by name
+;; Init's cells, which the wire builds for a program over Init's types and a string literal
+;; is made of: interned like the prelude's, found by name
 (fn init_nil () Name (n2 (quote List) (quote nil)))
 (fn init_cons () Name (n2 (quote List) (quote cons)))
 (fn init_none () Name (n2 (quote Option) (quote none)))
@@ -379,7 +377,7 @@
   (match l
     ((LNat k) (IVInt k))
     ((LInt k) (IVInt k))
-    ((LStr nl cs bs)  ; the cells the literal names: Init's List for a String (§8.4 slice 3.18 rule 3), the List in scope's in the toolchain's sources (§8.1 rule 2)
+    ((LStr nl cs bs)  ; the cells the literal names: Init's List for a String, the List in scope's in the toolchain's sources
      (match (nmap_find (lk_tags lk) nl)
        (None (bytes_in lk bs))
        ((Some tnl)
@@ -388,7 +386,7 @@
           ((Some tcs) (cells_in tnl tcs bs))))))
     ((LSym s) (IVSym s))))
 
-;; ---- the primitives' cells: the prelude's (§6.7); the externs' are read by declared type, below ----
+;; ---- the primitives' cells: the prelude's; the externs' are read by declared type, below ----
 (fn bytes_in ((lk Linked) (bs (List Int))) IVal
   (measure (struct bs))
   (match bs
@@ -412,14 +410,14 @@
     (_ None))))
 (fn bool_cell ((lk Linked) (b Bool)) IVal
   (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) Nil))
-;; Init's Bool and Decidable cells: what the table's Nat set returns (§7.5)
+;; Init's Bool and Decidable cells: what the table's Nat set returns
 (fn init_bool_cell ((lk Linked) (b Bool)) IVal
   (IVCtor (if b (wire_btrue (lk_wire lk)) (wire_bfalse (lk_wire lk))) Nil))
 (fn dec_cell ((lk Linked) (b Bool)) IVal
   (IVCtor (if b (wire_dtrue (lk_wire lk)) (wire_dfalse (lk_wire lk))) Nil))
 (fn wire_budget () Int 1000000000)
 
-;; ---- the machine (§6.7) --------------------------------------------------------------------
+;; ---- the machine ---------------------------------------------------------------------------
 (type Kont
   (KHalt)
   (KArg Int Int (List IVal) (List LTerm) (List IVal) Int Kont)  ; kind, head, the values so far (last first), the terms to go, env, cur, next
@@ -547,7 +545,7 @@
           ((Some env1) (match_fields pr vr env1))
           (None None)))))))
 
-;; ---- the primitives (prog.shard's codes; §6.4) ----------------------------------------------
+;; ---- the primitives (prog.shard's codes) ----------------------------------------------------
 ;; a primitive's outcome: a value; the guard failed (the input outside the operation's
 ;; domain); a resource exhausted (nat_size: a result past K's literal size, nat_count: a
 ;; count past 32 bits) — checked before the work, never a domain failure
@@ -619,7 +617,7 @@
     (PrimVal (IVInt (* x (nat_pow_ev 2 y)))))))
   (if (= code 27) (PrimVal (IVInt (nat_shr x y)))
   (nat_prim lk code x y))))))))))))
-;; K's accelerated Nat set under its identities (§7.5; tc.shard's nat_apply): total where
+;; K's accelerated Nat set under its identities (k/tc.shard's nat_apply): total where
 ;; Lean's are — Nat.div x 0 = 0, Nat.mod x 0 = x — and exhausted where K exhausts: a result
 ;; past K's literal size (nat_max_size, 2^27 bytes), a power's or a shift's count past 32 bits
 ;; (count_max), a power's size estimate — each before the work, as K's. A sum or a product is
@@ -663,7 +661,7 @@
   (if (< k 62) (bshr n k)
   (nat_shr (bshr n 62) (- k 62)))))
 
-;; ---- `ev` (§6.2) ----------------------------------------------------------------------------
+;; ---- `ev` -----------------------------------------------------------------------------------
 (fn val_in ((lk Linked) (v Val)) (Option IVal)
   (measure (struct v))
   (match v
@@ -719,7 +717,7 @@
        ((InvArg _ r _) (EvStuck r f))
        ((InvNo r _) (EvStuck r f))))))
 
-;; ---- the prepared handle (§8.6 slice 4.6 rule 1; law §9.3) ------------------------------------
+;; ---- the prepared handle ----------------------------------------------------------------------
 ;; `prepare` links a program once and binds one entry of it; `invoke` runs the bound entry on
 ;; arguments built as data, as often as the client likes. `ev` above and `run_prog` below are
 ;; one preparation and one invocation each, so nothing in this file links but `prepare`. A
@@ -731,29 +729,29 @@
 ;; constructor and updaters are ordinary declarations (record.shard), and no view seals this
 ;; file — kernel/test/handle_cost_test.sh holds the toolchain's sources to it by name.
 ;; The policy is fixed at `prepare`:
-;;   door     law §9.3's two kinds of entry. Checked: every argument is validated against the
+;;   door     the two kinds of entry. Checked: every argument is validated against the
 ;;            E type the program states for its parameter before the machine starts, and
 ;;            `prepare` refuses (`preconditioned`) an entry one of whose parameters states a
 ;;            type a value cannot be validated against in full — a type parameter with no
 ;;            type stated for it; `Fin`, `BitVec` or `Subtype`, whose bound or predicate is a
-;;            value argument E dropped (§8.4 slice 3.18 rule 1); a type the program does not
+;;            value argument E dropped; a type the program does not
 ;;            define, or applies to the wrong number of types. A sig fn no implementation is
 ;;            linked to and an extern are no entries (`unlinked`, `unknown_head`). Assumed:
-;;            the caller answers for the arguments' types — `ev`'s contract (§6.2) — and
+;;            the caller answers for the arguments' types — `ev`'s contract — and
 ;;            only their constructors are resolved; whatever the linker indexed is bound, and
 ;;            the machine answers for it.
 ;;   effects  the entry takes the World last and its externs are performed by the host's
 ;;            (`invoke_run`); without it an extern reached is stuck (`invoke`). The World
 ;;            is not an argument and not the door's: its token is built here, a value of the
-;;            last parameter's type (world_last) — which type that is, is §9's stated limit
+;;            last parameter's type, whatever type that is (world_last)
 ;;   trace    the path the effect trace is written to at a run's end (empty: none)
 ;;   fuel     of one invocation
 ;; THE CHECKED DOOR ON A PROGRAM ALONE: it validates against what the Prog states, and a Prog
 ;; does not state what the erasure dropped beside a type's value arguments — an evidence binder
-;; of the entry's own signature, a proposition field of a constructor (§7.5). An entry with
+;; of the entry's own signature, a proposition field of a constructor. An entry with
 ;; either passes this `prepare` as checked on its runtime parameters alone. Where the program
 ;; comes with the environment it was erased from — a session's revision, the driver's load —
-;; the door reads the two there and refuses the entry (session.shard prepare_on; rule 2).
+;; the door reads the two there and refuses the entry (session.shard prepare_on).
 (type Door (Checked) (Assumed))
 (record Policy (door Door) (effects Bool) (trace (List Int)) (fuel Int))
 ;; `make` reaches the records of its own file alone (record.shard), so a client states a policy
@@ -793,8 +791,8 @@
                      (Assumed (PrepOk h))
                      (Checked (checked_door h ds)))))))))))))))
 ;; the entry's parameter and result types as its declaration states them. At the checked door
-;; an entry is a fn; at the assumed one a sig fn and an extern are bound as `ev` always took
-;; them, and the machine answers — after the arguments are resolved, as before
+;; an entry is a fn; at the assumed one a sig fn and an extern are bound too, and the machine
+;; answers — after the arguments are resolved
 (type Ent (EntOk (List EType) EType) (EntNo Symbol (List Int)))
 (fn entry_types ((d (Option EDecl)) (door Door) (f Name)) Ent
   (match d
@@ -820,9 +818,9 @@
     ((Cons (EInd _ _ _) r) (fn_decl_at r j))
     ((Cons (ESigType _ _) r) (fn_decl_at r j))
     ((Cons d r) (if (< j 1) (Some d) (fn_decl_at r (- j 1))))))
-;; under effects the entry takes the World last (§9): the parameters before it are the client's,
+;; under effects the entry takes the World last: the parameters before it are the client's,
 ;; the World's token its type's first constructor with its fields zero. The last parameter's
-;; type is taken as the World, whatever its name (§9's stated Stage-0 limit) — but the token
+;; type is taken as the World, whatever its name — but the token
 ;; is a value of it: the constructor's fields are integers (`Int`, `Nat`), or it has none.
 ;; Of two inductives under the name, the later, as the linker's tags have it
 (fn world_last ((lk Linked) (ds (List EDecl)) (ps (List EType)))
@@ -942,7 +940,7 @@
        ((TcNo m) (TcNo m))
        ((TcOk seen1) (ctors_checked inds np r seen1))))))
 ;; the types the validation reads by identity: the integers, a symbol, and the registry's rows
-;; whose invariant a value shows (§8.4 slice 3.18 rule 1) — a UInt8 below 256, an Array's and a
+;; whose invariant a value shows — a UInt8 below 256, an Array's and a
 ;; ByteArray's cells, a String's bytes and their validity; and the rows it cannot
 (fn door_reads ((n Name)) Bool
   (bool_or (name_eq n (n1 (quote Int)))
@@ -1021,7 +1019,7 @@
   (append (show_name f)
     (append " takes " (append (show_nat takes) (append " argument(s), got " (show_nat got))))))
 
-;; ---- the checked door's validation (rule 1; law §9.3: raw inputs → validation or error) -------
+;; ---- the checked door's validation: raw inputs → validation or error --------------------------
 ;; a value built as data at an E type: an integer where the type is Int, not negative at Nat,
 ;; below 256 at UInt8; a symbol at Symbol; a constructor of the type's inductive over exactly
 ;; its fields, each at its field's type under the type's arguments; a row's cells. The reasons:
@@ -1079,7 +1077,7 @@
   (if (name_eq n (n1 (quote UInt8)))
     (if (bool_and (<= 0 k) (< k 256)) (ChkOk (IVInt k)) (ChkNo (quote not_a_byte) (show_int k)))
     (ChkNo (quote not_of_type) (at_type (VInt k) t))))))
-;; a row's cells (§8.4 slice 3.18 rule 1): an Array's and a ByteArray's are Init's List cells
+;; a row's cells: an Array's and a ByteArray's are Init's List cells
 ;; of their elements — the spine walked as a loop, so a long buffer takes no host stack
 (fn row_at ((h Handle) (et EType) (t EType) (v Val)) Chk
   (match (tags2 (Handle.lk h) (init_nil) (init_cons))
@@ -1110,7 +1108,7 @@
   (match acc
     (Nil tail)
     ((Cons x r) (cells_onto tcs r (IVCtor tcs (list x tail))))))
-;; a String is its ByteArray with the validity proof erased (slice 3.18): the bytes, and that
+;; a String is its ByteArray with the validity proof erased: the bytes, and that
 ;; they are UTF-8 — the invariant the erasure dropped, read back from the value
 (fn string_at ((h Handle) (t EType) (v Val)) Chk
   (match (row_at h (ETCon (n1 (quote UInt8)) Nil) t v)
@@ -1131,7 +1129,7 @@
       ((VCtor c _) (append "the constructor " (show_name c))))
     (append " at " (show_etype t))))
 
-;; ---- `run_prog`: the effectful driver (§6.2, §6.7; the checked entry, §9) --------------------
+;; ---- `run_prog`: the effectful driver, with the checked entry --------------------------------
 (type RunRes
   (RunOk)
   (RunOut Name)
@@ -1140,15 +1138,14 @@
   (RunLink Symbol (List Int))
   (RunArg Int Symbol (List Int)))  ; RunExhausted: a primitive's resource; RunLink: `prepare`'s refusal; RunArg: the argument's position, the reason, its text
 ;; f on the World with the program's arguments: the parameters before the World are the checked
-;; entry (§9) — each command-line argument read by the text codec below at its parameter's E
+;; entry — each command-line argument read by the text codec below at its parameter's E
 ;; type and validated at the checked door before the machine starts — the World the last
 ;; parameter's first constructor; every extern performed by the host's. One preparation, the
 ;; text codec, one invocation — of a program alone. The driver's run holds a load, and its door
-;; is the session's (session.shard run_load), where the policy carries the effect trace's path
-;; (§8.6 slice 4.3 landing 2; law §4.7 (iii)): every host call the run performs, in order, as
-;; one line — the extern's name, its arguments and the host's answer by the wire (perform_at)
-;; — written when the path is not empty: at the run's end, and before an `exit` is performed,
-;; since the host's exit never returns
+;; is the session's (session.shard run_load), where the policy carries the effect trace's path:
+;; every host call the run performs, in order, as one line — the extern's name, its arguments
+;; and the host's answer by the wire (perform_at) — written when the path is not empty: at the
+;; run's end, and before an `exit` is performed, since the host's exit never returns
 (fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
   (match (prepare p f (policy_of Checked True Nil fuel) 0)
     ((PrepNo e m) (Pair (RunLink e m) w))
@@ -1156,7 +1153,7 @@
      (match (text_args h argv)
        ((TextNo r) (Pair r w))
        ((TextOk vs) (invoke_run h vs argv w))))))
-;; the text codec (§9): one producer of a checked handle's arguments — the command line's
+;; the text codec: one producer of a checked handle's arguments — the command line's
 ;; against the parameters in order, i the 1-based position; an argument that does not parse is
 ;; refused with its position and text, never a file span; an entry with the World alone takes
 ;; the raw list through get_args
@@ -1200,8 +1197,8 @@
        (match (val_of_text t a)
          ((Some v) (TArgOk v))
          (None (TArgType (unsupplied n)))))))
-    (_ (TArgType "has a type variable's type, which no command-line argument supplies (§9)"))))
-;; text as a value of a byte type, and back (slice 3.29 rule 1: a tactic library's goal in and
+    (_ (TArgType "has a type variable's type, which no command-line argument supplies"))))
+;; text as a value of a byte type, and back (a tactic library's goal in and
 ;; block out, through the same codec as the checked entry's arguments): the cells of the
 ;; type's list constructors; None when the type is no byte type, or the value no text
 (fn text_type ((t EType)) Bool
@@ -1229,13 +1226,13 @@
 (fn unsupplied ((n Name)) (List Int)
   (append "has type "
     (append (show_name n)
-      ", which no command-line argument supplies (§9: Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)")))
-;; the byte-list codecs, by identity and element type (§9; GPT-6 R59, slice 10): the prelude's
+      ", which no command-line argument supplies (one supplies Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)")))
+;; the byte-list codecs, by identity and element type: the prelude's
 ;; (List Int), Init's (List Nat) and (List Int), and ByteArray, whose representation is Init's
-;; List cells (§8.4 slice 3.18 rule 1) — never a shape. Before: any two-constructor
-;; type with a nullary first and a binary second constructor took the bytes, so a
-;; `(type Tree (Empty) (Branch Tree Tree))` entry received Branch cells with integers in its
-;; Tree fields — a value of no type, stuck at the first match on it.
+;; List cells — never by shape: were any two-constructor type with a nullary first and a binary
+;; second constructor to take the bytes, a `(type Tree (Empty) (Branch Tree Tree))` entry would
+;; receive Branch cells with integers in its Tree fields — a value of no type, stuck at the
+;; first match on it.
 (fn list_ctors ((t EType)) (Option (Pair Name Name))
   (match t
     ((ETCon n (Cons (ETCon e Nil) Nil))
@@ -1296,7 +1293,7 @@
           ((Pair (Pair None _) w1)
            (Pair (RunStuck (quote extern) (fn_name lk id)) (tr_flush path tr w1)))))
        (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) (tr_flush path tr w)))))))
-;; ---- the effect trace (§8.6 slice 4.3 landing 2) ----------------------------------------------
+;; ---- the effect trace -------------------------------------------------------------------------
 ;; one line per host call: the extern's short name, its arguments as the host saw them and the
 ;; host's answer where it carries data — `get_args "a" "b"`, `read_file "p" -> none` or
 ;; `-> (some "…")`, `write "…"`, `write_line "…"`, `write_file "p" "…" -> true`, `exit 3`; bytes
@@ -1344,10 +1341,10 @@
   (match o
     (None "none")
     ((Some bs) (append "(some " (append (tr_quote bs) ")")))))
-;; ---- the wire by declared type (§6.7; §8.4 slice 3.18 rule 4) --------------------------------
+;; ---- the wire by declared type ---------------------------------------------------------------
 ;; each value of an extern is built and read by the E type the program declared — a codec by
 ;; identity, as the entry's is: the prelude's cells under the toolchain's signatures
-;; (host.shard), Init's under the naming law. A declared type the host's value does not fit
+;; (host.shard), Init's under v3/std/host.shard's. A declared type the host's value does not fit
 ;; yields no value (the extern is stuck), decided before the host is asked — the result's type
 ;; too: the World's token is returned at the type it was passed at (the extern's last parameter's)
 (fn tags2 ((lk Linked) (a Name) (b Name)) (Option (Pair Int Int))

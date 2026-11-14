@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# v3/kernel/test/store_test.sh — the store and the release gate (v3/LANGUAGE.md §8.4 slice
-# 3.22, landing 3; law §7.5). (1) v3/examples/auto under `load.shard --store`: 23 declarations
+# v3/kernel/test/store_test.sh — the store and the release gate. (1) v3/examples/auto
+# under `load.shard --store`: 23 declarations
 # written as the records K ingests, DIR/order in admission order; a second load of the same
 # module writes nothing new and lists nothing twice; verify_release.shard — K, the host and
 # the JSON reader, no elaborator — replays the store after the closure of Init it cites and accepts every
 # declaration. Then the gate refuses what it must: a theorem whose value is replaced by its
 # statement is REJECTED, an expression record removed is MALFORMED, a file removed is MISSING,
 # a name record removed is MISTIED (the declaration lands under another name), each with a
-# non-zero exit; then slice 4.0's tampers (R79, R80): a second rejected record and a second
+# non-zero exit; then tampers of the gate's exit and target: a second rejected record and a second
 # accepted one in a file, the theorem replaced by an axiom, a proof resting on an undeclared
 # axiom, a target removed from order, a discharge removed from the manifest — each a non-zero
 # exit —, and a discharged store verifying with its DISCHARGE lines. (2) calc: the five leaves of tactic_test.sh stored in sequence into
@@ -17,7 +17,7 @@ set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "store_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index (slice 3.26)
+INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0
@@ -58,7 +58,7 @@ verify "$OUT/t4" > "$OUT/t4.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^MISTIED examples.auto.auto.le_step accepted as ' "$OUT/t4.txt" && grep -q 'mistied 1  missing 0  taken 0 ' "$OUT/t4.txt" || { bad "a name record removed was not mistied (exit $rc)"; tail -2 "$OUT/t4.txt" | cut -c1-300; }
 echo "store_test: the gate rejects a forged proof, a broken record, a missing file and a renamed declaration"
 
-# ---- the reconstruction contract (slice 4.5 rule 2; law §7.2, §7.5): the example's P reconstructed
+# ---- the reconstruction contract: the example's P reconstructed
 # the same, a differing retained P an evidence change, another reconstruction version named on
 # every line and never written into; the gate reads the recon line past
 reconstruct() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --reconstruct "$1" "$2"; }
@@ -77,7 +77,7 @@ verify "$OUT/r0" > "$OUT/r5.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the gate refuses a manifest with a recon line (exit $rc)"; grep -v '^ACCEPT' "$OUT/r5.txt" | head -3 | cut -c1-200; }
 echo "store_test: the reconstruction contract — the example reconstructs the same P, a differing P is an evidence change, another version is named on every line and never written into"
 
-# ---- display names outside the records (slice 4.5 rule 3; law §7.5): every binder anonymous in the
+# ---- display names outside the records: every binder anonymous in the
 # records, DIR/ID.names beside each file naming the binder records that had a name, and one text for one
 # proof under two namings — the pins auto_core and auto_strategy_free, theorem t's binders x y against a b:
 # one ID, byte-identical records, differing names files
@@ -91,24 +91,24 @@ ta=$(grep ' main.t$' "$OUT/auto_core/order" | cut -d' ' -f1); tb=$(grep ' main.t
 checks=$((checks+1)); [ -n "$ta" ] && [ "$ta" = "$tb" ] && cmp -s "$OUT/auto_core/$ta.ndjson" "$OUT/auto_strategy_free/$tb.ndjson" && ! cmp -s "$OUT/auto_core/$ta.names" "$OUT/auto_strategy_free/$tb.names" || { bad "one proof under two namings did not write one text with differing names files ($ta, $tb)"; grep -E '^STORE:|ERROR|REFUSE' "$OUT/auto_core.txt" "$OUT/auto_strategy_free.txt" | head -3 | cut -c1-200; }
 echo "store_test: display names outside the records — every binder anonymous, a names file beside each record file, one text for one proof under two namings ($nn names over $nb binder records)"
 
-# ---- the release gate's exit and target (slice 4.0 rules 2–3; R79, R80)
+# ---- the release gate's exit and target
 F="$OUT/auto/$id.ndjson"; decl=$(tail -1 "$F")
 kin=$(grep -o '"in":[0-9]*' "$F" | tail -1 | tr -dc 0-9); kie=$(grep -o '"ie":[0-9]*' "$F" | tail -1 | tr -dc 0-9)
 nrec=$(grep -o '{"in":[0-9]*,"str":{"pre":[0-9]*,"str":"le_step"}}' "$F"); nidx=$(echo "$nrec" | grep -o '"in":[0-9]*' | tr -dc 0-9); pre=$(echo "$nrec" | grep -o '"pre":[0-9]*' | tr -dc 0-9)
-# R80: a second, rejected record in le_step's file (its value its statement) — one accepted, one rejected, exit nonzero
+# a second, rejected record in le_step's file (its value its statement) — one accepted, one rejected, exit nonzero
 cp -r "$OUT/auto" "$OUT/t5"; echo "$decl" | sed -E 's/"type":([0-9]+),"value":[0-9]+/"type":\1,"value":\1/' >> "$OUT/t5/$id.ndjson"
 verify "$OUT/t5" > "$OUT/t5.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^REJECT' "$OUT/t5.txt" && grep -q 'accepted 23  rejected 1 ' "$OUT/t5.txt" || { bad "a rejected second record did not fail the gate (exit $rc)"; grep -v '^ACCEPT' "$OUT/t5.txt" | tail -3 | cut -c1-300; }
-# R80: a second record K accepts under another name — accepted by K, MISTIED against the manifest, exit nonzero (before: n − accepted + mistied = 0)
+# a second record K accepts under another name — accepted by K, MISTIED against the manifest, exit nonzero (n − accepted + mistied would be 0)
 cp -r "$OUT/auto" "$OUT/t6"; sed -i "\$i {\"in\":$((kin+1)),\"str\":{\"pre\":$pre,\"str\":\"le_step_copy\"}}" "$OUT/t6/$id.ndjson"
 echo "$decl" | sed "s/\"name\":$nidx,/\"name\":$((kin+1)),/" >> "$OUT/t6/$id.ndjson"
 verify "$OUT/t6" > "$OUT/t6.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^MISTIED examples.auto.auto.le_step accepted as examples.auto.auto.le_step_copy' "$OUT/t6.txt" && grep -q 'accepted 24 .* mistied 1 ' "$OUT/t6.txt" || { bad "a second record accepted under another name did not fail the gate (exit $rc)"; grep -v '^ACCEPT' "$OUT/t6.txt" | tail -3 | cut -c1-300; }
-# R79: the theorem replaced by a same-name same-type axiom — MISKIND, UNDECLARED, exit nonzero
+# the theorem replaced by a same-name same-type axiom — MISKIND, UNDECLARED, exit nonzero
 cp -r "$OUT/auto" "$OUT/t8"; sed -i -E 's/\{"thm":\{"all":\[[0-9,]*\],/{"axiom":{"isUnsafe":false,/; s/,"value":[0-9]+\}\}$/}}/' "$OUT/t8/$id.ndjson"
 verify "$OUT/t8" > "$OUT/t8.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^MISKIND examples.auto.auto.le_step: the manifest says thm, the record is axiom' "$OUT/t8.txt" && grep -q 'miskind 1 ' "$OUT/t8.txt" || { bad "an axiom in the theorem's place was not MISKIND (exit $rc)"; grep -v '^ACCEPT' "$OUT/t8.txt" | tail -3 | cut -c1-300; }
-# R79: a proof resting on an axiom the manifest does not declare — the axiom's file added before le_step's (UNLISTED: no manifest line), le_step's value the axiom — CONDITIONAL, exit nonzero
+# a proof resting on an axiom the manifest does not declare — the axiom's file added before le_step's (UNLISTED: no manifest line), le_step's value the axiom — CONDITIONAL, exit nonzero
 cp -r "$OUT/auto" "$OUT/t9"; cp "$F" "$OUT/t9/ax.ndjson"
 sed -i -E 's/"str":"le_step"\}\}$/"str":"le_step_ax"}}/; s/\{"thm":\{"all":\[[0-9,]*\],/{"axiom":{"isUnsafe":false,/; s/,"value":[0-9]+\}\}$/}}/' "$OUT/t9/ax.ndjson"
 sed -i "/ examples.auto.auto.le_step\$/i ax examples.auto.auto.le_step_ax" "$OUT/t9/order"
@@ -117,11 +117,11 @@ sed -i "\$i {\"ie\":$((kie+1)),\"const\":{\"name\":$((kin+1)),\"us\":[]}}" "$OUT
 sed -i -E "\$s/,\"value\":[0-9]+\}\}$/,\"value\":$((kie+1))}}/" "$OUT/t9/$id.ndjson"
 verify "$OUT/t9" > "$OUT/t9.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q '^UNLISTED ax examples.auto.auto.le_step_ax' "$OUT/t9.txt" && grep -q '^UNDECLARED examples.auto.auto.le_step_ax: an axiom the manifest declares neither' "$OUT/t9.txt" && grep -q '^CONDITIONAL examples.auto.auto.le_step: rests on examples.auto.auto.le_step_ax' "$OUT/t9.txt" && grep -q 'unlisted 1 .* undeclared 1  conditional 1$' "$OUT/t9.txt" || { bad "a proof resting on an undeclared axiom was not CONDITIONAL (exit $rc)"; grep -v '^ACCEPT' "$OUT/t9.txt" | tail -4 | cut -c1-300; }
-# R79: a manifest target removed from order with its file — MISSING, exit nonzero
+# a manifest target removed from order with its file — MISSING, exit nonzero
 cp -r "$OUT/auto" "$OUT/t10"; sed -i "/ examples.auto.auto.le_step\$/d" "$OUT/t10/order"; rm "$OUT/t10/$id.ndjson"
 verify "$OUT/t10" > "$OUT/t10.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] && grep -q "^MISSING $id examples.auto.auto.le_step (a manifest declaration without an order line)" "$OUT/t10.txt" && grep -q 'missing 1 ' "$OUT/t10.txt" || { bad "a target removed from order was not MISSING (exit $rc)"; grep -v '^ACCEPT' "$OUT/t10.txt" | tail -3 | cut -c1-300; }
-# R79: a discharged obligation — the pin discharge_measure stored: its three obligations DISCHARGE lines, no parameter, exit 0; the discharge of count.dec_1 removed from the manifest: the function and its theorem rest on the obligation, CONDITIONAL, exit nonzero
+# a discharged obligation — the pin discharge_measure stored: its three obligations DISCHARGE lines, no parameter, exit 0; the discharge of count.dec_1 removed from the manifest: the function and its theorem rest on the obligation, CONDITIONAL, exit nonzero
 mkdir -p "$OUT/dm"
 "$EVAL" direct v3/kernel/load.shard --root v3/pins/loader/discharge_measure $INIT --store "$OUT/dm" v3/pins/loader/discharge_measure/main.shard > "$OUT/dm_load.txt" 2>&1
 checks=$((checks+1)); grep -q '^STORE: ' "$OUT/dm_load.txt" && [ "$(grep -c '^discharge ' "$OUT/dm/manifest")" = 3 ] && ! grep -q '^param ' "$OUT/dm/manifest" || { bad "discharge_measure did not store with three discharge lines and no parameter"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:|^STORE:' "$OUT/dm_load.txt" | head -3 | cut -c1-300; cat "$OUT/dm/manifest" 2>/dev/null | grep -v '^decl' | head -5; }
@@ -149,7 +149,7 @@ e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "verify_release failed on calc (exit $rc)"; grep -v '^ACCEPT' "$OUT/vc.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^RELEASE: declarations $n  accepted $n " "$OUT/vc.txt" || { bad "K did not accept every one of calc's $n declarations"; tail -1 "$OUT/vc.txt" | cut -c1-300; }
 echo "store_test: K alone accepts calc's $n declarations after Init's closure in $((e-s)) s"
-# R80: an inductive's exported metadata altered after its acceptance — MISMATCH counted, exit nonzero
+# an inductive's exported metadata altered after its acceptance — MISMATCH counted, exit nonzero
 cp -r "$REL" "$OUT/t7"; f=$(grep -l '"isRec":false' "$OUT/t7"/*.ndjson | head -1)
 checks=$((checks+1)); [ -n "$f" ] || bad "calc's store holds no non-recursive inductive to tamper"
 [ -n "$f" ] && sed -i '0,/"isRec":false/s//"isRec":true/' "$f"

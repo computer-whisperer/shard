@@ -1,57 +1,57 @@
 #!/usr/bin/env bash
-# v3/build.sh — route 1 (FOUNDATION §9.1): a toolchain closure as the V3 loader accepted
-# it, lowered and written as C by V3's own back end inside the loader's process (`load.shard
-# --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc` into a native
-# binary under v3/bin/ (LANGUAGE.md §8.7 slice 5.0 rules 2 and 4; §8.6 slice 4.1 rules 1, 2
-# and 8). The binaries are ENGINES: route 1's proof is still to come, so the Rust interpreter
-# (route 3) stays the authority and the byte-ties (v3/t0_full.sh;
-# kernel/test/native_tie_test.sh) tie the two. Nothing of the old tree is read: until slice
-# 5.0 the closure was printed in the old dialect and compiled by the old tree's two tools.
+# v3/build.sh — a native binary from a shard program: the root's closure as the V3 loader
+# accepted it, lowered and written as C by V3's own back end inside the loader's process
+# (`load.shard --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc`,
+# into v3/bin/ by default. The back end is unproven, so the Rust bootstrap stays the authority
+# and the byte-ties (v3/t0_full.sh; kernel/test/native_tie_test.sh) tie the two.
 #
 #   v3/build.sh [SRC [OUT]] [--root DIR] [EXTRA…]   one root: SRC's closure (default
 #                        v3/kernel/t0.shard) into OUT (default v3/bin/STEM); --root the loader's
-#                        root (default v3); EXTRA… further root files for the load (K's directory)
+#                        root (default v3); EXTRA… (after OUT) further roots for the load: the
+#                        directories of the views the program links (none named: K's, when the
+#                        closure consumes its view)
 #   v3/build.sh --all    the inventory below, V3_BUILD_JOBS roots at a time (default 8); a binary
 #                        whose stamp is current is kept; exit = the roots that failed
 #   v3/build.sh --stamp NAME   the stamp v3/bin/NAME would carry now (empty: never emitted)
 #   v3/build.sh --list   the inventory: NAME SRC
-#   v3/build.sh --shim   the engine shim v3/bin/eval (rule 4; --all writes it last): the bootstrap's
+#   v3/build.sh --shim   the engine shim v3/bin/eval (--all writes it last): the bootstrap's
 #                        command line over the binaries — `direct FILE` runs v3/bin/STEM when its
 #                        stamp is current and fails loudly otherwise; `dump` the bootstrap's
 #
-# THE INVENTORY (rule 8): the five drivers, calc_harness, the public harnesses of
-# kernel/test/ and those of k/test/ — parity's list (kernel/test/parity_test.sh).
+# THE INVENTORY: the five drivers, calc_harness, every *_test.shard of kernel/test/ and of
+# k/test/ — parity's list (kernel/test/parity_test.sh).
 # A root outside K's directory whose closure consumes K's view is loaded with v3/kernel/k as a
 # second root, so the directory's own check links the implementation into the program (as
 # parity and k_clients_test do; the bootstrap's dump shows env_empty when K is in the closure).
-# Every shell entrypoint's invocation of an engine has its disposition here:
-#   eval direct v3/kernel/X.shard ARGS…        -> v3/bin/X ARGS…      (the drivers and the harnesses: this inventory)
-#   eval direct load.shard … --run M.FN F…     -> v3/bin/load …       (the loader's own operation: k_clients_test, wire_test, define_test, calc_main_test, route2_test)
-#   eval direct load.shard … --dump F          -> v3/bin/load …       (the loader's own operation: template_test, define_test, parity's V3 side)
-#   eval dump F                                -> the bootstrap's     (parity's second reader; never compiled)
+# What a shell entrypoint's invocation of an engine becomes on the binaries:
+#   eval direct v3/kernel/X.shard ARGS…    -> v3/bin/X ARGS…  (a driver or a test: this inventory)
+#   eval direct load.shard … --run M.FN F… -> v3/bin/load …   (the loader's own operation)
+#   eval direct load.shard … --dump F      -> v3/bin/load …   (the loader's own operation)
+#   eval dump F                            -> the bootstrap's (parity's second reader; no binary)
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
-# under V3_ENGINE=native (rule 4), and kernel/test/suite_tie.sh compares that run with the bootstrap's.
+# under V3_ENGINE=native, and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
 # THE EMIT'S ENGINE: the bootstrap for every root. The loader's own closure — 9,003
-# declarations — loads, lowers and generates in 34 s on it (measured at slice 5.0), so no binary
-# builds another and a build never trusts one.
+# declarations — loads, lowers and generates in 34 s on it, so no binary builds another and a
+# build never trusts one.
 #
-# THE STAMP (rule 8): sha256 over the root's closure sources (the emit's `sources` list),
+# THE STAMP: sha256 over the root's closure sources (the emit's `sources` list),
 # the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,
 # the runtime (v3/kernel/rt.h) and the compiler's flags — v3/bin/NAME.stamp beside the binary;
-# the tie and the shim refuse a stale one. The `sources` list names a view by its mod.req.shard
-# alone, never the implementation behind it, so a root built with a view's directory as an
-# extra root has that directory's .shard files in its stamp too (emit/NAME/extra lists the
-# directories; K's own is in every stamp already). Found at slice 5.1 landing 3: an edit of
-# the formatter's printer, which sits behind a view, left its binary's stamp unchanged.
+# the tie and the shim refuse a stale one. A stamp covers every file that can enter the binary:
+# the `sources` list names a view by its mod.req.shard alone, never the implementation behind
+# it, so a root built with a view's directory as an extra root has that directory's .shard
+# files in its stamp too (emit/NAME/extra lists the directories; K's own is in every stamp
+# already), and an edit behind a view makes the binary stale.
 # A stamp says which sources the binary is a build of, so a build hashes every file that can
 # enter its stamp before the emit reads any and compares the stamp's files with those hashes
 # after the compile: one that was edited, created or removed while the build ran fails the
 # build (`FAIL: NAME: changed during the build: FILE…`) and no stamp is left beside the binary.
 # A file outside the stamp, or a file touched with its content unchanged, fails nothing.
-# Generated files live under v3/bin/ only (emit/NAME/
-# with main.c, its parts, map and sources; NAME, NAME.stamp, NAME.build.log); an authored file
-# is never written. v3/bin/ is derived and untracked.
+# Generated files live under v3/bin/ (emit/NAME/ with main.c, its parts, map and sources;
+# NAME, NAME.stamp, NAME.build.log; NAME is OUT's last component); only a binary and its stamp
+# go elsewhere, when OUT names another place. An authored file is never written. v3/bin/ is
+# derived and untracked.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 RUST_EVAL=${RUST_EVAL:-./rust_bootstrap/target/release/eval}
@@ -100,17 +100,16 @@ extra_roots() {
   if "$RUST_EVAL" dump "$1" 2>/dev/null | grep '^fn env_empty ' > /dev/null; then echo v3/kernel/k; fi
 }
 secs() { echo $(( $(date +%s) - $1 )); }
-# the engine shim (rule 4): a generated file under v3/bin/, rewritten by every --all
+# the engine shim: a generated file under v3/bin/, rewritten by every --all
 write_shim() {
   mkdir -p v3/bin
   cat > v3/bin/eval <<'SHIM'
 #!/usr/bin/env bash
-# v3/bin/eval — the engine shim (v3/LANGUAGE.md §8.6 slice 4.1 rule 4), GENERATED by
-# v3/build.sh --all (or --shim); never edited. The bootstrap's command line over the binaries
-# route 1 built:
+# v3/bin/eval — the engine shim, GENERATED by v3/build.sh --all (or --shim); never edited.
+# The bootstrap's command line over the native binaries:
 #   direct FILE ARGS…   v3/bin/NAME ARGS… (NAME = FILE's stem) when that binary exists and its
 #                       stamp is current (v3/build.sh --stamp NAME); otherwise exit 70 with a
-#                       message — never a silent fallback to the bootstrap (R84)
+#                       message — never a silent fallback to the bootstrap
 #   dump …              the bootstrap, unchanged (parity's second reader)
 # The command line's paths stay the caller's: every entrypoint runs from the repo root.
 set -u
@@ -135,10 +134,10 @@ build_one() {
   local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc snap err changed
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
   snap=$(snapshot "$root" "$@")
-  # Init on demand for a root under the naming law (slice 4.3 landing 2): the pinned export and
-  # its index when the fixtures hold them and the index is current — never built here (CI builds
-  # the driver before the index: on pipeline 629 the lookup built it on the bootstrap, ~1,950 s,
-  # in each heavy job); the kernel's roots import no Init and are unchanged
+  # Init on demand for a root under the naming law: the pinned export and its index when the
+  # index is current — never built here (a build by this lookup would run on the bootstrap,
+  # ~1,950 s: CI builds the index's driver before the index); the kernel's roots import no Init
+  # and need neither
   local init=""; read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
   s=$(date +%s)
   "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" $init --emit "$emit" "$src" "$@" > "$log" 2>&1; rc=$?

@@ -1,8 +1,7 @@
 /-
-v3/axioms.lean — the T0 axiom-closure oracle (FOUNDATION §3.6: "identical
-verdicts and axiom closures"). Run by v3/export.sh in the lean4export
-checkout (`lake env lean v3/axioms.lean`) against the pinned toolchain; it
-prints one line per constant of `Init`'s environment:
+v3/axioms.lean — the replay gate's axiom-closure oracle. Run by v3/export.sh
+in the lean4export checkout (`lake env lean --run v3/axioms.lean`) against
+the pinned toolchain; it prints one line per constant of `Init`'s environment:
 
     AX <name>: <axiom> <axiom> …        (axioms sorted by Name.lt)
 
@@ -14,8 +13,8 @@ inductive its type's and its constructors. Computed here as a least
 fixpoint over that relation (Kleene iteration in module order), NOT by
 calling Lean's `collectAxioms`: that function memoizes with a sentinel that
 makes an inductive's cached closure depend on whether it or one of its
-constructors was visited first (an order-dependent cache, records §8), and
-T0 compares by rule, not by tool name. K's side is v3/kernel/axioms.shard.
+constructors was visited first (an order-dependent cache), and the gate
+compares by rule, not by tool name. K's side is v3/kernel/k/axioms.shard.
 -/
 import Lean
 open Lean

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # v3/kernel/test/session_emit_test.sh — declarations built as data, lowered under the names
-# they were admitted, prepared and invoked under (LANGUAGE.md §8.6 slice 4.6 rule 2; GPT-6 R61;
-# the T6 row's "construct, prepare once, invoke repeatedly, transform, check, lower under one
-# identity"). session_test.shard's `emit` mode introduces v3/pins/session/data.shard as a
+# they were admitted, prepared and invoked under: construct, prepare once, invoke repeatedly,
+# lower, all under one identity. session_test.shard's `emit` mode introduces
+# v3/pins/session/data.shard as a
 # revision, builds `show3 : Nat → World → World` and `main : World → World := show3 2` as terms
 # of K, admits them through the raw entry, takes their derived views, writes the revision's
-# closure as the back end's C text (emit.shard: lower.shard, cgen.shard — §8.7 slice 5.0) and
+# closure as the back end's C text (emit.shard: lower.shard, cgen.shard) and
 # runs `main` through a prepared handle. This test compiles that text and runs the binary: its
 # output must be the handle's, byte for byte. Exit code = the number of failed checks.
 set -u

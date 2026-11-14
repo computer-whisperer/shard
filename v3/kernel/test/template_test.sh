@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# v3/kernel/test/template_test.sh — T2 and T3 as a test (v3/LANGUAGE.md §8.4 slice 3.28 rule 7;
-# law §12.5). Over v3/examples/template: the four files load in one process — std/list's six
-# templates (TEMPLATE records, no program of their own), the law's `add_offset` taking `List.map`
+# v3/kernel/test/template_test.sh — templates as a test. Over v3/examples/template:
+# the five files load in one process — std/list's six
+# templates (TEMPLATE records, no program of their own), `add_offset` taking `List.map`
 # at a lifted lambda with its captured value leading, a named fn and a named partial application
 # as static arguments, a package at Int with its generic theorems proven once over the package
 # parameter and applied at the constants, a package's operation passed on to another template;
-# the theorems over the instances' callers hold by Eq.refl through the unfolding; T3's large
-# finite workload — 64 instances at 64 lifted lambdas in one file, within the budget (landing 3).
+# the theorems over the instances' callers hold by Eq.refl through the unfolding; a large
+# finite workload — 64 instances at 64 lifted lambdas in one file, within the budget.
 # The entry runs under --run and prints the instances' results as one line of digits. Then the
 # ARTIFACT check:
 # the programs dumped (--dump) hold no lambda, no function type and no partial application —
 # the dump's grammar has none (calls saturated by construction); the check is that no `fun` and
-# no `->` appears in any program line while the source files hold the lambdas — T2's risk column
-# checked on the artifact, not read off the source. Exit code = the number of checks that failed.
+# no `->` appears in any program line while the source files hold the lambdas — that a program
+# holds no function value is checked on the artifact, not read off the source.
+# Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -55,16 +56,15 @@ for d in "DEFINE examples.template.add_offset.add_offset.lam_1 " "ACCEPT example
          "ACCEPT examples.template.package.fold_m_nil " "ACCEPT examples.template.package.sum_int_nil " "ACCEPT examples.template.package.sum_int_cons " "ACCEPT examples.template.package.prod_int_nil " "ACCEPT examples.template.package.int_add_unit "; do
   checks=$((checks+1)); grep -q "^$d" "$OUT/load.txt" || bad "missing record: $d"
 done
-# the workload (T3): its 64 instances, each at its own lifted lambda, all built in this load
+# the workload: its 64 instances, each at its own lifted lambda, all built in this load
 n_wl=$(grep -c "^INSTANCE examples.template.workload.List_[a-z]*_Int[_A-Za-z]*.of.examples_template_workload_[mfal][0-9]*_lam_1_0 " "$OUT/load.txt")
 checks=$((checks+1)); [ "$n_wl" = 64 ] || bad "the workload took $n_wl instances, not 64"
 checks=$((checks+1)); [ "$(grep -c '^DEFINE examples.template.workload.[mfal][0-9]*.lam_1 ' "$OUT/load.txt")" = 64 ] || bad "the workload's lambdas are not 64 lifted fns"
 # main takes List.map at digit on the typed route — the instance with its equations, main defined
-# (until slice 4.3 landing 1 gave externs an L meaning, main was E-first for the extern's sake and
-# the instance had no equations: rule 3's last sentence, now the fixture of pin template_e_first)
+# (an instance with no equations is the pin template_e_first's, below)
 checks=$((checks+1)); grep -q "^INSTANCE examples.template.template_main.List_map_Int_UInt8.of.examples_template_template_main_digit_0 of=List.map shapes=examples.template.template_main.digit/0 equations=examples.template.template_main.List_map_Int_UInt8.of.examples_template_template_main_digit_0.eq_1" "$OUT/load.txt" || bad "missing record: the INSTANCE at digit with its equations"
 checks=$((checks+1)); grep -q "^DEFINE examples.template.template_main.main " "$OUT/load.txt" || bad "the entry is not defined"
-# the E-first instance (rule 3's last sentence): a body E-first through a fn over a Symbol takes
+# the E-first instance: a body E-first through a fn over a Symbol takes
 # a template at a named fn — the instance built with no equations, the body RUNNABLE no_l_identity
 R=v3/pins/loader/template_e_first
 "$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard > "$OUT/efirst.txt" 2>&1
@@ -78,7 +78,7 @@ s=$(date +%s)
 checks=$((checks+1)); [ "$(load --run $ENTRY "${FILES[@]}" 2>&1 | tail -1)" = "9662014509" ] || { bad "the entry did not print 9662014509"; load --run $ENTRY "${FILES[@]}" 2>&1 | tail -3 | cut -c1-300; }
 t_run=$(secs $s)
 
-# ---- the artifact (T2's risk column, on the programs) ----------------------------------------
+# ---- the artifact (no function value, on the programs) --------------------------------------
 s=$(date +%s); load --dump "${FILES[@]}" > "$OUT/dump.txt" 2>&1; rc=$?; t_dump=$(secs $s)
 checks=$((checks+1)); [ "$rc" = 0 ] && grep -q "^fn " "$OUT/dump.txt" || bad "the programs did not dump (exit $rc)"
 n_src=$(cat "${FILES[@]}" v3/std/list.shard | grep -c "(fun \|(-> ")
@@ -89,7 +89,7 @@ checks=$((checks+1)); [ "$n_art" = 0 ] || { bad "a program holds a lambda or a f
 checks=$((checks+1)); grep -q "^fn [A-Za-z_.]*List_map_Int_Int.of.[A-Za-z_.]*add_offset_lam_1_1 " "$OUT/dump.txt" || bad "the lambda's instance is not a program of the artifact"
 checks=$((checks+1)); grep -q "^fn [A-Za-z_.]*add_offset.lam_1 " "$OUT/dump.txt" || bad "the lifted lambda is not a program of the artifact"
 checks=$((checks+1)); grep -q "^fn [A-Za-z_.]*fold_m_Int.of.[A-Za-z_.]*IntAdd_0 " "$OUT/dump.txt" || bad "the package instance is not a program of the artifact"
-checks=$((checks+1)); grep -q "^fn [A-Za-z_.]*List_map_Int_UInt8.of.[A-Za-z_.]*digit_0 " "$OUT/dump.txt" || bad "the E-first instance is not a program of the artifact"
+checks=$((checks+1)); grep -q "^fn [A-Za-z_.]*List_map_Int_UInt8.of.[A-Za-z_.]*digit_0 " "$OUT/dump.txt" || bad "the instance main takes (List.map at digit) is not a program of the artifact"
 checks=$((checks+1)); grep -q "^fn List.map \|^fn [A-Za-z_.]*fold_m [0-9]" "$OUT/dump.txt" && bad "a template has a program of its own"
 n_inst=$(grep -c "^fn [A-Za-z0-9_.]*\.of\." "$OUT/dump.txt")
 checks=$((checks+1)); [ "$n_inst" -ge 80 ] || bad "fewer than 80 instances in the artifact ($n_inst)"

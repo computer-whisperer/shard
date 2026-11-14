@@ -1,22 +1,16 @@
-;;; v3/kernel/prog.shard — E programs as data: what `ev` runs.
+;;; v3/kernel/prog.shard — E programs as data: what `ev` runs. `ev`
+;;; (ev.shard) is the definition of "run", stated over this data: the
+;;; declarations, with the rules as comments.
 ;;;
-;;; FOUNDATION §2 ("programs are data"), §4.2 (E's types and terms),
-;;; §4.4 (`ev` is the definition of "run"; evaluation reflection is
-;;; stated over this data), §9.1 (route 2: K interpreted by compiled
-;;; `ev`). v3/LANGUAGE.md §6 is the specification; this file is the
-;;; definition, phase 2 slice 1 (2026-09-07): declarations with the
-;;; rules as comments, the phase-0 precedent — `ev` and the classifier
-;;; are the slices after the reader.
-;;;
-;;; The shape is the Rust bootstrap's AST (rust_bootstrap/src/ast.rs,
-;;; the executor of E today) with every name resolved to an identity
+;;; The shape is the Rust bootstrap's AST (rust_bootstrap/src/ast.rs)
+;;; with every name resolved to an identity
 ;;; (name.shard's Name: the module path plus the declared name for a
 ;;; native declaration, the exported name for an imported one) and every
 ;;; call head classified at load, so `ev` never guesses what a head is.
-;;; Frontend parity (LANGUAGE.md §10) compares a Prog printed by the V3
+;;; Frontend parity (test/parity_test.sh) compares a Prog printed by the V3
 ;;; reader with the bootstrap's Module printed in the same text.
 ;;;
-;;; This is a toolchain-profile file: the L-level List/Option/Bool/Nat
+;;; This is a toolchain file: the L-level List/Option/Bool/Nat
 ;;; of the library are Init's and unrelated (prelude.shard).
 
 (import "util.shard")
@@ -32,10 +26,10 @@
 (use kernel.prelude.Pair)  ; Name (name.shard) + name_eq
 
 ;; ---------------------------------------------------------------------
-;; TYPES. E-types (§4.2): a type constructor applied to E-types, or a type
+;; TYPES. E-types: a type constructor applied to E-types, or a type
 ;; parameter of the enclosing declaration by position. Every polymorphic
 ;; type constructor is at universe level 0 here — E-types live in Type —
-;; so no levels are carried (LANGUAGE.md §4, "E-type positions").
+;; so no levels are carried.
 (type EType
   (ETCon Name (List EType))  ; List Int, Option (List Int), Nat, a native inductive applied
   (ETVar Int))  ; the i-th type parameter of the declaration (0-based)
@@ -79,15 +73,14 @@
     ((ETCon n ts) (ETCon n (subst_tys args ts)))))
 
 ;; ---------------------------------------------------------------------
-;; LITERALS (LANGUAGE.md §8.1 rule 2, one rule for every file). LNat and LInt
+;; LITERALS. LNat and LInt
 ;; share the runtime representation (VInt) — the realization of Nat and Int
-;; alike is the unbounded integer (v3/INVENTORY.md); the kind is the sign, a
+;; alike is the unbounded integer; the kind is the sign, a
 ;; non-negative numeral typing as Nat for the static pass. LStr is a string
 ;; literal: its UTF-8 bytes as a chain of the nil and cons it names, built
 ;; once by the linker — Init's `List` cells for a `String`, whose
-;; representation they are (§8.4 slice 3.18 rules 1 and 3); in the
-;; toolchain's own sources, until they migrate, the `List` in scope's. LSym
-;; is the symbol literal.
+;; representation they are; in the toolchain's own sources the `List` in
+;; scope's. LSym is the symbol literal.
 (type ELit
   (LNat Int)  ; a numeral ≥ 0
   (LInt Int)  ; a negative numeral
@@ -108,22 +101,22 @@
 ;; TERMS. Locally nameless: EBVar 0 is the innermost binding (a fn's last
 ;; parameter, the last variable a pattern bound, the last binding of a
 ;; let). Four head kinds are four constructors: the classifier resolved
-;; each head to exactly one of them (LANGUAGE.md §6.3), all saturated.
+;; each head to exactly one of them, all saturated.
 (type ETerm
   (EBVar Int)  ; a parameter or pattern/let variable
   (ELit ELit)
   (ECtor Name (List ETerm))  ; a constructor of an E-eligible inductive, applied to its fields
   (ECall Name (List ETerm))  ; an E function (EFn, or an ESig linked at run time)
-  (EPrim Name (List ETerm))  ; a primitive of the fixed table, by identity (LANGUAGE.md §6.4)
+  (EPrim Name (List ETerm))  ; a primitive of the fixed table, by identity
   (EExt Name (List ETerm))  ; a World extern — `ev` is pure and stops here; `run` performs it
   (EMatch ETerm (List EArm))  ; first arm whose pattern matches; no arm = stuck
-  (ELet (List ETerm) ETerm)  ; SEQUENTIAL (RULED 2026-09-12, R44): each rhs sees the bindings before it; pushed in order
+  (ELet (List ETerm) ETerm)  ; SEQUENTIAL: each rhs sees the bindings before it; pushed in order
   (EIf ETerm ETerm ETerm)  ; then-branch iff the condition's cell is the SECOND constructor of its type
-  (EAbsurd))  ; a refuted row — Init's `absurd` or `False.elim` in a body read on the typed route (slice 3.27 landing 3): unreachable, stuck if reached
-;; RULES of `ev` per node (LANGUAGE.md §6.2): arguments left to right; a
+  (EAbsurd))  ; a refuted row — Init's `absurd` or `False.elim` in a body read on the typed route: unreachable, stuck if reached
+;; RULES of `ev` per node: arguments left to right; a
 ;; call evaluates the callee's body in a fresh frame of exactly its
 ;; argument values with one unit of fuel less; a primitive's guard
-;; failure (the profile's `/` at zero, a shift out of range) is stuck,
+;; failure (the bare-named `/` at zero, a shift out of range) is stuck,
 ;; never a value; `if` is the tag rule — Bool.true, Decidable.isTrue and
 ;; the prelude's True are all the second constructor — which is what "a
 ;; decision tag with erased payload" means at run time.
@@ -131,14 +124,13 @@
 (type EArm (EArm EPat ETerm))
 
 ;; ---------------------------------------------------------------------
-;; RECURSION STRUCTURE (FOUNDATION §4.4: the correspondence is stated
-;; over "its cases, callees, representations and recursion"). `ev` needs
-;; none of it — fuel bounds every run — but the realization record does.
+;; RECURSION STRUCTURE. `ev` needs none of it — fuel bounds every run —
+;; but the descent check of a supplied `realize` does (realize.shard).
 (type ERec
   (RecNone)  ; no measure clause
   (RecStruct Int)  ; (measure (struct x)): structural on parameter i (0-based)
-  (RecMeasure ETerm)  ; (measure E): a term over the parameters — an obligation until phase 3
-  (RecLogical))  ; (measure E) where E has no program: it cites a function that is a definition and nothing more — a derived size (§8.7 slice 5.2 rule 6). The descent is K's alone, the definition's obligations
+  (RecMeasure ETerm)  ; (measure E): a term over the parameters
+  (RecLogical))  ; (measure E) where E has no program: it cites a function that is a definition and nothing more — a derived size. The descent is K's alone, the definition's obligations
 
 ;; ---------------------------------------------------------------------
 ;; DECLARATIONS.
@@ -154,7 +146,7 @@
   (EInd Name Int (List ECtorDef))  ; an E-eligible inductive: identity, nparams, constructors
   (EFn Name Int (List EType) EType ERec ETerm)  ; identity, ntparams, parameter types, return type, recursion, body
   (EExtern Name Int (List EType) EType)  ; a World extern: identity, ntparams, parameter types, return type
-  (ESig Name Int (List EType) EType)  ; a view's `sig fn`: a signature `run` links to an EFn (LANGUAGE.md §6.5)
+  (ESig Name Int (List EType) EType)  ; a view's `sig fn`: a signature `run` links to an EFn
   (ESigType Name Int))  ; a view's `sig type`: identity and arity, no constructors
 ;; RULES: identities are unique across a Prog (the loader's scope, K's
 ;; check_name for the L twins); an ECall's target is an EFn or an ESig
@@ -163,7 +155,7 @@
 ;; ESigType's constructor (the private-equality leak, refused at
 ;; classification); a call to an ESig is stuck (`unlinked`) — the
 ;; implementation check substitutes the implementation's EFn under the
-;; same identity (LANGUAGE.md §6.6, §6.7), which is the link.
+;; same identity, which is the link.
 
 (type Prog (Prog (List EDecl)))
 
@@ -175,16 +167,13 @@
 
 (type EvRes
   (EvOk Val)
-  (EvOut)  ; fuel exhausted — never a value, never a refusal (§9.4)
-  (EvExhausted Symbol Name)  ; a primitive's resource exhausted (nat_size, nat_count), the function — like EvOut, never a refusal (R51)
+  (EvOut)  ; fuel exhausted — never a value, never a refusal
+  (EvExhausted Symbol Name)  ; a primitive's resource exhausted (nat_size, nat_count), the function — like EvOut, never a refusal
   (EvStuck Symbol Name))  ; reason (no_arm, guard, unbound, extern, unknown_head), subject (the function)
 
 ;; ---------------------------------------------------------------------
-;; the identity of a declaration, and lookup by identity (name.shard's
-;; structural equality; `ev` may index a Prog however it likes — no
-;; representation is mandated).
 ;; the call heads of a body, first occurrence first (the loader: a realization's inherited
-;; obligations, LANGUAGE.md §7.5; GPT-6 R58)
+;; obligations)
 (fn calls_of ((t ETerm)) (List Name) (rev (calls_acc t Nil)))
 (fn calls_acc ((t ETerm) (acc (List Name))) (List Name)
   (measure (struct t))
@@ -209,6 +198,9 @@
   (match arms
     (Nil acc)
     ((Cons (EArm _ b) r) (calls_arms r (calls_acc b acc)))))
+;; the identity of a declaration, and lookup by identity (name.shard's
+;; structural equality; `ev` may index a Prog however it likes — no
+;; representation is mandated).
 (fn edecl_name ((d EDecl)) Name
   (match d
     ((EInd n _ _) n)
@@ -261,13 +253,12 @@
     ((Cons t r) (Cons 32 (append (show_etype t) (show_etypes r))))))
 
 ;; ---------------------------------------------------------------------
-;; THE PRIMITIVE TABLE (LANGUAGE.md §6.4): identity → (operation code,
-;; arity). The profile's bare names and the naming law's spellings where
+;; THE PRIMITIVE TABLE: identity → (operation code,
+;; arity). The toolchain's bare names and Init's spellings where
 ;; the meaning differs (`/` stuck at zero and `Int.tdiv` total are two
 ;; entries); ev.shard implements the codes, classify.shard resolves heads
-;; against the identities. `gen_fresh` is not carried (§6.7). The comparisons are `= < <=`
-;; since slice 3.17 (§8.4 rule 5); the old spellings `int_eq lt le` are refused everywhere
-;; with the new one (scope.shard `renamed_prim`; the toolchain's sources migrated at slice 4.4).
+;; against the identities. The comparisons are `= < <=`; the spellings `int_eq lt le` are
+;; refused with the one to write (scope.shard `renamed_prim`).
 (type Prim (Prim Int Int))
 (fn prim_table () (List (Pair Name Prim))
   (list (Pair (n1 (quote =)) (Prim 0 2)) (Pair (n1 (quote +)) (Prim 1 2))
@@ -308,13 +299,13 @@
     (Pair (n2 (quote Nat) (quote decEq)) (Prim 36 2))
     (Pair (n2 (quote Nat) (quote decLt)) (Prim 37 2))
     (Pair (n2 (quote Nat) (quote decLe)) (Prim 38 2))))
-;; the L identity of an entry (LANGUAGE.md §7.5): the naming-law spellings (18 and up) are L
-;; constants under their own names; the profile's spellings (0–17) have none
+;; the L identity of an entry: Init's spellings (18 and up) are L constants under their own
+;; names; the bare names (0–17) have none
 (fn prim_l_identity ((n Name)) (Option Name)
   (match (prim_find n)
     ((Some (Prim code _)) (if (< code 18) None (Some n)))
     (None None)))
-;; K's accelerated Nat set (§7.5): the entries whose operands are Nat and whose result is
+;; K's accelerated Nat set: the entries whose operands are Nat and whose result is
 ;; Nat (28–33 with Nat.sub and the bitwise five), Init's Bool (34, 35) or a Decidable (36–38)
 (fn prim_nat_bool ((code Int)) Bool (bool_or (= code 34) (= code 35)))
 (fn prim_decidable ((code Int)) Bool (bool_and (<= 36 code) (<= code 38)))
@@ -324,7 +315,7 @@
   (match t
     (Nil None)
     ((Cons (Pair k p) r) (if (name_eq k n) (Some p) (prim_assoc r n)))))
-;; the first candidate the table knows (S: the scope's candidates; the profile: the bare citation)
+;; the first candidate the table knows (the scope's candidates, the bare citation last)
 (fn prim_of ((cands (List Name))) (Option (Pair Name Prim))
   (measure (struct cands))
   (match cands
@@ -333,7 +324,7 @@
      (match (prim_find c)
        ((Some p) (Some (Pair c p)))
        (None (prim_of r))))))
-;; a primitive's result type head: the prelude's Bool for the profile's decisions, Symbol, List,
+;; a primitive's result type head: the prelude's Bool for the bare-named decisions, Symbol, List,
 ;; Nat for the Nat set, Init's Bool for Nat.beq/ble, Decidable for Nat.decEq/decLt/decLe, else Int
 (fn prim_result ((code Int)) EType
   (if (bool_or (= code 0) (bool_or (= code 3) (bool_or (= code 4) (= code 5))))
@@ -346,8 +337,8 @@
   (ETCon (n1 (quote Int)) Nil))))))))
 
 ;; ---------------------------------------------------------------------
-;; THE TOOLCHAIN PRELUDE'S IDENTITIES (LANGUAGE.md §8): the wire's cells
-;; and the decisions the comparison primitives return (§6.7).
+;; THE TOOLCHAIN PRELUDE'S IDENTITIES: the wire's cells
+;; and the decisions the comparison primitives return.
 (fn prelude_mod () Name (n2 (quote kernel) (quote prelude)))
 (fn prelude_list () Name (Str (prelude_mod) (quote List)))
 (fn prelude_bool () Name (Str (prelude_mod) (quote Bool)))

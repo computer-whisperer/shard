@@ -1,6 +1,7 @@
-/* rt.h — the C runtime under codegen'd RS-shard (see tools/lower/DESIGN.md).
+/* rt.h — the C runtime under the generated C (cgen.shard writes the text
+ * that includes it).
  *
- * Generated out.c #defines the core ctor tags (RT_TAG_True, RT_TAG_False,
+ * The generated main.c #defines the role tags (RT_TAG_True, RT_TAG_False,
  * RT_TAG_Nil, RT_TAG_Cons, RT_TAG_None, RT_TAG_Some, RT_TAG_Pair,
  * RT_TAG_World) BEFORE including this header. A constructor's tag is odd
  * where it is the second constructor of its type and even otherwise, these
@@ -10,25 +11,27 @@
  *   odd  = small int, (i << 1) | 1, i in i63.
  *   even = pointer to cell { tag, arity, fields... }.
  * Ints outside i63 are BIGNUM cells (tag RT_TAG_BIG_, see the bignum
- * section) — arithmetic is exact like the interpreted engines; the old
- * "overflow traps" posture survives only as the explicit guards (shift
- * counts, RT_BIG_MAXLIMB), still loud never wrong.
+ * section) — arithmetic is exact like the interpreted engines, up to the
+ * explicit guards (shift counts, RT_BIG_MAXLIMB), which trap: loud, never
+ * wrong.
  * Symbols are cells with tag RT_TAG_SYM_ (runtime-reserved, not a ctor
  * tag) whose single field is the intern id (small int). Equality = id.
  *
  * Allocator: bump pointer over a big MAP_NORESERVE region, backed by a
  * CONSERVATIVE mark-sweep collector (rt_gc). GC runs only inside rt_alloc,
  * which is a function call, so the C ABI guarantees every value_t live
- * across it is on the C stack or in a callee-saved register — setjmp +
- * a word scan of [sp..stack_base] captures all roots. Marking is sound
+ * across it is on the C stack or in a callee-saved register — the registers
+ * spilled into rt_gc's frame, then a word scan of [sp..stack_base] and of
+ * the data segment (the generated statics) captures all roots. Marking is sound
  * against false roots because a per-16B-slot START BITMAP (set on every
  * fresh bump allocation) validates that a candidate points at a real cell
  * head before any deref or mark; the mark itself is the top bit of the
  * 32-bit tag, cleared by the sweep so the hot rt_tag path is untouched
  * between collections. Reclaimed cells go to size-segregated free lists
- * (non-moving — conservative roots can't be relocated). This is a dev-loop
- * engine only; the Rust interpreter is the soundness authority and the
- * byte-identical corpus cross-check catches any divergence.
+ * (non-moving — conservative roots can't be relocated). Nothing here is
+ * proven: the Rust bootstrap is the authority wherever a binary differs from
+ * it, and the ties (test/native_tie_test.sh, test/suite_tie.sh) compare the
+ * two byte for byte.
  */
 #ifndef RT_H
 #define RT_H
@@ -101,12 +104,10 @@ static char *rt_gc_trigger;           /* next GC when bump passes this */
 /* ADAPTIVE spacing: collect after max(live, MIN) fresh bump bytes, capped at
    MAX. Spacing proportional to the live set keeps GC cost amortized-constant
    per allocated byte AND holds the heap extent (and so RSS + sweep length +
-   fresh-page faults) at a small multiple of live. The old FIXED 2 GiB
-   spacing grew the extent by 2 GiB per cycle regardless of a tiny live set —
-   measured ~30% of wall time in fresh-page faults (1.07M faults/6s) and
-   32 GB RSS on a nested-eval run (tools/bench). MAX keeps the old
-   parallel-jobs bound: peak resident ~= live + MAX per process (JOBS-parallel
-   gate_sweep/run_corpus without OOM). */
+   fresh-page faults) at a small multiple of live. A FIXED 2 GiB spacing
+   grows the extent by 2 GiB per cycle regardless of a tiny live set: ~30% of
+   wall time in fresh-page faults and 32 GB RSS on a nested evaluation. MAX
+   bounds processes run in parallel: peak resident ~= live + MAX each. */
 #define RT_GC_MIN_SPACING (64ul << 20)
 #define RT_GC_MAX_SPACING (2ul << 30)
 static size_t rt_live_bytes = 0;      /* live bytes found by the last sweep */
@@ -116,9 +117,9 @@ static size_t rt_live_bytes = 0;      /* live bytes found by the last sweep */
    work each event performs); only the dump is gated. Per-generated-fn call
    counters live in the GENERATED file (rt_fnctr_g/rt_fnname_g, one slot per
    fn, incremented at fn entry AND self-tail iteration); main binds them here
-   before rt_init so the dump can rank them. The measured quantities are the
-   CERT.md §9 instruments: total calls (checker work), allocations (term
-   construction), GC live peak (peak live terms), maxrss. */
+   before rt_init so the dump can rank them. The measured quantities: total
+   calls (checker work), allocations (term construction), GC live peak (peak
+   live terms), maxrss. */
 static long long rt_stat_allocs, rt_stat_alloc_bytes, rt_stat_gcs;
 static size_t rt_stat_live_peak;
 static long long *rt_fnctr_p; static const char *const *rt_fnname_p;
@@ -184,8 +185,8 @@ static void rt_gc(void) {
   /* roots: the preallocated singletons, callee-saved registers, the stack */
   rt_mpush(rt_true_); rt_mpush(rt_false_); rt_mpush(rt_nil_);
   rt_mpush(rt_none_); rt_mpush(rt_unit_world);
-  /* The codegen emits file-scope `static value_t sl_N` globals for interned
-     string/symbol literals (e.g. extern names) — roots not on any stack. Scan
+  /* The generated text has file-scope `static value_t sl_N` globals for the
+     symbol literals — roots not on any stack. Scan
      the whole data+bss segment conservatively. Safe: rt_free[] was just
      cleared (so the free lists can't keep dead cells alive), and rt.h's other
      globals point to non-cell memory (mmap/malloc), which the start-bitmap
@@ -298,10 +299,10 @@ static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(
  * Semantics authority = prim.rs (num-bigint): truncating `/`+`tmod`,
  * euclidean `mod`+`ediv`, two's-complement bitwise, floor shifts. Division
  * is bit-serial (simple over fast) past 128 bits; a dividend within 128 bits
- * over a divisor within 64 takes the machine's division (rt_idiv2): V3's
- * structural hash is a multiply and a `mod` by 2^61 - 1 per node and per
- * name byte, each one a division of that size — half of a loader run's time
- * on the bit-serial path (measured 2026-11-10). */
+ * over a divisor within 64 takes the machine's division (rt_idiv2): a
+ * structural hash written whole (name.shard `mix_whole`) is a multiply and a
+ * `mod` by 2^61 - 1, a division of that size, and slow on the bit-serial
+ * path. */
 #define RT_BIG_MAXLIMB 120  /* ~2^3840; stays inside the GC size classes */
 _Static_assert(RT_BIG_MAXLIMB + 1 <= RT_MAX_ARITY, "a bignum cell is inside the size classes");
 
@@ -615,8 +616,8 @@ static value_t rt_ishr2(value_t a, uint32_t k) {
   free(A); free(R);
   return out;
 }
-/* decimal literal -> value (codegen emits rt_big_dec("...") for out-of-i63
-   literals; also the unit-test entry) */
+/* decimal literal -> value (cgen.shard emits rt_big_dec("...") for
+   out-of-i63 literals) */
 static value_t rt_big_dec(const char *s) {
   int sign = 1;
   if (*s == '-') { sign = -1; s++; }
@@ -641,7 +642,7 @@ static inline int rt_byte_of(value_t v) {
   return rt_big_sign(v) < 0 ? (256 - b) & 0xFF : b;
 }
 
-/* ---- prims (specs = kernel reduce.shard / host prim.rs) ------------------ */
+/* ---- prims (specs = ev.shard prim_apply / the bootstrap's prim.rs) -------- */
 /* Every prim: small-int fast path first (both operands tagged odd), big
  * slow path on overflow or a big operand. rt_tag_int itself promotes
  * int64-but-not-i63 results, so fast paths only pre-check int64 overflow. */
@@ -799,14 +800,14 @@ static value_t rt_sym_of_chars(value_t l) {
   return rt_sym(rt_intern(buf, n));
 }
 
-/* ---- externs (World = preallocated unit cell, threaded for order) -------- */
+/* ---- externs (World = one cell, threaded for order; returned as given) --- */
 static int rt_argc; static char **rt_argv;
 
-/* The extern wire speaks RAW BYTES (issue #2 Phase 3): every (List Int)
+/* The extern wire speaks RAW BYTES: every (List Int)
    payload is a byte sequence, one element per byte (masked mod 256 on the
-   way out, mirroring bytes_of_list). No UTF-8 codec at this boundary —
+   way out, rt_byte_of). No UTF-8 codec at this boundary —
    reads are binary-safe, writes emit the list verbatim. Matches the Rust
-   engine (eval.rs byte_list/list_bytes). */
+   bootstrap (bin/eval.rs byte_list/list_bytes). */
 static value_t rt_str_list(const char *s) {
   /* argv -> its raw bytes */
   size_t len = strlen(s); const unsigned char *us = (const unsigned char *)s;
@@ -855,8 +856,8 @@ static value_t rt_read_file(value_t path, value_t w) {
 }
 /* a byte range of a file: at most n bytes from offset off as (Some bytes) —
  * fewer at the file's end, an empty list past it — or None on an I/O error or
- * a negative offset or count. Mirrors eval.rs read_range (v3/kernel/host.shard;
- * LANGUAGE.md §8.4 slice 3.26). */
+ * a negative offset or count. Mirrors the bootstrap's read_range (bin/eval.rs;
+ * v3/kernel/host.shard declares it). */
 static value_t rt_read_range(value_t path, value_t off, value_t n, value_t w) {
   int64_t o = rt_untag(off), k = rt_untag(n);
   if (o < 0 || k < 0) return rt_pair(rt_none_, w);
@@ -934,11 +935,10 @@ static void rt_stats_dump(void) {
 /* ---- init ---------------------------------------------------------------- */
 /* The stack-scan upper bound must sit ABOVE every later computation frame.
    argv points at the kernel-placed argv array on the initial process stack,
-   above main's frame — a layout-independent bound. (&argc was used before:
-   a spill slot INSIDE rt_init's frame, safe only while the compiler happened
-   to place it at the frame top; adding calls to rt_init moved the slot and
-   frames above it escaped the root scan — live cells got swept. Measured
-   2026-07-19, gcc 16.1.1 -O2, first surfaced by the stats additions.) */
+   above main's frame — a layout-independent bound. (&argc is no such bound:
+   a spill slot INSIDE rt_init's frame, safe only while the compiler happens
+   to place it at the frame top; where it does not, the frames above it
+   escape the root scan and live cells are swept — seen with gcc 16.1.1 -O2.) */
 static void rt_init(int argc, char **argv) {
   rt_argc = argc; rt_argv = argv;
   if (getenv("SHARD_STATS")) atexit(rt_stats_dump);

@@ -1,7 +1,6 @@
 ;;; v3/kernel/lower.shard — a program lowered to the restricted form RS: the first of the
-;;; back end's two stages (v3/LANGUAGE.md §8.7 slice 5.0 rule 2; law §9.1 route 1). The
-;;; design is the old tree's chain (tools/lower, removed at this slice): rewrite every
-;;; body to a shape the generator (cgen.shard) transcribes without a decision of its own.
+;;; back end's two stages. Every body is rewritten to a shape the generator (cgen.shard)
+;;; transcribes without a decision of its own.
 ;;; The input is the program the load yielded — a Prog, every name an identity, every head
 ;;; classified, every variable an index —, so there is no text to print and read back and
 ;;; no second reader, loader or resolver between a loaded program and its binary.
@@ -18,7 +17,7 @@
 ;;; without the generator (`load.shard --lowered --run`; test/lower_test.sh).
 ;;;
 ;;; THE PASSES, per function. (A) the body to a named form — a variable a number, the
-;;; parameters 0…n-1 —, with the bridge's rows applied (below) and a string literal spelled
+;;; parameters 0…n-1 —, with the primitives' rows applied (below) and a string literal spelled
 ;;; as its cells. (JP) an `if` or a `match` in an operand's position is lifted whole to a
 ;;; function over its free variables, a call being a legal operand; a nested pattern is
 ;;; compiled per arm into a chain of flat matches, the fall-through continuation lifted once
@@ -27,22 +26,22 @@
 ;;; identity is its owner's with a numeric component (`f.7`), which no source name has; its
 ;;; parameters and result carry the opaque type `JV` — RS is a run artifact.
 ;;;
-;;; THE BRIDGE'S ROWS (slice 4.4 landing 1, carried from the emitter this file replaces).
-;;; Of the naming law's primitives, seven stay as they are — `Nat.land lor xor shiftLeft
+;;; THE PRIMITIVES' ROWS. The eighteen bare-named primitives stay as they are.
+;;; Of those under Init's names, seven stay too — `Nat.land lor xor shiftLeft
 ;;; shiftRight beq ble` —, the runtime's operation agreeing with them on the values E reaches
-;;; (cgen.shard names it); they are not renamed to the profile's, because under `ev` the two
+;;; (cgen.shard names it); they are not renamed to the bare ones, because under `ev` the two
 ;;; differ in the cell they answer with (`Nat.beq` Init's `Bool`, `=` the prelude's) and RS
 ;;; must run as the program did. Seven become an expression over both operands bound once,
 ;;; where the runtime's operation differs: `Nat.sub` truncating at zero; `Nat.div`,
 ;;; `Int.tdiv`, `Int.ediv` zero at a zero divisor; `Nat.mod`, `Int.emod`, `Int.tmod` the
-;;; dividend there (the migration table, law §10.3) — the same value under `ev`, whose own
+;;; dividend there — the same value under `ev`, whose own
 ;;; operations these are. A primitive with no row is refused, never approximated.
 ;;;
 ;;; THE WIRE ROLES (`lw_role`). The runtime builds and reads eight cells by tag — true,
 ;;; false, nil, cons, none, some, pair and the World's (rt.h's decisions and extern shims) —,
-;;; so the constructors that are those cells carry a role, not a spelling: in the toolchain's
-;;; profile the constructor so named in whatever type declares it (the bootstrap's own rule
-;;; for `True False Nil Cons None Some`), under the naming law Init's `Bool`, `List`,
+;;; so the constructors that are those cells carry a role, not a spelling: the
+;;; constructor so named in whatever type declares it (the bootstrap's own rule
+;;; for `True False Nil Cons None Some`), and Init's `Bool`, `List`,
 ;;; `Option`, `Prod` and `Decidable`'s two as `Bool`'s. The generator gives a role its fixed
 ;;; tag and every other constructor a tag of its own.
 ;;;
@@ -190,7 +189,7 @@
         (match (lw_named_all r env k1)
           ((LwsErr m) (LwsErr m))
           ((LwsOk es k2) (LwsOk (Cons e es) k2))))))))
-;; the sequential let (R44): each right-hand side sees the bindings before it
+;; the sequential let: each right-hand side sees the bindings before it
 (fn lw_named_let ((rs (List ETerm)) (body ETerm) (env (List Int)) (k Int)) LwR
   (match rs
     (Nil (lw_named body env k))
@@ -220,7 +219,8 @@
     ((PLit (LNat n)) (LwPOk (LwPInt n) Nil k))
     ((PLit (LInt n)) (LwPOk (LwPInt n) Nil k))
     ((PLit (LSym s)) (LwPOk (LwPSym s) Nil k))
-    ((PLit (LStr _ _ _)) (LwPErr "a string pattern has no form in the chain"))
+    ((PLit (LStr _ _ _))
+     (LwPErr "a string pattern has no arm in a native binary (match its cons and nil cells)"))
     ((PCtor c subs)
      (match (lw_pats subs k)
        ((LwPsErr m) (LwPErr m))
@@ -248,9 +248,9 @@
     (Nil (LwCtor nl Nil))
     ((Cons b r) (LwCtor cs (list (LwInt b) (lw_str nl cs r))))))
 
-;; ---- the bridge's rows -------------------------------------------------------------------
+;; ---- the primitives' rows ----------------------------------------------------------------
 (fn lw_pn ((s Symbol)) Name (n1 s))
-;; a naming-law primitive the runtime's operation agrees with — Nat.land (23), lor (24), xor
+;; a primitive under Init's name the runtime's operation agrees with — Nat.land (23), lor (24), xor
 ;; (25), shiftLeft (26), shiftRight (27), beq (34), ble (35): kept under its own identity
 (fn lw_prim_kept ((code Int)) Bool
   (bool_or (bool_and (<= 23 code) (<= code 27)) (bool_or (= code 34) (= code 35))))
@@ -273,8 +273,8 @@
        (LwErr
          (append "the primitive "
            (append (show_name p)
-             " has no row in the chain (the profile's eighteen and the bridge's rows only)"))))))))
-;; both operands bound once, then the naming law's result where the runtime's operation differs
+             " has no operation in a native binary (those that have one: the eighteen bare-named primitives; Nat.sub div mod land lor xor shiftLeft shiftRight beq ble; Int.tdiv tmod ediv emod)"))))))))
+;; both operands bound once, then Init's result where the runtime's operation differs
 (fn lw_row ((code Int) (a LwE) (b LwE)) LwE
   (if (= code 22)
     (LwIf (LwPrim (lw_pn (quote <)) (list a b)) (LwInt 0) (LwPrim (lw_pn (quote -)) (list a b)))

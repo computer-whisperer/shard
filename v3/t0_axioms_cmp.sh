@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# v3/t0_axioms_cmp.sh K_LOG ORACLE — T0's axiom-closure comparison (FOUNDATION
-# §3.6: identical verdicts AND axiom closures). K_LOG holds the driver's `-a`
-# output (`AX name: axiom …` per admitted constant); ORACLE is v3/axioms.lean's
-# output for the same export. Both sides are normalized to one line per
-# constant with the axioms sorted, joined by name; every K constant must be in
-# the oracle with the same closure. Exit 0 = identical; the differences (up to
-# 20) and the counts are printed either way.
+# v3/t0_axioms_cmp.sh K_LOG ORACLE — the replay gate's axiom-closure
+# comparison. K_LOG holds the driver's `-a` output (`AX name: axiom …` per
+# admitted constant); ORACLE is v3/axioms.lean's output for the same export.
+# Both sides are normalized to one line per constant with the axioms sorted,
+# joined by name; every K constant must be in the oracle with the same closure.
+# Exit 0 = identical; the differences (up to 20) and the counts are printed
+# either way.
 set -u
 klog=$1; oracle=$2
 # POSIX awk only (CI's awk is mawk: no asort): the axioms are sorted by insertion.

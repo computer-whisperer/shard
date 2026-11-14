@@ -1,17 +1,17 @@
-;;; v3/kernel/classify.shard — the fragment classifier (v3/LANGUAGE.md §6.3,
-;;; §6.7): the E forms `fn`, `extern`, `type`, `sig fn` and `sig type` read
+;;; v3/kernel/classify.shard — the fragment classifier: the E forms `fn`,
+;;; `extern`, `type`, `sig fn` and `sig type` read
 ;;; into prog.shard's data with every head resolved to one identity and one
 ;;; kind, saturated, no function name in argument position, every `match`
 ;;; exhaustive by the pattern matrix, the private-equality leak refused where
-;;; the scrutinee's static type is a `sig type`. Phase 2, slice 5. Reading IS
+;;; the scrutinee's static type is a `sig type`. Reading IS
 ;;; classifying: nothing reaches `ev` unresolved.
 ;;;
 ;;; The E table (ESt) is the loader's: every E identity findable by any
 ;;; suffix of its spelling (`hex_val`, `json.hex_val`, `kernel.json.hex_val`),
 ;;; pre-registered from a file's forms before any body is read so that a
-;;; body may cite what its file declares later. Resolution: the visible
-;;; hits, and in S those among the scope's candidates (§3.1); the toolchain
-;;; scope's candidates for every file (the one E, §8; slice 3.4). The primitive table is §6.4's, keyed on identity.
+;;; body may cite what its file declares later. Resolution (etable.shard's
+;;; eresolve): the hits in a visible module that the citation names among the
+;;; scope's candidates. The primitive table is prog.shard's, keyed on identity.
 
 (import "etable.shard")
 (import "erase.shard")
@@ -52,7 +52,7 @@
 (use kernel.scope.Scope)
 (use kernel.sexpr.SExpr)
 
-;; ---- pre-registration (§6.7) ----------------------------------------------------------------
+;; ---- pre-registration ----------------------------------------------------------------
 ;; a file's E heads — name, kind, arity, a type's constructors — before any body
 (type PreRes (PreOk ESt) (PreErr Symbol (List Int)))
 (fn pre_register ((es ESt) (sc Scope) (env CheckedEnv) (forms (List SExpr))) PreRes
@@ -82,7 +82,7 @@
          (_ (PreOk es)))
        (PreOk es)))))))
     (_ (PreOk es))))
-;; the realize forms alone, after the file's directives made their targets visible (§7.5)
+;; the realize forms alone, after the file's directives made their targets visible
 (fn pre_register_realize ((es ESt) (sc Scope) (env CheckedEnv) (forms (List SExpr))) PreRes
   (measure (struct forms))
   (match forms
@@ -97,7 +97,7 @@
           (pre_register_realize es sc env r)))
        (_ (pre_register_realize es sc env r))))))
 ;; (realize NAME BINDERS RET …) / (realize NAME (view)): the realized constant's identity as a
-;; function head (§7.5) — its arity the E binders', or the erasure's for the derived view
+;; function head — its arity the E binders', or the erasure's for the derived view
 (fn pre_realize ((es ESt) (sc Scope) (env CheckedEnv) (args (List SExpr))) PreRes
   (match args
     ((Cons (SSym x) rest)
@@ -127,7 +127,7 @@
     ((Cons (TBind _ (BData _) _) r) (+ 1 (count_data_binds r)))
     ((Cons _ r) (count_data_binds r))))
 ;; HEAD BINDERS …: the declared name and its
-;; arity — `(T Type)` binders are type parameters, not arguments (read_params; §8.1 rule 3)
+;; arity — `(T Type)` binders are type parameters, not arguments (read_params)
 (fn pre_head ((es ESt) (sc Scope) (args (List SExpr)) (kind Symbol)) PreRes
   (match args
     ((Cons hd (Cons (SList bs) _))
@@ -143,7 +143,7 @@
                 (if (sym_eq kind (quote extern)) (EIExt k)
                 (EISig k))))))))))
     (_ (PreOk es))))
-;; an identity may be declared when it is new; a fn may take a sig fn's, a type a sig type's (§6.7)
+;; an identity may be declared when it is new; a fn may take a sig fn's, a type a sig type's
 (fn may_declare ((es ESt) (id Name) (is_fn Bool)) Bool
   (match (es_info es id)
     (None True)
@@ -207,8 +207,8 @@
      (if (es_has es n) (PreErr (quote duplicate_name) (show_name n))
      (PreOk (es_register es n (sc_tag sc) (EISigType (len params))))))))
 
-;; ---- E-types (§4: E-type positions) ---------------------------------------------------------
-;; the type parameters are threaded (`(T Type)` binders, read_params; no auto-binding since slice 3.4)
+;; ---- E-types ---------------------------------------------------------
+;; the type parameters are threaded (`(T Type)` binders, read_params; an unknown name binds none)
 (type TyRes (TyOk EType (List Name)) (TyErr Symbol (List Int)))
 (fn read_ety ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (s SExpr)) TyRes
   (match s
@@ -223,9 +223,9 @@
               ((TyOk t _) (TyOk t tps))
               ((TyErr e m) (TyErr e m))))))))
     ((SList (Cons (SSym x) args))
-     (if (sym_eq x (quote ->))  ; a function type: a function-typed binder makes a template, on the typed route (§8.4 slice 3.28 rules 1–2)
+     (if (sym_eq x (quote ->))  ; a function-typed binder makes a template, on the typed route
        (TyErr (quote function_value)
-         "(-> …): a function is no value of E (law §4.3) — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading (§8.4 slice 3.28 rule 1)")
+         "(-> …): a function is no value of E — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading")
        (match (name_of_sym x)
          (None (TyErr (quote bad_type) (chars_of_sym x)))
          ((Some n)
@@ -233,7 +233,7 @@
             ((TyErr e m) (TyErr e m))
             ((TyOk (ETCon id _) _)
              ;; `(Decidable P)`: the parameter is a proposition, nothing of it is in E — the type
-             ;; is its two cells, as the erasure has it (slice 3.19: a view's sig fn that exports
+             ;; is its two cells, as the erasure has it (a view's sig fn that exports
              ;; a decision states its result this way)
              (if (name_eq id (n1 (quote Decidable))) (TyOk (ETCon id Nil) tps)
              (match (read_etys es sc env tps args Nil)
@@ -252,7 +252,7 @@
      (match (read_ety es sc env tps s)
        ((TyErr e m) (Pair (TyErr e m) Nil))
        ((TyOk t tps1) (read_etys es sc env tps1 r (Cons t acc)))))))
-;; a type name's identity (§8.1 rule 1): the built-in E types `Int`, `Nat`, `Symbol` in every
+;; a type name's identity: the built-in E types `Int`, `Nat`, `Symbol` in every
 ;; file (where Init is in scope, `Int` and `Nat` are its constants under the same bare name);
 ;; then, where Init is in scope, K's constants through the scope (a `type` K holds, a `sig
 ;; type`, Init's inductives) and after them the E-only types; elsewhere the E table first —
@@ -260,7 +260,7 @@
 (fn type_ident ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (if (builtin_type n) (TyOk (ETCon n Nil) Nil)
   (if (init_seen sc) (type_ident_k es sc env n)  ; K's constants first where Init is in scope: a native type beside an imported one is an ambiguity K reports
-  (type_ident_e es sc env n))))  ; else the E table first — every K type of the scope has its E twin there, and the L resolution per binder was the load's cost (slice 3.6: 11 s → 6 s on one closure)
+  (type_ident_e es sc env n))))  ; faster than resolving in L; every K type has its E twin there
 (fn type_ident_k ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (match (resolve (cx_with_etype (cx0 sc env Nil Nil) True) n)
     ((RName k _) (TyOk (ETCon k Nil) Nil))
@@ -278,9 +278,9 @@
         ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
         (RNone (TyErr (quote unknown_type) (show_name n)))))))
 
-;; ---- terms (§5.4) ----------------------------------------------------------------------------
+;; ---- terms ----------------------------------------------------------------------------
 ;; the reading context: the table, the scope, the environment (S E-types), the
-;; the bound names innermost first
+;; bound names innermost first
 (type Rd (Rd ESt Scope CheckedEnv (List Name)))
 (fn rd_es ((r Rd)) ESt
   (match r
@@ -305,7 +305,7 @@
 (fn read_et ((r Rd) (s SExpr)) TRes
   (measure (struct s))
   (match s
-    ((SNum k) (TOk (ELit (if (< k 0) (LInt k) (LNat k)))))  ; the kind is the sign (§8.1 rule 2)
+    ((SNum k) (TOk (ELit (if (< k 0) (LInt k) (LNat k)))))  ; the kind is the sign
     ((SStr bs) (read_estr r bs))
     ((SSymU _ _) (TErr (quote bad_universe_suffix) "an E term takes no universe arguments"))
     ((SSym x) (read_esym r x))
@@ -316,10 +316,10 @@
      (if (sym_eq h (quote if)) (read_eif r args)
      (if (sym_eq h (quote dif))
        (TErr (quote dif_needs_init)
-         "a dif names the hypothesis of a decided proposition (§8.4 slice 3.24): Decidable and dite are Init's, and this body is read E-first")
+         "a dif names the hypothesis of a decided proposition: Decidable and dite are Init's, and this body is read E-first")
      (if (sym_eq h (quote absurd))
        (TErr (quote absurd_needs_init)
-         "a refuted row is Init's absurd applied to a proof and its negation (§8.4 slice 3.27 landing 3): it reads on the typed route, and this body is read E-first")
+         "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first")
      (if (sym_eq h (quote quote))
        (match args
          ((Cons (SSym q) Nil) (TOk (ELit (LSym q))))
@@ -327,21 +327,21 @@
      (if (sym_eq h (quote list)) (read_elist r args)
      (if (sym_eq h (quote fun))
        (TErr (quote function_value)
-         "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E (§8.4 slice 3.28 rules 2–3; law §4.3); this body has no L reading")
+         "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E; this body has no L reading")
        (read_eapp r h args))))))))))
     ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
 
 ;; a bare name: bound, else a constructor without fields, else a fn of no parameters as its
-;; call — the typed route reads the constant as the value it is, and the two routes agree
-;; (slice 3.27 landing 4, T9's finding) —, else the refusal it earns, naming the arity
+;; call — the typed route reads the constant as the value it is, and the two routes agree —,
+;; else the refusal it earns, naming the arity
 ;; a template cited bare in an E-first body: never a value — it is called at its full arity, and
-;; its instance is taken where it is called (§8.4 slice 3.28 rule 3; read_template_app)
+;; its instance is taken where it is called (read_template_app)
 (fn template_e_first_msg ((id Name)) (List Int)
   (append (show_name id)
-    " is a template (a fn with a function-typed binder, §8.4 slice 3.28): it is called at its full arity, and its instance is taken where it is called — never a value"))
+    " is a template (a fn with a function-typed binder): it is called at its full arity, and its instance is taken where it is called — never a value"))
 (fn fn_value_msg ((id Name) (k Int)) (List Int)
   (append (show_name id)
-    (append " in argument position (law §4.3): a function is no value — call it with its "
+    (append " in argument position: a function is no value — call it with its "
       (append (show_nat k) " arguments"))))
 (fn read_esym ((r Rd) (x Symbol)) TRes
   (match (name_of_sym x)
@@ -368,17 +368,17 @@
              (match (prim_of (scope_candidates (rd_sc r) n))
                ((Some (Pair id _))
                 (TErr (quote function_value)
-                  (append (show_name id) " in argument position (law §4.3)")))
+                  (append (show_name id) " in argument position: a function is no value")))
                (None
                  (if (nat_ctor r n)
                    (TErr (quote nat_constructor)
                      (append (show_name n)
-                       ": Nat and Int are realized as the integer — write a numeral (§7.5)"))
+                       ": Nat and Int are realized as the integer — write a numeral"))
                    (TErr (quote unbound_name) (show_name n))))))
            ((Cons (EHit id _ _) Nil)
             (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
 
-;; in S, a name that resolves to a constructor of Nat or Int (never E constructors, §7.5)
+;; in S, a name that resolves to a constructor of Nat or Int (never E constructors)
 (fn nat_ctor ((r Rd) (n Name)) Bool
   (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
     ((RName k _)
@@ -393,8 +393,7 @@
     ((Some n)
      (match (index_of n (rd_bound r) 0)
        ((Some _)
-        (TErr (quote bad_head)
-          (append (show_name n) " is a variable: there are no function values (law §4.3)")))
+        (TErr (quote bad_head) (append (show_name n) " is a variable: there are no function values")))
        (None
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((Cons (EHit id _ (EICtor _ _ k)) Nil) (read_head_args r id k args (quote ctor)))
@@ -411,13 +410,13 @@
                  (if (nat_ctor r n)
                    (TErr (quote nat_constructor)
                      (append (show_name n)
-                       ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub (§7.5)"))
+                       ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
                    (match (renamed_prim h)
                      ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
                      (None (TErr (quote unknown_head) (show_name n))))))))
            ((Cons (EHit id _ _) Nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
-;; a primitive head: the table's entry among the scope's candidates (a spelling from before
-;; the rename is refused by the caller, `renamed_primitive`)
+;; a primitive head: the table's entry among the scope's candidates (a renamed spelling
+;; is refused by the caller, `renamed_primitive`)
 (fn prim_head ((sc Scope) (n Name)) (Option (Pair Name Prim)) (prim_of (scope_candidates sc n)))
 (fn read_head_args ((r Rd) (id Name) (k Int) (args (List SExpr)) (kind Symbol)) TRes
   (if (bool_not (= k (len args)))
@@ -443,10 +442,10 @@
        ((TErr e m) (Pair (Some (Pair e m)) Nil))
        ((TOk t) (read_ets_list r rest (Cons t acc)))))))
 
-;; (TEMPLATE ARG…) in an E-first body (§8.4 slice 3.28 rule 3's last sentence, landing 3): the
-;; arguments read by the template's written binders — a data position as any term, a static
-;; position as a shape (read_static_arg), transiently the name applied to its captured terms;
-;; the instance is taken by take_instances once the body is read and its types are known
+;; (TEMPLATE ARG…) in an E-first body: the arguments read by the template's written binders —
+;; a data position as any term, a static position as a shape (read_static_arg), transiently the
+;; name applied to its captured terms; the instance is taken by take_instances once the body
+;; is read and its types are known
 (fn read_template_app ((r Rd) (id Name) (ebs (List EBind)) (args (List SExpr))) TRes
   (if (bool_not (= (len ebs) (len args)))
     (TErr (quote unsaturated)
@@ -472,7 +471,7 @@
             (EBPackage
               (TErr (quote function_value)
                 (append (show_name id)
-                  ": a package parameter — a package constant is a def with no E value (§8.4 slice 3.28 rule 5), so the taking body needs an L reading"))))
+                  ": a package parameter — a package constant is a def with no E value, so the taking body needs an L reading"))))
           ((TErr e m) (Pair (Some (Pair e m)) Nil))
           ((TOk t) (read_tm_args r id br ar (Cons t acc)))))))))
 ;; a static argument E-first: a name of the E table with a program and no type parameters, bare
@@ -486,12 +485,12 @@
      (if (sym_eq h (quote fun))
        (TErr (quote function_value)
          (append (show_name tm)
-           ": a lambda as a static argument in a body with no L reading — nothing lifts it here (§8.4 slice 3.28 rule 3(c) is the typed route's); name it as a fn and pass the name, or give the body an L reading"))
+           ": a lambda as a static argument in a body with no L reading — nothing lifts it here (lifting is the typed route's); name it as a fn and pass the name, or give the body an L reading"))
        (read_static_head r tm h gargs)))
     (_
       (TErr (quote function_value)
         (append (show_name tm)
-          ": a static argument is a name, or a name applied to its captured values (§8.4 slice 3.28 rule 3)")))))
+          ": a static argument is a name, or a name applied to its captured values")))))
 (fn read_static_head ((r Rd) (tm Name) (h Symbol) (gargs (List SExpr))) TRes
   (match (name_of_sym h)
     (None (TErr (quote bad_name) (chars_of_sym h)))
@@ -500,7 +499,7 @@
        ((Some _)
         (TErr (quote function_value)
           (append (show_name n)
-            ": a variable as a static argument — there are no function values (law §4.3); a static argument names a fn")))
+            ": a variable as a static argument — there are no function values; a static argument names a fn")))
        (None
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((Cons (EHit id _ (EIFn k)) Nil) (read_static_fn r id k gargs))
@@ -508,15 +507,15 @@
            ((Cons (EHit id _ (EIExt _)) Nil)
             (TErr (quote function_value)
               (append (show_name id)
-                ": an extern as a static argument — it takes a World (§8.4 slice 3.28, weighed and deferred)")))
+                ": an extern as a static argument is not supported — it takes a World")))
            ((Cons (EHit id _ (EITemplate _ _ _ _)) Nil)
             (TErr (quote function_value)
               (append (show_name id)
-                ": a template as a static argument — an instance is taken where the template is called (§8.4 slice 3.28 rule 3)")))
+                ": a template as a static argument — an instance is taken where the template is called")))
            ((Cons (EHit id _ (EICtor _ _ _)) Nil)
             (TErr (quote function_value)
               (append (show_name id)
-                ": a constructor as a static argument — a static argument names a fn (§8.4 slice 3.28 rule 2)")))
+                ": a constructor as a static argument — a static argument names a fn")))
            ((Cons (EHit a _ _) (Cons (EHit b _ _) _))
             (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
            (Nil
@@ -524,7 +523,7 @@
                ((Some (Pair id _))
                 (TErr (quote function_value)
                   (append (show_name id)
-                    ": a constant of the realization registry as a static argument in a body with no L reading — name a fn over it, (fn add ((a Int) (b Int)) Int (+ a b)), or give the body an L reading (§8.4 slice 3.28 rule 3, landing 3)")))
+                    ": a constant of the realization registry as a static argument in a body with no L reading — name a fn over it, (fn add ((a Int) (b Int)) Int (+ a b)), or give the body an L reading")))
                (None (TErr (quote unbound_name) (show_name n)))))
            ((Cons (EHit id _ _) Nil)
             (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
@@ -532,15 +531,14 @@
   (if (bool_not (= (e_tparams (rd_es r) id) 0))
     (TErr (quote function_value)
       (append (show_name id)
-        ": a polymorphic fn as a static argument in a body with no L reading — its type arguments are not written here; give the body an L reading (§8.4 slice 3.28 rule 3, landing 3)"))
+        ": a polymorphic fn as a static argument in a body with no L reading — its type arguments are not written here; give the body an L reading"))
   (if (<= k (len gargs))
     (TErr (quote function_value)
       (append (show_name id)
         (append " applied to "
           (append (show_nat (len gargs))
             (append " arguments leaves none of its "
-              (append (show_nat k)
-                " for the static parameter — a static argument is a function (§8.4 slice 3.28 rule 3)"))))))
+              (append (show_nat k) " for the static parameter — a static argument is a function"))))))
     (match (read_ets_list r gargs Nil)
       ((Pair (Some (Pair e m)) _) (TErr e m))
       ((Pair None ts) (TOk (ECall id ts)))))))
@@ -713,15 +711,15 @@
              ((TOk tb) (TOk (EIf tc ta tb)))))))))
     (_ (TErr (quote bad_shape) "(if E E E)"))))
 
-;; (list a b…) (§8.1 rule 2): the constructor chain of the `List` in scope — the
+;; (list a b…): the constructor chain of the `List` in scope — the
 ;; two-constructor type `List` resolves to (the toolchain prelude's, Init's), its first
-;; constructor nil and its second cons. "…" (§8.4 slice 3.18 rule 3): a String — its UTF-8
+;; constructor nil and its second cons. "…": a String — its UTF-8
 ;; bytes as Init's List cells, String's representation — carried as one literal the linker
-;; builds once (prog.shard LStr); in the toolchain's own sources still the chain of the List
-;; in scope over its bytes, until they migrate
+;; builds once (prog.shard LStr); in the toolchain's own sources the chain of the List
+;; in scope over its bytes
 (fn read_elist ((r Rd) (args (List SExpr))) TRes
   (match (list_in_scope r)
-    (None (TErr (quote no_list) "(list …) needs a two-constructor List in scope (§8.1 rule 2)"))
+    (None (TErr (quote no_list) "(list …) needs a two-constructor List in scope"))
     ((Some (Pair nil_id cons_id))
      (match (read_ets_list r args Nil)
        ((Pair (Some (Pair e m)) _) (TErr e m))
@@ -729,15 +727,14 @@
 (fn read_estr ((r Rd) (bs (List Int))) TRes
   (if (toolchain_scope (rd_sc r))
     (match (list_in_scope r)
-      (None (TErr (quote no_list) "\"…\" needs a two-constructor List in scope (§8.1 rule 2)"))
+      (None (TErr (quote no_list) "\"…\" needs a two-constructor List in scope"))
       ((Some (Pair nil_id cons_id)) (TOk (ELit (LStr nil_id cons_id bs)))))
-    (match (if (visible (rd_sc r) (nm_string)) (env_find (rd_env r) (nm_string)) None)  ; below the module's horizon (slice 3.25 rule 2)
-      (None
-        (TErr (quote no_string)
-          "\"…\" is a String: (import Init String) (§8.4 slice 3.18 rule 3)"))
+    (match (if (visible (rd_sc r) (nm_string)) (env_find (rd_env r) (nm_string)) None)
+      ;; String is seen only below the module's horizon
+      (None (TErr (quote no_string) "\"…\" is a String: (import Init String)"))
       ((Some _)
        (if (utf8_ok bs) (TOk (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
-       (TErr (quote bad_string) "a string literal's bytes are not UTF-8 (§8.4 slice 3.18 rule 3)"))))))
+       (TErr (quote bad_string) "a string literal's bytes are not UTF-8"))))))
 (fn list_in_scope ((r Rd)) (Option (Pair Name Name))
   (match (type_ident (rd_es r) (rd_sc r) (rd_env r) (n1 (quote List)))
     ((TyOk (ETCon id _) _)
@@ -752,7 +749,8 @@
     ((Cons t r) (ECtor c (list t (cons_chain c nl r))))))
 
 ;; ---- the declarations -------------------------------------------------------------------------
-(type CRes (COk EDecl) (COkT EDecl (List EDemand)) (CErr Symbol (List Int)))  ; COkT: a fn whose body takes instances (§8.4 slice 3.28 rule 3, landing 3)
+;; COkT: a fn whose body takes instances
+(type CRes (COk EDecl) (COkT EDecl (List EDemand)) (CErr Symbol (List Int)))
 ;; fn / extern / type / sig fn / sig type
 (fn classify_form ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
   (match s
@@ -773,12 +771,12 @@
        (CErr (quote unknown_form) (chars_of_sym h)))))))
     (_ (CErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
 
-;; HEAD: NAME (the type parameters are `(T Type)` binders, §8.1 rule 3; the parameterized head is gone)
+;; HEAD: NAME (the type parameters are `(T Type)` binders; a parameterized head is refused)
 (fn head_params ((hd SExpr)) (Pair (Option Name) (List Name))
   (match hd
     ((SSym x) (Pair (name_of_sym x) Nil))
     (_ (Pair None Nil))))
-;; ((x TYPE)…): the names and E-types in order; `(T Type)` declares a type parameter (§8.1 rule 3)
+;; ((x TYPE)…): the names and E-types in order; `(T Type)` declares a type parameter
 (type PmRes (PmOk (List Name) (List EType) (List Name)) (PmErr Symbol (List Int)))
 (fn read_params
   ((es ESt)
@@ -796,7 +794,7 @@
      (match (name_of_sym x)
        (None (PmErr (quote bad_binder) (chars_of_sym x)))
        ((Some n)
-        (if (is_type_sym ty)  ; `(T Type)` is a type parameter in every file (§8.1 rule 3; slice 3.3)
+        (if (is_type_sym ty)  ; `(T Type)` is a type parameter in every file
           (read_params es sc env (append tps (list n)) rest names types)
           (match (read_ety es sc env tps ty)
             ((TyErr e m) (PmErr e m))
@@ -841,7 +839,7 @@
        ((Pair None _) (CErr (quote bad_name) "a declared name is NAME"))
        ((Pair (Some short) tps0) (read_fn_rest es sc env (qualify sc short) tps0 bs ret rest))))
     (_ (CErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
-;; BINDERS RET (measure M)? BODY under the identity id (a fn's, or a realized constant's — §7.5)
+;; BINDERS RET (measure M)? BODY under the identity id
 (fn read_fn_rest
   ((es ESt)
    (sc Scope)
@@ -865,7 +863,8 @@
              (match (read_et r body)
                ((TErr e m) (CErr e m))
                ((TOk t0)
-                (match (take_instances es sc (some_all (rev ptypes)) t0 Nil)  ; the instances the body takes (landing 3)
+                (match (take_instances es sc (some_all (rev ptypes)) t0 Nil)
+                  ;; the instances the body takes
                   ((TkErr e m) (CErr e m))
                   ((TkOk t eds)
                    (match (read_rec r pnames meas)
@@ -877,7 +876,7 @@
                           (match eds
                             (Nil (COk (EFn id (len tps2) ptypes rt rec t)))
                             (_ (COkT (EFn id (len tps2) ptypes rt rec t) eds)))))))))))))))))))
-;; the body, then a measure term, each over the parameters (§4.4 states the correspondence over both)
+;; the body, then a measure term, each over the parameters
 (fn classify_both ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec))
   (Option (Pair Symbol (List Int)))
   (match (classify_body es id tys t)
@@ -961,7 +960,7 @@
              (read_ectors es sc env params ind r (Cons (ECtorDef (name_append ind short) fts) acc))))))))
     (_ (Pair (Some (Pair (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)")) Nil))))
 
-;; ---- the classifier's passes over a read body (§6.3 items 3 and 5) ------------------------------
+;; ---- the classifier's passes over a read body ------------------------------
 (fn classify_body ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm))
   (Option (Pair Symbol (List Int)))
   (if (bool_not (c_exh es t))
@@ -974,7 +973,8 @@
          (Pair (quote private_match)
            (append (show_name id)
              (append " matches a value of the sig type "
-               (append (show_name st) " against a constructor (§6.5)"))))))
+               (append (show_name st)
+                 " against a constructor: a sig type has no constructor outside its implementation"))))))
       ((Some (Mismatch st c))
        (Some
          (Pair (quote pattern_type)
@@ -986,7 +986,8 @@
          (Pair (quote private_if)
            (append (show_name id)
              (append " branches on a value of the sig type "
-               (append (show_name st) " (§6.2: the observation is the type's, not the cell's)"))))))
+               (append (show_name st)
+                 ": an if would read the implementation's constructor order through the view"))))))
       ((Some (PrimType st op))
        (Some
          (Pair (quote prim_type)
@@ -995,17 +996,19 @@
                (append (show_name st)
                  (append " with "
                    (append (show_name op)
-                     ": the comparison primitives are the integers' — an E-first body calls the type's derived decision by name, (T.decEq a b) (§8.4 slice 3.19 rule 7)"))))))))
+                     ": the comparison primitives are the integers' — an E-first body calls the type's derived decision by name, (T.decEq a b)"))))))))
       ((Some (IfType st k))
        (Some
          (Pair (quote if_type)
            (append (show_name id)
              (append " branches on a value of type "
                (append (show_name st)
-                 (if (= k 0) ", which is not an inductive (§6.2)"
-                 (append ", which has " (append (show_nat k) " constructors (§6.2: two)")))))))))
+                 (if (= k 0)
+                   ", which is not an inductive type: an if takes a type of two constructors"
+                   (append ", which has "
+                     (append (show_nat k) " constructors: an if takes a type of two")))))))))
       (None None))))
-;; ---- the instances an E-first body takes (§8.4 slice 3.28 rule 3, landing 3) ----------------
+;; ---- the instances an E-first body takes ----------------
 ;; a static argument's shape as the E-first reader takes it — a named fn of the E table with no
 ;; type parameters, the static parameter's arity, the captured values' declared types (their
 ;; count the captured count, the name's second key) — and the instance
@@ -1100,7 +1103,7 @@
      (match (take_instances es sc (rev_onto (pat_types es st p) tys) b acc)
        ((TkErr e m) (TkArmsErr e m))
        ((TkOk b1 acc1) (take_arms es sc tys st r acc1 (Cons (EArm p b1) out)))))))
-;; a let's bindings in order, each seeing the ones before it (R44), then its body
+;; a let's bindings in order, each seeing the ones before it, then its body
 (fn take_let
   ((es ESt)
    (sc Scope)
@@ -1142,7 +1145,7 @@
        (if (< 0 (tvar_count_all tye))
          (TkErr (quote function_value)
            (append (show_name c)
-             ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body (§8.4 slice 3.28 rule 3; a polymorphic taker is the typed route's)"))
+             ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body; an instance is at closed types"))
          (let ((name (instance_name_of sc c tye (eshape_keys shapes))))
            (TkOk (ECall name (append caps data)) (add_edemand acc (EDemand name c tye shapes)))))))))
 (type TaS
@@ -1172,7 +1175,7 @@
              (None
                (TaE (quote function_value)
                  (append (show_name c)
-                   ": an argument whose type the declarations do not determine — the type arguments of an instance are read off its arguments' types (§8.4 slice 3.28 rule 3, landing 3)")))
+                   ": an argument whose type the declarations do not determine — the type arguments of an instance are read off its arguments' types")))
              ((Some at) (take_args es tys c br ar (unify_ty ty at sub) shapes caps (Cons a data)))))
           ((EBStatic doms res)
            (match a
@@ -1201,7 +1204,7 @@
              (_
                (TaE (quote function_value)
                  (append (show_name c)
-                   ": a static argument is a name or a named partial application (§8.4 slice 3.28 rule 3)")))))
+                   ": a static argument is a name or a named partial application")))))
           (EBPackage
             (TaE (quote function_value)
               (append (show_name c) ": a package parameter in a body with no L reading")))))))))
@@ -1242,7 +1245,7 @@
 
 ;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another
 ;; type; an `if` whose condition is a sig type, or a type that is not a two-constructor inductive;
-;; a comparison primitive at an inductive or a row's type (it would be stuck at run: slice 3.19)
+;; a comparison primitive at an inductive or a row's type (it would be stuck at run)
 (type Bad (Leak Name) (Mismatch Name Name) (IfPrivate Name) (IfType Name Int) (PrimType Name Name))
 
 ;; exhaustiveness: every match, by the pattern matrix
@@ -1370,19 +1373,20 @@
                ((Some x) (Some x))
                (None (c_leak es tys c))))))))
     (EAbsurd None)))
-;; an `if`'s condition (§6.2; GPT-6 R56, slice 10): where the declarations determine its static type,
-;; that type must be a transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type —
-;; whose second constructor is the observation `if` makes. A sig type is the leak (`private_if`: the
-;; tag bit would read the implementation's constructor order through the view); an inductive of
-;; another arity, or Int, Nat, Symbol, is `if_type`. A type the pass cannot fix (a type parameter)
-;; is unchecked at Stage 0, as a match on one is.
+;; an `if`'s condition: where the declarations determine its static type, that type must be a
+;; transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type — whose second
+;; constructor is the observation `if` makes. A sig type is the leak (`private_if`: the tag bit
+;; would read the implementation's constructor order through the view); an inductive of another
+;; arity, or Int, Nat, Symbol, is `if_type`. A type the pass cannot fix (a type parameter) is
+;; unchecked, as a match on one is.
 (fn if_bad ((es ESt) (st (Option EType))) (Option Bad)
   (match st
     ((Some (ETCon n _))
      (match (es_info es n)
        ((Some (EISigType _)) (Some (IfPrivate n)))
        ((Some (EIInd _ ctors)) (if (= (len ctors) 2) None (Some (IfType n (len ctors)))))
-       (_ (if (bool_or (builtin_type n) (rep_row n)) (Some (IfType n 0)) None))))  ; a row of the registry's types has no tag an E-first body may read (slice 3.18 rule 1)
+       ;; a row of the registry's types has no tag an E-first body may read
+       (_ (if (bool_or (builtin_type n) (rep_row n)) (Some (IfType n 0)) None))))
     (_ None)))
 ;; `= < <=` compare integers: an operand whose static type is an inductive or one of the
 ;; registry's rows — a derived equality's type, a String — has no primitive comparison. On the
@@ -1436,7 +1440,7 @@
     ((Cons _ r) (any_ctor_arm r))))
 ;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int or
 ;; Symbol, or a row of the registry's types — whose representation no E-first body takes apart:
-;; every constructor pattern on it is foreign; §8.4 slice 3.18 rule 1)
+;; every constructor pattern on it is foreign)
 (fn foreign_ctor ((es ESt) (st (Option EType)) (arms (List EArm))) (Option Name)
   (measure (struct arms))
   (match arms
@@ -1510,7 +1514,7 @@
        (None None)))
     ((ELit (LNat _)) (Some (ETCon (nm_nat) Nil)))
     ((ELit (LInt _)) (Some (ETCon (n1 (quote Int)) Nil)))
-    ((ELit (LStr nl _ _))  ; a String (Init's cells: slice 3.18 rule 3); in the toolchain's sources the prelude's List over Int
+    ((ELit (LStr nl _ _))  ; a String (Init's cells); in the toolchain, the prelude's List over Int
      (if (name_eq nl (nm_list_nil)) (Some (ETCon (nm_string) Nil))
      (match (es_info es nl)
        ((Some (EICtor ind _ _)) (Some (ETCon ind (list (ETCon (n1 (quote Int)) Nil)))))
@@ -1556,8 +1560,8 @@
     (Nil None)
     ((Cons (EArm _ EAbsurd) r) (live_arm r))
     ((Cons a _) (Some a))))
-;; a primitive's static result: + - * at two Nat operands is Nat (§8.1 rule 2: a numeral's E type is
-;; the binder's; §8.4 rule 3 resolves the identity by this type), else the table's result type
+;; a primitive's static result: + - * at two Nat operands is Nat (a numeral's E type is the
+;; binder's, and the identity is resolved by this type), else the table's result type
 (fn prim_static ((es ESt) (tys (List (Option EType))) (code Int) (args (List ETerm))) EType
   (if (bool_or (= code 1) (bool_or (= code 2) (= code 8)))
     (match args

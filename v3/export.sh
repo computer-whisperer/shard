@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# v3/export.sh — the T0 oracle: Lean v4.33.1's `Init` (kernel pin
-# 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, v3/README.md) exported by
-# lean4export at 15f6055 with its toolchain forced to v4.33.1 (the head pins a
-# later toolchain that cannot export the pinned kernel — records §8), into
+# v3/export.sh — the replay gate's oracle: Lean v4.33.1's `Init` (commit
+# 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, the pin the loader checks:
+# kernel/initload.shard `init_pin_githash`) exported by lean4export at 15f6055
+# with its toolchain forced to v4.33.1 (its own lean-toolchain file names a
+# later one, which cannot export the pinned kernel), into
 # $V3_EXPORT_DIR (default .shard-cache/v3-export: untracked; on CI built
-# fresh every run, 77 s — caching the 3.5 GB tree cost more than that),
+# fresh every run, 77 s — caching the 3.5 GB tree costs more than that),
 # with the axiom-closure oracle (v3/axioms.lean → init.axioms, 15 s) over
 # the same environment. Idempotent: an export carrying the pin marker and
 # its oracle file is reused.
@@ -53,7 +54,7 @@ if [ "$EXPORT_OK" = 0 ]; then
   rm -rf "$DIR/chunks"
   echo "== $(date '+%H:%M:%S') export built: $(wc -l < "$DIR/init.ndjson") lines"
 fi
-# the axiom-closure oracle over the same environment (v3/axioms.lean; §3.6)
+# the axiom-closure oracle over the same environment (v3/axioms.lean)
 echo "== $(date '+%H:%M:%S') axiom closures"
 lake env lean --run "$ROOT/v3/axioms.lean" > "$DIR/init.axioms.tmp" 2> "$DIR/init.axioms.err"
 mv "$DIR/init.axioms.tmp" "$DIR/init.axioms"

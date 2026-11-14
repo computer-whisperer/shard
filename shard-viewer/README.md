@@ -7,13 +7,13 @@ type, and file-doc in scope, grouped by origin **dir ⊃ file** into nested
 bounding boxes on a single committed plane. Built on the
 [damascene](https://github.com/computer-whisperer/damascene) UI library.
 
-> **V3 (2026-09-13, FOUNDATION §10.5 phase 2):** the viewer's structural
-> reader knows the old tree's heads (`fn`, `type`, `record`, `sig`, `claim`,
-> `axiom`, `requirement`, `fulfills`). Under `v3/` the toolchain profile
-> (`v3/kernel`) and the S `fn`/`type` files map as today; V3's L forms —
-> `def`, `theorem`, `inductive`, `structure`, `realize` — are not cards yet.
-> They become cards when the viewer is pointed at V3, at the flip (phase 6)
-> at the latest.
+> **On V3 sources:** the viewer's structural reader makes cards of `fn`,
+> `type`, `record`, `sig fn` / `sig type`, and of `claim`, `axiom`,
+> `requirement`, `fulfills` in the previous generation's shapes (the
+> statement is looked for in a `(goal …)`; `proof.rs` lowers that
+> generation's proof forms). V3's `def`, `abbrev`, `opaque`, `theorem`,
+> `inductive`, `structure`, `extern`, `realize`, `derive` and `bin` are not
+> cards, so a V3 file maps as its functions and types, without its theorems.
 
 ## The shape of the app
 
@@ -29,13 +29,6 @@ There is **one view**. The application state is two values plus a camera:
   the current plane flies the viewport to it; targets not on the plane
   re-scope. The toolbar is a clickable **scope breadcrumb**
   (`◆ project ▸ kernel/ ▸ reader.shard ▸ rd_form`) — the orientation device.
-
-The viewer began as five separate views (Methods / Systems / Flow / Board /
-Map); the Map subsumed their topology and their lenses one by one, and the
-others were deleted. What survived of them: the triage overlay (orphan flags
-on cards), the Systems heat + composition lenses (on file boxes), the per-fn
-and per-file panels (the inspector), and the region-card renderer (the Map's
-card innards).
 
 **The cascade convention**: every dependency graph in the viewer — calls,
 imports, proof citations, claim subjects, type composition — reads left→right
@@ -100,9 +93,9 @@ and both feed the file's graph. **Amber = proof**: axioms are the loud amber
 (assumed, not proven — the trust roots), plain claims a faint wash,
 requirements **green once fulfilled and red while open**. The kind tint stays
 on the slab at any distance, so the wide view reads *where the proof mass and
-the assumptions live*. A statements-only file (`kernel/facts.shard`) earns
-its box from its claims alone. Fn-anchored scopes pull in the claims *about*
-their fns from wherever those claims live.
+the assumptions live*. A statements-only file earns its box from its claims
+alone. Fn-anchored scopes pull in the claims *about* their fns from wherever
+those claims live.
 
 **The proof card** shows each proof's *structure* in the same Flow vocabulary
 the fn cards use (`proof.rs` lowers the tactic tree into the shared `Region`
@@ -139,8 +132,8 @@ edges; the deck is an overlay, exempt from the cartographic rule, so it
 follows focus freely. Hovering a type shows what *it* is composed of. It
 shares the flow-innards zoom gate (far out, the map is being read as a map).
 
-**Docstrings are harvested, not invented**: the corpus already writes them —
-LANGUAGE.md §1's comment tiers (`;` trailing, `;;` line, `;;;` file header).
+**Docstrings are harvested, not invented**: the corpus already writes them,
+in three comment tiers (`;` trailing, `;;` line, `;;;` file header).
 The parser (`sexpr::TopForm`) carries each top-level form's lead comments;
 the model distills the contiguous `;;` run into `doc` (a `;;;` line, a
 single-`;` line, or a `;; ----` banner ends the block), and the `;;;` block
@@ -152,7 +145,7 @@ like any member but flagged as the packing **lead** so it takes the box's
 top-left slot, where reading starts. Undocumented members spend no space on
 absence.
 
-**The lenses** (carried over from the deleted views):
+**The lenses**:
 
 - **Orphan triage**: a fn nothing calls (and no proof reasons about, and that
   isn't an entry point) flags **red** — on its card and on its distant slab,
@@ -162,9 +155,8 @@ absence.
   share — cool implementation, warm proof — and in the label-only regime the
   box carries a thin **composition bar** (impl · proof · comment/blank track)
   along its bottom edge at screen-constant height. Line categories (impl /
-  measure / proof / reqproof / req / sidecar / comment / blank) come from the
-  same column-0-head-atom state machine as `tools/loc` — verified
-  byte-identical to that shard tool across the corpus.
+  measure / proof / reqproof / req / sidecar / comment / blank) come from a
+  column-0-head-atom state machine over the canonical layout.
 
 **Blocks, not receipts (reshaping)**: proofs and fn bodies are almost pure
 sequence-and-fork, and rendering both dimensions vertically produced cards
@@ -188,7 +180,7 @@ pure in the region tree, so the committed topology stays deterministic.
   clickable **Calls / Called by** lists (cross-file targets tagged with their
   file stem). The panel is resizable (drag its left edge, 320–820px; the
   source re-wraps). **Expand ⤢** opens the **source lightbox** — a large
-  modal for wide/long bodies (`driver.shard::run_decls`).
+  modal for wide/long bodies.
 - The **file inspector** (click a file's box label, or a sidebar file): the
   file's `;;;` header, per-category line counts, composition bar, import
   in/out degree, and **Map this file ▸** to scope down to it.
@@ -239,7 +231,7 @@ swappable per scale, since each level is one layout call.
 | Bin | What it does |
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Opens on the whole-project map, fitted. |
-| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide lines-by-category tally (mirrors `tools/loc`), most-called fns, a cut-candidate (orphan) list, or one fn's callers/callees. No GUI deps. |
+| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide lines-by-category tally, most-called fns, a cut-candidate (orphan) list, or one fn's callers/callees. No GUI deps. |
 | `shard-render ROOT SPEC [OUT.svg]` | Headless render to SVG + a lint report. No GPU/window. Specs: `SUBSTR` (file map, most-called fn selected) · `map:SUBSTR` (file map, nothing selected) · `map:DIR/` (directory subtree) · `project` (everything) · `fn:NAME` (one fn's map — "read this fn large") · `tree:NAME` (call neighborhood) · `inspect:SUBSTR` (file inspector open) · `src:NAME` (source lightbox). `SHARD_RENDER_HOVER=fn_name` (or a raw key like `type:7`) simulates hover; `SHARD_RENDER_W/H` size the frame. |
 | `diag [ROOT] [FILE]` | Layout diagnostics over the true committed topology (layer histograms, column stats, edge spans). |
 

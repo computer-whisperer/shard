@@ -1,13 +1,12 @@
-;;; v3/kernel/realize.shard — `realize` (v3/LANGUAGE.md §7, §7.5; §8.4 slice 3.16 rule 7;
-;;; law §4.4): an E body attached to an existing admitted L constant under its own identity.
+;;; v3/kernel/realize.shard — `realize`: an E body attached to an existing admitted L constant
+;;; under its own identity.
 ;;; The supplied form checks the E signature against the erasure of the constant's L type
 ;;; (erase.shard's roles), binds the signature's names to the constant's own telescope,
 ;;; elaborates the body once at the result's L type (elab.shard), takes its erasure as the
 ;;; program (erasure.shard), checks descent and callee order on it, and states one equation
 ;;; per leaf of the body's leading matchers — each a theorem `NAME.realize_N` the loader
 ;;; admits (proven by `Eq.refl`, or by the `equations` clause). The derived view erases the
-;;; constant's L value. The equations' leaves are shared with define.shard's `fn`. Phase 2,
-;;; slice 5b; rebuilt over the elaborator at slice 3.16 (the upward translation `tr` deleted).
+;;; constant's L value. The equations' leaves are shared with define.shard's `fn`.
 (import "erasure.shard")
 (import "classify.shard")
 (use kernel.k)
@@ -123,7 +122,7 @@
     (Nil Nil)
     ((Cons fv r) (if (= (fvar_id_of fv) id) (without_id r id) (Cons fv (without_id r id))))))
 
-;; ---- descent and order (§7.5) --------------------------------------------------------------
+;; ---- descent and order --------------------------------------------------------------
 ;; flags per variable (innermost first): 2 the structural parameter, 1 a proper subterm of it, 0 other
 ;; a realization cannot wait for a callee (the loader parks a fn's definition, never a realize):
 ;; the pending callee is the obstacle no_l_meaning here
@@ -131,7 +130,9 @@
   (match r
     ((Some (Pair e m))
      (if (sym_eq e (quote callee_pending))
-       (Some (Pair (quote no_l_meaning) (append m ": a fn has no L meaning (RUNNABLE, §0)")))
+       (Some
+         (Pair (quote no_l_meaning)
+           (append m ": a fn without a definition has no L meaning (RUNNABLE)")))
        r))
     (None None)))
 (fn check_calls ((es ESt) (env CheckedEnv) (id Name) (rec ERec) (flags (List Int)) (e ETerm))
@@ -172,13 +173,14 @@
                  (Some
                    (Pair (quote realize_descent)
                      (append (show_name id)
-                       " calls itself on its own parameters — no measure decreases (§7.5)")))
+                       " calls itself on its own parameters — no measure decreases")))
                  None)))
            (match (es_find_decl es f)
              ((Some (EFn _ _ _ _ _ _))
               (match (env_find env f)
                 ((Some _) None)
-                (None (Some (Pair (quote callee_pending) (show_name f))))))  ; the loader parks a definition on a callee still parked; otherwise the obstacle no_l_meaning (§8.4 rule 1)
+                ;; a fn K holds no constant for: pending_as_runnable makes it no_l_meaning
+                (None (Some (Pair (quote callee_pending) (show_name f))))))
              ((Some (ESig _ _ _ _)) None)
              ((Some (EExtern _ _ _ _))
               (Some
@@ -186,7 +188,7 @@
              (_
                (Some
                  (Pair (quote realize_order)
-                   (append (show_name f) ": cited before its realization is attached (§7.5)")))))))))
+                   (append (show_name f) ": cited before its realization is attached")))))))))
     ((EMatch s arms)
      (match (check_calls es env id rec flags s)
        ((Some x) (Some x))
@@ -269,13 +271,12 @@
   (if (<= n k) Nil (Cons (if (= k i) 2 0) (flags_upto n i (+ k 1)))))
 (fn zeros_int ((n Int)) (List Int) (measure n) (if (< n 1) Nil (Cons 0 (zeros_int (- n 1)))))
 
-;; ---- the supplied form (§7.2, §7.5; slice 3.16 rule 7) ---------------------------------------
-;; the result: the E table (Init inductives the walk registered), the EFn to attach once the
-;; equations are admitted, the equations as theorem declarations in order, a pending measure
-;; a realization: the table, the program, the matchers to admit, the equations, pending?, the
-;; lambdas it lifted and the instances it demands (§8.4 slice 3.28); or a realize template
-;; (rule 6): the constant, the elaboration state, the body, the recursion clause, the binders,
-;; the result's E and L types, the levels, the matchers, the equations, pending?
+;; ---- the supplied form ---------------------------------------
+;; a realization: the E table (Init inductives the walk registered), the program to attach once
+;; the equations are admitted, the matchers to admit, the equations as theorem declarations in
+;; order, pending?, the lambdas it lifted and the instances it demands; or a realize template:
+;; the constant, the elaboration state, the body, the recursion clause, the binders, the
+;; result's E and L types, the levels, the matchers, the equations, pending?
 (type RzRes
   (RzOk ESt EDecl (List Declaration) (List Declaration) Bool (List Lifted) (List Demand))
   (RzTemplate Name El Expr PdRec (List TBind) EType Expr (List Level) (List Declaration)
@@ -300,12 +301,12 @@
           ((Some _)
            (RtErr (quote realize_primitive)
              (append (show_name k)
-               " is an entry of the primitive table (§6.4): K's own rule realizes it, and a body cites it as a primitive")))
+               " is an entry of the primitive table: K's own rule realizes it, and a body cites it as a primitive")))
           (None (RtOk k info))))
        (_
          (RtErr (quote realize_kind)
            (append (show_name k)
-             " is not a definition (an axiom, a theorem, a constructor or a type has no realization at Stage 0)")))))
+             " is not a definition (an axiom, a theorem, a constructor or a type has no realization)")))))
     (None (RtErr (quote unknown_constant) (show_name k)))))
 ;; the E signature read from BINDERS RET, compared with the erasure of the L type
 (fn signature_matches
@@ -415,7 +416,7 @@
     (_
       (RzErr (quote bad_shape)
         "(realize NAME ((x TYPE)…) RET (measure M)? BODY (equations THM…)?) or (realize NAME (view))"))))
-;; the written binders without the static ones (rule 6): the data binders' E types are compared
+;; the written binders without the static ones: the data binders' E types are compared
 ;; with the L type's erasure; a static binder's written type is checked by static_signature
 (fn static_free ((binds (List TBind)) (bs (List SExpr))) (List SExpr)
   (measure (struct binds))
@@ -498,7 +499,7 @@
      (match bs
        ((Cons b br) (bool_and (etype_eq a b) (etypes_same ar br)))
        (Nil False)))))
-;; a realize template (rule 6): the body elaborated as any supplied body's and its equations
+;; a realize template: the body elaborated as any supplied body's and its equations
 ;; proven over the arbitrary static binder — the L half, once —; no program: the loader checks
 ;; the body at placeholder shapes (template.shard's check_template) and builds the instances
 ;; later bodies demand
@@ -552,7 +553,7 @@
                      (match prec
                        ((PdMeasure _) True)
                        (_ False)))))))))))))))
-;; the body, elaborated once against the constant's own telescope (slice 3.16 rule 7): the
+;; the body, elaborated once against the constant's own telescope: the
 ;; signature's names bound to the telescope's locals — a type or data binder each, an erased
 ;; binder none —, the body at the result's L type; its program the erasure, its equations the
 ;; leaves of its leading matchers, the matchers it generated admitted before them
@@ -620,10 +621,11 @@
                                    (_ False))
                                  (Tr.lifted t2)
                                  (Tr.demands t2)))))))))))))))))))))
-;; a body that lifted a lambda or demanded an instance (§8.4 slice 3.28): a fn's and a supplied realize's do; a derived view's cannot
+;; a body that lifted a lambda or demanded an instance: a fn's and a supplied realize's do; a
+;; derived view's cannot
 (fn takes_instances ((t Tr)) Bool (bool_or (< 0 (len (Tr.lifted t))) (< 0 (len (Tr.demands t)))))
 ;; a name the environment lacks, in a realization's body: a RUNNABLE function has no L meaning
-;; (a realization cannot wait for it, §7.5); an E primitive has no L identity (§6.4)
+;; (a realization cannot wait for it); an E primitive has no L identity
 (fn unknown_in_body ((es ESt) (sc Scope) (m (List Int))) RzRes
   (match (name_of_sym (sym_of_chars m))
     (None (RzErr (quote unknown_constant) m))
@@ -632,12 +634,12 @@
        ((Cons (EHit id _ _) _)
         (RzErr (quote no_l_meaning)
           (append (show_name id)
-            ": a fn has no L meaning (RUNNABLE, §0) — realize it, or make it a def")))
+            ": a fn without a definition has no L meaning (RUNNABLE) — realize it, or make it a def")))
        (Nil
          (match (prim_find n)
            ((Some _)
             (RzErr (quote no_l_identity)
-              (append m ": an E primitive with no L identity (§6.4) — cite the L constant")))
+              (append m ": an E primitive with no L identity — cite the L constant")))
            (None (RzErr (quote unknown_constant) m))))))))
 (fn bind_tele ((e El) (binds (List TBind)) (bs (List SExpr))) El
   (measure (struct binds))
@@ -660,7 +662,7 @@
     ((Some _) es)
     (None (es_register es k (sc_tag sc) (EIFn arity)))))
 
-;; ---- the equations (§7.5; slice 3.16 landing 3) ----------------------------------------------
+;; ---- the equations ----------------------------------------------
 (type Either3 (Left3 Symbol (List Int)) (Right3 (List Declaration)))
 ;; Eq.refl, or the clause's theorem applied to the binders — at the constant's solved levels
 ;; when it has as many universe parameters, at none when it has none
@@ -692,7 +694,7 @@
 (type PjFo (FoBind (List (Pair Int Expr))) (FoClash) (FoStuck Int))
 ;; `wfv`: a measured definition's value, `λ binders. WellFounded.fix α C r hwf F (tuple data)` —
 ;; then every leaf is an equation and its proof is Lean's `WellFounded.fix_eq` at the
-;; instance (slice 3.20: K decides `F t (λ y _. fix y)` against the leaf's body by conversion)
+;; instance (K decides `F t (λ y _. fix y)` against the leaf's body by conversion)
 (fn pj_equations
   ((t Tr)
    (head Expr)
@@ -724,9 +726,10 @@
      (match (mt_is_matcher (tr_env t) c)
        ((Some (MtDesc np 1 rows))
         ;; a matcher that carries its equation (a measured function's, define.shard's pj_match_eq)
-        ;; has one argument more, `Eq.refl s`: the alternative's last binder at a leaf
+        ;; has one argument more, `Eq.refl s`: the alternative's last binder at a leaf. Past
+        ;; the alternatives stand that Eq.refl and a dependent match's generalized locals
         (let ((args (get_app_args body)) (n0 (+ np (+ 2 (len rows)))))
-          (if (< (len args) n0) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))  ; past the alternatives: the measured function's Eq.refl, the dependent match's generalized locals (slice 3.27 landing 3)
+          (if (< (len args) n0) (Pair t (Some (Cons (PjLeaf lhs kept rl body) acc)))
           (match (nth args (+ np 1))
             (None (Pair t None))
             ((Some s)
@@ -875,7 +878,7 @@
                                 (pj_split_ctors t9 lhs kept rl body vid r ls largs fuel acc1))))))))))))))))))))))
 ;; the leaf's binders after a split: the kept binders the split left as they were, the
 ;; constructor's fields, then the kept binders re-opened at a type mentioning the fields
-;; (`i : Fin (List.length xs)` under `match xs`, slice 3.27 rule 7) — each after what its type names
+;; (`i : Fin (List.length xs)` under `match xs`) — each after what its type names
 (fn leaf_binders ((kept (List Expr)) (pairs (List (Pair Int Expr))) (fields (List Expr)))
   (List Expr)
   (append (kept_unrefreshed kept pairs) (append fields (kept_refreshed kept pairs))))
@@ -971,7 +974,7 @@
 ;; `WellFounded.fix_eq α C r hwf F t : fix … t = F t (λ y _. fix … y)` is the equation's proof,
 ;; its two sides K-convertible to the leaf's (the left by delta, the right by beta, the tuple's
 ;; projections and the matcher at a constructor, each self-call `f args` delta to `fix … (tuple args)`).
-;; A member of a group (slice 5.2; define.shard) is its group's fixpoint at the member's tagged
+;; A member of a group (define.shard) is its group's fixpoint at the member's tagged
 ;; tuple, `g.mutual x`, and the proof is the fixpoint's unfolding theorem there, `g.mutual.eq x`
 (fn fix_eq_proof ((t Tr) (v Expr) (lhs (List Expr))) (Pair Tr (Option Expr))
   (match (beta_head (w_st (Tr.w t)) v lhs)
@@ -996,7 +999,7 @@
     ((Str _ c) (sym_eq c (quote mutual)))
     (_ False)))
 
-;; ---- the derived view (§7.1, §7.5) --------------------------------------------------------------
+;; ---- the derived view --------------------------------------------------------------
 (fn realize_view ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) RzRes
   (match s
     ((SList (Cons _ (Cons (SSym x) _)))
@@ -1007,8 +1010,8 @@
           ((RtErr e m) (RzErr e m))
           ((RtOk k info) (view_of es sc env k info))))))
     (_ (RzErr (quote bad_shape) "(realize NAME (view))"))))
-;; the derived view of a constant named by its identity, no form read (§8.6 slice 4.6 rule 2:
-;; a declaration built as data gains its program as a file's `(realize NAME (view))` does)
+;; the derived view of a constant named by its identity, no form read: a declaration built as
+;; data gains its program as a file's `(realize NAME (view))` does
 (fn realize_view_of ((es ESt) (sc Scope) (env CheckedEnv) (k Name)) RzRes
   (match (realize_info env k)
     ((RtErr e m) (RzErr e m))
@@ -1021,7 +1024,7 @@
      (if (has_static binds)
        (RzErr (quote realize_signature)
          (append (show_name k)
-           ": a function-typed binder — a realize template is supplied, never a view (§8.4 slice 3.28 rule 6)"))
+           ": a function-typed binder — a realize template is supplied, never a view: write (realize NAME BINDERS RET BODY)"))
        (match (ci_value info)
          (None (RzErr (quote realize_kind) (append (show_name k) " has no value")))
          ((Some v0)
@@ -1036,7 +1039,7 @@
                      (if (takes_instances t2)
                        (RzErr (quote function_value)
                          (append (show_name k)
-                           ": a derived view lifting a lambda or taking an instance — supply the body (§8.4 slice 3.28 rule 6)"))
+                           ": a derived view lifting a lambda or taking an instance — supply the body"))
                        (let ((ptypes (bind_ptypes binds)))
                          (match (classify_both (Tr.es t2) k (some_all (rev ptypes)) ebody RecNone)
                            ((Some (Pair e m)) (RzErr e m))

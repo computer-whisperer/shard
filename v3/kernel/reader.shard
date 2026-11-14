@@ -1,12 +1,12 @@
 ;;; v3/kernel/reader.shard — the reader of the L forms: S forms → K's
-;;; `Declaration` (v3/LANGUAGE.md §4, §5.1–5.3). Phase 2, slice 2; over the
-;;; elaborator since slice 3.15 (elab.shard: implicit arguments, universe
-;;; inference, the numeral rule, the one coercion — the terms are built over
+;;; `Declaration`, over the elaborator (elab.shard: implicit arguments, universe
+;;; inference, the numeral rule, the coercions — the terms are built over
 ;;; K's locals and closed by K's mk_binding). The scope is data the loader
-;;; builds (scope.shard). A `fn`'s body is E and is read by the classifier
-;;; (classify.shard); this file reads the L side and routes the E forms and
-;;; the directives to their owners. Errors are a reason symbol and a message;
-;;; K's verdicts on what this file produces are K's (add.shard).
+;;; builds (scope.shard). A `fn` is the loader's (predef.shard reads it, or
+;;; classify.shard program-first); this file reads the L side and routes
+;;; the E forms and the directives to their owners. Errors are a reason
+;;; symbol and a message; K's verdicts on what this file produces are K's
+;;; (k/add.shard).
 
 (import "elab.shard")
 (import "engine.shard")
@@ -62,11 +62,11 @@
 
 (type RDecl
   (RDOk (List Declaration))  ; what the form declares, in admission order
-  (RDPending Name Symbol)  ; `sorry`: read, admits nothing; the loader's obligation
+  (RDPending Name Symbol)  ; a pending proof and its cause (sorry, auto_missing, …): read, admits nothing; the loader's obligation
   (RDDirective SExpr)  ; import / use / trusts: the loader's
-  (RDParam Declaration Symbol Int)  ; a view parameter (§6.5): the axiom, its kind (type / fn / requirement), a sig type's arity
-  (RDLater Symbol)  ; an E form the loader owns (fn, extern, realize: classify.shard, realize.shard; fulfills: §6.6) — the loader intercepts them before read_decl
-  (RDSolved Name Req (List SExpr) (List Declaration))  ; an `auto` proof the engine produced under mode `solve` (slice 3.22 rule 6), or a schema-2 entry re-keyed (4.5 rule 1): the theorem, the key, the block, what it declares
+  (RDParam Declaration Symbol Int)  ; a view parameter: the axiom, its kind (type / fn / requirement), a sig type's arity
+  (RDLater Symbol)  ; a form the loader owns (fn, extern, realize, fulfills, bin) — the loader intercepts them before read_decl
+  (RDSolved Name Req (List SExpr) (List Declaration))  ; an `auto` proof the engine produced under mode `solve`, or a schema-2 entry re-keyed: the theorem, the key, the block, what it declares
   (RDMeasured Name Bool (Option (Pair Name Bool)) (List Declaration))  ; mode `measure`: a hand-written proof read as usual, and whether the engine closes the statement unaided
   (RDErr Symbol (List Int)))  ; reason, message
 
@@ -100,26 +100,26 @@
 ;; checked into the walk's environment, admitted by the loader before their owner)
 (fn rd_ok ((e El) (ds (List Declaration))) RDecl (RDOk (append (el_aux e) ds)))
 
-;; ---- the forms (§4) -----------------------------------------------------------------------
-;; the resolved requirement's key (§8.6 slice 4.5 rule 1; law §5.2): four fingerprints —
+;; ---- the forms ----------------------------------------------------------------------------
+;; the resolved requirement's key: four fingerprints —
 ;; the closed statement's, the referenced declarations' (the identity closure through the
 ;; load's own declarations), the policy's (the file's trusts resolved, the parameters it sees),
 ;; the environment's (the module's Init horizon, the export's identity) — or, from a sidecar
-;; of schema 2, the statement's alone. Fingerprints, never authorities (R42): the key detects
+;; of schema 2, the statement's alone. Fingerprints, never authorities: the key detects
 ;; a changed task; K's replay accepts.
 (type Req (ReqFull Int Int Int Int) (ReqStmt Int))
 (fn req_stmt ((k Req)) Int
   (match k
     ((ReqFull s _ _ _) s)
     ((ReqStmt s) s)))
-;; a sidecar entry (slice 3.22 rule 1; 4.5 rule 1): the theorem's name as its source writes
+;; a sidecar entry: the theorem's name as its source writes
 ;; it, the key of the requirement the entry was made for, the block's steps
 (type Auto (Auto Name Req (List SExpr)))
-;; the file's parts of the key (4.5 rule 1), computed once by the loader: the scope (the
+;; the file's parts of the key, computed once by the loader: the scope (the
 ;; declaration table tells the load's own names from Init's), the policy's and the
 ;; environment's fingerprints
 (type ReqCtx (ReqCtx Scope Int Int))
-;; the producers' inputs for a file (slice 3.29 rule 2): the sidecar's entries, the loaded
+;; the producers' inputs for a file: the sidecar's entries, the loaded
 ;; programs (a tactic named by `(auto (tactic M.FN))` runs under `ev` on them, mode `solve`),
 ;; the driver's fuel for such a run, and the file's parts of the key
 (type Producers (Producers (List Auto) ESt Int ReqCtx))
@@ -131,7 +131,7 @@
     ((Producers _ _ _ rc) rc)))
 (fn no_producers () Producers (Producers Nil (es0) 0 (ReqCtx (Scope Anon Anon Nil VisAll) 0 0)))
 
-;; ---- the key (4.5 rule 1) -------------------------------------------------------------------
+;; ---- the key ------------------------------------------------------------------------------
 ;; the key of the closed statement T under the file's parts: S its structural hash (binder
 ;; names outside it), D the identity closure, P and E the file's
 (fn req_key ((env CheckedEnv) (rc ReqCtx) (T Expr)) Req
@@ -217,9 +217,9 @@
     (Nil Nil)
     ((Cons x Nil) x)
     ((Cons x r) (append x (Cons 44 (join_sp r))))))
-;; the load's mode for proofs (slice 3.22 rule 6): `off` — the build, nothing searches; `solve` — an
+;; the load's mode for proofs: `off` — the build, nothing searches; `solve` — an
 ;; `auto` without a valid entry is the engine's, RDSolved; `measure` — every hand-written proof is
-;; read as usual and the engine is also run on the statement, RDMeasured (the count over calc)
+;; read as usual and the engine is also run on the statement, RDMeasured (the engine's count)
 (fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl
   (read_decl_autos sc env s (no_producers) (quote off)))
 (fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos Producers) (mode Symbol)) RDecl
@@ -257,22 +257,23 @@
       "there are no user classes and no instance declarations: an instance argument at Nat, Int, Bool or List is filled from a fixed table of Init's instances — pass a structure of functions as an argument, and for equality, ordering and printing write (derive TYPE CAPABILITY…)")
   (if (sym_eq h (quote requires))
     (Some
-      "a clause of the bin form — (bin NAME (entry F) (externs E…) (trusts A…) (requires R…)) (§4, slice 4.3 landing 1)")
+      "a clause of the bin form, not a form of its own: write (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))")
   (if (sym_eq h (quote app))
-    (Some "dropped (§12.5): a loop in a bin is the MVU story, no second form")
+    (Some
+      "there is no app form: write the loop in the entry function of a bin — (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))")
   (if
     (bool_or (sym_eq h (quote namespace))
       (bool_or (sym_eq h (quote section)) (sym_eq h (quote variable))))
-    (Some "undecided; declare the dotted name")
+    (Some "there is no such block: declare the dotted name, with its binders on each declaration")
     None)))))
-;; a Lean keyword with no form here is refused `lean_form` with the V3 spelling or the law's
-;; reason (slice 3.27 landing 4; docs/LEAN.md lists the rows) — `unknown_form` is for the rest
+;; a Lean keyword with no form here is refused `lean_form` with what to write or the reason
+;; (docs/LEAN.md lists the rows) — `unknown_form` is for the rest
 (fn lean_form ((h Symbol)) (Option (List Int))
   (if (sym_eq h (quote partial))
     (Some
-      "a partial definition is refused (law §5.3 departure 4): write (fn NAME BINDERS RET (measure M) BODY) — the measure is the totality obligation (§8.4)")
+      "there are no partial definitions: write (fn NAME BINDERS RET (measure M) BODY) — the measure is the totality obligation")
   (if (sym_eq h (quote unsafe))
-    (Some "unsafe is refused (law §5.3 departure 4): every declaration is checked by K")
+    (Some "there is no unsafe modifier: every declaration is checked by K")
   (if
     (bool_or (sym_eq h (quote notation))
       (bool_or (sym_eq h (quote infix))
@@ -286,30 +287,29 @@
                       (bool_or (sym_eq h (quote elab))
                         (bool_or (sym_eq h (quote elab_rules)) (sym_eq h (quote declare_syntax_cat)))))))))))))
     (Some
-      "user-defined notation, macros and syntax extension are refused (law §5.3 departure 6): define a fn, a def or a tactic — an E library producing I's forms, named by (auto (tactic M.FN)) (§8.4 slice 3.29); the surface is fixed with the elaborator")
+      "there are no user-defined notation, macros or syntax extensions: define a fn or a def under an ordinary name; a proof procedure is a fn from the goal's text to a block of steps, named by (auto (tactic M.FN)) — the surface is fixed with the elaborator")
     (if (sym_eq h (quote open))
-      (Some "Lean's open is (use PREFIX) or (use PREFIX NAME…) (§3.1); import opens nothing")
+      (Some "Lean's open is (use PREFIX) or (use PREFIX NAME…); import opens nothing")
     (if (bool_or (sym_eq h (quote lemma)) (sym_eq h (quote example)))
-      (Some "write (theorem NAME BINDERS PROP PROOF) (§4): every theorem is named")
+      (Some "write (theorem NAME BINDERS PROP PROOF): every theorem is named")
     (if (sym_eq h (quote mutual))
       (Some
         "there is no mutual block: write each fn on its own, with its (measure …) — functions that call each other are found and defined together as one group")
     (if (bool_or (sym_eq h (quote termination_by)) (sym_eq h (quote decreasing_by)))
-      (Some "the measure is written in the fn: (fn NAME BINDERS RET (measure M) BODY) (§4)")
-    (if (sym_eq h (quote noncomputable))
       (Some
-        "no modifier: a def is logical and never runs; a fn is a def with its realization (§8.4)")
+        "the measure is written in the fn: (fn NAME BINDERS RET (measure M) BODY); a descent it leaves to prove is (fulfills NAME.dec_N PROOF)")
+    (if (sym_eq h (quote noncomputable))
+      (Some "no modifier: a def is logical and never runs; a fn is a def with its realization")
     (if (bool_or (sym_eq h (quote private)) (sym_eq h (quote protected)))
-      (Some "no modifier: a module's public surface is its sig view (§6.5)")
+      (Some "no modifier: a directory module's public surface is its view, DIR/mod.req.shard")
     (if (sym_eq h (quote universe))
-      (Some "universe parameters are declared on the name: (def NAME.{u} …) (§4)")
-    (if (sym_eq h (quote deriving))
-      (Some "(derive TYPE CAPABILITY…) after the type (§8.4 slice 3.19)")
+      (Some "universe parameters are declared on the name: (def NAME.{u} …)")
+    (if (sym_eq h (quote deriving)) (Some "write (derive TYPE CAPABILITY…) after the type")
     (if (sym_eq h (quote implemented_by))
       (Some
-        "(realize NAME BINDERS RET BODY) attaches the executable body to a declared constant (§7)")
+        "write (realize NAME BINDERS RET BODY): it attaches the executable body to a declared constant")
     (if (sym_eq h (quote attribute))
-      (Some "there are no attributes: simp_only and rw take their lemmas by name (§8.4 slice 3.21)")
+      (Some "there are no attributes: simp_only and rw take their lemmas by name")
     (if (sym_eq h (quote set_option))
       (Some "there are no options: the elaborator has one behavior, versioned with it")
       None)))))))))))))))
@@ -354,13 +354,13 @@
       (RDErr (quote bad_shape)
         (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
 
-;; (extern NAME BINDERS RET): in L an opaque constant of the declared type (§8.6 slice 4.3
-;; landing 1, rule 3; law §4.7). K's opaque kind checks a value and never unfolds it, so the
-;; value is the type's default witness (inhabit.shard) and the constant has no equations: a
-;; function calling the extern is defined with its equations where it was a program without a
-;; definition, and a requirement can name the entry. No witness is `extern_uninhabited`; a
-;; binder or the result the elaborator cannot read is its refusal — the loader then keeps the
-;; extern E-only with the obstacle on its record (loader.shard load_extern)
+;; (extern NAME BINDERS RET): in L an opaque constant of the declared type. K's opaque kind
+;; checks a value and never unfolds it, so the value is the type's default witness
+;; (inhabit.shard) and the constant has no equations: a function calling the extern is defined
+;; with its equations, and a requirement can name the entry. No witness is
+;; `extern_uninhabited`; a binder or the result the elaborator cannot read is its refusal — the
+;; loader then keeps the extern E-only with the obstacle on its record (loader.shard
+;; load_extern)
 (fn read_extern ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match args
     ((Cons hd (Cons (SList bs) (Cons ty Nil)))
@@ -401,9 +401,9 @@
      (if (name_eq (name_append (qualify sc an) suffix) n) (Some (Pair fp steps))
      (auto_entry_as sc r n suffix)))))
 ;; a proof: (exact TERM) — TERM at the statement, over the binders; sorry; (by STEP…) — I's
-;; block on the statement closed over the binders (tactic.shard, slice 3.20); auto or
+;; block on the statement closed over the binders (tactic.shard); auto or
 ;; (auto HINT…) — the sidecar's block for the theorem, replayed as (by …) when the entry's
-;; key is the statement's (slice 3.22 rules 1–2; 4.5 rule 1): no entry is pending
+;; key is the statement's: no entry is pending
 ;; auto_missing, another requirement's entry pending auto_stale with the parts that differ
 ;; named; the hints are the producer's, unread here
 (fn read_proof
@@ -481,7 +481,8 @@
        (match (auto_fit entry key)
          ((AutoFits steps)
           (match entry
-            ;; a schema-2 entry fits by its statement; under solve it is re-keyed whole (4.5 rule 1: the restamp, no search)
+            ;; a schema-2 entry fits by its statement; under solve it is re-keyed whole (the
+            ;; restamp, no search)
             ((Some (Pair (ReqStmt _) _))
              (if (sym_eq mode (quote solve))
                (match (read_block_proof e1 n lps fvars T steps)
@@ -497,7 +498,7 @@
                   (sym_of_chars
                     (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " " m))))))
                ((TacticNamed tfn rest)
-                ;; the library's block (slice 3.29 rule 2), replayed as an entry's would be before it is one
+                ;; the library's block, replayed as an entry's would be before it is one
                 (match (run_tactic e1 T (len fvars) tfn rest pr)
                   ((TacNo m)
                    (RDPending n
@@ -544,7 +545,7 @@
                     (append "auto_stale "
                       (append (join_sp bad) (append " fp=" (show_int (req_stmt key))))))
                    (_ (append "auto_missing fp=" (show_int (req_stmt key))))))))))))))
-;; the producer a delegation names (slice 3.29 rule 2): `(tactic M.FN)` among the hints, once;
+;; the producer a delegation names: `(tactic M.FN)` among the hints, once;
 ;; the hints after it are the library's
 (type TacticHint (TacticNamed Name (List SExpr)) (TacticNone) (TacticErr (List Int)))
 (fn tactic_named ((hints (List SExpr))) TacticHint (tactic_named_go hints None Nil))
@@ -560,19 +561,17 @@
        (match found
          ((Some _)
           (TacticErr
-            "tactic: several tactics in one delegation — name one; a library composes its own (§8.4 slice 3.29 rule 10)"))
+            "tactic: several tactics in one delegation — name one; a library composes its own"))
          (None
            (match args
              ((Cons (SSym f) Nil)
               (match (name_of_sym f)
                 ((Some fn) (tactic_named_go r (Some fn) acc))
                 (None (TacticErr (append "tactic: not a name: " (chars_of_sym f))))))
-             (_
-               (TacticErr
-                 "tactic: (tactic M.FN) names one fn of the load, module-qualified (§8.4 slice 3.29 rule 2)")))))
+             (_ (TacticErr "tactic: (tactic M.FN) names one fn of the load, module-qualified")))))
        (tactic_named_go r found (Cons (SList (Cons (SSym h) args)) acc))))
     ((Cons o r) (tactic_named_go r found (Cons o acc)))))
-;; the tactic run (slice 3.29 rules 1–2): M.FN a fn of the loaded programs taking the goal
+;; the tactic run: M.FN a fn of the loaded programs taking the goal
 ;; and the hints as text and answering text; the goal as goal_sx renders it, the hints as
 ;; the S text of the forms after (tactic M.FN); the answer one block (STEP…), or empty
 (type TacRun (TacSteps (List SExpr)) (TacNo (List Int)))
@@ -587,7 +586,7 @@
               (bool_and (= ntp 0) (bool_and (text_type gt) (bool_and (text_type ht) (text_type rt)))))
             (TacNo
               (append (show_name tfn)
-                " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec (§9: the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)"))
+                " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec (the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)"))
             (match (el_fresh e (n1 (quote goal)) T (quote goal))
               ((Pair e1 (MVar _ i))
                (let ((g (Goal i T nctx)))
@@ -641,7 +640,7 @@
        (sym_of_chars (append "sorry goals=" (append (show_nat (len gs)) (goals_bounded gs))))))
     ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n)))))))
 ;; mode `measure`: the proof as written, and whether the engine closes the statement unaided —
-;; the engine's count (slice 3.22's third ruling); an `auto` here is read as the build reads it
+;; the engine's count; an `auto` here is read as the build reads it
 (fn read_measured
   ((e El)
    (n Name)
@@ -664,7 +663,7 @@
           (measure_tactic e1 n lps fvars T p pr)
           ds))))
     (other other)))
-;; under `measure`, the tactic a delegation names is run too (slice 3.29 rule 2): its name
+;; under `measure`, the tactic a delegation names is run too: its name
 ;; and whether its answer closes the statement; None when none is named
 (fn measure_tactic
   ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (T Expr) (p SExpr) (pr Producers))
@@ -686,7 +685,7 @@
        None))
     (_ None)))
 
-;; ---- views (§6.5, §6.6) ---------------------------------------------------------------
+;; ---- views ------------------------------------------------------------------------------
 ;; (sig type NAME) / (sig type (NAME T…)): the parameter NAME : Type → … → Type
 ;; (sig fn NAME BINDERS RET): the parameter NAME : ∀ BINDERS, RET — E-types (level 0 by rule)
 (fn read_sig ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
@@ -740,7 +739,7 @@
        (Nil (RDParam (AxiomDecl (ConstantVal n lps T) False) (quote requirement) 0))
        (_
          (RDErr (quote match_in_requirement)
-           "a requirement's statement with a match needs its matcher in the view: state it over a def (LANGUAGE.md §8.4 slice 3.16 rule 1)"))))
+           "a requirement's statement with a match needs its matcher in the view: state it over a def"))))
     ((RSErr m) (RDErr (quote bad_shape) m))))
 ;; a statement read: the state over the binders, the name, its universe
 ;; parameters, the fvars, the open proposition, the closed one
@@ -776,7 +775,7 @@
     ((RSOk e n lps fvars t _)
      (read_proof e n lps fvars t proof (auto_entry sc (pr_autos autos) n) mode autos))))
 
-;; (fulfills f.dec_N PROOF) outside a view (§8.4 slice 3.16 rule 8): PROOF against the
+;; (fulfills f.dec_N PROOF) outside a view: PROOF against the
 ;; obligation's own statement, a theorem under `thm`
 (fn read_discharge
   ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos Producers) (mode Symbol))
@@ -786,7 +785,7 @@
     mode
     autos))
 
-;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME) (§9)
+;; (axiom NAME.{u…} BINDERS TYPE) — the loader admits it only under (trusts NAME)
 (fn read_axiom ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match args
     ((Cons hd (Cons (SList bs) (Cons ty Nil)))
@@ -846,9 +845,9 @@
               (read_ctors e2 ind fvars r (Cons (Constructor (name_append ind short) CT) acc)))))))))
     (_ (Pair None "a constructor is (CTOR TYPE)"))))
 
-;; (type (NAME T…) (CTOR FIELD-TYPE…)…) / (type NAME (CTOR FIELD-TYPE…)…): today's
+;; (type (NAME T…) (CTOR FIELD-TYPE…)…) / (type NAME (CTOR FIELD-TYPE…)…): the
 ;; E data form as an inductive with `(T Type)` parameters, result `Type`,
-;; non-dependent fields in E-type position (level 0 by rule, §4)
+;; non-dependent fields in E-type position (level 0 by rule)
 (fn read_type ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match args
     ((Cons hd ctors)
@@ -867,7 +866,7 @@
                    (RDOk (list (InductDecl Nil (len params) (list (InductiveType n IT cs)) False)))))))))))))
     (_ (RDErr (quote bad_shape) "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))
 ;; the `(T Type)` parameters as locals — implicit in the constructors, as Lean's inductive
-;; parameters are and as E cites them (slice 3.15: `(Pair2.mk two green)` in L as in a body)
+;; parameters are and as E cites them (`(Pair2.mk two green)` in L as in a body)
 (fn type_locals ((e El) (ps (List Name)) (acc (List Expr))) (Pair El (List Expr))
   (measure (struct ps))
   (match ps
@@ -996,7 +995,7 @@
     (_ (Pair None "a field is (FIELD TYPE)"))))
 ;; the first k binders of a Pi or lambda chain made implicit: a structure's parameters in its
 ;; constructor and its projections, as Lean declares them — explicit in the type itself — so a
-;; package's field is read as `(Monoid.op m x y)` (§8.4 slice 3.28 rule 5)
+;; package's field is read as `(Monoid.op m x y)`
 (fn implicit_prefix ((e Expr) (k Int)) Expr
   (measure k)
   (if (< k 1) e
