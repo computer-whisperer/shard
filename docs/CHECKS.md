@@ -36,7 +36,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | Specialization is finite; exceeding the budget is a refusal. | pins `template_growth`, `template_budget` |
 | The toolchain is itself first-order, closure-free programs over the logic as data. | `parity_test.sh`; `v3/build.sh` compiles every root |
 | The toolchain's functions are total by verified measure. | no test found, and no load checks it: in a file that sees no Init a measure that grows, a recursion with no measure and a `struct` call on no subterm each load without a record of it (`RUNNABLE fn F why=e_only_type`); in a file that imports Init the same functions state an obligation or are refused (`realize_descent`) |
-| A `fn` either lowers or is refused. | no test found; `v3/pins/emit/refused_numeral_pattern` shows a program the interpreter runs and the back end refuses |
+| A `fn` either lowers or is refused. | no test found; `v3/pins/emit/refused_*` show four programs the interpreter runs and the back end refuses |
 | One name for one mathematical object, in a body, a definition and a theorem. | pins `one_meaning`, `one_spelling`, `rename_refused`, `rename_refused_e`, `rename_refused_kernel` |
 | A `fn`'s meaning in L is its body's elaboration; its defining equations are theorems K checks. | pins `define_basic`, `define_depth`, `realize_equations`; `define_test.sh` |
 | A wrong executable body is refused whatever its provenance. | pin `realize_wrong`; `path_test.sh` |
@@ -133,7 +133,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | An induction rule with a missing case ("zero-case induction", named only). | recursors are K's, compared with the export (`v3/t0_full.sh`); one declaration per name (`hostile_test.shard` case 9) |
 | A reducer bound a multi-binding `let` in the wrong order. | `let` is sequential in both readers: `parity_test.sh`; `v3/pins/emit/nested_shadow` |
 | The gate did not read one failure line shape, so must-fail tests gated nothing. | each pin's header is compared; the list of cases is kept by hand and nothing checks it against the directory |
-| A stamp written at the end of a build marked old code as fresh. | not covered: `v3/build.sh` writes the stamp after the compile; a stale stamp is refused by `v3/bin/eval` |
+| A stamp written at the end of a build marked old code as fresh. | `build_test.sh`: a source edited while its build runs fails the build and no stamp is written; a stale stamp is refused by `v3/bin/eval` |
 | A fast engine's verdict taken without the authority; agreement on a shared failure. | `native_tie_test.sh`, `suite_tie.sh`, `t0_gate_test.sh` |
 | The evaluator's integers wrapped silently at 64 bits. | `prims_test.shard`; `v3/pins/emit/prims`, `refused_numeral_pattern` |
 | A shortcut authorised by a hash: a forged `Nat.add` gave `Nat.add 2 3 = 5`. | `hostile_test.shard` case 7b; `k/test/accel_test.shard` |
@@ -152,3 +152,4 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | The release gate's exit was not the conjunction of its checks; an admit flag was trusted. | `store_test.sh`; pin `k_client_admit` |
 | A rewrite's motive was typed and not checked; K refused the certificate. | pins `reduce_dependent`, `rw_dependent` |
 | Unique use of the World does not follow from a monotone clock. | pins `thread_sequential`, `thread_pair_twice`, `thread_helper_twice`, `bin_unthreaded` |
+| A native binary took the else-branch of every `if` whose condition was not a `Bool` (a program's own two-constructor type, `Option`, `List`): the generated C tested for the `true` tag alone, and every test branched on `Bool`. Wrong output, not a false theorem. | `v3/pins/emit/if_second` (run by `native_tie_test.sh`) |

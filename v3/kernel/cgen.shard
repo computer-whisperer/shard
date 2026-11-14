@@ -19,9 +19,14 @@
 ;;; numeric component (a lifted function's) as `_jN` —, so two identities never meet in one C
 ;;; name and no word is reserved.
 ;;;
-;;; TAGS. A constructor with a wire role (lower.shard `lw_role`) carries the runtime's fixed
-;;; tag for it, 900–907 — which is what identifies Init's wire types with the cells rt.h's
-;;; extern shims build —; every other constructor a tag from 1000 in the program's order.
+;;; TAGS. A tag's low bit says "second constructor of its type", as the evaluator's tags do
+;;; (ev.shard), so the runtime decides an `if` by that bit and takes the branch the evaluator
+;;; takes on a value of any type. A constructor with a wire role (lower.shard `lw_role`)
+;;; carries the runtime's fixed tag for it, 900–908 — which is what identifies Init's wire
+;;; types with the cells rt.h's extern shims build —, odd for the three roles that are second
+;;; constructors (true, cons, some); every other constructor two tags from 1000 in the
+;;; program's order, the odd one its own where it is the second of its type. A role's tag is
+;;; fixed, so a constructor that carries a role at another place in its type is refused.
 ;;;
 ;;; THE TEXT IN PARTS. `main.c` holds the tags, the runtime, the tables, the prototypes and
 ;;; `main`; the functions are in `pNNNN.c`, cg_part of them a file, included by `main.c` —
@@ -116,17 +121,63 @@
   (match ds
     (Nil t)
     ((Cons (EInd _ _ cs) r)
-     (match (cg_tag_ctors cs t next)
+     (match (cg_tag_ctors cs t next 0)
        ((Pair t1 next1) (cg_tags r t1 next1))))
     ((Cons _ r) (cg_tags r t next))))
-(fn cg_tag_ctors ((cs (List ECtorDef)) (t (IntMap (List (Pair Name (Pair Int Int))))) (next Int))
+;; i is the constructor's place in its type: the second one takes the odd tag of its two
+(fn cg_tag_ctors
+  ((cs (List ECtorDef)) (t (IntMap (List (Pair Name (Pair Int Int))))) (next Int) (i Int))
   (Pair (IntMap (List (Pair Name (Pair Int Int)))) Int)
   (match cs
     (Nil (Pair t next))
     ((Cons (ECtorDef c fs) r)
      (let ((role (lw_role c)))
-       (if (< 0 role) (cg_tag_ctors r (cg_tag_add t c (+ 899 role) (len fs)) next)
-       (cg_tag_ctors r (cg_tag_add t c next (len fs)) (+ next 1)))))))
+       (if (< 0 role) (cg_tag_ctors r (cg_tag_add t c (cg_role_tag role) (len fs)) next (+ i 1))
+       (cg_tag_ctors r (cg_tag_add t c (+ next (if (= i 1) 1 0)) (len fs)) (+ next 2) (+ i 1)))))))
+;; the runtime's tag of a role: odd for true, cons and some, the second constructors of their
+;; types; even for false, nil, none, pair and the World
+(fn cg_role_tag ((role Int)) Int
+  (if (= role 1) 901
+  (if (= role 2) 900
+  (if (= role 8) 908
+  (+ 899 role)))))
+;; what the runtime cannot hold of a type's constructors, each a refusal. A role's tag is
+;; fixed, and with it the bit an `if` reads: a constructor that carries a role at another place
+;; in its type than the role's own. A cell's fields: one more than the allocator's size classes
+;; reach. errs is newest first
+(fn cg_ctor_errs ((ds (List EDecl)) (errs (List (List Int)))) (List (List Int))
+  (match ds
+    (Nil errs)
+    ((Cons (EInd _ _ cs) r) (cg_ctor_errs r (cg_ctor_errs_in cs 0 errs)))
+    ((Cons _ r) (cg_ctor_errs r errs))))
+(fn cg_ctor_errs_in ((cs (List ECtorDef)) (i Int) (errs (List (List Int)))) (List (List Int))
+  (match cs
+    (Nil errs)
+    ((Cons (ECtorDef c fs) r)
+     (cg_ctor_errs_in r (+ i 1) (cg_wide_err c (len fs) (cg_role_err c i errs))))))
+(fn cg_role_err ((c Name) (i Int) (errs (List (List Int)))) (List (List Int))
+  (let ((role (lw_role c)))
+    (if (< role 1) errs
+    (let ((bit (mod (cg_role_tag role) 2)))
+      (if (= bit (if (= i 1) 1 0)) errs
+      (Cons
+        (append "the constructor "
+          (append (show_name c)
+            (if (= bit 1)
+              " is named as a cell of the runtime and must be the second constructor of its type"
+              " is named as a cell of the runtime and must not be the second constructor of its type")))
+        errs))))))
+;; the most fields a cell has: rt.h's RT_MAX_ARITY, which the generated text asserts
+(fn cg_max_fields () Int 125)
+(fn cg_wide_err ((c Name) (nf Int) (errs (List (List Int)))) (List (List Int))
+  (if (<= nf (cg_max_fields)) errs
+  (Cons
+    (append "the constructor "
+      (append (show_name c)
+        (append " has "
+          (append (show_nat nf)
+            (append " fields: a cell of the runtime holds at most " (show_nat (cg_max_fields)))))))
+    errs)))
 ;; the World's cell: its constructor's field count, where the program declares one
 (fn cg_world ((ds (List EDecl))) (Option Int)
   (match ds
@@ -194,7 +245,7 @@
 (fn cg_tag_of ((cx CgCx) (c Name)) (Option Int)
   (match (cg_tag_find (cg_cx_tags cx) c)
     ((Some (Pair tag _)) (Some tag))
-    (None (let ((role (lw_role c))) (if (< 0 role) (Some (+ 899 role)) None)))))
+    (None (let ((role (lw_role c))) (if (< 0 role) (Some (cg_role_tag role)) None)))))
 ;; rt_no_match("NAME")
 (fn cg_trap ((cx CgCx)) CgDoc
   (cg_cat3 (CgS "rt_no_match(\"") (CgS (cg_cstr (show_name (cg_cx_self cx)))) (CgS "\")")))
@@ -226,8 +277,8 @@
   (if (= code 23) (Some "rt_band")
   (if (= code 24) (Some "rt_bor")
   (if (= code 25) (Some "rt_bxor")
-  (if (= code 26) (Some "rt_bshl")
-  (if (= code 27) (Some "rt_bshr")
+  (if (= code 26) (Some "rt_nat_shl")
+  (if (= code 27) (Some "rt_nat_shr")
   (if (= code 34) (Some "rt_int_eq")
   (if (= code 35) (Some "rt_le")
   None))))))))))))))))))))))))))
@@ -632,14 +683,34 @@
     (Nil k)
     ((Cons (EFn _ _ _ _ _ _) r) (cg_count_fns r (+ k 1)))
     ((Cons _ r) (cg_count_fns r k))))
-(fn cg_has_fn ((ds (List EDecl)) (n Name)) Bool
+;; the entry's refusal: `main` calls it on the World alone, so it is a function of one
+;; parameter. What the loader's `--run` reads from the arguments into the parameters before
+;; the World has no source in a binary
+(fn cg_entry_err ((ds (List EDecl)) (n Name)) (Option (List Int))
   (match ds
-    (Nil False)
-    ((Cons (EFn m _ _ _ _ _) r) (if (name_eq m n) True (cg_has_fn r n)))
-    ((Cons _ r) (cg_has_fn r n))))
+    (Nil (Some (append "no fn " (append (show_name n) " to start from"))))
+    ((Cons (EFn m _ ps _ _ _) r)
+     (if (bool_not (name_eq m n)) (cg_entry_err r n)
+     (if (= (len ps) 1) None
+     (Some
+       (append (show_name n)
+         (if (< (len ps) 1) " takes no parameter: a binary's main takes the World"
+         (append " takes "
+           (append (show_nat (len ps))
+             " parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)"))))))))
+    ((Cons _ r) (cg_entry_err r n))))
+;; the roles' tags under the names rt.h reads them by
 (fn cg_tag_defs () CgDoc
-  (CgS
-    "#define RT_TAG_True 900\n#define RT_TAG_False 901\n#define RT_TAG_Nil 902\n#define RT_TAG_Cons 903\n#define RT_TAG_None 904\n#define RT_TAG_Some 905\n#define RT_TAG_Pair 906\n#define RT_TAG_World 907\n"))
+  (cg_tag_def "True" 1
+    (cg_tag_def "False" 2
+      (cg_tag_def "Nil" 3
+        (cg_tag_def "Cons" 4
+          (cg_tag_def "None" 5
+            (cg_tag_def "Some" 6 (cg_tag_def "Pair" 7 (cg_tag_def "World" 8 (CgS ""))))))))))
+(fn cg_tag_def ((cell (List Int)) (role Int) (rest CgDoc)) CgDoc
+  (cg_cat4 (cg_cat3 (CgS "#define RT_TAG_") (CgS cell) (CgS " ")) (cg_num (cg_role_tag role))
+    (CgS "\n")
+    rest))
 (fn cg_counters ((ds (List EDecl)) (nfn Int)) CgDoc
   (cg_cat4 (cg_cat3 (CgS "static long long rt_fnctr_g[") (cg_num (if (< nfn 1) 1 nfn)) (CgS "];\n"))
     (cg_cat3 (CgS "static const char *const rt_fnname_g[") (cg_num (if (< nfn 1) 1 nfn))
@@ -688,28 +759,33 @@
 (fn cg_prog ((p Prog) (entry Name)) CgRes
   (match p
     ((Prog ds)
-     (if (bool_not (cg_has_fn ds entry))
-       (CgRefused (list (append "no fn " (append (show_name entry) " to start from"))))
-       (let ((tags (cg_tags ds IMEmpty 1000)) (syms (cg_syms_fns ds Nil)) (nfn (cg_count_fns ds 0)))
-         (match (cg_fns ds tags syms (CgSt Nil (CgS "") 0 0 Nil))
-           ((CgSt parts _ _ _ errs)
-            (match errs
-              ((Cons _ _) (CgRefused (rev errs)))
-              (Nil
-                (let ((ps (rev parts)))
-                  (CgFiles
-                    (Cons
-                      (Pair "main.c"
-                        (cg_flat
-                          (cg_cat4
+     (match (cg_entry_err ds entry)
+       ((Some m) (CgRefused (list m)))
+       (None
+         (let
+           ((tags (cg_tags ds IMEmpty 1000)) (syms (cg_syms_fns ds Nil)) (nfn (cg_count_fns ds 0)))
+           (match (cg_fns ds tags syms (CgSt Nil (CgS "") 0 0 (cg_ctor_errs ds Nil)))
+             ((CgSt parts _ _ _ errs)
+              (match errs
+                ((Cons _ _) (CgRefused (rev errs)))
+                (Nil
+                  (let ((ps (rev parts)))
+                    (CgFiles
+                      (Cons
+                        (Pair "main.c"
+                          (cg_flat
                             (cg_cat4
-                              (CgS "/* GENERATED by v3/kernel/cgen.shard — do not edit. */\n")
-                              (cg_tag_defs)
-                              (CgS "#include \"rt.h\"\n\n")
-                              (cg_counters ds nfn))
-                            (CgCat (cg_sym_decls syms 0) (CgS "\n"))
-                            (cg_cat3 (cg_protos ds) (CgS "\n") (cg_includes ps))
-                            (CgCat (CgS "\n") (cg_main entry (cg_world ds) syms nfn)))
-                          Nil))
-                      ps)
-                    nfn)))))))))))
+                              (cg_cat4
+                                (CgS "/* GENERATED by v3/kernel/cgen.shard — do not edit. */\n")
+                                (cg_tag_defs)
+                                (cg_cat3 (CgS "#include \"rt.h\"\n_Static_assert(RT_MAX_ARITY == ")
+                                  (cg_num (cg_max_fields))
+                                  (CgS
+                                    ", \"the generator's bound on a cell's fields is the runtime's\");\n\n"))
+                                (cg_counters ds nfn))
+                              (CgCat (cg_sym_decls syms 0) (CgS "\n"))
+                              (cg_cat3 (cg_protos ds) (CgS "\n") (cg_includes ps))
+                              (CgCat (CgS "\n") (cg_main entry (cg_world ds) syms nfn)))
+                            Nil))
+                        ps)
+                      nfn))))))))))))

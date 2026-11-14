@@ -493,14 +493,13 @@ The spellings `lt`, `le`, `int_eq` are `renamed_primitive` (write `<`, `<=`, `=`
 name ending in `!` (`List.get!`) is `inhabited_default`.
 
 **`if`.** `(if C T F)` takes three kinds of condition: a `Bool`, read as `C = true`; a proposition
-whose decision the elaborator knows — `<` and `<=` at `Nat` and `Int`, `=` at `Nat`, `Int`,
-`Bool`, and `=` at a type with exactly one visible derived equality (`(derive T eq)`); a value of
-an inductive type with exactly two constructors, the second taking the then-branch (`Yes` of
-`(type Dec (No) (Yes))`, `some`, `cons`) — under the evaluator; a native binary takes the
-else-branch of such an `if` whatever the value (`OPEN.md` §1), so use `match` there. Otherwise:
-`no_decision` (write `(@ite C DEC T F)`, or derive equality), `ambiguous_decision`, `if_type` (not
-two constructors), `private_if` (a view's `sig type`). `(dif h C T F)` takes a `Bool` or a
-proposition and binds `h` to the condition's proof in T and to its negation's in F.
+whose decision the elaborator knows — `<` and `<=` at `Nat` and `Int`, `=` at `Nat`, `Int`, `Bool`,
+and `=` at a type with exactly one visible derived equality (`(derive T eq)`); a value of an
+inductive type with exactly two constructors, the second taking the then-branch (`Yes` of
+`(type Dec (No) (Yes))`, `some`, `cons`), under the evaluator and in a native binary alike.
+Otherwise: `no_decision` (write `(@ite C DEC T F)`, or derive equality), `ambiguous_decision`,
+`if_type` (not two constructors), `private_if` (a view's `sig type`). `(dif h C T F)` takes a
+`Bool` or a proposition and binds `h` to the condition's proof in T and to its negation's in F.
 
 **`match`.** The scrutinee's type must be an inductive type without indices. The match takes its
 type from its position; where the position gives none it is `match_motive` — bind it: `(let ((r
@@ -883,8 +882,8 @@ entry returns. By practice the `bin` and its requirements stand in a file of the
 program (`v3/examples/calc/calc_bin.shard`), so importing the program does not run these checks.
 `v3/build.sh` never reads a `bin` form: it compiles the `main` of the file it is given, so a
 binary is the program a contract speaks of only when it is built from the file that declares the
-contract's entry. An entry with parameters before the World passes the first check and cannot be
-built as a native binary ("As a native binary").
+contract's entry. An entry with parameters before the World passes the first check and is refused
+by the build of a native binary ("As a native binary").
 
 ### Effect traces
 
@@ -954,22 +953,26 @@ v3/build.sh v3/examples/calc/calc_main.shard /tmp/calc --root v3     # needs a c
 
 The binary starts at `main` of the root file's module, called on the World alone; its command-line
 arguments arrive through `get_args`. A `main` with parameters before the World is a `--run` entry
-only: the emit refuses nothing and writes a call of `main` on the World alone, and `v3/build.sh`
-then fails at the C compiler (`FAIL: NAME: cc`; the build log holds `too few arguments to
-function`). There is no fuel. Exit status: 0 when `main` returns, the program's `exit` code, 3 on
-a runtime trap (`rt trap: MESSAGE` on standard error; the traps are listed under "The back end" in
+only: the emit refuses it (`EMIT: MODULE.main takes N parameters: a binary's main takes the World
+alone (a main with parameters before the World runs under the loader's --run only)`), and
+`v3/build.sh` prints `FAIL: NAME: the emit (exit 2)` with that line. The other refusals of the emit
+are listed under "The back end" in KERNEL.md: among them a constructor of more than 125 fields, and
+a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` at another
+place in its type than the runtime's cell of that name (`True`, `Cons`, `Some` second; the others
+not second). There is no fuel. Exit status: 0 when `main` returns, the program's `exit` code, 3 on a
+runtime trap (`rt trap: MESSAGE` on standard error; the traps are listed under "The back end" in
 KERNEL.md). With `SHARD_STATS=1` the binary prints call, allocation and collection counts to
 standard error.
 
 Wherever the output path is, the build also writes its log to `v3/bin/NAME.build.log` and the
 generated C to `v3/bin/emit/NAME/`, NAME being the output path's last component. On a C compiler
-failure the console shows `FAIL: NAME: cc` and the log's last three lines, which need not hold the
-error (KERNEL.md, "Build and gates").
+failure the console shows `FAIL: NAME: cc:` with the compiler's first error line, and the path of
+the log. A source edited while its build runs fails the build (`FAIL: NAME: changed during the
+build: FILE…`) and no stamp is written (KERNEL.md, "Build and gates").
 
 A binary is held to the evaluator by tests, not by proof, and differs from it at known edges
-(`OPEN.md` §1). An `if` on a value of a two-constructor type other than `Bool` takes the
-else-branch whatever the value. `Nat.shiftLeft` and `Nat.shiftRight` by 64 or more trap. An
-integer past 2^3840 traps. A program stuck under the evaluator (exit 4) traps (exit 3).
+(`OPEN.md` §1). An integer of 2^3840 or more traps, so a `Nat.shiftLeft` to such a result does. A
+program stuck under the evaluator (exit 4) traps (exit 3).
 
 ### Prepared handles and sessions
 

@@ -130,8 +130,9 @@ host calls.
 
 *Trust.*
 - The compiler to native code is unproven. Agreement with the evaluator on the tests is the only
-  evidence, and cases outside the tests are known wrong today (`OPEN.md` §1): a binary takes the
-  else-branch of every `if` whose condition is not a `Bool`.
+  evidence, and it has been wrong outside them: a binary took the wrong branch of every `if` whose
+  condition was not a `Bool` until a program outside the tests showed it (`CHECKS.md`, soundness
+  lessons). What is known to differ today is in `OPEN.md` §1.
 - The step from a function's definition to its program (the erasure) is trusted by review.
 - The host-call axioms a contract trusts are checked against nothing.
 - K is reviewed and tested, not proven. The export of Lean's library is fetched and built, and

@@ -112,11 +112,11 @@ total (`(/ 7 0)` is 0, `(mod 7 0)` is 7); `and`, `or`, `not` are for `Bool`. `ma
 `v3/examples/calc/calc.shard`); the other spelling in the tree is `(if (= n 0) true false)`
 (`is_zero` in `v3/tools/shardfmt/print/cst.shard`), where the bare `true` and `false` need
 `(use Init.Bool)`. Test a `Bool` or a comparison with `if` and take any other value apart with
-`match`: an `if` on a value of another two-constructor type (`Option`, `List`, a type of the
-program) is accepted, and under `--run` it takes the then-branch on the second constructor
-(`some`, `cons`); a native binary takes the else-branch whatever the value (`OPEN.md` §1). A `Nat`
-is taken apart by numeral rows, `(match n (0 A) (1 B) (_ C))`, or by `if`: the patterns `Nat.zero`
-and `(Nat.succ k)` are refused in a `fn`.
+`match`. An `if` on a value of another two-constructor type (`Option`, `List`, a type of the
+program) is accepted too, and takes the then-branch on the second constructor (`some`, `cons`),
+under `--run` and in a native binary alike. A `Nat` is taken apart by numeral rows,
+`(match n (0 A) (1 B) (_ C))`, or by `if`: the patterns `Nat.zero` and `(Nat.succ k)` are refused
+in a `fn`.
 
 The loader records what each function became:
 
@@ -320,7 +320,11 @@ speaks of rests on building it from the file the contract imports. The contract
 | `BAD-BIN B extern_outside: X is called in F and is not in the roster`; `BAD-BIN B untrusted: T rests on A, which the bin does not trust`; `UNMET T` | the bin's `externs` or `trusts` misses a name; a requirement's proof is `sorry` | add the name; prove the requirement |
 | `LOAD-ERROR FILE private_module: PATH is inside the sealed directory DIR — import the directory` | a file behind a view imported from outside | `(import "DIR")` |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: no fn MODULE.main to start from` | the file given declares no `main` (the contract's file, say) | give the program's file |
-| `v3/build.sh` prints `FAIL: NAME: cc` | the C compiler refused the generated program. For a `main` with parameters before the `World` the error is `too few arguments to function` | read the error in `v3/bin/NAME.build.log`; take the arguments through `get_args` |
+| `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: MODULE.main takes N parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)` | a `main` with parameters before the `World` is an entry for `--run` only | take the arguments through `get_args` |
+| `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C is named as a cell of the runtime and must not be the second constructor of its type` (or `must be the second`) | a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` stands at another place in its type than the runtime's cell of that name (`True`, `Cons`, `Some` are second constructors; the others are not) | rename the constructor, or move it |
+| `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C has N fields: a cell of the runtime holds at most 125` | a constructor of more than 125 fields | nest the fields in further types |
+| `v3/build.sh` prints `FAIL: NAME: cc: FILE:LINE: error: …` and the path of the log | the C compiler refused the generated program; the line shown is its first error | read the rest in `v3/bin/NAME.build.log`: it is a defect of the back end |
+| `v3/build.sh` prints `FAIL: NAME: changed during the build: FILE…` | a source of the program, or of the toolchain, was edited while the build ran; no stamp is written | build again |
 
 ## 12. The formatting gate
 
@@ -364,16 +368,17 @@ goes inside `v3/`.
 **The entry.** Under `--run` a `main` may take checked parameters before the `World`
 (`(fn main ((i Nat) (w World)) World …)` in `v3/examples/path/path_main.shard`), read from `ARG…`.
 A native binary's `main` takes the `World` alone and reads its arguments through `get_args`. The
-build of a `main` with parameters is not refused: it fails in the C compiler (`FAIL: NAME: cc`,
-with `too few arguments to function` in the log), and no binary is made.
+build of a `main` with parameters is refused at the emit (`EMIT: MODULE.main takes N parameters:
+a binary's main takes the World alone …`), and no binary is made.
 
 **What a build leaves.** `v3/build.sh` is given the file that declares `main`. It writes the
 binary at OUT and its stamp at `OUT.stamp`. Wherever OUT is, it also writes, under the name NAME
 that is OUT's last component, the log `v3/bin/NAME.build.log` and the directory
 `v3/bin/emit/NAME/` (the generated C, `map`, `sources`). Git ignores `v3/bin/`, so `git status`
 does not show them, and two builds whose OUT ends in the same NAME overwrite each other's. When
-the C compiler fails the console shows `FAIL: NAME: cc` and the log's last lines; the compiler's
-error line is in the log.
+the C compiler fails the console shows `FAIL: NAME: cc:` with the compiler's first error line and
+the path of the log. A source edited while its build runs fails the build, and no stamp is
+written: build again.
 
 ## 14. The library
 

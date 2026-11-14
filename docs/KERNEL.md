@@ -222,9 +222,9 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `ev.shard` | 1,578 | `ev`, the definition of "run": links a `Prog` into a private form (constructors as tags, functions as indices) and runs it as a machine with an explicit continuation, fuel spent per function entry. Also `prepare`/`invoke`/`invoke_run` (the handle and its two doors), the argument validation, the text codec for command-line arguments, `run_prog`, the extern wire by declared type (six host calls), the effect trace. | `host`, `prog`, `intmap`, `util` | `session.shard` (the door on a load), `load.shard` (through the session), `reader.shard`/`loader.shard` (a tactic library's run), tests `ev_test`, `prims_test`, `entry_test`, `handle_test`, `rows_test`, `project_test`, `loader_test`, `calc_harness` |
 | `session.shard` | 589 | The long-lived value a host holds: revisions by ordinal (`ses_introduce`, `ses_extend`), handles by ordinal (`ses_prepare`, `ses_release`, `ses_revoke`, `ses_withdraw`), invocation (`ses_invoke[_at]`, `ses_run[_at]`), and `prepare_on`: `ev`'s `prepare` plus what the load's environment shows of an entry that the program does not state (evidence binders, proposition fields). `run_load`/`run_load_as` are the command line's `--run`. | `loader`, `ev`, K's view (`kernel.k`), `kw`, `reader`, `index`, `initload` | `load.shard` (`--run`, `--lowered`), `test/session_test.shard` |
 | `lower.shard` | 687 | Back end stage 1, `lw_prog : Prog → Prog`: to a named form, the seven expression rows for naming-law primitives, lifting of `if`/`match` in operand position, nested patterns to flat chains, every operand an atom, back to indices. `lw_role` gives the eight wire roles. Refuses unlinked `sig`s, primitives with no row, string patterns. | `prog`, `name`, `util` | `emit.shard`, `cgen.shard` (`lw_role`), `load.shard` (`--lowered`) |
-| `cgen.shard` | 715 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–907 by role, others from 1000), symbol statics, per-function text, `main.c` plus parts of 400 functions, `main`. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main`. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
+| `cgen.shard` | 791 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–908 by role, others from 1000, odd for a type's second constructor), symbol statics, per-function text, `main.c` plus parts of 400 functions, `main`. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main` or one with parameters before the World, a constructor of more than 125 fields, a constructor named as a cell of the runtime at another place in its type. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
 | `emit.shard` | 108 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`), `test/session_test.shard` (emit mode) |
-| `rt.h` | 978 (C) | The runtime every generated `main.c` includes: tagged small integers and bignum cells, cells and the allocator, the conservative mark–sweep collector, the intern table, the primitives, nine extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`, `test/session_emit_test.sh`) |
+| `rt.h` | 1,014 (C) | The runtime every generated `main.c` includes: tagged small integers and bignum cells, cells and the allocator, the conservative mark–sweep collector, the intern table, the primitives, nine extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`, `test/session_emit_test.sh`) |
 | `host.shard` | 25 | The toolchain's World type and seven extern declarations over the prelude's types (`get_args read_file read_range write write_line write_file exit`). | `prelude` | every toolchain entrypoint; `ev.shard` (its driver performs six of them through these) |
 | `load.shard` | 613 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`). | `loader`, `store`, `ev`, `dump`, `emit`, `lower`, `session` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
 | `dump.shard` | 240 | A `Prog` as the canonical text that the bootstrap's `eval dump` also prints: one line per declaration, sorted; a stated projection (last name components). | `prog`, `etable` | `load.shard --dump`; `test/parity_test.sh`, `test/template_test.sh` |
@@ -251,7 +251,7 @@ export's chunks), `prove.shard` (the producers), `verify_release.shard` (K's rep
 
 | script | what it does | called by |
 |---|---|---|
-| `v3/build.sh` | emit on the bootstrap, then `cc`; the inventory, the stamp, the shim `v3/bin/eval` | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `shardfmt_test.sh` |
+| `v3/build.sh` | emit on the bootstrap, then `cc`; the inventory, the stamp, the shim `v3/bin/eval` | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `build_test.sh`, `shardfmt_test.sh` |
 | `v3/test.sh` | every entrypoint on one engine, in parallel; keeps outputs for the suite tie | CI (`v3`, `native`), authors |
 | `v3/fmt.sh` | lists or rewrites sources that are not canonical; builds `v3/bin/shardfmt` when stale | authors; `shardfmt_test.sh` (`--list`) |
 | `v3/t0_full.sh` | the engines' tie on 100,000 lines, then the full Init replay against its pins | CI (`v3`), `test/t0_gate_test.sh` (with stub engines) |
@@ -561,7 +561,10 @@ primitive of the table is refused: `Nat.gcd`, `Nat.pow`, and `Nat.add`, `Nat.mul
 
 **The generated C.** One `static value_t s_NAME(value_t p_0, …)` per function, the name mangled
 injectively from the identity. A self tail call reassigns the parameters and jumps; any other call
-is a C call. A `match` is a `switch` on the tag or the integer, or a chain of symbol tests.
+is a C call. A `match` is a `switch` on the tag or the integer, or a chain of symbol tests. An
+`if` tests the low bit of the condition's tag, which says "second constructor of its type" as the
+evaluator's tags do, so a binary takes the branch `ev` takes on a value of any type
+(`v3/pins/emit/if_second`).
 
 ### The runtime's data (`v3/kernel/rt.h`)
 
@@ -570,7 +573,7 @@ is a C call. A `match` is a `switch` on the tag or the integer, or a chain of sy
 | every value | one machine word |
 | `Nat`, `Int` | the same thing: an odd word holding a 63-bit integer, or beyond that a heap cell of sign and 32-bit limbs; arithmetic is exact up to 2^3840 |
 | a constructor | a pointer to a 16-byte-aligned cell: a 32-bit tag, a 32-bit field count, the fields. `true`, `false`, `nil`, `none` are one shared cell each |
-| tags | 900–907 for the constructors the runtime itself builds and reads (true, false, nil, cons, none, some, pair, the World) — the prelude's and Init's `Bool`, `List`, `Option`, `Pair`/`Prod`, and `Decidable`'s two as `Bool`'s; every other constructor from 1000 in program order |
+| tags | odd for the second constructor of a type, even for every other. 900–908 for the constructors the runtime itself builds and reads (false 900, true 901, nil 902, cons 903, none 904, some 905, pair 906, the World 908) — the prelude's and Init's `Bool`, `List`, `Option`, `Pair`/`Prod`, and `Decidable`'s two as `Bool`'s; every other constructor two tags from 1000 in program order, of which it carries the odd one where it is its type's second |
 | a list; `ByteArray`, `String`, `Array`; a string literal | cons cells ending in nil, one per element; a byte is a small integer in a 32-byte cons cell. A literal is rebuilt each time its code runs |
 | a symbol | a cell holding an index into an intern table; equality compares indices |
 | a closure | none exists: every call is saturated and names a top-level function |
@@ -586,12 +589,12 @@ that only look like pointers. Freed cells go to free lists by size. A collection
 |---|---|
 | a `match` no arm takes; a refuted branch reached | `rt trap: inexhaustive match in F`, exit 3 |
 | `/ mod tmod ediv` by zero — the toolchain's bare-named primitives; Init's `Nat.div`, `Int.ediv` and their kin are total | `rt trap: div by zero (stuck on the interpreted engines)` and its like, exit 3 (under `ev`: exit 4) |
-| a shift count outside 0–63 | `rt trap: bshl shift out of range (stuck on engines)`, `bshr` likewise, exit 3. This includes `Nat.shiftLeft` and `Nat.shiftRight`, which `ev` computes at a count of 64: `Nat.shiftLeft 1 64` is 18446744073709551616 and `Nat.shiftRight 5 64` is 0 under `--run`, and each traps in a binary |
-| an integer past 2^3840 | `rt trap: bignum too large (exceeds 2^3840)`, exit 3. The toolchain's own binaries too: `v3/bin/load` ends so on a `--run` that reaches such a number and on a theorem K evaluates past it, where the loader on the bootstrap accepts both |
+| `bshl` or `bshr` by a count outside 0–63 — the toolchain's bare-named shifts | `rt trap: bshl shift out of range (stuck on engines)`, `bshr` likewise, exit 3. `Nat.shiftLeft` and `Nat.shiftRight` take a count of any size, as under `ev`: `Nat.shiftLeft 1 64` is 18446744073709551616, `Nat.shiftRight 5 64` is 0 (`v3/pins/emit/init_prim`) |
+| an `if` on a number or a symbol | `rt trap: if on a value that is no constructor (stuck on the interpreted engines)`, exit 3 |
+| an integer of 2^3840 or more | `rt trap: bignum too large (exceeds 2^3840)`, exit 3: a sum, a product, a `Nat.shiftLeft` whose result is that large (any count past 3840 on a nonzero number), where `ev` computes it. The toolchain's own binaries too: `v3/bin/load` ends so on a `--run` that reaches such a number and on a theorem K evaluates past it, where the loader on the bootstrap accepts both |
 | the heap past 64 GB | `rt trap: heap exhausted` |
 | `sym_of_chars` over 4,096 bytes | `rt trap: sym_of_chars: name too long` |
 | recursion depth | a call that is not a self tail call uses the C stack; the limit is raised to 2 GB at start, best effort |
-| a constructor of more than 125 fields | not guarded: the allocator's size classes end at 1 KiB. 125 fields run; 126 and 127 end in a segmentation fault (exit 139); 200 happened to run. Both evaluators run all four |
 
 A program stuck at a primitive ends differently on each engine: the Rust bootstrap run directly
 (`eval direct`) exits 2 with `error running entrypoint: …`; `load --run`, on either engine, exits
@@ -608,27 +611,16 @@ A program stuck at a primitive ends differently on each engine: the Rust bootstr
 | `a numeral pattern outside the runtime's small integers in F` | a numeral pattern beyond ±2^62 (`v3/pins/emit/refused_numeral_pattern`) |
 | `the extern NAME has no shim in the runtime in F` | an extern other than `get_args read_file read_range read_dir write write_line write_file exit read_key` |
 | `no fn MODULE.main to start from` | the root module has no `main` |
-
-Not refused at the emit: a `main` that takes parameters before the World. The generated `main.c`
-calls it on the World alone, the C compiler rejects the call (`too few arguments to function`),
-and `v3/build.sh` prints `FAIL: NAME: cc`. No binary is made; such a `main` is an entry for
-`--run` only.
+| `MODULE.main takes N parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)` | a `main` with parameters before the World, which `--run` reads from the arguments (`v3/pins/emit/refused_main_params`); `takes no parameter` for a `main` of none |
+| `the constructor NAME has N fields: a cell of the runtime holds at most 125` | a constructor of more than 125 fields: the allocator's size classes end at a cell of 1 KiB (`v3/pins/emit/refused_wide_ctor`; `wide_ctor` runs 125). Both evaluators run such a program |
+| `the constructor NAME is named as a cell of the runtime and must not be the second constructor of its type` (or `must be the second`) | a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` carries that cell's tag, whose low bit is fixed: `True`, `Cons` and `Some` are second constructors, the others are not (`v3/pins/emit/refused_role_place`). Both evaluators run such a program |
 
 **What is proven, and what is not.** Nothing about the back end is proven — not the lowering, the
 generator, the runtime or the C compiler. A theorem about a function, or a `bin`'s requirement, is
 about the program's meaning in the logic, not about the binary. What holds a binary to that
 meaning is agreement by test: the lowering against the program under `ev` (`lower_test.sh`), and
 the binaries against the Rust evaluator (the ties below). Where a binary's answer is used as a
-verdict — the full Init replay runs on compiled K — it rests on those tests. One gap no pin
-covers: `ev` takes an `if`'s then-branch when the condition is the second constructor of its
-two-constructor type, whatever its name; the generated C tests for the `true` tag alone. So an
-`if` on a program's own type such as `(type Dec (No) (Yes))` (`v3/pins/loader/if_ok`) takes the
-else-branch in a binary: a program with `(if x "then" "else")` prints `then` for `Dec.Yes` under
-the evaluator on both engines and `else` as a native binary. Init's two-constructor data types
-fare the same. The loader accepts an `if` on an `Option` or a `List` value in a `fn` and defines
-the function; the evaluator takes the then-branch on `some` and on `cons`; a binary takes the
-else-branch on every value. `Bool` and a decision (`<`, `=`), which carry the `true` and `false`
-tags, are tested rightly. Use `match` on anything else.
+verdict — the full Init replay runs on compiled K — it rests on those tests.
 
 ## The two engines
 
@@ -700,16 +692,20 @@ automatically when no EXTRA is given; others are named, as `v3/fmt.sh` names the
 *The stamp* (`v3/bin/NAME.stamp`) is a hash over the root's closure sources, the `.shard` files of
 its extra directories, every `v3/kernel/*.shard` and `v3/kernel/k/*.shard`, `rt.h` and the compiler
 flags. Any edit of a kernel source makes every binary stale. It does not cover the Rust evaluator
-or the C compiler. It is written after the compile, from the sources as they are then: a source
-edited during a build is marked as built (`OPEN.md` §1).
+or the C compiler. A build hashes every file that can enter its stamp before the emit reads any,
+and compares the stamp's files with those hashes after the compile: when one was edited, created
+or removed while the build ran, the build fails with `FAIL: NAME: changed during the build:
+FILE…` and leaves no stamp beside the binary. A file outside the stamp, or one touched with its
+content unchanged, fails nothing (`build_test.sh`).
 
 *What a build writes.* By default everything is under `v3/bin/` (untracked): `NAME`,
 `NAME.stamp`, `NAME.build.log`, `emit/NAME/` (`main.c` and its parts, `map`, `sources`, `root`,
 `extra`). NAME is OUT's last component. With an OUT elsewhere the binary and `OUT.stamp` stand
 there, and the log and the emit directory are still written under `v3/bin/` by that name, so two
 builds whose outputs share a last component overwrite each other's. A failed C compile prints
-`FAIL: NAME: cc` and the last three lines of the log; the compiler's error may stand earlier in
-the log. A root over Init needs a current Init index; the build never builds one.
+`FAIL: NAME: cc:` with the compiler's first `error:` line, then the path of the log, which holds
+the compiler's whole output. A root over Init needs a current Init index; the build never builds
+one.
 
 ### `v3/test.sh`
 
@@ -749,6 +745,7 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `k/test/nested_test.shard` | nested inductives |
 | `k/test/tc_test.shard` | the type checker on a hand-built environment |
 | `bin_test.sh` | calc's `bin`: record, requirements, store, trace, native binary, two negatives |
+| `build_test.sh` | `v3/build.sh` on one small program through a stand-in C compiler: the first error of a failed compile shown, a source edited during the build refused a stamp |
 | `calc_main_test.sh` | calc's `main` under `--run` prints the model's output, byte for byte |
 | `calc_test.sh` | calc's functions under `ev` against recorded reference answers |
 | `define_test.sh` | calc's functions get definitions with equations; theorems citing them accepted |

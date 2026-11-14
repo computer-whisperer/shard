@@ -43,7 +43,13 @@
 # alone, never the implementation behind it, so a root built with a view's directory as an
 # extra root has that directory's .shard files in its stamp too (emit/NAME/extra lists the
 # directories; K's own is in every stamp already). Found at slice 5.1 landing 3: an edit of
-# the formatter's printer, which sits behind a view, left its binary's stamp unchanged. Generated files live under v3/bin/ only (emit/NAME/
+# the formatter's printer, which sits behind a view, left its binary's stamp unchanged.
+# A stamp says which sources the binary is a build of, so a build hashes every file that can
+# enter its stamp before the emit reads any and compares the stamp's files with those hashes
+# after the compile: one that was edited, created or removed while the build ran fails the
+# build (`FAIL: NAME: changed during the build: FILE…`) and no stamp is left beside the binary.
+# A file outside the stamp, or a file touched with its content unchanged, fails nothing.
+# Generated files live under v3/bin/ only (emit/NAME/
 # with main.c, its parts, map and sources; NAME, NAME.stamp, NAME.build.log); an authored file
 # is never written. v3/bin/ is derived and untracked.
 set -uo pipefail
@@ -58,18 +64,34 @@ inventory() {   # NAME SRC per root, parity's list
     echo "$(basename "$f" .shard) $f"
   done
 }
+# the files NAME's stamp is made of, in the stamp's order: the root's closure sources (the emit's
+# `sources` list), the implementations behind its views, the toolchain's sources, the runtime
+stamp_files() {
+  local root
+  root=$(cat "v3/bin/emit/$1/root" 2>/dev/null || echo v3)
+  awk -v r="$root" '{print r "/" $2}' "v3/bin/emit/$1/sources" | sort
+  if [ -s "v3/bin/emit/$1/extra" ]; then
+    while IFS= read -r d; do find "$d" -name '*.shard' | LC_ALL=C sort; done < "v3/bin/emit/$1/extra"
+  fi
+  printf '%s\n' v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/k/mod.req.shard v3/kernel/rt.h
+}
 # the stamp of NAME from its emitted sources list; empty when never emitted
 stamp_of() {
-  local srcs=v3/bin/emit/$1/sources root
-  [ -s "$srcs" ] || { echo ""; return; }
-  root=$(cat "v3/bin/emit/$1/root" 2>/dev/null || echo v3)
-  { awk -v r="$root" '{print r "/" $2}' "$srcs" | sort | xargs cat 2>/dev/null
-    if [ -s "v3/bin/emit/$1/extra" ]; then   # the implementations behind the root's views
-      while IFS= read -r d; do find "$d" -name '*.shard' | LC_ALL=C sort | xargs cat 2>/dev/null; done < "v3/bin/emit/$1/extra"
-    fi
-    cat v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/k/mod.req.shard
-    cat v3/kernel/rt.h
-    echo "cc $CFLAGS"; } | sha256sum | cut -c1-16
+  [ -s "v3/bin/emit/$1/sources" ] || { echo ""; return; }
+  { stamp_files "$1" | xargs cat 2>/dev/null; echo "cc $CFLAGS"; } | sha256sum | cut -c1-16
+}
+# sums: the paths on the input, each once and spelled one way, with the hash of its content now
+sums() { sed 's://*:/:g' | LC_ALL=C sort -u | xargs -r sha256sum 2>/dev/null; }
+# snapshot ROOT EXTRA…: every file that can enter a stamp — the .shard files under the loader's
+# root and the extra roots, the toolchain's sources, the runtime — hashed before the emit reads any
+snapshot() { { find "$@" v3/kernel -name '*.shard' -type f 2>/dev/null; echo v3/kernel/rt.h; } | sums; }
+# changed_since NAME SNAPSHOT: the files of NAME's stamp whose content is not the snapshot's — a
+# source edited, created or removed while the build ran. A file outside the stamp is not looked at
+changed_since() {
+  local then now
+  now=$(stamp_files "$1" | sums)
+  then=$(awk 'NR == FNR { f[$2]; next } ($2 in f)' <(stamp_files "$1" | sed 's://*:/:g; s:^:x  :') <(echo "$2"))
+  [ "$now" = "$then" ] || diff <(echo "$then") <(echo "$now") | sed -n 's/^[<>] [0-9a-f]*  //p' | sort -u
 }
 # K's directory as a second root when the closure consumes its view from outside it
 extra_roots() {
@@ -110,8 +132,9 @@ SHIM
 # build_one NAME SRC OUT ROOT EXTRA…: emit (the load, the lowering, the C text), cc; the stamp last
 build_one() {
   local name=$1 src=$2 out=$3 root=$4; shift 4
-  local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc
+  local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc snap err changed
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
+  snap=$(snapshot "$root" "$@")
   # Init on demand for a root under the naming law (slice 4.3 landing 2): the pinned export and
   # its index when the fixtures hold them and the index is current — never built here (CI builds
   # the driver before the index: on pipeline 629 the lookup built it on the bootstrap, ~1,950 s,
@@ -127,12 +150,23 @@ build_one() {
   entry=$(sed -n 's/^EMIT: .* entry=\([^ ]*\).*/\1/p' "$log" | tail -1)
   [ -n "$entry" ] && [ -s "$emit/$entry" ] || { echo "FAIL: $name: no entry file after the emit"; tail -2 "$log" | cut -c1-200; return 1; }
   s=$(date +%s)
-  cc $CFLAGS -o "$out" "$emit/$entry" -I v3/kernel >> "$log" 2>&1 || { echo "FAIL: $name: cc"; tail -3 "$log" | cut -c1-300; return 1; }
+  if ! cc $CFLAGS -o "$out" "$emit/$entry" -I v3/kernel >> "$log" 2>&1; then
+    # the compiler's first error, wherever in its output it stands; the whole output is the log
+    err=$(grep -m1 'error:' "$log" | cut -c1-300); [ -n "$err" ] || err=$(tail -1 "$log" | cut -c1-300)
+    echo "FAIL: $name: cc: $err"; echo "   the compiler's output: $log"; return 1
+  fi
   t_cc=$(secs $s)
+  # a stamp says which sources the binary is a build of: one edited after the emit read it would be
+  # stamped as built, so the sources are compared with what they were when the build began
+  changed=$(changed_since "$name" "$snap")
+  if [ -n "$changed" ]; then
+    rm -f "$out.stamp"
+    echo "FAIL: $name: changed during the build: $(echo "$changed" | head -3 | tr '\n' ' ')— no stamp is written; build again"; return 1
+  fi
   stamp_of "$name" > "$out.stamp"
   echo "OK: $out ($(sed -n 's/^EMIT: [^ ]* entry=[^ ]* //p' "$log" | tail -1); emit $t_emit s, cc $t_cc s)"
 }
-export -f stamp_of extra_roots secs build_one inventory
+export -f stamp_files stamp_of sums snapshot changed_since extra_roots secs build_one inventory
 export RUST_EVAL CFLAGS
 
 case ${1:-} in

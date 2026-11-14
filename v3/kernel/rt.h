@@ -2,7 +2,9 @@
  *
  * Generated out.c #defines the core ctor tags (RT_TAG_True, RT_TAG_False,
  * RT_TAG_Nil, RT_TAG_Cons, RT_TAG_None, RT_TAG_Some, RT_TAG_Pair,
- * RT_TAG_World) BEFORE including this header.
+ * RT_TAG_World) BEFORE including this header. A constructor's tag is odd
+ * where it is the second constructor of its type and even otherwise, these
+ * eight included: `if` reads that bit (rt_truthy).
  *
  * Representation: value_t is one machine word.
  *   odd  = small int, (i << 1) | 1, i in i63.
@@ -42,6 +44,7 @@
 typedef intptr_t value_t;
 
 #define RT_TAG_SYM_ 0x7fffffffu
+#define RT_TAG_BIG_ 0x7ffffffeu  /* a bignum cell (the bignum section) */
 #define RT_MARK_ 0x80000000u  /* GC mark = top bit of tag (free; tags < SYM_) */
 
 static void rt_trap(const char *msg) {
@@ -85,6 +88,13 @@ static inline value_t rt_field(value_t v, uint32_t i) {
 /* All cells are 16-aligned, so size classes index by (size >> 4). Arity is
    small; 64 classes covers cell sizes up to 1 KiB. */
 #define RT_NCLASS 64
+/* the most fields a cell has: the largest arity whose size has a class. The
+   generator refuses a constructor of more fields and a bignum stops below it
+   (RT_BIG_MAXLIMB), so rt_alloc never indexes past the free lists. */
+#define RT_MAX_ARITY 125
+_Static_assert(((sizeof(rt_cell) + RT_MAX_ARITY * sizeof(value_t) + 15) >> 4) < RT_NCLASS
+               && ((sizeof(rt_cell) + (RT_MAX_ARITY + 1) * sizeof(value_t) + 15) >> 4) >= RT_NCLASS,
+               "RT_MAX_ARITY is the last arity inside the size classes");
 static rt_cell *rt_free[RT_NCLASS];   /* size-segregated free lists */
 static uint8_t *rt_startmap;          /* 1 bit per 16B slot: is a cell head */
 static char *rt_stack_base;           /* high end of the C stack (set in init) */
@@ -239,7 +249,15 @@ static value_t rt_alloc(uint32_t tag, uint32_t arity) {
   }
 }
 
-static inline int rt_truthy(value_t v) { return rt_tag(v) == RT_TAG_True; }
+/* an `if` takes its first branch on the second constructor of the condition's
+   type, whatever the type: the generator gives that constructor an odd tag
+   and every other one an even tag (the evaluator's rule, ev.shard). A number
+   or a symbol is no condition: stuck on the interpreted engines. */
+static inline int rt_truthy(value_t v) {
+  uint32_t t = rt_tag(v);
+  if (t >= RT_TAG_BIG_) rt_trap("if on a value that is no constructor (stuck on the interpreted engines)");
+  return t & 1;
+}
 static inline value_t rt_bool(int b) { return b ? rt_true_ : rt_false_; }
 
 static inline value_t rt_cons(value_t h, value_t t) {
@@ -286,8 +304,8 @@ static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(
  * structural hash is a multiply and a `mod` by 2^61 - 1 per node and per
  * name byte, each one a division of that size — half of a loader run's time
  * on the bit-serial path (measured 2026-11-10). */
-#define RT_TAG_BIG_ 0x7ffffffeu
 #define RT_BIG_MAXLIMB 120  /* ~2^3840; stays inside the GC size classes */
+_Static_assert(RT_BIG_MAXLIMB + 1 <= RT_MAX_ARITY, "a bignum cell is inside the size classes");
 
 static inline int rt_is_big(value_t v) {
   return !(v & 1) && rt_cellof(v)->tag == RT_TAG_BIG_;
@@ -349,7 +367,7 @@ static uint32_t rt_mag_mul(const uint32_t *a, uint32_t na,
   }
   return rt_mag_norm(r, na + nb);
 }
-/* r = a << k, k in 0..63 (r cap na + k/32 + 2, distinct from a) */
+/* r = a << k, any k (r cap na + k/32 + 2, distinct from a) */
 static uint32_t rt_mag_shl(const uint32_t *a, uint32_t na, uint32_t k,
                            uint32_t *r) {
   uint32_t lw = k >> 5, lb = k & 31, n = na + lw + (lb ? 1 : 0);
@@ -743,13 +761,31 @@ static inline value_t rt_bshr(value_t a, value_t b) {
   if (a & 1) return rt_mk_small(rt_untag(a) >> s);  /* arithmetic = floor */
   return rt_ishr2(a, (uint32_t)s);
 }
-static value_t rt_word_stub(void) { rt_trap("word ops unimplemented in v0 codegen"); return 0; }
-
-static int64_t rt_fresh_ctr = 0;
-static value_t rt_gen_fresh(void) {
-  char buf[32];
-  int n = snprintf(buf, sizeof buf, "g__%lld", (long long)rt_fresh_ctr++);
-  return rt_sym(rt_intern(buf, (uint32_t)n));
+/* Nat.shiftLeft and Nat.shiftRight: total on the naturals, as the evaluator
+ * computes them (ev.shard, codes 26 and 27) — n * 2^k and floor(n / 2^k) for
+ * a count of any size, where the bare-named bshl and bshr above are guarded
+ * to 0..63. A negative operand is no natural: stuck on the interpreted
+ * engines. A left shift whose result reaches 2^3840 ends as every integer of
+ * that size does; a count past 3840 on a nonzero n is always one. */
+static inline int rt_is_neg(value_t v) {
+  return (v & 1) ? rt_untag(v) < 0 : rt_big_sign(v) < 0;
+}
+static inline value_t rt_nat_shl(value_t a, value_t b) {
+  if (rt_is_neg(a) || rt_is_neg(b)) rt_trap("Nat.shiftLeft of a negative (stuck on the interpreted engines)");
+  if (a == rt_mk_small(0)) return a;         /* zero whatever the count */
+  if (!(b & 1) || rt_untag(b) > 32 * RT_BIG_MAXLIMB) rt_trap("bignum too large (exceeds 2^3840)");
+  int64_t s = rt_untag(b);
+  if ((a & 1) && s < 62 && rt_untag(a) <= (RT_INT_MAX >> s))
+    return rt_mk_small(rt_untag(a) << s);
+  return rt_ishl2(a, (uint32_t)s);
+}
+static inline value_t rt_nat_shr(value_t a, value_t b) {
+  if (rt_is_neg(a) || rt_is_neg(b)) rt_trap("Nat.shiftRight of a negative (stuck on the interpreted engines)");
+  /* every integer here is below 2^3840: a count past that leaves nothing */
+  if (!(b & 1) || rt_untag(b) > 32 * RT_BIG_MAXLIMB) return rt_mk_small(0);
+  int64_t s = rt_untag(b);
+  if (a & 1) return rt_mk_small(s < 63 ? rt_untag(a) >> s : 0);
+  return rt_ishr2(a, (uint32_t)s);
 }
 
 static value_t rt_chars_of_sym(value_t s) {

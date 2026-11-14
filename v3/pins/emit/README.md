@@ -34,12 +34,17 @@ A case is one of two kinds by where its file lives, and a name marks a refusal:
 | `symbol_pattern` | a symbol with a quote character in it, in a pattern: a static of the generated text, compared by identity |
 | `mangle_injective` | a record's accessor `A.x` beside a plain fn `A_x`: two identities, two C names |
 | `refused_numeral_pattern` | a numeral pattern past 2^62: no C case label for it, the emit refused with its message, nothing built — the refusal path |
+| `refused_main_params` | a `main` with a parameter before the World: a binary's start has the World alone to call it on, so the emit is refused, where the generated call would fail in the C compiler |
+| `refused_wide_ctor` | a constructor of 126 fields, one more than a cell of the runtime holds: refused, where the binary would end in a segmentation fault |
+| `wide_ctor` | a constructor of 125 fields, the most a cell holds, built 100,000 times and read back: the cells pass through a collection and are reused from the allocator's last size class |
+| `refused_role_place` | a constructor named `Pair`, a first constructor among the runtime's cells, declared second in a type of the program: it carries the cell's tag, whose low bit an `if` reads as the place, so the emit is refused |
 | `init_list` | an ordinary case: its own World, an extern over `ByteArray`, a string literal. Init's `Bool`, `List`, `Option` and `Prod` are the cells the runtime's externs build and read, so the literal needs no rewrite |
-| `init_prim` | an ordinary case: Init's arithmetic at the values where the runtime's own operations differ — `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble`. Each row is silent when Init's result holds and prints its name otherwise; the last line is always printed |
+| `init_prim` | an ordinary case: Init's arithmetic at the values where the runtime's own operations differ — `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble`; `Nat.shiftLeft` and `Nat.shiftRight` by counts of 63, 64 and more, on small and large numbers, up to the last power of two a binary's integers hold, where the runtime's bare-named shifts stop at 63. Each row is silent when Init's result holds and prints its name otherwise; the last line is always printed |
+| `if_second` | an ordinary case: an `if` on a value of a program's own type (without fields, with fields, with the fields on the first constructor, each declared after a type of three constructors), of Init's `Option`, `List` and `Bool`, and on a decision — each on its first constructor, then its second, printing the branch taken: the then-branch on the second constructor, read in a binary from the tag's low bit |
 | `prims` | the toolchain's integer primitives at their edges (negative operands of `mod`/`tmod`/`ediv`, truncating `/`, the bitwise five, a product near 2^62): the binary's runtime against the bootstrap's |
 
-`v3/kernel/test/lower_test.sh` also runs the two ordinary cases, each as loaded and in its lowered
-form, and requires the same output.
+`v3/kernel/test/lower_test.sh` also runs the ordinary cases `init_list` and `init_prim`, each as
+loaded and in its lowered form, and requires the same output.
 
 The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a sidecar
 written by `prove`, a store written and verified — are the tie script's workloads over the
