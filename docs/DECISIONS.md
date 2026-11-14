@@ -271,7 +271,7 @@ measurements; measure again before building on one.
   1.4–1.7 s (1,533); bootstrap ~1 s and 20–24 s; 0.6 s for the 1,533 on a base that kept Init.
 - Back end: the loader's own closure (9,003 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.3 MB; all 31 roots 175–222 s (2,826 s through the text chain).
-- Suite: 52 entrypoints, ~900 s on the bootstrap, ~520–570 s on the binaries. Loader pins on one
+- Suite: 54 entrypoints, ~850–950 s on the bootstrap, ~520–570 s on the binaries. Loader pins on one
   shared Init base 33–42 s (783 s loading Init per case).
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
