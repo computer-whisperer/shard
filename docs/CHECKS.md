@@ -25,7 +25,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | A checked environment comes only from admission and cannot be built or forged by a client. | `v3/kernel/k/mod.req.shard`; pins `k_client_reach`, `k_client_admit`, `k_client_transfer` |
 | What a client hands K is a claim: K re-derives every node's data before reading it. | `hostile_test.shard` cases 16, 19, 19b, 20, 21 |
 | A shortcut for a primitive or a literal is enabled only for an admitted declaration that matches the reference structurally, never by name. | `v3/kernel/k/test/accel_test.shard`; `hostile_test.shard` cases 7, 7b, 7e, 8, 8b |
-| Building declarations as data through K's interface is a normal route. | `k_client_test.shard`; `session_test.shard` |
+| Building declarations as data through K's interface is a normal route. | `k_client_test.shard` |
 | Acceptance by K implies the judgment holds. | not proven; the evidence is the comparison with Lean |
 
 ### Programs (E)
@@ -63,7 +63,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 
 | rule | held by |
 |---|---|
-| The elaborator is untrusted: K checks what it produces. | release verification runs without it (`store_test.sh`) |
+| The elaborator is untrusted: K checks what it produces. | no test found; the elaborator reaches the environment only through K's view, as any client does (pins `k_client_reach`, `k_client_admit`; `k_clients_test.sh`) |
 | Inference fills in what the inputs determine and never chooses among alternatives; an undetermined argument is a refusal. | pins `elab_unsolved`, `elab_instance`, `elab_no_decision`, `match_motive` |
 | An unknown identifier is never turned into a parameter. | `v3/pins/reader/refuse_unknown_constant` |
 | A requirement is identified by its statement, the declarations it refers to, the policy and the environment; a changed proof strategy leaves it alone. | pins `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env`, `auto_strategy_free` |
@@ -86,26 +86,25 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | `exact TERM` reaches every proof term. | pin `by_exact_external` |
 | A step carries its choices or names a versioned, bounded reconstruction. | pins `arith_only`, `arith_certificate`, `simp_budget`, `auto_recon_old` |
 | A rewrite addresses an occurrence together with the subterm expected there. | pins `by_rw_occ`, `by_rw_occ_guard`, `by_rw_occ_spine` |
-| Schema and reconstruction versions are apart from the rules; a version change is reported, not overwritten. | pins `auto_schema_old`, `auto_schema_2`, `auto_schema_future`; `store_test.sh` |
+| Schema and reconstruction versions are apart from the rules; a version change is reported, not overwritten. | pins `auto_schema_old`, `auto_schema_2`, `auto_schema_future`, `auto_recon_old` |
 | Proof steps are functions over data, and an engine is a program composing them. | `tactic_lib_test.sh`; pin `auto_tactic` (a library exchanges text once) |
 | One engine's solution is checked the same way as any other's. | `tactic_lib_test.sh` |
 | A failed proof refutes neither the statement nor the program. | no test found |
 | `sorry` is reported and never accepted. | pins `sorry`, `by_sorry`, `bin_unmet`; `v3/pins/reader/pending_sorry` |
-| Release verification checks stored proof terms against target and policy with no elaborator. | `store_test.sh`, `std_test.sh`, `imp_test.sh`, `path_test.sh` |
 | No tool writes into an authored source; a missing or stale delegated proof is pending, never searched for at build. | `engine_test.sh`, `tactic_lib_test.sh`; pins `auto_missing`, `auto_stale` |
 
 ### Identity, views and acceptance
 
 | rule | held by |
 |---|---|
-| Assumption policy is checked at every acceptance; two proofs of one statement keep their own assumption sets. | pins `policy_axiom`, `policy_cross`, `bin_untrusted`; `store_test.sh`; `tactic_lib_test.sh` |
+| Assumption policy is checked at every acceptance; two proofs of one statement keep their own assumption sets. | pins `policy_axiom`, `policy_cross`, `bin_untrusted`; `tactic_lib_test.sh` |
 | The checking engine, its version and the route are part of an acceptance. | no test found; no such record found |
 | A view is well-formed on its own. | pins `view_req_scope`, `view_form`, `view_sig_outside` |
 | An implementation gives each signature a body and each requirement a proof. | pins `view_missing_fn`, `view_missing_type`, `view_missing_fulfills`, `view_signature`, `view_pending` |
 | A consumer checks against the view alone, and K cannot unfold a view's constant. | pins `view_eq_hidden`, `view_rfl`, `private_module` |
 | Identity is the qualified name under the package root plus content; location is separate. | no relocation test found |
 | Types never collapse by shape or spelling. | pins `same_spelled`, `collision`, `qualified_collision`, `entry_shape` |
-| A changed body is a new revision; a proof made against the old one is not carried over. | pin `auto_stale_deps`; `session_test.shard` |
+| A changed body is a new identity for everything that cites it; a proof made against the old one is not carried over. | pin `auto_stale_deps` |
 | Invalidation follows dependency classes, never a shared directory. | pins `auto_stale*` for stored proofs; nothing else caches |
 
 ### Execution and trust
@@ -116,10 +115,8 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | A compiled engine is confirmed against the interpreter byte for byte. | `native_tie_test.sh`, `suite_tie.sh`, `route2_test.sh`, `t0_gate_test.sh` |
 | The toolchain's sources are written in the language every file uses. | `parity_test.sh`; pin `rename_refused_kernel` (string literals under `kernel` remain byte lists) |
 | Every entry from outside is checked or preconditioned; a value built as data is not thereby well-typed. | `entry_test.shard`, `handle_test.shard`, `wire_test.sh`; pins `entry`, `entry_shape`, `handle_door` |
-| A prepared handle keeps denoting its revision; a newer revision neither retargets nor revokes it. | `session_test.shard`, `handle_cost_test.sh` |
 | Bulk buffers cross a boundary through explicit views. | no test found; no packed buffer exists |
 | Limits cover decoding, sizes, depth and primitives; exhaustion changes no state and is never cached. | `hostile_test.shard`; `prims_test.shard`; `index_test.sh` |
-| A long-lived context owns what it holds, and release makes it reclaimable. | no test found; not built |
 
 ## Soundness lessons
 
@@ -149,7 +146,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | `decide` erased as the identity; a descent obligation nearly stated without its branch fact. | pins `project_bool`, `discharge_measure`, `if_rec_call` |
 | A primitive let a negative through a `Nat` operation; a host call died instead of sticking. | `prims_test.shard` |
 | The two readers agreed on a text that hid two same-named functions. | `parity_test.sh` checks one declaration per short name |
-| The release gate's exit was not the conjunction of its checks; an admit flag was trusted. | `store_test.sh`; pin `k_client_admit` |
+| An admit flag was trusted. | pin `k_client_admit` |
 | A rewrite's motive was typed and not checked; K refused the certificate. | pins `reduce_dependent`, `rw_dependent` |
 | Unique use of the World does not follow from a monotone clock. | pins `thread_sequential`, `thread_pair_twice`, `thread_helper_twice`, `bin_unthreaded` |
 | A native binary took the else-branch of every `if` whose condition was not a `Bool` (a program's own two-constructor type, `Option`, `List`): the generated C tested for the `true` tag alone, and every test branched on `Bool`. Wrong output, not a false theorem. | `v3/pins/emit/if_second` (run by `native_tie_test.sh`) |

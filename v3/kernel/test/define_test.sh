@@ -78,7 +78,7 @@ check v3/std/host.shard \
   'RUNNABLE extern std.host.get_args' \
   'runnable 6  refused 0  pending 0  realized 0  defined 0  errors 0'
 # a registry row never speaks for a native declaration that bears its name: the driver
-# refuses the native `Bool.or` by name wherever it loads, as the release gate does
+# refuses the native `Bool.or` by name wherever it loads
 # (`name_taken` on the record); a Decidable value is the type's cells off an `if`'s condition
 # (the program agrees with K's theorems on all three entries); the refusals of what has no
 # derivation, each with its reason

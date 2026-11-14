@@ -24,7 +24,7 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | A supplied `realize` that is no template and whose body is the first to take a template's instance may be refused "cited before its realization is attached" (`realize.shard`, `realize_order`); no pin has such a `realize`. | read from the code |
 | K's `check_level` does not refuse a level metavariable when it is given no list of level parameters. Admission always gives the list; the `infer` that K's view offers to callers does not. | read from the code |
 | The Rust bootstrap loads an identifier that names nothing as a free variable, and `eval dump` prints an undeclared bare type name as a type variable; a source of the toolchain with such a name is refused only when the V3 loader reads it. | reproduced on ordinary files; none in the toolchain |
-| The text that says why a function got no definition is written and then dropped: where the loader prints `RUNNABLE fn NAME why=REASON` for a single function or for a group (`group_shape`, `group_measure`, `measure_type`, `callee_runnable`), the sentence `define.shard` built for that reason is not printed; it prints only for a recursive `def` and for a template. Three more texts can never print because an earlier check refuses first: `match_indexed`, the back end's string-pattern refusal, `name_taken` for a declaration built as data. | read from the code; no run printed them |
+| The text that says why a function got no definition is written and then dropped: where the loader prints `RUNNABLE fn NAME why=REASON` for a single function or for a group (`group_shape`, `group_measure`, `measure_type`, `callee_runnable`), the sentence `define.shard` built for that reason is not printed; it prints only for a recursive `def` and for a template. Two more texts can never print because an earlier check refuses first: `match_indexed` and the back end's string-pattern refusal. | read from the code; no run printed them |
 | Messages that say less than the case: five `LOAD-ERROR` records of the loader carry no detail; `no_l_meaning: F: an extern has no L meaning` is printed for a supplied `realize` body that calls an extern, where an extern is an opaque constant; `unknown_in_body` says "a fn without a definition" for any program-side name. | read from the code |
 | Small: the classifier offers a parameterized head `(NAME T…)` that it then refuses; `t0.shard` with `-p` and `--pins` prints only the `PINS` line; `define_test.sh` prints a constant `20 checks`; `v3/t0_full.sh` writes its log to the repository root, where nothing ignores it; `wf_proj` and `wf_proj_rest` in `define.shard` are one function written twice. | read from the code |
 | Code nothing uses, still in place: in the formatter `drop_lead_blanks` only renames `drop_blanks`, and two proofs cite its equation; the reader's `empty_atom` error cannot occur. | read from the code |
@@ -60,7 +60,6 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a witness through `exact` | `(exact (Exists.intro w h))` is `unify_stuck`; `apply` with `show` works | nobody yet |
 | goal states kept between steps; shared holes | every query replays its block | a search engine working on goals |
 | source positions on diagnostics | a failure names its step and goal, not a span | incremental goal states |
-| budgets and reclamation for a long-lived session | not built | nobody yet |
 | a proof that the evaluator is right, and results proven by running it | not built | the compile system, possibly (§2) |
 | a checked decoder from bytes to text | text enters a program as literals only | nobody yet |
 | host calls to list a directory or read a key | not built | nobody yet |
@@ -83,8 +82,10 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
 - No run-time value from a non-constructive choice: the refusal exists, no pin exercises it.
 - A user function or host call spelled like an operator: no pin. A `fn` named `lt` is defined and
   cannot be called (`renamed_primitive`).
-- An unfinished proof fails neither a load nor the release check, so a stored release can verify
-  with a theorem absent. Only a binary's contract insists.
+- An unfinished proof does not fail a load, so a load can end clean with a theorem absent. Only a
+  binary's contract insists.
+- The layers above K are untrusted and K checks what they produce: no test hands K a wrong term
+  from the elaborator. That those layers reach the environment only through K's view is tested.
 - Which engine and route produced an acceptance is not recorded.
 - Identity under a move of the tree: no test.
 - "An agent with only the documents can write a program and prove something": no test. It is

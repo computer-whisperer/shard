@@ -936,8 +936,8 @@ compares the two files byte for byte.
 A *program* is what a clean load yields: the `fn`, `type` and `extern` declarations of the loaded
 files, every name resolved. An *entry* is a `fn` whose last parameter is the World (the token
 that orders effects) and whose result is the World. The evaluator `ev` (`v3/kernel/ev.shard`) is
-the definition of "run". A program runs under it from the command line or through a prepared
-handle, or as a native binary, which is held to `ev` by tests.
+the definition of "run". A program runs under it from the command line, or as a native binary,
+which is held to `ev` by tests.
 
 ### Under the evaluator: the loader's `--run`
 
@@ -978,8 +978,8 @@ An entry with the World alone takes any arguments and reads them through `get_ar
 | 6 | `RUN: argument N REASON: TEXT` | `argument_count`, `not_an_int`, `not_a_nat`; e.g. `RUN: argument 1 not_a_nat: x` |
 
 `preconditioned` refuses an entry whose arguments cannot be validated in full: a parameter that is
-evidence (`(h (Nat.lt n 10))` in `guarded`, `v3/pins/session/data.shard`), a constructor with a
-proposition field, a type parameter, `Fin`, `BitVec` or `Subtype`.
+evidence (`(h (Nat.lt n 10))` in `guarded`, `v3/pins/loader/handle_door/main.shard`), a
+constructor with a proposition field, a type parameter, `Fin`, `BitVec` or `Subtype`.
 
 ### As a native binary
 
@@ -1011,29 +1011,22 @@ A binary is held to the evaluator by tests, not by proof, and differs from it at
 (`OPEN.md` §1). An integer of 2^3840 or more traps, so a `Nat.shiftLeft` to such a result does. A
 program stuck under the evaluator (exit 4) traps (exit 3).
 
-### Prepared handles and sessions
+### Prepared handles
 
-A host written in shard runs programs in its own process, with no command line between steps.
-A *handle* (`ev.shard`) is a program linked once with one entry bound; it is invoked any number of
-times on arguments built as data. A *session* (`session.shard`) owns a table of *revisions* (each
-one load, or an earlier revision extended by declarations built as data) and a table of handles.
-A client holds ordinals, never the values. `v3/kernel/test/session_test.shard` is the worked host.
+Every run under the evaluator goes through a *handle* (`ev.shard`): a program linked once with one
+entry bound under a policy, invoked on arguments built as data. `ev` itself — which also runs a
+tactic library for `prove` — is one preparation at the `Assumed` door and one invocation; `--run`
+is one preparation at the `Checked` door with effects and one invocation.
 
 | operation | answer |
 |---|---|
-| `(policy_of DOOR EFFECTS TRACE FUEL)` | a policy: `Checked` validates every argument against its parameter's type and refuses a `preconditioned` entry; `Assumed` takes the caller's word and records what was assumed |
-| `(prepare PROG ENTRY POLICY REV)`, `(invoke H ARGS)`, `(invoke_run H ARGS ARGV W)` | a handle on a program alone; a run without effects (`InvRan`, `InvArg`, `InvNo`); a run with effects |
-| `(ses_start EXPORT INDEX)` | a session |
-| `(ses_introduce S ROOT FILES W)` | the files loaded as a new revision: `IntroOk N`, or the load's records |
-| `(ses_extend S REV MODULE DECLS VIEWS)` | a new revision: REV plus declarations built as data |
-| `(ses_prepare S REV ENTRY POLICY)` | `PreparedOk H`, or `PreparedNo REASON TEXT` |
-| `(ses_invoke S H ARGS)`, `(ses_run S H ARGS ARGV W)` | the handle's run; `ses_invoke_at` / `ses_run_at` also require a revision |
-| `(ses_release S H)`, `(ses_revoke S H WHY)`, `(ses_withdraw S REV WHY)` | the handle gone; every handle of REV and of the revisions extending it revoked |
+| `(policy_of DOOR EFFECTS TRACE FUEL)` | a policy: `Checked` validates every argument against its parameter's type and refuses a `preconditioned` entry; `Assumed` takes the caller's word |
+| `(prepare PROG ENTRY POLICY)`, `(invoke H ARGS)`, `(invoke_run H ARGS ARGV W)` | a handle on a program alone; a run without effects (`InvRan`, `InvArg`, `InvNo`); a run with effects |
 
-A handle keeps running the revision it was prepared on, whatever revisions come after. The
-refusals: `unknown_revision`, `withdrawn`, `unknown_handle`, `released`, `revoked`, `revision`
-(the invocation requires another one), `policy` (the handle was prepared for the other kind of
-run). Limits: no host in another language; fuel is the only budget; no revision is ever removed.
+A handle prepared for one kind of run refuses the other (`policy`). On a program alone the
+`Checked` door cannot see an evidence binder or a constructor's proposition field: the erasure
+dropped them. `--run` holds the load's environment as well and refuses such an entry
+(`v3/kernel/run.shard`).
 
 ### Host calls
 
@@ -1298,7 +1291,6 @@ of refusals and errors, does not. What rests on a pending proof is reported, nev
 | A view's requirement whose `fulfills` is pending | `PENDING NAME sorry`, then `DISCHARGE NAME pending`. The requirement stays a parameter; every theorem that rests on it lists it in `params=` (v3/pins/loader/view_pending). |
 | A measured function | Each descent is a parameter, `PARAM f.dec_N obligation`. The function is defined, with its equations; its record and those of its callers carry `pending=f`; a theorem that cites it is accepted with `params=f.dec_N`. `(fulfills f.dec_N PROOF)` proves the descent as the theorem `f.dec_N.proof`: `DISCHARGE f.dec_N proved`, and the load's records are rewritten so that `PENDING f measure`, `pending=f` and the `params=` entry are gone (v3/pins/loader/discharge_measure). |
 | A `bin` that `requires` a pending theorem | `UNMET NAME`, an error: the load fails (v3/pins/loader/bin_unmet). This is the one place where pending fails a load. |
-| The store | A pending theorem is absent. An undischarged obligation or a view parameter is a `param` line of the manifest, and the verifier prints it. |
 
 A discharge that rests on the obligation it discharges, directly or through another, is refused
 `fulfills_cycle` and closes nothing (v3/pins/loader/discharge_two_cycle).
@@ -1423,105 +1415,27 @@ library. A failure is `PENDING NAME auto_unsolved fp=S tactic=M.FN: REASON`: an 
 wrong signature, no answer, an answer that is not one block, a refused step, an evaluator stuck or
 out of fuel. One delegation names one tactic.
 
-## The store and identities
+## Fingerprints and versions
 
 A plain load persists nothing. Every load reads, elaborates and checks again, and prints one
 record per declaration; for an accepted one,
 `ACCEPT NAME module=M hash=H axioms=A,… init=N params=P,… req=S.D.P.E`. `hash=` is the
 declaration's *content fingerprint*: a 61-bit structural hash of its type, for a definition of its
 value too, for an inductive type of its constructors' types. A theorem's is its statement's alone.
-Binder names are outside it. It names files and detects change; nothing is accepted on its
+Binder names are outside it. It tells records apart and detects change; nothing is accepted on its
 strength. `axioms=` is the axiom closure of the proof as written, so two proofs of one statement
 may differ in it. `init=` is the module's Init horizon, `params=` the parameters the declaration
 rests on, and `req=`, on theorems only, the key of the previous section.
 
-### Writing a store
-
-`load --root DIR [--init EXPORT --init-index INDEX] --store OUT FILE…`: after a load without
-refusals or errors, every constant the load gave to K (each `ACCEPT`, each `PARAM` K holds) is
-written under OUT. Pending theorems do not block the store and are not in it.
-
-| File | Content |
-|---|---|
-| `OUT/ID.ndjson` | One declaration as the records K reads: lean4export's NDJSON, format 3.1.0. First the name, level and expression tables it cites, numbered from 1; then the declaration record. An inductive type is written with its constructors and recursors. Every binder is anonymous. ID is the content fingerprint in decimal, or `FP-K` when another text already has that name. |
-| `OUT/ID.names` | Display only: a line `IE NAME` for each binder record that had a name. |
-| `OUT/order` | `ID NAME` per declaration, in admission order. |
-| `OUT/manifest` | What the store claims to hold: the verifier's target. |
-
-The manifest's lines are `manifest 1`; `recon N`, the reconstruction version the proofs were
-elaborated under; `decl ID KIND NAME`, KIND one of `axiom`, `def`, `thm`, `opaque`, `inductive`;
-`param NAME` for each parameter held as an axiom (a view parameter, an undischarged obligation);
-`discharge OBL OBL.proof` for each obligation the load proved; and `bin NAME entry F externs E…
-requires R…` for each `bin`.
-
-`order` and `manifest` are appended, never rewritten, so several loads fill one store, and a file
-that already holds the same text is shared: the last line is `STORE: OUT new=N shared=M`. Because
-the records carry no binder names, two proofs that differ only in names write one text under one
-ID. A store holds one reconstruction version; a load at another is refused: `STORE: refused
-OUT/manifest: recon 0 is not this loader's 2 — a store holds one reconstruction version; the
-migration is a new store`. The declarations of a view's implementation are checked and not stored.
-The test suite writes the store of v3/examples/calc to `v3/release/calc` (derived, untracked).
-
 | Version | Value | Where it stands | A mismatch |
 |---|---|---|---|
 | Sidecar schema | 3 | `(sidecar 3 …)` | older: the `SIDECAR` report; newer: `sidecar_schema` |
-| Reconstruction version | 2 | `(sidecar … 2)`; the manifest's `recon 2` | the `RECON` report; `STORE: refused`; named by `--reconstruct` |
+| Reconstruction version | 2 | `(sidecar … 2)` | the `RECON` report |
 | Engine version | 1 | the sidecar's first comment line; the `PROVE` header | none: it is not read back |
-| Manifest | 1 | `manifest 1` | the verifier exits 2 |
-
-### Reconstruction
-
-`load --root DIR [--init …] --reconstruct OUT FILE…`: after a clean load, each theorem listed in
-OUT's manifest that this load elaborated is rendered as the store would write it and compared,
-byte for byte, with `OUT/ID.ndjson`. Nothing is written.
-
-| Line | Meaning |
-|---|---|
-| `RECONSTRUCT NAME same recon=2` | The same proof term. |
-| `EVIDENCE-CHANGE NAME recon=2` | A different term; `missing` follows NAME when the file is gone. |
-| `RECONSTRUCT NAME not-loaded` | The load did not elaborate this theorem. |
-| `RECONSTRUCT: theorems N  same S  changed C  not-loaded A recon=2` | The total. |
-
-`recon=A→B` on every line means the manifest's version is A and this loader's is B. The exit code
-is the number of changes. A change is no error of the proof, since K accepted both terms: the
-stored evidence is no longer what the sources produce, and the remedy is a new store.
-
-### The verifier
-
-`verify_release [-v] OUT EXPORT INDEX` (`v3/kernel/verify_release.shard`, built as
-`v3/bin/verify_release`) contains K, the file primitives, the JSON reader and the Init index
-reader, and no elaborator. It checks the part of Init that the store cites, then gives each stored
-file to K in `order`'s order, each file with fresh tables over the environment so far, and holds
-the result to the manifest:
-
-| Line | Meaning |
-|---|---|
-| `REJECT …`, `EXHAUSTED …`, `MISMATCH …`, `UNSUPPORTED …`, `MALFORMED …` | K's own verdict on a record. `ACCEPT NAME` is printed under `-v`. |
-| `MISTIED WANT accepted as NAME fp=FP` | Accepted under another name or fingerprint than the manifest's. |
-| `MISKIND NAME: the manifest says thm, the record is axiom` | Accepted as another kind. |
-| `CARDINALITY ID: N declarations accepted, one expected` | A file with more or fewer than one. |
-| `UNLISTED ID NAME`, `MISSING ID NAME` | An order line the manifest lacks; a manifest declaration without its file or its order line. |
-| `TAKEN NAME is a declaration of the export` | A stored name that is Init's. |
-| `UNDECLARED NAME: …` | An axiom that is neither a `param` nor a discharged obligation. |
-| `PARAM NAME` | A declared parameter: what the store's theorems are conditional on. |
-| `DISCHARGE OBL by PROOF`, `BAD-DISCHARGE OBL: …` | The store holds, or does not hold, the theorem `OBL.proof` at the obligation's statement. |
-| `CONDITIONAL NAME: rests on A …` | The axiom closure reaches an axiom that is not Init's, not a `param` and not a verified discharge. |
-| `BIN NAME ok`, `BAD-BIN NAME: REASON` | A `bin` line's entry, externs and requirements are, or are not, accepted declarations of the right kind, the requirements unconditional. |
-
-The last line gives every count:
-
-```
-RELEASE: declarations 23  accepted 23  rejected 0  exhausted 0  mismatched 0  unsupported 0  malformed 0  mistied 0  missing 0  taken 0  unlisted 0  miskind 0  cardinality 0  undeclared 0  conditional 0
-```
-
-The exit code is 0 exactly when every count after `accepted` is zero and Init's part checked
-clean, 1 otherwise, and 2 when the store or the arguments cannot be read. The verifier does not
-know which theorems a source states: a theorem that was pending when the store was written is not
-in the manifest, and the store verifies without it. A `bin`'s `requires` makes a theorem mandatory.
 
 Each tool runs under the bootstrap evaluator (`eval direct v3/kernel/load.shard ARGS…`) and as a
 native binary under `v3/bin/`. The tests: v3/kernel/test/tactic_test.sh (blocks), engine_test.sh
-and tactic_lib_test.sh (`prove`, sidecars), store_test.sh (store, reconstruction, verifier).
+and tactic_lib_test.sh (`prove`, sidecars).
 
 ## Acceptance: axioms and policy
 
@@ -1609,10 +1523,6 @@ names what its proof rests on instead, and a proof that rests on its own obligat
 `READ-ERROR FILE pending_obligation: main.t3 is pending: …`, a `fulfills` by `sorry` is
 `DISCHARGE NAME pending`, and a `bin` requirement left pending fails the load with `UNMET`.
 
-The release gate (`verify_release.shard`) reports the same classes over a stored bundle with K
-alone: `PARAM NAME`, `DISCHARGE OBL by PROOF`, `UNDECLARED NAME` (an axiom the manifest does not
-declare) and `CONDITIONAL NAME: rests on A…` (a closure that reaches such an axiom).
-
 ## What the loader prints
 
 ### The command line
@@ -1627,8 +1537,6 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--init-index INDEX` | the export's index (built by `v3/kernel/initindex.shard`) |
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
-| `--store DIR` | after a clean load, write every admitted constant under DIR: `STORE: DIR new=N shared=M` |
-| `--reconstruct DIR` | after a clean load, compare each theorem's proof with the one stored under DIR, byte for byte; nothing is written |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |
@@ -1647,11 +1555,10 @@ LOAD root=DIR
 LOAD: modules 10  accepted 404  runnable 6  refused 0  pending 0  realized 12  defined 61  errors 0
 ```
 
-The exit code is `refused` plus `errors`; a pending declaration does not fail a load. With
-`--reconstruct` a clean load exits with the number of changed proofs. Under `--dump`, `--emit` and
-`--run` a failed load prints its records and the counts and exits 2. A run exits 3 out of fuel, 4
-stuck, 5 on a link failure, 6 on a refused argument (`RUN: argument 1 not_a_nat: x`), else as its
-program.
+The exit code is `refused` plus `errors`; a pending declaration does not fail a load. Under
+`--dump`, `--emit` and `--run` a failed load prints its records and the counts and exits 2. A run
+exits 3 out of fuel, 4 stuck, 5 on a link failure, 6 on a refused argument (`RUN: argument 1
+not_a_nat: x`), else as its program.
 
 ### The records
 

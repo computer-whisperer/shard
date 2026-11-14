@@ -47,5 +47,4 @@ A case is one of two kinds by where its file lives, and a name marks a refusal:
 loaded and in its lowered form, and requires the same output.
 
 The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a sidecar
-written by `prove`, a store written and verified — are the tie script's workloads over the
-drivers, not programs here.
+written by `prove` — are the tie script's workloads over the drivers, not programs here.

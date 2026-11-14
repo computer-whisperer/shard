@@ -3,8 +3,7 @@
 # v3/examples/calc/calc_bin.shard declares calc's main as a bin over calc_main.shard —
 # three observables as opaque constants, nine bolt axioms, two requirements proven through
 # the model world (main_output, main_reads). The load records the bin (BIN … requires 2/2)
-# and every function of its closure THREAD ok; the store's manifest carries the bin line
-# and the release gate verifies it (BIN … ok); the requirements' closures are Init's two
+# and every function of its closure THREAD ok; the requirements' closures are Init's two
 # and the bolts they use; the program runs through the driver with the bin file as the
 # root file, byte-identical to the model world as calc_main_test.sh ties it; and two
 # negatives — the bin with a requirement left `sorry` fails the load with UNMET, and a
@@ -20,14 +19,13 @@ read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "bin_test: no Init
 INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 INPUTS=v3/kernel/test/fixtures/calc_inputs.txt
 OUT=$(mktemp -d); ROOT=$(mktemp -d -p v3 bin_scratch_XXXXXX); trap 'rm -rf "$OUT" "$ROOT"' EXIT   # the scratch root inside the tree: the loader takes paths relative to the working directory
-mkdir -p "$OUT/store"
 fail=0; checks=0
 bad() { echo "bin_test: $*"; fail=$((fail+1)); }
 BIN=examples.calc.calc_bin.calc
 
 # ---- (1) the load: the record, the closure's verdicts, the requirements' closures
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --store "$OUT/store" v3/examples/calc/calc_bin.shard > "$OUT/load.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_bin.shard > "$OUT/load.txt" 2>&1; rc=$?
 e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the bin's load failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|UNMET|UNTHREADED|BAD-BIN|LOAD:)' "$OUT/load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -qx "BIN $BIN entry examples.calc.calc_main.main externs 3 trusts 9 requires 2/2" "$OUT/load.txt" || { bad "the bin's record is not BIN … externs 3 trusts 9 requires 2/2"; grep '^BIN' "$OUT/load.txt" | cut -c1-300; }
@@ -46,27 +44,9 @@ want_reads="Quot.sound examples.calc.calc_bin.exit_reads examples.calc.calc_bin.
 checks=$((checks+1)); [ "$(closure examples.calc.calc_bin.main_output)" = "$want_output" ] || { bad "main_output's closure is not Init's two and its three bolts"; closure examples.calc.calc_bin.main_output; }
 checks=$((checks+1)); [ "$(closure examples.calc.calc_bin.main_reads)" = "$want_reads" ] || { bad "main_reads's closure is not Init's two and its three bolts"; closure examples.calc.calc_bin.main_reads; }
 n=$(sed -nE 's/^LOAD: modules [0-9]+  accepted ([0-9]+) .*/\1/p' "$OUT/load.txt")
-echo "bin_test: calc's bin loaded and stored in $((e-s)) s — $n declarations accepted, BIN $BIN requires 2/2"
+echo "bin_test: calc's bin loaded in $((e-s)) s — $n declarations accepted, BIN $BIN requires 2/2"
 
-# ---- (2) the store's manifest and the release gate
-checks=$((checks+1)); grep -qx "bin $BIN entry examples.calc.calc_main.main externs std.host.get_args std.host.write_line std.host.exit requires examples.calc.calc_bin.main_output examples.calc.calc_bin.main_reads" "$OUT/store/manifest" || { bad "the manifest lacks the bin line"; grep '^bin' "$OUT/store/manifest" | cut -c1-300; }
-stored=$(sed -nE 's/^STORE: .* new=([0-9]+) .*/\1/p' "$OUT/load.txt" | head -1)
-checks=$((checks+1)); [ -n "$stored" ] || { bad "no store was written"; stored=0; }
-s=$(date +%s)
-"$EVAL" direct v3/kernel/verify_release.shard "$OUT/store" "$EXPORT" "$INDEX" > "$OUT/verify.txt" 2>&1; rc=$?
-e=$(date +%s)
-checks=$((checks+1)); [ "$rc" = 0 ] || { bad "verify_release failed on the bin's store (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | head -5 | cut -c1-300; }
-checks=$((checks+1)); grep -qx "BIN $BIN ok" "$OUT/verify.txt" || { bad "the gate does not say BIN $BIN ok"; grep '^\(BIN\|BAD-BIN\)' "$OUT/verify.txt" | cut -c1-300; }
-checks=$((checks+1)); grep -q "^RELEASE: declarations $stored  accepted $stored " "$OUT/verify.txt" || { bad "K did not accept every one of the store's $stored declarations"; tail -1 "$OUT/verify.txt" | cut -c1-300; }
-echo "bin_test: K alone accepts the store's $stored declarations and the gate says BIN $BIN ok in $((e-s)) s"
-
-# a tampered manifest: the bin's requirement replaced by a definition's name is BAD-BIN
-cp -r "$OUT/store" "$OUT/t1"; sed -i 's/requires examples.calc.calc_bin.main_output examples.calc.calc_bin.main_reads$/requires examples.calc.calc_bin.main_output examples.calc.calc_bin.line_bytes/' "$OUT/t1/manifest"
-"$EVAL" direct v3/kernel/verify_release.shard "$OUT/t1" "$EXPORT" "$INDEX" > "$OUT/verify_t1.txt" 2>&1; rc=$?
-checks=$((checks+1)); [ "$rc" = 1 ] || bad "the gate accepts a bin line naming a definition as a requirement (exit $rc)"
-checks=$((checks+1)); grep -q "^BAD-BIN $BIN: examples.calc.calc_bin.line_bytes is not an accepted theorem of the store" "$OUT/verify_t1.txt" || { bad "the tampered bin line is not BAD-BIN"; grep '^\(BIN\|BAD-BIN\)' "$OUT/verify_t1.txt" | cut -c1-300; }
-
-# ---- (3) the program through the driver, the bin file the root file, tied to the model world
+# ---- (2) the program through the driver, the bin file the root file, tied to the model world
 lines=()
 while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < "$INPUTS"
 s=$(date +%s)
@@ -84,7 +64,7 @@ checks=$((checks+1)); [ "$(wc -l < "$OUT/want")" -eq "${#lines[@]}" ] || bad "th
 checks=$((checks+1)); cmp -s "$OUT/got" "$OUT/want" || { bad "the program's output through the bin is not the model world's"; diff "$OUT/got" "$OUT/want" | head -6; }
 echo "bin_test: the program through the bin in $((e-s)) s, byte-identical to the model world over ${#lines[@]} inputs"
 
-# ---- (3b) the effect trace: the driver's --trace FILE —
+# ---- (2b) the effect trace: the driver's --trace FILE —
 # one host call per line, the arguments read then one write_line per input — against the
 # model's trace (calc_app_world.shard trace_of, rendered by the harness as `* trace:` lines
 # with the driver's own renderer): the call lists identical, byte for byte
@@ -95,7 +75,7 @@ checks=$((checks+1)); head -1 "$OUT/trace.txt" | grep -q '^get_args "' || { bad 
 checks=$((checks+1)); cmp -s "$OUT/trace.txt" "$OUT/model_trace.txt" || { bad "the driver's trace is not the model's"; diff "$OUT/trace.txt" "$OUT/model_trace.txt" | head -6 | cut -c1-200; }
 echo "bin_test: the trace — $(wc -l < "$OUT/trace.txt") host calls — is the model's, byte for byte"
 
-# ---- (3c) the bolt bundle on the model host: the nine axioms the
+# ---- (2c) the bolt bundle on the model host: the nine axioms the
 # bin trusts, instantiated at calc_bin_model.shard's Host and proven, and a ground run computed
 s=$(date +%s)
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/calc/calc_bin_model.shard > "$OUT/model_load.txt" 2>&1; rc=$?
@@ -106,7 +86,7 @@ for t in get_args_output get_args_reads get_args_exit write_line_output write_li
 done
 echo "bin_test: the nine bolts hold on the model host, with the ground run, in $((e-s)) s"
 
-# ---- (3d) the native binary of the program: calc's main
+# ---- (2d) the native binary of the program: calc's main
 # (v3/build.sh over a root that imports Init), run over the same inputs — stdout byte for byte the
 # driver's run through the bin, exit 0, nothing on stderr
 s=$(date +%s)
@@ -121,7 +101,7 @@ if [ "$rc" = 0 ]; then
   echo "bin_test: the native binary of calc's main ($(stat -c %s "$OUT/calc_native") bytes, built in $((e-s)) s) is the driver's byte for byte over ${#lines[@]} inputs, in $((e2-s2)) s"
 fi
 
-# ---- (4) the negatives, over a scratch root that sees the library through a link
+# ---- (3) the negatives, over a scratch root that sees the library through a link
 mkdir -p "$ROOT/examples"; ln -s ../std "$ROOT/std"; cp -r v3/examples/calc "$ROOT/examples/calc"
 # a requirement left sorry: UNMET, requires 1/2, the load fails
 python3 -I - v3/examples/calc/calc_bin.shard "$ROOT/examples/calc/calc_bin.shard" <<'PY'

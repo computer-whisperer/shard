@@ -91,7 +91,6 @@
 (use kernel.classify.PreRes)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
-(use kernel.decl.Constructor)
 (use kernel.decl.Declaration)
 (use kernel.verdict.Outcome)
 (use kernel.verdict)
@@ -248,18 +247,14 @@
 ;; check, which may come after a consumer loaded the view
 (record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int)
   (fork (Option ForkPt))
-  (ok Bool)
-  (taken (List (List Int))))
+  (ok Bool))
 ;; ok False: its loading failed — a later import fails the same way, never re-reads it
-;; taken: the names of Init under the file's identity (Fx.taken), kept for a declaration built
-;; as data that enters the module after its file is done (load_data)
 ;; a file whose loading failed after its heads were pre-registered: recorded so that a
 ;; later import of it reports import_failed instead of re-reading it into duplicate_name
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
   (ld_add_mod l
     (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init -1) (fork None)
-      (ok False)
-      (taken Nil))))
+      (ok False))))
 
 ;; Init alone: an environment no native declaration entered, the records it holds, its ordinal
 ;; table. While a load has declared nothing its environment IS the base, and a demand enters
@@ -1457,127 +1452,6 @@
     ((SList (Cons _ (Cons _ (Cons (SList (Cons (SSym v) Nil)) Nil))))
      (if (sym_eq v (quote view)) (quote view) (quote supplied)))
     (_ (quote supplied))))
-;; ---- declarations built as data ------------------------------------------------------------
-;; A client that holds a load hands K a declaration it built as data — no source, no reader, no
-;; elaborator. `load_data` admits it through the raw entry (`check`) as a file's own are
-;; admitted: into a module `m` the load holds, under the standard policy — no trust clause —
-;; with its ACCEPT record, or the refusal's (REFUSE, POLICY). The naming law holds as for a
-;; file's: every name it declares — an inductive block's types and constructors each — extends
-;; the module's (`outside_module`), none is a name of Init under the module's identity (the
-;; file's taken names, kept with the module) and none is the name of a program with no
-;; constant behind it (`name_taken`, both). A quotient and a mutual block are no declaration of
-;; a module (`data_kind`). Nothing is generated beside it: an inductive's auxiliaries are the
-;; reader's, not K's. `load_data_view` then gives an admitted definition its program by the
-;; derived view, as a file's `(realize NAME (view))` does — REALIZE, or the classifier's
-;; refusal. What the declaration cites is in the load's environment or K refuses it
-;; (`unknown_constant`): no demand is made of Init on its behalf.
-(fn fx_plain ((m Name) (init Int) (taken (List (List Int)))) Fx
-  (make Fx (module m) (ident m) (parts (list "(data)")) (opened Nil) (vis (list m)) (init init)
-    (trusts Nil)
-    (hash (hash_name m))
-    (view False)
-    (autos Nil)
-    (initname Anon)
-    (initvia Nil)
-    (fetched (Pair -1 Nil))
-    (taken taken)
-    (ecount 0)
-    (above Nil)
-    (bins Nil)))
-(fn fx_data ((l Load) (m Name)) Fx
-  (match (ld_find_mod (Load.mods l) m)
-    ((Some md) (fx_plain m (Mod.init md) (Mod.taken md)))
-    (None (fx_plain m -1 Nil))))
-(fn load_data ((l Load) (m Name) (d Declaration)) Load
-  (match (ld_find_mod (Load.mods l) m)
-    (None
-      (ld_rec l
-        (RLoadErr "(data)" (quote unknown_module)
-          (append (show_name m) " is no module of this load"))))
-    ((Some _)
-     (match (data_names d)
-       (None
-         (ld_rec l
-           (RLoadErr "(data)" (quote data_kind)
-             "a quotient or a mutual block is no declaration of a module")))
-       ((Some ns)
-        (match (first_outside m ns)
-          ((Some n)
-           (ld_rec l
-             (RLoadErr "(data)" (quote outside_module)
-               (append (show_name n) (append " is not a name of the module " (show_name m))))))
-          (None
-            (match (first_program l ns)
-              ((Some n)
-               (ld_rec l
-                 (RClassify n (quote name_taken)
-                   (append (show_name n)
-                     " is a fn or an extern of the program with no constant of K behind it: declare another name"))))
-              (None
-                (match (admit_core l (fx_data l m) (list d))
-                  ((Pair l1 _) l1)))))))))))
-;; the names a declaration states: its own, an inductive block's types and their constructors
-;; (the recursors K adds are under the types')
-(fn data_names ((d Declaration)) (Option (List Name))
-  (match d
-    ((AxiomDecl (ConstantVal n _ _) _) (Some (list n)))
-    ((DefnDecl (ConstantVal n _ _) _ _ _ _) (Some (list n)))
-    ((ThmDecl (ConstantVal n _ _) _ _) (Some (list n)))
-    ((OpaqueDecl (ConstantVal n _ _) _ _ _) (Some (list n)))
-    ((InductDecl _ _ ts _) (Some (data_block_names ts)))
-    (_ None)))
-(fn data_block_names ((ts (List InductiveType))) (List Name)
-  (measure (struct ts))
-  (match ts
-    (Nil Nil)
-    ((Cons (InductiveType n _ cs) r) (Cons n (append (data_ctor_names cs) (data_block_names r))))))
-(fn data_ctor_names ((cs (List Constructor))) (List Name)
-  (measure (struct cs))
-  (match cs
-    (Nil Nil)
-    ((Cons (Constructor n _) r) (Cons n (data_ctor_names r)))))
-(fn first_outside ((m Name) (ns (List Name))) (Option Name)
-  (measure (struct ns))
-  (match ns
-    (Nil None)
-    ((Cons n r) (if (name_within m n) (first_outside m r) (Some n)))))
-(fn first_program ((l Load) (ns (List Name))) (Option Name)
-  (measure (struct ns))
-  (match ns
-    (Nil None)
-    ((Cons n r) (if (program_named l n) (Some n) (first_program l r)))))
-(fn load_data_view ((l Load) (m Name) (k Name)) Load
-  (if
-    (match (ld_find_mod (Load.mods l) m)
-      ((Some _) False)
-      (None True))
-    (ld_rec l
-      (RLoadErr "(data)" (quote unknown_module) (append (show_name m) " is no module of this load")))
-    (if
-      (match (es_find_decl (Load.etab l) k)
-        ((Some _) True)
-        (None False))
-      (ld_rec l (RClassify k (quote duplicate_name) (append (show_name k) " has a program already")))
-      (match (realize_view_of (Load.etab l) (fx_scope l (fx_data l m)) (Load.env l) k)
-        ((RzOk es1 d _ _ _ _ _)
-         (ld_rec (ld_with_e l (es_add_decl (es_register_all es1 m (decl_infos d)) d))
-           (RRealize k (quote view) Nil Nil)))
-        ((RzErr e msg) (ld_rec l (RClassify k e msg)))
-        (_
-          (ld_rec l
-            (RClassify k (quote realize_signature)
-              (append (show_name k) ": a template has no derived view"))))))))
-;; the parts of the requirement's key for a declaration of the module m, read after the load (a
-;; session's key for an entry): the scope by the declaration table, the policy's part without a
-;; trust clause, the environment's under the module's Init horizon
-(fn data_ctx ((l Load) (m Name)) ReqCtx (req_ctx l (fx_data l m)))
-;; n = m.x… : m a proper prefix of n
-(fn name_within ((m Name) (n Name)) Bool
-  (measure (struct n))
-  (match n
-    (Anon False)
-    ((Str p _) (if (name_eq p m) True (name_within m p)))
-    ((Num p _) (if (name_eq p m) True (name_within m p)))))
 ;; an E declaration. An extern or an E-only type is classified and RUNNABLE. A `fn` is read
 ;; once as a pre-definition (predef.shard): its program is the erasure, its
 ;; definition K's projection — DEFINE with its equations, RUNNABLE `route=typed` with the
@@ -3241,8 +3115,7 @@
                                                              (closure (Fx.vis f))
                                                              (init (Fx.init f))
                                                              (fork fp)
-                                                             (ok True)
-                                                             (taken (Fx.taken f))))
+                                                             (ok True)))
                                                          f
                                                          dirs
                                                          rest)
@@ -3364,8 +3237,7 @@
 ;; UNTHREADED. The record `BIN NAME entry F externs N trusts N requires MET/TOTAL`, then the
 ;; `UNMET`, `UNTHREADED` and `BAD-BIN` lines, each an error: an unmet requirement, an unthreaded
 ;; function, an extern outside the roster or an untrusted axiom fails the load (pending is
-;; never silent). The verdicts are re-derived by every load of the file; the
-;; store's manifest carries the bin line and the release gate its BIN check (verify_release)
+;; never silent). The verdicts are re-derived by every load of the file
 (fn rec_bins ((l Load) (f Fx)) Load (rb_go l f (Fx.bins f)))
 (fn rb_go ((l Load) (f Fx) (ss (List SExpr))) Load
   (measure (struct ss))

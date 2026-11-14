@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Frontend parity: over every toolchain entrypoint — the five drivers,
+# Frontend parity: over every toolchain entrypoint — the four drivers,
 # the calc harness, every test — the
 # V3 reader's Prog (`load.shard --dump`, kernel/dump.shard) and the Rust
 # bootstrap's Module over the same closure (`eval dump`, rust_bootstrap/src/
@@ -29,7 +29,7 @@ INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned exp
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
-for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/kernel/verify_release.shard v3/kernel/initindex.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
+for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/kernel/initindex.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
   n=$((n+1))
   "$EVAL" dump "$entry" > "$a" 2>&1 || { echo "parity_test: eval dump failed on $entry"; head -3 "$a"; failed=$((failed+1)); continue; }
   dups=$(awk '

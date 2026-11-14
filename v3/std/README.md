@@ -22,9 +22,8 @@ comparison is the proposition `(<= a b)`; `/` and `%` at `Int` are the Euclidean
 | `migration.shard` | `std.migration` | what each operator and constructor spelling means; small arithmetic lemmas | `std_test.sh` |
 
 `kernel/test/std_test.sh` loads every file of the directory in one process, holds the theorems of
-`facts`, `bits`, `migration` and `list` by name — each accepted on no axiom but Lean's `propext`,
-`Quot.sound` and `Classical.choice` — stores every declaration and has the checker K alone accept
-the store.
+`facts`, `bits`, `migration` and `list` by name, each accepted on no axiom but Lean's `propext`,
+`Quot.sound` and `Classical.choice`.
 
 ## `list.shard`
 

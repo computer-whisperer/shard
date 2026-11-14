@@ -55,7 +55,7 @@ entries are explained under "Measured" at the end.
 - A `type` opens its constructors for its own file; `(use M)` opens none, `(use M.T)` does — a
   prefix opens only what stands directly under it. An unused `use` is a lint (`UNUSED`), no refusal.
 - ★ A hash is a fingerprint, never an authority: it is affine in a literal, so a preimage is one
-  subtraction — pins compare declarations structurally, sessions use ordinals, keys only report.
+  subtraction — pins compare declarations structurally, keys only report.
 - ★ A consumer of a directory module holds only its view: each `sig fn`, `sig type`, `requirement`
   is a parameter K cannot unfold; not the bodies or `eq_N` — a missing fact is exported, not pried.
 - Opacity is by not loading the body into the consumer's environment; not by a name gate — so no
@@ -142,10 +142,6 @@ entries are explained under "Measured" at the end.
   fails the load of a `bin`; not a warning. Requirements speak of the entry's observables only.
 - `invoke` validates arguments against the entry's types (the checked door) and `ev` stays the
   assumed door; not one validated path — `ev`'s contract is over values, out-of-type ones included.
-- A session names revisions and handles by ordinals it mints; not by hash and not by handing out
-  the prepared value — release and revocation then reach a copy a client kept.
-- ★ Each revision checks its own closure of Init from an empty base; not a base that grows — the
-  loader generates by what the environment holds, so one root loaded twice gives two revisions.
 - The reader keeps no handle across a file's tactic steps: five links saved are ~6.5 ms of a
   1.7 s run, against a handle stale after every definition.
 
@@ -213,10 +209,6 @@ entries are explained under "Measured" at the end.
   bootstrap — a missing binary must not count as native coverage.
 - A binary's stamp covers its sources, the toolchain's, the runtime, the flags and the
   implementation directories behind its views; not the emit's source list alone, which names views.
-- The proof store is K's own export format, verified by K, the host and the JSON reader alone;
-  not a second format — and it is a CI artifact, never committed.
-- The release gate's target is the manifest; `order` is only the admission sequence; exit 0 only
-  when every failed class counts zero — a theorem swapped for a same-named axiom is `MISKIND`.
 - Files a tool writes (`*.auto.shard`, `k/accel_pins.shard`) are outside the format gate: their
   tests compare regenerated text byte for byte.
 - The loader pins run in one process on one Init base, re-rooted per case; not Init loaded again
@@ -263,16 +255,15 @@ measurements; measure again before building on one.
   once at K's raw entry: the model root 33.2 to 26.8 s, peak 8.3 to 3.3 GB; 11.2 million node
   visits remain. Sharing read from submitted ids instead: 62% of nodes carry none; 17.0 to 23.6 s.
 - A case step forced at an open discriminant: ten minutes and 69 GB; waiting at it: 15 s.
-- Largest roots, native load: the model root (`models/imp`, 901 accepted) 28–31 s; the std root
-  (ten files, loaded and stored) ~5 s, 86–96 s on the bootstrap; the formatter's contract ~3 s.
+- Largest roots, native load: the model root (`models/imp`, 896 accepted) 28–31 s; the std root
+  (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- A session revision costs its load in a fresh process: native 81–86 ms (184 Init constants) and
-  1.4–1.7 s (1,533); bootstrap ~1 s and 20–24 s; 0.6 s for the 1,533 on a base that kept Init.
-- Back end: the loader's own closure (9,003 declarations) loads, lowers and generates in 34 s on
-  the bootstrap, `cc` 65 s, binary 5.3 MB; all 31 roots 175–222 s (2,826 s through the text chain).
-- Suite: 54 entrypoints, ~850–950 s on the bootstrap, ~520–570 s on the binaries. Loader pins on one
-  shared Init base 33–42 s (783 s loading Init per case).
+- Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
+  the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
+- Suite: 51 entrypoints, eight at a time: ~720 s on the bootstrap (4,160 s of entrypoint time),
+  ~120 s on the binaries (580 s). Loader pins on one shared Init base 33–42 s (783 s loading Init
+  per case).
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.

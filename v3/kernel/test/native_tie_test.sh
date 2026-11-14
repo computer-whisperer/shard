@@ -3,7 +3,7 @@
 # set of the suite's workloads run under both engines — the Rust bootstrap (`eval direct`,
 # the authority) and the binaries v3/build.sh built (kernel/lower.shard, kernel/cgen.shard) —
 # and compared on four things: stdout, stderr, the exit status and every artifact written
-# (a sidecar, a store's files, an index), byte for byte. Both runs use the same scratch
+# (a sidecar, the back end's C text, an index), byte for byte. Both runs use the same scratch
 # paths (the first engine's artifacts are set aside before the second runs), so a path
 # printed is the same text in both logs. A divergence is a miscompile or a semantic gap
 # between the bootstrap and the back end and fails the gate: the binary is never patched —
@@ -24,12 +24,11 @@
 # Init's types, built and tied to the driver's run over the differential's inputs; (2c)
 # the back end's own text — the loader's emit of one closure under both engines, every file
 # of it byte for byte; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
-# view), a dump, an example, a program run under ev with and without fuel, a store written;
-# (4) prove regenerating two examples' sidecars and a measure run; (5) verify_release over
-# the tie's store and a store without a manifest; (6) t0 over the export's first 3,000
-# lines with -v -a -p, the usage line, the wrong-pin fixture; (7) initindex building and
-# verifying an index over the same lines; (8) one harness, loader_pins_test, over every
-# loader pin; (9) the tree's authored files byte-identical before and after. Exit = the
+# view), a dump, an example, a program run under ev with and without fuel; (4) prove
+# regenerating two examples' sidecars and a measure run; (5) t0 over the export's first 3,000
+# lines with -v -a -p, the usage line, the wrong-pin fixture; (6) initindex building and
+# verifying an index over the same lines; (7) one harness, loader_pins_test, over every
+# loader pin; (8) the tree's authored files byte-identical before and after. Exit = the
 # checks that failed. Run after `v3/build.sh --all`; v3/test.sh runs it under V3_NATIVE=1.
 cd "$(dirname "$0")/../../.."
 # the bootstrap side, never the shim: v3/test.sh exports EVAL=v3/bin/eval under V3_ENGINE=native
@@ -61,7 +60,7 @@ compare() {   # LABEL DIR_A DIR_B -> 0 identical
   return 0
 }
 # set_aside DIR: the artifact ARTIFACT names moved under DIR/artifacts and its place left as the
-# run found it (a directory artifact, a store, recreated empty for the next engine)
+# run found it (a directory artifact, the emit's, recreated empty for the next engine)
 set_aside() {
   [ -n "${ARTIFACT:-}" ] || return 0
   mkdir -p "$1/artifacts"; cp -r "$ARTIFACT" "$1/artifacts/" 2>/dev/null
@@ -181,9 +180,7 @@ tie "load calc_spec" load --root v3 $INIT v3/examples/calc/calc_spec.shard
 head -n 300 "$DIR/init.ndjson" > "$SCRATCH/fix300.ndjson"
 VERDICT='^T0: ' tie "load run t0" load --root v3 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
 VERDICT='^RUN: out of fuel' tie "load run fuel" load --root v3 --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
-mkdir -p "$SCRATCH/store"
-ARTIFACT=$SCRATCH/store VERDICT='^STORE: ' tie "load store" load --root v3 $INIT --store "$SCRATCH/store" v3/examples/auto/auto.shard
-echo "native_tie_test: the loader tied over four pins, a dump, an example, a run with and without fuel, a store"
+echo "native_tie_test: the loader tied over four pins, a dump, an example, a run with and without fuel"
 
 # ---- (4) prove: the examples copied without their sidecars, the sidecars regenerated
 for ex in auto tactic; do
@@ -194,15 +191,7 @@ ARTIFACT=$SCRATCH/tactic/use_split.auto.shard VERDICT='^PROVE: ' tie "prove use_
 VERDICT='^PROVE: \|^LOAD: ' tie "prove measure" prove --root v3 $INIT --measure v3/examples/calc/calc_ndigit.shard
 echo "native_tie_test: prove tied over two sidecars regenerated and a measure run"
 
-# ---- (5) verify_release over the tie's store (the bootstrap's copy) and a store without a manifest
-cp -r "$OUT/load store/a/artifacts/store" "$SCRATCH/vstore"
-VERDICT='^RELEASE: ' tie "verify store" verify_release "$SCRATCH/vstore" "$EXPORT" "$INDEX"
-mkdir -p "$SCRATCH/nomanifest"; cp "$SCRATCH/vstore/order" "$SCRATCH/nomanifest/"
-tie "verify no manifest" verify_release "$SCRATCH/nomanifest" "$EXPORT" "$INDEX"
-tie "verify usage" verify_release
-echo "native_tie_test: verify_release tied over the store, a store without a manifest, the usage line"
-
-# ---- (6) t0 over the export's first 3,000 lines; (7) initindex over the same
+# ---- (5) t0 over the export's first 3,000 lines; (6) initindex over the same
 head -n 3000 "$DIR/init.ndjson" > "$SCRATCH/fix.ndjson"
 VERDICT='^T0: ' tie "t0 fixture" t0 -v -a -p "$SCRATCH/fix.ndjson"
 tie "t0 usage" t0
@@ -213,11 +202,11 @@ VERDICT='^index: ' tie "initindex verify" initindex --verify "$SCRATCH/fix.ndjso
 tie "initindex usage" initindex
 echo "native_tie_test: t0 and initindex tied over the export's first 3,000 lines and their usage lines"
 
-# ---- (8) one harness: loader_pins_test over every loader pin
+# ---- (7) one harness: loader_pins_test over every loader pin
 VERDICT='^loader_pins_test: failures = ' tie "harness loader_pins_test" test/loader_pins_test
 echo "native_tie_test: the loader pins' harness tied"
 
-# ---- (9) the authored tree untouched
+# ---- (8) the authored tree untouched
 checks=$((checks+1)); [ "$(tree_state)" = "$before" ] || { bad "the tree's authored files changed under the tie"; diff <(echo "$before") <(tree_state) | head -5; }
 
 echo "native_tie_test: $checks checks, $fail failed, in $(( $(date +%s) - s0 )) s"

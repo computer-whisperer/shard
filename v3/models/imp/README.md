@@ -112,7 +112,5 @@ nothing `RUNNABLE`, refused or pending; every function `DEFINE` with its equatio
 least 17 and no descent obligation; `fuel_of` with its descent discharged); the recursive
 specifications of `heap.shard` and `readback.shard` defined with two equations each; every lemma of
 the kits and every run lemma accepted; `tb_len` accepted on Lean's three axioms and `tb_app` on
-those and the six; exactly six `PARAM … axiom` records. The load is then stored and
-`verify_release.shard` has the checker K alone accept every stored declaration, with six `PARAM` lines, three
-`DISCHARGE` lines (`fuel_of`, `load_le`, `store_le`) and no `CONDITIONAL` or `UNDECLARED` line. The
-test does not run the machine.
+those and the six; exactly six `PARAM … axiom` records; the descents of `fuel_of`, `load_le` and
+`store_le` discharged. The test does not run the machine.

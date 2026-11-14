@@ -37,7 +37,6 @@ generation's tree and every document written before the cleanup) and `v2-kernel-
 | `rust_bootstrap/` | the Rust evaluator the toolchain runs on |
 | `bin/` | `ci_docs_only.sh`, which lets a push of documents alone skip the gates |
 | `tools/zed-shard/` | an editor grammar |
-| `shard-viewer/` | a graphical navigator of source files; it reads the previous generation's forms, so a V3 file shows as its functions and types, without its theorems |
 
 ## Build, run, gate
 
@@ -50,7 +49,7 @@ v3/export.sh                       # Lean's Init, exported once into .shard-cach
 v3/build.sh v3/kernel/initindex.shard v3/bin/initindex            # the index builder, compiled
 v3/kernel/test/init_index.sh       # the Init index, into v3/.cache/
 V3_TEST_OUT=v3/bin/suite/bootstrap bash v3/test.sh   # the suite on the Rust evaluator
-v3/build.sh --all                  # the 31 native binaries and the shim, into v3/bin/
+v3/build.sh --all                  # the 29 native binaries and the shim, into v3/bin/
 V3_ENGINE=native V3_NATIVE=1 V3_TEST_OUT=v3/bin/suite/native bash v3/test.sh    # and on them
 v3/kernel/test/suite_tie.sh v3/bin/suite/bootstrap v3/bin/suite/native   # the two runs compared
 V3_T0_SKIP_FULL=1 v3/t0_full.sh    # K against Init: the tie; without the variable, all of it

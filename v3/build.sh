@@ -18,7 +18,7 @@
 #                        command line over the binaries — `direct FILE` runs v3/bin/STEM when its
 #                        stamp is current and fails loudly otherwise; `dump` the bootstrap's
 #
-# THE INVENTORY: the five drivers, calc_harness, every *_test.shard of kernel/test/ and of
+# THE INVENTORY: the four drivers, calc_harness, every *_test.shard of kernel/test/ and of
 # k/test/ — parity's list (kernel/test/parity_test.sh).
 # A root outside K's directory whose closure consumes K's view is loaded with v3/kernel/k as a
 # second root, so the directory's own check links the implementation into the program (as
@@ -31,7 +31,7 @@
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
 # under V3_ENGINE=native, and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
-# THE EMIT'S ENGINE: the bootstrap for every root. The loader's own closure — 9,003
+# THE EMIT'S ENGINE: the bootstrap for every root. The loader's own closure — 8,933
 # declarations — loads, lowers and generates in 34 s on it, so no binary builds another and a
 # build never trusts one.
 #
@@ -59,7 +59,7 @@ CFLAGS="-O2"
 [ -x "$RUST_EVAL" ] || { echo "missing $RUST_EVAL (cargo build --release in rust_bootstrap/)"; exit 1; }
 
 inventory() {   # NAME SRC per root, parity's list
-  for f in v3/kernel/load.shard v3/kernel/prove.shard v3/kernel/verify_release.shard v3/kernel/t0.shard v3/kernel/initindex.shard \
+  for f in v3/kernel/load.shard v3/kernel/prove.shard v3/kernel/t0.shard v3/kernel/initindex.shard \
            v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
     echo "$(basename "$f" .shard) $f"
   done

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v3/kernel/test/imp_test.sh — the imp machine model, loaded, stored and replayed: the
+# v3/kernel/test/imp_test.sh — the imp machine model, loaded: the
 # model root v3/models/imp — the call-tier imp machine, the counted-heap runtime's table, the
 # ghost heap with its operations and invariant, the readbacks and the post-predicate, the word,
 # cell and ghost kits, the evaluator's step laws, the runtime's laws as parameters, the sources
@@ -10,11 +10,8 @@
 # `tb_len` ACCEPTED through I on Init's three axioms; `tb_app` ACCEPTED through I on
 # Init's three and the six declared parameters — the runtime's allocation, fill, seal and increment
 # laws, each PARAM NAME axiom — the run lemmas, the cell, word and ghost laws and
-# step.shard's three with them. The root is then stored and the store verified by K alone
-# (verify_release), the
-# parameters its six PARAM lines, the three measured descents its DISCHARGE lines. The two library
-# files the model rests on, std/map and std/mem, load with
-# it. The load's seconds are printed on the engine that runs it.
+# step.shard's three with them. The two library files the model rests on, std/map and std/mem,
+# load with it. The load's seconds are printed on the engine that runs it.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -24,9 +21,8 @@ OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0
 bad() { echo "imp_test: $*"; fail=$((fail+1)); }
-mkdir -p "$OUT/imp"
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 --init "$EXPORT" --init-index "$INDEX" --store "$OUT/imp" v3/models/imp/len.shard v3/models/imp/app.shard > "$OUT/load.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 --init "$EXPORT" --init-index "$INDEX" v3/models/imp/len.shard v3/models/imp/app.shard > "$OUT/load.txt" 2>&1; rc=$?
 e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the model root did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/load.txt" | head -5 | cut -c1-300; }
 # the summary: the fourteen modules (map, mem, list; imp, rt, heap, readback, word, cell, step, len;
@@ -115,20 +111,6 @@ done
 checks=$((checks+1)); accepted std.map.map_insert_shadow || bad "std/map's four requirements are not theorems (map_insert_shadow)"
 checks=$((checks+1)); [ "$(grep -c '^DISCHARGE std.mem.\(load_le\|store_le\).dec_1 proved$' "$OUT/load.txt")" = 2 ] || bad "std/mem's two word operations' descents are not discharged"
 n=$(grep -c '^ACCEPT ' "$OUT/load.txt"); d=$(grep -c '^DEFINE ' "$OUT/load.txt")
-echo "imp_test: the model root — 14 modules, $n declarations accepted, $d defined — loaded and stored in $((e-s)) s; tb_len and tb_app accepted"
-# the store, replayed by K alone: every declaration the load admitted, accepted again
-stored=$(sed -nE 's/^STORE: .* new=([0-9]+) .*/\1/p' "$OUT/load.txt" | head -1)
-checks=$((checks+1)); [ -n "$stored" ] || { bad "no store was written"; grep '^STORE' "$OUT/load.txt" | head -2; stored=0; }
-s=$(date +%s)
-"$EVAL" direct v3/kernel/verify_release.shard "$OUT/imp" "$EXPORT" "$INDEX" > "$OUT/verify.txt" 2>&1; rc=$?
-e=$(date +%s)
-checks=$((checks+1)); [ "$rc" = 0 ] || { bad "verify_release failed on the model root's store (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | head -5 | cut -c1-300; }
-checks=$((checks+1)); grep -q "^RELEASE: declarations $stored  accepted $stored " "$OUT/verify.txt" || { bad "K did not accept every one of the store's $stored declarations"; tail -1 "$OUT/verify.txt" | cut -c1-300; }
-# the release conditional on the six named parameters and nothing else (the PARAM lines)
-checks=$((checks+1)); [ "$(grep -c '^PARAM models.imp.rtlaw.' "$OUT/verify.txt")" = 6 ] || { bad "the release does not name the six runtime laws as its parameters"; grep '^PARAM\|^UNDECLARED\|^CONDITIONAL' "$OUT/verify.txt" | head -8; }
-checks=$((checks+1)); [ "$(grep -c '^PARAM ' "$OUT/verify.txt")" = 6 ] || { bad "the release names other parameters than the six runtime laws"; grep '^PARAM' "$OUT/verify.txt"; }
-checks=$((checks+1)); [ "$(grep -c '^DISCHARGE ' "$OUT/verify.txt")" = 3 ] || { bad "the release does not verify the three measured descents as discharged"; grep '^DISCHARGE\|^BAD-DISCHARGE' "$OUT/verify.txt"; }
-checks=$((checks+1)); [ "$(grep -c '^CONDITIONAL\|^UNDECLARED' "$OUT/verify.txt")" = 0 ] || { bad "the release has an undeclared axiom or a conditional declaration"; grep '^CONDITIONAL\|^UNDECLARED' "$OUT/verify.txt" | head -5; }
-echo "imp_test: K alone accepts the root's $stored declarations from the store in $((e-s)) s"
+echo "imp_test: the model root — 14 modules, $n declarations accepted, $d defined — loaded in $((e-s)) s; tb_len and tb_app accepted"
 echo "imp_test: $checks checks, $fail failed"
 exit $fail

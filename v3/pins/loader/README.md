@@ -4,25 +4,24 @@ Each directory is a small package. `CASE/main.shard` is the file the loader is g
 resolve under `CASE/`, and its first line states the outcome the load must have. A case that imports
 Init reads the pinned export on demand, up to the horizon its `(import Init NAME)` sets.
 
-`v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome
-with the header; `v3/test.sh` runs it, and `loader_pins_list_test.sh` requires that the list and
-this directory name the same cases. `v3/kernel/test/loader_test.shard` holds the cases a header
-cannot state (two root files in order, a wrong export, the records' text, a loaded program run).
-Some shell tests read the records of a case: `define_test.sh` (`route_callee`, `discharge_measure`,
-`registry_native`, `decidable_cells`, `mutual_measure`, `derive_refusals`), `derive_test.sh`
-(`derive_size`, `derive_size_plain`), `wire_test.sh` (`wire_*`), `template_test.sh`
-(`template_e_first`), `store_test.sh` (`auto_core`, `auto_strategy_free`, `discharge_measure`),
-`messages_test.sh` (the text after the reason: `by_cases_arm_fields`, `by_cases_fields`,
-`init_two_imports`, `init_horizon_inherited`, `init_import_late`, `init_import_late_none`,
-`impl_import_late`, `impl_read_error`, `impl_load_error`, `init_above_instance`,
-`init_above_instance_fn`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`, `define_nested`,
-`lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`),
-`parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh` and `lower_test.sh` (`basic`,
-`refused`, `read_error`, `view_basic`). Some harnesses run a case's program and compare values:
-`entry_test.shard` (`entry`, `entry_s`, `entry_shape`), `handle_test.shard` (`handle_door`, `entry`,
-`entry_s`, `row_types`), `rows_test.shard` (`ev_string`, `row_types`, `struct_proj`),
-`project_test.shard` (`project_bool`), `matcher_test.shard` (`match_def`, `match_imposter`,
-`match_poly`).
+`v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome with
+the header; `v3/test.sh` runs it, and `loader_pins_list_test.sh` requires that the list and this
+directory name the same cases. `v3/kernel/test/loader_test.shard` holds the cases a header cannot
+state (two root files in order, a wrong export, the records' text, a loaded program run, a load with
+no export: `init_name_taken_l/Quot.shard`). Some shell tests read the records of a case: `define_test.sh`
+(`route_callee`, `discharge_measure`, `registry_native`, `decidable_cells`, `mutual_measure`,
+`derive_refusals`), `derive_test.sh` (`derive_size`, `derive_size_plain`), `wire_test.sh`
+(`wire_*`), `template_test.sh` (`template_e_first`), `messages_test.sh` (the text after the reason:
+`by_cases_arm_fields`, `by_cases_fields`, `init_two_imports`, `init_horizon_inherited`,
+`init_import_late`, `init_import_late_none`, `impl_import_late`, `impl_read_error`,
+`impl_load_error`, `init_above_instance`, `init_above_instance_fn`, `match_dead_row`,
+`match_dead_row_def`, `ev_dead_row`, `define_nested`, `lean_mutual`, `reserved_instance`,
+`bool_bare`, `shadowed_head`), `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh`
+and `lower_test.sh` (`basic`, `refused`, `read_error`, `view_basic`). Some harnesses run a case's
+program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape`, `handle_door`),
+`handle_test.shard` (`handle_door`, `entry`, `entry_s`, `row_types`), `rows_test.shard`
+(`ev_string`, `row_types`, `struct_proj`), `project_test.shard` (`project_bool`),
+`matcher_test.shard` (`match_def`, `match_imposter`, `match_poly`).
 
 ## The header
 
@@ -162,7 +161,7 @@ the reason its name spells, less a leading `by_`.
 
 | cases | what they pin |
 |---|---|
-| `entry`, `entry_s`, `entry_shape`, `handle_door` | functions run from outside with checked arguments; what the check does not cover (an evidence binder, a proposition field) |
+| `entry`, `entry_s`, `entry_shape`, `handle_door` | functions run from outside with checked arguments; what the check does not cover on a program alone (an evidence binder, a proposition field), which a load's run refuses |
 | `wire_s`, `wire_bad`, `wire_bad_result` | host calls over Init's types; one over a type with no encoding; two with a wrong result |
 | `thread_branches`, `thread_helper_ok`, `thread_unused`, `thread_proof_ref` (`threaded`) | a `World` used once per branch, through a helper, left unused, named only in an erased proof |
 | `thread_sequential`, `thread_pair_twice`, `thread_helper_twice` (`world_twice`); `thread_match_world`, `thread_poly` (`world_unsupported`); `thread_forged` (`world_forged`) | a `World` used twice, taken apart, passed to a polymorphic function, or built by a program |

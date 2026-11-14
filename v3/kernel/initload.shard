@@ -39,7 +39,6 @@
 (use kernel.index.IxRow)
 (use kernel.json.JRes)
 (use kernel.intmap.IntMap)
-(use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
 (use kernel.prelude.Option)
@@ -298,9 +297,6 @@
   (match b
     (Nil None)
     ((Cons (Pair n v) r) (if (name_eq n nm) (Some v) (od_pmemo_find r nm)))))
-;; a rendered name's ordinal — the name table is keyed by the rendering — or None
-(fn od_lookup_text ((x OdIx) (text (List Int)) (w World)) (Pair (Pair OdIx (Option Int)) World)
-  (od_search x (ix_pad text (ix_name_w)) 0 (- (ix_hdr_names (odx_hdr x)) 1) 0 64 w))
 ;; every declared name rendering with the prefix, as rendered
 (fn od_names_under ((x OdIx) (prefix (List Int)) (w World)) (Pair (List (List Int)) World)
   (ix_names_under (odx_index x) (odx_hdr x) prefix w))
@@ -795,86 +791,3 @@
            (match (od_feed (run_on env) (od_ordered wk) Nil 0)
              ((OdFed run1 cs n) (Pair (OdLoaded x1 run1 (odd_records done1) cs n) w1))
              ((OdFedErr msg) (Pair (OdLoadErr x1 (quote init_refused) msg) w1)))))))))
-
-;; ---- a stream's citations (the release gate's demand) ------------------------------------------
-;; the constants a stream's expression lines cite, by name: its own name lines resolve them
-(fn od_consts_of_stream ((bs (List Int))) (List Name)
-  (match (od_stream_consts bs IMEmpty IMEmpty Nil 100000000)
-    ((Pair _ ns) (rev ns))))
-(fn od_stream_consts
-  ((bs0 (List Int)) (names (IntMap Name)) (seen (IntMap Bool)) (acc (List Name)) (fuel Int))
-  (Pair (IntMap Bool) (List Name))
-  (measure fuel)
-  (if (<= fuel 0) (Pair seen acc)
-  (let ((bs (skip_ws bs0)))
-    (match bs
-      (Nil (Pair seen acc))
-      (_
-        (match (json_parse bs)
-          (JErr (Pair seen acc))
-          ((JRes j rest)
-           (match (od_line_id_j j)
-             ((Some (Pair 0 i))
-              (od_stream_consts rest
-                (match (od_name_of names j)
-                  ((Some nm) (im_insert names i nm))
-                  (None names))
-                seen
-                acc
-                (- fuel 1)))
-             ((Some (Pair 2 _))
-              (match
-                (od_stream_cited names seen acc
-                  (append (od_sub_int j "const" "name") (od_sub_int j "proj" "typeName")))
-                ((Pair seen1 acc1) (od_stream_consts rest names seen1 acc1 (- fuel 1)))))
-             (_ (od_stream_consts rest names seen acc (- fuel 1)))))))))))
-(fn od_stream_cited ((names (IntMap Name)) (seen (IntMap Bool)) (acc (List Name)) (ids (List Int)))
-  (Pair (IntMap Bool) (List Name))
-  (measure (struct ids))
-  (match ids
-    (Nil (Pair seen acc))
-    ((Cons i r)
-     (if (im_has seen i) (od_stream_cited names seen acc r)
-     (match (im_find names i)
-       ((Some nm) (od_stream_cited names (im_insert seen i True) (Cons nm acc) r))
-       (None (od_stream_cited names seen acc r)))))))
-(fn od_line_id_j ((j Json)) (Option (Pair Int Int))
-  (match (od_int j "in")
-    ((Cons i _) (Some (Pair 0 i)))
-    (Nil
-      (match (od_int j "il")
-        ((Cons i _) (Some (Pair 1 i)))
-        (Nil
-          (match (od_int j "ie")
-            ((Cons i _) (Some (Pair 2 i)))
-            (Nil None)))))))
-(fn od_name_of ((names (IntMap Name)) (j Json)) (Option Name)
-  (match (jget j "str")
-    ((Some o)
-     (match (od_int o "pre")
-       ((Cons pre _)
-        (match (jget o "str")
-          ((Some sv)
-           (match (jstr sv)
-             ((Some s)
-              (match (od_name_at names pre)
-                ((Some p) (Some (Str p (sym_of_chars s))))
-                (None None)))
-             (None None)))
-          (None None)))
-       (Nil None)))
-    (None
-      (match (jget j "num")
-        ((Some o)
-         (match (od_int o "pre")
-           ((Cons pre _)
-            (match (od_int o "i")
-              ((Cons k _)
-               (match (od_name_at names pre)
-                 ((Some p) (Some (Num p k)))
-                 (None None)))
-              (Nil None)))
-           (Nil None)))
-        (None None)))))
-(fn od_name_at ((names (IntMap Name)) (i Int)) (Option Name)
-  (if (= i 0) (Some Anon) (im_find names i)))

@@ -28,7 +28,7 @@
 ;;; caller's word at the assumed one. `ev` and `run_prog` are one
 ;;; preparation and one invocation each. What a program does not state of
 ;;; an entry — an evidence binder, a constructor's proposition field — is
-;;; read where the environment is held: session.shard's door (`prepare_on`).
+;;; read where the environment is held: run.shard's door (`run_load`).
 ;;; A primitive's outcome is three-valued: a value, a
 ;;; GUARD failure (the input outside the operation's domain: a negative Nat, a
 ;;; zero divisor) or an EXHAUSTED resource (K's literal limits, `nat_size` and
@@ -709,7 +709,7 @@
 ;; preparation and one invocation through the assumed door (below): the caller answers for the
 ;; arguments' types, and only their constructors are resolved (`bad_value`)
 (fn ev ((p Prog) (f Name) (args (List Val)) (fuel Int)) EvRes
-  (match (prepare p f (policy_of Assumed False Nil fuel) 0)
+  (match (prepare p f (policy_of Assumed False Nil fuel))
     ((PrepNo e _) (EvStuck e f))
     ((PrepOk h)
      (match (invoke h args)
@@ -723,11 +723,11 @@
 ;; one preparation and one invocation each, so nothing in this file links but `prepare`. A
 ;; handle is a value: an invocation does not change it, and no later program retargets it.
 ;; A client reads `Handle.entry`, `Handle.params` (the parameters it supplies: under effects,
-;; those before the World), `Handle.result`, `Handle.policy` and `Handle.revision`; the linked
-;; program, the entry's index, the World's token and the inductives' index are this file's,
-;; and so is making or restating a handle. That is a convention, as `Linked`'s is: a record's
-;; constructor and updaters are ordinary declarations (record.shard), and no view seals this
-;; file — kernel/test/handle_cost_test.sh holds the toolchain's sources to it by name.
+;; those before the World) and `Handle.policy`; the linked program, the entry's index, the
+;; World's token and the inductives' index are this file's, and so is making or restating a
+;; handle. That is a convention, as `Linked`'s is: a record's constructor and updaters are
+;; ordinary declarations (record.shard), and no view seals this file —
+;; kernel/test/handle_cost_test.sh holds the toolchain's sources to it by name.
 ;; The policy is fixed at `prepare`:
 ;;   door     the two kinds of entry. Checked: every argument is validated against the
 ;;            E type the program states for its parameter before the machine starts, and
@@ -750,21 +750,19 @@
 ;; does not state what the erasure dropped beside a type's value arguments — an evidence binder
 ;; of the entry's own signature, a proposition field of a constructor. An entry with
 ;; either passes this `prepare` as checked on its runtime parameters alone. Where the program
-;; comes with the environment it was erased from — a session's revision, the driver's load —
-;; the door reads the two there and refuses the entry (session.shard prepare_on).
+;; comes with the environment it was erased from — the driver's load — the run reads the two
+;; there and refuses the entry (run.shard run_load).
 (type Door (Checked) (Assumed))
 (record Policy (door Door) (effects Bool) (trace (List Int)) (fuel Int))
 ;; `make` reaches the records of its own file alone (record.shard), so a client states a policy
 ;; through this
 (fn policy_of ((door Door) (effects Bool) (trace (List Int)) (fuel Int)) Policy
   (make Policy (door door) (effects effects) (trace trace) (fuel fuel)))
-(record Handle (lk Linked) (id Int) (entry Name) (params (List EType)) (result EType)
-  (policy Policy)
+(record Handle (lk Linked) (id Int) (entry Name) (params (List EType)) (policy Policy)
   (token (Option IVal))
-  (inds (IntMap (List (Pair Name EDecl))))
-  (revision Int))
+  (inds (IntMap (List (Pair Name EDecl)))))
 (type Prep (PrepOk Handle) (PrepNo Symbol (List Int)))  ; a refusal: the reason — a link error's, unknown_head, unlinked, bad_entry, preconditioned — and its text
-(fn prepare ((p Prog) (f Name) (pol Policy) (revision Int)) Prep
+(fn prepare ((p Prog) (f Name) (pol Policy)) Prep
   (match (link p)
     ((LkErr e m) (PrepNo e m))
     ((LkOk lk)
@@ -775,37 +773,35 @@
           ((Prog ds)
            (match (entry_types (fn_decl_at ds id) (Policy.door pol) f)
              ((EntNo e m) (PrepNo e m))
-             ((EntOk ps rt)
+             ((EntOk ps)
               (match (if (Policy.effects pol) (world_last lk ds ps) (Some (Pair ps None)))
                 (None
                   (PrepNo (quote bad_entry) (append (show_name f) " does not take a World last")))
                 ((Some (Pair params token))
                  (let
                    ((h
-                      (make Handle (lk lk) (id id) (entry f) (params params) (result rt)
-                        (policy pol)
+                      (make Handle (lk lk) (id id) (entry f) (params params) (policy pol)
                         (token token)
-                        (inds IMEmpty)
-                        (revision revision))))
+                        (inds IMEmpty))))
                    (match (Policy.door pol)
                      (Assumed (PrepOk h))
                      (Checked (checked_door h ds)))))))))))))))
-;; the entry's parameter and result types as its declaration states them. At the checked door
-;; an entry is a fn; at the assumed one a sig fn and an extern are bound too, and the machine
-;; answers — after the arguments are resolved
-(type Ent (EntOk (List EType) EType) (EntNo Symbol (List Int)))
+;; the entry's parameter types as its declaration states them. At the checked door an entry is
+;; a fn; at the assumed one a sig fn and an extern are bound too, and the machine answers —
+;; after the arguments are resolved
+(type Ent (EntOk (List EType)) (EntNo Symbol (List Int)))
 (fn entry_types ((d (Option EDecl)) (door Door) (f Name)) Ent
   (match d
-    ((Some (EFn _ _ ps rt _ _)) (EntOk ps rt))
-    ((Some (ESig _ _ ps rt))
+    ((Some (EFn _ _ ps _ _ _)) (EntOk ps))
+    ((Some (ESig _ _ ps _))
      (match door
-       (Assumed (EntOk ps rt))
+       (Assumed (EntOk ps))
        (Checked
          (EntNo (quote unlinked)
            (append (show_name f) " is a sig fn no implementation is linked to")))))
-    ((Some (EExtern _ _ ps rt))
+    ((Some (EExtern _ _ ps _))
      (match door
-       (Assumed (EntOk ps rt))
+       (Assumed (EntOk ps))
        (Checked
          (EntNo (quote unknown_head) (append (show_name f) " is an extern, not a fn of the program")))))
     (_ (EntNo (quote unknown_head) (show_name f)))))
@@ -1142,12 +1138,12 @@
 ;; type and validated at the checked door before the machine starts — the World the last
 ;; parameter's first constructor; every extern performed by the host's. One preparation, the
 ;; text codec, one invocation — of a program alone. The driver's run holds a load, and its door
-;; is the session's (session.shard run_load), where the policy carries the effect trace's path:
+;; is run.shard's (run_load), where the policy carries the effect trace's path:
 ;; every host call the run performs, in order, as one line — the extern's name, its arguments
 ;; and the host's answer by the wire (perform_at) — written when the path is not empty: at the
 ;; run's end, and before an `exit` is performed, since the host's exit never returns
 (fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
-  (match (prepare p f (policy_of Checked True Nil fuel) 0)
+  (match (prepare p f (policy_of Checked True Nil fuel))
     ((PrepNo e m) (Pair (RunLink e m) w))
     ((PrepOk h)
      (match (text_args h argv)

@@ -356,8 +356,6 @@ read EXPORT INDEX < <(v3/kernel/test/init_index.sh)        # the export and its 
 E=./rust_bootstrap/target/release/eval; I="--init $EXPORT --init-index $INDEX"
 $E direct v3/kernel/load.shard --root v3 $I FILE [DIR…]                        # check; prints the records
 $E direct v3/kernel/load.shard --root v3 $I --run MODULE.main FILE [DIR…] -- ARG…   # run main
-$E direct v3/kernel/load.shard --root v3 $I --store OUT FILE                    # keep the checked terms
-$E direct v3/kernel/verify_release.shard OUT $EXPORT $INDEX                    # the checker alone on them
 $E direct v3/kernel/prove.shard --root v3 $I FILE                              # write FILE's sidecar
 v3/build.sh FILE OUT [--root v3] [DIR…]                                        # a native binary at OUT
 ```

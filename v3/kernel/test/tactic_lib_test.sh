@@ -11,7 +11,7 @@
 # (3) One solution checked identically: the engine solves the same statements in a
 # second copy delegated `auto`; the two sidecars differ, both replay to the same ACCEPT records
 # but for the axiom closure (the proof's: the engine's arith rests on propext and Quot.sound,
-# the library's exact term on nothing), both are stored and verified by K alone.
+# the library's exact term on nothing).
 # (4) The copy's sidecar without its schema
 # form replays as schema 1, reported, never refused. (5) The delegation with a hint
 # added replays unchanged. (6) --measure runs both producers on every statement.
@@ -29,7 +29,6 @@ fail=0; checks=0
 bad() { echo "tactic_lib_test: $*"; fail=$((fail+1)); }
 load() { "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$@"; }
 prove() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$@"; }
-verify() { "$EVAL" direct v3/kernel/verify_release.shard "$1" "$EXPORT" "$INDEX"; }
 NAMES="and_comm and_assoc de_morgan excluded le_self eq_self"
 MA=$(basename "$A"); MB=$(basename "$B")
 
@@ -65,17 +64,7 @@ checks=$((checks+1)); [ "$(acc "$OUT/replayA.txt" "$MA" | wc -l)" = 6 ] || { bad
 checks=$((checks+1)); cmp -s <(acc "$OUT/replayA.txt" "$MA") <(acc "$OUT/replayB.txt" "$MB") || { bad "the two sidecars do not replay to the same ACCEPT records (but for the axiom closure)"; diff <(acc "$OUT/replayA.txt" "$MA") <(acc "$OUT/replayB.txt" "$MB") | head -6 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^ACCEPT $MB.use_split.le_self .* axioms=Quot.sound,propext " "$OUT/replayB.txt" && grep -q "^ACCEPT $MA.use_split.le_self .* axioms= " "$OUT/replayA.txt" || bad "le_self's axiom closures are not the proofs' (arith: propext and Quot.sound; exact: none)"
 checks=$((checks+1)); grep -q '^PROVED\|^TACTIC' "$OUT/replayA.txt" "$OUT/replayB.txt" && bad "a replay ran a producer"
-mkdir -p "$OUT/storeA" "$OUT/storeB"
-load --store "$OUT/storeA" "$A/use_split.shard" > "$OUT/storeA.txt" 2>&1
-load --store "$OUT/storeB" "$B/use_split.shard" > "$OUT/storeB.txt" 2>&1
-checks=$((checks+1)); grep -q '^STORE: ' "$OUT/storeA.txt" && grep -q '^STORE: ' "$OUT/storeB.txt" || bad "a copy did not store"
-verify "$OUT/storeA" > "$OUT/vA.txt" 2>&1; rcA=$?
-verify "$OUT/storeB" > "$OUT/vB.txt" 2>&1; rcB=$?
-checks=$((checks+1)); [ "$rcA" = 0 ] || { bad "verify_release failed on the library's store (exit $rcA)"; grep -v '^ACCEPT' "$OUT/vA.txt" | head -4 | cut -c1-300; }
-checks=$((checks+1)); [ "$rcB" = 0 ] || { bad "verify_release failed on the engine's store (exit $rcB)"; grep -v '^ACCEPT' "$OUT/vB.txt" | head -4 | cut -c1-300; }
-checks=$((checks+1)); grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0 ' "$OUT/vA.txt" && grep -q '^RELEASE: declarations [0-9]*  accepted [0-9]* .* malformed 0  mistied 0  missing 0  taken 0 ' "$OUT/vB.txt" || bad "a release line is not clean"
-checks=$((checks+1)); [ "$(grep -c '^ACCEPT' "$OUT/vA.txt")" = "$(grep -c '^ACCEPT' "$OUT/vB.txt")" ] || bad "the two stores do not verify the same number of declarations"
-echo "tactic_lib_test: the engine's and the library's sidecars differ, replay to the same ACCEPT records, and both stores verify by K alone"
+echo "tactic_lib_test: the engine's and the library's sidecars differ and replay to the same ACCEPT records"
 
 # ---- (4) the schema-1 copy reported
 sed -i '/^(sidecar 3 2)$/d' "$A/use_split.auto.shard"

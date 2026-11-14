@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # v3/kernel/test/std_test.sh — the library's gate: every file under v3/std loaded in ONE
-# process, Init on demand shared across the files, every declaration written to a store, and
-# the store replayed by K alone (verify_release.shard) after the closure of Init it cites.
+# process, Init on demand shared across the files.
 # The theorems are held by name, each under no axiom but Lean's own (propext, Quot.sound,
 # Classical.choice — what the cited Init theorems carry): std/facts.shard's division, shift
 # and bitwise facts, std/migration.shard's one per spelling rule and its small arithmetic
@@ -25,9 +24,8 @@ held() {   # NAME: accepted, and its axioms Lean's own and no other
 }
 FILES=(v3/std/*.shard)
 n=${#FILES[@]}
-mkdir -p "$OUT/std"
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --store "$OUT/std" "${FILES[@]}" > "$OUT/load.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT "${FILES[@]}" > "$OUT/load.txt" 2>&1; rc=$?
 e=$(date +%s)
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the std root did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|ERROR|POLICY|PENDING' "$OUT/load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^LOAD: modules $n .* refused 0  pending 0 .* errors 0$" "$OUT/load.txt" || { bad "not every one of the $n files loaded clean"; grep '^LOAD:' "$OUT/load.txt"; }
@@ -65,14 +63,7 @@ for t in List.map.realize_1 List.map.realize_2 List.filter.realize_1 List.filter
   checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
 done
 checks=$((checks+1)); grep -q '^REALIZE Option.getD view ' "$OUT/load.txt" || bad "Option.getD is not realized through its matcher's definition (the view)"
-decls=$(wc -l < "$OUT/std/order" 2>/dev/null || echo 0)
-checks=$((checks+1)); grep -q "^STORE: .* new=$decls shared=0$" "$OUT/load.txt" || { bad "the store's count is not the order's $decls"; grep '^STORE:' "$OUT/load.txt"; }
-echo "std_test: the std root — $n files, $decls declarations — loaded and stored in one process in $((e-s)) s"
-s=$(date +%s)
-"$EVAL" direct v3/kernel/verify_release.shard "$OUT/std" "$EXPORT" "$INDEX" > "$OUT/verify.txt" 2>&1; rc=$?
-e=$(date +%s)
-checks=$((checks+1)); [ "$rc" = 0 ] || { bad "verify_release failed on the std root (exit $rc)"; grep -v '^ACCEPT' "$OUT/verify.txt" | head -5 | cut -c1-300; }
-checks=$((checks+1)); grep -q "^RELEASE: declarations $decls  accepted $decls " "$OUT/verify.txt" || { bad "K did not accept every one of the $decls declarations"; tail -1 "$OUT/verify.txt" | cut -c1-300; }
-echo "std_test: K alone accepts the root's $decls declarations after Init's closure in $((e-s)) s"
+decls=$(grep -c '^ACCEPT ' "$OUT/load.txt")
+echo "std_test: the std root — $n files, $decls declarations accepted — loaded in one process in $((e-s)) s"
 echo "std_test: $checks checks, $fail failed"
 exit $fail

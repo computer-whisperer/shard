@@ -86,7 +86,7 @@ first-order dialect that has no meaning in the logic: nothing can be proven abou
 checks that their functions terminate. Ordinary files (everything else) use Init's types and can
 carry theorems. This split is the largest irregularity in the system.
 
-**Build and gates.** 51 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 50 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 35 minutes on
 the development machine and about 65 in CI.
 
@@ -94,16 +94,15 @@ the development machine and about 65 in CI.
 
 | where | size | what |
 |---|---|---|
-| `v3/kernel/` | 53,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 60 files | the test scripts and drivers |
-| `v3/pins/` | 510 files | small sources, each stating the outcome it expects; 338 cases for the loader |
+| `v3/kernel/` | 50,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
+| `v3/kernel/test/` | 57 files | the test scripts and drivers |
+| `v3/pins/` | 505 files | small sources, each stating the outcome it expects; 338 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 3,200 lines of Rust | the bootstrap evaluator |
 | `tools/zed-shard/` | | an editor grammar |
-| `shard-viewer/` | | a viewer for the previous generation's proofs; unused by this tree |
 
 Two programs are carried all the way: `calc` and `shardfmt` each have a native binary and a
 contract proven about their entry point. In both, the contract rests on nine stated axioms about
@@ -121,7 +120,7 @@ host calls.
 - **Proofs do not rot silently.** A stored proof is keyed by the statement and everything it cites;
   when any of those changes it is reported stale, not reused.
 - **Views hold.** A consumer cannot see through an interface, by construction and not by a check.
-- **The toolchain builds itself** to 31 native binaries in about three minutes, and the binaries
+- **The toolchain builds itself** to 29 native binaries in about three minutes, and the binaries
   agree with the bootstrap on every test.
 
 ### Weak or missing
@@ -159,10 +158,6 @@ host calls.
 - Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
   replay of Init takes 7 minutes natively and 76 on the bootstrap.
 - The full gate is 35 minutes, so each change to the toolchain costs that much before it lands.
-
-*Hygiene.*
-- The session machinery (prepared programs, revisions, handles) has no user but the loader's own
-  `--run` and its tests.
 
 ## 5. Decisions most likely to be proposed again
 
