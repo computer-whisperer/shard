@@ -141,7 +141,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | A native axiom named `Classical.choice` passed the policy as Lean's. | pin `init_name_taken_l`; beside it `def_takes_fn` |
 | A registry row answered for any constant of its name; a decision had two runtime forms. | pins `registry_native`, `decidable_cells`, `derive_name_taken`, `derive_visible` |
 | `(- 1 2)` at `Int` was read as 0, and K proved the statement so read. | pin `op_expected` |
-| A module's meaning depended on load order. | pins `init_horizon`, `init_horizon_beyond` |
+| A module's meaning depended on load order. | pins `init_step_lemma`, `init_unseen_bundle`, `impl_init_demand`, `init_late_file_import`; `loader_pins_test.shard` loads every case a second time in the reverse order and compares the records |
 | An entry decoded by constructor shape let a value of no type in. | pin `entry_shape`; `entry_test.shard` |
 | `decide` erased as the identity; a descent obligation nearly stated without its branch fact. | pins `project_bool`, `discharge_measure`, `if_rec_call` |
 | A primitive let a negative through a `Nat` operation; a host call died instead of sticking. | `prims_test.shard` |

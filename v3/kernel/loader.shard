@@ -2,8 +2,8 @@
 ;;; A package root and its files: each file is a module
 ;;; named by its path from the root; `import` loads a file once (a cycle is
 ;;; refused) and makes the imported module's closure visible, opening
-;;; nothing; `(import Init NAME)` sets the module's Init horizon just past
-;;; NAME's ordinal in the pinned export, whose declarations the module cites are
+;;; nothing; `(import Init)` lets the module see Lean's Init — every
+;;; declaration of the pinned export, of which the ones the module needs are
 ;;; loaded on demand from the export's index (initload.shard), the meta
 ;;; line checked against the pin; `use` opens a prefix for the rest of
 ;;; the file; `trusts` widens the file's assumption policy; every declared
@@ -14,7 +14,7 @@
 ;;; kept as it was. What the loader records per declaration is the
 ;;; acceptance record (the driver load.shard prints it): the
 ;;; identity (K name and content fingerprint), the module, the axiom
-;;; closure, and the environment revision (the Init prefix, the visible
+;;; closure, and the environment revision (the visible
 ;;; modules and their hashes on their MODULE lines). Nothing here is
 ;;; authority: K's verdicts are K's.
 
@@ -71,6 +71,7 @@
 (use kernel.define.DfRes)
 (use kernel.define.GrpDef)
 (use kernel.define.GrpRes)
+(use kernel.decl.Constructor)
 (use kernel.decl.InductiveType)
 (use kernel.record)
 (use kernel.record.RxRes)
@@ -242,10 +243,10 @@
 ;; ---- the state -------------------------------------------------------------------------
 ;; a loaded module: path, root-relative file, hash (over its accepted
 ;; declarations' fingerprints, in order), its closure (the module paths
-;; visible in it, itself included), its Init horizon (-1: none);
+;; visible in it, itself included), whether it sees Init (its importers then do);
 ;; a view's module also keeps its fork point for the implementation
 ;; check, which may come after a consumer loaded the view
-(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Int)
+(record Mod (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Bool)
   (fork (Option ForkPt))
   (ok Bool))
 ;; ok False: its loading failed — a later import fails the same way, never re-reads it
@@ -253,7 +254,7 @@
 ;; later import of it reports import_failed instead of re-reading it into duplicate_name
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
   (ld_add_mod l
-    (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init -1) (fork None)
+    (make Mod (path mp) (file (join_path rel)) (hash 0) (closure Nil) (init False) (fork None)
       (ok False))))
 
 ;; Init alone: an environment no native declaration entered, the records it holds, its ordinal
@@ -267,8 +268,7 @@
 
 (type Rec
   (RModule Name (List Int) Int (List Name))  ; a module loaded: path, file, hash, its closure
-  (RInit Name Int Int)  ; the Init load: the file's import target (Anon: the horizon inherited), its horizon, the declarations its demand admitted
-  (RAccept Name Name Int (List Name) Int (List Name) (Option Req))  ; declaration, module, content fingerprint, axiom closure, the module's Init horizon at the check (-1: none), the view parameters it rests on, a theorem's resolved requirement
+  (RAccept Name Name Int (List Name) (List Name) (Option Req))  ; declaration, module, content fingerprint, axiom closure, the view parameters it rests on, a theorem's resolved requirement
   (RParam Name Symbol Int)  ; a parameter admitted: a view's (kind type / fn / requirement; a sig type's arity), a measured fn's obligation, a trusted axiom (kind axiom)
   (RRefuse Name Symbol)  ; K refused
   (RPolicy Name (List Name))  ; outside the file's policy: the axioms it reaches that the policy lacks
@@ -304,6 +304,8 @@
 (record Load (root (List (List Int))) (env CheckedEnv) (memo AxMemo) (mods (List Mod)) (init InitSt)
   (tbl (IntMap (List (Pair Name Name))))
   (inits (IntMap (List (Pair Name Int))))  ; declaration → ordinal for every imported declaration
+  (missed (List (List Int)))  ; the words of the refusals recorded since the reading of the present declaration began that may name a constant of Init the load has not fetched (settle_missed)
+  (beyond (List Int))  ; the ordinals of the records of Init the load fetched after its first declaration: its own environment holds them and the base does not (ld_reroot starts without them)
   (mode Symbol)  ; the proofs' mode: off (the build), solve (prove), measure
   (pending (List Name))
   (stack (List Name))
@@ -325,6 +327,8 @@
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone)
     (tbl IMEmpty)
     (inits IMEmpty)
+    (missed Nil)
+    (beyond Nil)
     (mode (quote off))
     (pending Nil)
     (stack Nil)
@@ -402,18 +406,17 @@
 ;; through the scope and the parameters the file can see, what `permitted` can be asked about
 ;; for a declaration of the file beyond the standard axioms: a parameter of a module outside
 ;; the file's closure reaches none of its declarations, so what another root admitted is no
-;; part of the key —, the environment's — the module's Init horizon and the export's identity
+;; part of the key —, the environment's — for a module that sees Init the export's identity
 ;; as the index's header states it (its record count and byte length); 0 for a module without
 ;; Init, whose requirement rests on no export
 (fn req_ctx ((l Load) (f Fx)) ReqCtx
   (let ((sc (fx_scope l f)))
     (ReqCtx sc
       (req_names (append (trust_candidates sc (Fx.trusts f)) (params_seen sc (Load.params l))) 0)
-      (if (< (Fx.init f) 0) 0
+      (if (bool_not (Fx.init f)) 0
       (match (Load.init l)
-        ((InitSt x _ _)
-         (mix (mix (+ 1 (Fx.init f)) (ix_hdr_records (odx_hdr x))) (ix_hdr_bytes (odx_hdr x))))
-        (_ (mix (mix (+ 1 (Fx.init f)) 0) 0)))))))
+        ((InitSt x _ _) (mix (ix_hdr_records (odx_hdr x)) (ix_hdr_bytes (odx_hdr x))))
+        (_ (mix 0 0)))))))
 (fn params_seen ((sc Scope) (ps (List Name))) (List Name)
   (measure (struct ps))
   (match ps
@@ -424,6 +427,11 @@
   (match ts
     (Nil Nil)
     ((Cons t r) (append (scope_candidates sc t) (trust_candidates sc r)))))
+(fn ordinals_onto ((cs (List (Pair Name Int))) (acc (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil acc)
+    ((Cons (Pair _ o) r) (ordinals_onto r (Cons o acc)))))
 (fn ld_add_inits ((l Load) (cs (List (Pair Name Int)))) Load
   (measure (struct cs))
   (match cs
@@ -564,7 +572,49 @@
     (_ None)))
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (Cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
-(fn ld_rec ((l Load) (x Rec)) Load (with Load l (recs (Cons x (Load.recs l)))))
+;; a record added. The words of a refusal that may name a constant are kept beside it until
+;; the declaration being read is settled: one may be a constant of Init the load has not
+;; fetched
+(fn ld_rec ((l Load) (x Rec)) Load
+  (let
+    ((l1
+       (match (rec_refusal x)
+         ((Some (Pair e m)) (ld_miss l e m))
+         (None l))))
+    (with Load l1 (recs (Cons x (Load.recs l1))))))
+;; a reading error and a refusal with their reason; under prove, a delegation no producer
+;; closed (its text holds the refusal of the block the producer answered)
+(fn rec_refusal ((x Rec)) (Option (Pair Symbol (List Int)))
+  (match x
+    ((RReadErr _ e m) (Some (Pair e m)))
+    ((RClassify _ e m) (Some (Pair e m)))
+    ((RPending _ r)
+     (match (starts_with_lit "auto_unsolved" (chars_of_sym r))
+       ((Some rest) (Some (Pair (quote auto_unsolved) rest)))
+       (None None)))
+    (_ None)))
+;; the words of a message that may name a constant the environment lacks. The refusal of a
+;; citation (citation_reason) is a name, or names: the elaborator and the classifier show the
+;; name as written (alone, or inside a step's message), K's refusal lists the constants the
+;; declaration cites. Under
+;; any other reason — a case analysis without its casesOn, a derivation without a
+;; constructor's injectivity, a recursion without its below — the constant is one the
+;; toolchain built from a name it met, the owner's name and a suffix: a dotted word. The rest
+;; of a message is prose and is not looked up. An obstacle that leaves no refusal — a body
+;; read E-first after the typed route — states what it met through here as a refusal does
+(fn ld_miss ((l Load) (e Symbol) (m (List Int))) Load
+  (with Load l (missed (naming_words (citation_reason e) (msg_tokens m Nil Nil) (Load.missed l)))))
+(fn naming_words ((all Bool) (ws (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ws))
+  (match ws
+    (Nil acc)
+    ((Cons t r) (naming_words all r (if (bool_or all (has_dot t)) (Cons t acc) acc)))))
+(fn has_dot ((t (List Int))) Bool
+  (measure (struct t))
+  (match t
+    (Nil False)
+    ((Cons c r) (if (= c 46) True (has_dot r)))))
+(fn ld_settled ((l Load)) Load (with Load l (missed Nil)))
 (fn ld_add_param ((l Load) (n Name)) Load (with Load l (params (Cons n (Load.params l)))))
 (fn ld_with_e ((l Load) (es ESt)) Load (with Load l (etab es)))
 (fn ld_add_typed ((l Load) (n Name) (sc Scope) (s SExpr)) Load
@@ -619,26 +669,24 @@
     ((Cons m r) (if (name_eq (Mod.path m) p) (Some m) (ld_find_mod r p)))))
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
-;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
+;; visible modules (itself included), whether it sees Init — it imports Init, or a module
+;; that sees it —, trusted names, hash so
 ;; far, whether it is a view (the forms it may hold, the req-scope gate), the sidecar's
 ;; entries (FILE.auto.shard beside the file, read when a theorem or a fulfills says auto),
-;; the import that set its horizon — the target of an `(import Init NAME)` (initname), or the
-;; file whose import handed its own on (initvia; Anon and empty: no horizon) —, the horizon its
-;; Init demand was fetched at with that import as a refusal shows it (fetched; -1: the fetch
-;; point is passed and the file saw no Init there; -2: the leading directives are still being
-;; read), the names of Init under its identity, which none of its declarations may take
+;; whether its first declaration is reached (begun: there what the file sees of Init is
+;; settled and its demand fetched), whether it is the implementation file of a view (its
+;; forms stand after the view's declarations), the names of Init under its identity, which
+;; none of its declarations may take
 (record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open))
   (vis (List Name))
-  (init Int)
+  (init Bool)
   (trusts (List Name))
   (hash Int)
   (view Bool)
   (autos (List Auto))
-  (initname Name)
-  (initvia (List Int))
-  (fetched (Pair Int (List Int)))
+  (begun Bool)
+  (impl Bool)
   (taken (List (List Int)))
-  (above (List (Pair Name Int)))
   (ecount Int)
   (bins (List SExpr)))
 ;; the prefix the file's declarations take: its module, or the sealed directory's for a file
@@ -646,48 +694,30 @@
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
 (fn fx_file ((f Fx)) (List Int) (join_path (Fx.parts f)))
 (fn fx_open ((f Fx) (o Open)) Fx (with Fx f (opened (append (Fx.opened f) (list o)))))
-;; an import of a file that sees `mods` under the horizon `init`: the farther horizon stands,
-;; and the import that set it is the one named
-(fn fx_see ((f Fx) (mods (List Name)) (init Int) (via (List Int))) Fx
-  (if (< (Fx.init f) init)
-    (with Fx f (vis (names_union (Fx.vis f) mods)) (init init) (initname Anon) (initvia via))
-    (with Fx f (vis (names_union (Fx.vis f) mods)))))
-;; `(import Init n)`, its horizon h: the farther horizon stands, under the import that set it
-(fn fx_see_init ((f Fx) (n Name) (h Int)) Fx
-  (if (< (Fx.init f) h) (with Fx f (init h) (initname n) (initvia Nil)) f))
-;; the import that set the file's horizon, as a refusal shows it
-(fn horizon_source ((f Fx)) (List Int)
-  (match (Fx.initname f)
-    (Anon
-      (match (Fx.initvia f)
-        (Nil " (inherited)")
-        (p (append " (inherited through the import of " (append p ")")))))
-    (k (append " (import Init " (append (show_name k) ")")))))
+;; an import of a module that sees `mods`, and Init when `init`: the importer sees them too
+(fn fx_see ((f Fx) (mods (List Name)) (init Bool)) Fx
+  (with Fx f (vis (names_union (Fx.vis f) mods)) (init (bool_or (Fx.init f) init))))
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
 (fn fx_add_bin ((f Fx) (s SExpr)) Fx (with Fx f (bins (append (Fx.bins f) (list s)))))
 ;; the fork's file context for the implementation: the view's after its directives, as no
 ;; view, under the implementation file with its own sidecar's entries
 (fn fx_as_impl ((f Fx) (ifile (List (List Int))) (autos (List Auto))) Fx
-  (with Fx f (view False) (parts ifile) (autos autos)))
-;; an `(import Init …)` whose horizon h lies past the file's, read after the file's Init
-;; declarations were fetched: what it would let the file see was never fetched for it
-(fn late_raise ((f Fx) (h Int)) Bool
-  (match (Fx.fetched f)
-    ((Pair at _) (bool_and (<= -1 at) (< (Fx.init f) h)))))
-(fn late_import_msg ((f Fx) (n Name) (h Int)) (List Int)
-  (append "(import Init "
-    (append (show_name n)
-      (append
-        (if (< (Fx.init f) 0)
-          (append ") gives the module a horizon, "
-            (append (show_nat h) ", after its first declaration was read without one"))
-          (append ") raises the module's horizon from "
-            (append (show_nat (Fx.init f))
-              (append (horizon_source f)
-                (append " to "
-                  (append (show_nat h) " after the file's Init declarations were fetched"))))))
-        ": an import of Init that raises the horizon stands before the file's first declaration — move it there (an implementation's: into its view)"))))
+  (with Fx f (view False) (impl True) (parts ifile) (autos autos)))
+;; a directive that would let the file see Init (`init`) where it does not, read after the
+;; file's first declaration: the declarations before it were read as those of a file that
+;; sees none, so the directive is refused. A file sees Init from its first declaration on,
+;; or not at all; an implementation's forms stand after its view's declarations, so it sees
+;; Init exactly when its view does
+(fn late_init ((f Fx) (init Bool)) Bool
+  (bool_and (Fx.begun f) (bool_and init (bool_not (Fx.init f)))))
+;; `what`: the directive as written; `brings`: how it brings Init
+(fn late_init_msg ((f Fx) (what (List Int)) (brings (List Int))) (List Int)
+  (append what
+    (append brings
+      (if (Fx.impl f)
+        ", and this implementation's view does not import Init: an implementation sees Init exactly when its view does — write (import Init) into its view (mod.req.shard)"
+        ", and it stands after the file's first declaration, which was read without Init: a file sees Init from its first declaration on, or not at all — write (import Init) before the first declaration"))))
 (fn fx_scope ((l Load) (f Fx)) Scope
   (Scope (Fx.ident f) (Fx.module f) (Fx.opened f)
     (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
@@ -695,7 +725,7 @@
 ;; ---- the forms -------------------------------------------------------------------------
 (type Form
   (FImportFile (List Int))
-  (FImportInit Name)
+  (FImportInit)
   (FUse Name (List Symbol))
   (FTrusts (List Name))
   (FDecl)
@@ -711,13 +741,15 @@
 (fn import_form ((args (List SExpr))) Form
   (match args
     ((Cons (SStr p) Nil) (FImportFile p))
-    ((Cons (SSym i) (Cons (SSym n) Nil))
+    ((Cons (SSym i) rest)
      (if (sym_eq i (quote Init))
-       (match (name_of_sym n)
-         ((Some m) (FImportInit m))
-         (None (FBad (quote bad_import) "(import Init NAME)")))
-       (FBad (quote bad_import) "(import \"FILE\") or (import Init NAME)")))
-    (_ (FBad (quote bad_import) "(import \"FILE\") or (import Init NAME)"))))
+       (match rest
+         (Nil FImportInit)
+         (_
+           (FBad (quote bad_import)
+             "(import Init NAME…): the import takes no name — write (import Init): a file that imports Init sees every declaration of it")))
+       (FBad (quote bad_import) "(import \"FILE\") or (import Init)")))
+    (_ (FBad (quote bad_import) "(import \"FILE\") or (import Init)"))))
 ;; (use P) opens P; (use P a b) opens P for the names a… and b…; a leading
 ;; `Init` is dropped (reader.shard's drop_init) — imported names are bare in
 ;; K, so (use Init) opens nothing new and (use Init.List) opens `List`
@@ -841,20 +873,47 @@
        ((Accepted e2) (admit_decls e2 r))
        ((Rejected reason subject) (AdRefused subject (reason_of reason)))
        ((Exhausted res site) (AdRefused (decl_name d) (exhausted_sym res site)))))))
-;; K's admission of a file's declarations into the load's environment, then the naming law
-;; for every name they declare — a constructor's and a recursor's with the rest: none is a
-;; name of Init under the file's identity (Fx.taken), whether or not the load holds Init's
-;; constant yet. A `fn`, an `extern` and a derivation are refused by their form's name before
-;; (name_taken); this is every other declaration's. Without it a file `Classical.shard`
-;; declaring `(axiom choice …)` below the horizon of Init's takes the standard axiom's
-;; identity and passes the policy by its name (pin init_name_taken_l)
+;; the naming law for every name a file's declarations state — a constructor's and a
+;; recursor's with the rest: none is a name of Init under the file's identity (Fx.taken) —
+;; then K's admission into the load's environment. The law is asked of the export's name
+;; table and before K, so its refusal is the same whether or not the load holds Init's
+;; constant: where it does K's own refusal would be `already_declared`, and where it does
+;; not, a file `Classical.shard` declaring `(axiom choice …)` would take the standard
+;; axiom's identity and pass the policy by its name (pin init_name_taken_l). A `fn`, an
+;; `extern` and a derivation are refused by their form's name before (name_taken); this is
+;; every other declaration's
 (fn admit_under ((l Load) (f Fx) (ds (List Declaration))) Admit
-  (match (admit_decls (Load.env l) ds)
-    ((AdRefused subj reason) (AdRefused subj reason))
-    ((AdOk env1)
-     (match (first_taken (Fx.taken f) (decls_declare env1 ds))
-       ((Some n) (AdRefused n (quote name_taken)))
-       (None (AdOk env1))))))
+  (match (first_taken (Fx.taken f) (decls_state ds))
+    ((Some n) (AdRefused n (quote name_taken)))
+    (None (admit_decls (Load.env l) ds))))
+;; the names the declarations state before K has them: each one's own, an inductive block's
+;; types, constructors and recursors
+(fn decls_state ((ds (List Declaration))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d r)
+     (append
+       (match d
+         ((InductDecl _ _ ts _) (append (induct_names ts) (rec_names (all_names ts))))
+         (_ (list (decl_name d))))
+       (decls_state r)))))
+;; an inductive block's types, each with its constructors
+(fn induct_names ((ts (List InductiveType))) (List Name)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons (InductiveType n _ cs) r) (Cons n (append (induct_ctor_names cs) (induct_names r))))))
+(fn induct_ctor_names ((cs (List Constructor))) (List Name)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons (Constructor n _) r) (Cons n (induct_ctor_names r)))))
+(fn rec_names ((ts (List Name))) (List Name)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (Cons (Str t (quote rec)) (rec_names r)))))
 (fn first_taken ((ts (List (List Int))) (ns (List Name))) (Option Name)
   (measure (struct ns))
   (match ns
@@ -885,7 +944,6 @@
                         ((Some h) h)
                         (None 0))
                       axs
-                      (Fx.init f)
                       (params_of (Load.params l) axs)
                       (match (env_find env n)
                         ((Some (ThmInfo (ConstantVal _ _ ty) _ _))
@@ -917,7 +975,7 @@
   (measure (struct rs))
   (match rs
     (Nil f)
-    ((Cons (RAccept _ _ h _ _ _ _) r) (mix_recs (fx_mix f h) r))
+    ((Cons (RAccept _ _ h _ _ _) r) (mix_recs (fx_mix f h) r))
     ((Cons _ r) (mix_recs f r))))
 (fn recs_add ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
@@ -1032,7 +1090,7 @@
            (match rd
              ((RDErr e m)
               (if (bool_and (sym_eq h (quote sig)) (Fx.view f)) (sig_e_only l f s e m)
-              (Pair (ld_rec l (horizon_refusal f e m)) f)))
+              (Pair (ld_rec l (read_refusal f e m)) f)))
              ((RDPending n r) (Pair (ld_rec (ld_add_pending l n) (RPending n r)) f))
              ((RDParam d kind arity)
               (match (admit_param l f d kind arity)
@@ -1151,11 +1209,11 @@
                (Load.mode l)))
            ((Pair l rd)
             (match rd
-              ((RDErr e m) (ld_rec l (horizon_refusal f e m)))
+              ((RDErr e m) (ld_rec l (read_refusal f e m)))
               ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
               ((RDOk ds)
                (match (admit_under l f ds)
-                 ((AdRefused subj reason) (ld_rec l (refusal_rec l f ds subj reason)))
+                 ((AdRefused subj reason) (ld_rec l (refusal_rec l ds subj reason)))
                  ((AdOk env1)
                   (match (policy_pass l f env1 (Load.memo l) ds Nil)
                     ((PolBound n)
@@ -1192,7 +1250,7 @@
   (measure (struct recs))
   (match recs
     (Nil Nil)
-    ((Cons (RAccept m _ _ axs _ _ _) r) (if (name_eq m n) axs (thm_closure_of r n)))
+    ((Cons (RAccept m _ _ axs _ _) r) (if (name_eq m n) axs (thm_closure_of r n)))
     ((Cons _ r) (thm_closure_of r n))))
 ;; the account recomputed: k replaced in every ACCEPT record's closure and parameters; its
 ;; function, once none of its obligations is open, out of every pending= and no longer PENDING
@@ -1209,12 +1267,12 @@
   (measure (struct rs))
   (match rs
     (Nil Nil)
-    ((Cons (RAccept n m h axs i ps q) r)
+    ((Cons (RAccept n m h axs ps q) r)
      (Cons
        (if (mem_name k axs)
          (let ((axs1 (names_union (names_without axs k) rests)))
-           (RAccept n m h axs1 i (params_of params axs1) q))
-         (RAccept n m h axs i ps q))
+           (RAccept n m h axs1 (params_of params axs1) q))
+         (RAccept n m h axs ps q))
        (rewrite_closures r k rests params)))
     ((Cons x r) (Cons x (rewrite_closures r k rests params)))))
 ;; an obligation of g — a parameter g.dec_N — not yet discharged
@@ -1278,7 +1336,7 @@
     ((Pair l1 (Some recs)) (bundle_after (add_e_twin l1 f s) (mix_recs f recs) ds))))
 (fn admit_core ((l Load) (f Fx) (ds (List Declaration))) (Pair Load (Option (List Rec)))
   (match (admit_under l f ds)
-    ((AdRefused subj reason) (Pair (ld_rec l (refusal_rec l f ds subj reason)) None))
+    ((AdRefused subj reason) (Pair (ld_rec l (refusal_rec l ds subj reason)) None))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) ds Nil)
        ((PolBound n)
@@ -1342,7 +1400,7 @@
 (type AtRes (AtOk Load CheckedEnv) (AtDone Load))
 (fn admit_theorems ((l Load) (f Fx) (thms (List Declaration))) AtRes
   (match (admit_under l f thms)
-    ((AdRefused subj reason) (AtDone (ld_rec l (refusal_rec l f thms subj reason))))
+    ((AdRefused subj reason) (AtDone (ld_rec l (refusal_rec l thms subj reason))))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) thms Nil)
        ((PolBound n)
@@ -1527,7 +1585,7 @@
     ((CErr e m2)
      (Pair
        (ld_rec l1
-         (match (horizon_pointer f r m)
+         (match (name_pointer r m)
            ((Some (Pair r2 p)) (RClassify (form_name (fx_scope l1 f) s) r2 p))
            (None
              (RClassify (form_name (fx_scope l1 f) s) e
@@ -1535,8 +1593,8 @@
                  (append " — read E-first after the typed route's "
                    (append (chars_of_sym r) (append ": " m))))))))
        f))
-    ((COk _) (load_e_sig l1 f s (quote no_l_identity)))
-    ((COkT _ _) (load_e_sig l1 f s (quote no_l_identity)))))
+    ((COk _) (load_e_sig (ld_miss l1 r m) f s (quote no_l_identity)))
+    ((COkT _ _) (load_e_sig (ld_miss l1 r m) f s (quote no_l_identity)))))
 ;; a signature with no L reading: the classifier's program alone. When the classifier
 ;; refuses the form too, its refusal carries what the signature's reading met — a result type
 ;; the elaborator could not read is `unknown_type` to the classifier, which names the symbol
@@ -1553,8 +1611,12 @@
                  (append (chars_of_sym r) (append ": " m))))
              m2)))
        f))
-    ((COk _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))
-    ((COkT _ _) (load_e_first l1 f s (quote e_only_type) (quote e_first)))))
+    ((COk _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))
+    ((COkT _ _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))))
+;; what a signature's reading met, noted where the file sees Init (settle_missed); a file
+;; that sees none has no L reading by construction, and nothing to fetch
+(fn unread_noted ((l Load) (f Fx) (e Symbol) (m (List Int))) Load
+  (if (Fx.init f) (ld_miss l e m) l))
 (fn ld_last_runnable ((l Load)) Bool
   (match (ld_recs_head l)
     ((Some (RRun _ _ _ _)) True)
@@ -1634,9 +1696,9 @@
       ((PdErr r m)
        (if (sym_eq r (quote unknown_constant))
          ;; a name the environment lacks: a function still to come parks the fn; a RUNNABLE one
-         ;; or an extern has no L meaning; anything else — an operator's identity past the Init
-         ;; prefix, a toolchain spelling — has no L identity, and a name that is nothing at all
-         ;; is the classifier's refusal
+         ;; or an extern has no L meaning; anything else — a toolchain spelling, a constant of
+         ;; Init the load has yet to fetch (load_e_after notes it for settle_missed) — has no L
+         ;; identity, and a name that is nothing at all is the classifier's refusal
          (match (callee_state l1 sc m)
            (CsPark
              (Pair
@@ -2363,7 +2425,7 @@
               ((Pair l2 f2) (programs_each l2 f2 r))))))))))
 (fn ld_last_accepted ((l Load)) Bool
   (match (ld_recs_head l)
-    ((Some (RAccept _ _ _ _ _ _ _)) True)
+    ((Some (RAccept _ _ _ _ _ _)) True)
     (_ False)))
 ;; a defined fn: its obligations (a measure's decreasing facts) admitted as parameters,
 ;; the definition admitted and checked against the policy, then its equations
@@ -2420,7 +2482,7 @@
     ((Cons t r) (if (int_list_eq t s) True (taken_has r s)))))
 ;; an S form's citations of the environment's E-eligible inductives enter the E table first
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
-  (if (< (Fx.init f) 0) l (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s))))  ; an optimization: Init's inductives are citable only where Init is visible
+  (if (Fx.init f) (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s)) l))  ; Init's inductives are citable only where the file sees Init
 ;; a `type` enters K when its field types are L types; it is E only when a field cites a
 ;; built-in E type with no L constant in scope — Int or Nat without Init, Symbol — or another
 ;; E-only type, transitively. Never the directory and never the file's imports: K checks any
@@ -2478,7 +2540,7 @@
   (let ((h (form_head s)))
     (if (bool_or (sym_eq h (quote type)) (sym_eq h (quote sig)))
       (match (ld_recs_head l)
-        ((Some (RAccept _ _ _ _ _ _ _)) (add_e_twin_now l f s))
+        ((Some (RAccept _ _ _ _ _ _)) (add_e_twin_now l f s))
         ((Some (RParam _ _ _)) (add_e_twin_now l f s))
         (_ l))
       l)))
@@ -2525,7 +2587,18 @@
 ;; (initload.shard od_open: the meta line against the pin, the index's header, the export's
 ;; size the header's). The base holds Init alone — its environment never a native
 ;; declaration's — so a process loading many roots carries it (ld_reroot); the loader's own
-;; environment holds Init beside the natives, and a demand enters it (init_load)
+;; environment holds Init beside the natives, and a demand enters it (init_load).
+;;
+;; What a file is given of Init does not depend on what the load fetched for another file.
+;; A file that sees Init has, before its first declaration, the closure of every name it can
+;; ask the environment for by itself: each token of its forms and of its sidecar's blocks
+;; under every candidate resolution tries (init_demand), the kits — the constants the
+;; toolchain builds by name (init_kit) — and the satellites of the inductives among them. A
+;; name asked for beyond those — one a proof step or the definer builds from a type met in a
+;; term — is refused by a message that names it, and the declaration is read again with the
+;; name fetched (settle_missed). A file that sees no Init is given nothing of it, whatever
+;; the environment holds: resolution finds no constant of Init there (scope.shard `visible`),
+;; and no gate asks the environment for one
 (fn init_opened ((l Load) (w World)) (Pair (Pair Load (Option (Pair Symbol (List Int)))) World)
   (match (Load.init l)
     ((InitSt _ _ _) (Pair (Pair l None) w))
@@ -2542,88 +2615,30 @@
        ((Pair (OdOpened x) w1)
         (Pair (Pair (ld_with_init l (InitSt x (odd0) (InitBase (env_empty) (odd0) IMEmpty))) None)
           w1))))))
-;; a reading error as the file's record; `unknown_constant` on a name the name table places at
-;; or above the module's horizon (one of the file's tokens, resolved at init_prepare: Fx.above)
-;; is `above_horizon` with the ordinal, the horizon and the import to write. The
-;; elaborator shows the name as written, alone or inside a tactic step's message
-;; (`step 1: NAME — the goal: …`): the entry matched is a token of the message, itself or
-;; under a prefix an opened namespace supplies
-(fn horizon_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
-  (match (horizon_pointer f e m)
+;; a reading error as the file's record. An `unknown_constant` on one of Lean's spellings is
+;; refused with what to write (lean_pointer): the elaborator shows the name as written, the
+;; first token of its message
+(fn read_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
+  (match (name_pointer e m)
     ((Some (Pair r p)) (RReadErr (fx_file f) r p))
     (None (RReadErr (fx_file f) e m))))
-;; what an `unknown_constant` is refused as where the name says more: a Lean spelling with its
-;; pointer, or a name the name table places at or above the module's horizon — `above_horizon`
-(fn horizon_pointer ((f Fx) (e Symbol) (m (List Int))) (Option (Pair Symbol (List Int)))
-  (if (bool_not (sym_eq e (quote unknown_constant))) None
-  (match (lean_pointer m)
-    ((Some rp) (Some rp))
-    (None
-      (match (above_entry (Fx.above f) m)
-        (None None)
-        ((Some (Pair n o))
-         (Some
-           (Pair (quote above_horizon)
-             (match (Fx.fetched f)
-               ((Pair h src)
-                (append (show_name n)
-                  (append " is declaration "
-                    (append (show_nat o)
-                      (if (< h (Fx.init f))
-                        (append " of the export, at or above the horizon "
-                          (append (show_nat h)
-                            (append src
-                              (append
-                                " the file's Init declarations were fetched at; the horizon was raised to "
-                                (append (show_nat (Fx.init f))
-                                  (append (horizon_source f)
-                                    (append
-                                      " after that, by a file import that follows a declaration, and the names this file cites were not fetched again: "
-                                      (append
-                                        (if (< o (Fx.init f)) "move that import"
-                                        (append "write (import Init " (append (show_name n) ")")))
-                                        " before the first declaration"))))))))
-                        (append " of the export, at or above the module's horizon "
-                          (append (show_nat h)
-                            (append src (append ": write (import Init " (append (show_name n) ")")))))))))))))))))))
+(fn name_pointer ((e Symbol) (m (List Int))) (Option (Pair Symbol (List Int)))
+  (if (sym_eq e (quote unknown_constant)) (lean_pointer m) None))
 ;; K's refusal of a file's declarations as its record. K's `unknown_constant` names no
-;; constant: the ones the declarations cite that the environment lacks are found here. Where
-;; the name table places one at or above the module's horizon the record is `above_horizon`
-;; with the import to write — the farthest of them, so that one import reaches them all: an
-;; instance or a function a table spelled, the lemmas a proof step builds on. Else the first
-;; is named
-(fn refusal_rec ((l Load) (f Fx) (ds (List Declaration)) (subj Name) (reason Symbol)) Rec
+;; constant: the ones the declarations cite that the environment lacks are found here and
+;; named, each once — an instance or a function a table spelled, the lemmas a proof step
+;; builds on
+(fn refusal_rec ((l Load) (ds (List Declaration)) (subj Name) (reason Symbol)) Rec
   (if (bool_not (sym_eq reason (quote unknown_constant))) (RRefuse subj reason)
-  (match (all_unknown (Load.env l) (decl_names ds) (decls_cite ds))
+  (match (all_unknown (Load.env l) (decl_names ds) (decls_cite ds) Nil)
     (Nil (RRefuse subj reason))
-    ((Cons k r)
-     (match
-       (horizon_pointer f reason
-         (show_name
-           (match (farthest_above (Fx.above f) (Cons k r) None)
-             ((Some (Pair n _)) n)
-             (None k))))
-       ((Some (Pair r2 p)) (RClassify subj r2 p))
-       (None (RClassify subj reason (show_name k))))))))
-;; of the names, the one the name table places farthest past the horizon
-(fn farthest_above ((above (List (Pair Name Int))) (ns (List Name)) (best (Option (Pair Name Int))))
-  (Option (Pair Name Int))
+    (ks (RClassify subj reason (names_spaced ks))))))
+(fn names_spaced ((ns (List Name))) (List Int)
   (measure (struct ns))
   (match ns
-    (Nil best)
-    ((Cons n r)
-     (farthest_above above r
-       (match (above_ordinal above n)
-         (None best)
-         ((Some o)
-          (match best
-            ((Some (Pair _ b)) (if (< b o) (Some (Pair n o)) best))
-            (None (Some (Pair n o))))))))))
-(fn above_ordinal ((above (List (Pair Name Int))) (n Name)) (Option Int)
-  (measure (struct above))
-  (match above
-    (Nil None)
-    ((Cons (Pair m o) r) (if (name_eq m n) (Some o) (above_ordinal r n)))))
+    (Nil Nil)
+    ((Cons n Nil) (show_name n))
+    ((Cons n r) (append (show_name n) (Cons 32 (names_spaced r))))))
 (fn decls_cite ((ds (List Declaration))) (List Name)
   (measure (struct ds))
   (match ds
@@ -2637,16 +2652,17 @@
          ((OpaqueDecl (ConstantVal _ _ ty) v _ _) (append (expr_consts ty) (expr_consts v)))
          (_ Nil))
        (decls_cite r)))))
-;; those of the names that are neither in the environment nor among `own`
-(fn all_unknown ((env CheckedEnv) (own (List Name)) (ns (List Name))) (List Name)
+;; those of the names that are neither in the environment nor among `own`, each once, in order
+(fn all_unknown ((env CheckedEnv) (own (List Name)) (ns (List Name)) (acc (List Name))) (List Name)
   (measure (struct ns))
   (match ns
-    (Nil Nil)
+    (Nil (rev acc))
     ((Cons n r)
-     (if (bool_or (env_has env n) (mem_name n own)) (all_unknown env own r)
-     (Cons n (all_unknown env own r))))))
-;; Lean's spellings the elaborator does not know, each refused with its pointer whatever the
-;; horizon (docs/LEAN.md "Refused, and what to write instead" lists the rows). The name is the
+     (if (bool_or (env_has env n) (bool_or (mem_name n own) (mem_name n acc)))
+       (all_unknown env own r acc)
+       (all_unknown env own r (Cons n acc))))))
+;; Lean's spellings the elaborator does not know, each refused with its pointer whatever
+;; the file sees (docs/LEAN.md "Refused, and what to write instead" lists the rows). The name is the
 ;; first token of the elaborator's `unknown_constant` message. A name ending in `!` reads a
 ;; default from an Inhabited instance — get!-style sugar: inhabited_default with the Option
 ;; form and the supplied-default form; `==`, `&&`, `||` are lexed as symbols and are no
@@ -2713,21 +2729,8 @@
   (if (int_list_eq t "ℤ") (Some "Int")
   (if (int_list_eq t "×") (Some "(Prod A B)")
   None)))))))))))))))))))
-(fn above_entry ((xs (List (Pair Name Int))) (m (List Int))) (Option (Pair Name Int))
-  (above_entry_go xs (msg_tokens m Nil Nil)))
-(fn above_entry_go ((xs (List (Pair Name Int))) (toks (List (List Int)))) (Option (Pair Name Int))
-  (measure (struct xs))
-  (match xs
-    (Nil None)
-    ((Cons (Pair n o) r)
-     (if (token_names (show_name n) toks) (Some (Pair n o)) (above_entry_go r toks)))))
-;; `sn` is one of the tokens, or ends in ".TOKEN"
-(fn token_names ((sn (List Int)) (toks (List (List Int)))) Bool
-  (measure (struct toks))
-  (match toks
-    (Nil False)
-    ((Cons t r) (if (bool_or (int_list_eq sn t) (ix_ends_dot sn t)) True (token_names sn r)))))
-;; the message's words: maximal runs without a space, a parenthesis or a colon
+;; the message's words: maximal runs without a space, a parenthesis, a colon, a comma, a
+;; semicolon or a quote
 (fn msg_tokens ((m (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
   (measure (struct m))
   (match m
@@ -2736,98 +2739,194 @@
         (Nil (rev acc))
         (_ (rev (Cons (rev cur) acc)))))
     ((Cons c r)
-     (if (bool_or (= c 32) (bool_or (= c 40) (bool_or (= c 41) (= c 58))))
+     (if (msg_separator c)
        (msg_tokens r Nil
          (match cur
            (Nil acc)
            (_ (Cons (rev cur) acc))))
        (msg_tokens r (Cons c cur) acc)))))
-;; `s` ends in ".m"
-(fn ix_ends_dot ((s (List Int)) (m (List Int))) Bool
-  (let ((k (- (len s) (len m))))
-    (if (< k 1) False
-    (bool_and
-      (=
-        (match (nth s (- k 1))
-          ((Some c) c)
-          (None 0))
-        46)
-      (int_list_eq (drop k s) m)))))
+(fn msg_separator ((c Int)) Bool
+  (bool_or (= c 32)
+    (bool_or (= c 40)
+      (bool_or (= c 41)
+        (bool_or (= c 58) (bool_or (= c 44) (bool_or (= c 59) (bool_or (= c 34) (= c 96)))))))))
 (fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) Load
   (ld_rec l (RLoadErr file reason detail)))
-;; `(import Init NAME)`: NAME's ordinal from the name table, the module's horizon the ordinal
-;; past it; a name the export does not declare is init_name_not_found
-(fn init_through ((l Load) (target Name) (w World)) (Pair (Pair Load (Option Int)) World)
-  (match (init_opened l w)
-    ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 "Init" e m) None) w1))
-    ((Pair (Pair l1 None) w1)
-     (match (Load.init l1)
-       ((InitSt x done base)
-        (match (od_lookup x target w1)
-          ((Pair (Pair x1 None) w2)
-           (Pair
-             (Pair
-               (init_err (ld_with_init l1 (InitSt x1 done base)) "Init" (quote init_name_not_found)
-                 (append (show_name target) " is not a declaration of the export"))
-               None)
-             w2))
-          ((Pair (Pair x1 (Some o)) w2)
-           (Pair (Pair (ld_with_init l1 (InitSt x1 done base)) (Some (+ o 1))) w2))))
-       (_ (Pair (Pair l1 None) w1))))))
-;; a file prepared after its directives: the names of Init under
-;; its identity, which none of its declarations may take; then, where it sees Init, its
-;; demand loaded — every token of its forms under the candidates resolution tries
-;; (scope_candidates), the gates' kits, an inductive block's names with their satellites —
-;; the names the table places below its horizon, their closure through K. None: the file
-;; fails here, its record says why
+;; a file prepared after its leading directives: the names of Init under its identity,
+;; which none of its declarations may take; then, where it sees Init, its demand fetched.
+;; From here the file's first declaration is reached (begun). None: the file fails here,
+;; its record says why
 (fn init_prepare ((l Load) (f Fx) (forms (List SExpr)) (w World))
   (Pair (Pair Load (Option Fx)) World)
   (match (Load.init l)
-    (InitNone (Pair (Pair l (Some (with Fx f (fetched (Pair -1 Nil))))) w))
+    (InitNone (Pair (Pair l (Some (with Fx f (begun True)))) w))
     (_
       (match (init_opened l w)
         ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 (fx_file f) e m) None) w1))
         ((Pair (Pair l1 None) w1)
          (match (init_taken l1 f w1)
            ((Pair f2 w2)
-            (if (< (Fx.init f2) 0) (Pair (Pair l1 (Some (with Fx f2 (fetched (Pair -1 Nil))))) w2)
-            (init_demand l1 f2 forms w2)))))))))
+            (if (bool_not (Fx.init f2)) (Pair (Pair l1 (Some (with Fx f2 (begun True)))) w2)
+            (match (init_demand l1 f2 forms w2)
+              ((Pair (Pair l2 True) w3) (Pair (Pair l2 (Some (with Fx f2 (begun True)))) w3))
+              ((Pair (Pair l2 False) w3) (Pair (Pair l2 None) w3)))))))))))
 (fn init_taken ((l Load) (f Fx) (w World)) (Pair Fx World)
   (match (Load.init l)
     ((InitSt x _ _)
      (match (od_names_under x (append (show_name (Fx.ident f)) ".") w)
        ((Pair ns w1) (Pair (with Fx f (taken ns)) w1))))
     (_ (Pair f w))))
-(fn init_demand ((l Load) (f Fx) (forms (List SExpr)) (w World))
-  (Pair (Pair Load (Option Fx)) World)
+;; the demand of a file that sees Init, for these forms: every token of the forms and of the
+;; sidecar's blocks under the candidates resolution tries — under the prefixes the file has
+;; opened and each one a `use` among the forms opens further down, so that no candidate of
+;; a later citation is left to what another file fetched —, and the kits. False: the load
+;; failed, its error recorded
+(fn init_demand ((l Load) (f Fx) (forms (List SExpr)) (w World)) (Pair (Pair Load Bool) World)
   (match (Load.init l)
     ((InitSt x done base)
-     (let ((horizon (Fx.init f)))
-       (match (init_empty x (init_prefixes f) Nil w)
+     (let ((sc (fx_scope l (with Fx f (opened (append (Fx.opened f) (later_opens forms)))))))
+       (match (init_empty x (init_prefixes sc) Nil w)
          ((Pair (Pair xe empty) we)
           (match
-            (init_resolve xe
+            (init_fetch (ld_with_init l (InitSt xe done base))
               (append
-                (init_candidates (fx_scope l f) (tok_names (form_tokens forms (Toks IMEmpty Nil)))
+                (init_candidates sc
+                  (tok_names (autos_tokens (Fx.autos f) (form_tokens forms (Toks IMEmpty Nil))))
                   empty
                   Nil)
                 (init_kit))
-              horizon
-              Nil
-              Nil
-              Nil
               we)
-            ((Pair (Pair x1 (Pair (Pair ords inds) above)) w1)
-             (match (init_resolve x1 (init_satellites inds Nil) horizon ords Nil above w1)
-               ((Pair (Pair x2 (Pair (Pair ords2 _) above2)) w2)
-                (match (init_load (ld_with_init l (InitSt x2 done base)) ords2 w2)
-                  ((Pair (Pair l1 (Some n)) w3)
-                   (Pair
-                     (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n))
-                       (Some (with Fx f (above above2) (fetched (Pair horizon (horizon_source f))))))
-                     w3))
-                  ((Pair (Pair l1 None) w3) (Pair (Pair l1 None) w3)))))))))))
-    (_ (Pair (Pair l (Some f)) w))))
+            ((Pair (Pair l1 (Some _)) w1) (Pair (Pair l1 True) w1))
+            ((Pair (Pair l1 None) w1) (Pair (Pair l1 False) w1)))))))
+    (_ (Pair (Pair l True) w))))
+;; the prefixes the `use` forms among these open
+(fn later_opens ((forms (List SExpr))) (List Open)
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons s r)
+     (match (form_of s)
+       ((FUse p ms) (Cons (if (= (len ms) 0) (OpenAll p) (OpenSome p ms)) (later_opens r)))
+       (_ (later_opens r))))))
+;; the tokens of a sidecar's blocks: a block cites lemmas the source does not spell
+(fn autos_tokens ((xs (List Auto)) (t Toks)) Toks
+  (measure (struct xs))
+  (match xs
+    (Nil t)
+    ((Cons (Auto _ _ steps) r) (autos_tokens r (sexprs_tokens steps t)))))
+;; those of the names the export declares, the satellites of the inductives among them, and
+;; their closure admitted into the load's environment: the records admitted — 0 when the
+;; environment held them all. None: the load failed, its error recorded
+(fn init_fetch ((l Load) (ns (List Name)) (w World)) (Pair (Pair Load (Option Int)) World)
+  (match (Load.init l)
+    ((InitSt x done base)
+     (match (init_resolve x ns Nil Nil w)
+       ((Pair (Pair x1 (Pair ords inds)) w1)
+        (match (init_resolve x1 (init_satellites inds Nil) ords Nil w1)
+          ((Pair (Pair x2 (Pair ords2 _)) w2)
+           (init_load (ld_with_init l (InitSt x2 done base)) ords2 w2))))))
+    (_ (Pair (Pair l (Some 0)) w))))
+
+;; ---- a name the environment was asked for and did not hold -----------------------------------
+;; One declaration has been read from the load `l0` into `l1`, and the words of its refusals
+;; that may name a constant are at hand (Load.missed, ld_miss). In a file that sees Init,
+;; every one of them that names — under the candidates resolution tries — a declaration of
+;; the export the environment lacks is fetched with its closure into `l0`, and the caller reads the
+;; declaration again from there (True): so a constant a proof step, the definer, a derivation
+;; or K asked for by a name it built is there on the second reading, and a file's record
+;; never says that Init's constant is unknown. When nothing was fetched the reading stands
+;; (False). In a file that sees no Init nothing is fetched, and a refusal of a citation that
+;; names a declaration of Init says what to write (unseen_reworded). The words `l0`
+;; carried stay with the result: an enclosing reading settles them
+(fn settle_missed ((l0 Load) (l1 Load) (f Fx) (fuel Int) (w World)) (Pair (Pair Load Bool) World)
+  (let ((stands (with Load l1 (missed (Load.missed l0)))))
+    (match (Load.missed l1)
+      (Nil (Pair (Pair stands False) w))
+      (ms
+        (match (Load.init l0)
+          ((InitSt _ _ _)
+           (if (bool_not (Fx.init f)) (unseen_reworded l0 stands f w)
+           (if (< fuel 1) (Pair (Pair stands False) w)
+           (match (init_fetch l0 (words_names (seeing_scope l1 f) ms) w)
+             ((Pair (Pair l2 None) w1)
+              (Pair (Pair (with Load l2 (missed (Load.missed l0))) False) w1))  ; the fetch failed: its load error stands in the reading's place and ends the file
+             ((Pair (Pair l2 (Some n)) w1)
+              (if (< 0 n) (Pair (Pair l2 True) w1)
+              (Pair (Pair (ld_with_init stands (Load.init l2)) False) w1)))))))
+          (_ (Pair (Pair stands False) w)))))))
+;; the file's scope as one that sees Init has it: `Init.NAME` is NAME there
+(fn seeing_scope ((l Load) (f Fx)) Scope (fx_scope l (with Fx f (init True))))
+;; the names the words can stand for: each under the candidates resolution tries
+(fn words_names ((sc Scope) (ws (List (List Int)))) (List Name)
+  (measure (struct ws))
+  (match ws
+    (Nil Nil)
+    ((Cons t r)
+     (match (name_of_sym (sym_of_chars t))
+       ((Some n) (append (scope_candidates sc (init_strip_at n)) (words_names sc r)))
+       (None (words_names sc r))))))
+;; a file that sees no Init: among the records the reading added, a refusal of a citation
+;; whose message names a declaration of the export is recorded `init_not_imported` with the
+;; import to write. The toolchain's own sources import no Init by rule and keep their
+;; refusals as read
+(fn unseen_reworded ((l0 Load) (l1 Load) (f Fx) (w World)) (Pair (Pair Load Bool) World)
+  (if (toolchain_scope (fx_scope l1 f)) (Pair (Pair l1 False) w)
+  (let ((k (- (len (Load.recs l1)) (len (Load.recs l0)))))
+    (if (< k 1) (Pair (Pair l1 False) w)
+    (match (Load.init l1)
+      ((InitSt x done base)
+       (match (reword_recs x (seeing_scope l1 f) f (take k (Load.recs l1)) Nil w)
+         ((Pair (Pair x1 rs) w1)
+          (Pair
+            (Pair
+              (ld_with_init (ld_with_recs_raw l1 (append rs (drop k (Load.recs l1))))
+                (InitSt x1 done base))
+              False)
+            w1))))
+      (_ (Pair (Pair l1 False) w)))))))
+(fn reword_recs ((x OdIx) (sc Scope) (f Fx) (rs (List Rec)) (acc (List Rec)) (w World))
+  (Pair (Pair OdIx (List Rec)) World)
+  (measure (struct rs))
+  (match rs
+    (Nil (Pair (Pair x (rev acc)) w))
+    ((Cons r rest)
+     (match (citation_refused r)
+       (None (reword_recs x sc f rest (Cons r acc) w))
+       ((Some m)
+        (match (first_declared x (words_names sc (msg_tokens m Nil Nil)) w)
+          ((Pair (Pair x1 None) w1) (reword_recs x1 sc f rest (Cons r acc) w1))
+          ((Pair (Pair x1 (Some n)) w1) (reword_recs x1 sc f rest (Cons (unseen_rec f r n) acc) w1))))))))
+(fn citation_refused ((r Rec)) (Option (List Int))
+  (match r
+    ((RReadErr _ e m) (if (citation_reason e) (Some m) None))
+    ((RClassify _ e m) (if (citation_reason e) (Some m) None))
+    (_ None)))
+;; the refusals that say a name written in the source names nothing: the elaborator's
+;; `unknown_constant` (K's is the same word), the classifier's `unknown_type`, `unknown_head`
+;; and `unbound_name`
+(fn citation_reason ((e Symbol)) Bool
+  (bool_or (sym_eq e (quote unknown_constant))
+    (bool_or (sym_eq e (quote unknown_type))
+      (bool_or (sym_eq e (quote unknown_head)) (sym_eq e (quote unbound_name))))))
+(fn first_declared ((x OdIx) (ns (List Name)) (w World)) (Pair (Pair OdIx (Option Name)) World)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (Pair x None) w))
+    ((Cons n r)
+     (match (od_lookup x n w)
+       ((Pair (Pair x1 (Some _)) w1) (Pair (Pair x1 (Some n)) w1))
+       ((Pair (Pair x1 None) w1) (first_declared x1 r w1))))))
+(fn unseen_rec ((f Fx) (r Rec) (n Name)) Rec
+  (let
+    ((m
+       (append (show_name n)
+         (if (Fx.impl f)
+           " is a declaration of Init, and this implementation's view does not import Init: write (import Init) into its view (mod.req.shard)"
+           " is a declaration of Init, and this file does not import Init: write (import Init) before the file's first declaration"))))
+    (match r
+      ((RReadErr file _ _) (RReadErr file (quote init_not_imported) m))
+      ((RClassify k _ _) (RClassify k (quote init_not_imported) m))
+      (_ r))))
 ;; every candidate of every token (its `@` sigil of an explicit application dropped), except
 ;; those under a prefix the export declares nothing under (the file's own identity, an
 ;; opened native module): resolution's candidates, pruned
@@ -2856,7 +2955,8 @@
     (Nil False)
     ((Cons p r) (if (ix_starts s p) True (init_under_any s r)))))
 ;; the prefixes resolution puts above a token here: the file's identity, the opened ones
-(fn init_prefixes ((f Fx)) (List Name) (Cons (Fx.ident f) (init_open_prefixes (Fx.opened f))))
+(fn init_prefixes ((sc Scope)) (List Name)
+  (Cons (sc_module sc) (init_open_prefixes (sc_opened sc))))
 (fn init_open_prefixes ((os (List Open))) (List Name)
   (measure (struct os))
   (match os
@@ -2873,29 +2973,20 @@
      (match (od_has_under x p w)
        ((Pair (Pair x1 True) w1) (init_empty x1 r acc w1))
        ((Pair (Pair x1 False) w1) (init_empty x1 r (Cons (append (show_name p) ".") acc) w1))))))
-;; the ordinals the table places below the horizon, the names among them of inductive
-;; blocks (kind i), and the names it places at or above the horizon with their ordinals
-;; (a citation of one is refused above_horizon, the import to write named)
-(fn init_resolve
-  ((x OdIx)
-   (ns (List Name))
-   (horizon Int)
-   (acc (List Int))
-   (inds (List Name))
-   (above (List (Pair Name Int)))
-   (w World))
-  (Pair (Pair OdIx (Pair (Pair (List Int) (List Name)) (List (Pair Name Int)))) World)
+;; the ordinals of the names the export declares, and those names among them whose record
+;; is an inductive block (kind i)
+(fn init_resolve ((x OdIx) (ns (List Name)) (acc (List Int)) (inds (List Name)) (w World))
+  (Pair (Pair OdIx (Pair (List Int) (List Name))) World)
   (measure (struct ns))
   (match ns
-    (Nil (Pair (Pair x (Pair (Pair acc inds) above)) w))
+    (Nil (Pair (Pair x (Pair acc inds)) w))
     ((Cons n r)
      (match (od_lookup x n w)
-       ((Pair (Pair x1 None) w1) (init_resolve x1 r horizon acc inds above w1))
+       ((Pair (Pair x1 None) w1) (init_resolve x1 r acc inds w1))
        ((Pair (Pair x1 (Some o)) w1)
-        (if (<= horizon o) (init_resolve x1 r horizon acc inds (Cons (Pair n o) above) w1)
         (match (od_kind_of x1 o w1)
           ((Pair (Pair x2 k) w2)
-           (init_resolve x2 r horizon (Cons o acc) (if (= k 105) (Cons n inds) inds) above w2)))))))))
+           (init_resolve x2 r (Cons o acc) (if (= k 105) (Cons n inds) inds) w2))))))))
 ;; what the elaborator, the tactics and the definer construct from an inductive name: its
 ;; case analysis, no-confusion, below, brecOn, a constructor's injectivity
 (fn init_satellites ((ns (List Name)) (acc (List Name))) (List Name)
@@ -2910,8 +3001,9 @@
            (name_append n (n1 (quote inj))))
          acc)))))
 ;; the names the gates construct: K's own and the pins, the elaborator's,
-;; the tactics', arith's, the derivations', the definer's — demanded wherever a module sees
-;; Init, loaded where the table places them below its horizon
+;; the tactics', arith's, the derivations', the definer's, the spelling tables' — fetched
+;; for every module that sees Init, so that a gate's question "is this constant there" has
+;; one answer in such a module (yes) and one in a module that sees none (it is not asked)
 (fn init_kit () (List Name)
   (append (k_kit)
     (append (el_kit)
@@ -2955,9 +3047,10 @@
         (let ((l1 (ld_add_inits (ld_with_env l (run_env run1) (Load.memo l)) cs)))
           (Pair
             (Pair
-              (ld_with_init l1
-                (InitSt x1 done1
-                  (if (ld_undeclared l) (InitBase (Load.env l1) done1 (Load.inits l1)) base)))
+              (if (ld_undeclared l)
+                (ld_with_init l1 (InitSt x1 done1 (InitBase (Load.env l1) done1 (Load.inits l1))))
+                (with Load (ld_with_init l1 (InitSt x1 done1 base))
+                  (beyond (ordinals_onto cs (Load.beyond l1)))))
               (Some n))
             w1)))))
     (_ (Pair (Pair l (Some 0)) w))))
@@ -3049,17 +3142,15 @@
                             (pre_register_file l0a
                               (make Fx (module mp) (ident ip) (parts rel) (opened Nil)
                                 (vis (list mp))
-                                (init -1)
+                                (init False)
                                 (trusts Nil)
                                 (hash (hash_name mp))
                                 (view view)
                                 (autos autos)
-                                (initname Anon)
-                                (initvia Nil)
-                                (fetched (Pair -2 Nil))
+                                (begun False)
+                                (impl False)
                                 (taken Nil)
                                 (ecount 0)
-                                (above Nil)
                                 (bins Nil))
                               rest)
                             ((Pair None l0) (Pair (Pair (ld_add_failed l0 mp rel) None) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed
@@ -3476,7 +3567,7 @@
   (match rs
     (Nil (Pair (Pair (rev names) met) (rev errs)))
     ((Cons r rest)
-     (match (bin_theorem (Load.env l) (scope_candidates sc r))
+     (match (bin_theorem (Load.env l) sc (scope_candidates sc r))
        ((Some c) (bin_requires l sc rest (Cons c names) (+ met 1) errs))
        (None
          (match (bin_pending (Load.pending l) (scope_candidates sc r))
@@ -3489,17 +3580,20 @@
                  (Pair (quote unknown_requirement)
                    (append (show_name r) ": no theorem of that name in scope"))
                  errs)))))))))
-(fn bin_theorem ((env CheckedEnv) (cs (List Name))) (Option Name)
+;; a candidate counts where the file can cite it (`visible`): a theorem of Init only where
+;; the file sees Init, whatever the environment holds
+(fn bin_theorem ((env CheckedEnv) (sc Scope) (cs (List Name))) (Option Name)
   (measure (struct cs))
   (match cs
     (Nil None)
     ((Cons c r)
+     (if (bool_not (visible sc c)) (bin_theorem env sc r)
      (match (env_find env c)
        ((Some (ThmInfo _ _ _)) (Some c))
        (_
          (match (env_find env (Str c (quote proof)))
            ((Some (ThmInfo _ _ _)) (Some c))
-           (_ (bin_theorem env r))))))))
+           (_ (bin_theorem env sc r)))))))))
 (fn bin_pending ((pending (List Name)) (cs (List Name))) (Option Name)
   (measure (struct cs))
   (match cs
@@ -3523,20 +3617,20 @@
   (match ts
     (Nil (Pair acc (rev errs)))
     ((Cons t r)
-     (match (bin_axiom env (scope_candidates sc t))
+     (match (bin_axiom env sc (scope_candidates sc t))
        ((Some a) (bin_axioms env sc r (Cons a acc) errs))
        (None
          (bin_axioms env sc r acc
            (Cons (Pair (quote unknown_trust) (append (show_name t) " is not an axiom in scope"))
              errs)))))))
-(fn bin_axiom ((env CheckedEnv) (cs (List Name))) (Option Name)
+(fn bin_axiom ((env CheckedEnv) (sc Scope) (cs (List Name))) (Option Name)
   (measure (struct cs))
   (match cs
     (Nil None)
     ((Cons c r)
-     (match (env_find env c)
+     (match (if (visible sc c) (env_find env c) None)
        ((Some (AxiomInfo _ _)) (Some c))
-       (_ (bin_axiom env r))))))
+       (_ (bin_axiom env sc r))))))
 (fn bin_rests ((l Load) (sc Scope) (ts (List Name)) (ds (List Name)))
   (List (Pair Symbol (List Int)))
   (measure (struct ds))
@@ -3600,11 +3694,12 @@
     (Nil l)
     (ps (ld_rec l (RUnused (Fx.module f) ps)))))
 (fn unused_uses ((l Load) (f Fx) (dirs (List SExpr)) (forms (List SExpr))) (List Name)
-  (let ((toks (tok_names (form_tokens forms (Toks IMEmpty Nil)))))
+  (let ((toks (tok_names (form_tokens forms (Toks IMEmpty Nil)))) (sc (fx_scope l f)))
     (let
       ((needed
-         (needed_k (Load.tbl l) (tok_buckets toks IMEmpty) (needed_e (Load.etab l) toks IMEmpty))))
-      (unused_go l (Fx.ident f) (uses_of dirs) toks needed Nil))))
+         (needed_k sc (Load.tbl l) (tok_buckets toks IMEmpty)
+           (needed_e sc (Load.etab l) toks IMEmpty))))
+      (unused_go l sc (Fx.ident f) (uses_of dirs) toks needed Nil))))
 (fn uses_of ((dirs (List SExpr))) (List Name)
   (measure (struct dirs))
   (match dirs
@@ -3614,66 +3709,83 @@
        ((FUse p Nil) (Cons p (uses_of r)))
        (_ (uses_of r))))))
 (fn unused_go
-  ((l Load) (m Name) (ps (List Name)) (toks (List Name)) (needed (IntMap Bool)) (acc (List Name)))
+  ((l Load)
+   (sc Scope)
+   (m Name)
+   (ps (List Name))
+   (toks (List Name))
+   (needed (IntMap Bool))
+   (acc (List Name)))
   (List Name)
   (measure (struct ps))
   (match ps
     (Nil (rev acc))
     ((Cons p r)
-     (unused_go l m r toks needed
+     (unused_go l sc m r toks needed
        (if (name_eq p m) (Cons p acc)
        (if (im_has needed (name_key p)) acc
-       (if (use_needed l p toks) acc
+       (if (use_needed l sc p toks) acc
        (Cons p acc))))))))
-;; the fallback: some token names a declaration of K under P
-(fn use_needed ((l Load) (p Name) (toks (List Name))) Bool
+;; the fallback: some token names, under P, a declaration of K the file can cite — one of
+;; Init's only where the file sees Init, whatever the environment holds
+(fn use_needed ((l Load) (sc Scope) (p Name) (toks (List Name))) Bool
   (measure (struct toks))
   (match toks
     (Nil False)
-    ((Cons t r) (if (env_has (Load.env l) (name_append p t)) True (use_needed l p r)))))
+    ((Cons t r)
+     (if (bool_and (env_has (Load.env l) (name_append p t)) (visible sc (name_append p t))) True
+     (use_needed l sc p r)))))
 ;; E: every hit of a token by suffix marks the prefix above the token in its identity, and the
 ;; module that registered the entry — a realization of Init's `List.append` is `std.list`'s, and
-;; a program that runs it needs that module open
-(fn needed_e ((es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
+;; a program that runs it needs that module open. An entry counts where the file sees the
+;; module that registered it (Init's inductives: where the file sees Init), whatever another
+;; root of the load put in the table
+(fn needed_e ((sc Scope) (es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct toks))
   (match toks
     (Nil needed)
-    ((Cons t r) (needed_e es r (mark_hits (es_hits es t) t needed)))))
-(fn mark_hits ((hs (List EEnt)) (t Name) (needed (IntMap Bool))) (IntMap Bool)
+    ((Cons t r) (needed_e sc es r (mark_hits sc (es_hits es t) t needed)))))
+(fn mark_hits ((sc Scope) (hs (List EEnt)) (t Name) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct hs))
   (match hs
     (Nil needed)
     ((Cons (EEnt _ id m _) r)
-     (mark_hits r t (im_insert (mark_above id t needed) (name_key m) True)))))
+     (mark_hits sc r t
+       (if (mod_visible sc m) (im_insert (mark_above id t needed) (name_key m) True) needed)))))
 (fn mark_above ((id Name) (t Name) (needed (IntMap Bool))) (IntMap Bool)
   (match (name_above id t)
     ((Some pre) (im_insert needed (name_key pre) True))
     (None needed)))
-;; K: every native declaration against the tokens sharing its last component
+;; K: every native declaration of a module the file sees against the tokens sharing its last
+;; component
 (fn needed_k
-  ((tbl (IntMap (List (Pair Name Name)))) (buckets (IntMap (List Name))) (needed (IntMap Bool)))
+  ((sc Scope)
+   (tbl (IntMap (List (Pair Name Name))))
+   (buckets (IntMap (List Name)))
+   (needed (IntMap Bool)))
   (IntMap Bool)
   (measure (struct tbl))
   (match tbl
     (IMEmpty needed)
-    ((IMLeaf _ ds) (mark_decls ds buckets needed))
+    ((IMLeaf _ ds) (mark_decls sc ds buckets needed))
     ((IMNode v c0 c1 c2 c3)
-     (needed_k c3 buckets
-       (needed_k c2 buckets
-         (needed_k c1 buckets
-           (needed_k c0 buckets
+     (needed_k sc c3 buckets
+       (needed_k sc c2 buckets
+         (needed_k sc c1 buckets
+           (needed_k sc c0 buckets
              (match v
-               ((Some ds) (mark_decls ds buckets needed))
+               ((Some ds) (mark_decls sc ds buckets needed))
                (None needed)))))))))
-(fn mark_decls ((ds (List (Pair Name Name))) (buckets (IntMap (List Name))) (needed (IntMap Bool)))
+(fn mark_decls
+  ((sc Scope) (ds (List (Pair Name Name))) (buckets (IntMap (List Name))) (needed (IntMap Bool)))
   (IntMap Bool)
   (measure (struct ds))
   (match ds
     (Nil needed)
-    ((Cons (Pair id _) r)
-     (mark_decls r buckets
+    ((Cons (Pair id m) r)
+     (mark_decls sc r buckets
        (match (im_find buckets (last_key id))
-         ((Some ts) (mark_tokens id ts needed))
+         ((Some ts) (if (mod_visible sc m) (mark_tokens id ts needed) needed))
          (None needed))))))
 (fn mark_tokens ((id Name) (ts (List Name)) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct ts))
@@ -3805,18 +3917,27 @@
                         (match (pre_register_file lfs (fx_as_impl f ifile autos) iforms)
                           ((Pair None lf0) (Pair (merge_impl_recs l1 (ld_recs lf0)) w2s))
                           ((Pair (Some f0) lf0)
-                           (match
-                             (impl_replay lf0
-                               (make Im (view rest) (impl iforms) (done Nil) (fx f0) (file ifile)
-                                 (vparts (Fx.parts f))
-                                 (all rest))
-                               (import_depth)
-                               w2s)
-                             ((Pair (Pair lf2 im) w3)
-                              (Pair
-                                (ld_with_e (merge_impl_recs l1 (ld_recs lf2))
-                                  (es_merge (Load.etab l1) (Load.etab lf2)))
-                                w3))))))))))))))))))))
+                           (match (impl_demand lf0 f0 iforms w2s)
+                             ((Pair (Pair lf1 False) w2d)
+                              (Pair (merge_impl_recs l1 (ld_recs lf1)) w2d))
+                             ((Pair (Pair lf1 True) w2d)
+                              (match
+                                (impl_replay lf1
+                                  (make Im (view rest) (impl iforms) (done Nil) (fx f0) (file ifile)
+                                    (vparts (Fx.parts f))
+                                    (all rest))
+                                  (import_depth)
+                                  w2d)
+                                ((Pair (Pair lf2 im) w3)
+                                 (Pair
+                                   (ld_with_e (merge_impl_recs l1 (ld_recs lf2))
+                                     (es_merge (Load.etab l1) (Load.etab lf2)))
+                                   w3))))))))))))))))))))))
+;; the implementation's own demand of Init, fetched into the fork before its first form: the
+;; fork starts from what was fetched for the view's forms, and the implementation cites
+;; names its view does not. An implementation sees Init exactly when its view does
+(fn impl_demand ((l Load) (f Fx) (iforms (List SExpr)) (w World)) (Pair (Pair Load Bool) World)
+  (if (Fx.init f) (init_demand l f iforms w) (Pair (Pair l True) w)))
 ;; the fork's records under IMPL; DISCHARGE and IMPL-ERROR as themselves
 (fn merge_impl_recs ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
@@ -3859,12 +3980,30 @@
      (let ((im1 (im_with_view im r)))
        (match (form_of s)
          (FDecl
-           (match (replay_decl l im1 s fuel w)
+           (match (replay_decl_fetching (ld_settled l) im1 s fuel (refetches) w)
              ((Pair (Pair l2 im2) w2) (impl_replay l2 im2 (- fuel 1) w2))))
          (_
            (match (load_forms l (im_fx_view im1) (list s) fuel w)
              ((Pair (Pair l2 (Some f2)) w2) (impl_replay l2 (im_with_fx im1 f2) (- fuel 1) w2))
              ((Pair (Pair l2 None) w2) (Pair (Pair l2 im1) w2))))))))))
+;; a view form replayed, or an implementation form read, and read again with what it asked
+;; of Init fetched into the fork (settle_missed)
+(fn replay_decl_fetching ((l Load) (im Im) (s SExpr) (fuel Int) (rf Int) (w World))
+  (Pair (Pair Load Im) World)
+  (measure rf)
+  (match (replay_decl l im s fuel w)
+    ((Pair (Pair l1 im1) w1)
+     (match (settle_missed l l1 (im_fx_view im) rf w1)
+       ((Pair (Pair l2 True) w2) (replay_decl_fetching l2 im s fuel (- rf 1) w2))
+       ((Pair (Pair l2 False) w2) (Pair (Pair l2 im1) w2))))))
+(fn impl_form_fetching ((l Load) (im Im) (s SExpr) (fuel Int) (rf Int) (w World))
+  (Pair (Pair Load Im) World)
+  (measure rf)
+  (match (impl_form l im s fuel w)
+    ((Pair (Pair l1 im1) w1)
+     (match (settle_missed l l1 (im_fx_impl im) rf w1)
+       ((Pair (Pair l2 True) w2) (impl_form_fetching l2 im s fuel (- rf 1) w2))
+       ((Pair (Pair l2 False) w2) (Pair (Pair l2 im1) w2))))))
 ;; one view form in the fork: a parameter is discharged by the implementation's form
 (fn replay_decl ((l Load) (im Im) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Im) World)
   (let ((sc (fx_scope l (Im.fx im))) (h (form_head s)))
@@ -3940,7 +4079,7 @@
   (match (Im.impl im)
     (Nil (Pair (Pair l im) w))
     ((Cons s r)
-     (match (impl_form l (im_with_impl im r) s fuel w)
+     (match (impl_form_fetching l (im_with_impl im r) s fuel (refetches) w)
        ((Pair (Pair l1 im1) w1)
         (if (im_marked im1 k n) (Pair (Pair l1 im1) w1)
         (match (ld_recs_head l1)
@@ -3958,7 +4097,7 @@
   (match (Im.impl im)
     (Nil (Pair (Pair l im) w))
     ((Cons s r)
-     (match (impl_form l (im_with_impl im r) s fuel w)
+     (match (impl_form_fetching (ld_settled l) (im_with_impl im r) s fuel (refetches) w)
        ((Pair (Pair l1 im1) w1)
         (match (ld_recs_head l1)
           ((Some (RReadErr _ _ _)) (Pair (Pair l1 im1) w1))
@@ -4120,7 +4259,7 @@
         (read_fulfills sc (Load.env l) rargs proof (producers_of l (im_fx_impl im)) (Load.mode l)))
       ((Pair l rd)
        (match rd
-         ((RDErr e m) (Pair (ld_rec l (horizon_refusal (im_fx_impl im) e m)) im))
+         ((RDErr e m) (Pair (ld_rec l (read_refusal (im_fx_impl im) e m)) im))
          ((RDPending nn r)
           (Pair
             (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending)))
@@ -4128,8 +4267,7 @@
          ((RDOk ds)
           (match (admit_under l (im_fx_impl im) ds)
             ((AdRefused subj reason)
-             (Pair (ld_rec l (refusal_rec l (im_fx_impl im) ds subj reason))
-               (im_mark im (quote requirement) n)))
+             (Pair (ld_rec l (refusal_rec l ds subj reason)) (im_mark im (quote requirement) n)))
             ((AdOk env1)
              (match (policy_pass l (im_fx_impl im) env1 (Load.memo l) ds Nil)
                ((PolBound _)
@@ -4154,35 +4292,56 @@
   (Pair (Pair Load (Option Fx)) World)
   (measure fuel)
   (match forms
-    (Nil (Pair (Pair (flush_parked l f) (Some f)) w))  ; the fns parked on a forward reference that never came
+    (Nil
+      (match (flush_fetching (ld_settled l) f (refetches) w)  ; the fns parked on a forward reference that never came
+        ((Pair l1 w1) (Pair (Pair l1 (Some f)) w1))))
     ((Cons s r)
      (match (form_of s)
        ((FBad e m) (Pair (Pair (ld_rec l (RLoadErr (fx_file f) e m)) None) w))
        ((FUse p ms)
         (load_forms l (fx_open f (if (= (len ms) 0) (OpenAll p) (OpenSome p ms))) r fuel w))
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
-       ((FImportInit n)
-        (match (init_through l n w)
-          ((Pair (Pair l1 (Some h)) w1)
-           (if (late_raise f h)
+       (FImportInit
+         (if (Fx.init f) (load_forms l f r fuel w)  ; the file sees Init already: nothing changes, wherever the line stands
+         (if (late_init f True)
+           (Pair
              (Pair
-               (Pair
-                 (ld_rec l1 (RLoadErr (fx_file f) (quote late_init_import) (late_import_msg f n h)))
-                 None)
-               w1)
-             (load_forms l1 (fx_see_init f n h) r fuel w1)))
-          ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
+               (ld_rec l
+                 (RLoadErr (fx_file f) (quote late_init_import)
+                   (late_init_msg f "(import Init)" " lets the file see Init")))
+               None)
+             w)
+           (match (init_opened l w)
+             ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 "Init" e m) None) w1))
+             ((Pair (Pair l1 None) w1) (load_forms l1 (fx_see f Nil True) r fuel w1))))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)
           ((Pair (Pair l1 (Some f1)) w1) (load_forms l1 f1 r fuel w1))
           ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
        (FDecl
-         (match (load_decl l f s)
-           ((Pair l1 f1)
+         (match (load_decl_fetching (ld_settled l) f s (refetches) w)
+           ((Pair (Pair l1 f1) w1)
             (match (ld_recs_head l1)
-              ((Some (RReadErr _ _ _)) (Pair (Pair l1 None) w))
-              ((Some (RLoadErr _ _ _)) (Pair (Pair l1 None) w))
-              (_ (load_forms l1 f1 r fuel w))))))))))
+              ((Some (RReadErr _ _ _)) (Pair (Pair l1 None) w1))
+              ((Some (RLoadErr _ _ _)) (Pair (Pair l1 None) w1))
+              (_ (load_forms l1 f1 r fuel w1))))))))))
+;; the readings of one declaration: the first, and one more for each round of names it asked
+;; of Init that were fetched for it (settle_missed) — a round fetches every name the reading's
+;; refusals name, so a declaration settles in two or three
+(fn refetches () Int 8)
+(fn load_decl_fetching ((l Load) (f Fx) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Fx) World)
+  (measure fuel)
+  (match (load_decl l f s)
+    ((Pair l1 f1)
+     (match (settle_missed l l1 f fuel w)
+       ((Pair (Pair l2 True) w1) (load_decl_fetching l2 f s (- fuel 1) w1))
+       ((Pair (Pair l2 False) w1) (Pair (Pair l2 f1) w1))))))
+;; the same for what a file's end settles (flush_parked reads the parked fns again)
+(fn flush_fetching ((l Load) (f Fx) (fuel Int) (w World)) (Pair Load World)
+  (measure fuel)
+  (match (settle_missed l (flush_parked l f) f fuel w)
+    ((Pair (Pair l2 True) w1) (flush_fetching l2 f (- fuel 1) w1))
+    ((Pair (Pair l2 False) w1) (Pair l2 w1))))
 (fn ld_recs_head ((l Load)) (Option Rec)
   (match (Load.recs l)
     (Nil None)
@@ -4284,7 +4443,16 @@
         (match (ld_find_mod (Load.mods l1) mp)
           ((Some m)
            (if (Mod.ok m)
-             (Pair (Pair l1 (Some (fx_see f (Mod.closure m) (Mod.init m) (join_path rel)))) w1)
+             (if (late_init f (Mod.init m))
+               (Pair
+                 (Pair
+                   (ld_rec l1
+                     (RLoadErr (fx_file f) (quote late_init_import)
+                       (late_init_msg f (append "the import of " (join_path rel))
+                         " brings Init with it (the imported module sees Init)")))
+                   None)
+                 w1)
+               (Pair (Pair l1 (Some (fx_see f (Mod.closure m) (Mod.init m)))) w1))
              (Pair
                (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None)
                w1)))
@@ -4322,15 +4490,7 @@
          (append " file="
            (append file (append " hash=" (append (show_nat h) (append " sees=" (show_names_c cl)))))))))
     ((RUnused m ps) (append "UNUSED " (append (show_name m) (append " use=" (show_names_c ps)))))
-    ((RInit n h k)
-     (append "INIT "
-       (append
-         (match n
-           (Anon "-")
-           (_ (show_name n)))
-         (append ": horizon "
-           (append (show_nat h) (append ", " (append (show_nat k) " declarations admitted")))))))
-    ((RAccept n m h axs pfx ps q)
+    ((RAccept n m h axs ps q)
      (append "ACCEPT "
        (append (show_name n)
          (append " module="
@@ -4339,13 +4499,11 @@
                (append (show_nat h)
                  (append " axioms="
                    (append (show_names_c axs)
-                     (append " init="
-                       (append (if (< pfx 0) "-" (show_nat pfx))
-                         (append " params="
-                           (append (show_names_c ps)
-                             (match q
-                               ((Some k) (append " req=" (req_show k)))
-                               (None Nil)))))))))))))))
+                     (append " params="
+                       (append (show_names_c ps)
+                         (match q
+                           ((Some k) (append " req=" (req_show k)))
+                           (None Nil)))))))))))))
     ((RParam n k a)
      (append "PARAM "
        (append (show_name n)
@@ -4480,7 +4638,7 @@
     ((Cons a (Cons b (Cons u (Cons c (Cons d (Cons e (Cons f (Cons g Nil))))))))
      (match x
        ((RModule _ _ _ _) (list (+ a 1) b u c d e f g))
-       ((RAccept _ _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
+       ((RAccept _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
        ((RParam _ _ _) (list a (+ b 1) u c d e f g))
        ((RRun _ _ _ _) (list a b (+ u 1) c d e f g))
        ((RClassify _ _ _) (list a b u (+ c 1) d e f g))
@@ -4494,7 +4652,6 @@
        ((RImplRec y) (rec_count y acc))
        ((RReadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
-       ((RInit _ _ _) acc)
        ((RUnused _ _) acc)
        ((RProved _ _ _ _ _) acc)
        ((RSidecar _ _ _) acc)

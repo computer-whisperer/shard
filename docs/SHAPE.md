@@ -46,8 +46,8 @@ declarations of Lean's `Init` export with Lean's own axiom lists, and passes a b
 built to break it. It is not proven.
 
 **Init, Lean's library as the base.** `v3/export.sh` builds Lean v4.33.1 and exports its `Init`
-library as text. A source file says how far into Init it looks, `(import Init NAME)`, and a load
-gives K only the part of Init the file cites, each declaration checked again. `v3/std/` holds only
+library as text. A source file that writes `(import Init)` sees all of it, and a load gives K
+only the part of Init the file cites, each declaration checked again. `v3/std/` holds only
 what Init lacks, and the programs Init's own functions run as.
 
 **The loader** (`v3/kernel/loader.shard`, driven by `load.shard`). It reads a root file and what it
@@ -166,9 +166,8 @@ area, is `DECISIONS.md`.
 
 - **Finding proofs of decrease automatically while loading.** A build never searches (`LAW.md`
   rule 14), so a later change to the search cannot change what loads. Decrease proofs are written out.
-- **Lean's `mutual` blocks and its packing of arguments.** Functions that call each other are found
-  by the loader, and packed into a type generated for the group, because Lean's packing type lies
-  far beyond the part of Init most files import.
+- **Lean's `mutual` blocks.** Functions that call each other are found by the loader when the last
+  one is read; a `mutual` form would state the same fact a second time.
 - **Structural recursion across a group of functions.** Not built: it refuses a call that passes
   its argument on unchanged, which most of the formatter's renderers do.
 - **Type classes and instance search.** Refused. Instances come from a fixed table, and an interface

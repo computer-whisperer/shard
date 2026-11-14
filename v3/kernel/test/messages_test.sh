@@ -3,8 +3,9 @@
 # load must end in (v3/pins/loader/README.md); the text after the reason is no part of a pin's
 # header. This test loads a set of pins, and five sources of its own, and requires of each
 # record the words an author acts on: the counts a `cases` or `induction` arm is told, the
-# import a horizon is attributed to, the import to write for a name past the horizon, where an
-# import that raises the horizon belongs, the file a refusal inside an implementation names,
+# form the import of Init takes, the import to write where a file that sees no Init cites a
+# declaration of it, where a directive that brings Init belongs, the file a refusal inside an
+# implementation names,
 # the row that makes later rows unreachable, the let a nested recursion cites, and what to
 # write where Lean's `mutual`, `instance`, a bare `true` or a head shadowed by Init's was
 # written.
@@ -33,22 +34,25 @@ lacks() {   # WHAT REGEX
 }
 
 # the test's own sources. step.shard and latefile.shard are the first roots of the load: what
-# each is refused for is a constant the environment lacks, and nothing a root after them
-# fetches is in the environment yet. latefile.shard imports far.shard after a declaration, and
-# with it a horizon past the lemma it cites
-printf '%s\n' '(import Init Eq)' '(theorem t ((a Nat) (b Nat) (h (Eq a b))) (Eq b a) (by (rw h) rfl))' > "$SCRATCH/step.shard"
-printf '%s\n' '(import Init Nat.sub_one_lt)' '(fn twice ((n Nat)) Nat (+ n n))' > "$SCRATCH/far.shard"
-printf '%s\n' '(import Init Eq)' '(theorem a () (Eq 1 1) (exact (Eq.refl 1)))' '(import "far.shard")' '(theorem t ((n Nat) (h (Not (Eq n 0)))) (Nat.lt (Nat.sub n 1) n) (exact (Nat.sub_one_lt h)))' > "$SCRATCH/latefile.shard"
-printf '%s\n' '(import Init Int.decEq)' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (if (= n 0) 0 (g (- n 1))))' > "$SCRATCH/parked.shard"
-printf '%s\n' '(import Init Int.decEq)' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
+# each needs of Init — the lemmas a step builds on, a lemma cited after a file import that
+# follows a declaration — is fetched for it, nothing a root after them fetches being in the
+# environment yet. noinit.shard and latenone.shard see no Init; named.shard writes the import
+# with a name
+printf '%s\n' '(import Init)' '(theorem t ((a Nat) (b Nat) (h (Eq a b))) (Eq a b) (by (rw h) rfl))' > "$SCRATCH/step.shard"
+printf '%s\n' '(import Init)' '(fn twice ((n Nat)) Nat (+ n n))' > "$SCRATCH/far.shard"
+printf '%s\n' '(import Init)' '(theorem a () (Eq 1 1) (exact (Eq.refl 1)))' '(import "far.shard")' '(theorem t ((n Nat) (h (Not (Eq n 0)))) (Nat.lt (Nat.sub n 1) n) (exact (Nat.sub_one_lt h)))' > "$SCRATCH/latefile.shard"
+printf '%s\n' '(type Color (Red) (Green))' '(def n () Nat Nat.zero)' > "$SCRATCH/noinit.shard"
+printf '%s\n' '(type Color (Red) (Green))' '(fn pick ((c Color)) Color c)' '(import "far.shard")' > "$SCRATCH/latenone.shard"
+printf '%s\n' '(import Init Eq)' '(theorem t () (Eq 1 1) (exact (Eq.refl 1)))' > "$SCRATCH/named.shard"
+printf '%s\n' '(import Init)' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (if (= n 0) 0 (g (- n 1))))' > "$SCRATCH/parked.shard"
+printf '%s\n' '(import Init)' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
 
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/step.shard" "$SCRATCH/latefile.shard" \
+  "$SCRATCH/noinit.shard" "$SCRATCH/latenone.shard" "$SCRATCH/named.shard" \
   $P/by_cases_arm_fields/main.shard $P/by_cases_fields/main.shard \
-  $P/init_two_imports/main.shard $P/init_horizon_inherited/main.shard \
-  $P/init_import_late/main.shard $P/init_import_late_none/main.shard \
+  $P/init_import_late_none/main.shard \
   $P/impl_read_error/lib $P/impl_load_error/lib $P/impl_import_late/lib \
   $P/define_nested/main.shard \
-  $P/init_above_instance/main.shard $P/init_above_instance_fn/main.shard \
   $P/match_dead_row/main.shard $P/match_dead_row_def/main.shard $P/ev_dead_row/kernel/main.shard \
   $P/lean_mutual/main.shard $P/reserved_instance/main.shard "$SCRATCH/class.shard" $P/bool_bare/main.shard \
   "$SCRATCH/parked.shard" > "$OUT/load.txt" 2>&1 &
@@ -63,24 +67,22 @@ has "cases: an arm naming one of two fields is not told both counts" "by_cases_a
 has "induction: an arm naming the fields and no hypothesis is not told both counts" "by_cases_fields" \
   "induction_fields: step 1: List\.cons's arm names 2 binder\(s\) and its case has 3: name the constructor's 2 field\(s\), then 1 induction hypothesis name\(s\), one for each recursive field — \(x : Nat\) \(r : "
 
-# ---- the import that set the horizon
-has "two Init imports: the INIT record does not name the one that set the horizon" "init_two_imports" \
-  "^INIT WellFounded\.fix_eq: horizon [0-9]+, [0-9]+ declarations admitted$"
-has "two Init imports: above_horizon does not name the import that set the horizon" "init_two_imports" \
-  "^READ-ERROR pins/loader/init_two_imports/main\.shard above_horizon: Nat\.sub_one_lt is declaration [0-9]+ of the export, at or above the module's horizon [0-9]+ \(import Init WellFounded\.fix_eq\): write \(import Init Nat\.sub_one_lt\)$"
-has "an inherited horizon: above_horizon does not name the imported file" "init_horizon_inherited" \
-  "^READ-ERROR pins/loader/init_horizon_inherited/main\.shard above_horizon: Nat\.sub_one_lt is declaration [0-9]+ of the export, at or above the module's horizon [0-9]+ \(inherited through the import of pins/loader/init_horizon_inherited/base\.shard\): write "
-has "an inherited horizon: no INIT record with - for its import" "INIT -" "^INIT -: horizon [0-9]+, "
-
-# ---- an import that raises the horizon after the fetch
-has "a late Init import that raises the horizon: not refused with the import and where it belongs" "init_import_late/" \
-  "^LOAD-ERROR pins/loader/init_import_late/main\.shard late_init_import: \(import Init Int\.decEq\) raises the module's horizon from [0-9]+ \(import Init Eq\) to [0-9]+ after the file's Init declarations were fetched: an import of Init that raises the horizon stands before the file's first declaration — move it there"
-has "a late Init import in a file read without Init: not refused" "init_import_late_none" \
-  "^LOAD-ERROR pins/loader/init_import_late_none/main\.shard late_init_import: \(import Init Int\.decEq\) gives the module a horizon, [0-9]+, after its first declaration was read without one: "
-has "an implementation's Init import past its view's: not refused under the implementation's file" "impl_import_late" \
-  "^IMPL LOAD-ERROR pins/loader/impl_import_late/lib/lib\.shard late_init_import: \(import Init Int\.decEq\) raises the module's horizon from [0-9]+ \(import Init Eq\) to [0-9]+ after the file's Init declarations were fetched: .*\(an implementation's: into its view\)$"
-has "a late file import that raises the horizon: the refusal does not give the horizon of the fetch and the import to move" "$S/latefile.shard" \
-  "^READ-ERROR $S/latefile\.shard above_horizon: Nat\.sub_one_lt is declaration [0-9]+ of the export, at or above the horizon [0-9]+ \(import Init Eq\) the file's Init declarations were fetched at; the horizon was raised to [0-9]+ \(inherited through the import of $S/far\.shard\) after that, by a file import that follows a declaration, and the names this file cites were not fetched again: move that import before the first declaration"
+# ---- Init: the import's form, a file that sees none, a directive that brings it late
+has "(import Init NAME): not refused with the form to write" "$S/named.shard" \
+  "^LOAD-ERROR $S/named\.shard bad_import: \(import Init NAME…\): the import takes no name — write \(import Init\): a file that imports Init sees every declaration of it$"
+has "a file that sees no Init cites a declaration of it: the refusal does not say to write the import" "$S/noinit.shard" \
+  "^READ-ERROR $S/noinit\.shard init_not_imported: Nat is a declaration of Init, and this file does not import Init: write \(import Init\) before the file's first declaration$"
+has "a late Init import in a file read without Init: not refused with where to write it" "init_import_late_none" \
+  "^LOAD-ERROR pins/loader/init_import_late_none/main\.shard late_init_import: \(import Init\) lets the file see Init, and it stands after the file's first declaration, which was read without Init: a file sees Init from its first declaration on, or not at all — write \(import Init\) before the first declaration$"
+has "a late file import that brings Init into a file read without it: not refused with what to write" "$S/latenone.shard" \
+  "^LOAD-ERROR $S/latenone\.shard late_init_import: the import of $S/far\.shard brings Init with it \(the imported module sees Init\), and it stands after the file's first declaration, which was read without Init: .* — write \(import Init\) before the first declaration$"
+has "an implementation's Init import where its view has none: not refused under the implementation's file, with the view named" "impl_import_late" \
+  "^IMPL LOAD-ERROR pins/loader/impl_import_late/lib/lib\.shard late_init_import: \(import Init\) lets the file see Init, and this implementation's view does not import Init: an implementation sees Init exactly when its view does — write \(import Init\) into its view \(mod\.req\.shard\)$"
+has "a step's lemmas: a theorem by rw in a first root is not accepted" "$S.step" "^ACCEPT $S\.step\.t "
+has "a late file import in a file that sees Init: a lemma cited after it is not found" "$S.latefile" "^ACCEPT $S\.latefile\.t "
+lacks "an INIT record" "^INIT "
+lacks "an Init position on a record" " init="
+lacks "a refusal that speaks of a horizon" "horizon"
 
 # ---- the file a refusal inside an implementation names
 has "an implementation's refused form: the record does not name the implementation's file" "impl_read_error" \
@@ -88,14 +90,6 @@ has "an implementation's refused form: the record does not name the implementati
 has "an implementation's failed import: the record does not name the implementation's file" "impl_load_error" \
   "^IMPL LOAD-ERROR pins/loader/impl_load_error/lib/lib\.shard import_failed: pins/loader/impl_load_error/lib/absent\.shard$"
 lacks "a record of an implementation's check that names the view's file" "^IMPL (READ|LOAD)-ERROR [^ ]*mod\.req\.shard "
-
-# ---- a name past the horizon that the source does not spell
-has "an instance past the horizon: a theorem is not refused with the import to write" "init_above_instance/" \
-  "^READ-ERROR pins/loader/init_above_instance/main\.shard above_horizon: Nat\.instMax is declaration [0-9]+ of the export, .*: write \(import Init Nat\.instMax\)$"
-has "an instance past the horizon: a fn is not refused with the import to write" "init_above_instance_fn" \
-  "^REFUSE pins\.loader\.init_above_instance_fn\.main\.m above_horizon: Nat\.instMax is declaration [0-9]+ of the export, .*: write \(import Init Nat\.instMax\)$"
-has "a step's lemma past the horizon: K's refusal is not named with the import that reaches it" "$S.step" \
-  "^REFUSE $S\.step\.t above_horizon: Eq\.mpr is declaration [0-9]+ of the export, .*: write \(import Init Eq\.mpr\)$"
 
 # ---- a row that matches everything
 has "an unresolved constructor's row: the refusal does not name the row and why it is a variable" "match_dead_row.main.code" \

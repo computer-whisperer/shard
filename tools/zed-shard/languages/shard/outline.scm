@@ -50,20 +50,11 @@
    (string) @name)
   (#match? @context "^(import|use-module)$")) @item
 
-;; V3: (import Init NAME) — the Init prefix through NAME; (use PREFIX NAME…);
+;; V3: (import Init) — Lean's Init, the whole of it; (use PREFIX NAME…);
 ;; (trusts NAME…)
 ((list
    .
    (symbol) @context
    .
-   (symbol) @context.extra
-   .
    (symbol) @name)
-  (#eq? @context "import")) @item
-
-((list
-   .
-   (symbol) @context
-   .
-   (symbol) @name)
-  (#match? @context "^(use|trusts)$")) @item
+  (#match? @context "^(import|use|trusts)$")) @item

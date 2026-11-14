@@ -69,7 +69,7 @@ R=v3/pins/loader/derive_size
 out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
 want size "$out" 'DERIVE main.Tree.size type=main.Tree cap=size policy=structural fields=main.List_Tree.size'
 want size "$out" '^ACCEPT main.List_Tree.size.eq_2 '
-want size "$out" '^DEFINE main.counts equations=main.counts.eq_1,main.counts.eq_2$'
+want size "$out" '^DEFINE main.weighs equations=main.weighs.eq_1,main.weighs.eq_2$'
 want size "$out" 'pending 0  realized 0  defined 2  errors 0'
 R=v3/pins/loader/derive_size_plain
 out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)

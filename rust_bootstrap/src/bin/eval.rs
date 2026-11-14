@@ -25,8 +25,8 @@ use shard_bootstrap::{ast, eval, load};
 /// then its implementation `DIR/BASE.shard`, each with its own closure; the
 /// reader skips the view's `sig` forms, so a consumer's call resolves flat
 /// to the implementation's `fn` of the same name (the V3 loader makes that
-/// substitution by identity; docs/LANGUAGE.md "Views"). `(import Init
-/// NAME)` names no file and is not followed.
+/// substitution by identity; docs/LANGUAGE.md "Views"). `(import Init)`
+/// names no file and is not followed.
 fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
     fn import_of(form: &Value) -> Option<String> {
         let items: Vec<&Value> = form.list_iter()?.collect();

@@ -176,10 +176,8 @@
                            (HRegular (def_height (tr_env t1) value))
                            Safe
                            (list k))))
-                      (if
-                        (bool_or (bool_not (has_eq (tr_env t1)))
-                          (bool_and measured (bool_not (has_fix_eq (tr_env t1)))))
-                        (DfOk (Tr.es t1) (tr_obls t1) dd Nil measured)  ; no Eq in scope: the definition alone; a measured one needs WellFounded.fix_eq for its equations
+                      (if (bool_not (init_seen sc))
+                        (DfOk (Tr.es t1) (tr_obls t1) dd Nil measured)  ; the file sees no Init: the definition alone — an equation is stated with Init's Eq, a measured one's by WellFounded.fix_eq
                         ;; the definition checked into the walk's environment, so each leaf's
                         ;; equation is stated only where K decides it by conversion
                         ;; (pj_equation_decls); a measured definition's equations are by
@@ -237,17 +235,6 @@
      (match (w_admit w b)
        ((Pair w1 (Some why)) (Pair w1 (Some why)))
        ((Pair w1 None) (w_admit_after w1 r d))))))
-(fn has_fix_eq ((env CheckedEnv)) Bool
-  (match (env_find env (n2 (quote WellFounded) (quote fix_eq)))
-    (None False)
-    ((Some _) True)))
-(fn has_eq ((env CheckedEnv)) Bool
-  (match (env_find env (nm_eq))
-    (None False)
-    ((Some _)
-     (match (env_find env (nm_eq_refl))
-       (None False)
-       ((Some _) True)))))
 
 (fn pj_value
   ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (recursive Bool))
@@ -288,9 +275,7 @@
                    ((AuxOk t2 auxs)
                     (if (< 0 (len auxs)) (AuxOk t2 auxs)
                     (match (below_names t2 ind)
-                      ((Pair t3 None)
-                       (AuxErr t3 (quote below_unreached)
-                         (append (show_name ind) ": its below and brecOn are not in scope")))
+                      ((Pair t3 None) (AuxErr t3 (quote equation_form) (no_below ind)))
                       ((Pair t3 (Some (Pair (Pair belowc brecc) lsb)))
                        (pj_brec t3 pd tps data rl selfid x pos xty largs belowc brecc lsb))))))))))))))))
 (fn pj_brec
@@ -405,58 +390,55 @@
 (fn pj_wf_go
   ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr))
   TrAux
-  (if (bool_not (wf_reachable t))
-    (AuxErr t (quote wf_unreached)
-      "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
-    (match (local_types t data Nil)
-      ((Pair t1 ltys)
-       (match (wf_tuple_type t1 ltys)
-         ((Pair t2 alpha)
-          (match (tr_local t2 (n1 (quote p)) alpha)
-            ((Pair t3 pm)
-             (match (pj_subst_projs t3 m data pm (len data) 0)
-               ((Pair t5 ml)
-                (match (tr_lams t5 (list pm) ml)
-                  ((Pair t6 mfn)
-                   (match (wf_relation t6 alpha mfn)
-                     ((Pair t7 (Pair rel hwf))
-                      (match (tr_local t7 (pj_tuple_name pd data) alpha)
-                        ((Pair t8 p)
-                         (match (wf_rec_type t8 alpha rel p rl)
-                           ((Pair t9 rty)
-                            (match (tr_local t9 (n1 (quote rec)) rty)
-                              ((Pair t10 recl)
-                               (match (pj_subst_projs t10 (pd_body pd) data p (len data) 0)
-                                 ((Pair t11 body1)
-                                  (let
-                                    ((cx
-                                       (make PjCx (self selfid) (tps tps)
-                                         (kind (PkWf recl p ltys m data))
-                                         (tables Nil)
-                                         (scope (list (Pair False p)))
-                                         (members Nil)
-                                         (beyond Nil))))
-                                    (match (pj_term t11 cx body1 (budget_depth))
-                                      ((TrErr e m2) (AuxErr t11 e m2))
-                                      ((TrOk t12 b)
-                                       (match (tr_lams t12 (list p recl) b)
-                                         ((Pair t13 fnl)
-                                          (match (tr_local t13 (n1 (quote x)) alpha)
-                                            ((Pair t14 xc)
-                                             (match (tr_lams t14 (list xc) rl)
-                                               ((Pair t15 cmot)
-                                                (match (wf_tuple t15 ltys data)
-                                                  ((Pair t16 tup)
-                                                   (match
-                                                     (tr_apps t16
-                                                       (mk_const
-                                                         (n2 (quote WellFounded) (quote fix))
-                                                         (list (level_one) (level_one)))
-                                                       (list alpha cmot rel hwf fnl tup))
-                                                     ((Pair t17 fixed)
-                                                      (match (tr_lams t17 (pd_binders pd) fixed)
-                                                        ((Pair t18 v)
-                                                         (AuxOk (tr_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))
+  (if (bool_not (init_seen (Tr.sc t))) (AuxErr t (quote wf_unreached) (wf_unseen))
+  (match (local_types t data Nil)
+    ((Pair t1 ltys)
+     (match (wf_tuple_type t1 ltys)
+       ((Pair t2 alpha)
+        (match (tr_local t2 (n1 (quote p)) alpha)
+          ((Pair t3 pm)
+           (match (pj_subst_projs t3 m data pm (len data) 0)
+             ((Pair t5 ml)
+              (match (tr_lams t5 (list pm) ml)
+                ((Pair t6 mfn)
+                 (match (wf_relation t6 alpha mfn)
+                   ((Pair t7 (Pair rel hwf))
+                    (match (tr_local t7 (pj_tuple_name pd data) alpha)
+                      ((Pair t8 p)
+                       (match (wf_rec_type t8 alpha rel p rl)
+                         ((Pair t9 rty)
+                          (match (tr_local t9 (n1 (quote rec)) rty)
+                            ((Pair t10 recl)
+                             (match (pj_subst_projs t10 (pd_body pd) data p (len data) 0)
+                               ((Pair t11 body1)
+                                (let
+                                  ((cx
+                                     (make PjCx (self selfid) (tps tps)
+                                       (kind (PkWf recl p ltys m data))
+                                       (tables Nil)
+                                       (scope (list (Pair False p)))
+                                       (members Nil)
+                                       (beyond Nil))))
+                                  (match (pj_term t11 cx body1 (budget_depth))
+                                    ((TrErr e m2) (AuxErr t11 e m2))
+                                    ((TrOk t12 b)
+                                     (match (tr_lams t12 (list p recl) b)
+                                       ((Pair t13 fnl)
+                                        (match (tr_local t13 (n1 (quote x)) alpha)
+                                          ((Pair t14 xc)
+                                           (match (tr_lams t14 (list xc) rl)
+                                             ((Pair t15 cmot)
+                                              (match (wf_tuple t15 ltys data)
+                                                ((Pair t16 tup)
+                                                 (match
+                                                   (tr_apps t16
+                                                     (mk_const (n2 (quote WellFounded) (quote fix))
+                                                       (list (level_one) (level_one)))
+                                                     (list alpha cmot rel hwf fnl tup))
+                                                   ((Pair t17 fixed)
+                                                    (match (tr_lams t17 (pd_binders pd) fixed)
+                                                      ((Pair t18 v)
+                                                       (AuxOk (tr_set_value t18 v) Nil))))))))))))))))))))))))))))))))))))))
 ;; e with the k-th data binder the k-th component of the tuple p
 (fn pj_subst_projs ((t Tr) (e Expr) (data (List Expr)) (p Expr) (n Int) (k Int)) (Pair Tr Expr)
   (measure (struct data))
@@ -465,16 +447,10 @@
     ((Cons fv r)
      (match (tr_subst t e (fvar_id_of fv) (wf_proj p n k))
        ((Pair t1 e1) (pj_subst_projs t1 e1 r p n (+ k 1)))))))
-(fn wf_reachable ((t Tr)) Bool
-  (bool_and (has_const t (n2 (quote WellFounded) (quote fix)))
-    (bool_and (has_const t (n2 (quote InvImage) (quote wf)))
-      (bool_and (has_const t (n2 (quote Nat) (quote lt_wfRel)))
-        (bool_and (has_const t (n2 (quote WellFoundedRelation) (quote wf)))
-          (has_const t (n2 (quote PProd) (quote mk))))))))
-(fn has_const ((t Tr) (n Name)) Bool
-  (match (env_find (tr_env t) n)
-    ((Some _) True)
-    (None False)))
+;; the obstacle of a measured function in a file that sees no Init: the definition is built
+;; on Init's well-founded recursion (the kit of df_kit, fetched for every file that sees Init)
+(fn wf_unseen () (List Int)
+  "a measure is compiled on Init's WellFounded.fix, and this file does not import Init: write (import Init) before the file's first declaration")
 (fn local_types ((t Tr) (fvs (List Expr)) (acc (List Expr))) (Pair Tr (List Expr))
   (measure (struct fvs))
   (match fvs
@@ -1425,8 +1401,6 @@
   (match cs
     (Nil True)
     ((Cons (CalleeLocal _ id _) r) (if (mem_name id names) (grp_callees_in r names) False))))
-(fn grp_reachable ((t Tr)) Bool
-  (bool_and (wf_reachable t) (bool_and (has_fix_eq (tr_env t)) (has_eq (tr_env t)))))
 (fn grp_args_name ((k1 Name)) Name (name_append k1 (n1 (quote args))))
 (fn grp_ctor_name ((k1 Name) (i Int)) Name
   (name_append (grp_args_name k1) (n1 (sym_of_chars (append "of_" (show_nat (+ i 1)))))))
@@ -1443,10 +1417,8 @@
             ((GpSkip e m) (GrpSkip e m))
             ((GpErr e m) (GrpErr e m))
             ((GpOk t1 ms)
-             (if (bool_not (grp_reachable t1))
-               (GrpSkip (quote wf_unreached)
-                 "WellFounded.fix, WellFounded.fix_eq, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
-               (grp_build t1 (pd_name first) ms))))))))))
+             (if (bool_not (init_seen sc)) (GrpSkip (quote wf_unreached) (wf_unseen))
+             (grp_build t1 (pd_name first) ms))))))))))
 ;; each member with its data binders, its result type and its measure — or the reason the
 ;; group is not compiled
 (fn grp_prepare ((t Tr) (k1 Name) (pds (List PreDef)) (names (List Name)) (i Int) (acc (List GrpM)))
@@ -1805,26 +1777,29 @@
 
 ;; ---- below and brecOn ---------------------------------------------------------------------------
 ;; Init's under Lean's names at solved levels; a native inductive's generated once, monomorphic,
-;; and admitted before the definition (DfAux); an Init inductive whose below the prefix does not
-;; reach is the obstacle below_unreached
+;; and admitted before the definition (DfAux) — its table is built of Init's PProd and PUnit,
+;; so in a file that sees no Init a native inductive has none: the obstacle below_unreached.
+;; An inductive of Init whose below the environment lacks is refused by a message that names
+;; the constant: where the export declares it the loader fetches it and reads the function
+;; again; where it does not — Lean generates below and brecOn for a recursive type only —
+;; the refusal stands
 (fn ensure_below ((t Tr) (ind Name) (ls (List Level))) TrAux
   (match (env_find (tr_env t) (name_append ind (n1 (quote below))))
     ((Some _) (AuxOk t Nil))
     (None
-      (if
-        (match (es_module (Tr.es t) ind)
-          ((Some m) (name_eq m (init_module)))
-          (None False))
+      (if (bool_not (native_decl (Tr.sc t) ind)) (AuxErr t (quote equation_form) (no_below ind))
+      (if (bool_not (init_seen (Tr.sc t)))
         (AuxErr t (quote below_unreached)
-          (append (show_name ind) ": Init's below is past the prefix in scope"))
-        (if (bool_not (pprod_reachable t))
-          (AuxErr t (quote below_unreached)
-            (append (show_name ind) ": a table needs Init's PProd and PUnit in scope"))
-          (gen_below t ind ls))))))
-(fn pprod_reachable ((t Tr)) Bool
-  (bool_and (has_const t (n1 (quote PProd)))
-    (bool_and (has_const t (n2 (quote PProd) (quote mk)))
-      (bool_and (has_const t (n1 (quote PUnit))) (has_const t (n2 (quote PUnit) (quote unit)))))))
+          (append (show_name ind)
+            ": structural recursion keeps its table in Init's PProd and PUnit, and this file does not import Init: write (import Init) before the file's first declaration"))
+        (gen_below t ind ls))))))
+(fn no_below ((ind Name)) (List Int)
+  (append (show_name (name_append ind (n1 (quote below))))
+    (append " and "
+      (append (show_name (name_append ind (n1 (quote brecOn))))
+        (append " are not both in the environment: structural recursion over "
+          (append (show_name ind)
+            " is built on them, and Lean generates them for a recursive type only — write a Nat measure, (measure M), where the type has none"))))))
 ;; the below and brecOn constants with their levels: Init's solved (the motive's universe 1, the
 ;; type's 0), a generated one at none
 (fn below_names ((t Tr) (ind Name)) (Pair Tr (Option (Pair (Pair Name Name) (List Level))))
@@ -2140,9 +2115,10 @@
 ;; eliminates into every universe, T.noConfusionType, T.noConfusion and T.c.inj per constructor
 ;; with fields — Lean 4.33's shapes read off the export (Nat's; a parametric type's shape
 ;; generalizes the parameters twice with HEq on the fields and eq_of_heq, and is not
-;; generated). Only where Init's Eq, Eq.ndrec, Eq.refl, And and And.intro are in scope —
-;; nothing in K's own sources, as Lean's Prelude before Eq has none. K checks each
-;; declaration; the generator's failure is nothing generated, never a refusal of the type.
+;; generated). Only in a file that sees Init, whose Eq, Eq.ndrec, Eq.refl, And and And.intro
+;; they are built of — nothing in K's own sources, as Lean's Prelude before Eq has none. K
+;; checks each declaration; the generator's failure is nothing generated, never a refusal of
+;; the type.
 (fn confusion_bundle ((es ESt) (sc Scope) (env CheckedEnv) (ind Name)) (List Declaration)
   (match (env_find env ind)
     ((Some (InductInfo _ nparams nindices all ctors nnested _ _ _))
@@ -2154,7 +2130,7 @@
           (match (gen_cases_on t ind u nparams ctors)
             ((AuxErr _ _ _) Nil)
             ((AuxOk t1 cds)
-             (if (bool_or (< 0 nparams) (bool_not (confusion_reachable env))) cds
+             (if (bool_or (< 0 nparams) (bool_not (init_seen sc))) cds
              (match (gen_nct t1 ind u ctors)
                ((AuxErr _ _ _) cds)
                ((AuxOk t2 nds)
@@ -2173,15 +2149,6 @@
        ((Cons u Nil) (Some u))
        (_ None)))
     (None None)))
-(fn confusion_reachable ((env CheckedEnv)) Bool
-  (bool_and (has_env env (nm_eq))
-    (bool_and (has_env env (nm_eq_refl))
-      (bool_and (has_env env (n2 (quote Eq) (quote ndrec)))
-        (bool_and (has_env env (n1 (quote And))) (has_env env (n2 (quote And) (quote intro))))))))
-(fn has_env ((env CheckedEnv) (n Name)) Bool
-  (match (env_find env n)
-    ((Some _) True)
-    (None False)))
 (fn nm_cases_on ((ind Name)) Name (name_append ind (n1 (quote casesOn))))
 (fn nm_nct ((ind Name)) Name (name_append ind (n1 (quote noConfusionType))))
 (fn nm_nc ((ind Name)) Name (name_append ind (n1 (quote noConfusion))))

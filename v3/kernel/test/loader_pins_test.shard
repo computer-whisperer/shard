@@ -4,8 +4,10 @@
 ;;; (v3/pins/loader/README.md). The export and its index are opened once
 ;;; for the whole run and Init's load carried from case to case:
 ;;; each case's root loads fresh on K's environment of Init alone,
-;;; its `(import Init NAME)` answered from the name table, what it cites
-;;; loaded on demand — once in the process.
+;;; what it needs of Init loaded on demand — once in the process. Then the
+;;; cases are loaded a second time, last first, and each one's records
+;;; compared with its first run's: what a file is given of Init does not
+;;; depend on what was fetched before it.
 
 (import "loader_kit.shard")
 (use kernel.host)
@@ -24,7 +26,6 @@
 (fn cases () (List (List Int))
   (list "basic" "no_open" "ambiguous" "selective" "cycle" "missing" "directory" "outside" "init"
     "init_nested"
-    "init_not_found"
     "sorry"
     "type_opens"
     "type_ctor_name"
@@ -220,7 +221,6 @@
     "arith_certificate"
     "arith_goal"
     "arith_fact"
-    "arith_unreached"
     "simp_core"
     "simp_no_progress"
     "simp_budget"
@@ -233,10 +233,9 @@
     ;; a rule that rewrites its own result; Ne at its own universe
     "simp_self"
     "by_ne_level"
-    ;; an operator at the expected type; a module's own Init horizon
+    ;; an operator at the expected type; Init seen through an import
     "op_expected"
-    "init_horizon"
-    "init_horizon_beyond"
+    "init_inherited"
     ;; arith only, the witness goal, auto with sidecar replay
     "arith_only"
     "by_witness_open"
@@ -249,12 +248,10 @@
     "dif_type"
     "dif_needs_init"
     "dif_scope"
-    ;; / at Int, the one spelling under apply, instances by table, the horizon's pointer
+    ;; / at Int, the one spelling under apply, instances by table
     "op_int_div"
     "one_spelling"
     "instance_table"
-    "init_above_horizon"
-    "init_above_horizon_by"
     ;; an equation's two combinations compared entry for entry
     "arith_eq_bare"
     ;; templates, lifted lambdas, instances by shape, the escape rule
@@ -370,16 +367,10 @@
     "auto_other_root"
     ;; an arm's name list against its case, both counts
     "by_cases_arm_fields"
-    ;; the import that set the horizon, named: an Init line, an imported file
-    "init_two_imports"
-    "init_horizon_inherited"
     ;; a let bound to a recursive call with another call in its scope; nested recursion by name
     "define_let_call"
     "mutual_let_call"
     "define_nested"
-    ;; an instance of the table past the horizon
-    "init_above_instance"
-    "init_above_instance_fn"
     ;; a directory module nested in a sealed directory
     "private_dir"
     ;; a row that matches everything, with rows after it
@@ -400,11 +391,26 @@
     "impl_read_error"
     "impl_load_error"
     "view_dir_form_private"
-    ;; an import of Init that raises the horizon after the fetch
-    "init_import_late"
-    "init_import_late_same"
+    ;; a directive after a declaration that would let the file see Init where it did not: an
+    ;; import of Init, a file import that brings it, an implementation's import; one that
+    ;; changes nothing
+    "init_import_again"
     "init_import_late_none"
-    "impl_import_late"))
+    "init_late_file_import_none"
+    "impl_import_late"
+    ;; the import's form; a file that sees no Init: the refusal of a citation, and nothing built
+    ;; of Init whatever another root fetched
+    "init_named"
+    "init_not_imported"
+    "init_unseen_bundle"
+    ;; what a file that sees Init is given without citing it: a step's lemmas, an
+    ;; implementation's own demand, a name cited after a late import or a late use, a constant
+    ;; built by name from a type (fetched for the second reading)
+    "init_step_lemma"
+    "impl_init_demand"
+    "init_late_file_import"
+    "init_use_late"
+    "init_fetch_second"))
 
 ;; the outcome of a load: its first record that is not a module, an Init
 ;; load, an acceptance, a parameter or a discharge (the implementation's
@@ -418,8 +424,7 @@
   (measure (struct x))
   (match x
     ((RModule _ _ _ _) True)
-    ((RInit _ _ _) True)
-    ((RAccept _ _ _ _ _ _ _) True)
+    ((RAccept _ _ _ _ _ _) True)
     ((RUnused _ _) True)
     ((RDerive _ _ _ _ _) True)
     ((RParam _ _ _) True)
@@ -448,7 +453,7 @@
 (fn accepted_one ((x Rec)) Int
   (measure (struct x))
   (match x
-    ((RAccept _ _ _ _ _ _ _) 1)
+    ((RAccept _ _ _ _ _ _) 1)
     ((RParam _ _ _) 1)
     ((RRun _ _ _ _) 1)
     ((RRealize _ _ _ _) 1)
@@ -623,42 +628,131 @@
     ((Cons w r) (Cons (append p w) (prefix_all p r)))))
 ;; every case starts from one Init load of this process (the
 ;; export and its index opened once, the records a case demands loaded once), the case's root
-;; fresh on it (ld_reroot) — a case's records are those of its own load, since a module's Init
-;; horizon is its imports'
-(fn run ((cs (List (List Int))) (l0 Load) (fails Int) (w World)) World
+;; fresh on it (ld_reroot) — a case's records are those of its own load, whatever the cases
+;; before it fetched of Init. A case as it was loaded: the load after it (the next case
+;; re-roots from it: Init's load carried, the case's own declarations not), whether the
+;; outcome is the header's with the line that says so, the records as text
+(type Ran (Ran Load Bool (List Int) (List Int)) (RanNot (List Int)))
+(fn run_case ((c (List Int)) (l0 Load) (w World)) (Pair Ran World)
+  (let ((main (append (case_root c) "/main.shard")))
+    (match (read_file main w)
+      ((Pair None w1) (Pair (RanNot (append "FAIL cannot read " main)) w1))
+      ((Pair (Some src) w1)
+       (let ((ws (expect_words src)))
+         (match (parts_of (root_of c src))
+           (None (Pair (RanNot (append "FAIL bad root " c)) w1))
+           ((Some rootp)
+            (match
+              (load_all (ld_with_budget (ld_reroot l0 rootp) (case_budget c)) (root_files c src) w1)
+              ((Pair l w2)
+               (Pair
+                 (if (matches ws (ld_recs l))
+                   (Ran l True (append "PASS " (append c (append " — " (show_words ws))))
+                     (recs_text (ld_recs l)))
+                   (Ran l False
+                     (append "FAIL "
+                       (append c
+                         (append " expected "
+                           (append (show_words ws)
+                             (append " got "
+                               (match (first_bad (ld_recs l))
+                                 ((Some x) (show_rec x))
+                                 (None "all accepted")))))))
+                     (recs_text (ld_recs l))))
+                 w2))))))))))
+(fn recs_text ((rs (List Rec))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons x r) (append (show_rec x) (Cons 10 (recs_text r))))))
+;; the cases in the list's order: each one's outcome against its header, its records kept —
+;; newest first — and the records of Init it fetched after its first declaration, which the
+;; base it leaves does not hold (Load.beyond)
+(type First (First Load Int (List (List Int)) (List Int)))
+(fn run_first
+  ((cs (List (List Int)))
+   (l0 Load)
+   (fails Int)
+   (texts (List (List Int)))
+   (beyond (List Int))
+   (w World))
+  (Pair First World)
   (measure (struct cs))
   (match cs
-    (Nil (exit fails (write_line (append "loader_pins_test: failures = " (show_int fails)) w)))
+    (Nil (Pair (First l0 fails texts beyond) w))
     ((Cons c r)
-     (let ((main (append (case_root c) "/main.shard")))
-       (match (read_file main w)
-         ((Pair None w1) (run r l0 (+ fails 1) (write_line (append "FAIL cannot read " main) w1)))
-         ((Pair (Some src) w1)
-          (let ((ws (expect_words src)))
-            (match (parts_of (root_of c src))
-              (None (run r l0 (+ fails 1) (write_line (append "FAIL bad root " c) w1)))
-              ((Some rootp)
-               (match
-                 (load_all (ld_with_budget (ld_reroot l0 rootp) (case_budget c)) (root_files c src)
-                   w1)
-                 ((Pair l w2)  ; the next case re-roots from this one: Init's load carried, the case's own declarations not
-                  (if (matches ws (ld_recs l))
-                    (run r l fails
-                      (write_line (append "PASS " (append c (append " — " (show_words ws)))) w2))
-                    (run r l (+ fails 1)
-                      (write_line
-                        (append "FAIL "
-                          (append c
-                            (append " expected "
-                              (append (show_words ws)
-                                (append " got "
-                                  (match (first_bad (ld_recs l))
-                                    ((Some x) (show_rec x))
-                                    (None "all accepted")))))))
-                        w2))))))))))))))
+     (match (run_case c l0 w)
+       ((Pair (RanNot line) w1)
+        (run_first r l0 (+ fails 1) (Cons Nil texts) beyond (write_line line w1)))
+       ((Pair (Ran l ok line text) w1)
+        (run_first r l (if ok fails (+ fails 1)) (Cons text texts) (append (Load.beyond l) beyond)
+          (write_line line w1)))))))
+;; ---- the order of the cases is no part of a case's records ------------------------------------
+;; The standing test that what a file is given of Init is its own: after the cases have run in
+;; the list's order, the base holds what each fetched before its first declaration; what they
+;; fetched after it is loaded into the base as well, so that the base holds every record of
+;; Init any case asked for; then every case is loaded again, last first, and its records must
+;; be the first run's, byte for byte. A record that depended on what another case fetched —
+;; an equation stated because Eq happened to be there, a lemma found because another file
+;; cited it — differs here
+(fn run_again
+  ((cs (List (List Int))) (texts (List (List Int))) (l0 Load) (n Int) (differ Int) (w World))
+  (Pair (Pair Int Int) World)
+  (measure (struct cs))
+  (match cs
+    (Nil (Pair (Pair n differ) w))
+    ((Cons c r)
+     (match texts
+       (Nil (Pair (Pair n differ) w))
+       ((Cons text tr)
+        (match (run_case c l0 w)
+          ((Pair (RanNot _) w1) (run_again r tr l0 (+ n 1) differ w1))
+          ((Pair (Ran l _ _ text2) w1)
+           (if (int_list_eq text text2) (run_again r tr l (+ n 1) differ w1)
+           (run_again r tr l (+ n 1) (+ differ 1)
+             (write_line
+               (append "FAIL "
+                 (append c
+                   (append
+                     " — its records on the base every case left are not its records in the list's order: "
+                     (first_difference (text_lines text Nil Nil) (text_lines text2 Nil Nil)))))
+               w1))))))))))
+(fn text_lines ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev acc))
+    ((Cons b r)
+     (if (= b 10) (text_lines r Nil (Cons (rev cur) acc)) (text_lines r (Cons b cur) acc)))))
+(fn first_difference ((a (List (List Int))) (b (List (List Int)))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil "no line differs")
+        ((Cons y _) (append "in the list's order no record, here " y))))
+    ((Cons x ar)
+     (match b
+       (Nil (append "in the list's order " (append x ", here no record")))
+       ((Cons y br)
+        (if (int_list_eq x y) (first_difference ar br)
+        (append "in the list's order " (append x (append ", here " y)))))))))
 ;; the one Init load every case starts from: the export and its index named, opened by the
 ;; first case that imports Init
-(fn run_all ((w World)) World (run (cases) (kit_load0 (list "v3" "pins") True) 0 w))
+(fn run_all ((w World)) World
+  (match (run_first (cases) (kit_load0 (list "v3" "pins") True) 0 Nil Nil w)
+    ((Pair (First l fails texts beyond) w1)
+     (match (init_load (ld_reroot l (list "v3" "pins")) beyond w1)
+       ((Pair (Pair lb _) w2)
+        (match (run_again (rev (cases)) texts lb 0 0 w2)
+          ((Pair (Pair n differ) w3)
+           (exit (+ fails differ)
+             (write_line (append "loader_pins_test: failures = " (show_int (+ fails differ)))
+               (write_line
+                 (append "loader_pins_test: order: "
+                   (append (show_int n)
+                     (append " cases loaded again, last first, on the base every case left — "
+                       (append (show_int differ) " with other records"))))
+                 w3))))))))))
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair Nil w1) (run_all w1))

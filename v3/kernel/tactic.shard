@@ -1076,7 +1076,8 @@
                   (match (env_find (el_env e2) elim)
                     (None
                       (StepErr (quote cases_type)
-                        (append (show_name elim) " is not in the environment")))
+                        (append (show_name elim)
+                          " is not in the environment: cases and induction are built on a type's casesOn and rec")))
                     ((Some einfo)
                      (let
                        ((levels (if (< (len ils) (len (ci_lparams einfo))) (Cons LZero ils) ils)))
@@ -1332,9 +1333,9 @@
                ((Some (Pair xx m)) (StepErr xx m))
                (None
                  (let ((mt (el_zonk e2 mz)))
-                   (if (bool_not (wf_in_scope e2))
+                   (if (bool_not (init_seen (cx_scope (el_cx e2))))
                      (StepErr (quote wf_unreached)
-                       "WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope")
+                       "(wf …) is built on Init's WellFounded.fix, and this file does not import Init: write (import Init) before the file's first declaration")
                      (match (tac_sort_level e2 alpha)
                        ((Pair e3 None) (StepErr (quote wf_local) "the local's type is not a type"))
                        ((Pair e3 (Some u))
@@ -1378,11 +1379,6 @@
                                                               (list g)
                                                               (list b))))))))))))))))))))))))))))))))))))
        (_ (StepErr (quote wf_local) "wf takes a local of the context (a variable, not a term)"))))))
-(fn wf_in_scope ((e El)) Bool
-  (bool_and (el_sees e (n2 (quote WellFounded) (quote fix)))
-    (bool_and (el_sees e (n2 (quote InvImage) (quote wf)))
-      (bool_and (el_sees e (n2 (quote Nat) (quote lt_wfRel)))
-        (el_sees e (n2 (quote WellFoundedRelation) (quote wf)))))))
 ;; the level of a type's sort
 (fn tac_sort_level ((e El) (ty Expr)) (Pair El (Option Level))
   (match (el_infer e ty)
@@ -1762,9 +1758,13 @@
 ;; the equations of a constant, in order, until one is missing: a fn's `f.eq_k`; else a
 ;; realization's `M.f.realize_k` for the module M that attached it — this module, or one it
 ;; opens (calc runs Init's List.length through std/list's realization and reduces by its
-;; equations; a use of the realizing module is needed for that, as the loader records)
+;; equations; a use of the realizing module is needed for that, as the loader records).
+;; Only a declaration of the load has equations here: Lean's own `f.eq_k` of a function of
+;; Init are in the environment when some proof of Init the load fetched happens to cite
+;; them, so a step that unfolded by them would depend on what else was fetched — such a
+;; function unfolds by K, by a realization's equations, or by its lemma cited as a rule
 (fn equations_of ((e El) (f Name)) (List Name)
-  (match (equations_go e f "eq_" 1 Nil)
+  (match (if (native_decl (cx_scope (el_cx e)) f) (equations_go e f "eq_" 1 Nil) Nil)
     (Nil
       (realize_equations e f
         (Cons (sc_module (cx_scope (el_cx e))) (opened_modules (sc_opened (cx_scope (el_cx e)))))))
@@ -1787,9 +1787,7 @@
   (measure (- 64 k))
   (if (< 64 k) (rev acc)
   (let ((n (name_append f (n1 (sym_of_chars (append kind (show_nat k)))))))
-    (match (env_find (el_env e) n)
-      ((Some _) (equations_go e f kind (+ k 1) (Cons n acc)))
-      (None (rev acc))))))
+    (if (el_sees e n) (equations_go e f kind (+ k 1) (Cons n acc)) (rev acc)))))
 ;; an equation applied to a subterm: its instantiated right side and proof, and whether that
 ;; proof is Eq.refl (then the replacement is also K-convertible: redex_apply's fallback under a binder)
 (fn try_equation ((e El) (s Expr) (eqn Name)) Found
@@ -2919,7 +2917,7 @@
           ((TacOk e2 sorried) (ProvePending e2 sorried))))
        ((Pair e1 _) (ProveErr (quote bad_shape) "no metavariable"))))))
 
-;; the constants the tactics construct by name (the WellFounded kit of wf_in_scope among them)
+;; the constants the tactics construct by name (the well-founded kit of (wf …) among them)
 (fn tc_kit () (List Name)
   (list (n2 (quote WellFounded) (quote fix)) (n2 (quote InvImage) (quote wf))
     (n2 (quote Nat) (quote lt_wfRel))

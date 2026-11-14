@@ -2,7 +2,7 @@
 
 Each directory is a small package. `CASE/main.shard` is the file the loader is given, its imports
 resolve under `CASE/`, and its first line states the outcome the load must have. A case that imports
-Init reads the pinned export on demand, up to the horizon its `(import Init NAME)` sets.
+Init — it writes `(import Init)` — reads from the pinned export, on demand, what it needs.
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome with
 the header; `v3/test.sh` runs it, and `loader_pins_list_test.sh` requires that the list and this
@@ -12,11 +12,10 @@ no export: `init_name_taken_l/Quot.shard`). Some shell tests read the records of
 (`route_callee`, `discharge_measure`, `registry_native`, `decidable_cells`, `mutual_measure`,
 `derive_refusals`), `derive_test.sh` (`derive_size`, `derive_size_plain`), `wire_test.sh`
 (`wire_*`), `template_test.sh` (`template_e_first`), `messages_test.sh` (the text after the reason:
-`by_cases_arm_fields`, `by_cases_fields`, `init_two_imports`, `init_horizon_inherited`,
-`init_import_late`, `init_import_late_none`, `impl_import_late`, `impl_read_error`,
-`impl_load_error`, `init_above_instance`, `init_above_instance_fn`, `match_dead_row`,
-`match_dead_row_def`, `ev_dead_row`, `define_nested`, `lean_mutual`, `reserved_instance`,
-`bool_bare`, `shadowed_head`), `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh`
+`by_cases_arm_fields`, `by_cases_fields`, `init_import_late_none`, `impl_import_late`,
+`impl_read_error`, `impl_load_error`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`,
+`define_nested`, `lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`),
+`parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh`
 and `lower_test.sh` (`basic`, `refused`, `read_error`, `view_basic`). Some harnesses run a case's
 program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape`, `handle_door`),
 `handle_test.shard` (`handle_door`, `entry`, `entry_s`, `row_types`), `rows_test.shard`
@@ -61,11 +60,10 @@ the reason its name spells, less a leading `by_`.
 | refused: `ev_duplicate`, `qualified_collision` (`duplicate_name`); `qualified_collision_l` (`already_declared`) | one name declared twice: in a file, by two modules that build the same name, and in K |
 | `type_opens`, `type_ctor_name`, `type_ctor_theorem` | a `type` opens its constructors for its file; a type whose constructor bears its name |
 | refused: `read_error` (`unterminated_list`); `retry` (`bad_constructor`) | a file that does not read; a file whose reading failed is loaded once |
-| `init`, `init_nested`; refused: `init_not_found` (`init_name_not_found`) | Init's names are bare; two horizons in one load; a name the export does not declare |
-| `init_horizon`; refused: `init_horizon_beyond`, `init_above_horizon`, `init_above_horizon_by` (`above_horizon`) | a module sees Init up to its own horizon whatever an earlier file loaded; a name past it is refused with the import to write, also inside a `by` block |
-| refused: `init_two_imports`, `init_horizon_inherited` (`above_horizon`) | the refusal and the `INIT` record name the import that set the horizon: the farthest of several Init lines, or the imported file a horizon is inherited through |
-| `init_import_late_same`; refused: `init_import_late`, `init_import_late_none`, `impl_import_late` (`late_init_import`) | an `(import Init …)` after a declaration: accepted where it does not raise the horizon; refused where it would — in a file with a horizon, in a file read without one, and in an implementation past its view's horizon |
-| refused: `init_above_instance`, `init_above_instance_fn` (`above_horizon`) | an instance the fixed table supplies is taken only where the module sees it: `max` at `Nat` below `Nat.instMax`, in a theorem and in a `fn` |
+| `init`, `init_nested`, `init_inherited`; refused: `init_named` (`bad_import`) | Init's names are bare; two files of one load that see Init; a file sees Init through a file it imports; the import takes no name |
+| refused: `init_not_imported` (`init_not_imported`), `init_unseen_bundle` (`unknown_constant`) | a file that sees no Init: a citation of a declaration of Init is refused with the import to write; nothing built of Init — no equation — whatever another root of the load fetched |
+| `init_step_lemma`, `impl_init_demand`, `init_late_file_import`, `init_use_late`, `init_fetch_second` | what a file that sees Init is given: the lemmas a proof step builds on, an implementation's own citations, a name cited after a late file import or under a late `use`, a constant the toolchain builds by name from a type (fetched for a second reading) |
+| `init_import_again`; refused: `init_import_late_none`, `init_late_file_import_none`, `impl_import_late` (`late_init_import`) | a second `(import Init)` changes nothing, wherever it stands; a directive after a declaration that would let the file see Init is refused — `(import Init)`, a file import that brings it, an implementation's where its view imports none |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
 | `type_flip`; refused: `type_e_only` (`unknown_constant`) | the same type is a logical type in a file that imports Init and a runtime-only type in one that does not |
 | `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
@@ -148,13 +146,13 @@ the reason its name spells, less a leading `by_`.
 | `by_core`, `by_wf`, `by_witness`, `by_case_step`, `by_cases_local_eq`, `by_cases_dependent`, `by_sibling_names`, `by_exact_external`, `by_rw_occ_spine`, `by_ne_level`, `by_reduce` | every step on small goals; well-founded induction; a witness given by a premise; `cases` on a term and with dependent hypotheses; an external term through `exact` |
 | `by_sorry` (`pending sorry goals=2 …`) | the open goals are shown in the record |
 | refused: `by_goal_open`, `by_goal_closed`, `by_unknown_step`, `by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness_open`, `by_cases_rows`, `by_induction_eq`, `by_rw_no_match`, `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`; `by_cases_fields` (`induction_fields`), `by_cases_arm_fields` (`cases_fields`), `by_rw_occ` (`rw_no_match`), `by_rw_occ_guard` (`rw_occ_changed`) | each step's refusal, a read error |
-| `arith_core`, `arith_div`, `arith_only`, `arith_eq_bare`; refused: `arith_failed`, `arith_certificate`, `arith_goal`, `arith_fact`, `arith_unreached` | linear arithmetic and its refusals |
+| `arith_core`, `arith_div`, `arith_only`, `arith_eq_bare`; refused: `arith_failed`, `arith_certificate`, `arith_goal`, `arith_fact` | linear arithmetic and its refusals |
 | `simp_core`; refused: `simp_no_progress`, `simp_budget`, `simp_self` | `simp_only` and its refusals |
 | `reduce_using`, `reduce_dependent`; refused: `reduce_rule_unused`, `reduce_rule_open`; `reduce_rule_fn` (`rw_not_eq`), `rw_dependent` (`rw_motive`) | `reduce` with facts; a rewrite at an occurrence beside a proof that states it |
 | `auto_core`, `auto_tactic`, `auto_hints_changed`, `auto_strategy_free` | a theorem proven by `auto` replays its sidecar's entry; hints and binder names are outside the key |
 | `auto_fulfills`, `auto_other_root` | an obligation delegated with `auto` is discharged from the entry under its name, in a file with no `auto` theorem; an entry made for a file loaded alone fits when another root has admitted a parameter the file does not see |
 | `auto_impl` | `auto` inside the implementation of a view — a requirement's `fulfills`, a theorem, an obligation — replays the sidecar beside the implementation file, `lib/lib.auto.shard` |
-| `auto_missing`, `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env` (`pending`) | no entry; an entry made for another statement, dependency, policy or horizon |
+| `auto_missing`, `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env` (`pending`) | no entry; an entry made for another statement, dependency, policy or export of Init |
 | `auto_schema_old`, `auto_schema_2`, `auto_recon_old`; refused: `auto_schema_future` (`sidecar_schema`), `auto_malformed` (`sidecar_malformed`) | older sidecar formats replay and are reported; a newer or malformed one is a load error |
 
 ### Entries, host calls and binaries

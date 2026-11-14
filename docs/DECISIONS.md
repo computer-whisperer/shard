@@ -88,7 +88,8 @@ entries are explained under "Measured" at the end.
 - ★ Functions that call each other are found as a group when the last is read; no `mutual` form —
   forward references already resolve, and a second surface would state the same fact twice.
 - ★ A group is one fixpoint over a type generated for it (a constructor per member); not Lean's
-  `PSum` of tuples — `PSum` is declaration 25,089 of the export; the formatter imports to ~3,400.
+  `PSum` of tuples. The reason recorded was `PSum`'s position in the export under a horizon;
+  every file that imports Init now sees `PSum`, so this stands as built and is open.
 - ★ Not the structural route for groups: it owes no proofs but needs `below` for nested types and
   refuses a call that hands its argument on unchanged — five of the formatter's seven renderers.
 - ★ Every member of a group states a `Nat` measure; `(measure (struct x))` there is `group_measure`;
@@ -195,11 +196,12 @@ entries are explained under "Measured" at the end.
   and checked; not the whole export per load, not a cached or serialized environment.
 - No receipt that lets a load skip Init's typing judgments: measured, it saves a tenth to a
   fifth — the walk and ingestion are the cost — and only a full replay could write it.
-- What Init a module sees is its horizon (`(import Init NAME)`); not whatever the process loaded —
-  records must not depend on load order; a later name is `above_horizon` with the import to write.
-  (Known exceptions, where another root of the load fetched the name: a lemma a proof step builds
-  on, the equations of a file that sees no Init, a name a file import after a declaration should
-  have brought: `OPEN.md` §1.)
+- A file that imports Init sees all of it (`(import Init)`); not a horizon by position in the
+  export (`(import Init NAME)`) — a horizon is raised lemma by lemma, and what the toolchain
+  builds on by name was not held to it, so a file's records depended on the other roots of a load.
+- What a file is given of Init is its own demand; not whatever the process loaded — records must
+  not depend on load order. A name missed is fetched and the declaration read again; a file
+  without Init is given nothing built of Init.
 
 ## Build and gates
 
@@ -243,7 +245,8 @@ measurements; measure again before building on one.
   verifies in 36 s native; its rows are 62 / 218 / 9 bytes.
 - Skipping Init's typing judgments (the removed receipt): calc 9 s against 10 s, `std/bytes` 20 s
   against 25 s. Over 3,523 declarations: parse 9.2 s, tables 13.1 s, check 47.2 s.
-- Positions in the export: `PSum` is declaration 25,089; the formatter's files import to ~3,400.
+- Init for one file: a file with one theorem loads in 1.7 s native (the toolchain's fixed names
+  and what they depend on, about 1,400 declarations); `calc_bin` in 2.9 s, `calc_spec` in 2.5 s.
 - Compiled `ev`, functions over six parameters: 2.5 GB of stack on K's `nested_test`; else 12 MB.
 - K evaluating a closed call through a measured definition by `rfl` (a probe, not in the tree):
   depth 40 in 2.4 s, 200 in 7.8 s, 1,000 over 120 s, 4,000 `unify_exhausted`.
@@ -262,8 +265,8 @@ measurements; measure again before building on one.
 - Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
 - Suite: 51 entrypoints, eight at a time: ~720 s on the bootstrap (4,160 s of entrypoint time),
-  ~120 s on the binaries (580 s). Loader pins on one shared Init base 33–42 s (783 s loading Init
-  per case).
+  ~120 s on the binaries (580 s). Loader pins on one shared Init base, each case loaded twice: 9 s
+  native, about 150 s on the bootstrap.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.

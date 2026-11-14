@@ -34,43 +34,29 @@ of the file, in order. Abridged from that file:
 A theorem's proof is `(exact TERM)`, `(by STEP…)`, `auto` or `sorry`. A function may call one
 declared later in the file; a theorem cites only what stands above it.
 
-## 2. Imports and the Init horizon
+## 2. Imports
 
 | form | effect |
 |---|---|
 | `(import "FILE")` | loads the file once and makes its declarations citable by their full names; opens nothing |
 | `(import "DIR")` | the same for a directory that has a view (section 8) |
-| `(import Init NAME)` | the module sees the export's declarations up to and including `NAME` |
+| `(import Init)` | the file sees Lean's `Init`: every declaration of the export may be cited |
 
-The export is ordered, and a module sees it up to its *horizon*: the farthest `NAME` among its own
-`(import Init …)` lines and those of the files it imports. A file may have several such lines
-(`v3/models/imp/word.shard` has ten); the farthest one sets the horizon, whatever their order. A
-name past the horizon is refused with the line to add:
+Write `(import Init)` before the file's first declaration. A file that imports a file that sees
+Init sees it too, but the line costs nothing and says what the file is. The loader fetches from the
+export only what the file cites and what the toolchain builds on, so a lemma anywhere in Init is
+cited by its name and nothing else; section 15 shows how to find a lemma's name. In a file with
+no Init the functions are programs only, with no equations. Citing Init there is refused with the
+line to add:
 
 ```
-READ-ERROR FILE above_horizon: NAME is declaration N of the export, at or above the module's
-horizon H (import Init K): write (import Init NAME)
+READ-ERROR FILE init_not_imported: NAME is a declaration of Init, and this file does not import
+Init: write (import Init) before the file's first declaration
 ```
 
-`K` there is the line that set `H`; where the horizon comes from an imported file the message
-says `(inherited through the import of FILE)` instead. The same refusal names an instance the
-elaborator supplies and the file does not see (`max` at `Nat` below `Nat.instMax`). A
-lemma a proof cites may lie anywhere in the export, far past every row below (`Nat.sub_one_lt` is
-declaration 6,037, `Nat.succ_sub_one` 48,720): cite it, and add the line the refusal names.
-Horizons that matter, in the export's order — each row covers the rows above it:
-
-| import through | declaration | what it brings | example |
-|---|---|---|---|
-| `Int.decEq` | 835 | `Int` and `Nat` arithmetic and their decisions | `v3/examples/calc/calc.shard` |
-| `Lean.Omega.Int.ofNat_lt_of_lt` | 1,508 | what `arith` builds its proofs from | `v3/examples/calc/calc_proof.shard` |
-| `WellFounded.fix_eq` | 1,647 | a measured function as a definition (from `InvImage.wf`, 1,581) and its equations | `v3/pins/loader/by_wf/main.shard` |
-| `UInt8.toNat` | 3,399 | the projections of `UInt8` and `ByteArray`, which the bytes library is written over | `v3/std/bytes.shard` |
-| `Int.lt_mul_ediv_self_add` | 3,522 | `arith` over a product with a literal and over a quotient | `v3/examples/calc/natabs.shard` |
-| `Nat.instMax` | 3,958 | `max` at `Nat` | — |
-
-A file that imports `v3/std/bytes.shard` inherits its horizon (`UInt8.toNat`); one that imports
-`v3/std/list.shard` inherits `List.take_succ_cons` (14,110). Section 15 shows how to find a
-lemma's name and its position.
+With all of Init in sight, a name of the file can meet one of Init's under a namespace the file
+opens: a function `lex` beside `(use Init.List)` is `ambiguous_name: lex: M.lex and List.lex`.
+Give the function another name (`tokenize` in `v3/examples/calc/calc.shard`).
 
 ## 3. Opening names
 
@@ -109,8 +95,8 @@ field or argument is erased: `(Fin.mk i h)` runs as `i` (`v3/examples/path/path.
 (`v3/std/list.shard`), is called by its name alone, `sorted_nil`; `(sorted_nil)` is accepted too.
 
 The operators `+ * = < <=` work at `Nat` and `Int`; `-` at `Nat` stops at zero; `/` and `mod` are
-total (`(/ 7 0)` is 0, `(mod 7 0)` is 7); `and`, `or`, `not` are for `Bool`. `max` at `Nat` needs
-`(import Init Nat.instMax)`. A comparison is a `Bool` where the result is one (`is_ws` in
+total (`(/ 7 0)` is 0, `(mod 7 0)` is 7); `and`, `or`, `not` are for `Bool`. A comparison is a
+`Bool` where the result is one (`is_ws` in
 `v3/examples/calc/calc.shard`); the other spelling in the tree is `(if (= n 0) true false)`
 (`is_zero` in `v3/tools/shardfmt/print/cst.shard`), where the bare `true` and `false` need
 `(use Init.Bool)`. Test a `Bool` or a comparison with `if` and take any other value apart with
@@ -160,8 +146,7 @@ records say `PARAM F.dec_K obligation` and `PENDING F measure`; a proof is
 (fulfills load_le.dec_1 (by (intro p h) (exact (Nat.sub_one_lt h))))
 ```
 
-`Nat.sub_one_lt` lies past every horizon of section 2's table: that file has
-`(import Init Nat.sub_one_lt)`. A count-down by another step, or by division, is closed by the two
+`Nat.sub_one_lt` is Init's lemma. A count-down by another step, or by division, is closed by the two
 `apply` rows of section 10; `(arith)` alone does not close them.
 
 **Functions that call each other** are found by the loader; there is no form that declares them.
@@ -301,7 +286,6 @@ speaks of rests on building it from the file the contract imports. The contract
 | `RUNNABLE fn F why=group_measure` | functions call each other and one has no `(measure N)`; a `struct` clause does not count | a `Nat` measure on every one |
 | `RUNNABLE fn F why=group_shape` | such a function has a type parameter, or a result type over its parameters | make it specific |
 | `RUNNABLE fn F why=measure_type` | the measure is an `Int` | `(measure (Int.natAbs n))` (`calc_show.shard`) |
-| `RUNNABLE fn F why=wf_unreached`; its `fulfills` is then `LOAD-ERROR FILE fulfills_outside_impl` | `WellFounded.fix`, `InvImage.wf` or `Nat.lt_wfRel` is past the horizon: importing through `arith`'s lemma alone does not reach them | `(import Init WellFounded.fix_eq)` |
 | `RUNNABLE fn F why=callee_runnable` | it calls a function that is a program only | repair the callee, or put it behind a view |
 | `REFUSE F realize_recursion: F calls itself without a measure` | no recursion clause | add `(measure …)` |
 | `REFUSE F equation_form: T: a nested inductive's recursor has a motive per auxiliary type, and structural recursion takes one — write a Nat measure: (derive TYPE size) gives a size to measure by` | structural recursion into a type nested through `List` | `(derive T size)` and a `Nat` measure |
@@ -310,21 +294,19 @@ speaks of rests on building it from the file the contract imports. The contract
 | `REFUSE F unreachable_arm: the row X binds a variable and matches every value, so the N row(s) after it can never be taken: no constructor of T named X is in scope — …` | a row that is a bare name which is no constructor of the matched type — a misspelt or unopened constructor — or `_`, with rows after it | write the constructor as its type spells it (`T.C`, or `(use MODULE.T)`); a catch-all is the last row |
 | `REFUSE F unknown_head: Nat.succ is not a constructor — …` | a `fn` that matches a `Nat` by `Nat.zero` and `(Nat.succ k)` | numeral rows closed by `_` or a name, or an `if` |
 | `REFUSE F unknown_constant: true: Init's constructor is Bool.true — write Bool.true, or open the namespace with (use Init.Bool)` | bare `true` or `false` | `(use Init.Bool)`, or `Bool.true` |
-| `REFUSE F above_horizon: Nat.instMax is declaration 3958 of the export, at or above the module's horizon H (import Init K): write (import Init Nat.instMax)`; in a theorem the same as a `READ-ERROR` | `max` at `Nat` below its instance | `(import Init Nat.instMax)` |
-| `REFUSE T above_horizon: NAME is declaration N of the export, …: write (import Init NAME)` on a theorem whose source does not spell NAME | a proof step builds on a lemma of Init past the horizon (`rw` on `Eq.mpr`, declaration 383) | the import the message names |
+| `READ-ERROR FILE ambiguous_name: lex: M.lex and List.lex` (a `REFUSE` in a `fn`) | a name of the file is also a name of Init under a namespace the file opens | rename it, or open the namespace for the names needed: `(use Init.List length)` |
 | `READ-ERROR FILE function_expected: the head resolved to Add — Init's declaration; … — and is applied to 1 more arguments than its type has: (Sort (succ ?u2))` | a bare constructor (`Add`) whose name Init also has, in a file that opens the type's module and not the type | `Exp.Add`, or `(use MODULE.Exp)` |
 | `REFUSE F type_mismatch: expected (List.{0} UInt8), found (List.{0} Nat)` | `Bytes.ofList` given numbers | `Bytes.ofNats` (section 14) |
 | `READ-ERROR FILE unknown_constant: step N: NAME — the goal: …` | a lemma's name is wrong, or is not Init's; no name is suggested | search the names (section 15) |
 | `READ-ERROR FILE arith_failed: … — rows: [0 <= …] …` | the goal is not linear in the atoms the rows show: a truncated subtraction `(Nat.sub n 2)`, a quotient, a call | give the missing fact, or use the `apply` rows of section 10 |
 | `READ-ERROR FILE cases_fields: … C's arm names N binder(s) and its case has M: name the constructor's K field(s) — (a : T) (_ : T)`; `induction_fields` likewise, with `, then J induction hypothesis name(s), one for each recursive field` | an arm's name list has the wrong length: M is what the case has, and the binders listed show `_` where the arm gave no name | name every field of the constructor; under `induction`, then one hypothesis per recursive field: `(Add (a b iha ihb) STEP…)` |
-| `READ-ERROR FILE arith_unreached: a product with a literal needs Lean.Omega.LinearCombo.mul_eval_of_const_right, past the Init prefix in scope: …` | the horizon is before `arith`'s product lemma | write a sum, or `(import Init Int.lt_mul_ediv_self_add)` |
 | `REFUSE F function_value: …` | a lambda outside a template's function argument, or a function passed as a value | name it as a `fn`, or pass it to a template |
 | `REFUSE F lean_symbol`, `REFUSE F infix_form` | `==`, `&&`, `\|\|`, or `(n + 1)` | `(= a b)`, `(and a b)`, `(+ n 1)` |
 | `POLICY T outside the policy: A` | `T` rests on an axiom this file does not trust | `(trusts A)` in every file whose theorems rest on `A` |
 | `UNTHREADED F world_twice: parameter 2 used twice: std.host.write_line, std.host.write_line` | one `World` passed to two calls | pass each call's result on |
 | `BAD-BIN B extern_outside: X is called in F and is not in the roster`; `BAD-BIN B untrusted: T rests on A, which the bin does not trust`; `UNMET T` | the bin's `externs` or `trusts` misses a name; a requirement's proof is `sorry` | add the name; prove the requirement |
 | `LOAD-ERROR FILE private_module: PATH is inside the sealed directory DIR — import the directory` | a file behind a view, or a directory module nested behind it, imported from outside | `(import "DIR")` |
-| `LOAD-ERROR FILE late_init_import: (import Init N) raises the module's horizon from H (import Init K) to H2 after the file's Init declarations were fetched: …` | an `(import Init …)` after a declaration that would raise the horizon; in an implementation, one past its view's horizon | move it before the first declaration; for an implementation, write it in the view |
+| `LOAD-ERROR FILE late_init_import: (import Init) lets the file see Init, and it stands after the file's first declaration, which was read without Init: …` | an `(import Init)`, or the import of a file that sees Init, after a declaration of a file that saw none; in an implementation, where its view imports none | move it before the first declaration; for an implementation, write it in the view |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: no fn MODULE.main to start from` | the file given declares no `main` (the contract's file, say) | give the program's file |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: MODULE.main takes N parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)` | a `main` with parameters before the `World` is an entry for `--run` only | take the arguments through `get_args` |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C is named as a cell of the runtime and must not be the second constructor of its type` (or `must be the second`) | a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` stands at another place in its type than the runtime's cell of that name (`True`, `Cons`, `Some` are second constructors; the others are not) | rename the constructor, or move it |
@@ -474,14 +456,13 @@ Nat.div_lt_one_iff 00038273
 Nat.div_lt_self 00000580
 ```
 
-The number is the `N` of `above_horizon`'s "declaration N": a file cites the lemma when it imports
-Init through that lemma or a later one.
+The number is the declaration's position in the export.
 
 **Statements.** Cite the lemma where it cannot fit, and read its type off the refusal. A scratch
 file under `v3/`, loaded as in section 13:
 
 ```
-(import Init UInt64.ofBitVec_shiftLeft)   ; the export's last declaration: every lemma is in reach
+(import Init)
 
 (theorem probe () False (by (cases @Nat.div_lt_self ())))
 ```

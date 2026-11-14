@@ -52,15 +52,15 @@ echo "engine_test: the example replays 11 theorems from its sidecar and prove re
 # ---- (1b) an obligation delegated with auto: a file whose only `auto` stands in a fulfills.
 # prove writes the entry under the obligation's name as the source writes it; then a load
 # discharges the obligation from it and a second prove finds nothing to search
-printf '%s\n' '(import Init UInt8.toNat)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/fulfills.shard"
+printf '%s\n' '(import Init)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/fulfills.shard"
 M=$(basename "$SCRATCH").fulfills
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove.txt" 2>&1
 checks=$((checks+1)); grep -q 'proved 1  unsolved 0  sidecars written 1$' "$OUT/f_prove.txt" || { bad "prove did not discharge the delegated obligation"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/f_prove.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^(proof-for dn\.dec_1 (req ' "$SCRATCH/fulfills.auto.shard" 2>/dev/null || { bad "the sidecar's entry does not bear the obligation's name dn.dec_1"; grep '^(proof-for' "$SCRATCH/fulfills.auto.shard" 2>/dev/null | cut -c1-120; }
 # (1c)'s sources, and its first prove beside (1b)'s two runs
 mkdir "$SCRATCH/lib"
-printf '%s\n' '(import Init UInt8.toNat)' '(sig fn pick ((n Nat)) Nat)' '(requirement pick_le ((x Int) (y Int) (z Int) (h1 (<= x y)) (h2 (<= y z))) (<= x z))' > "$SCRATCH/lib/mod.req.shard"
-printf '%s\n' '(import Init UInt8.toNat)' '(fn pick ((n Nat)) Nat n)' '(fulfills pick_le auto)' '(theorem extra ((x Int) (y Int) (h1 (<= 0 x)) (h2 (<= x y))) (<= 0 y) auto)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/lib/lib.shard"
+printf '%s\n' '(import Init)' '(sig fn pick ((n Nat)) Nat)' '(requirement pick_le ((x Int) (y Int) (z Int) (h1 (<= x y)) (h2 (<= y z))) (<= x z))' > "$SCRATCH/lib/mod.req.shard"
+printf '%s\n' '(import Init)' '(fn pick ((n Nat)) Nat n)' '(fulfills pick_le auto)' '(theorem extra ((x Int) (y Int) (h1 (<= 0 x)) (h2 (<= x y))) (<= 0 y) auto)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/lib/lib.shard"
 L=$(basename "$SCRATCH").lib
 printf '%s\n' '(import "lib")' "(fn twice_pick ((n Nat)) Nat ($L.pick ($L.pick n)))" > "$SCRATCH/client.shard"
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_load.txt" 2>&1 &

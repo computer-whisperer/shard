@@ -35,7 +35,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | `name.shard` | Hierarchical names (`Anon`/`Str`/`Num`, Lean's `Name`) and the structural hash (`mix`, `hash_name`, `name_key`) every table is keyed by. | `prelude.shard` | `util.shard`, `level.shard`, `expr.shard`, `verdict.shard`, `index.shard`, `initload.shard`, … — the base of everything |
 | `util.shard` | List, byte, decimal and name utilities: `len append rev nth take drop`, `is_ws is_digit`, `show_nat show_int`, `name_eq name_lt show_name`, `hex_val`, `utf8_ok`. | `name.shard` | nearly every kernel file (`sexpr`, `json`, `record`, `index`, `initload`, …) |
 | `intmap.shard` | Persistent map keyed by a non-negative Int (4-ary trie): `im_find im_insert im_has`. | `prelude.shard` | `expr.shard`, `prog.shard`, `ev.shard`, `index.shard`, `initload.shard`; through them `scope`, `loader`, K's tables |
-| `scope.shard` | What a citation means in a file: `Scope` (declaration prefix, module tag, opened prefixes, visible set with the Init horizon), the elaboration context `Cx`, `resolve` / `scope_candidates` / `resolve_ctor`, `visible`, `init_cited` (`Init.NAME`), `toolchain_scope`, the renamed-primitive table, `type_head`. | `sexpr.shard`, K's view (`k`: `CheckedEnv`, `env_find`), `expr`, `intmap`, `name`, `util` | `etable.shard`, `matcher.shard`, `elab.shard` (imports); used by `reader`, `classify`, `erase`, `predef`, `loader` |
+| `scope.shard` | What a citation means in a file: `Scope` (declaration prefix, module tag, opened prefixes, visible set, whether the file sees Init), the elaboration context `Cx`, `resolve` / `scope_candidates` / `resolve_ctor`, `visible`, `init_cited` (`Init.NAME`), `toolchain_scope`, the renamed-primitive table, `type_head`. | `sexpr.shard`, K's view (`k`: `CheckedEnv`, `env_find`), `expr`, `intmap`, `name`, `util` | `etable.shard`, `matcher.shard`, `elab.shard` (imports); used by `reader`, `classify`, `erase`, `predef`, `loader` |
 | `spelling.shard` | Two fixed tables over Init's names: `sp_canon` (a class method under Init's instance read as its function, e.g. `HAdd.hAdd Nat …` → `Nat.add`), `sp_instance` (the instance term for an instance-implicit binder at Nat/Int/Bool/List), and `sp_kit` (every constant the tables can write, for the Init demand). | `kw.shard` (K's view, `expr`, `level`, `name`) | `unify.shard` (import); `elab`, `tactic`, `arith`, `engine`; `loader.shard` (`sp_kit` in `init_kit`) |
 | `reader.shard` | The reader of the logic's forms: one S form → K `Declaration`s (`def abbrev opaque theorem axiom inductive type structure`), view parameters (`sig`, `requirement`), `fulfills` and discharge proofs, the proof forms (`exact`, `by`, `auto`, `sorry`) with the sidecar key (`Req`, `req_key`, `auto_fit`); routes `fn extern realize fulfills bin` and the directives to the loader; refuses reserved and Lean keywords with a pointer. | `elab.shard`, `engine.shard`, `ev.shard`, `etable.shard`, `inhabit.shard`; `tactic`, `scope`, `sexpr` | `loader.shard`, `predef.shard`; tests through `test/reader_kit.shard` |
 | `loader.shard` | The loader: package root, paths → module paths, imports (file, directory, Init) with cycle/collision/seal checks, `use`/`trusts`, the Init demand per file, per-form dispatch (K admission, policy check, `fn`/`extern`/`realize`/`derive`/`bin`/`fulfills` pipelines), views and the implementation check in a fork, the sidecar, the record type `Rec` with `show_rec`, the counts and the exit code. | `host`, `reader`, K's view, `realize`, `define`, `template`, `record`, `derive`, `initload`, `elab`, `tactic`, `arith`, `thread` | `load.shard`, `prove.shard`, `run.shard`, `test/calc_harness.shard`, `test/loader_kit.shard` |
@@ -86,7 +86,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `unify.shard` (724) | Metavariables and first-order unification: the metavariable context (`MCtx`), assignment with occurs and scope checks (`assign`), `unify` with four outcomes (yes, no, stuck, exhausted), level unification, instantiation (`inst_mvars`). A closed mismatch is decided by K's `is_def_eq`. | `kw.shard`, `spelling.shard`, K's view. | `elab.shard` (every term), `tactic.shard` (`tac_match`, `rfl`, `apply`), `engine.shard`, `derive.shard`. |
 | `matcher.shard` (569) | Generates the auxiliary definition a `match` elaborates to (`mt_generate`) and recognizes one by regenerating it from its type (`mt_is_matcher`). | `kw.shard`, `scope.shard`, K's view. | `elab.shard` (`elab_match`), `tactic.shard` (the case step of `reduce`), `define.shard`, `realize.shard`, `erasure.shard`, `derive.shard`, `template.shard`. |
 | `kw.shard` (180) | The walk over K's terms from outside K: an environment, a local context and checker state (`W`), with K's `whnf`, `infer`, `is_def_eq`, `is_prop`, local creation and binder closing wrapped so that a failure is a value. | K's view only. | Every elaborating file: `unify`, `elab`, `tactic`, `arith`, `spelling`, `matcher`, `reader`, `loader`, `define`, `realize`, `derive`, `erase`, `erasure`, `template`, `classify`, `inhabit`, `run`, `predef`. |
-| `elab.shard` (2,070), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (is an Init constant within the module's horizon); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
+| `elab.shard` (2,070), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (can the module cite this constant: one of Init only where the module sees Init); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
 | `loader.shard` (4,534), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
 
 #### Other files on the path of a proof
@@ -362,23 +362,26 @@ every line in order: the replay gate. *On demand*, in a load: `initindex.shard` 
 over the export once (`index.shard`: a record table, a sorted name table, a table from name ids
 to records), and a module writes
 
-    (import Init Int.decEq)                         (v3/pins/loader/init_horizon/small.shard)
+    (import Init)                                   (v3/pins/loader/init/main.shard)
 
-Its *horizon* is the record after `Int.decEq`'s: it sees the declarations before its horizon, or
-before the farthest horizon among its imports. For each file the loader takes the names the file
-cites and a fixed kit of names the toolchain itself builds, keeps those below the horizon, walks
-their dependencies through the index (`initload.shard`) and feeds those lines to K in export
-order, into the load's own environment. Every record is checked; none is admitted on trust. The
-load prints `INIT NAME: horizon H, K declarations admitted`, NAME the import that set the horizon
-(`-` when it is inherited through a file import). Only `Init` is exported; no other
-Lean library can be imported.
+The module then sees every declaration of the export, and so does a module that imports it.
+Before a file's first declaration the loader takes the names the file cites and a fixed kit of
+names the toolchain itself builds (`init_kit` in `loader.shard`), walks their dependencies through
+the index (`initload.shard`) and feeds those lines to K in export order, into the load's own
+environment. Every record is checked; none is admitted on trust. A name the toolchain builds from
+a type it meets, outside both, is fetched when a declaration's reading is refused for lack of it,
+and the declaration is read again (`settle_missed`). What a file is given does not depend on what
+the load fetched for another file: a file that sees no Init is given nothing built of it, whatever
+the environment holds. The loader pins are loaded a second time in the reverse order and each
+case's records compared with the first (`loader_pins_test.shard`). Only `Init` is exported; no
+other Lean library can be imported.
 
 | refusal | when |
 |---|---|
 | `export_pin_mismatch` | the export's first line names another Lean commit, exporter or format |
 | `init_index_stale` | no index, or one built over another byte count |
-| `init_name_not_found` | `NAME` is not a declaration of the export |
-| `above_horizon` | a cited name lies at or past the horizon — or an instance the elaborator supplies does, or a constant K refused a declaration for; the message names the import that set the horizon and the import to write |
+| `init_not_imported` | a file that imports no Init cites a declaration of the export; the message says to write `(import Init)` |
+| `late_init_import` | a directive after a declaration would let a file see Init where it saw none |
 | `init_refused` | K did not accept a record; its verdict follows |
 
 ### The replay gate
@@ -634,7 +637,7 @@ nothing. Its reader takes `type`, `fn`, `extern` and `record`, skips the forms o
 (`def`, `theorem`, `sig`, `use`, `bin`, …) and fails on any other. It resolves names flat: by
 bare name across the whole closure, with no module paths and no check that a view hides its
 implementation. It follows a directory import to the view and then the implementation, and does
-not follow `(import Init NAME)`. It knows the eighteen bare-named primitives and performs the
+not follow `(import Init)`. It knows the eighteen bare-named primitives and performs the
 host calls itself. So it runs the toolchain's own sources, which import no Init, and cannot run a
 program written over Init's types: that one runs through `load.shard --run` or as a binary. It is
 trusted by review; its 20 unit tests run in CI.
@@ -754,7 +757,7 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `k_clients_test.sh` | K's tests loaded by the V3 loader and run under `ev`, so K's view is enforced |
 | `loader_pins_list_test.sh` | the cases `loader_pins_test.shard` lists are the directories of `v3/pins/loader/`: none unlisted, none missing, none twice |
 | `lower_test.sh` | seven programs as loaded and under `--lowered`: same streams, same exit |
-| `messages_test.sh` | what a refusal says after its reason: the counts of an arm's names, the import a horizon is attributed to, the import to write, where an import that raises the horizon belongs, the file a refusal inside an implementation names, the row that makes rows unreachable, what to write for `mutual`, `instance`, a bare `true` |
+| `messages_test.sh` | what a refusal says after its reason: the counts of an arm's names, the import to write where a file cites Init and imports none, where an import that brings Init belongs, the file a refusal inside an implementation names, the row that makes rows unreachable, what to write for `mutual`, `instance`, a bare `true` |
 | `parity_test.sh` | the two readers agree on every toolchain root (above) |
 | `path_test.sh` | one example end to end — load, run — and three breaks that must fail |
 | `route2_test.sh` | K under `ev` prints what K run directly prints, on 3,000 lines of the export |
