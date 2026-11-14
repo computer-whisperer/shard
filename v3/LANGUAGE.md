@@ -7753,8 +7753,9 @@ times the size plus a rank for the renderers (`em_kids` 0, `em_head`
 1, `em_if` 2; `em_pp` 0, `em_chain` 1; `em_if_deep` over the sum of
 its two nodes, 2), written as sums — a product with a literal wants a
 later Init horizon of `arith`. 43 obligations, each a `fulfills` under
-its group: 30 close by the equation of the match the call stands
-under, the size's equation and `arith`; 13 take a fact — that a list
+its group: 20 close by the equation of the match the call stands
+under, the size's equation and `arith`; 14 by `arith` alone — the
+rank, or a node against the sum of two; 9 take a fact — that a list
 another function handed back is no larger (`opt_trail_rest`,
 `em_keep_rest`, `drop_blanks_le`) or `size_of_cons` at the equations
 in scope; `em_if`'s four descents to the then- and else-nodes take
