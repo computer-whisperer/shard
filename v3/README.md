@@ -2643,6 +2643,10 @@ the rebuilt binary. Green on the full local gate: the full replay
 equal to its pin, both suites 51 entrypoints with 0 failed, 0 differ
 between the engines. The slice is built as designed; the formatter's
 scenarios as theorems and the structural route are deferred rows.
+Pipeline 700 green on `e50fc07` (landing 3): `host` 32 s, `v3`
+3,844 s, `native` 2,029 s, `suite_tie` 40 s. Pipeline 701 green on
+`0ae4800` (landing 4): `host` 32 s, `v3` 3,865 s, `native` 2,080 s,
+`suite_tie` 24 s. No job retried in either.
 
 ## Open obligations (2026-09-12; GPT-6 R48)
 
