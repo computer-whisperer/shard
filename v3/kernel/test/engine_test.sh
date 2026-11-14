@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v3/kernel/test/engine_test.sh — the producers (v3/LANGUAGE.md §8.4 slice 3.22, landing 2;
-# law §7.5). Three parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
+# law §7.5). Four parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
 # replays the committed sidecar (auto.auto.shard) — 11 theorems accepted by name, `beyond`
 # pending auto_missing, nothing searched —, and prove.shard regenerates the sidecar into a
 # scratch copy of the example under v3/ (the loader reads repository-relative paths), which
@@ -9,6 +9,10 @@
 # sidecar is machine-owned. (1b) An obligation delegated with `auto` — `(fulfills f.dec_N auto)`
 # in a file with no `auto` theorem — is proved by prove.shard, entered in the sidecar under the
 # obligation's name and discharged from it by a load; a second prove searches nothing.
+# (1c) `auto` inside the implementation of a view — a requirement's `fulfills`, a theorem, an
+# obligation: prove.shard given the directory writes one sidecar, beside the implementation
+# file; a load of a consumer with the directory replays it; a second prove, given the consumer
+# and the directory, searches nothing.
 # (2) The engine's reach over calc's 100 claims (the slice's third
 # ruling): prove.shard --measure over the five leaves of tactic_test.sh runs the engine on
 # every hand-written theorem's statement unaided; the names it closes must be exactly
@@ -54,13 +58,35 @@ M=$(basename "$SCRATCH").fulfills
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove.txt" 2>&1
 checks=$((checks+1)); grep -q 'proved 1  unsolved 0  sidecars written 1$' "$OUT/f_prove.txt" || { bad "prove did not discharge the delegated obligation"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/f_prove.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^(proof-for dn\.dec_1 (req ' "$SCRATCH/fulfills.auto.shard" 2>/dev/null || { bad "the sidecar's entry does not bear the obligation's name dn.dec_1"; grep '^(proof-for' "$SCRATCH/fulfills.auto.shard" 2>/dev/null | cut -c1-120; }
+# (1c)'s sources, and its first prove beside (1b)'s two runs
+mkdir "$SCRATCH/lib"
+printf '%s\n' '(import Init UInt8.toNat)' '(sig fn pick ((n Nat)) Nat)' '(requirement pick_le ((x Int) (y Int) (z Int) (h1 (<= x y)) (h2 (<= y z))) (<= x z))' > "$SCRATCH/lib/mod.req.shard"
+printf '%s\n' '(import Init UInt8.toNat)' '(fn pick ((n Nat)) Nat n)' '(fulfills pick_le auto)' '(theorem extra ((x Int) (y Int) (h1 (<= 0 x)) (h2 (<= x y))) (<= 0 y) auto)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/lib/lib.shard"
+L=$(basename "$SCRATCH").lib
+printf '%s\n' '(import "lib")' "(fn twice_pick ((n Nat)) Nat ($L.pick ($L.pick n)))" > "$SCRATCH/client.shard"
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_load.txt" 2>&1 &
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove2.txt" 2>&1 &
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/lib" > "$OUT/i_prove.txt" 2>&1 &
 wait
 checks=$((checks+1)); { grep -q "^DISCHARGE $M.dn.dec_1 proved$" "$OUT/f_load.txt" && ! grep -q '^PENDING' "$OUT/f_load.txt" && grep -q 'pending 0 .*errors 0$' "$OUT/f_load.txt"; } || { bad "a load does not discharge the obligation from the sidecar"; grep -E 'PENDING|ERROR|^LOAD:' "$OUT/f_load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^PROVED" "$OUT/f_load.txt" && bad "the build searched for the obligation (a PROVED record under load.shard)"
 checks=$((checks+1)); grep -q 'proved 0  unsolved 0  sidecars written 0$' "$OUT/f_prove2.txt" || { bad "a second prove searched again"; grep -E 'PROVE:' "$OUT/f_prove2.txt" | cut -c1-300; }
 echo "engine_test: an obligation delegated with auto is proved once, entered under its name and discharged from the sidecar"
+
+# ---- (1c) auto inside the implementation of a view: the sidecar stands beside the
+# implementation file and holds the three entries under the names the source writes
+checks=$((checks+1)); grep -q 'proved 3  unsolved 0  sidecars written 1$' "$OUT/i_prove.txt" || { bad "prove on the directory did not prove the implementation's three delegated proofs into one sidecar"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/i_prove.txt" | head -5 | cut -c1-300; }
+for e in pick_le extra 'dn\.dec_1'; do
+  checks=$((checks+1)); grep -q "^(proof-for $e (req " "$SCRATCH/lib/lib.auto.shard" 2>/dev/null || { bad "the implementation's sidecar lib/lib.auto.shard has no entry $e"; grep '^(proof-for' "$SCRATCH/lib/lib.auto.shard" 2>/dev/null | cut -c1-120; }
+done
+checks=$((checks+1)); [ ! -e "$SCRATCH/lib/mod.req.auto.shard" ] || bad "prove wrote a sidecar beside the view for the implementation's proofs"
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/client.shard" "$SCRATCH/lib" > "$OUT/i_load.txt" 2>&1 &
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/client.shard" "$SCRATCH/lib" > "$OUT/i_prove2.txt" 2>&1 &
+wait
+checks=$((checks+1)); { grep -q "^DISCHARGE $L.pick_le proved$" "$OUT/i_load.txt" && grep -q "^DISCHARGE $L.dn.dec_1 proved$" "$OUT/i_load.txt" && grep -q "^IMPL ACCEPT $L.extra " "$OUT/i_load.txt" && ! grep -q 'PENDING' "$OUT/i_load.txt" && grep -q 'pending 0 .*errors 0$' "$OUT/i_load.txt"; } || { bad "a load does not replay the implementation's sidecar"; grep -E 'PENDING|ERROR|^LOAD:' "$OUT/i_load.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q "PROVED" "$OUT/i_load.txt" && bad "the build searched in the implementation (a PROVED record under load.shard)"
+checks=$((checks+1)); grep -q 'proved 0  unsolved 0  sidecars written 0$' "$OUT/i_prove2.txt" || { bad "a second prove, on the consumer and the directory, searched again"; grep -E 'PROVE:' "$OUT/i_prove2.txt" | cut -c1-300; }
+echo "engine_test: auto inside an implementation is proved once into the sidecar beside the implementation file and replayed from it"
 
 # ---- (2) the count over calc
 measure() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT --measure "v3/examples/calc/$1.shard" > "$OUT/m_$1.txt" 2>&1; }

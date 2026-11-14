@@ -201,8 +201,9 @@ entries are explained under "Measured" at the end.
   fifth — the walk and ingestion are the cost — and only a full replay could write it.
 - What Init a module sees is its horizon (`(import Init NAME)`); not whatever the process loaded —
   records must not depend on load order; a later name is `above_horizon` with the import to write.
-  (Known exceptions: a name a late `(import Init …)` should have brought, and a lemma a proof step
-  builds on, are found when another root of the load fetched them: `OPEN.md` §1.)
+  (Known exceptions, where another root of the load fetched the name: a lemma a proof step builds
+  on, the equations of a file that sees no Init, a name a file import after a declaration should
+  have brought: `OPEN.md` §1.)
 
 ## Build and gates
 

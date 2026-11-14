@@ -116,7 +116,7 @@
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (match
          (write_sidecars l
-           (with_restamps (proved_by_file l (ld_recs l) Nil) (restamp_files (ld_recs l) Nil))
+           (with_restamps (proved_by_file (ld_recs l) Nil) (restamp_files (ld_recs l) Nil))
            w2)
          ((Pair written w3)
           (exit (+ (load_failures cs) (unsolved (ld_recs l)))
@@ -129,20 +129,29 @@
                         (append (show_nat (unsolved (ld_recs l)))
                           (append "  sidecars written " (show_nat written))))))))
               (print_precs (ld_recs l) w3)))))))))
+;; a record as it was made: one of an implementation's check stands under IMPL in the load's
+(fn impl_inner ((x Rec)) Rec
+  (measure (struct x))
+  (match x
+    ((RImplRec y) (impl_inner y))
+    (_ x)))
 (fn proved ((rs (List Rec))) Int
   (measure (struct rs))
   (match rs
     (Nil 0)
-    ((Cons (RProved _ _ _ _) r) (+ 1 (proved r)))
-    ((Cons _ r) (proved r))))
+    ((Cons x r)
+     (match (impl_inner x)
+       ((RProved _ _ _ _ _) (+ 1 (proved r)))
+       (_ (proved r))))))
 ;; the theorems the engine did not close: PENDING auto_unsolved
 (fn unsolved ((rs (List Rec))) Int
   (measure (struct rs))
   (match rs
     (Nil 0)
-    ((Cons (RPending _ why) r)
-     (+ (if (starts_with (chars_of_sym why) "auto_unsolved") 1 0) (unsolved r)))
-    ((Cons _ r) (unsolved r))))
+    ((Cons x r)
+     (match (impl_inner x)
+       ((RPending _ why) (+ (if (starts_with (chars_of_sym why) "auto_unsolved") 1 0) (unsolved r)))
+       (_ (unsolved r))))))
 (fn starts_with ((s (List Int)) (p (List Int))) Bool (int_list_eq (take (len p) s) p))
 
 ;; the files whose sidecar was read at an older schema or another reconstruction version
@@ -152,9 +161,11 @@
   (measure (struct rs))
   (match rs
     (Nil (rev acc))
-    ((Cons (RSidecar file _ _) r) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
-    ((Cons (RRecon file _ _) r) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
-    ((Cons _ r) (restamp_files r acc))))
+    ((Cons x r)
+     (match (impl_inner x)
+       ((RSidecar file _ _) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
+       ((RRecon file _ _) (restamp_files r (if (mem_bytes_p file acc) acc (Cons file acc))))
+       (_ (restamp_files r acc))))))
 (fn mem_bytes_p ((x (List Int)) (xs (List (List Int)))) Bool
   (measure (struct xs))
   (match xs
@@ -172,17 +183,17 @@
   (match gs
     (Nil False)
     ((Cons (Pair g _) r) (if (int_list_eq g f) True (group_has r f)))))
-;; the PROVED records grouped by the file their theorem's module was loaded from: (file, entries)
-(fn proved_by_file ((l Load) (rs (List Rec)) (acc (List (Pair (List Int) (List Auto)))))
+;; the PROVED records grouped by the file their proof stands in — an implementation's among
+;; them, under its own file: (file, entries)
+(fn proved_by_file ((rs (List Rec)) (acc (List (Pair (List Int) (List Auto)))))
   (List (Pair (List Int) (List Auto)))
   (measure (struct rs))
   (match rs
     (Nil (rev_groups acc Nil))
-    ((Cons (RProved n en k steps) r)
-     (match (file_of_decl l n)
-       ((Some file) (proved_by_file l r (group_add acc file (Auto en k steps))))
-       (None (proved_by_file l r acc))))
-    ((Cons _ r) (proved_by_file l r acc))))
+    ((Cons x r)
+     (match (impl_inner x)
+       ((RProved _ en file k steps) (proved_by_file r (group_add acc file (Auto en k steps))))
+       (_ (proved_by_file r acc))))))
 (fn group_add ((acc (List (Pair (List Int) (List Auto)))) (file (List Int)) (a Auto))
   (List (Pair (List Int) (List Auto)))
   (measure (struct acc))
@@ -197,14 +208,6 @@
   (match gs
     (Nil (rev acc))
     ((Cons (Pair f as) r) (rev_groups r (Cons (Pair f (rev as)) acc)))))
-;; a declaration's file: through its module (the declaration → module table, then the module's record)
-(fn file_of_decl ((l Load) (n Name)) (Option (List Int))
-  (match (tbl_find (Load.tbl l) n)
-    (None None)
-    ((Some m)
-     (match (ld_find_mod (Load.mods l) m)
-       ((Some md) (Some (Mod.file md)))
-       (None None)))))
 
 ;; the sidecars rewritten: each file's existing entries not superseded, then the new ones
 (fn write_sidecars ((l Load) (groups (List (Pair (List Int) (List Auto)))) (w World))

@@ -299,7 +299,7 @@
   (RReadErr (List Int) Symbol (List Int))  ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))  ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
-  (RProved Name Name Req (List SExpr))  ; mode solve: the engine's block for an auto proof — the theorem, the name its sidecar entry bears (the theorem's, or the obligation's a discharge proves, as the source writes it), the requirement's key, the block
+  (RProved Name Name (List Int) Req (List SExpr))  ; mode solve: the engine's block for an auto proof — the theorem, the name its sidecar entry bears (the theorem's, or the obligation's a discharge proves, as the source writes it), the file the proof stands in (its sidecar is beside it), the requirement's key, the block
   (RSidecar (List Int) Int Int)  ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
   (RRecon (List Int) Int Int)  ; a sidecar replayed under another reconstruction version (4.5 rule 2): the file, its version (-1: none stated), the current one
   (REngine Name Bool)  ; mode measure: the engine closes the statement unaided, or not
@@ -387,8 +387,8 @@
 (fn ld_with_mode ((l Load) (m Symbol)) Load (with Load l (mode m)))
 ;; an RDSolved or RDMeasured read: its record, and the plain RDOk. `under` is the obligation a
 ;; discharge's theorem proves — the sidecar's entry bears its name — and Anon for a theorem,
-;; entered under its own
-(fn rd_plain ((l Load) (sc Scope) (under Name) (rd RDecl)) (Pair Load RDecl)
+;; entered under its own; `file` is the file the proof stands in
+(fn rd_plain ((l Load) (sc Scope) (file (List Int)) (under Name) (rd RDecl)) (Pair Load RDecl)
   (match rd
     ((RDSolved n k steps ds)
      (Pair
@@ -398,6 +398,7 @@
              (match under
                (Anon n)
                (_ under)))
+           file
            k
            steps))
        (RDOk ds)))
@@ -444,7 +445,8 @@
   (match cs
     (Nil l)
     ((Cons (Pair n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
-;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof (slice 3.22 rule 1):
+;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof — a module's
+;; file, or the implementation file of a view, read where its check begins (check_impl):
 ;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
 ;; that does not read, or a form of another shape, is the file's load error and no entries.
 ;; Its first form may be the schema (sidecar N) — I's schema the entries are written in (slice
@@ -637,8 +639,9 @@
 ;; entries (FILE.auto.shard beside the file, read when a theorem or a fulfills says auto),
 ;; the import that set its horizon — the target of an `(import Init NAME)` (initname), or the
 ;; file whose import handed its own on (initvia; Anon and empty: no horizon) —, the horizon its
-;; Init demand was fetched at with that import as a refusal shows it (fetched; -1: nothing
-;; fetched), the names of Init under its identity, which none of its declarations may take
+;; Init demand was fetched at with that import as a refusal shows it (fetched; -1: the fetch
+;; point is passed and the file saw no Init there; -2: the leading directives are still being
+;; read), the names of Init under its identity, which none of its declarations may take
 (record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open))
   (vis (List Name))
   (init Int)
@@ -678,7 +681,28 @@
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
 (fn fx_add_bin ((f Fx) (s SExpr)) Fx (with Fx f (bins (append (Fx.bins f) (list s)))))
-(fn fx_as_impl ((f Fx)) Fx (with Fx f (view False)))
+;; the fork's file context for the implementation: the view's after its directives, as no
+;; view, under the implementation file with its own sidecar's entries
+(fn fx_as_impl ((f Fx) (ifile (List (List Int))) (autos (List Auto))) Fx
+  (with Fx f (view False) (parts ifile) (autos autos)))
+;; an `(import Init …)` whose horizon h lies past the file's, read after the file's Init
+;; declarations were fetched: what it would let the file see was never fetched for it
+(fn late_raise ((f Fx) (h Int)) Bool
+  (match (Fx.fetched f)
+    ((Pair at _) (bool_and (<= -1 at) (< (Fx.init f) h)))))
+(fn late_import_msg ((f Fx) (n Name) (h Int)) (List Int)
+  (append "(import Init "
+    (append (show_name n)
+      (append
+        (if (< (Fx.init f) 0)
+          (append ") gives the module a horizon, "
+            (append (show_nat h) ", after its first declaration was read without one"))
+          (append ") raises the module's horizon from "
+            (append (show_nat (Fx.init f))
+              (append (horizon_source f)
+                (append " to "
+                  (append (show_nat h) " after the file's Init declarations were fetched"))))))
+        ": an import of Init that raises the horizon stands before the file's first declaration — move it there (an implementation's: into its view)"))))
 (fn fx_scope ((l Load) (f Fx)) Scope
   (Scope (Fx.ident f) (Fx.module f) (Fx.opened f)
     (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
@@ -1019,7 +1043,8 @@
             f)
         (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half (slice 4.2 landing 0)
         (match
-          (rd_plain l sc Anon (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
+          (rd_plain l sc (fx_file f) Anon
+            (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
           ((Pair l rd)
            (match rd
              ((RDErr e m)
@@ -1142,7 +1167,7 @@
       ((Some info)
        (let ((thm (name_append k (n1 (quote proof)))))
          (match
-           (rd_plain l (fx_scope l f) k
+           (rd_plain l (fx_scope l f) (fx_file f) k
              (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (producers_of l f)
                (Load.mode l)))
            ((Pair l rd)
@@ -2702,11 +2727,11 @@
                                 (append (show_nat (Fx.init f))
                                   (append (horizon_source f)
                                     (append
-                                      " after that, by an import that follows a declaration and fetches nothing: "
+                                      " after that, by a file import that follows a declaration, and the names this file cites were not fetched again: "
                                       (append
                                         (if (< o (Fx.init f)) "move that import"
                                         (append "write (import Init " (append (show_name n) ")")))
-                                        " before the first declaration (an implementation's: into its view)"))))))))
+                                        " before the first declaration"))))))))
                         (append " of the export, at or above the module's horizon "
                           (append (show_nat h)
                             (append src (append ": write (import Init " (append (show_name n) ")")))))))))))))))))))
@@ -2909,14 +2934,15 @@
 (fn init_prepare ((l Load) (f Fx) (forms (List SExpr)) (w World))
   (Pair (Pair Load (Option Fx)) World)
   (match (Load.init l)
-    (InitNone (Pair (Pair l (Some f)) w))
+    (InitNone (Pair (Pair l (Some (with Fx f (fetched (Pair -1 Nil))))) w))
     (_
       (match (init_opened l w)
         ((Pair (Pair l1 (Some (Pair e m))) w1) (Pair (Pair (init_err l1 (fx_file f) e m) None) w1))
         ((Pair (Pair l1 None) w1)
          (match (init_taken l1 f w1)
            ((Pair f2 w2)
-            (if (< (Fx.init f2) 0) (Pair (Pair l1 (Some f2)) w2) (init_demand l1 f2 forms w2)))))))))
+            (if (< (Fx.init f2) 0) (Pair (Pair l1 (Some (with Fx f2 (fetched (Pair -1 Nil))))) w2)
+            (init_demand l1 f2 forms w2)))))))))
 (fn init_taken ((l Load) (f Fx) (w World)) (Pair Fx World)
   (match (Load.init l)
     ((InitSt x _ _)
@@ -3181,7 +3207,7 @@
                                 (autos autos)
                                 (initname Anon)
                                 (initvia Nil)
-                                (fetched (Pair -1 Nil))
+                                (fetched (Pair -2 Nil))
                                 (taken Nil)
                                 (ecount 0)
                                 (above Nil)
@@ -3924,20 +3950,26 @@
               (match (expand_records iforms0)
                 ((RxErr e m) (Pair (ld_rec l1 (RReadErr (join_path ifile) e m)) w2))
                 ((RxOk iforms)
-                 (match (pre_register_file (ld_with_recs_raw lf Nil) (fx_as_impl f) iforms)
-                   ((Pair None lf0) (Pair (merge_impl_recs l1 (ld_recs lf0)) w2))
-                   ((Pair (Some f0) lf0)
-                    (match
-                      (impl_replay lf0
-                        (make Im (view rest) (impl iforms) (done Nil) (fx f0) (file ifile)
-                          (all rest))
-                        (import_depth)
-                        w2)
-                      ((Pair (Pair lf2 im) w3)
-                       (Pair
-                         (ld_with_e (merge_impl_recs l1 (ld_recs lf2))
-                           (es_merge (Load.etab l1) (Load.etab lf2)))
-                         w3))))))))))))))))
+                 (match (read_sidecar (ld_with_recs_raw lf Nil) ifile iforms w2)
+                   ((Pair (Pair lfs autos) w2s)
+                    (match (ld_recs_head lfs)
+                      ((Some (RLoadErr _ _ _)) (Pair (merge_impl_recs l1 (ld_recs lfs)) w2s))  ; the implementation's sidecar does not read: its load error, and the check ends
+                      (_
+                        (match (pre_register_file lfs (fx_as_impl f ifile autos) iforms)
+                          ((Pair None lf0) (Pair (merge_impl_recs l1 (ld_recs lf0)) w2s))
+                          ((Pair (Some f0) lf0)
+                           (match
+                             (impl_replay lf0
+                               (make Im (view rest) (impl iforms) (done Nil) (fx f0) (file ifile)
+                                 (vparts (Fx.parts f))
+                                 (all rest))
+                               (import_depth)
+                               w2s)
+                             ((Pair (Pair lf2 im) w3)
+                              (Pair
+                                (ld_with_e (merge_impl_recs l1 (ld_recs lf2))
+                                  (es_merge (Load.etab l1) (Load.etab lf2)))
+                                w3))))))))))))))))))))
 ;; the fork's records under IMPL; DISCHARGE and IMPL-ERROR as themselves
 (fn merge_impl_recs ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
@@ -3949,11 +3981,16 @@
 
 ;; the implementation check's state: the view's forms still to replay, the
 ;; implementation's forms not yet consumed (file order), the parameters
-;; discharged so far, the fork's file context, the implementation file
+;; discharged so far, the fork's file context, the implementation file, the view's
 (record Im (view (List SExpr)) (impl (List SExpr)) (done (List (Pair Symbol Name))) (fx Fx)
   (file (List (List Int)))
+  (vparts (List (List Int)))
   (all (List SExpr)))
 (fn im_file ((i Im)) (List Int) (join_path (Im.file i)))
+;; the fork's file context for a form of the implementation file, and for a form of the view
+;; replayed: a record names the file its form stands in, and an import resolves from there
+(fn im_fx_impl ((i Im)) Fx (with Fx (Im.fx i) (parts (Im.file i))))
+(fn im_fx_view ((i Im)) Fx (with Fx (Im.fx i) (parts (Im.vparts i))))
 (fn im_with_fx ((i Im) (f Fx)) Im (with Im i (fx f)))
 (fn im_with_impl ((i Im) (p (List SExpr))) Im (with Im i (impl p)))
 (fn im_with_view ((i Im) (v (List SExpr))) Im (with Im i (view v)))
@@ -3978,7 +4015,7 @@
            (match (replay_decl l im1 s fuel w)
              ((Pair (Pair l2 im2) w2) (impl_replay l2 im2 (- fuel 1) w2))))
          (_
-           (match (load_forms l (Im.fx im1) (list s) fuel w)
+           (match (load_forms l (im_fx_view im1) (list s) fuel w)
              ((Pair (Pair l2 (Some f2)) w2) (impl_replay l2 (im_with_fx im1 f2) (- fuel 1) w2))
              ((Pair (Pair l2 None) w2) (Pair (Pair l2 im1) w2))))))))))
 ;; one view form in the fork: a parameter is discharged by the implementation's form
@@ -4002,7 +4039,7 @@
             (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) "(requirement NAME …)")) im)
             w))
         (n (discharge l im (quote requirement) n s fuel w)))
-      (match (load_decl l (Im.fx im) s)
+      (match (load_decl l (im_fx_view im) s)
         ((Pair l2 f2) (Pair (Pair l2 (im_with_fx im f2)) w))))))))
 ;; (sig type (NAME …)) / (sig type NAME) / (sig fn NAME …): its kind and qualified name
 (fn sig_kind_name ((sc Scope) (s SExpr)) (Option (Pair Symbol Name))
@@ -4086,11 +4123,11 @@
 ;; PROOF) — the requirement's statement re-read here, the proof checked or
 ;; pending; anything else the implementation's own
 (fn impl_form ((l Load) (im Im) (s SExpr) (fuel Int) (w World)) (Pair (Pair Load Im) World)
-  (let ((sc (fx_scope l (Im.fx im))) (h (form_head s)))
+  (let ((sc (fx_scope l (im_fx_impl im))) (h (form_head s)))
     (match (form_of s)
       (FDecl
         (if (sym_eq h (quote type))
-          (match (load_decl l (Im.fx im) s)
+          (match (load_decl l (im_fx_impl im) s)
             ((Pair l1 f1)
              (let ((n (form_name sc s)))
                (match (find_sig (Im.all im) sc (quote type) n)
@@ -4105,7 +4142,7 @@
                         w))))))))
         (if (sym_eq h (quote fn))
           (let ((n (form_name sc s)))
-            (match (load_e_form l (Im.fx im) s)
+            (match (load_e_form l (im_fx_impl im) s)
               ((Pair l0 f0)
                (match (find_sig (Im.all im) sc (quote fn) n)
                  (None (Pair (Pair l0 (im_with_fx im f0)) w))
@@ -4126,7 +4163,8 @@
                     (None  ; no requirement: an obligation of a measured fn of the implementation discharges as in a plain file (slice 3.30 landing 2)
                       (match (obligation_named l sc s)
                         ((Some (Pair k proof))
-                         (let ((l1 (load_discharge l (Im.fx im) k proof))) (Pair (Pair l1 im) w)))
+                         (let ((l1 (load_discharge l (im_fx_impl im) k proof)))
+                           (Pair (Pair l1 im) w)))
                         (None
                           (Pair
                             (Pair
@@ -4144,10 +4182,10 @@
                 (Pair (ld_rec l (RReadErr (im_file im) (quote bad_shape) "(fulfills NAME PROOF)"))
                   im)
                 w)))
-          (match (load_decl l (Im.fx im) s)
+          (match (load_decl l (im_fx_impl im) s)
             ((Pair l1 f1) (Pair (Pair l1 (im_with_fx im f1)) w)))))))
       (_
-        (match (load_forms l (Im.fx im) (list s) fuel w)
+        (match (load_forms l (im_fx_impl im) (list s) fuel w)
           ((Pair (Pair l1 (Some f1)) w1) (Pair (Pair l1 (im_with_fx im f1)) w1))
           ((Pair (Pair l1 None) w1) (Pair (Pair l1 im) w1)))))))
 ;; the view's (sig K NAME …) / (requirement NAME …) form for (k, n)
@@ -4197,7 +4235,7 @@
 ;; (the implementation file's, just loaded; a private file's, loaded by an import) — then the
 ;; parameter admitted to K where K can read the signature, an E parameter only where it cannot
 (fn check_signature ((l Load) (im Im) (sig SExpr) (n Name)) (Pair Load Im)
-  (let ((sc (fx_scope l (Im.fx im))))
+  (let ((sc (fx_scope l (im_fx_impl im))))
     (match (classify_form (Load.etab l) sc (Load.env l) sig)
       ((CErr e m) (Pair (ld_rec l (RReadErr (im_file im) e m)) im))
       ((COk (ESig _ snt sps srt))
@@ -4210,7 +4248,7 @@
                  ((Some _)
                   (Pair (ld_rec l (RDischarge n (quote defined))) (im_mark im (quote fn) n)))  ; the implementation's definition stands in the parameter's place (§8.5)
                  (None
-                   (match (admit_param l (Im.fx im) d k a)
+                   (match (admit_param l (im_fx_view im) d k a)
                      ((Pair l1 f1)
                       (Pair (ld_rec l1 (RDischarge n (quote fn)))
                         (im_mark (im_with_fx im f1) (quote fn) n)))))))
@@ -4229,24 +4267,24 @@
       ((COkT _ _) (Pair l im)))))
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
-  (let ((sc (fx_scope l (Im.fx im))))
+  (let ((sc (fx_scope l (im_fx_impl im))))
     (match
-      (rd_plain l sc Anon
-        (read_fulfills sc (Load.env l) rargs proof (producers_of l (Im.fx im)) (Load.mode l)))
+      (rd_plain l sc (im_file im) Anon
+        (read_fulfills sc (Load.env l) rargs proof (producers_of l (im_fx_impl im)) (Load.mode l)))
       ((Pair l rd)
        (match rd
-         ((RDErr e m) (Pair (ld_rec l (horizon_refusal (Im.fx im) e m)) im))
+         ((RDErr e m) (Pair (ld_rec l (horizon_refusal (im_fx_impl im) e m)) im))
          ((RDPending nn r)
           (Pair
             (ld_rec (ld_rec (ld_add_pending l nn) (RPending nn r)) (RDischarge n (quote pending)))
             (im_mark im (quote requirement) n)))
          ((RDOk ds)
-          (match (admit_under l (Im.fx im) ds)
+          (match (admit_under l (im_fx_impl im) ds)
             ((AdRefused subj reason)
-             (Pair (ld_rec l (refusal_rec l (Im.fx im) ds subj reason))
+             (Pair (ld_rec l (refusal_rec l (im_fx_impl im) ds subj reason))
                (im_mark im (quote requirement) n)))
             ((AdOk env1)
-             (match (policy_pass l (Im.fx im) env1 (Load.memo l) ds Nil)
+             (match (policy_pass l (im_fx_impl im) env1 (Load.memo l) ds Nil)
                ((PolBound _)
                 (Pair (ld_rec l (RLoadErr (im_file im) (quote closure_bound) (show_name n))) im))
                ((PolOut nn out)
@@ -4257,10 +4295,11 @@
                   (ld_rec
                     (recs_add
                       (ld_with_tbl (ld_with_env l env1 memo1)
-                        (tbl_add_all (Load.tbl l) (decls_declare env1 ds) (Fx.module (Im.fx im))))
+                        (tbl_add_all (Load.tbl l) (decls_declare env1 ds)
+                          (Fx.module (im_fx_impl im))))
                       recs)
                     (RDischarge n (quote proved)))
-                  (im_mark (im_with_fx im (mix_recs (Im.fx im) recs)) (quote requirement) n)))))))
+                  (im_mark (im_with_fx im (mix_recs (im_fx_impl im) recs)) (quote requirement) n)))))))
          (_ (Pair l im)))))))
 
 ;; the forms in order; None when the file's loading ended in an error
@@ -4277,7 +4316,14 @@
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
        ((FImportInit n)
         (match (init_through l n w)
-          ((Pair (Pair l1 (Some h)) w1) (load_forms l1 (fx_see_init f n h) r fuel w1))
+          ((Pair (Pair l1 (Some h)) w1)
+           (if (late_raise f h)
+             (Pair
+               (Pair
+                 (ld_rec l1 (RLoadErr (fx_file f) (quote late_init_import) (late_import_msg f n h)))
+                 None)
+               w1)
+             (load_forms l1 (fx_see_init f n h) r fuel w1)))
           ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)
@@ -4498,7 +4544,7 @@
      (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m)
      (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
-    ((RProved n _ k steps)
+    ((RProved n _ _ k steps)
      (append "PROVED "
        (append (show_name n)
          (append " req=" (append (req_show k) (append " (by " (append (show_sexprs steps) ")")))))))
@@ -4603,7 +4649,7 @@
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInit _ _ _) acc)
        ((RUnused _ _) acc)
-       ((RProved _ _ _ _) acc)
+       ((RProved _ _ _ _ _) acc)
        ((RSidecar _ _ _) acc)
        ((RRecon _ _ _) acc)
        ((REngine _ _) acc)

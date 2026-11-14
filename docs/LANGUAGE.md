@@ -138,7 +138,8 @@ environment but outside this closure cannot be cited.
 Each of these ends the importing file with a `LOAD-ERROR`: an absolute path (`absolute_import`), a
 path climbing above the root (`import_outside_root`), no such file (`missing_file`), a cycle
 (`import_cycle`), nesting deeper than 1,000 (`import_depth`), an imported file whose own loading
-failed (`import_failed`; it is not read a second time).
+failed (`import_failed`; it is not read a second time), an `(import Init …)` that follows a
+declaration and would raise the horizon (`late_init_import`, under "`use`").
 
 **Importing `Init`.** The loader is given one pinned export of Lean's `Init` library and an index
 of it (`--init`, `--init-index`). The export lists Init's declarations in dependency order, each
@@ -184,15 +185,19 @@ is listed without `Init.`); it is not an error.
 assumption policy ("Acceptance: axioms and policy"). By convention the directives lead the file;
 nothing checks their place or their order. A `use`, a file `import` and a `trusts` that stand
 after a declaration are accepted and act on the forms after them. Init's declarations are fetched
-once, after the leading directives: a later `(import Init …)` raises the horizon and fetches
-nothing. A name it should have brought is refused `above_horizon` with the horizon of the fetch
-and the line to move: `Int is declaration 470 of the export, at or above the horizon 70 (import
-Init Eq) the file's Init declarations were fetched at; the horizon was raised to 836 (import Init
-Int.decEq) after that, by an import that follows a declaration and fetches nothing: move that
-import before the first declaration`. That holds for a file loaded alone; where another root of
-the load fetched the name, it is found (`OPEN.md` §1). An implementation's own `(import Init …)`
-lines are read after its view's declarations and are late in this sense: the import that sets an
-implementation's horizon stands in its view.
+once, after the leading directives, at the horizon those set. An `(import Init …)` after a
+declaration that would raise the horizon is refused, and the file's loading ends: `LOAD-ERROR FILE
+late_init_import: (import Init Int.decEq) raises the module's horizon from 70 (import Init Eq) to
+836 after the file's Init declarations were fetched: an import of Init that raises the horizon
+stands before the file's first declaration — move it there` (`v3/pins/loader/init_import_late`;
+`init_import_late_none` for a file whose leading directives import no Init). One that does not
+raise the horizon is accepted and changes nothing (`init_import_late_same`). An implementation is
+read at its view's horizon: its own directives stand after the view's declarations, so an
+`(import Init …)` of the implementation past the view's horizon is refused the same way, and the
+import belongs in the view (`impl_import_late`). A *file* import after a declaration that brings a
+farther horizon is accepted, and the names this file cites between the two horizons are not
+fetched for it: one is `above_horizon` with the horizon of the fetch and the import to move — when
+the file is loaded alone (`OPEN.md` §1).
 
 ### How a name resolves
 
@@ -316,7 +321,11 @@ A failure is `IMPL-ERROR NAME REASON: …`, an error of the load: `impl_missing_
 `impl_missing_fn`, `impl_missing_fulfills`, `impl_type_arity`, `impl_signature`, and
 `fulfills_unknown` for a `fulfills` that names neither a requirement nor an obligation of one of the
 implementation's own functions. The implementation's own declarations print as their usual records
-behind `IMPL `: `IMPL DEFINE lib.push equations=lib.push.eq_1`.
+behind `IMPL `: `IMPL DEFINE lib.push equations=lib.push.eq_1`. A record of a form of the
+implementation names the implementation's file — `IMPL READ-ERROR lib/lib.shard …`, `IMPL
+LOAD-ERROR lib/lib.shard …` (`v3/pins/loader/impl_read_error`, `impl_load_error`) — and an import
+written there resolves from the implementation's directory, also where the view is in the
+directory form (`view_dir_form_private`).
 
 The fork's environment is dropped when the check ends: in the main load the parameters stay
 parameters (`PARAM lib.stack_refl requirement` is still there after `DISCHARGE … proved`). Only the
@@ -334,7 +343,7 @@ by convention lead the file, and declarations `(KEYWORD NAME …)`. The loader r
 declarations in order and prints one or more *records* for each: a line whose first word is the
 record's kind (`ACCEPT`, `DEFINE`, `RUNNABLE`, `REFUSE`, …). A directive may stand after a
 declaration: a `use`, a file `import` and a `trusts` are accepted there and act on the forms after
-them. A later `(import Init …)` fetches nothing ("`use`").
+them. An `(import Init …)` there that would raise the horizon is `late_init_import` ("`use`").
 
 | form | syntax | introduces | example (file) |
 |---|---|---|---|
@@ -1330,8 +1339,9 @@ An obligation delegated this way is discharged as a hand-written `fulfills` is: 
 `PROVED F.dec_N.proof …` and writes `(proof-for F.dec_N …)`; a load replays the block and prints
 `DISCHARGE F.dec_N proved`; without an entry the record is `PENDING F.dec_N.proof auto_missing`
 (`v3/pins/loader/auto_fulfills`; `engine_test.sh`). Inside the implementation of a view `auto` is
-not supported, in a `theorem` or a `fulfills`: no sidecar is read for the implementation file and
-`prove` writes none (`OPEN.md` §1).
+read the same way, in a `theorem`, in a requirement's `fulfills` and in an obligation's: the
+sidecar stands beside the implementation file, `DIR/DIR.auto.shard`, and `prove` writes it when it
+is given the directory, alone or after a consumer (`v3/pins/loader/auto_impl`).
 
 An entry is keyed by the *resolved requirement*: four numbers, `(req S D P E)`, each a 61-bit
 fingerprint. They detect a changed task and prove nothing: the block is always replayed, and K

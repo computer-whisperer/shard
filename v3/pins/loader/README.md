@@ -13,9 +13,10 @@ Some shell tests read the records of a case: `define_test.sh` (`route_callee`, `
 (`derive_size`, `derive_size_plain`), `wire_test.sh` (`wire_*`), `template_test.sh`
 (`template_e_first`), `store_test.sh` (`auto_core`, `auto_strategy_free`, `discharge_measure`),
 `messages_test.sh` (the text after the reason: `by_cases_arm_fields`, `by_cases_fields`,
-`init_two_imports`, `init_horizon_inherited`, `init_above_instance`, `init_above_instance_fn`,
-`match_dead_row`, `match_dead_row_def`, `ev_dead_row`, `define_nested`, `lean_mutual`,
-`reserved_instance`, `bool_bare`, `shadowed_head`),
+`init_two_imports`, `init_horizon_inherited`, `init_import_late`, `init_import_late_none`,
+`impl_import_late`, `impl_read_error`, `impl_load_error`, `init_above_instance`,
+`init_above_instance_fn`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`, `define_nested`,
+`lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`),
 `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh` and `lower_test.sh` (`basic`,
 `refused`, `read_error`, `view_basic`). Some harnesses run a case's program and compare values:
 `entry_test.shard` (`entry`, `entry_s`, `entry_shape`), `handle_test.shard` (`handle_door`, `entry`,
@@ -64,6 +65,7 @@ the reason its name spells, less a leading `by_`.
 | `init`, `init_nested`; refused: `init_not_found` (`init_name_not_found`) | Init's names are bare; two horizons in one load; a name the export does not declare |
 | `init_horizon`; refused: `init_horizon_beyond`, `init_above_horizon`, `init_above_horizon_by` (`above_horizon`) | a module sees Init up to its own horizon whatever an earlier file loaded; a name past it is refused with the import to write, also inside a `by` block |
 | refused: `init_two_imports`, `init_horizon_inherited` (`above_horizon`) | the refusal and the `INIT` record name the import that set the horizon: the farthest of several Init lines, or the imported file a horizon is inherited through |
+| `init_import_late_same`; refused: `init_import_late`, `init_import_late_none`, `impl_import_late` (`late_init_import`) | an `(import Init …)` after a declaration: accepted where it does not raise the horizon; refused where it would — in a file with a horizon, in a file read without one, and in an implementation past its view's horizon |
 | refused: `init_above_instance`, `init_above_instance_fn` (`above_horizon`) | an instance the fixed table supplies is taken only where the module sees it: `max` at `Nat` below `Nat.instMax`, in a theorem and in a `fn` |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
 | `type_flip`; refused: `type_e_only` (`unknown_constant`) | the same type is a logical type in a file that imports Init and a runtime-only type in one that does not |
@@ -75,6 +77,7 @@ the reason its name spells, less a leading `by_`.
 | cases | what they pin |
 |---|---|
 | `directory`, `view_basic`, `view_dir_form`, `view_helper` | a directory's view, its implementation checked as a second root, the `mod.req/mod.req.shard` form, a private helper type |
+| `view_dir_form_private`; refused: `impl_read_error` (`rfl_failed`), `impl_load_error` (`missing_file`) | an implementation's forms are read under its own file: an import resolves from its directory where the view is in the directory form, and a refusal names the implementation's file |
 | `view_fulfills_obligation`; `view_pending` (`pending sorry`) | a measured function inside an implementation discharging its own obligation; a requirement fulfilled by `sorry` |
 | `view_missing_type`, `view_missing_fn`, `view_missing_fulfills`, `view_signature`, `view_arity`, `view_fulfills_unknown` (each an `impl-error`) | each way an implementation can fail its view |
 | refused: `view_form`; `view_no_interface` (`missing_interface`), `view_sig_outside` (`sig_outside_view`), `view_req_scope` (`req_scope`) | the view file's own errors |
@@ -151,6 +154,7 @@ the reason its name spells, less a leading `by_`.
 | `reduce_using`, `reduce_dependent`; refused: `reduce_rule_unused`, `reduce_rule_open`; `reduce_rule_fn` (`rw_not_eq`), `rw_dependent` (`rw_motive`) | `reduce` with facts; a rewrite at an occurrence beside a proof that states it |
 | `auto_core`, `auto_tactic`, `auto_hints_changed`, `auto_strategy_free` | a theorem proven by `auto` replays its sidecar's entry; hints and binder names are outside the key |
 | `auto_fulfills`, `auto_other_root` | an obligation delegated with `auto` is discharged from the entry under its name, in a file with no `auto` theorem; an entry made for a file loaded alone fits when another root has admitted a parameter the file does not see |
+| `auto_impl` | `auto` inside the implementation of a view — a requirement's `fulfills`, a theorem, an obligation — replays the sidecar beside the implementation file, `lib/lib.auto.shard` |
 | `auto_missing`, `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env` (`pending`) | no entry; an entry made for another statement, dependency, policy or horizon |
 | `auto_schema_old`, `auto_schema_2`, `auto_recon_old`; refused: `auto_schema_future` (`sidecar_schema`), `auto_malformed` (`sidecar_malformed`) | older sidecar formats replay and are reported; a newer or malformed one is a load error |
 
