@@ -116,7 +116,7 @@ message says what to write. The second column of list 2 is that reason.
 | `a == b`, `a && b`, `a \|\| b`, `!a`; `∀ ∃ λ → ↔ ¬ ∧ ∨ ≤ ≥ ≠ ℕ ℤ ×` | `lean_symbol: X is Lean's spelling: write …` | the spelling the message gives: `(BEq.beq a b)` or the proposition `(= a b)`; `(and a b)`, `(or a b)`, `(not a)`; `(forall ((x T)) P)`, `(-> A B)`, `Nat`, `(Prod A B)` (pin `lean_symbol`) |
 | `(lt a b)`, `(le a b)`, `(int_eq a b)` — the comparison spellings of older shard sources | `renamed_primitive` | `(< a b)`, `(<= a b)`, `(= a b)` (pins `rename_refused`, `rename_ok`). Init's `Nat.lt` and `Nat.le` stay citable by name |
 | `(e : T)` | no such form | the position's expected type decides; to state one, `(let ((r T e)) r)` |
-| `(3 : Fin 5)` | `type_mismatch: expected (Fin 5), found Nat` | `(Fin.mk 3 h)` with `h` a named theorem: `(theorem one_lt_two () (< 1 …) (by (decide)))`, cited in `(@Fin.mk … 1 one_lt_two)` (`std/list.shard`) |
+| `(3 : Fin 5)` | `type_mismatch: expected (Fin 5), found Nat` | `(Fin.mk 3 h)` with `h` a named theorem: `(theorem one_lt_two () (< 1 …) (by (decide)))`, cited in `(@Fin.mk … 1 one_lt_two)` (pin `dependent_match`) |
 | `⟨3, by decide⟩` — `by` inside a term | `lean_symbol` | prove the fact as a named theorem and cite it (pin `lean_by_term`) |
 | `if p ∧ q then …`, `if a ≠ b then …`, an `if` on any proposition without a known decision | `no_decision` | nest the tests, `(if (<= 48 c) (<= c 57) false)` (pin `elab_bridge`); test `=` and swap the branches; or `(@ite T C DEC t e)` with the instance written. For `=` at a type of your own, `(derive T eq)` first |
 | a `match` where no type is expected | `match_motive` | write it as a definition's value or an argument, or `(let ((r T (match …))) r)` (pin `match_motive`) |
@@ -137,7 +137,7 @@ message says what to write. The second column of list 2 is that reason.
 | a `def` or an Init function called from a `fn` when it has no program | `no_realization: NAME: no realization attached — realize it first` | write the callee as a `fn`, or `(realize NAME …)` it (list 3) |
 | `{ xs : List Nat // P xs }` written in a `fn`'s signature | `(@Subtype (List Nat) (List.Pairwise Nat.le))` there is `REFUSE F unknown_type: @Subtype — its signature has no L reading: type_mismatch: expected (Sort 0), found (Sort 1)`; `(Subtype (List.Pairwise Nat.le))` is not refused, and the function is a program only (`RUNNABLE fn F why=e_only_type`) | name the carrier by a `def` (list 1, `Subtype`) |
 | `IO`, `do` | no such forms | an effect is a function that takes the `World` and returns it (list 3) |
-| in a body that has no reading in the logic — it mentions a `Symbol`, or its file imports no Init — a `dif`, `absurd`, a `fun`, `-` at `Nat` | `dif_needs_init`, `absurd_needs_init`, `function_value`, `nat_operator` | give the function a signature over Init's types (pins `dif_needs_init`, `absurd_e_first`); `Symbol` is the toolchain's own type |
+| in a body that has no reading in the logic — it mentions a `Symbol`, or its file imports no Init — a `dif`, `absurd`, a `fun` | `dif_needs_init`, `absurd_needs_init`, `function_value` | give the function a signature over Init's types (pins `dif_needs_init`, `absurd_e_first`); `Symbol` is the toolchain's own type |
 
 ## 3. Only in shard
 

@@ -3,40 +3,16 @@
 //! here and applies the native operation when args fit the expected
 //! shape.
 //!
-//! Primitives that return a user `Bool` (`int_eq`, `sym_eq`, `lt`,
-//! `le`) hardcode the constructor names `True` / `False`. This
+//! Primitives that return a user `Bool` (`=`, `sym_eq`, `<`,
+//! `<=`) hardcode the constructor names `True` / `False`. This
 //! couples the runtime to the stdlib's `(type Bool (False) (True))`
 //! definition — see REVISIT.md, "Primitive comparisons return user
 //! Bool". A future module-header directive will let the bool ctor
 //! names be configurable.
-//!
-//! `=`, `<`, `<=` are V3's spellings of `int_eq`, `lt`, `le`
-//! (v3/LANGUAGE.md §8.4, slice 3.17 rule 5); the old tree's spellings are
-//! still read. lib.rs's `NATIVE_ALIASES` is their spec list, swept against
-//! the names they stand for. `canonical_prim` is the one spelling `eval
-//! dump` prints.
-//!
-//! `gen_fresh` is the documented effectful primitive — REVISIT.md,
-//! "Fresh-symbol generation as an effectful primitive". Implemented
-//! with a global atomic counter; sequential and unique within a
-//! process.
-
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use num_traits::{Signed, ToPrimitive, Zero};
 
-use crate::ast::{Expr, IntLit as Int, Symbol};
-
-/// The spelling `eval dump` prints for a comparison primitive: V3's
-/// (the E table's identity), whichever the source wrote.
-pub fn canonical_prim(name: &str) -> &str {
-    match name {
-        "int_eq" => "=",
-        "lt" => "<",
-        "le" => "<=",
-        other => other,
-    }
-}
+use crate::ast::{Expr, IntLit as Int};
 
 /// Try to apply a primitive to fully-reduced args. Returns `Some(e)`
 /// if `name` is a known primitive and the args fit the expected
@@ -79,14 +55,10 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("bshr", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a >> shift_amount(b)?)),
 
         // Equality / comparison — return user-defined `Bool` ctor.
-        ("int_eq" | "=", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
+        ("=", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
         ("sym_eq", [SymLit(a), SymLit(b)]) => Some(bool_ctor(a == b)),
-        ("lt" | "<",   [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
-        ("le" | "<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
-
-        // Fresh symbol generation. Zero-arity; each call yields a
-        // unique Symbol of the form "_fresh<N>". Effectful.
-        ("gen_fresh", []) => Some(SymLit(gen_fresh_name())),
+        ("<",   [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
+        ("<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
         // Symbol ↔ characters. The bridge a self-hosted parser needs:
         // text is made of symbols, but `Symbol` is otherwise opaque
@@ -155,11 +127,4 @@ fn bool_ctor(b: bool) -> Expr {
         if b { "True" } else { "False" }.into(),
         Vec::new(),
     )
-}
-
-static FRESH_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn gen_fresh_name() -> Symbol {
-    let n = FRESH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("_fresh{n}")
 }

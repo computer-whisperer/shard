@@ -58,7 +58,7 @@ citation:
 the loader's instance table does not hold (`Std.LawfulLeftIdentity`). A sorted list: `insert`,
 `mem_insert`, `insert_sorted`, and `Sorted`, the type `Subtype (List.Pairwise Nat.le)`, with
 `sorted_insert` keeping the proof. `Sorted` is named by a `def` because a `fn` signature reads
-`@Subtype` at the wrong universe. `sorted_demo` and `get_demo` are small closed uses.
+`@Subtype` at the wrong universe. `sorted_nil` is the empty one.
 
 ## `bytes.shard`
 

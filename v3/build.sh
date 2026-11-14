@@ -73,7 +73,7 @@ stamp_files() {
   if [ -s "v3/bin/emit/$1/extra" ]; then
     while IFS= read -r d; do find "$d" -name '*.shard' | LC_ALL=C sort; done < "v3/bin/emit/$1/extra"
   fi
-  printf '%s\n' v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/k/mod.req.shard v3/kernel/rt.h
+  printf '%s\n' v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/rt.h
 }
 # the stamp of NAME from its emitted sources list; empty when never emitted
 stamp_of() {

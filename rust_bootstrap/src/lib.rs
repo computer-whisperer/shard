@@ -157,7 +157,7 @@ mod tests {
         );
         // Comparisons see magnitude, not truncated bits.
         assert_eq!(
-            eval_str(m, "(lt 9223372036854775807 (+ 9223372036854775807 1))"),
+            eval_str(m, "(< 9223372036854775807 (+ 9223372036854775807 1))"),
             true_v()
         );
     }
@@ -214,17 +214,6 @@ mod tests {
         assert_eq!(eval_str(m, "(bshr 16 2)"),  ast::Expr::IntLit(4.into()));
     }
 
-    #[test]
-    fn prim_bool_returning() {
-        let m = "(fn id ((x Int)) Int x)";
-        assert_eq!(eval_str(m, "(int_eq 3 3)"), true_v());
-        assert_eq!(eval_str(m, "(int_eq 3 4)"), false_v());
-        assert_eq!(eval_str(m, "(lt 1 2)"),     true_v());
-        assert_eq!(eval_str(m, "(lt 2 1)"),     false_v());
-        assert_eq!(eval_str(m, "(le 5 5)"),     true_v());
-        assert_eq!(eval_str(m, "(le 6 5)"),     false_v());
-    }
-
     /// V3's spellings of the three comparisons (v3/LANGUAGE.md §8.4,
     /// slice 3.17 rule 5): the same operations, in a call and as an
     /// `if` condition (the fused-compare path).
@@ -250,16 +239,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prim_gen_fresh_unique() {
-        let m = "(fn id ((x Int)) Int x)";
-        let a = eval_str(m, "(gen_fresh)");
-        let b = eval_str(m, "(gen_fresh)");
-        assert!(matches!(a, ast::Expr::SymLit(_)));
-        assert!(matches!(b, ast::Expr::SymLit(_)));
-        assert_ne!(a, b);
-    }
-
     // ------------------------------------------------------------------
     // Slice 3: control flow — if, match, let — and ADTs.
     // ------------------------------------------------------------------
@@ -269,7 +248,7 @@ mod tests {
     fn if_branches() {
         let src = r#"
 (type Bool (False) (True))
-(fn abs ((x Int)) Int (if (lt x 0) (- 0 x) x))
+(fn abs ((x Int)) Int (if (< x 0) (- 0 x) x))
 "#;
         let m = load::module_from_str(src).expect("loads");
         for (input, expected) in [("(abs -5)", 5), ("(abs 7)", 7), ("(abs 0)", 0)] {
@@ -453,7 +432,7 @@ mod tests {
     const SHARED_INT2: &[&str] = &[
         "+", "-", "*", "/", "mod", "tmod", "ediv",
         "band", "bor", "bxor", "bshl", "bshr",
-        "int_eq", "lt", "le",
+        "=", "<", "<=",
     ];
 
     /// The Int value matrix: zero, units, small values, sign mixes,
@@ -534,37 +513,6 @@ mod tests {
             (got, want) => panic!(
                 "fast path vs table at ({name} {args:?}): evaluator {got:?}, table {want:?}"
             ),
-        }
-    }
-
-    /// V3's spellings of the three comparisons (v3/LANGUAGE.md §8.4, slice
-    /// 3.17 rule 5): NATIVE-ONLY names — the object table does not carry
-    /// them, since this host runs both trees and the old one never writes
-    /// them in a `fn` body. Each is the operation of the shared name it
-    /// stands for.
-    const NATIVE_ALIASES: &[(&str, &str)] = &[("=", "int_eq"), ("<", "lt"), ("<=", "le")];
-
-    /// Each alias agrees with its shared name on the full pair matrix, in
-    /// the table and on the evaluator's fast arms.
-    #[test]
-    fn prim_conformance_native_aliases() {
-        let m = ast::Module::default();
-        let vals = int_matrix();
-        for (alias, name) in NATIVE_ALIASES {
-            for a in &vals {
-                for b in &vals {
-                    let args = [
-                        ast::Expr::IntLit(a.clone()),
-                        ast::Expr::IntLit(b.clone()),
-                    ];
-                    assert_eq!(
-                        prim::try_apply(alias, &args),
-                        prim::try_apply(name, &args),
-                        "alias drift: ({alias} {args:?}) vs {name}"
-                    );
-                    fast_path_point(&m, alias, &args);
-                }
-            }
         }
     }
 

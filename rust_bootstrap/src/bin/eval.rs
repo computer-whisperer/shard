@@ -41,7 +41,7 @@ fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
             return None;
         }
         match items[0].as_symbol()? {
-            "import" | "use-module" => items[1].as_str().map(|s| s.to_string()),
+            "import" => items[1].as_str().map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -249,36 +249,6 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                     None => ctor("Pair", vec![ctor("None", vec![]), w1]),
                 })
             }
-            // directory entries as (Some (List (Pair is_dir name))), or None if
-            // the path is not a readable directory. Each entry is a
-            // (Pair Bool (List Int)): the is-directory flag plus the entry's
-            // basename bytes (binary-safe, raw on unix — same convention as
-            // read_file paths). Sorted by name so the listing is deterministic
-            // (the OS yields directory entries in arbitrary order).
-            "read_dir" => match std::fs::read_dir(path_of_bytes(&args[0])) {
-                Ok(rd) => {
-                    use std::os::unix::ffi::OsStrExt as _;
-                    let mut ents: Vec<(bool, Vec<u8>)> = rd
-                        .flatten()
-                        .map(|e| {
-                            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                            (is_dir, e.file_name().as_bytes().to_vec())
-                        })
-                        .collect();
-                    ents.sort_by(|a, b| a.1.cmp(&b.1));
-                    let items: Vec<ast::Expr> = ents
-                        .into_iter()
-                        .map(|(is_dir, name)| {
-                            ctor(
-                                "Pair",
-                                vec![ctor(if is_dir { "True" } else { "False" }, vec![]), byte_list(&name)],
-                            )
-                        })
-                        .collect();
-                    Ok(ctor("Pair", vec![ctor("Some", vec![list_of(items)]), w1]))
-                }
-                Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
-            },
             "write" => {
                 let out = list_bytes(&args[0]);
                 let mut stdout = std::io::stdout();
@@ -297,26 +267,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                     vec![ctor(if ok { "True" } else { "False" }, vec![]), w1],
                 ))
             }
-            // Blocking line-read from stdin: first byte as (Some b). A bare 'q',
-            // an empty line typed as "q", or EOF ends the session as (None).
-            // Returns (Pair (Option Int) World). Line-buffered (REPL-style): the
-            // player types a key and presses Enter; any non-w/a/s/d byte is an
-            // inert "advance in the current heading" tick.
-            "read_key" => {
-                let _ = std::io::stdout().flush();
-                let mut line = String::new();
-                let opt = match std::io::stdin().read_line(&mut line) {
-                    Ok(0) => ctor("None", vec![]), // EOF
-                    Ok(_) => match line.bytes().next() {
-                        Some(b'q') => ctor("None", vec![]), // quit key
-                        Some(b) => ctor("Some", vec![ast::Expr::IntLit(b.into())]),
-                        None => ctor("None", vec![]),
-                    },
-                    Err(_) => ctor("None", vec![]),
-                };
-                Ok(ctor("Pair", vec![opt, w1]))
-            }
-            "write_line" | "emit" => {
+            "write_line" => {
                 let mut out = list_bytes(&args[0]);
                 out.push(b'\n');
                 let mut stdout = std::io::stdout();
@@ -334,7 +285,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 std::process::exit(code);
             }
             other => Err(format!(
-                "unknown extern `{}` (eval handler: get_args/read_file/read_range/read_dir/write/write_file/write_line/emit/read_key/exit)",
+                "unknown extern `{}` (eval handler: get_args/read_file/read_range/write/write_file/write_line/exit)",
                 other
             )),
         }

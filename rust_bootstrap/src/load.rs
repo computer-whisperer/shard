@@ -183,10 +183,7 @@ pub fn module_from_str_with_base(
             "type" => {}
             "fn" => module.fns.push(load_fn_def(&parts[1..], &ctors)?),
             "extern" => module.externs.push(load_extern_def(&parts[1..], &ctors)?),
-            // `app` is the entrypoint declaration consumed by the
-            // `check app` driver (state + init + update), not the module
-            // loader — skip it here exactly like claim/import.
-            // `use`/`sig`/`requirement`/`fulfills`/`bin` are likewise
+            // `use`/`sig`/`requirement`/`fulfills`/`bin` are
             // check-layer declarations with no runtime semantics: `use`
             // scoping matters only to STRICT check-time resolution (host
             // dispatch is name-keyed), and the contract forms are the
@@ -196,7 +193,7 @@ pub fn module_from_str_with_base(
             // trusts`; v3/LANGUAGE.md §4) are K's, never this executor's:
             // under the one E (§8.1) a file holds them beside its E forms
             // and this loader reads the E half (slice 3.2).
-            "claim" | "axiom" | "import" | "use-module" | "app" | "cli" | "use"
+            "axiom" | "import" | "use"
             | "sig" | "requirement" | "fulfills" | "bin"
             | "def" | "theorem" | "abbrev" | "opaque" | "inductive" | "structure"
             | "realize" | "trusts" => {}

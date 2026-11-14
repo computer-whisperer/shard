@@ -45,7 +45,7 @@ fail=0; checks=0; s0=$(date +%s)
 bad() { echo "native_tie_test: $*"; fail=$((fail+1)); }
 # the authored tree: every tracked file under v3 unmodified, and no new file under the authored
 # directories (the suite's other entrypoints keep their scratch roots directly under v3/)
-tree_state() { { git status --porcelain --untracked-files=no -- v3; git status --porcelain --untracked-files=all -- v3/kernel v3/pins v3/examples v3/std; } 2>/dev/null | grep -v "native_tie_" | sort -u; }
+tree_state() { { git status --porcelain --untracked-files=no -- v3; git status --porcelain --untracked-files=all -- v3/kernel v3/pins v3/examples v3/std v3/tools v3/models; } 2>/dev/null | grep -v "native_tie_" | sort -u; }
 before=$(tree_state)
 
 # ---- the comparison: two result directories (out, err, rc, artifacts/…) byte for byte

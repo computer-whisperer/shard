@@ -1626,8 +1626,6 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--root DIR` | the package root; required (`load: --root DIR is required`, exit 2) |
 | `--init EXPORT` | the pinned export of Lean's `Init`, one file |
 | `--init-index INDEX` | the export's index (built by `v3/kernel/initindex.shard`) |
-| `--route N` | the text after `route=` on the header line (default `3`) |
-| `--engine S` | the text after `engine=` on the header line (default `bootstrap`) |
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--store DIR` | after a clean load, write every admitted constant under DIR: `STORE: DIR new=N shared=M` |
@@ -1645,7 +1643,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 line, one record per event in the order it happened, and a line of counts:
 
 ```
-LOAD root=DIR route=3 engine=bootstrap
+LOAD root=DIR
 …records…
 LOAD: modules 10  accepted 404  runnable 6  refused 0  pending 0  realized 12  defined 61  errors 0
 ```

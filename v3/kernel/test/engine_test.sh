@@ -28,7 +28,6 @@ SCRATCH=$(mktemp -d -p v3 engine_scratch_XXXXXX)
 trap 'rm -rf "$OUT" "$SCRATCH"' EXIT
 fail=0; checks=0
 bad() { echo "engine_test: $*"; fail=$((fail+1)); }
-check() { checks=$((checks+1)); "$@" || bad "check $checks: $*"; }
 
 # ---- (1) the example: replay, then regeneration
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/auto/auto.shard > "$OUT/load.txt" 2>&1

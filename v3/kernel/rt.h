@@ -36,8 +36,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 
@@ -307,9 +305,6 @@ static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(
 #define RT_BIG_MAXLIMB 120  /* ~2^3840; stays inside the GC size classes */
 _Static_assert(RT_BIG_MAXLIMB + 1 <= RT_MAX_ARITY, "a bignum cell is inside the size classes");
 
-static inline int rt_is_big(value_t v) {
-  return !(v & 1) && rt_cellof(v)->tag == RT_TAG_BIG_;
-}
 static inline int rt_big_sign(value_t v) { return (int)rt_untag(rt_field(v, 0)); }
 static inline uint32_t rt_big_n(value_t v) { return rt_cellof(v)->arity - 1; }
 static inline uint32_t rt_big_limb(value_t v, uint32_t i) {
@@ -878,45 +873,6 @@ static value_t rt_read_range(value_t path, value_t off, value_t n, value_t w) {
   free(buf);
   return rt_pair(rt_some(acc), w);
 }
-/* directory entries as (Some (List (Pair is_dir name))), or None if the path
- * is not a readable directory. Mirrors eval.rs read_dir: each entry is a
- * (Pair Bool (List Int)) of the is-directory flag and the basename bytes,
- * sorted by name so the listing is deterministic. */
-static int rt_name_cmp(const void *a, const void *b) {
-  return strcmp(*(const char *const *)a, *(const char *const *)b);
-}
-static value_t rt_read_dir(value_t path, value_t w) {
-  char *p = rt_cstr(path, 0);
-  DIR *d = opendir(p);
-  if (!d) { free(p); return rt_pair(rt_none_, w); }
-  /* collect names, then sort for a deterministic listing */
-  size_t cap = 16, n = 0;
-  char **names = malloc(cap * sizeof(char *));
-  struct dirent *de;
-  while ((de = readdir(d))) {
-    if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
-    if (n == cap) { cap *= 2; names = realloc(names, cap * sizeof(char *)); }
-    names[n++] = strdup(de->d_name);
-  }
-  closedir(d);
-  qsort(names, n, sizeof(char *), rt_name_cmp);
-  value_t acc = rt_nil_;
-  for (size_t k = n; k > 0; k--) {
-    const char *nm = names[k - 1];
-    /* is_dir via stat on the joined path */
-    size_t pl = strlen(p), nl = strlen(nm);
-    char *full = malloc(pl + nl + 2);
-    memcpy(full, p, pl); full[pl] = '/'; memcpy(full + pl + 1, nm, nl); full[pl + nl + 1] = 0;
-    struct stat st;
-    int is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
-    free(full);
-    value_t namelist = rt_str_list(nm);
-    acc = rt_cons(rt_pair(rt_bool(is_dir), namelist), acc);
-    free((void *)nm);
-  }
-  free(names); free(p);
-  return rt_pair(rt_some(acc), w);
-}
 static value_t rt_write(value_t s, value_t w) {
   size_t n; char *p = rt_cstr(s, &n);
   fwrite(p, 1, n, stdout); fflush(stdout); free(p);
@@ -937,10 +893,6 @@ static value_t rt_write_file(value_t path, value_t bytes, value_t w) {
 }
 static value_t rt_exit(value_t code, value_t w) {
   (void)w; fflush(stdout); exit((int)rt_untag(code));
-}
-static value_t rt_read_key(value_t w) {
-  int c = getchar();
-  return rt_pair(c == EOF ? rt_none_ : rt_some(rt_tag_int(c)), w);
 }
 
 static value_t rt_no_match(const char *fn) {

@@ -19,7 +19,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | K's verdict and axiom closure for a declaration are Lean's. | `v3/t0_axioms_cmp.sh`; `t0_fixture_test.sh` |
 | K refuses hostile input, each case for a stated reason. | `hostile_test.shard` |
 | The standard profile has three axioms: `propext`, `Quot.sound`, `Classical.choice`. | pins `policy_axiom`, `policy_cross`, `policy_trusts`, `init_name_taken_l`; `std_test.sh` |
-| K answers Accepted, Rejected with one of five reasons, or Exhausted; Exhausted is neither; every negative names its subject. | `v3/kernel/verdict.shard`; `hostile_test.shard` case 12; `t0_gate_test.sh` |
+| K answers Accepted, Rejected with one of four reasons, or Exhausted; Exhausted is neither; every negative names its subject. | `v3/kernel/verdict.shard`; `hostile_test.shard` case 12; `t0_gate_test.sh` |
 | A "not established" answer is never read as a disproof and never widened to a region of candidates. | no test found |
 | K holds no unification, elaboration, type classes, tactics, arithmetic procedure, measure recogniser, file access or global state. | no test of the absence; clients reach K through its view only (pins `private_module`, `k_client_reach`; `k_clients_test.sh`) |
 | A checked environment comes only from admission and cannot be built or forged by a client. | `v3/kernel/k/mod.req.shard`; pins `k_client_reach`, `k_client_admit`, `k_client_transfer` |

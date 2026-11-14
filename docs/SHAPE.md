@@ -103,7 +103,7 @@ the development machine and about 65 in CI.
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/examples/` | 2,300 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
-| `rust_bootstrap/` | 3,700 lines of Rust | the bootstrap evaluator |
+| `rust_bootstrap/` | 3,500 lines of Rust | the bootstrap evaluator |
 | `tools/zed-shard/` | | an editor grammar |
 | `shard-viewer/` | | a viewer for the previous generation's proofs; unused by this tree |
 
