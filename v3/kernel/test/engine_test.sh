@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # v3/kernel/test/engine_test.sh — the producers (v3/LANGUAGE.md §8.4 slice 3.22, landing 2;
-# law §7.5). Two parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
+# law §7.5). Three parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
 # replays the committed sidecar (auto.auto.shard) — 11 theorems accepted by name, `beyond`
 # pending auto_missing, nothing searched —, and prove.shard regenerates the sidecar into a
 # scratch copy of the example under v3/ (the loader reads repository-relative paths), which
 # must be byte-identical to the committed one but for the fingerprints (the copy is another
 # module, and a statement's fingerprint carries the module's name): the engine's output is reproducible and the
-# sidecar is machine-owned. (2) The engine's reach over calc's 100 claims (the slice's third
+# sidecar is machine-owned. (1b) An obligation delegated with `auto` — `(fulfills f.dec_N auto)`
+# in a file with no `auto` theorem — is proved by prove.shard, entered in the sidecar under the
+# obligation's name and discharged from it by a load; a second prove searches nothing.
+# (2) The engine's reach over calc's 100 claims (the slice's third
 # ruling): prove.shard --measure over the five leaves of tactic_test.sh runs the engine on
 # every hand-written theorem's statement unaided; the names it closes must be exactly
 # engine_calc.txt's (a change either way is a report, not a silent drift) and the count is
@@ -42,6 +45,22 @@ mask() { sed -E 's/^\(proof-for ([^ ]+) \(req [0-9 ]+\) /(proof-for \1 KEY /' "$
 checks=$((checks+1)); cmp -s <(mask "$SCRATCH/auto.auto.shard") <(mask v3/examples/auto/auto.auto.shard) || { bad "the regenerated sidecar differs from the committed one"; diff <(mask "$SCRATCH/auto.auto.shard") <(mask v3/examples/auto/auto.auto.shard) | head -6 | cut -c1-300; }
 checks=$((checks+1)); cmp -s "$SCRATCH/auto.shard" v3/examples/auto/auto.shard || bad "prove wrote into the source"
 echo "engine_test: the example replays 11 theorems from its sidecar and prove regenerates it byte-identical"
+
+# ---- (1b) an obligation delegated with auto: a file whose only `auto` stands in a fulfills.
+# prove writes the entry under the obligation's name as the source writes it; then a load
+# discharges the obligation from it and a second prove finds nothing to search
+printf '%s\n' '(import Init UInt8.toNat)' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/fulfills.shard"
+M=$(basename "$SCRATCH").fulfills
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove.txt" 2>&1
+checks=$((checks+1)); grep -q 'proved 1  unsolved 0  sidecars written 1$' "$OUT/f_prove.txt" || { bad "prove did not discharge the delegated obligation"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/f_prove.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q '^(proof-for dn\.dec_1 (req ' "$SCRATCH/fulfills.auto.shard" 2>/dev/null || { bad "the sidecar's entry does not bear the obligation's name dn.dec_1"; grep '^(proof-for' "$SCRATCH/fulfills.auto.shard" 2>/dev/null | cut -c1-120; }
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_load.txt" 2>&1 &
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove2.txt" 2>&1 &
+wait
+checks=$((checks+1)); { grep -q "^DISCHARGE $M.dn.dec_1 proved$" "$OUT/f_load.txt" && ! grep -q '^PENDING' "$OUT/f_load.txt" && grep -q 'pending 0 .*errors 0$' "$OUT/f_load.txt"; } || { bad "a load does not discharge the obligation from the sidecar"; grep -E 'PENDING|ERROR|^LOAD:' "$OUT/f_load.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q "^PROVED" "$OUT/f_load.txt" && bad "the build searched for the obligation (a PROVED record under load.shard)"
+checks=$((checks+1)); grep -q 'proved 0  unsolved 0  sidecars written 0$' "$OUT/f_prove2.txt" || { bad "a second prove searched again"; grep -E 'PROVE:' "$OUT/f_prove2.txt" | cut -c1-300; }
+echo "engine_test: an obligation delegated with auto is proved once, entered under its name and discharged from the sidecar"
 
 # ---- (2) the count over calc
 measure() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT --measure "v3/examples/calc/$1.shard" > "$OUT/m_$1.txt" 2>&1; }

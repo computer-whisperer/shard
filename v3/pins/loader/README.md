@@ -5,12 +5,17 @@ resolve under `CASE/`, and its first line states the outcome the load must have.
 Init reads the pinned export on demand, up to the horizon its `(import Init NAME)` sets.
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome
-with the header; `v3/test.sh` runs it. `v3/kernel/test/loader_test.shard` holds the cases a header
+with the header; `v3/test.sh` runs it, and `loader_pins_list_test.sh` requires that the list and
+this directory name the same cases. `v3/kernel/test/loader_test.shard` holds the cases a header
 cannot state (two root files in order, a wrong export, the records' text, a loaded program run).
 Some shell tests read the records of a case: `define_test.sh` (`route_callee`, `discharge_measure`,
 `registry_native`, `decidable_cells`, `mutual_measure`, `derive_refusals`), `derive_test.sh`
 (`derive_size`, `derive_size_plain`), `wire_test.sh` (`wire_*`), `template_test.sh`
 (`template_e_first`), `store_test.sh` (`auto_core`, `auto_strategy_free`, `discharge_measure`),
+`messages_test.sh` (the text after the reason: `by_cases_arm_fields`, `by_cases_fields`,
+`init_two_imports`, `init_horizon_inherited`, `init_above_instance`, `init_above_instance_fn`,
+`match_dead_row`, `match_dead_row_def`, `ev_dead_row`, `define_nested`, `lean_mutual`,
+`reserved_instance`, `bool_bare`, `shadowed_head`),
 `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh` and `lower_test.sh` (`basic`,
 `refused`, `read_error`, `view_basic`). Some harnesses run a case's program and compare values:
 `entry_test.shard` (`entry`, `entry_s`, `entry_shape`), `handle_test.shard` (`handle_door`, `entry`,
@@ -58,6 +63,8 @@ the reason its name spells, less a leading `by_`.
 | refused: `read_error` (`unterminated_list`); `retry` (`bad_constructor`) | a file that does not read; a file whose reading failed is loaded once |
 | `init`, `init_nested`; refused: `init_not_found` (`init_name_not_found`) | Init's names are bare; two horizons in one load; a name the export does not declare |
 | `init_horizon`; refused: `init_horizon_beyond`, `init_above_horizon`, `init_above_horizon_by` (`above_horizon`) | a module sees Init up to its own horizon whatever an earlier file loaded; a name past it is refused with the import to write, also inside a `by` block |
+| refused: `init_two_imports`, `init_horizon_inherited` (`above_horizon`) | the refusal and the `INIT` record name the import that set the horizon: the farthest of several Init lines, or the imported file a horizon is inherited through |
+| refused: `init_above_instance`, `init_above_instance_fn` (`above_horizon`) | an instance the fixed table supplies is taken only where the module sees it: `max` at `Nat` below `Nat.instMax`, in a theorem and in a `fn` |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
 | `type_flip`; refused: `type_e_only` (`unknown_constant`) | the same type is a logical type in a file that imports Init and a runtime-only type in one that does not |
 | `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
@@ -72,7 +79,7 @@ the reason its name spells, less a leading `by_`.
 | `view_missing_type`, `view_missing_fn`, `view_missing_fulfills`, `view_signature`, `view_arity`, `view_fulfills_unknown` (each an `impl-error`) | each way an implementation can fail its view |
 | refused: `view_form`; `view_no_interface` (`missing_interface`), `view_sig_outside` (`sig_outside_view`), `view_req_scope` (`req_scope`) | the view file's own errors |
 | refused: `view_eq_hidden` (`unknown_constant`), `view_rfl` (`type_mismatch`) | a consumer cannot cite an implementation's equation or compute through its body |
-| `private_inside`, `sealed_module`; refused: `private_module` | files behind a view are private to their directory, which is one module across its files |
+| `private_inside`, `sealed_module`; refused: `private_module`, `private_dir` (`private_module`) | files behind a view are private to their directory, which is one module across its files; so is a directory module nested behind it |
 | `impl_e_only`, `match_in_impl`; `route_sig_callee` (`runnable no_l_meaning`); refused: `if_private` (`private_if`), `derive_sig` (`derive_type`) | a runtime-only implementation type; a matcher inside an implementation; a view function with no logical reading as a callee; an `if` and a derivation on a view's type |
 | refused: `k_client_reach` (`function_expected`), `k_client_admit`, `k_client_transfer` (`unknown_head`) | a client of the checker's view cannot name what the view does not export |
 
@@ -83,6 +90,8 @@ the reason its name spells, less a leading `by_`.
 | `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_symbol`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, a symbol, `(list …)`, nested patterns, a string literal |
 | `ev_profile`; refused: `ev_profile_form` (`unknown_constant`) | a file that sees no Init is a program only; a `def` there cannot cite `Int` |
 | refused: `ev_unknown_head` (`unknown_head`), `ev_unsaturated`, `ev_fn_value` (`type_mismatch`), `ev_ambiguous` (`ambiguous_name`), `ev_nonexhaustive` (`match_not_exhaustive`), `ev_pattern_type` (`pattern_constructor`), `ev_no_l_meaning` (`unknown_constant`) | the refusals of a body |
+| refused: `match_dead_row`, `match_dead_row_def`, `ev_dead_row` (`unreachable_arm`) | a row that matches every value — `_`, or a name no constructor bears, such as a misspelt one — with rows after it: in a `fn`, in a `def`, in a file that sees no Init; a capitalised variable in a last row stays a variable |
+| refused: `bool_bare` (`unknown_constant`), `shadowed_head` (`function_expected`), `lean_mutual` (`lean_form`), `reserved_instance` (`reserved_form`) | refusals that say what to write: a bare `true`, a bare constructor that is Init's class of the same name, `mutual`, `instance` |
 | `if_ok`; refused: `if_one`, `if_type` (`if_type`) | an `if` takes a `Bool`, a two-constructor type or a comparison; not a one- or three-constructor type, not a `Nat` |
 | `dif_ok`; refused: `dif_needs_init`, `dif_type`; `dif_scope` (`unknown_type`) | the dependent `if` and its hypothesis's scope |
 | `bool_ops`, `op_expected`, `op_int_div`, `define_nat_operator`, `rename_ok` | `and`, `or`, `not` at `Bool`; an operator takes the expected type's meaning; `/` and `%`; `-` at `Nat`; `< <= =` |
@@ -110,7 +119,9 @@ the reason its name spells, less a leading `by_`.
 |---|---|
 | `define_basic`, `define_below`, `define_depth`, `define_forward`, `define_arg_match`, `if_rec_call`, `def_struct` | a function defined with its equations: non-recursive, structural, two constructors deep, calling one declared later, a self-call under a `match` or in an `if`'s condition; a `def` with a recursion clause |
 | `define_runnable`; `route_callee` (`runnable callee_runnable`); refused: `define_refused` (`realize_recursion`) | a function left a program with the obstacle named; a caller of one; a self-call without a measure |
+| `fn_named_below` | functions named `below`, `brecOn`, `fix`, `casesOn` and their caller are defined: only the generated constants of an inductive type and Init's fixpoints are read as such |
 | `define_measure`, `measure_natabs`, `measure_if_call` (`pending measure`); `define_measure_int` (`runnable measure_type`) | a measured function and its obligation; a measure through `Int.natAbs`; an `Int` measure |
+| `define_let_call`, `mutual_let_call`; refused: `define_nested` (`nested_recursion`) | a `let` bound to a recursive call with another call in its scope, alone and in a group: the later obligation is stated without the let; a call whose argument cites such a let |
 | `discharge_measure`, `define_match_eq`; refused: `discharge_self_cycle`, `discharge_two_cycle` (`fulfills_cycle`) | obligations discharged; an obligation stated under its match's equation; a discharge that rests on itself |
 | `mutual_measure`, `mutual_forward`, `mutual_three`; `mutual_pending` (`pending measure`); `mutual_no_measure`, `define_mutual` (`runnable group_measure`), `mutual_shape` (`runnable group_shape`) | functions that call each other as one definition; what leaves them programs |
 | `fulfills_refused`, `fulfills_not_obligation`, `fulfills_outside` (each a load error) | a `fulfills` of a refused function's obligation, of a declaration, of nothing |
@@ -134,11 +145,12 @@ the reason its name spells, less a leading `by_`.
 |---|---|
 | `by_core`, `by_wf`, `by_witness`, `by_case_step`, `by_cases_local_eq`, `by_cases_dependent`, `by_sibling_names`, `by_exact_external`, `by_rw_occ_spine`, `by_ne_level`, `by_reduce` | every step on small goals; well-founded induction; a witness given by a premise; `cases` on a term and with dependent hypotheses; an external term through `exact` |
 | `by_sorry` (`pending sorry goals=2 …`) | the open goals are shown in the record |
-| refused: `by_goal_open`, `by_goal_closed`, `by_unknown_step`, `by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness_open`, `by_cases_rows`, `by_induction_eq`, `by_rw_no_match`, `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`; `by_cases_fields` (`induction_fields`), `by_rw_occ` (`rw_no_match`), `by_rw_occ_guard` (`rw_occ_changed`) | each step's refusal, a read error |
+| refused: `by_goal_open`, `by_goal_closed`, `by_unknown_step`, `by_intro_no_pi`, `by_rfl_failed`, `by_apply_goals`, `by_witness_open`, `by_cases_rows`, `by_induction_eq`, `by_rw_no_match`, `by_unfold_stuck`, `by_decide_failed`, `by_show_mismatch`; `by_cases_fields` (`induction_fields`), `by_cases_arm_fields` (`cases_fields`), `by_rw_occ` (`rw_no_match`), `by_rw_occ_guard` (`rw_occ_changed`) | each step's refusal, a read error |
 | `arith_core`, `arith_div`, `arith_only`, `arith_eq_bare`; refused: `arith_failed`, `arith_certificate`, `arith_goal`, `arith_fact`, `arith_unreached` | linear arithmetic and its refusals |
 | `simp_core`; refused: `simp_no_progress`, `simp_budget`, `simp_self` | `simp_only` and its refusals |
 | `reduce_using`, `reduce_dependent`; refused: `reduce_rule_unused`, `reduce_rule_open`; `reduce_rule_fn` (`rw_not_eq`), `rw_dependent` (`rw_motive`) | `reduce` with facts; a rewrite at an occurrence beside a proof that states it |
 | `auto_core`, `auto_tactic`, `auto_hints_changed`, `auto_strategy_free` | a theorem proven by `auto` replays its sidecar's entry; hints and binder names are outside the key |
+| `auto_fulfills`, `auto_other_root` | an obligation delegated with `auto` is discharged from the entry under its name, in a file with no `auto` theorem; an entry made for a file loaded alone fits when another root has admitted a parameter the file does not see |
 | `auto_missing`, `auto_stale`, `auto_stale_deps`, `auto_stale_policy`, `auto_stale_env` (`pending`) | no entry; an entry made for another statement, dependency, policy or horizon |
 | `auto_schema_old`, `auto_schema_2`, `auto_recon_old`; refused: `auto_schema_future` (`sidecar_schema`), `auto_malformed` (`sidecar_malformed`) | older sidecar formats replay and are reported; a newer or malformed one is a load error |
 

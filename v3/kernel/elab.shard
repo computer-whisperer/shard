@@ -239,9 +239,12 @@
            (match (sp_instance ty)
              (None e)
              ((Some v)
-              (match (assign (el_w e) (el_mc e) i v 32)
-                ((UYes w1 mc1) (el_set_mc (el_set_w e w1) mc1))
-                (_ e))))))))))))
+              (match (first_missing e (expr_consts v))
+                ((Some _) e)  ; an instance the module does not see is not taken: unsolved_msg names it
+                (None
+                  (match (assign (el_w e) (el_mc e) i v 32)
+                    ((UYes w1 mc1) (el_set_mc (el_set_w e w1) mc1))
+                    (_ e))))))))))))))
 (fn el_finish_term ((e El) (z Expr)) FinRes
   (match (first_mvar z)
     ((Some i) (unsolved_msg e i))
@@ -256,10 +259,13 @@
     (None (FinErr (quote unsolved_implicit) "an argument the declared inputs do not determine"))
     ((Some d)
      (if (sym_eq (md_kind d) (quote inst))
-       (FinErr (quote instance_needed)
-         (append "the instance argument "
-           (append (show_name (md_name d))
-             " has no resolution at Stage 1: write the application with @ and the instance (law §5.1 Stage 3)")))
+       (match (inst_unseen e (el_zonk e (md_type d)))
+         ((Some k) (FinErr (quote unknown_constant) (show_name k)))
+         (None
+           (FinErr (quote instance_needed)
+             (append "the instance argument "
+               (append (show_name (md_name d))
+                 " has no resolution at Stage 1: write the application with @ and the instance (law §5.1 Stage 3)")))))
      (if (sym_eq (md_kind d) (quote explicit))
        (FinErr (quote unsolved_implicit)
          (append "the argument " (append (show_name (md_name d)) " was not determined")))
@@ -267,6 +273,13 @@
          (append "the implicit argument "
            (append (show_name (md_name d))
              " is not determined by the explicit arguments or the expected type: write the application with @ (law §5.2)"))))))))
+;; the instance the table has for a closed type cites a constant the module does not see — one
+;; the environment lacks, or one past the module's horizon: that constant
+(fn inst_unseen ((e El) (ty Expr)) (Option Name)
+  (if (has_mvar ty) None
+  (match (sp_instance ty)
+    (None None)
+    ((Some v) (first_missing e (expr_consts v))))))
 (fn fin_type ((e El) (x Expr)) (Pair (Option Expr) (List Int))
   (match (el_finish e x)
     ((FinOk z) (Pair (Some z) Nil))
@@ -691,15 +704,21 @@
                           (append " A B) — applied to "
                             (append (show_nat (len args))
                               (append " more arguments than its type has: " (show_expr tyw)))))))
-                    (TlErr (quote function_expected)
-                      (append "applied to "
-                        (append (show_nat (len args))
-                          (append " more arguments than its type has: " (show_expr tyw)))))))
-                 (_
-                   (TlErr (quote function_expected)
-                     (append "applied to "
-                       (append (show_nat (len args))
-                         (append " more arguments than its type has: " (show_expr tyw)))))))))))))))))
+                    (TlErr (quote function_expected) (over_applied e1 f (len args) tyw))))
+                 (_ (TlErr (quote function_expected) (over_applied e1 f (len args) tyw))))))))))))))
+;; a head applied past its type: the head as it was resolved — where a name of Init's stands
+;; for a declaration of the load's that was meant, the full name is what to write
+(fn over_applied ((e El) (f Expr) (extra Int) (tyw Expr)) (List Int)
+  (append
+    (match (get_app_fn f)
+      ((Const _ c _)
+       (append "the head resolved to "
+         (append (show_name c)
+           (if (native_decl (cx_scope (el_cx e)) c) ", which is "
+           " — Init's declaration; a constructor or function of the load that bears the name is cited by its full name, or bare where its prefix is opened with (use …) — and is "))))
+      (_ "the head is "))
+    (append "applied to "
+      (append (show_nat extra) (append " more arguments than its type has: " (show_expr tyw))))))
 (fn bi_default ((bi BinderInfo)) Bool
   (match bi
     (BDefault True)
@@ -1583,27 +1602,28 @@
                                ((Some id) (match_deps e3 id))
                                (None Nil))))  ; (name, local) pairs, outermost first
                           ;; the dependent reading first (slice 3.27 rule 7), then the expected type's, then the constant motive; the first reading's error
-                          (match
-                            (match deps
-                              (Nil (EErr (quote none) Nil))
-                              (_ (match_try e3 dty ret l sv1 deps svid arms expected)))
-                            ((EOk e4 v vt) (EOk e4 v vt))
-                            ((EErr r0 m0)
-                             (match (match_try e3 dty ret l sv1 Nil gen arms expected)
-                               ((EOk e4 v vt) (EOk e4 v vt))
-                               ((EErr r m)
-                                (match gen
-                                  (None
-                                    (match deps
-                                      (Nil (EErr r m))
-                                      (_ (EErr r0 m0))))
-                                  ((Some _)
-                                   (match (match_try e3 dty ret l sv1 Nil None arms expected)
-                                     ((EOk e4 v vt) (EOk e4 v vt))
-                                     ((EErr _ _)
+                          (match_live e3 dty arms
+                            (match
+                              (match deps
+                                (Nil (EErr (quote none) Nil))
+                                (_ (match_try e3 dty ret l sv1 deps svid arms expected)))
+                              ((EOk e4 v vt) (EOk e4 v vt))
+                              ((EErr r0 m0)
+                               (match (match_try e3 dty ret l sv1 Nil gen arms expected)
+                                 ((EOk e4 v vt) (EOk e4 v vt))
+                                 ((EErr r m)
+                                  (match gen
+                                    (None
                                       (match deps
                                         (Nil (EErr r m))
-                                        (_ (EErr r0 m0)))))))))))))))
+                                        (_ (EErr r0 m0))))
+                                    ((Some _)
+                                     (match (match_try e3 dty ret l sv1 Nil None arms expected)
+                                       ((EOk e4 v vt) (EOk e4 v vt))
+                                       ((EErr _ _)
+                                        (match deps
+                                          (Nil (EErr r m))
+                                          (_ (EErr r0 m0))))))))))))))))
                    ((Pair _ other)
                     (EErr (quote not_a_type)
                       (append (show_expr ret) (append " : " (show_expr other))))))))))))))))
@@ -1884,6 +1904,61 @@
        (Cons fv (fvars_among r (remove_ints ids (list (fvar_id_of fv)))))
        (fvars_among r ids)))))
 
+;; a match whose rows all read is refused where a row that matches every value has rows
+;; after it: those can never be taken, and a constructor's name that resolved to nothing is
+;; read as such a row
+(fn match_live ((e El) (ty Expr) (arms (List SExpr)) (r ERes)) ERes
+  (match r
+    ((EOk _ _ _)
+     (match (dead_row e ty arms)
+       ((Some m) (EErr (quote unreachable_arm) m))
+       (None r)))
+    (_ r)))
+(fn dead_row ((e El) (ty Expr) (arms (List SExpr))) (Option (List Int))
+  (measure (struct arms))
+  (match arms
+    ((Cons (SList (Cons pat _)) (Cons a r))
+     (match (catch_all_before e pat ty (+ 1 (len r)))
+       ((Some m) (Some m))
+       (None (dead_row e ty (Cons a r)))))
+    (_ None)))
+;; the refusal's text for a row that matches every value, `after` rows following it
+(fn catch_all_before ((e El) (pat SExpr) (ty Expr) (after Int)) (Option (List Int))
+  (match pat
+    ((SSym x)
+     (if (sym_eq x (quote _))
+       (Some
+         (append "the row _ matches every value, so the "
+           (append (show_nat after)
+             " row(s) after it can never be taken: a catch-all is the last row")))
+       (match (name_of_sym x)
+         (None None)
+         ((Some n)
+          (match (pat_ctor e n ty)
+            ((Some (Pair _ (Pair 0 _))) None)
+            ((Some (Pair c (Pair k _)))
+             (Some
+               (append "the row "
+                 (append (chars_of_sym x)
+                   (append " binds a variable and matches every value, so the "
+                     (append (show_nat after)
+                       (append " row(s) after it can never be taken: "
+                         (append (show_name c)
+                           (append " has "
+                             (append (show_nat k)
+                               (append " field(s) — write (" (append (chars_of_sym x) " NAME…)"))))))))))))
+            (None
+              (Some
+                (append "the row "
+                  (append (chars_of_sym x)
+                    (append " binds a variable and matches every value, so the "
+                      (append (show_nat after)
+                        (append " row(s) after it can never be taken: no constructor of "
+                          (append (show_expr (el_zonk e ty))
+                            (append " named "
+                              (append (chars_of_sym x)
+                                " is in scope — write the constructor as its type spells it, or make a catch-all the last row")))))))))))))))
+    (_ None)))
 ;; a pattern at its type: `_`, a name — the constructor of the type's inductive it names when
 ;; that constructor has no fields, else a variable bound for the body —, or a constructor on
 ;; its fields' patterns. The state with the variables bound, the pattern, its term, the next

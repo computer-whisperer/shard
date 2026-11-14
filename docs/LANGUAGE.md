@@ -152,9 +152,13 @@ horizon, and has the checker admit them and what they depend on — once per loa
   order. A file also sees Init through its imports: its horizon is the farthest of its own and of
   each imported module's (`v3/pins/loader/init_horizon`). A file with no horizon sees no Init.
 - Citing a declaration at or above the horizon is `READ-ERROR … above_horizon`; the message names
-  the declaration, its ordinal and the import to write (`v3/pins/loader/init_above_horizon`). The
-  import it reports as in force is the file's last `(import Init …)` line, which need not be the
-  one that set the horizon.
+  the declaration, its ordinal, the horizon with the import that set it — the Init line
+  (`v3/pins/loader/init_two_imports`), or the imported file the horizon is inherited through
+  (`init_horizon_inherited`) — and the import to write (`init_above_horizon`). The same refusal
+  answers a name the source does not spell: an instance the fixed table supplies (`max` at `Nat`
+  is `Max.max` under `Nat.instMax`; `init_above_instance`), and a lemma a proof step builds on
+  where K refused the theorem for lack of it — the farthest such constant is named, so one import
+  reaches them all.
 - A NAME the export does not declare is `init_name_not_found`; no export given is
   `init_unavailable`; an export whose first line is not the pinned Lean version and exporter is
   `export_pin_mismatch`; a missing index, or one built over another export, is `init_index_stale`.
@@ -169,7 +173,9 @@ is dropped, Init's names having no prefix (`v3/pins/loader/init/main.shard`). A 
 name under its type, so opening a module does not open the constructors of its types: after
 `(use a)` the constructor `a.Tok.TPlus` is written `Tok.TPlus`, or bare after `(use a.Tok)`; a
 bare `TPlus` is `unbound_name` in a `fn` and `unknown_constant` in a `def`. In the same way
-`(use Init.Bool)` opens `true` and `false`, which are otherwise `Bool.true` and `Bool.false`.
+`(use Init.Bool)` opens `true` and `false`, which are otherwise `Bool.true` and `Bool.false`; a
+bare `true` without it is `unknown_constant: true: Init's constructor is Bool.true — write
+Bool.true, or open the namespace with (use Init.Bool)` (pin `bool_bare`).
 Besides, every `type` a file declares opens its constructors for that whole file. A `(use PREFIX)`
 that no name in the file could need is reported as `UNUSED MODULE use=PREFIX,…` (an Init namespace
 is listed without `Init.`); it is not an error.
@@ -178,9 +184,15 @@ is listed without `Init.`); it is not an error.
 assumption policy ("Acceptance: axioms and policy"). By convention the directives lead the file;
 nothing checks their place or their order. A `use`, a file `import` and a `trusts` that stand
 after a declaration are accepted and act on the forms after them. Init's declarations are fetched
-once, after the leading directives: a later `(import Init …)` fetches nothing, and a name it
-should have brought is refused by a message at odds with itself (`above_horizon: Int is
-declaration 470 of the export, at or above the module's horizon 836 (import Init Int.decEq)`).
+once, after the leading directives: a later `(import Init …)` raises the horizon and fetches
+nothing. A name it should have brought is refused `above_horizon` with the horizon of the fetch
+and the line to move: `Int is declaration 470 of the export, at or above the horizon 70 (import
+Init Eq) the file's Init declarations were fetched at; the horizon was raised to 836 (import Init
+Int.decEq) after that, by an import that follows a declaration and fetches nothing: move that
+import before the first declaration`. That holds for a file loaded alone; where another root of
+the load fetched the name, it is found (`OPEN.md` §1). An implementation's own `(import Init …)`
+lines are read after its view's declarations and are late in this sense: the import that sets an
+implementation's horizon stands in its view.
 
 ### How a name resolves
 
@@ -278,6 +290,9 @@ signature names a type the checker does not hold is a parameter for programs onl
 
 The files inside a directory that has a view are private to it. A file under DIR may import them; a
 file import from anywhere else is `LOAD-ERROR … private_module` (`v3/pins/loader/private_module`).
+A directory module nested inside DIR, with a view of its own, is private to DIR in the same way:
+DIR's files import it, and `(import "DIR/INNER")` from anywhere else — or an import of INNER's
+view file by its path — is `private_module` (`v3/pins/loader/private_dir`).
 A file directly inside DIR declares under DIR's module path — `lib/types.shard` declares `lib.T`
 (`v3/pins/loader/sealed_module`) — so the directory is one module, and its implementation file may
 hold nothing but imports of its private files.
@@ -438,7 +453,9 @@ unification: the result type against the expected type first, then the arguments
 so `(List.cons 0 nil)` at `(List Int)` reads `0` as an `Int`. `@NAME` makes every binder explicit:
 `(@List.nil a)`. What the inputs do not determine is refused, never defaulted: `unsolved_implicit`
 (write the application with `@`), `unsolved_universe` (write `NAME.{…}`). Too many arguments is
-`function_expected`; infix text such as `(n + 1)` is `infix_form` (write `(+ n 1)`). `Prop` is
+`function_expected`, which names the head as it was resolved — `the head resolved to Add — Init's
+declaration; …` where a bare name is Init's and a constructor of the load was meant (pin
+`shadowed_head`); infix text such as `(n + 1)` is `infix_form` (write `(+ n 1)`). `Prop` is
 `(Sort 0)`, `Type` is `(Sort 1)`, `(Type u)` is `(Sort (succ u))`.
 
 **Instances.** There is no instance search and no `class` or `instance` declaration. An `inst`
@@ -484,10 +501,10 @@ definition and in its program alike (pin `define_nat_operator`); to go below zer
 `/` and `mod` are Init's and total: `7 / 0` is 0 at `Nat` and at `Int`, `7 % 0` is 7 at `Nat`,
 `-7 mod 0` is −7 at `Int`, under `--run` and in a binary alike. `max` at `Nat` needs
 `(import Init Nat.instMax)`, declaration 3,958 of the export, past `UInt8.toNat` and
-`Int.lt_mul_ediv_self_add`. Below it nothing says `above_horizon`: a theorem is `REFUSE NAME
-unknown_constant` (or `decide_failed`, `rfl_failed`), and a `fn` is `REFUSE F unknown_head: max —
-read E-first after the typed route's no_realization: a package constant whose value is not its
-constructor applied`. `min` at `Nat`, and `min` and `max` at `Int`, are in reach of `UInt8.toNat`.
+`Int.lt_mul_ediv_self_add`. Below it the refusal is `above_horizon: Nat.instMax is declaration
+3958 of the export, … : write (import Init Nat.instMax)`, a `READ-ERROR` in a theorem and a
+`REFUSE` in a `fn` (pins `init_above_instance`, `init_above_instance_fn`). `min` at `Nat`, and
+`min` and `max` at `Int`, are in reach of `UInt8.toNat`.
 The spellings `lt`, `le`, `int_eq` are `renamed_primitive` (write `<`, `<=`, `=`). Lean's `==`,
 `&&`, `||`, `!x`, `∀`, `→`, `≤` and the like are `lean_symbol`, each with its spelling here; a
 name ending in `!` (`List.get!`) is `inhabited_default`.
@@ -503,7 +520,11 @@ Otherwise: `no_decision` (write `(@ite C DEC T F)`, or derive equality), `ambigu
 
 **`match`.** The scrutinee's type must be an inductive type without indices. The match takes its
 type from its position; where the position gives none it is `match_motive` — bind it: `(let ((r
-TYPE (match …))) r)`. Rows are tried in order; a later catch-all row is allowed. Patterns:
+TYPE (match …))) r)`. Rows are tried in order. A row that matches every value — `_`, or a NAME
+that is no field-less constructor of the scrutinee's type — is the last row: with rows after it
+the match is `unreachable_arm`, which names the row and, for a name, says that no constructor of
+that name is in scope. A misspelt constructor is such a name, and its row would take every value
+(pins `match_dead_row`, `match_dead_row_def`, `ev_dead_row`). Patterns:
 
 | pattern | meaning |
 |---|---|
@@ -575,7 +596,12 @@ derived size. The definition is built on `WellFounded.fix`. Every self-call stat
   parameters — one data parameter stands under its own name, several stand as a single tuple `p :
   PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, … —, then pattern variables and
   `let`s, and the facts the enclosing branches give: under an `if`, `h : C` in the then-branch and
-  `h : ¬C` in the else-branch; under a `match` row, `h : scrutinee = pattern`.
+  `h : ¬C` in the else-branch; under a `match` row, `h : scrutinee = pattern`. Left out is what
+  states the function's own values: a `let` bound to a recursive call, a `let` computed from one,
+  and a fact about either — so a call in the scope of such a `let` has its obligation without it
+  (pins `define_let_call`, `mutual_let_call`). A call whose *argument* cites such a `let`, or
+  holds a recursive call, is nested recursion and gets no definition: `REFUSE NAME
+  nested_recursion` (pin `define_nested`).
 - *Numbering.* From 1, in the order the body is walked: arguments left to right, the rows of a
   `match` in order, and for an `if` the condition, the else-branch, then the then-branch. Two calls
   that state the same fact share one obligation. The records: `PARAM NAME.dec_N obligation` for
@@ -704,7 +730,7 @@ can name it. `route=typed`: the body was elaborated and the program is its erasu
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
 | `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`), a constant above the Init horizon | rewrite the construct; raise the import |
 | `e_only_type` | e_first | the signature cannot be read: the file has no `(import Init …)`, or a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | import Init; declare the type first; the normal state of a file that sees no Init |
-| `mutual_recursion` | e_first | at the file's end the function still waits on a function of the file that never got a declaration, because that one was refused | mend the refusal of the callee above |
+| `callee_undeclared` | e_first | at the file's end the function still waits on a function of the file that never got a declaration, because that one was refused | mend the refusal of the callee above |
 
 `RUNNABLE extern NAME` and `RUNNABLE type NAME` are the ordinary records of an extern and of a
 program-only type; `RUNNABLE extern NAME why=REASON` is an extern that got no constant.
@@ -722,7 +748,8 @@ into a definition:
 | `untyped_subterm` | `the structural parameter's type is not an inductive type` | use `(measure M)` |
 | `equation_form` | `T: a nested inductive's recursor has no Stage-0 translation`; `T eliminates into Prop only`; `T has no recursor` | `(measure (T.size x))` after `(derive T size)` |
 | `function_value` | `NAME: its own name is not applied to its structural argument (no function values, §4)`; `… not applied to all its arguments …`; `the function's own name in a type` | apply the function fully |
-| `definition_refused` | `NAME: K refused the definition (WHY)`; for a group also `… the group's argument type`, `… the group's fixpoint`, `… the fixpoint's unfolding` | a defect of the definer: report it. One cause is known: `F1.mutual: K refused the group's fixpoint (fvar_in_type)` is a `let` bound to a call of a group member with another such call in its scope — write the call where it is used |
+| `nested_recursion` | `NAME: the argument of a recursive call is computed by the recursion itself — it cites X, a let bound to the result of a recursive call`; `… — a recursive call stands inside it` | pass an argument computed without a recursive call; nested recursion gets no definition |
+| `definition_refused` | `NAME: K refused the definition (WHY)`; for a group also `… the group's argument type`, `… the group's fixpoint`, `… the fixpoint's unfolding` | a defect of the definer: report it |
 | `define_matrix`, `define_depth`, `define_loop` | internal shapes; `a body too deep`; `the auxiliaries did not settle` | split the function; report |
 | `name_taken` | `NAME is an admitted constant: realize it, or declare another name (§7.5)` | rename, or `realize` |
 
@@ -776,8 +803,10 @@ a measure is never run. A function body that calls one in a runtime position can
 as a program, where the name is unknown, so the usual record is `REFUSE … unknown_head … — read
 E-first after the typed route's no_realization …`. `v3/std/list.shard` realizes the list
 functions: import it. `Classical.choice`, `Acc.rec` and the `Quot` primitives in a runtime
-position are `noncomputable`; a recursor, `brecOn` or `WellFounded.fix` written in a body is
-`recursion_structure`; a type or a proof in a runtime position is `erased_in_runtime`.
+position are `noncomputable`; a recursor, `T.brecOn` or `T.below` of an inductive type, or
+`WellFounded.fix`, written in a body is `recursion_structure` — the generated constants, never a
+function that only bears such a name (pin `fn_named_below`); a type or a proof in a runtime
+position is `erased_in_runtime`.
 
 ### Functions as arguments: templates
 
@@ -1192,7 +1221,7 @@ two `(farkas …)` forms.
 | `cases_type` | cases, induction | `NAME is not an inductive type`; `not an inductive type: T`; `K could not type NAME.casesOn at this motive` |
 | `cases_indexed` | cases, induction | `NAME is an indexed family: cases on it is a later form (injection, subst)` |
 | `cases_rows`, `induction_rows` | | `no arm for the constructor C`; `C is not a constructor of the type, or is named twice` |
-| `cases_fields`, `induction_fields` | | `C's arm names N binder(s) and its case has M: (x : T) …` |
+| `cases_fields`, `induction_fields` | | `C's arm names N binder(s) and its case has M: name the constructor's K field(s) — (x : T) …`; under `induction`, `…, then J induction hypothesis name(s), one for each recursive field — (x : T) … (_ : P)`. The binders listed are the case's, each under the arm's name for it, `_` where the arm gave none |
 | `induction_eq` | induction | `induction takes no equation name: the hypotheses would be guarded by it (Lean has none either); name the equation under cases, or state the equation and induct on the local` |
 | `wf_local` | wf | `wf takes a local of the context (a variable, not a term)`; `the local's type is not a type` |
 | `wf_unreached` | wf | `WellFounded.fix, InvImage.wf or Nat.lt_wfRel is past the Init prefix in scope` |
@@ -1284,22 +1313,25 @@ a source file.
 
 ### At load time
 
-A load never searches. When a file has a `theorem` whose proof is `auto`, the loader reads
-`FILE.auto.shard` beside `FILE.shard`; no such file means no entries. For each `auto` theorem it
-computes the theorem's key and looks up the entry under the theorem's name. Where the key agrees
-in every part, the entry's block is elaborated exactly as a block written in the source would be:
-the theorem is accepted, or the step's refusal is the file's read error. Where there is no entry,
-the record is `PENDING NAME auto_missing fp=S`. Where a part of the key differs, it is `PENDING
-NAME auto_stale CAUSE,… fp=S`, and the entry is not tried, even if its block would still succeed.
+A load never searches. When a file has a `theorem` or a `fulfills` whose proof is `auto`, the
+loader reads `FILE.auto.shard` beside `FILE.shard`; no such file means no entries. For each `auto`
+proof it computes the key of the statement and looks up the entry under the name the source
+writes: a theorem's own, and for `(fulfills dn.dec_1 auto)` the obligation's, `dn.dec_1`. Where
+the key agrees in every part, the entry's block is elaborated exactly as a block written in the
+source would be: the theorem is accepted, or the step's refusal is the file's read error. Where
+there is no entry, the record is `PENDING NAME auto_missing fp=S`. Where a part of the key
+differs, it is `PENDING NAME auto_stale CAUSE,… fp=S`, and the entry is not tried, even if its
+block would still succeed.
 
 The hints are not read at load time: changing them, or renaming a binder, changes nothing
 (v3/pins/loader/auto_strategy_free).
 
-`auto` works for a `theorem` only. In a `fulfills` it does not work end to end, and no test uses
-it there: `prove` searches and prints `PROVED F.dec_N.proof …` and `DISCHARGE F.dec_N proved`, but
-writes the entry under the name `proof`, where a load looks for `F.dec_N`; and a load reads the
-sidecar only when the file also has an `auto` theorem. So the obligation stays `PENDING
-F.dec_N.proof auto_missing`, and each `prove` searches again.
+An obligation delegated this way is discharged as a hand-written `fulfills` is: `prove` prints
+`PROVED F.dec_N.proof …` and writes `(proof-for F.dec_N …)`; a load replays the block and prints
+`DISCHARGE F.dec_N proved`; without an entry the record is `PENDING F.dec_N.proof auto_missing`
+(`v3/pins/loader/auto_fulfills`; `engine_test.sh`). Inside the implementation of a view `auto` is
+not supported, in a `theorem` or a `fulfills`: no sidecar is read for the implementation file and
+`prove` writes none (`OPEN.md` §1).
 
 An entry is keyed by the *resolved requirement*: four numbers, `(req S D P E)`, each a 61-bit
 fingerprint. They detect a changed task and prove nothing: the block is always replayed, and K
@@ -1309,7 +1341,7 @@ checks the result.
 |---|---|---|---|
 | S | `statement` | The elaborated statement closed over its binders. Binder names are outside it. | auto_stale |
 | D | `deps` | Every declaration of the load that the statement cites, directly or through other declarations, each by its content fingerprint. Init's declarations are not walked. 0 when there is none. | auto_stale_deps |
-| P | `policy` | The axioms the file `trusts`, and every parameter the load has admitted so far: view parameters and descent obligations, discharged or not. | auto_stale_policy |
+| P | `policy` | The axioms the file `trusts`, and every parameter the file can see that the load has admitted so far: view parameters and descent obligations, discharged or not, of the file and of the modules in its closure. A parameter of another root is no part of it. | auto_stale_policy, auto_other_root |
 | E | `env` | The module's Init horizon and the identity of the Init export (its record count and byte length). 0 for a module without Init. | auto_stale_env |
 
 ### The sidecar file
@@ -1335,12 +1367,13 @@ prove --root DIR [--init EXPORT --init-index INDEX] [--fuel N] FILE…
 prove --root DIR [--init EXPORT --init-index INDEX] --measure FILE…
 ```
 
-It loads each FILE as the loader does, with one difference: an `auto` theorem without a fitting
-entry, missing or stale, is given to a *producer*, and the block the producer returns is replayed
-before anything is recorded. Then every file that gained a block is rewritten whole: the entries it
-held for other theorems, then the new ones. A sidecar read at an older schema or another
-reconstruction version is rewritten at the current ones, without a search. `prove` prints the
-load's records, with `PROVED NAME req=S.D.P.E (by …)` for each new block, and ends with
+It loads each FILE as the loader does, with one difference: an `auto` proof — a theorem's, or an
+obligation's `fulfills` — without a fitting entry, missing or stale, is given to a *producer*, and
+the block the producer returns is replayed before anything is recorded. Then every file that
+gained a block is rewritten whole: the entries it held for other theorems, then the new ones. A
+sidecar read at an older schema or another reconstruction version is rewritten at the current
+ones, without a search. `prove` prints the load's records, with `PROVED NAME req=S.D.P.E (by …)`
+for each new block, and ends with
 `PROVE: modules … errors 0  proved 11  unsolved 1  sidecars written 1`. The exit code is refusals
 plus errors plus unsolved theorems. An entry is replaced only when its theorem is proven anew;
 entries of theorems that no longer exist stay in the file.
@@ -1624,7 +1657,7 @@ trusted because two fingerprints agree.
 | Record | Fields | Meaning | Counts as |
 |---|---|---|---|
 | `MODULE` | `M file=F hash=H sees=M1,…` | a module is done: its file, a fingerprint over its accepted declarations, the modules it sees | modules |
-| `INIT` | `NAME: horizon H, K declarations admitted` | a file's Init demand: the target of its last `(import Init …)` line, which with several such lines need not be the one that set the horizon (`-` when the horizon is inherited); the horizon; how many Init declarations were admitted for it | — |
+| `INIT` | `NAME: horizon H, K declarations admitted` | a file's Init demand: the target of the `(import Init …)` line that set its horizon (`-` when the horizon is inherited through a file import); the horizon; how many Init declarations were admitted for it | — |
 | `ACCEPT` | `N module=M hash=H axioms=A,… init=H params=P,… [req=S.D.P.E]` | the checker admitted N within the file's policy: its file's module, its content fingerprint, the axioms it rests on, the module's horizon (`-`: none), the parameters among those axioms; for a theorem, the key of its statement | accepted |
 | `PARAM` | `N KIND [arity=K]` | N admitted as a named assumption: a view's `type`, `fn` or `requirement`; an `obligation` — a measured function's descent `F.dec_N`; an `axiom` the file trusts | accepted |
 | `DEFINE` | `N equations=E,… [pending=F,…]` | a function defined in the checker with its equations; `pending=` names the functions whose open obligations it rests on | defined |

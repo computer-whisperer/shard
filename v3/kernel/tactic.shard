@@ -1200,12 +1200,7 @@
                 ((Opened e2 fields res)
                  (if (bool_not (= (minor_binders (el_zonk e1 mty) 64) (len names)))
                    (MinErr (sym_of_chars (append (chars_of_sym who) "_fields"))
-                     (append (show_name c)
-                       (append "'s arm names "
-                         (append (show_nat (len names))
-                           (append " binder(s) and its case has "
-                             (append (show_nat (len fields))
-                               (append ": " (fields_list e2 ctx fields))))))))
+                     (fields_refusal e1 ctx c (el_zonk e1 mty) names))
                    (match (tac_fields_open e2 res depn Nil)
                      ((Pair _ (Opened e2b deps res1))
                       (match (tac_goal e2b (append ctx (append fields deps)) res1)
@@ -1273,9 +1268,60 @@
            (match (w_inst1 (el_w e1) body fv)
              ((Pair w2 body1) (Opened (el_set_w e1 w2) (append fields (list fv)) body1))))))
        (_ (Opened e fields res))))))
-(fn fields_list ((e El) (ctx (List Expr)) (fields (List Expr))) (List Int)
+;; an arm whose name list is not its case's: both counts, what the case's binders are — the
+;; constructor's fields, then under induction one hypothesis for each recursive field — and
+;; the binders themselves, each under the arm's name for it where the arm gave one
+(fn fields_refusal ((e El) (ctx (List Expr)) (c Name) (mty Expr) (names (List Name))) (List Int)
+  (let
+    ((total (minor_binders mty 64))
+     (nf
+       (match (env_find (el_env e) c)
+         ((Some (CtorInfo _ _ _ _ k _)) k)
+         (_ 0))))
+    (match (tac_fields_open e mty (case_names mty names 64) Nil)
+      ((Pair _ (Opened e1 fields _))
+       (append (show_name c)
+         (append "'s arm names "
+           (append (show_nat (len names))
+             (append " binder(s) and its case has "
+               (append (show_nat total)
+                 (append ": name the constructor's "
+                   (append (show_nat nf)
+                     (append " field(s)"
+                       (append
+                         (if (< nf total)
+                           (append ", then "
+                             (append (show_nat (- total nf))
+                               " induction hypothesis name(s), one for each recursive field"))
+                           Nil)
+                         (append " —" (binders_list e1 ctx fields)))))))))))))))
+;; a name for every binder of a minor premise: the arm's, then the binder's own
+(fn case_names ((t Expr) (names (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (< fuel 1) Nil
+  (match t
+    ((Pi _ n _ _ body)
+     (match names
+       ((Cons x r) (Cons x (case_names body r (- fuel 1))))
+       (Nil (Cons n (case_names body Nil (- fuel 1))))))
+    (_ Nil))))
+;; the locals as ` (NAME : TYPE)…`, their types read under the context
+(fn binders_list ((e El) (ctx (List Expr)) (fields (List Expr))) (List Int)
   (match (el_pis e (append ctx fields) (mk_sort LZero))
-    ((Pair _ c) (show_goal_go c (+ (len ctx) (len fields)) Nil))))
+    ((Pair _ c) (show_binders_go c (len ctx) (len fields) Nil))))
+(fn show_binders_go ((t Expr) (skip Int) (k Int) (names (List (List Int)))) (List Int)
+  (measure (struct t))
+  (match t
+    ((Pi _ n _ dom body)
+     (let ((nm (tc_binder n)))
+       (if (< 0 skip) (show_binders_go body (- skip 1) k (Cons nm names))
+       (if (< k 1) Nil
+       (append " ("
+         (append nm
+           (append " : "
+             (append (tc_show dom names)
+               (append ")" (show_binders_go body 0 (- k 1) (Cons nm names)))))))))))
+    (_ Nil)))
 
 ;; (wf X MEASURE IH STEP…): WellFounded.fix over (measure MEASURE) with the target as motive
 (fn step_wf

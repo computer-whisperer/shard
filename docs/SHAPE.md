@@ -146,8 +146,9 @@ host calls.
   machine words.
 - No instance search and no user notation: an operation at a type outside a fixed table must be
   written out in full.
-- Each recursive call of a measured function needs a hand-written proof of decrease. The formatter's
-  printer needed 43.
+- Each recursive call of a measured function needs a proof of decrease, written by hand wherever
+  the proof search (`(fulfills NAME auto)`) does not find one — it does not find `n - 1 < n` from
+  `¬ n < 2`. The formatter's printer needed 43.
 
 *Proofs.*
 - K's own evaluation is slow through measured functions: a closed call gives out at a depth between

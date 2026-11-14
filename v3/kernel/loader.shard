@@ -299,7 +299,7 @@
   (RReadErr (List Int) Symbol (List Int))  ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))  ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))  ; the file's `use` lines no citation could need (§8.1 rule 4): module, prefixes
-  (RProved Name Req (List SExpr))  ; mode solve (slice 3.22 rule 6): the engine's block for an auto theorem, with the requirement's key (4.5 rule 1) — what the sidecar's entry holds
+  (RProved Name Name Req (List SExpr))  ; mode solve: the engine's block for an auto proof — the theorem, the name its sidecar entry bears (the theorem's, or the obligation's a discharge proves, as the source writes it), the requirement's key, the block
   (RSidecar (List Int) Int Int)  ; a sidecar of an older schema replayed (slice 3.29 rule 4): the file, its schema, the current one
   (RRecon (List Int) Int Int)  ; a sidecar replayed under another reconstruction version (4.5 rule 2): the file, its version (-1: none stated), the current one
   (REngine Name Bool)  ; mode measure: the engine closes the statement unaided, or not
@@ -385,10 +385,22 @@
 (fn default_fuel () Int 1000000000000)
 (fn ld_with_fuel ((l Load) (n Int)) Load (with Load l (fuel n)))
 (fn ld_with_mode ((l Load) (m Symbol)) Load (with Load l (mode m)))
-;; an RDSolved or RDMeasured read: its record, and the plain RDOk
-(fn rd_plain ((l Load) (rd RDecl)) (Pair Load RDecl)
+;; an RDSolved or RDMeasured read: its record, and the plain RDOk. `under` is the obligation a
+;; discharge's theorem proves — the sidecar's entry bears its name — and Anon for a theorem,
+;; entered under its own
+(fn rd_plain ((l Load) (sc Scope) (under Name) (rd RDecl)) (Pair Load RDecl)
   (match rd
-    ((RDSolved n k steps ds) (Pair (ld_rec l (RProved n k steps)) (RDOk ds)))
+    ((RDSolved n k steps ds)
+     (Pair
+       (ld_rec l
+         (RProved n
+           (name_after (sc_module sc)
+             (match under
+               (Anon n)
+               (_ under)))
+           k
+           steps))
+       (RDOk ds)))
     ((RDMeasured n ok tac ds)
      (Pair
        (match tac
@@ -402,18 +414,26 @@
 (fn producers_of ((l Load) (f Fx)) Producers
   (Producers (Fx.autos f) (Load.etab l) (Load.fuel l) (req_ctx l f)))
 ;; the file's parts of the key: its scope, the policy's fingerprint — the trusts' candidates
-;; through the scope and the load's parameters, what `permitted` consults beyond the standard
-;; axioms —, the environment's — the module's Init horizon and the export's identity as the
-;; index's header states it (its record count and byte length); 0 for a module without Init,
-;; whose requirement rests on no export
+;; through the scope and the parameters the file can see, what `permitted` can be asked about
+;; for a declaration of the file beyond the standard axioms: a parameter of a module outside
+;; the file's closure reaches none of its declarations, so what another root admitted is no
+;; part of the key —, the environment's — the module's Init horizon and the export's identity
+;; as the index's header states it (its record count and byte length); 0 for a module without
+;; Init, whose requirement rests on no export
 (fn req_ctx ((l Load) (f Fx)) ReqCtx
   (let ((sc (fx_scope l f)))
-    (ReqCtx sc (req_names (append (trust_candidates sc (Fx.trusts f)) (Load.params l)) 0)
+    (ReqCtx sc
+      (req_names (append (trust_candidates sc (Fx.trusts f)) (params_seen sc (Load.params l))) 0)
       (if (< (Fx.init f) 0) 0
       (match (Load.init l)
         ((InitSt x _ _)
          (mix (mix (+ 1 (Fx.init f)) (ix_hdr_records (odx_hdr x))) (ix_hdr_bytes (odx_hdr x))))
         (_ (mix (mix (+ 1 (Fx.init f)) 0) 0)))))))
+(fn params_seen ((sc Scope) (ps (List Name))) (List Name)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p r) (if (visible sc p) (Cons p (params_seen sc r)) (params_seen sc r)))))
 (fn trust_candidates ((sc Scope) (ts (List Name))) (List Name)
   (measure (struct ts))
   (match ts
@@ -513,20 +533,25 @@
 (fn drop_shard_suffix ((path (List Int))) (List Int)
   (let ((n (len path)))
     (if (bool_and (< 6 n) (int_list_eq (drop (- n 6) path) ".shard")) (take (- n 6) path) path)))
+;; a form whose proof is delegated: (theorem NAME BINDERS PROP auto), (fulfills NAME auto)
 (fn forms_want_auto ((forms (List SExpr))) Bool
   (measure (struct forms))
   (match forms
     (Nil False)
     ((Cons (SList (Cons (SSym h) args)) r)
-     (if (bool_and (sym_eq h (quote theorem)) (proof_is_auto args)) True (forms_want_auto r)))
+     (if
+       (match args
+         ((Cons _ (Cons _ (Cons _ (Cons p Nil))))
+          (bool_and (sym_eq h (quote theorem)) (proof_is_auto p)))
+         ((Cons _ (Cons p Nil)) (bool_and (sym_eq h (quote fulfills)) (proof_is_auto p)))
+         (_ False))
+       True
+       (forms_want_auto r)))
     ((Cons _ r) (forms_want_auto r))))
-(fn proof_is_auto ((args (List SExpr))) Bool
-  (match args
-    ((Cons _ (Cons _ (Cons _ (Cons p Nil))))
-     (match p
-       ((SSym x) (sym_eq x (quote auto)))
-       ((SList (Cons (SSym x) _)) (sym_eq x (quote auto)))
-       (_ False)))
+(fn proof_is_auto ((p SExpr)) Bool
+  (match p
+    ((SSym x) (sym_eq x (quote auto)))
+    ((SList (Cons (SSym x) _)) (sym_eq x (quote auto)))
     (_ False)))
 (fn sidecar_entries ((es (List SExpr)) (acc (List Auto))) (Pair (Option (List Auto)) (List Int))
   (measure (struct es))
@@ -609,9 +634,11 @@
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
 ;; visible modules (itself included), the Init horizon (-1: none), trusted names, hash so
 ;; far, whether it is a view (§6.6: the forms it may hold, the req-scope gate), the sidecar's
-;; entries (slice 3.22 rule 1: FILE.auto.shard beside the file, read when a theorem says auto),
-;; its own Init import's target (Anon: none), the names of Init under its identity, which
-;; none of its declarations may take (slice 3.26 rule 5)
+;; entries (FILE.auto.shard beside the file, read when a theorem or a fulfills says auto),
+;; the import that set its horizon — the target of an `(import Init NAME)` (initname), or the
+;; file whose import handed its own on (initvia; Anon and empty: no horizon) —, the horizon its
+;; Init demand was fetched at with that import as a refusal shows it (fetched; -1: nothing
+;; fetched), the names of Init under its identity, which none of its declarations may take
 (record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open))
   (vis (List Name))
   (init Int)
@@ -620,6 +647,8 @@
   (view Bool)
   (autos (List Auto))
   (initname Name)
+  (initvia (List Int))
+  (fetched (Pair Int (List Int)))
   (taken (List (List Int)))
   (above (List (Pair Name Int)))
   (ecount Int)
@@ -629,8 +658,23 @@
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
 (fn fx_file ((f Fx)) (List Int) (join_path (Fx.parts f)))
 (fn fx_open ((f Fx) (o Open)) Fx (with Fx f (opened (append (Fx.opened f) (list o)))))
-(fn fx_see ((f Fx) (mods (List Name)) (init Int)) Fx
-  (with Fx f (vis (names_union (Fx.vis f) mods)) (init (if (< (Fx.init f) init) init (Fx.init f)))))
+;; an import of a file that sees `mods` under the horizon `init`: the farther horizon stands,
+;; and the import that set it is the one named
+(fn fx_see ((f Fx) (mods (List Name)) (init Int) (via (List Int))) Fx
+  (if (< (Fx.init f) init)
+    (with Fx f (vis (names_union (Fx.vis f) mods)) (init init) (initname Anon) (initvia via))
+    (with Fx f (vis (names_union (Fx.vis f) mods)))))
+;; `(import Init n)`, its horizon h: the farther horizon stands, under the import that set it
+(fn fx_see_init ((f Fx) (n Name) (h Int)) Fx
+  (if (< (Fx.init f) h) (with Fx f (init h) (initname n) (initvia Nil)) f))
+;; the import that set the file's horizon, as a refusal shows it
+(fn horizon_source ((f Fx)) (List Int)
+  (match (Fx.initname f)
+    (Anon
+      (match (Fx.initvia f)
+        (Nil " (inherited)")
+        (p (append " (inherited through the import of " (append p ")")))))
+    (k (append " (import Init " (append (show_name k) ")")))))
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
 (fn fx_add_bin ((f Fx) (s SExpr)) Fx (with Fx f (bins (append (Fx.bins f) (list s)))))
@@ -974,7 +1018,8 @@
                   " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have (§7.5) — declare another name")))
             f)
         (if (bool_and (sym_eq h (quote def)) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half (slice 4.2 landing 0)
-        (match (rd_plain l (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
+        (match
+          (rd_plain l sc Anon (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
           ((Pair l rd)
            (match rd
              ((RDErr e m)
@@ -1097,7 +1142,7 @@
       ((Some info)
        (let ((thm (name_append k (n1 (quote proof)))))
          (match
-           (rd_plain l
+           (rd_plain l (fx_scope l f) k
              (read_discharge (fx_scope l f) (Load.env l) thm (ci_type info) proof (producers_of l f)
                (Load.mode l)))
            ((Pair l rd)
@@ -1106,7 +1151,7 @@
               ((RDPending nn r) (ld_rec (ld_add_pending l nn) (RPending nn r)))
               ((RDOk ds)
                (match (admit_under l f ds)
-                 ((AdRefused subj reason) (ld_rec l (RRefuse subj reason)))
+                 ((AdRefused subj reason) (ld_rec l (refusal_rec l f ds subj reason)))
                  ((AdOk env1)
                   (match (policy_pass l f env1 (Load.memo l) ds Nil)
                     ((PolBound n)
@@ -1230,7 +1275,7 @@
     ((Pair l1 (Some recs)) (bundle_after (add_e_twin l1 f s) (mix_recs f recs) ds))))
 (fn admit_core ((l Load) (f Fx) (ds (List Declaration))) (Pair Load (Option (List Rec)))
   (match (admit_under l f ds)
-    ((AdRefused subj reason) (Pair (ld_rec l (RRefuse subj reason)) None))
+    ((AdRefused subj reason) (Pair (ld_rec l (refusal_rec l f ds subj reason)) None))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) ds Nil)
        ((PolBound n)
@@ -1294,7 +1339,7 @@
 (type AtRes (AtOk Load CheckedEnv) (AtDone Load))
 (fn admit_theorems ((l Load) (f Fx) (thms (List Declaration))) AtRes
   (match (admit_under l f thms)
-    ((AdRefused subj reason) (AtDone (ld_rec l (RRefuse subj reason))))
+    ((AdRefused subj reason) (AtDone (ld_rec l (refusal_rec l f thms subj reason))))
     ((AdOk env1)
      (match (policy_pass l f env1 (Load.memo l) thms Nil)
        ((PolBound n)
@@ -1425,6 +1470,8 @@
     (view False)
     (autos Nil)
     (initname Anon)
+    (initvia Nil)
+    (fetched (Pair -1 Nil))
     (taken taken)
     (ecount 0)
     (above Nil)
@@ -1598,7 +1645,7 @@
     ((CErr e m2)
      (Pair
        (ld_rec l1
-         (match (if (sym_eq r (quote unknown_constant)) (lean_pointer m) None)
+         (match (horizon_pointer f r m)
            ((Some (Pair r2 p)) (RClassify (form_name (fx_scope l1 f) s) r2 p))
            (None
              (RClassify (form_name (fx_scope l1 f) s) e
@@ -1712,7 +1759,7 @@
            (CsPark
              (Pair
                (ld_with_parked l1
-                 (append (Load.parked l1) (list (Parked k s (quote mutual_recursion) m))))
+                 (append (Load.parked l1) (list (Parked k s (quote callee_undeclared) m))))
                f))
            ((CsTyped c)
             (if (< cfuel 1)
@@ -2058,9 +2105,10 @@
      (match (load_fn l f s 2)
        ((Pair l1 f1)
         (retry_each l1 f1 r (bool_or progressed (= (len (Load.parked l1)) (len (Load.parked l))))))))))
-;; the fns still parked at a file's end — mutual recursion, a forward reference that never
-;; settled: each other's callee-locals (rule 6), read once more — RUNNABLE route=typed with
-;; callee_runnable; one that parks even so is the classifier's, the obstacle it waited on named
+;; the fns still parked at a file's end — a forward reference that never settled: each other's
+;; callee-locals, read once more — RUNNABLE route=typed with callee_runnable; one that parks
+;; even so calls a function of the file that got no declaration (it was refused) and is the
+;; classifier's, `why=callee_undeclared`
 (fn flush_parked ((l Load) (f Fx)) Load
   (let ((ps (Load.parked l)))
     (flush_each (ld_with_parked (typed_all l (fx_scope l f) ps) Nil) f ps)))
@@ -2625,24 +2673,102 @@
 ;; (`step 1: NAME — the goal: …`): the entry matched is a token of the message, itself or
 ;; under a prefix an opened namespace supplies
 (fn horizon_refusal ((f Fx) (e Symbol) (m (List Int))) Rec
-  (if (bool_not (sym_eq e (quote unknown_constant))) (RReadErr (fx_file f) e m)
-  (match (lean_pointer m)
+  (match (horizon_pointer f e m)
     ((Some (Pair r p)) (RReadErr (fx_file f) r p))
+    (None (RReadErr (fx_file f) e m))))
+;; what an `unknown_constant` is refused as where the name says more: a Lean spelling with its
+;; pointer, or a name the name table places at or above the module's horizon — `above_horizon`
+(fn horizon_pointer ((f Fx) (e Symbol) (m (List Int))) (Option (Pair Symbol (List Int)))
+  (if (bool_not (sym_eq e (quote unknown_constant))) None
+  (match (lean_pointer m)
+    ((Some rp) (Some rp))
     (None
       (match (above_entry (Fx.above f) m)
-        (None (RReadErr (fx_file f) e m))
+        (None None)
         ((Some (Pair n o))
-         (RReadErr (fx_file f) (quote above_horizon)
-           (append (show_name n)
-             (append " is declaration "
-               (append (show_nat o)
-                 (append " of the export, at or above the module's horizon "
-                   (append (show_nat (Fx.init f))
-                     (append
-                       (match (Fx.initname f)
-                         (Anon " (inherited)")
-                         (k (append " (import Init " (append (show_name k) ")"))))
-                       (append ": write (import Init " (append (show_name n) ")")))))))))))))))
+         (Some
+           (Pair (quote above_horizon)
+             (match (Fx.fetched f)
+               ((Pair h src)
+                (append (show_name n)
+                  (append " is declaration "
+                    (append (show_nat o)
+                      (if (< h (Fx.init f))
+                        (append " of the export, at or above the horizon "
+                          (append (show_nat h)
+                            (append src
+                              (append
+                                " the file's Init declarations were fetched at; the horizon was raised to "
+                                (append (show_nat (Fx.init f))
+                                  (append (horizon_source f)
+                                    (append
+                                      " after that, by an import that follows a declaration and fetches nothing: "
+                                      (append
+                                        (if (< o (Fx.init f)) "move that import"
+                                        (append "write (import Init " (append (show_name n) ")")))
+                                        " before the first declaration (an implementation's: into its view)"))))))))
+                        (append " of the export, at or above the module's horizon "
+                          (append (show_nat h)
+                            (append src (append ": write (import Init " (append (show_name n) ")")))))))))))))))))))
+;; K's refusal of a file's declarations as its record. K's `unknown_constant` names no
+;; constant: the ones the declarations cite that the environment lacks are found here. Where
+;; the name table places one at or above the module's horizon the record is `above_horizon`
+;; with the import to write — the farthest of them, so that one import reaches them all: an
+;; instance or a function a table spelled, the lemmas a proof step builds on. Else the first
+;; is named
+(fn refusal_rec ((l Load) (f Fx) (ds (List Declaration)) (subj Name) (reason Symbol)) Rec
+  (if (bool_not (sym_eq reason (quote unknown_constant))) (RRefuse subj reason)
+  (match (all_unknown (Load.env l) (decl_names ds) (decls_cite ds))
+    (Nil (RRefuse subj reason))
+    ((Cons k r)
+     (match
+       (horizon_pointer f reason
+         (show_name
+           (match (farthest_above (Fx.above f) (Cons k r) None)
+             ((Some (Pair n _)) n)
+             (None k))))
+       ((Some (Pair r2 p)) (RClassify subj r2 p))
+       (None (RClassify subj reason (show_name k))))))))
+;; of the names, the one the name table places farthest past the horizon
+(fn farthest_above ((above (List (Pair Name Int))) (ns (List Name)) (best (Option (Pair Name Int))))
+  (Option (Pair Name Int))
+  (measure (struct ns))
+  (match ns
+    (Nil best)
+    ((Cons n r)
+     (farthest_above above r
+       (match (above_ordinal above n)
+         (None best)
+         ((Some o)
+          (match best
+            ((Some (Pair _ b)) (if (< b o) (Some (Pair n o)) best))
+            (None (Some (Pair n o))))))))))
+(fn above_ordinal ((above (List (Pair Name Int))) (n Name)) (Option Int)
+  (measure (struct above))
+  (match above
+    (Nil None)
+    ((Cons (Pair m o) r) (if (name_eq m n) (Some o) (above_ordinal r n)))))
+(fn decls_cite ((ds (List Declaration))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d r)
+     (append
+       (match d
+         ((AxiomDecl (ConstantVal _ _ ty) _) (expr_consts ty))
+         ((DefnDecl (ConstantVal _ _ ty) v _ _ _) (append (expr_consts ty) (expr_consts v)))
+         ((ThmDecl (ConstantVal _ _ ty) v _) (append (expr_consts ty) (expr_consts v)))
+         ((OpaqueDecl (ConstantVal _ _ ty) v _ _) (append (expr_consts ty) (expr_consts v)))
+         (_ Nil))
+       (decls_cite r)))))
+;; those of the names that are neither in the environment nor among `own`
+(fn all_unknown ((env CheckedEnv) (own (List Name)) (ns (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n r)
+     (if (bool_or (env_has env n) (mem_name n own)) (all_unknown env own r)
+     (Cons n (all_unknown env own r))))))
 ;; Lean's spellings the elaborator does not know, each refused with its pointer whatever the
 ;; horizon (slice 3.27 landing 4; docs/LEAN.md lists the rows). The name is the first token of
 ;; the elaborator's `unknown_constant` message. A name ending in `!` reads a default from an
@@ -2682,7 +2808,16 @@
          (match (lean_symbol_pointer t)
            ((Some p)
             (Some (Pair (quote lean_symbol) (append t (append " is Lean's spelling: write " p)))))
-           (None None)))))))
+           (None
+             (if (bool_or (int_list_eq t "true") (int_list_eq t "false"))
+               (Some
+                 (Pair (quote unknown_constant)
+                   (append t
+                     (append ": Init's constructor is Bool."
+                       (append t
+                         (append " — write Bool."
+                           (append t ", or open the namespace with (use Init.Bool)")))))))
+               None))))))))
 (fn lean_symbol_pointer ((t (List Int))) (Option (List Int))
   (if (int_list_eq t "==") (Some "(BEq.beq a b) at Nat or Int, or the proposition (= a b) (§5.1)")
   (if (int_list_eq t "&&") (Some "(and a b) at Bool operands — Bool.and (§5.1)")
@@ -2814,7 +2949,7 @@
                   ((Pair (Pair l1 (Some n)) w3)
                    (Pair
                      (Pair (ld_rec l1 (RInit (Fx.initname f) horizon n))
-                       (Some (with Fx f (above above2))))
+                       (Some (with Fx f (above above2) (fetched (Pair horizon (horizon_source f))))))
                      w3))
                   ((Pair (Pair l1 None) w3) (Pair (Pair l1 None) w3)))))))))))
     (_ (Pair (Pair l (Some f)) w))))
@@ -3045,6 +3180,8 @@
                                 (view view)
                                 (autos autos)
                                 (initname Anon)
+                                (initvia Nil)
+                                (fetched (Pair -1 Nil))
                                 (taken Nil)
                                 (ecount 0)
                                 (above Nil)
@@ -4094,7 +4231,7 @@
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (Im.fx im))))
     (match
-      (rd_plain l
+      (rd_plain l sc Anon
         (read_fulfills sc (Load.env l) rargs proof (producers_of l (Im.fx im)) (Load.mode l)))
       ((Pair l rd)
        (match rd
@@ -4106,7 +4243,8 @@
          ((RDOk ds)
           (match (admit_under l (Im.fx im) ds)
             ((AdRefused subj reason)
-             (Pair (ld_rec l (RRefuse subj reason)) (im_mark im (quote requirement) n)))
+             (Pair (ld_rec l (refusal_rec l (Im.fx im) ds subj reason))
+               (im_mark im (quote requirement) n)))
             ((AdOk env1)
              (match (policy_pass l (Im.fx im) env1 (Load.memo l) ds Nil)
                ((PolBound _)
@@ -4139,8 +4277,7 @@
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
        ((FImportInit n)
         (match (init_through l n w)
-          ((Pair (Pair l1 (Some h)) w1)
-           (load_forms l1 (with Fx (fx_see f Nil h) (initname n)) r fuel w1))
+          ((Pair (Pair l1 (Some h)) w1) (load_forms l1 (fx_see_init f n h) r fuel w1))
           ((Pair (Pair l1 None) w1) (Pair (Pair l1 None) w1))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)
@@ -4167,20 +4304,20 @@
       (match (norm_parts (append (dir_of (Fx.parts f)) (split_path p Nil Nil)) Nil)
         (None (Pair (Pair (ld_rec l (RLoadErr (fx_file f) (quote import_outside_root) p)) None) w))
         ((Some rel)
-         (match (module_of rel)
-           ((MPOk _)
-            (match (sealed_above l (dir_of (Fx.parts f)) rel w)
-              ((Pair (Some d) w1)
-               (Pair
-                 (Pair
-                   (ld_rec l
-                     (RLoadErr (fx_file f) (quote private_module)
-                       (append (join_path rel)
-                         (append " is inside the sealed directory "
-                           (append (join_path d) " — import the directory")))))
-                   None)
-                 w1))
-              ((Pair None w1)
+         (match (sealed_above l (dir_of (Fx.parts f)) (seal_target rel) w)
+           ((Pair (Some d) w1)
+            (Pair
+              (Pair
+                (ld_rec l
+                  (RLoadErr (fx_file f) (quote private_module)
+                    (append (join_path rel)
+                      (append " is inside the sealed directory "
+                        (append (join_path d) " — import the directory")))))
+                None)
+              w1))
+           ((Pair None w1)
+            (match (module_of rel)
+              ((MPOk _)
                (if (bool_and (Fx.view f) (parts_under (dir_of rel) (view_dir (Fx.parts f))))
                  (Pair
                    (Pair
@@ -4190,14 +4327,20 @@
                            ": a view imports directory modules, Init and plain files outside its own directory, never its implementation's")))
                      None)
                    w1)
-                 (import_loaded l f rel fuel w1)))))
-           (_ (import_loaded l f rel fuel w))))))))
-;; The sealed-directory rule (§13 item 26, the K seal): a file inside a directory that has a
-;; view — DIR/mod.req.shard or DIR/mod.req/mod.req.shard — is private to that directory,
-;; importable from a file under DIR and refused as `private_module` from anywhere else; the
-;; directory module `(import "DIR")` is the way in. The directories above the target are
-;; tried from the root down; the importer's own directory and its ancestors are never sealed
-;; against it.
+                 (import_loaded l f rel fuel w1)))
+              (_ (import_loaded l f rel fuel w1))))))))))
+;; The sealed-directory rule: what lies inside a directory that has a view —
+;; DIR/mod.req.shard or DIR/mod.req/mod.req.shard — is private to that directory: a file, and
+;; a directory module nested in it with its own view. Each is importable from a file under DIR
+;; and refused as `private_module` from anywhere else; the directory module `(import "DIR")`
+;; is the way in. The directories above the target are tried from the root down; the
+;; importer's own directory and its ancestors are never sealed against it.
+;; what an import path names for the rule: a file, a directory module, or — for a view file
+;; named directly — the directory the view belongs to
+(fn seal_target ((rel (List (List Int)))) (List (List Int))
+  (match (module_of rel)
+    ((MPView _) (view_dir rel))
+    (_ rel)))
 ;; the directory a view belongs to: its own, or the one above `mod.req/` for the dir form
 (fn view_dir ((parts (List (List Int)))) (List (List Int))
   (let ((d (dir_of parts)))
@@ -4247,10 +4390,11 @@
        ((Some mp)
         (match (ld_find_mod (Load.mods l1) mp)
           ((Some m)
-           (if (Mod.ok m) (Pair (Pair l1 (Some (fx_see f (Mod.closure m) (Mod.init m)))) w1)
-           (Pair
-             (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None)
-             w1)))
+           (if (Mod.ok m)
+             (Pair (Pair l1 (Some (fx_see f (Mod.closure m) (Mod.init m) (join_path rel)))) w1)
+             (Pair
+               (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None)
+               w1)))
           (None
             (Pair
               (Pair (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) None)
@@ -4354,7 +4498,7 @@
      (append "READ-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
     ((RLoadErr file e m)
      (append "LOAD-ERROR " (append file (append " " (append (chars_of_sym e) (append ": " m))))))
-    ((RProved n k steps)
+    ((RProved n _ k steps)
      (append "PROVED "
        (append (show_name n)
          (append " req=" (append (req_show k) (append " (by " (append (show_sexprs steps) ")")))))))
@@ -4459,7 +4603,7 @@
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInit _ _ _) acc)
        ((RUnused _ _) acc)
-       ((RProved _ _ _) acc)
+       ((RProved _ _ _ _) acc)
        ((RSidecar _ _ _) acc)
        ((RRecon _ _ _) acc)
        ((REngine _ _) acc)

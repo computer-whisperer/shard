@@ -52,7 +52,9 @@ READ-ERROR FILE above_horizon: NAME is declaration N of the export, at or above 
 horizon H (import Init K): write (import Init NAME)
 ```
 
-`K` there is the file's last `(import Init …)` line, which need not be the one that set `H`. A
+`K` there is the line that set `H`; where the horizon comes from an imported file the message
+says `(inherited through the import of FILE)` instead. The same refusal names an instance the
+elaborator supplies and the file does not see (`max` at `Nat` below `Nat.instMax`). A
 lemma a proof cites may lie anywhere in the export, far past every row below (`Nat.sub_one_lt` is
 declaration 6,037, `Nat.succ_sub_one` 48,720): cite it, and add the line the refusal names.
 Horizons that matter, in the export's order — each row covers the rows above it:
@@ -218,7 +220,8 @@ The implementation is `D/D.shard`; it may import kernel files and write their ty
 (`kernel.prelude.List.Cons` beside Init's `List` in `v3/tools/shardfmt/reads/reads.shard`). A
 consumer writes `(import "reads") (use tools.shardfmt.reads)` and sees `reads_same` as an opaque
 function: its own functions are definitions, and its theorems hold for any implementation. Files
-inside `D/` are private; importing one from outside is refused `private_module`. Give the directory
+inside `D/` are private, and so is a directory with a view nested inside `D/`; importing one from
+outside is refused `private_module`. Give the directory
 to the loader and to `v3/build.sh` after the root file, so that the implementation is checked and
 linked: the record is `DISCHARGE D.f fn` for a linked function and `DISCHARGE D.f defined` where
 the implementation is itself a definition (`tools.shardfmt.print.print`). A view may also state
@@ -289,7 +292,7 @@ speaks of rests on building it from the file the contract imports. The contract
 | give a witness; open one | `(apply (Exists.intro W) ((exact h)))`; `(cases h ((intro (x hx) STEP…)))` | `models/imp/app.shard` |
 | restate the goal, then rewrite backwards | `(show G) (rw (<- h))` | `layout.shard` `opt_trail_rest` |
 | run a function over given facts | `(reduce lhs (using ht len_ipfn.eq_1 (if_pos hd)))` | `models/imp/len.shard` |
-| leave a goal open, or hand it to the search | `sorry`: the theorem is `PENDING NAME sorry` and admits nothing; as a step, `(by … sorry)` also prints the goal it stands at. `auto`: `prove.shard` writes the steps into `FILE.auto.shard`; it works for a `theorem`, not for a `fulfills` (`OPEN.md` §1) | `pins/loader/by_sorry`; `examples/auto` |
+| leave a goal open, or hand it to the search | `sorry`: the theorem is `PENDING NAME sorry` and admits nothing; as a step, `(by … sorry)` also prints the goal it stands at. `auto`: `prove.shard` writes the steps into `FILE.auto.shard`; it works for a `theorem` and for a function's obligation, `(fulfills F.dec_K auto)`, not inside the implementation of a view (`OPEN.md` §1) | `pins/loader/by_sorry`; `examples/auto`; `pins/loader/auto_fulfills` |
 
 ## 11. What goes wrong
 
@@ -303,22 +306,24 @@ speaks of rests on building it from the file the contract imports. The contract
 | `REFUSE F realize_recursion: F calls itself without a measure` | no recursion clause | add `(measure …)` |
 | `REFUSE F equation_form: T: a nested inductive's recursor has no Stage-0 translation` | structural recursion into a type nested through `List` | `(derive T size)` and a `Nat` measure |
 | `DEFINE F equations=` with no name after it; then `READ-ERROR FILE unknown_constant: F.eq_1`, and `(unfold F)` is `unfold_stuck` | a structurally recursive body that starts with `if` has no equation | let the `match` on the recursion parameter lead (`em_keep`) |
-| `REFUSE F definition_refused: F1.mutual: K refused the group's fixpoint (fvar_in_type)`, on every member of the group | a `let` bound to a call of a member, with another such call in its scope: an obligation is stated over the bindings in scope and cannot cite the recursion | write the call where it is used (`em_kids`, `em_if_deep`) |
+| `REFUSE F nested_recursion: F: the argument of a recursive call is computed by the recursion itself — it cites R, a let bound to the result of a recursive call: …` (or `— a recursive call stands inside it`) | a recursive call's argument depends on another recursive call's result: no obligation can state that it decreases. A `let` bound to a recursive call is fine while later calls do not take it as an argument (`pins/loader/define_let_call`) | pass an argument computed without a recursive call |
+| `REFUSE F unreachable_arm: the row X binds a variable and matches every value, so the N row(s) after it can never be taken: no constructor of T named X is in scope — …` | a row that is a bare name which is no constructor of the matched type — a misspelt or unopened constructor — or `_`, with rows after it | write the constructor as its type spells it (`T.C`, or `(use MODULE.T)`); a catch-all is the last row |
 | `REFUSE F unknown_head: Nat.succ is not a constructor — …` | a `fn` that matches a `Nat` by `Nat.zero` and `(Nat.succ k)` | numeral rows closed by `_` or a name, or an `if` |
-| `REFUSE F unbound_name: true — read E-first after the typed route's unknown_constant: true` | bare `true` or `false` | `(use Init.Bool)`, or `Bool.true` |
-| `REFUSE F unknown_head: max — … no_realization: a package constant whose value is not its constructor applied`; in a theorem `REFUSE T unknown_constant` or `decide_failed` | `max` at `Nat` below its instance; no message names the import | `(import Init Nat.instMax)` |
-| `READ-ERROR FILE function_expected: applied to 1 more arguments than its type has: (Sort (succ ?u2))` | a bare constructor (`Add`) whose name Init also has, in a file that opens the type's module and not the type | `Exp.Add`, or `(use MODULE.Exp)` |
+| `REFUSE F unknown_constant: true: Init's constructor is Bool.true — write Bool.true, or open the namespace with (use Init.Bool)` | bare `true` or `false` | `(use Init.Bool)`, or `Bool.true` |
+| `REFUSE F above_horizon: Nat.instMax is declaration 3958 of the export, at or above the module's horizon H (import Init K): write (import Init Nat.instMax)`; in a theorem the same as a `READ-ERROR` | `max` at `Nat` below its instance | `(import Init Nat.instMax)` |
+| `REFUSE T above_horizon: NAME is declaration N of the export, …: write (import Init NAME)` on a theorem whose source does not spell NAME | a proof step builds on a lemma of Init past the horizon (`rw` on `Eq.mpr`, declaration 383) | the import the message names |
+| `READ-ERROR FILE function_expected: the head resolved to Add — Init's declaration; … — and is applied to 1 more arguments than its type has: (Sort (succ ?u2))` | a bare constructor (`Add`) whose name Init also has, in a file that opens the type's module and not the type | `Exp.Add`, or `(use MODULE.Exp)` |
 | `REFUSE F type_mismatch: expected (List.{0} UInt8), found (List.{0} Nat)` | `Bytes.ofList` given numbers | `Bytes.ofNats` (section 14) |
 | `READ-ERROR FILE unknown_constant: step N: NAME — the goal: …` | a lemma's name is wrong, or is not Init's; no name is suggested | search the names (section 15) |
 | `READ-ERROR FILE arith_failed: … — rows: [0 <= …] …` | the goal is not linear in the atoms the rows show: a truncated subtraction `(Nat.sub n 2)`, a quotient, a call | give the missing fact, or use the `apply` rows of section 10 |
-| `READ-ERROR FILE cases_fields: … C's arm names N binder(s) and its case has M: …`; `induction_fields` likewise | an arm's name list has the wrong length; the two counts printed are not reliable (`OPEN.md` §1) | name every field of the constructor; under `induction`, then one hypothesis per recursive field: `(Add (a b iha ihb) STEP…)` |
+| `READ-ERROR FILE cases_fields: … C's arm names N binder(s) and its case has M: name the constructor's K field(s) — (a : T) (_ : T)`; `induction_fields` likewise, with `, then J induction hypothesis name(s), one for each recursive field` | an arm's name list has the wrong length: M is what the case has, and the binders listed show `_` where the arm gave no name | name every field of the constructor; under `induction`, then one hypothesis per recursive field: `(Add (a b iha ihb) STEP…)` |
 | `READ-ERROR FILE arith_unreached: a product with a literal needs Lean.Omega.LinearCombo.mul_eval_of_const_right, past the Init prefix in scope: …` | the horizon is before `arith`'s product lemma | write a sum, or `(import Init Int.lt_mul_ediv_self_add)` |
 | `REFUSE F function_value: …` | a lambda outside a template's function argument, or a function passed as a value | name it as a `fn`, or pass it to a template |
 | `REFUSE F lean_symbol`, `REFUSE F infix_form` | `==`, `&&`, `\|\|`, or `(n + 1)` | `(= a b)`, `(and a b)`, `(+ n 1)` |
 | `POLICY T outside the policy: A` | `T` rests on an axiom this file does not trust | `(trusts A)` in every file whose theorems rest on `A` |
 | `UNTHREADED F world_twice: parameter 2 used twice: std.host.write_line, std.host.write_line` | one `World` passed to two calls | pass each call's result on |
 | `BAD-BIN B extern_outside: X is called in F and is not in the roster`; `BAD-BIN B untrusted: T rests on A, which the bin does not trust`; `UNMET T` | the bin's `externs` or `trusts` misses a name; a requirement's proof is `sorry` | add the name; prove the requirement |
-| `LOAD-ERROR FILE private_module: PATH is inside the sealed directory DIR — import the directory` | a file behind a view imported from outside | `(import "DIR")` |
+| `LOAD-ERROR FILE private_module: PATH is inside the sealed directory DIR — import the directory` | a file behind a view, or a directory module nested behind it, imported from outside | `(import "DIR")` |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: no fn MODULE.main to start from` | the file given declares no `main` (the contract's file, say) | give the program's file |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: MODULE.main takes N parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)` | a `main` with parameters before the `World` is an entry for `--run` only | take the arguments through `get_args` |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C is named as a cell of the runtime and must not be the second constructor of its type` (or `must be the second`) | a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` stands at another place in its type than the runtime's cell of that name (`True`, `Cons`, `Some` are second constructors; the others are not) | rename the constructor, or move it |

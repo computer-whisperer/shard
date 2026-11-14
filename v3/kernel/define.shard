@@ -112,15 +112,38 @@
 ;; the abstract motive —, every local in scope outermost first (True = a let)
 ;; `members`: the callee-locals that stand for the other members of the function's group (slice
 ;; 5.2), none for a function that calls only itself
+;; `beyond`: the lets in scope whose value is the recursion's own — bound to a recursive call,
+;; or computed from such a let —, each with its name: no obligation is stated over them
 (record PjCx (self Int) (tps (List Expr)) (kind PjKind) (tables (List (Pair Expr Expr)))
   (scope (List (Pair Bool Expr)))
-  (members (List Int)))
+  (members (List Int))
+  (beyond (List (Pair Int Name))))
 (fn pj_push ((cx PjCx) (is_let Bool) (fvs (List Expr))) PjCx
   (measure (struct fvs))
   (match fvs
     (Nil cx)
     ((Cons fv r)
      (pj_push (with PjCx cx (scope (append (PjCx.scope cx) (list (Pair is_let fv))))) is_let r))))
+;; a let's local in scope; one whose value cites the recursion's local, or a let that does, is
+;; beyond an obligation's reach
+(fn pj_push_let ((cx PjCx) (n Name) (fv Expr) (v Expr)) PjCx
+  (let ((cx1 (pj_push cx True (list fv))))
+    (if (mentions_any v (pj_out cx))
+      (with PjCx cx1 (beyond (Cons (Pair (fvar_id_of fv) n) (PjCx.beyond cx))))
+      cx1)))
+;; the locals no obligation may cite: the recursion's own local, and the lets beyond reach
+(fn pj_out ((cx PjCx)) (List Int)
+  (append
+    (match (PjCx.kind cx)
+      ((PkWf recl _ _ _ _) (list (fvar_id_of recl)))
+      ((PkGrp recl _ _ _) (list (fvar_id_of recl)))
+      (_ Nil))
+    (pj_beyond_ids (PjCx.beyond cx))))
+(fn pj_beyond_ids ((bs (List (Pair Int Name)))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (Pair i _) r) (Cons i (pj_beyond_ids r)))))
 
 (fn define_pd ((es ESt) (sc Scope) (pd PreDef)) DfRes
   (match (pd_callees pd)
@@ -174,7 +197,8 @@
                                (pj_term (tr_set_w t1 w2)
                                  (make PjCx (self selfid) (tps tps) (kind (PkEqn)) (tables Nil)
                                    (scope Nil)
-                                   (members Nil))
+                                   (members Nil)
+                                   (beyond Nil))
                                  (pd_body pd)
                                  (budget_depth))
                                (TrOk (tr_set_w t1 w2) (pd_body pd)))
@@ -306,7 +330,8 @@
                                    (kind (PkStruct (fvar_id_of cfv) pos))
                                    (tables (list (Pair below belowabs)))
                                    (scope Nil)
-                                   (members Nil))))
+                                   (members Nil)
+                                   (beyond Nil))))
                               (match (pj_term t8 cx (pd_body pd) (budget_depth))
                                 ((TrErr e m) (AuxErr t8 e m))
                                 ((TrOk t9 b)
@@ -408,7 +433,8 @@
                                          (kind (PkWf recl p ltys m data))
                                          (tables Nil)
                                          (scope (list (Pair False p)))
-                                         (members Nil))))
+                                         (members Nil)
+                                         (beyond Nil))))
                                     (match (pj_term t11 cx body1 (budget_depth))
                                       ((TrErr e m2) (AuxErr t11 e m2))
                                       ((TrOk t12 b)
@@ -754,7 +780,7 @@
           ((Pair t2 fv)
            (match (tr_inst1 t2 b fv)
              ((Pair t3 b1)
-              (match (pj_term t3 (pj_push cx True (list fv)) b1 (- fuel 1))
+              (match (pj_term t3 (pj_push_let cx n fv v1) b1 (- fuel 1))
                 ((TrErr x m) (TrErr x m))
                 ((TrOk t4 b2)
                  (match (tr_lams t4 (list fv) b2)
@@ -855,34 +881,33 @@
                   ((Pair t2 tup)
                    (match (pj_descent t2 m data (take n dargs) p n)
                      ((Pair t3 goal)
-                      (match
-                        (tr_pis t3 (scope_fvars (pj_obl_scope t3 (PjCx.scope cx) (fvar_id_of recl)))
-                          goal)
-                        ((Pair t4 stmt)
-                         (let ((had (obl_stating (Tr.obls t4) stmt)))
-                           (let
-                             ((name
-                                (match had
-                                  ((Some k) k)
-                                  (None
-                                    (name_append (Tr.id t4)
-                                      (n1
-                                        (sym_of_chars
-                                          (append "dec_" (show_nat (+ 1 (len (Tr.obls t4))))))))))))
-                             (match
-                               (tr_apps t4 (mk_const name Nil)
-                                 (scope_lambda_fvars
-                                   (pj_obl_scope t4 (PjCx.scope cx) (fvar_id_of recl))))
-                               ((Pair t5 proof)
-                                (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
-                                  ((Pair t6 r)
-                                   (TrOk
+                      (match (pj_obl_scope t3 cx)
+                        ((Pair over out)
+                         (if (mentions_any goal out)
+                           (TrErr (quote nested_recursion) (pj_nested t3 cx goal))
+                           (match (tr_pis t3 (scope_fvars over) goal)
+                             ((Pair t4 stmt)
+                              (let ((had (obl_stating (Tr.obls t4) stmt)))
+                                (let
+                                  ((name
                                      (match had
-                                       ((Some _) t6)
+                                       ((Some k) k)
                                        (None
-                                         (tr_add_obl t6
-                                           (AxiomDecl (ConstantVal name Nil stmt) False))))
-                                     r)))))))))))))))))))))))
+                                         (name_append (Tr.id t4)
+                                           (n1
+                                             (sym_of_chars
+                                               (append "dec_" (show_nat (+ 1 (len (Tr.obls t4))))))))))))
+                                  (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars over))
+                                    ((Pair t5 proof)
+                                     (match (tr_apps t5 recl (Cons tup (Cons proof (drop n dargs))))
+                                       ((Pair t6 r)
+                                        (TrOk
+                                          (match had
+                                            ((Some _) t6)
+                                            (None
+                                              (tr_add_obl t6
+                                                (AxiomDecl (ConstantVal name Nil stmt) False))))
+                                          r))))))))))))))))))))))))))
 ;; the descent fact as the comparison it is, `measure[arguments] < measure[parameters]` at Nat
 ;; (slice 3.21): K converts the relation's instance `InvImage … (tuple arguments) p` to it, and
 ;; an author — and arith — reads a comparison. The body's arguments are over the tuple's
@@ -928,22 +953,47 @@
           ((Pair t2 b1) (pj_open_named t2 b1 (- k 1) (Cons fv acc)))))))
     (_ (Pair t (Pair (rev acc) e))))))
 ;; the locals an obligation is stated over: every local in scope at the call but those that
-;; state the function's own value — the hypothesis `f x = true` of a branch under a self-call
-;; condition — whose type cites the recursor's local, which a closed statement cannot. The
-;; obligation is asked without them: a stronger statement, never a weaker one (slice 3.19;
-;; `(if (f a) (f b) …)` under a measure was dec_2 fvar_in_type). A let bound to a self-call
-;; is not dropped (its value is K's to read): a later call in its scope is still refused
-(fn pj_obl_scope ((t Tr) (scope (List (Pair Bool Expr))) (recid Int)) (List (Pair Bool Expr))
+;; state the function's own value, which a closed statement cannot cite — the hypothesis
+;; `f x = true` of a branch under a recursive call's condition, whose type cites the
+;; recursion's local; a let bound to a recursive call, whose value does; and every local whose
+;; type cites one left out. The obligation is asked without them: a stronger statement, never
+;; a weaker one. The second component is every local left out, the recursion's own first
+(fn pj_obl_scope ((t Tr) (cx PjCx)) (Pair (List (Pair Bool Expr)) (List Int))
+  (pj_obl_keep t (PjCx.scope cx) (pj_out cx) Nil))
+(fn pj_obl_keep
+  ((t Tr) (scope (List (Pair Bool Expr))) (out (List Int)) (acc (List (Pair Bool Expr))))
+  (Pair (List (Pair Bool Expr)) (List Int))
   (measure (struct scope))
   (match scope
-    (Nil Nil)
+    (Nil (Pair (rev acc) out))
     ((Cons (Pair letb fv) r)
-     (if (pj_local_cites t fv recid) (pj_obl_scope t r recid)
-     (Cons (Pair letb fv) (pj_obl_scope t r recid))))))
-(fn pj_local_cites ((t Tr) (fv Expr) (recid Int)) Bool
+     (if (bool_or (mem_int (fvar_id_of fv) out) (pj_local_cites t fv out))
+       (pj_obl_keep t r (Cons (fvar_id_of fv) out) acc)
+       (pj_obl_keep t r out (Cons (Pair letb fv) acc))))))
+(fn pj_local_cites ((t Tr) (fv Expr) (out (List Int))) Bool
   (match (lctx_find (w_lctx (Tr.w t)) (fvar_id_of fv))
-    ((Some d) (mentions_any (ldecl_type d) (list recid)))
+    ((Some d) (mentions_any (ldecl_type d) out))
     (None False)))
+;; a descent fact that cites a local left out of its obligation: the argument of a recursive
+;; call is computed by the recursion itself — nested recursion, which gets no definition
+(fn pj_nested ((t Tr) (cx PjCx) (goal Expr)) (List Int)
+  (append (show_name (Tr.id t))
+    (append ": the argument of a recursive call is computed by the recursion itself"
+      (append
+        (match (pj_beyond_cited (PjCx.beyond cx) goal)
+          ((Some n)
+           (append " — it cites "
+             (append (show_name n) ", a let bound to the result of a recursive call")))
+          (None " — a recursive call stands inside it"))
+        ": that it decreases would be a statement over the function's own values, which cannot be made before the function is defined. Nested recursion gets no definition: pass an argument computed without a recursive call"))))
+(fn pj_beyond_cited ((bs (List (Pair Int Name))) (goal Expr)) (Option Name)
+  (measure (struct bs))
+  (match bs
+    (Nil None)
+    ((Cons (Pair i n) r)
+     (match (pj_beyond_cited r goal)
+       ((Some m) (Some m))
+       (None (if (mentions_any goal (list i)) (Some n) None))))))
 ;; the obligation already stating this fact: one call written once and read twice (an `if`'s
 ;; condition is in its proposition and in its decision), or the same call twice in one scope,
 ;; is one obligation
@@ -1297,33 +1347,36 @@
               ((Pair t2 tagged)
                (match (pj_subst_list t2 cm cdata (take n dargs))
                  ((Pair t3 ma)
-                  (match
-                    (tr_pis t3 (scope_fvars (pj_obl_scope t3 (PjCx.scope cx) (fvar_id_of recl)))
-                      (mk_app (mk_app (mk_const (n2 (quote Nat) (quote lt)) Nil) ma) m))
-                    ((Pair t4 stmt)
-                     (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
-                       (let
-                         ((name
-                            (match had
-                              ((Some k) k)
-                              (None
-                                (name_append (Tr.id t4)
-                                  (n1
-                                    (sym_of_chars
-                                      (append "dec_"
-                                        (show_nat (+ 1 (obls_under (Tr.obls t4) (Tr.id t4))))))))))))
-                         (match
-                           (tr_apps t4 (mk_const name Nil)
-                             (scope_lambda_fvars (pj_obl_scope t4 (PjCx.scope cx) (fvar_id_of recl))))
-                           ((Pair t5 proof)
-                            (match (tr_apps t5 recl (Cons tagged (Cons proof (drop n dargs))))
-                              ((Pair t6 r)
-                               (TrOk
-                                 (match had
-                                   ((Some _) t6)
-                                   (None
-                                     (tr_add_obl t6 (AxiomDecl (ConstantVal name Nil stmt) False))))
-                                 r))))))))))))))))))
+                  (let ((goal (mk_app (mk_app (mk_const (n2 (quote Nat) (quote lt)) Nil) ma) m)))
+                    (match (pj_obl_scope t3 cx)
+                      ((Pair over out)
+                       (if (mentions_any goal out)
+                         (TrErr (quote nested_recursion) (pj_nested t3 cx goal))
+                         (match (tr_pis t3 (scope_fvars over) goal)
+                           ((Pair t4 stmt)
+                            (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
+                              (let
+                                ((name
+                                   (match had
+                                     ((Some k) k)
+                                     (None
+                                       (name_append (Tr.id t4)
+                                         (n1
+                                           (sym_of_chars
+                                             (append "dec_"
+                                               (show_nat (+ 1 (obls_under (Tr.obls t4) (Tr.id t4))))))))))))
+                                (match (tr_apps t4 (mk_const name Nil) (scope_lambda_fvars over))
+                                  ((Pair t5 proof)
+                                   (match
+                                     (tr_apps t5 recl (Cons tagged (Cons proof (drop n dargs))))
+                                     ((Pair t6 r)
+                                      (TrOk
+                                        (match had
+                                          ((Some _) t6)
+                                          (None
+                                            (tr_add_obl t6
+                                              (AxiomDecl (ConstantVal name Nil stmt) False))))
+                                        r))))))))))))))))))))))
     (_ (TrErr (quote define_matrix) "a group call outside a group"))))
 ;; the obligations named under one owner: their count, and the one stating a fact already
 (fn obl_owner_is ((k Name) (owner Name)) Bool
@@ -1527,7 +1580,8 @@
                              (grp_callees all (pd_callees pd)))))
                        (tables Nil)
                        (scope (grp_scope data))
-                       (members (grp_callee_ids (pd_callees pd))))))
+                       (members (grp_callee_ids (pd_callees pd)))
+                       (beyond Nil))))
                   (match (pj_term (tr_set_id t3 (pd_name pd)) cx (pd_body pd) (budget_depth))
                     ((TrErr e m) (Pair t3 (Left2 e m)))
                     ((TrOk t4 b)
@@ -1724,7 +1778,8 @@
              (match
                (pj_term (tr_set_id t (pd_name pd))
                  (make PjCx (self selfid) (tps Nil) (kind (PkEqn)) (tables Nil) (scope Nil)
-                   (members (grp_callee_ids (pd_callees pd))))
+                   (members (grp_callee_ids (pd_callees pd)))
+                   (beyond Nil))
                  (pd_body pd)
                  (budget_depth))
                ((TrErr e m) (GrpErr e m))

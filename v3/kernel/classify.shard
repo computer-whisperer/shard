@@ -563,7 +563,10 @@
        ((TOk t)
         (match (read_earms r arms Nil)
           ((Pair (Some (Pair e m)) _) (TErr e m))
-          ((Pair None as) (TOk (EMatch t as)))))))
+          ((Pair None as)
+           (match (dead_row_in as arms)
+             ((Some m) (TErr (quote unreachable_arm) m))
+             (None (TOk (EMatch t as)))))))))
     (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
 (fn read_earms ((r Rd) (arms (List SExpr)) (acc (List EArm)))
   (Pair (Option (Pair Symbol (List Int))) (List EArm))
@@ -579,6 +582,42 @@
           ((TOk body) (read_earms r rest (Cons (EArm pat body) acc)))))))
     (_ (Pair (Some (Pair (quote bad_shape) "an arm is (PAT E)")) Nil))))
 
+;; a match whose rows all read is refused where a row that matches every value has rows
+;; after it: those can never be taken, and a constructor's name that resolved to nothing is
+;; read as such a row. The rows as read, beside their source
+(fn dead_row_in ((as (List EArm)) (arms (List SExpr))) (Option (List Int))
+  (measure (struct as))
+  (match as
+    ((Cons (EArm pat _) ar)
+     (match arms
+       ((Cons (SList (Cons p _)) sr)
+        (match (dead_rows pat p (len ar))
+          ((Some m) (Some m))
+          (None (dead_row_in ar sr))))
+       (_ None)))
+    (Nil None)))
+;; the refusal's text for a row that matches every value, `after` rows following it
+(fn dead_rows ((pat EPat) (p SExpr) (after Int)) (Option (List Int))
+  (if (< after 1) None
+  (match pat
+    (PVar
+      (match p
+        ((SSym x)
+         (if (sym_eq x (quote _))
+           (Some
+             (append "the row _ matches every value, so the "
+               (append (show_nat after)
+                 " row(s) after it can never be taken: a catch-all is the last row")))
+           (Some
+             (append "the row "
+               (append (chars_of_sym x)
+                 (append " binds a variable and matches every value, so the "
+                   (append (show_nat after)
+                     (append " row(s) after it can never be taken: no constructor named "
+                       (append (chars_of_sym x)
+                         " is in scope — write the constructor as its type spells it, or make a catch-all the last row")))))))))
+        (_ None)))
+    (_ None))))
 ;; ---- patterns: the variables in capture order (leftmost first) ------------------------------
 (type PRes (POk EPat (List Name)) (PErr Symbol (List Int)))
 (fn read_epat ((r Rd) (s SExpr)) PRes

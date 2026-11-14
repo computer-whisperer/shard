@@ -733,6 +733,28 @@
   (match n
     ((Str _ s) s)
     (_ (quote anon))))
+;; a constant generated for a recursion, whose executable structure no kernel term shows:
+;; `T.below`, `T.brecOn` and `T.binductionOn` of an inductive T, and Init's fixpoints. A
+;; declaration that only bears such a last component — a fn named `below` — is none
+(fn rec_generated ((env CheckedEnv) (c Name)) Bool
+  (match c
+    ((Str _ lc)
+     (if
+       (bool_or (sym_eq lc (quote brecOn))
+         (bool_or (sym_eq lc (quote below)) (sym_eq lc (quote binductionOn))))
+       (of_inductive env c)
+       (bool_or (name_eq c (n2 (quote WellFounded) (quote fix)))
+         (bool_or (name_eq c (Str (n2 (quote WellFounded) (quote Nat)) (quote fix)))
+           (name_eq c (Str (n2 (quote Lean) (quote Order)) (quote fix)))))))
+    (_ False)))
+;; a name directly under an inductive type's: where a generated constant of the type stands
+(fn of_inductive ((env CheckedEnv) (c Name)) Bool
+  (match c
+    ((Str p _)
+     (match (env_find env p)
+       ((Some (InductInfo _ _ _ _ _ _ _ _ _)) True)
+       (_ False)))
+    (_ False)))
 ;; `k`: the constant where a row of the registry may speak for it — Init's; a native declaration
 ;; that bears a row's name (a module `Bool` declaring `or` under a prefix that stops before
 ;; Init's) is its own program, never the row's (slice 3.19: the second reader's probe)
@@ -801,77 +823,74 @@
             (bool_or (name_eq k (n2 (quote Bool) (quote or)))
               (name_eq k (n2 (quote Bool) (quote not)))))
           (erase_bool_op t env c args fuel)
-          (if
-            (bool_or (sym_eq lc (quote brecOn))
-              (bool_or (sym_eq lc (quote below))
-                (bool_or (sym_eq lc (quote fix)) (sym_eq lc (quote binductionOn)))))
+          (if (rec_generated (tr_env t) c)
             (ErErr (quote recursion_structure)
               (append (show_name c)
                 ": a recursive definition's executable structure is not readable off the kernel term — supply the body (§7.1, §7.3)"))
-            (if
-              (bool_or (name_eq k (n2 (quote Classical) (quote choice)))
-                (bool_or (name_eq k (n2 (quote Acc) (quote rec)))
-                  (bool_or (name_eq k (nm_quot_lift))
-                    (bool_or (name_eq k (nm_quot_mk)) (name_eq k (nm_quot_ind))))))
-              (ErErr (quote noncomputable)
-                (append (show_name c) " in a runtime position (law §4.2)"))
-              (match (env_find (tr_env t) c)
-                (None (ErErr (quote unknown_constant) (show_name c)))
-                ((Some info)
-                 (match info
-                   ((CtorInfo _ ind _ nparams _ _) (erase_ctor t env c ind nparams args fuel))
-                   ((RecInfo _ _ nparams _ nmotives nminors _ _ _)
-                    (erase_rec t env c nparams nmotives nminors args fuel))
-                   (_
-                     (if (sym_eq lc (quote casesOn)) (erase_cases t env c args fuel)
-                     (if (bool_or (is_template (Tr.es t) c) (owner_is t c))  ; a template's call is a call of its instance (§8.4 slice 3.28 rule 3); a realize template's self-call names its constant
-                       (erase_template_call t env c args fuel)
-                       (match
-                         (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0)))
-                         (es_find_decl (Tr.es t) c))  ; the realized constant calling itself: a call
-                         ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
-                         ((Some (ESig _ _ ps _)) (erase_call t env c info args fuel))
-                         ((Some (EExtern _ _ _ _)) (erase_call_as t env c info args fuel True))
-                         (_
-                           (match (realization_of k)
-                             ((Some p)
-                              (match (erase_all t env args fuel Nil)
-                                ((Pair (Some (Pair e m)) _) (ErErr e m))
-                                ((Pair None (Pair t1 as))
-                                 (if (is_decision k) (erase_dec_value t1 env (EPrim p as) fuel)
-                                 (ErOk t1 (EPrim p as))))))
-                             (None
-                               (match (realization_expr k)
-                                 ((Some body)
-                                  (match (erase_all t env args fuel Nil)
-                                    ((Pair (Some (Pair e m)) _) (ErErr e m))
-                                    ((Pair None (Pair t1 (Cons a Nil)))
-                                     (ErOk t1 (ELet (list a) body)))
-                                    ((Pair None _)
-                                     (ErErr (quote function_value)
-                                       (append (show_name c) " partially applied (law §4.3)")))))
-                                 (None
-                                   (match (prim_l_identity k)
-                                     ((Some _)
-                                      (match (erase_all t env args fuel Nil)
-                                        ((Pair (Some (Pair e m)) _) (ErErr e m))
-                                        ((Pair None (Pair t1 as)) (ErOk t1 (EPrim c as)))))
-                                     (None
-                                       (match (mt_is_matcher (tr_env t) c)
-                                         ((Some desc) (erase_matcher t env c desc args fuel))
-                                         (None
-                                           (match (proj_fn_app info args)
-                                             ((Some (Pair (Pair sn i) (Pair x Nil)))
-                                              (erase_proj t env sn i x fuel))
-                                             ((Some (Pair (Pair sn i) (Pair x rest)))
-                                              (match (tr_package t sn)
-                                                ((Pair t1 (Some _))
-                                                 (erase_package_proj t1 env sn i x rest fuel))
-                                                ((Pair t1 None)
-                                                 (ErErr (quote function_value)
-                                                   (append (show_name c)
-                                                     ": a projection applied past its structure — a function is no value (law §4.3)")))))
-                                             (None (erase_unfold_matcher t env c info args fuel)))))))))))))))))))))))))))))))))
+          (if
+            (bool_or (name_eq k (n2 (quote Classical) (quote choice)))
+              (bool_or (name_eq k (n2 (quote Acc) (quote rec)))
+                (bool_or (name_eq k (nm_quot_lift))
+                  (bool_or (name_eq k (nm_quot_mk)) (name_eq k (nm_quot_ind))))))
+            (ErErr (quote noncomputable) (append (show_name c) " in a runtime position (law §4.2)"))
+            (match (env_find (tr_env t) c)
+              (None (ErErr (quote unknown_constant) (show_name c)))
+              ((Some info)
+               (match info
+                 ((CtorInfo _ ind _ nparams _ _) (erase_ctor t env c ind nparams args fuel))
+                 ((RecInfo _ _ nparams _ nmotives nminors _ _ _)
+                  (erase_rec t env c nparams nmotives nminors args fuel))
+                 (_
+                   (if (bool_and (sym_eq lc (quote casesOn)) (of_inductive (tr_env t) c))
+                     (erase_cases t env c args fuel)
+                   (if (bool_or (is_template (Tr.es t) c) (owner_is t c))  ; a template's call is a call of its instance (§8.4 slice 3.28 rule 3); a realize template's self-call names its constant
+                     (erase_template_call t env c args fuel)
+                     (match
+                       (if (name_eq c (Tr.id t)) (Some (ESig c 0 Nil (ETVar 0)))
+                       (es_find_decl (Tr.es t) c))  ; the realized constant calling itself: a call
+                       ((Some (EFn _ _ ps _ _ _)) (erase_call t env c info args fuel))
+                       ((Some (ESig _ _ ps _)) (erase_call t env c info args fuel))
+                       ((Some (EExtern _ _ _ _)) (erase_call_as t env c info args fuel True))
+                       (_
+                         (match (realization_of k)
+                           ((Some p)
+                            (match (erase_all t env args fuel Nil)
+                              ((Pair (Some (Pair e m)) _) (ErErr e m))
+                              ((Pair None (Pair t1 as))
+                               (if (is_decision k) (erase_dec_value t1 env (EPrim p as) fuel)
+                               (ErOk t1 (EPrim p as))))))
+                           (None
+                             (match (realization_expr k)
+                               ((Some body)
+                                (match (erase_all t env args fuel Nil)
+                                  ((Pair (Some (Pair e m)) _) (ErErr e m))
+                                  ((Pair None (Pair t1 (Cons a Nil)))
+                                   (ErOk t1 (ELet (list a) body)))
+                                  ((Pair None _)
+                                   (ErErr (quote function_value)
+                                     (append (show_name c) " partially applied (law §4.3)")))))
+                               (None
+                                 (match (prim_l_identity k)
+                                   ((Some _)
+                                    (match (erase_all t env args fuel Nil)
+                                      ((Pair (Some (Pair e m)) _) (ErErr e m))
+                                      ((Pair None (Pair t1 as)) (ErOk t1 (EPrim c as)))))
+                                   (None
+                                     (match (mt_is_matcher (tr_env t) c)
+                                       ((Some desc) (erase_matcher t env c desc args fuel))
+                                       (None
+                                         (match (proj_fn_app info args)
+                                           ((Some (Pair (Pair sn i) (Pair x Nil)))
+                                            (erase_proj t env sn i x fuel))
+                                           ((Some (Pair (Pair sn i) (Pair x rest)))
+                                            (match (tr_package t sn)
+                                              ((Pair t1 (Some _))
+                                               (erase_package_proj t1 env sn i x rest fuel))
+                                              ((Pair t1 None)
+                                               (ErErr (quote function_value)
+                                                 (append (show_name c)
+                                                   ": a projection applied past its structure — a function is no value (law §4.3)")))))
+                                           (None (erase_unfold_matcher t env c info args fuel)))))))))))))))))))))))))))))))))
 ;; a definition without a realization: Lean's own matcher (`NAME.match_N`, no descriptor of this
 ;; run) is a definition over `casesOn` — unfolded at its arguments and erased as any definition's
 ;; value (slice 3.27 rule 6); anything else has no realization
