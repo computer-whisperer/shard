@@ -12,7 +12,7 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | A binary and the evaluator differ at edges: a binary's integers stop at 2^3840, so an operation whose result reaches that — a `Nat.shiftLeft` among them — ends in `rt trap: bignum too large (exceeds 2^3840)` where the evaluator computes it; a stuck program exits 2 on the Rust bootstrap run directly, 4 under `load --run` and 3 as a binary. | reproduced |
 | The compiled loader has the binary's integer limit: `v3/bin/load` ends with `rt trap: bignum too large (exceeds 2^3840)`, exit 3, on a theorem K evaluates past that size and on a `--run` that reaches it. The loader on the bootstrap accepts both. | reproduced: `(= (Nat.pow 2 4000) (* (Nat.pow 2 2000) (Nat.pow 2 2000)))` by `decide` |
 | Two files that each give a program to the same function of Init cannot be roots of one load: the second is `LOAD-ERROR … duplicate_name: List.length`, and what imports it `import_failed`. Each loads alone. | reproduced: `load --root v3 v3/std/list.shard v3/examples/path/path_main.shard` (`examples/path/path.shard` and `std/list.shard` both realize `List.length`) |
-| In a function that is only a program, `-` on parameters declared `Nat` is integer subtraction: a body `(- n k)` gives a negative number for 3 and 5, under the evaluator on both engines and in a binary. The same body in a defined function is `Nat.sub` and gives 0. Nothing false is proved — such a function has no meaning in the logic — but a value declared `Nat` is negative at run time. | reproduced: `(fn prog ((s Symbol) (n Nat) (k Nat)) Nat (- n k))` |
+| In a function that is only a program, an operator whose type is decided by a call of a function declared later in the file is left as written: `(- (late n) 5)` with `late` returning a `Nat` is integer subtraction, −2 at 3, where no `Nat` or `Int` is expected of it. With `late` declared first it is `Nat.sub` and gives 0. Nothing false is proved — such a function has no meaning in the logic — but a value declared `Nat` is negative at run time. | reproduced: `(fn early ((s Symbol) (n Nat)) Nat (let ((d (- (late n) 5))) d))` before `(fn late ((n Nat)) Nat n)` |
 | A wrong name of an Init lemma gets no suggestion: `unknown_constant: step 1: Nat.div_lt_slf`. | reproduced |
 | `v3/build.sh` names its log and its emit directory under `v3/bin/` by the output path's last component, wherever the output is: two builds of one name overwrite each other's. | reproduced |
 | A `match` on an indexed family: a constructor row is refused `pattern_constructor: C is not a constructor of T`, where C is one; a bare field-less constructor row (`Vec.nil`) is read as a variable. | reproduced |
@@ -72,6 +72,12 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 Each is a rule of `LAW.md`, or follows from one, with no test behind it.
 
 - The toolchain's own functions are meant to be total. Nothing checks their measures.
+- What runs is written (rule 24): no load refuses a function whose two readings differ. The
+  comparison runs only under `load --both`, over a `fn` and not over a template, an instance or
+  a `realize`; `readings_test.sh` holds one fixture to it. Measured over the tree's 473
+  functions (`DECISIONS.md`, Measured): none differs, and the classifier does not read 103.
+  Two shapes the two readings write differently and run alike: a numeral pattern (a chain of
+  tests, a `match`) and consecutive `let`s (nested, one).
 - "Could not show these equal" is never read as "these differ": no test.
 - A positive node id in K is written only by five constructors: no test. The test of K's state
   discipline believes the types the sources declare.

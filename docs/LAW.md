@@ -56,6 +56,10 @@ with a proof. Today's compiler is unproven and is to be replaced by it.
 10. Effects go through the World. Each World value is used at most once on every path. What a host
     call does is stated as axioms, and a binary's contract names the axioms it trusts.
 11. The evaluator defines what "run" means. Every other way of running is compared with it.
+24. What runs is written. A program is fixed by the source text and the types its binders state:
+    elaboration fills in types and proofs, never an argument that exists at run time. A program
+    can therefore be read without elaboration, and the reading that elaborates gives the same
+    program.
 
 **Elaboration and proofs**
 
@@ -175,6 +179,12 @@ admitted that the logic does not derive.
 9. *This file and `SHAPE.md`.* "I read through and can ratify that those match what we built so far.
    There are some details there that I think are worth reviewing and potentially reworking now".
    (Ratified as a description of what exists; the details stay open to rework.)
+10. *One language.* "The main incentive I am following here is the desire to have the full v3
+    shard source code be itself first-class shard. A shard application should be able to import K
+    as a module and use it natively, with the whole system compiled in the same fashion. Given how
+    small K itself is, the extra complexity of promoting the rust bootstrap to be capable of the
+    same things seems worthwhile if it means K itself can be standard." (Rule 24 is the means: a
+    program the Rust evaluator can read without the elaborator.)
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.

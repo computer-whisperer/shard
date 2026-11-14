@@ -370,11 +370,12 @@
                 (TErr (quote function_value)
                   (append (show_name id) " in argument position: a function is no value")))
                (None
+                 (if (init_const r n (nm_nat_zero)) (TOk (ELit (LNat 0)))
                  (if (nat_ctor r n)
                    (TErr (quote nat_constructor)
                      (append (show_name n)
                        ": Nat and Int are realized as the integer — write a numeral"))
-                   (TErr (quote unbound_name) (show_name n))))))
+                   (TErr (quote unbound_name) (show_name n)))))))
            ((Cons (EHit id _ _) Nil)
             (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
 
@@ -387,7 +388,9 @@
        (_ False)))
     (_ False)))
 ;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated
-(fn read_eapp ((r Rd) (h Symbol) (args (List SExpr))) TRes
+(fn read_eapp ((r Rd) (h0 Symbol) (args (List SExpr))) TRes
+  (read_eapp_at r (if (sym_eq h0 (quote %)) (quote mod) h0) args))  ; `%` is `mod`'s other spelling
+(fn read_eapp_at ((r Rd) (h Symbol) (args (List SExpr))) TRes
   (match (name_of_sym h)
     (None (TErr (quote bad_name) (chars_of_sym h)))
     ((Some n)
@@ -405,16 +408,72 @@
             (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
            (Nil
              (match (prim_head (rd_sc r) n)
-               ((Some (Pair id (Prim _ k))) (read_head_args r id k args (quote prim)))
+               ((Some (Pair id (Prim _ k))) (read_head_args r (table_entry id) k args (quote prim)))
                (None
-                 (if (nat_ctor r n)
-                   (TErr (quote nat_constructor)
-                     (append (show_name n)
-                       ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
-                   (match (renamed_prim h)
-                     ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
-                     (None (TErr (quote unknown_head) (show_name n))))))))
+                 (match (init_row r h n args)
+                   ((Some res) res)
+                   (None
+                     (if (nat_ctor r n)
+                       (TErr (quote nat_constructor)
+                         (append (show_name n)
+                           ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
+                       (match (renamed_prim h)
+                         ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
+                         (None (TErr (quote unknown_head) (show_name n))))))))))
            ((Cons (EHit id _ _) Nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
+;; the entry an operation of Init written by name is run as: the registry's (prog.shard
+;; realization_of — `Nat.add` is `+`), as the typed route's erasure writes it. A decision
+;; written by name keeps its own entry: its value is a cell and not the test
+(fn table_entry ((id Name)) Name
+  (match (realization_of id)
+    ((Some p) (if (cmp_prim p) id p))
+    (None id)))
+;; does the name resolve, through the scope, to the constant k of Init?
+(fn init_const ((r Rd) (n Name) (k Name)) Bool
+  (if (bool_not (init_seen (rd_sc r))) False
+  (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+    ((RName c _) (name_eq c k))
+    (_ False))))
+;; a head no table knows, in a file that sees Init: a constant of Init with a fixed program —
+;; the rows the typed route's erasure gives the same constants (erasure.shard erase_const_at,
+;; prog.shard's registry). An Int operation is the table's entry; `Nat.succ x` is x + 1; Init's
+;; Bool connectives, `and` `or` `not` among them, are the `if` their definitions are; a row
+;; with an expression (`Int.natAbs`) and the identity (`Int.ofNat`) keep their name as the
+;; head until the body is typed (settle_ops) and are written out last (expand_rows)
+(fn init_row ((r Rd) (h Symbol) (n Name) (args (List SExpr))) (Option TRes)
+  (if (bool_not (init_seen (rd_sc r))) None
+  (if (sym_eq h (quote and)) (Some (read_bool_row r (quote and) args))
+  (if (sym_eq h (quote or)) (Some (read_bool_row r (quote or) args))
+  (if (sym_eq h (quote not)) (Some (read_bool_row r (quote not) args))
+  (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+    ((RName k _)
+     (if (name_eq k (n2 (quote Bool) (quote and))) (Some (read_bool_row r (quote and) args))
+     (if (name_eq k (n2 (quote Bool) (quote or))) (Some (read_bool_row r (quote or) args))
+     (if (name_eq k (n2 (quote Bool) (quote not))) (Some (read_bool_row r (quote not) args))
+     (if (name_eq k (nm_nat_succ)) (Some (read_succ r args))
+     (match (realization_of k)
+       ((Some p) (if (cmp_prim p) None (Some (read_head_args r p 2 args (quote prim)))))
+       (None
+         (match (realization_type k)
+           ((Some _) (Some (read_head_args r k 1 args (quote prim))))
+           (None None)))))))))
+    (_ None)))))))
+(fn read_succ ((r Rd) (args (List SExpr))) TRes
+  (match (read_ets_list r args Nil)
+    ((Pair (Some (Pair e m)) _) (TErr e m))
+    ((Pair None (Cons x Nil)) (TOk (EPrim (n2 (quote Nat) (quote add)) (list x (ELit (LNat 1))))))
+    ((Pair None _) (TErr (quote unsaturated) "Nat.succ takes 1 argument"))))
+(fn read_bool_row ((r Rd) (op Symbol) (args (List SExpr))) TRes
+  (match (read_ets_list r args Nil)
+    ((Pair (Some (Pair e m)) _) (TErr e m))
+    ((Pair None (Cons a Nil))
+     (if (sym_eq op (quote not)) (TOk (EIf a (bool_false) (bool_true)))
+     (TErr (quote unsaturated) (append (chars_of_sym op) " takes 2 arguments, given 1"))))
+    ((Pair None (Cons a (Cons b Nil)))
+     (if (sym_eq op (quote and)) (TOk (EIf a b (bool_false)))
+     (if (sym_eq op (quote or)) (TOk (EIf a (bool_true) b))
+     (TErr (quote unsaturated) "not takes 1 argument, given 2"))))
+    ((Pair None _) (TErr (quote unsaturated) (append (chars_of_sym op) " takes 2 arguments")))))
 ;; a primitive head: the table's entry among the scope's candidates (a renamed spelling
 ;; is refused by the caller, `renamed_primitive`)
 (fn prim_head ((sc Scope) (n Name)) (Option (Pair Name Prim)) (prim_of (scope_candidates sc n)))
@@ -864,20 +923,30 @@
             ((Pair (Some body) meas)
              (match (read_et r body)
                ((TErr e m) (CErr e m))
-               ((TOk t0)
-                (match (take_instances es sc (some_all (rev ptypes)) t0 Nil)
+               ((TOk t00)
+                (match
+                  (take_instances es sc (some_all (rev ptypes))
+                    ;; typed with the fn's own signature in the table: a call of itself has a type
+                    (settle_body (es_add_decl es (EFn id (len tps2) ptypes rt RecNone t00)) sc
+                      (some_all (rev ptypes))
+                      (Some rt)
+                      t00)
+                    Nil)
                   ;; the instances the body takes
                   ((TkErr e m) (CErr e m))
                   ((TkOk t eds)
                    (match (read_rec r pnames meas)
                      ((RcErr e m) (CErr e m))
-                     ((RcOk rec)
-                      (match (classify_both es id (some_all (rev ptypes)) t rec)
-                        ((Some (Pair e m)) (CErr e m))
-                        (None
-                          (match eds
-                            (Nil (COk (EFn id (len tps2) ptypes rt rec t)))
-                            (_ (COkT (EFn id (len tps2) ptypes rt rec t) eds)))))))))))))))))))
+                     ((RcOk rec0)
+                      (let ((rec (settle_rec es sc (some_all (rev ptypes)) rec0)))
+                        (match (classify_both es id (some_all (rev ptypes)) t rec)
+                          ((Some (Pair e m)) (CErr e m))
+                          (None
+                            (let
+                              ((d (EFn id (len tps2) ptypes rt (expand_rec rec) (expand_rows t))))
+                              (match eds
+                                (Nil (COk d))
+                                (_ (COkT d eds)))))))))))))))))))))
 ;; the body, then a measure term, each over the parameters
 (fn classify_both ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec))
   (Option (Pair Symbol (List Int)))
@@ -961,6 +1030,211 @@
                Nil)
              (read_ectors es sc env params ind r (Cons (ECtorDef (name_append ind short) fts) acc))))))))
     (_ (Pair (Some (Pair (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)")) Nil))))
+
+;; ---- the operators of a body, by their operands' types ------------------------------------
+;; An operator's meaning is its operands' type (LANGUAGE.md, Terms): `-` at Nat is Nat.sub;
+;; `/` and `mod` are Nat.div and Nat.mod there, Int.ediv and Int.emod at Int; a comparison
+;; where Init's Bool is expected is the decision's value, (if TEST true false). On the typed
+;; route the elaborator resolves these and the erasure writes the table's entry; this pass
+;; writes the same entries into a body read here, from the types its binders state. A numeral
+;; takes the type of the operand beside it, else the type expected of the operation, else Nat.
+;; A file that sees no Init has no Nat, and its `/` and `mod` are the bare entries: its bodies
+;; are left as read.
+(fn settle_body ((es ESt) (sc Scope) (tys (List (Option EType))) (exp (Option EType)) (t ETerm))
+  ETerm
+  (if (init_seen sc) (settle_ops es tys exp t) t))
+(fn settle_rec ((es ESt) (sc Scope) (tys (List (Option EType))) (rec ERec)) ERec
+  (match rec
+    ((RecMeasure m) (RecMeasure (settle_body es sc tys (Some (ETCon (nm_nat) Nil)) m)))
+    (_ rec)))
+(fn settle_ops ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (t ETerm)) ETerm
+  (measure (struct t))
+  (match t
+    ((EBVar _) t)
+    ((ELit _) t)
+    ((ECtor c as) (ECtor c (settle_args es tys (ctor_ptypes es c exp) as)))
+    ((ECall f as) (ECall f (settle_args es tys (head_ptypes es f exp) as)))
+    ((EExt f as) (EExt f (settle_args es tys (head_ptypes es f exp) as)))
+    ((EPrim p as) (settle_prim es tys exp p as))
+    ((EMatch s arms)
+     (let ((s1 (settle_ops es tys None s)))
+       (EMatch s1 (settle_arms es tys (c_type es tys s1) exp arms))))
+    ((ELet rs b) (settle_let es tys exp rs b Nil))
+    ((EIf c a b)
+     (EIf (settle_ops es tys None c) (settle_ops es tys exp a) (settle_ops es tys exp b)))
+    (EAbsurd t)))
+;; the arguments, each under its parameter's declared type where the head states one
+(fn settle_args ((es ESt) (tys (List (Option EType))) (pts (List EType)) (as (List ETerm)))
+  (List ETerm)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons a r)
+     (match pts
+       ((Cons pt pr) (Cons (settle_ops es tys (Some pt) a) (settle_args es tys pr r)))
+       (Nil (Cons (settle_ops es tys None a) (settle_args es tys Nil r)))))))
+(fn settle_arms
+  ((es ESt) (tys (List (Option EType))) (st (Option EType)) (exp (Option EType)) (arms (List EArm)))
+  (List EArm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (EArm p b) r)
+     (Cons (EArm p (settle_ops es (rev_onto (pat_types es st p) tys) exp b))
+       (settle_arms es tys st exp r)))))
+(fn settle_let
+  ((es ESt)
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (rs (List ETerm))
+   (b ETerm)
+   (out (List ETerm)))
+  ETerm
+  (measure (struct rs))
+  (match rs
+    (Nil (ELet (rev out) (settle_ops es tys exp b)))
+    ((Cons v r)
+     (let ((v1 (settle_ops es tys None v)))
+       (settle_let es (Cons (c_type es tys v1) tys) exp r b (Cons v1 out))))))
+(fn head_ptypes ((es ESt) (f Name) (exp (Option EType))) (List EType)
+  (match (es_find_decl es f)
+    ((Some (EFn _ _ ps rt _ _)) (ptypes_under ps rt exp))
+    ((Some (ESig _ _ ps rt)) (ptypes_under ps rt exp))
+    ((Some (EExtern _ _ ps rt)) (ptypes_under ps rt exp))
+    (_ Nil)))
+;; a head's parameter types under the type arguments its result type takes from the type
+;; expected of the call: `(List.cons (- a 1) xs)` where a `(List Int)` is expected reads its
+;; first argument at Int
+(fn ptypes_under ((ps (List EType)) (rt EType) (exp (Option EType))) (List EType)
+  (match exp
+    ((Some e) (subst_tys (params_from (unify_ty rt e Nil) (tvar_count_all (Cons rt ps)) 0) ps))
+    (None ps)))
+(fn ctor_ptypes ((es ESt) (c Name) (exp (Option EType))) (List EType)
+  (match (es_info es c)
+    ((Some (EICtor ind _ _))
+     (match (es_find_decl es ind)
+       ((Some (EInd _ _ cs))
+        (match (fields_of cs c)
+          ((Some fts)
+           (match exp
+             ((Some (ETCon ind2 targs)) (if (name_eq ind ind2) (subst_tys targs fts) fts))
+             (_ fts)))
+          (None Nil)))
+       (_ Nil)))
+    (_ Nil)))
+;; the five operators written bare whose entry is their operands' type's
+(fn arith_op ((p Name)) Bool
+  (bool_or (name_eq p (n1 (quote +)))
+    (bool_or (name_eq p (n1 (quote -)))
+      (bool_or (name_eq p (n1 (quote *)))
+        (bool_or (name_eq p (n1 (quote /))) (name_eq p (n1 (quote mod))))))))
+;; a numeral, or an operator over numerals: it has no type of its own
+(fn lit_only ((t ETerm)) Bool
+  (measure (struct t))
+  (match t
+    ((ELit (LNat _)) True)
+    ((EPrim p (Cons a (Cons b Nil))) (if (arith_op p) (bool_and (lit_only a) (lit_only b)) False))
+    (_ False)))
+(fn is_int_type ((t (Option EType))) Bool
+  (match t
+    ((Some (ETCon n Nil)) (name_eq n (n1 (quote Int))))
+    (_ False)))
+(fn is_init_bool ((t (Option EType))) Bool
+  (match t
+    ((Some (ETCon n Nil)) (name_eq n (n1 (quote Bool))))
+    (_ False)))
+(fn settle_prim
+  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (as (List ETerm)))
+  ETerm
+  (match as
+    ((Cons a (Cons b Nil))
+     (if (arith_op p)
+       ;; under an expected Nat or Int the operation is that type's and both operands are read
+       ;; at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is the integer it is
+       (if (bool_or (is_nat_type exp) (is_int_type exp))
+         (EPrim (arith_entry p exp) (list (settle_ops es tys exp a) (settle_ops es tys exp b)))
+         (settle_by_operand es tys exp p a b))
+       (if (cmp_prim p) (settle_by_operand es tys exp p a b)
+       (EPrim p (settle_args es tys (prim_ptypes p) as)))))
+    (_ (EPrim p (settle_args es tys (prim_ptypes p) as)))))
+;; no numeric type expected: the operation is the first operand's type's — of the second where
+;; the first is numerals alone — and the other operand is read at that type (elab.shard
+;; elab_op_at). An operand whose type the declarations do not fix leaves the operation as written
+(fn settle_by_operand
+  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a ETerm) (b ETerm))
+  ETerm
+  (if (bool_and (lit_only a) (bool_not (lit_only b)))
+    (settle_second es tys exp p a (settle_ops es tys None b))
+    (settle_first es tys exp p (settle_ops es tys None a) b)))
+(fn settle_first
+  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a1 ETerm) (b ETerm))
+  ETerm
+  (settle_at exp p (c_type es tys a1) a1 (settle_ops es tys (c_type es tys a1) b)))
+(fn settle_second
+  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a ETerm) (b1 ETerm))
+  ETerm
+  (settle_at exp p (c_type es tys b1) (settle_ops es tys (c_type es tys b1) a) b1))
+(fn settle_at ((exp (Option EType)) (p Name) (ty (Option EType)) (a2 ETerm) (b2 ETerm)) ETerm
+  (if (cmp_prim p)
+    (if (is_init_bool exp) (EIf (EPrim p (list a2 b2)) (bool_true) (bool_false))
+    (EPrim p (list a2 b2)))
+    (EPrim (arith_entry p ty) (list a2 b2))))
+(fn arith_entry ((p Name) (ty (Option EType))) Name
+  (if (is_nat_type ty)
+    (if (name_eq p (n1 (quote -))) (n2 (quote Nat) (quote sub))
+    (if (name_eq p (n1 (quote /))) (n2 (quote Nat) (quote div))
+    (if (name_eq p (n1 (quote mod))) (n2 (quote Nat) (quote mod))
+    p)))
+  (if (is_int_type ty)
+    (if (name_eq p (n1 (quote /))) (n2 (quote Int) (quote ediv))
+    (if (name_eq p (n1 (quote mod))) (n2 (quote Int) (quote emod))
+    p))
+    p)))
+;; the operand type an entry written by name states: Nat for Init's Nat set, Int for its Int
+;; divisions and for a row's argument
+(fn prim_ptypes ((p Name)) (List EType)
+  (match (prim_find p)
+    ((Some (Prim code _))
+     (if (bool_and (<= 22 code) (<= code 38)) (list (ETCon (nm_nat) Nil) (ETCon (nm_nat) Nil))
+     (if (bool_and (<= 18 code) (<= code 21))
+       (list (ETCon (n1 (quote Int)) Nil) (ETCon (n1 (quote Int)) Nil))
+       Nil)))
+    (None Nil)))
+;; the rows kept by name while the body was typed, written out: `Int.ofNat x` is x, a row with
+;; an expression is the expression over its argument bound once (prog.shard's registry; the
+;; typed route's erasure writes the same)
+(fn expand_rows ((t ETerm)) ETerm
+  (measure (struct t))
+  (match t
+    ((EBVar _) t)
+    ((ELit _) t)
+    ((ECtor c as) (ECtor c (expand_all as)))
+    ((ECall f as) (ECall f (expand_all as)))
+    ((EExt f as) (EExt f (expand_all as)))
+    ((EPrim p (Cons a Nil))
+     (if (name_eq p (n2 (quote Int) (quote ofNat))) (expand_rows a)
+     (match (realization_expr p)
+       ((Some body) (ELet (list (expand_rows a)) body))
+       (None (EPrim p (list (expand_rows a)))))))
+    ((EPrim p as) (EPrim p (expand_all as)))
+    ((EMatch s arms) (EMatch (expand_rows s) (expand_arms arms)))
+    ((ELet rs b) (ELet (expand_all rs) (expand_rows b)))
+    ((EIf c a b) (EIf (expand_rows c) (expand_rows a) (expand_rows b)))
+    (EAbsurd t)))
+(fn expand_all ((ts (List ETerm))) (List ETerm)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (Cons (expand_rows t) (expand_all r)))))
+(fn expand_arms ((arms (List EArm))) (List EArm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (EArm p b) r) (Cons (EArm p (expand_rows b)) (expand_arms r)))))
+(fn expand_rec ((rec ERec)) ERec
+  (match rec
+    ((RecMeasure m) (RecMeasure (expand_rows m)))
+    (_ rec)))
 
 ;; ---- the classifier's passes over a read body ------------------------------
 (fn classify_body ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm))
@@ -1547,7 +1821,7 @@
     ((EPrim n args)
      (match (prim_find n)
        ((Some (Prim code _)) (Some (prim_static es tys code args)))
-       (None None)))
+       (None (realization_type n))))  ; a row kept by name while the body is typed (settle_ops)
     ((EMatch s arms)
      (match (live_arm arms)
        ((Some (EArm p b)) (c_type es (rev_onto (pat_types es (c_type es tys s) p) tys) b))

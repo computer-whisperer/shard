@@ -31,6 +31,7 @@
 (import "tactic.shard")
 (import "arith.shard")
 (import "thread.shard")
+(import "dump.shard")
 (use kernel.k)
 (use kernel.kw)
 (use kernel.classify)
@@ -76,6 +77,7 @@
 (use kernel.record)
 (use kernel.record.RxRes)
 (use kernel.derive)
+(use kernel.dump)
 (use kernel.derive.DvGen)
 (use kernel.derive.DvRes)
 (use kernel.arith)
@@ -293,6 +295,7 @@
   (RInstance Name Name (List (List Int)) (List Name))  ; an instance built: the template, the shapes (identity/captured count), its equations' identities
   (RThread Name Symbol (List Int))  ; the well-threadedness verdict of a token-handling function: ok, or world_twice / world_unsupported / world_forged with its detail
   (RState Name Symbol (List Int))  ; the state's check on a function that takes or returns the checker's state, under --state: ok (with its resumptions), primitive, reused or unsupported with its detail
+  (RBoth Name Symbol (List Int))  ; under --both, a fn the typed route gave a program: the classifier's reading of the same form gives the same program (same), another (differs, with both), or none (unread, with its refusal)
   (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked: its name, entry, externs, trusted axioms' count, requirements, requirements met
   (RBinErr Name Symbol (List Int)))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
 
@@ -322,6 +325,7 @@
   (instances (List Demand))  ; the instances built, by name — a second taking at other arguments under one name is refused
   (budget Int)  ; the instances of one template this load may build: instance_budget, or the driver's --instance-budget
   (fuel Int)  ; the fuel for a run under ev the load performs itself: a tactic named by a delegation under prove; default_fuel, or the driver's --fuel
+  (both Bool)  ; the driver's --both: each fn the typed route gives a program is read by the classifier too, and the two programs compared (BOTH records)
   (states (Option (IntMap (List (Pair Name Int))))))  ; the state's check (thread.shard): None in a plain load; under the driver's --state the modes of the functions judged so far
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods Nil) (init InitNone)
@@ -345,6 +349,7 @@
     (instances Nil)
     (budget (instance_budget))
     (fuel (default_fuel))
+    (both False)
     (states None)))
 ;; a fresh root load from a load's Init state: the Init load carried — the
 ;; base's environment of Init alone, its records and ordinals, the export and index handle;
@@ -630,6 +635,8 @@
 (fn ld_with_budget ((l Load) (n Int)) Load (with Load l (budget n)))
 ;; the state's check asked for: every file loaded from here records its functions' verdicts
 (fn ld_with_states ((l Load)) Load (with Load l (states (Some IMEmpty))))
+;; the two readings' comparison asked for
+(fn ld_with_both ((l Load)) Load (with Load l (both True)))
 (fn instances_of ((c Name) (ds (List Demand))) Int
   (measure (struct ds))
   (match ds
@@ -1729,10 +1736,15 @@
                ((Pair l1b (Some f1b))
                 (match (define_pd (Load.etab l1b) sc pd)
                   ((DfSkip why _)
-                   (Pair
-                     (ld_rec (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s)
-                       (RRun (quote fn) k why (quote typed)))
-                     f1b))
+                   (both_noted
+                     (Pair
+                       (ld_rec (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s)
+                         (RRun (quote fn) k why (quote typed)))
+                       f1b)
+                     l1
+                     sc
+                     s
+                     d))
                   ((DfErr e m) (Pair (ld_rec l1b (RClassify k e m)) f1b))
                   ((DfAux es2 auxs)
                    (if (< fuel 1)
@@ -1746,8 +1758,25 @@
                         (Pair l2 f2))))))
                   ((DfOk es2 obls dd eqs wf)
                    (match (admit_matchers (ld_with_e l1b (es_add_decl es2 d)) f1b s (pd_aux pd))
-                     ((Pair l2 (Some f2)) (load_defined l2 f2 d obls dd eqs wf))
+                     ((Pair l2 (Some f2))
+                      (both_noted (load_defined l2 f2 d obls dd eqs wf) l1 sc s d))
                      ((Pair l2 None) (Pair l2 f1b)))))))))))))))
+;; under --both: the classifier's reading of a fn the typed route gave a program, over the
+;; same form in the state the typed route began in, compared with the erasure by the dump's
+;; text (dump.shard: a projection — a literal's kind and the recursion clause are outside it)
+(fn both_noted ((r (Pair Load Fx)) (l1 Load) (sc Scope) (s SExpr) (d EDecl)) (Pair Load Fx)
+  (if (bool_not (Load.both l1)) r
+  (match r
+    ((Pair l2 f2) (Pair (ld_rec l2 (both_rec l1 sc s d)) f2)))))
+(fn both_rec ((l1 Load) (sc Scope) (s SExpr) (d EDecl)) Rec
+  (let ((k (form_name sc s)) (t (dm_decl (Load.etab l1) d)))
+    (match (classify_form (Load.etab l1) sc (Load.env l1) s)
+      ((CErr e m) (RBoth k (quote unread) (append (chars_of_sym e) (append ": " m))))
+      ((COk d2) (both_cmp k t (dm_decl (Load.etab l1) d2)))
+      ((COkT d2 _) (both_cmp k t (dm_decl (Load.etab l1) d2))))))
+(fn both_cmp ((k Name) (t (List Int)) (p (List Int))) Rec
+  (if (int_list_eq t p) (RBoth k (quote same) Nil)
+  (RBoth k (quote differs) (append "typed: " (append t (append " | plain: " p))))))
 ;; a template: defined in K as any fn — the definition, its equations
 ;; — and kept with its binders' roles for the instances later bodies demand; no program of its
 ;; own, so no RUNNABLE and no DEFINE: TEMPLATE. One that K cannot define has no L half to
@@ -4596,6 +4625,14 @@
              (match m
                (Nil "")
                (_ (append ": " m))))))))
+    ((RBoth n k m)
+     (append "BOTH "
+       (append (show_name n)
+         (append " "
+           (append (chars_of_sym k)
+             (match m
+               (Nil "")
+               (_ (append ": " m))))))))
     ((RBin n f exts nt reqs met)
      (append "BIN "
        (append (show_name n)
@@ -4662,6 +4699,7 @@
        ((RTemplate _ _ _) (list a b u c d e (+ f 1) g))
        ((RThread _ _ _) acc)
        ((RState _ _ _) acc)
+       ((RBoth _ _ _) acc)
        ((RBin _ _ _ _ _ _) acc)
        ((RBinErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))

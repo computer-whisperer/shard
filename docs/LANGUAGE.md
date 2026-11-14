@@ -512,6 +512,9 @@ alone, so `(<= 48 c)` is read at `c`'s type. A type with no row is `no_operator_
 
 No operator is refused at `Nat`: `(- a b)` there is `Nat.sub`, which stops at zero, in the
 definition and in its program alike (pin `define_nat_operator`); to go below zero, work at `Int`.
+A function that is only a program (`route=e_first`) takes the same entries, from the types its
+binders state: its operators, `Int.natAbs`, `Int.ofNat`, `Nat.succ`, `Nat.zero`, Init's `Int`
+and `Nat` operations written by name, and `and`, `or`, `not` at `Bool` (`v3/pins/readings`).
 `/` and `mod` are Init's and total: `7 / 0` is 0 at `Nat` and at `Int`, `7 % 0` is 7 at `Nat`,
 `-7 mod 0` is −7 at `Int`, under `--run` and in a binary alike. `min` and `max` are `Min.min` and
 `Max.max` at `Nat` and at `Int` (pin `instance_table`).
@@ -1534,6 +1537,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--init-index INDEX` | the export's index (built by `v3/kernel/initindex.shard`) |
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
+| `--both` | also read each `fn` the typed route gave a program as a program alone, and compare the two (`BOTH` records) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |
@@ -1587,6 +1591,7 @@ trusted because two fingerprints agree.
 | `UNUSED` | `M use=P,…` | `use` lines of M that no name in it needs | — |
 | `THREAD` | `N VERDICT[: DETAIL]` | whether the function N uses each World token once: `ok`, `world_twice`, `world_unsupported`, `world_forged` | — |
 | `STATE` | `N VERDICT[: DETAIL]` | under `--state`, N's use of the checker's state: `ok`, `primitive`, `reused`, `unsupported` | — |
+| `BOTH` | `N VERDICT[: DETAIL]` | under `--both`, N's program read without elaboration beside the erasure of its elaborated body: `same`; `differs: typed: TEXT \| plain: TEXT`; `unread: REASON: MESSAGE`, the refusal of the reading without elaboration | — |
 | `BIN` | `N entry F externs K trusts K requires MET/TOTAL` | a `bin` form checked | — |
 | `UNMET`, `UNTHREADED`, `BAD-BIN` | `REQUIREMENT`; `FN VERDICT: DETAIL`; `N REASON: MESSAGE` | a bin's failure: a requirement still pending; a function it reaches is not threaded; any other (`bad_entry`, `extern_undeclared`, `extern_outside`, `unknown_requirement`, `unknown_trust`, `untrusted`) | errors |
 | `SIDECAR` | `FILE schema=N current=M` | the file's proof sidecar is of an older schema; it is replayed all the same | — |

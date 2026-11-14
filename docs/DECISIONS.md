@@ -119,6 +119,15 @@ entries are explained under "Measured" at the end.
 
 ## Programs and the back end
 
+- A program is read from the source and the types its binders state (`LAW.md` rule 24), so the
+  Rust evaluator can come to read every program and the toolchain's own files can become ordinary
+  ones; not type inference in the Rust evaluator — the elaborator, the erasure and K's type
+  checker, about 19,400 of the toolchain's lines, inside the engine that is the authority; not
+  a seed — the Rust evaluator running the erased form a previous toolchain wrote, so that the
+  authority no longer runs the sources. Assent: "Let's adopt it and begin."
+- The classifier writes the entries the erasure writes by sharing its tables (`prog.shard`:
+  `realization_of`, `realization_expr`), and types a body before it writes a row's expression;
+  not a second copy of the erasure's cases.
 - `ev` is pure: an extern is `EvStuck extern` and only the driver's run performs it; fuel is spent
   at function entry; not effects inside the evaluator.
 - A primitive answers a value, a failed guard, or a resource exhausted, decided before the work;
@@ -264,6 +273,13 @@ measurements; measure again before building on one.
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
 - Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
+- The two readings (`load --both`) over the 473 functions of the examples, the library, the
+  formatter and the model: 370 one program, none different, 103 the classifier does not read —
+  69 pass a function (64 of them in `examples/template/workload.shard`), 11 are a derived
+  decision's own text or a `dite`, 8 convert a one-field structure or build a `Subtype`, 8 match
+  a view's constructors, 3 compare by a derived equality, 2 have a type that names a value, 2
+  pass a function of Init by name. Before the classifier took an operator's entry from its
+  operands: 341, 10 and 122.
 - Suite: 51 entrypoints, eight at a time: ~720 s on the bootstrap (4,160 s of entrypoint time),
   ~120 s on the binaries (580 s). Loader pins on one shared Init base, each case loaded twice: 9 s
   native, about 150 s on the bootstrap.

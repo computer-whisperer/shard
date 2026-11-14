@@ -86,7 +86,7 @@ first-order dialect that has no meaning in the logic: nothing can be proven abou
 checks that their functions terminate. Ordinary files (everything else) use Init's types and can
 carry theorems. This split is the largest irregularity in the system.
 
-**Build and gates.** 50 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 51 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 35 minutes on
 the development machine and about 65 in CI.
 
@@ -95,8 +95,8 @@ the development machine and about 65 in CI.
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 50,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 57 files | the test scripts and drivers |
-| `v3/pins/` | 505 files | small sources, each stating the outcome it expects; 337 cases for the loader |
+| `v3/kernel/test/` | 58 files | the test scripts and drivers |
+| `v3/pins/` | 506 files | small sources, each stating the outcome it expects; 337 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |

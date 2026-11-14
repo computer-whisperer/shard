@@ -37,6 +37,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | The toolchain is itself first-order, closure-free programs over the logic as data. | `parity_test.sh`; `v3/build.sh` compiles every root |
 | The toolchain's functions are total by verified measure. | no test found, and no load checks it: in a file that sees no Init a measure that grows, a recursion with no measure and a `struct` call on no subterm each load without a record of it (`RUNNABLE fn F why=e_only_type`); in a file that imports Init the same functions state an obligation or are refused (`realize_descent`) |
 | A `fn` either lowers or is refused. | no test found; `v3/pins/emit/refused_*` show four programs the interpreter runs and the back end refuses |
+| What runs is written: a `fn` read as a program alone is the program its elaborated body erases to. | `readings_test.sh` over `v3/pins/readings`: sixteen functions read both ways to one text, and the reading without elaboration run. No load refuses a difference (`OPEN.md` §4) |
 | One name for one mathematical object, in a body, a definition and a theorem. | pins `one_meaning`, `one_spelling`, `rename_refused`, `rename_refused_e`, `rename_refused_kernel` |
 | A `fn`'s meaning in L is its body's elaboration; its defining equations are theorems K checks. | pins `define_basic`, `define_depth`, `realize_equations`; `define_test.sh` |
 | A wrong executable body is refused whatever its provenance. | pin `realize_wrong`; `path_test.sh` |

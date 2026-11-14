@@ -141,10 +141,9 @@ hashes the bytes of its sources (`v3/build.sh`): binaries built from a rewritten
 
 ## 4. Spelling of terms
 
-One rule about how a term is spelled is enforced, by the loader: a number in a program body is a
-numeral. `(Nat.succ Nat.zero)` in a `fn` body is refused, `REFUSE NAME nat_constructor`; write `1`.
-
-Nothing else about spelling is in force. A set of rules for one canonical spelling of terms (no
+Nothing about spelling is in force. A number in a program body is written as a numeral by
+habit only: `(Nat.succ Nat.zero)` in a `fn` body is 1, on both readings of the program (`LAW.md`
+rule 24). A set of rules for one canonical spelling of terms (no
 control flow on a known value, one flat `let`, arms in declaration order, `if` in place of a
 two-arm `match`, arrows and sorts in their short forms) was written for the previous layout law. No
 tool checks them and the tree is not written to them. They are at the tag `v2-last`
