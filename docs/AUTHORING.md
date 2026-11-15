@@ -407,8 +407,8 @@ bytes.
 
 **`v3/std/list.shard`**: the programs of Init's list functions. They keep Init's names, so they
 need the import and no `use`; without the import a `fn` that calls one is refused: `REFUSE F
-unknown_head: List.length — read E-first after the typed route's no_realization: List.length: no
-realization attached — realize it first, or import the file that does`.
+no_realization: List.length: no realization attached — realize it first, or import the file that
+does`.
 
 | name | binders, result | does |
 |---|---|---|

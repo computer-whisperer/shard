@@ -514,7 +514,10 @@ No operator is refused at `Nat`: `(- a b)` there is `Nat.sub`, which stops at ze
 definition and in its program alike (pin `define_nat_operator`); to go below zero, work at `Int`.
 A function that is only a program (`route=e_first`) takes the same entries, from the types its
 binders state: its operators, `Int.natAbs`, `Int.ofNat`, `Nat.succ`, `Nat.zero`, Init's `Int`
-and `Nat` operations written by name, and `and`, `or`, `not` at `Bool` (`v3/pins/readings`).
+and `Nat` operations written by name, and `and`, `or`, `not` at `Bool`. It reads `=` at `Bool`,
+and at a type with one visible derived equality as the call of that decision; a decision written
+by name (`(Nat.decEq a b)`) as its test where an `if` reads it and as `Decidable`'s cell
+elsewhere (`v3/pins/readings`).
 `/` and `mod` are Init's and total: `7 / 0` is 0 at `Nat` and at `Int`, `7 % 0` is 7 at `Nat`,
 `-7 mod 0` is −7 at `Int`, under `--run` and in a binary alike. `min` and `max` are `Min.min` and
 `Max.max` at `Nat` and at `Int` (pin `instance_table`).
@@ -745,6 +748,20 @@ can name it. `route=typed`: the body was elaborated and the program is its erasu
 | `e_only_type` | e_first | the signature cannot be read: the file sees no Init, or a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | import Init; declare the type first; the normal state of a file that sees no Init |
 | `callee_undeclared` | e_first | at the file's end the function still waits on a function of the file that never got a declaration, because that one was refused | mend the refusal of the callee above |
 
+**What is written and erased.** A call writes more than it passes: a proof, a type under `@`,
+a value a type is indexed by. Read as a program alone, a call's arguments are sorted by the
+head's declared signature — its binders in order, each explicit or implicit, each runtime data
+or not — and what is not data is passed over unread. A row of the registry reads as on the
+typed route: a constructor is its one runtime argument, a projection its subject, a constructor
+pattern its field's pattern. A binder whose type is a proposition is a proof and no parameter
+of the program; a type's arguments that are values or propositions (`(Fin n)`) are dropped; a
+name a `def` gives a type stands for that type. Two refusals keep this honest:
+
+| reason | when | what to do |
+|---|---|---|
+| `unwritten_argument` | a binder is implicit *and* runtime data (`BitVec.toNat`'s width): the argument runs and is not written. The elaborator fills it in, so the typed route accepts the call and `--both` reports the function `unread` | write the call with `@` and every argument: `(@BitVec.toNat 8 x)` |
+| `unchecked_proof` | a function that is only a program writes a proof — an argument at a proposition binder, a `let` that binds one. The typed route did not read the body, and this reading passes a proof over: nothing would check it. `absurd` there is `absurd_needs_init` for the same reason | give the function a reading in the logic; a `dif` reads there as the `if` it is, and its hypothesis can be passed to nothing |
+
 `RUNNABLE extern NAME` and `RUNNABLE type NAME` are the ordinary records of an extern and of a
 program-only type; `RUNNABLE extern NAME why=REASON` is an extern that got no constant.
 
@@ -813,9 +830,8 @@ and every function of Init that is neither a primitive nor given a body by a `re
 may cite one freely:
 a measure is never run. A function body that calls one in a runtime position cannot be erased:
 `no_realization: NAME: no realization attached — realize it first, or import the file that does`. The body is then read
-as a program, where the name is unknown, so the usual record is `REFUSE … unknown_head … — read
-E-first after the typed route's no_realization …`. `v3/std/list.shard` realizes the list
-functions: import it. `Classical.choice`, `Acc.rec` and the `Quot` primitives in a runtime
+as a program, where the constant has no program either, and the record states the one refusal.
+`v3/std/list.shard` realizes the list functions: import it. `Classical.choice`, `Acc.rec` and the `Quot` primitives in a runtime
 position are `noncomputable`; a recursor, `T.brecOn` or `T.below` of an inductive type, or
 `WellFounded.fix`, written in a body is `recursion_structure` — the generated constants, never a
 function that only bears such a name (pin `fn_named_below`); a type or a proof in a runtime

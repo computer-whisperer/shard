@@ -654,26 +654,6 @@
           ((Pair t1 (Some (Tele _ binds _ _))) (Pair t1 (Some (data_flags (drop nparams binds)))))))
        (_ (Pair t None))))
     (None (Pair t None))))
-(fn data_flags ((binds (List TBind))) (List Bool)
-  (measure (struct binds))
-  (match binds
-    (Nil Nil)
-    ((Cons (TBind _ (BData _) _) r) (Cons True (data_flags r)))
-    ((Cons _ r) (Cons False (data_flags r)))))
-;; field i's index among the runtime fields, and their count
-(fn runtime_index ((roles (List Bool)) (i Int) (k Int) (j Int)) (Option (Pair Int Int))
-  (measure (struct roles))
-  (match roles
-    (Nil None)
-    ((Cons rt r)
-     (if (= k i) (if rt (Some (Pair j (+ j (count_true roles)))) None)
-     (runtime_index r i (+ k 1) (if rt (+ j 1) j))))))
-(fn count_true ((bs (List Bool))) Int
-  (measure (struct bs))
-  (match bs
-    (Nil 0)
-    ((Cons True r) (+ 1 (count_true r)))
-    ((Cons _ r) (count_true r))))
 ;; an application by its head
 (fn erase_app ((t Tr) (env (List ErEnt)) (head Expr) (args (List Expr)) (fuel Int)) ErRes
   (match head
@@ -941,21 +921,13 @@
 (fn is_decision ((c Name)) Bool
   (let ((lc (last_component c)))
     (bool_or (sym_eq lc (quote decEq)) (bool_or (sym_eq lc (quote decLt)) (sym_eq lc (quote decLe))))))
-;; `a = b` at Bool: the test is `a` where b is `true` (and symmetrically), else
-;; (if a b (if b false true)) over Init's Bool cells — b read once on either path
+;; `a = b` at Bool: the test over the erased operands (prog.shard bool_eq_cond) — `a` where b
+;; is `true` (and symmetrically), else (if a b (if b false true)) over Init's Bool cells
 (fn bool_eq_test ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
-  (if (is_const_named b (n2 (quote Bool) (quote true))) (erase t env a (- fuel 1))
-  (if (is_const_named a (n2 (quote Bool) (quote true))) (erase t env b (- fuel 1))
-  (match
-    (erase_all t env
-      (list a b (mk_const (n2 (quote Bool) (quote true)) Nil)
-        (mk_const (n2 (quote Bool) (quote false)) Nil))
-      fuel
-      Nil)
+  (match (erase_all t env (list a b) fuel Nil)
     ((Pair (Some (Pair e m)) _) (ErErr e m))
-    ((Pair None (Pair t1 (Cons a1 (Cons b1 (Cons tt (Cons ff Nil))))))
-     (ErOk t1 (EIf a1 b1 (EIf b1 ff tt))))
-    ((Pair None _) (ErErr (quote no_realization) "Bool's decidable equality"))))))
+    ((Pair None (Pair t1 (Cons a1 (Cons b1 Nil)))) (ErOk t1 (bool_eq_cond a1 b1)))
+    ((Pair None _) (ErErr (quote no_realization) "Bool's decidable equality"))))
 (fn erase_bool_eq ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
   (match (bool_eq_test t env a b fuel)
     ((ErErr e m) (ErErr e m))

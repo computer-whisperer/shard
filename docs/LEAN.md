@@ -135,9 +135,9 @@ message says what to write. The second column of list 2 is that reason.
 | in such a `fn`, an argument built from its own function parameter: `(twice (fun ((y Int)) (f (f y))) x)` | `function_value: … a static parameter is passed on, never transformed` | pass the parameter on unchanged (pins `template_transform`, `template_passed`) |
 | polymorphic recursion: `f` at `a` calling itself at `List a` | `realize_descent` | recurse over a value (pin `template_growth`) |
 | a `def` or an Init function called from a `fn` when it has no program | `no_realization: NAME: no realization attached — realize it first, or import the file that does` | write the callee as a `fn`, or `(realize NAME …)` it (list 3) |
-| `{ xs : List Nat // P xs }` written in a `fn`'s signature | `(@Subtype (List Nat) (List.Pairwise Nat.le))` there is `REFUSE F unknown_type: @Subtype — its signature has no L reading: type_mismatch: expected (Sort 0), found (Sort 1)`; `(Subtype (List.Pairwise Nat.le))` is not refused, and the function is a program only (`RUNNABLE fn F why=e_only_type`) | name the carrier by a `def` (list 1, `Subtype`) |
+| `{ xs : List Nat // P xs }` written in a `fn`'s signature | `(Subtype (List.Pairwise Nat.le))` there is `REFUSE F unwritten_argument: Subtype: a type argument that is implicit …`; `(@Subtype (List Nat) (List.Pairwise Nat.le))` is not refused, and the function is a program only (`RUNNABLE fn F why=e_only_type`) | name the carrier by a `def` (list 1, `Subtype`) |
 | `IO`, `do` | no such forms | an effect is a function that takes the `World` and returns it (list 3) |
-| in a body that has no reading in the logic — it mentions a `Symbol`, or its file imports no Init — a `dif`, `absurd`, a `fun` | `dif_needs_init`, `absurd_needs_init`, `function_value` | give the function a signature over Init's types (pins `dif_needs_init`, `absurd_e_first`); `Symbol` is the toolchain's own type |
+| in a body that has no reading in the logic — it mentions a `Symbol`, or its file imports no Init — a written proof, `absurd`, a `fun`; a `dif` where the file imports no Init | `unchecked_proof`, `absurd_needs_init`, `function_value`, `dif_needs_init` | give the function a signature over Init's types (pins `dif_scope`, `absurd_e_first`, `dif_needs_init`); `Symbol` is the toolchain's own type |
 
 ## 3. Only in shard
 

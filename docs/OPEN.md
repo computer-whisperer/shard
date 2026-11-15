@@ -72,10 +72,13 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 Each is a rule of `LAW.md`, or follows from one, with no test behind it.
 
 - The toolchain's own functions are meant to be total. Nothing checks their measures.
-- What runs is written (rule 24): no load refuses a function whose two readings differ. The
-  comparison runs only under `load --both`, over a `fn` and not over a template, an instance or
-  a `realize`; `readings_test.sh` holds one fixture to it. Measured over the tree's 473
-  functions (`DECISIONS.md`, Measured): none differs, and the classifier does not read 103.
+- What runs is written (rule 24): no load refuses a function whose two readings differ, nor one
+  that leaves a runtime argument to the elaborator — the classifier refuses that call
+  (`unwritten_argument`), the typed route reads it. The comparison runs only under
+  `load --both`, over a `fn` and not over a template, an instance or a `realize`;
+  `readings_test.sh` holds one fixture to it. Measured over the tree's 473 functions
+  (`DECISIONS.md`, Measured): none differs, and the classifier does not read 71, each of which
+  passes a function.
   Two shapes the two readings write differently and run alike: a numeral pattern (a chain of
   tests, a `match`) and consecutive `let`s (nested, one).
 - "Could not show these equal" is never read as "these differ": no test.

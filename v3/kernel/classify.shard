@@ -20,6 +20,8 @@
 (use kernel.kw)
 (use kernel.etable)
 (use kernel.etable.EBind)
+(use kernel.expr)
+(use kernel.level)
 (use kernel.name)
 (use kernel.prelude)
 (use kernel.prog)
@@ -34,6 +36,8 @@
 (use kernel.etable.EHit)
 (use kernel.etable.EInfo)
 (use kernel.etable.ESt)
+(use kernel.expr.BinderInfo)
+(use kernel.expr.Expr)
 (use kernel.name.Name)
 (use kernel.prelude.Bool)
 (use kernel.prelude.List)
@@ -220,13 +224,14 @@
           ((Some i) (TyOk (ETVar i) tps))
           (None
             (match (type_ident es sc env n)
+              ((TyOk (ETCon id Nil) _) (TyOk (alias_etype es sc env id) tps))
               ((TyOk t _) (TyOk t tps))
               ((TyErr e m) (TyErr e m))))))))
     ((SList (Cons (SSym x) args))
      (if (sym_eq x (quote ->))  ; a function-typed binder makes a template, on the typed route
        (TyErr (quote function_value)
          "(-> …): a function is no value of E — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading")
-       (match (name_of_sym x)
+       (match (name_of_sym (at_strip sc x))
          (None (TyErr (quote bad_type) (chars_of_sym x)))
          ((Some n)
           (match (type_ident es sc env n)
@@ -236,11 +241,122 @@
              ;; is its two cells, as the erasure has it (a view's sig fn that exports
              ;; a decision states its result this way)
              (if (name_eq id (n1 (quote Decidable))) (TyOk (ETCon id Nil) tps)
-             (match (read_etys es sc env tps args Nil)
-               ((Pair (TyErr e m) _) (TyErr e m))
-               ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))
+             (match (type_args sc env id (at_explicit sc x) args)
+               ((WrErr e m)
+                (if (sym_eq e (quote unwritten_argument))
+                  (TyErr e
+                    (append (show_name id)
+                      ": a type argument that is implicit — the type it is at is not written here, and this reading fills nothing in; write the type with @ and every argument"))
+                  (TyErr e (append (show_name id) m))))
+               ((WrOk targs)
+                (match (read_etys es sc env tps targs Nil)
+                  ((Pair (TyErr e m) _) (TyErr e m))
+                  ((Pair (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))))
             ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments")))))))
     (_ (TyErr (quote bad_type) "a type is NAME or (NAME TYPE…)"))))
+;; a type's written arguments that are types. An inductive of K takes values and propositions
+;; too — `(Fin n)`, `(Subtype P)`, `(Decidable P)` — which no E type keeps (erase.shard
+;; l_to_etype): its parameters' roles select the type arguments among those written, by the
+;; binder infos of its own type (written_data). An E-only type's arguments are all types
+(fn type_args ((sc Scope) (env CheckedEnv) (id Name) (ex Bool) (args (List SExpr))) Wr
+  (match (if (init_seen sc) (type_flags env id) None)
+    ((Some flags) (written_data flags ex True args Nil))
+    (None (WrOk args))))
+(fn type_flags ((env CheckedEnv) (id Name)) (Option (List (Pair Bool Symbol)))
+  (match (env_find env id)
+    ((Some info)
+     (match info
+       ((InductInfo _ _ _ _ _ _ _ _ _)
+        (match (if (rep_row id) (row_param_roles (w0 env) id) (ind_param_roles (w0 env) id))
+          ((Pair _ (Some roles)) (zip_type_flags (ci_type info) roles Nil))
+          ((Pair _ None) None)))
+       (_ None)))
+    (None None)))
+(fn zip_type_flags ((ty Expr) (roles (List Bool)) (acc (List (Pair Bool Symbol))))
+  (Option (List (Pair Bool Symbol)))
+  (measure (struct roles))
+  (match roles
+    (Nil (Some (rev acc)))
+    ((Cons is_type rr)
+     (match ty
+       ((Pi _ _ bi _ body)
+        (zip_type_flags body rr
+          (Cons (Pair (bi_explicit bi) (if is_type (quote keep) (quote drop))) acc)))
+       (_ None)))))
+;; a name that is a definition of K standing for a type (`(def Sorted () Type …)`): the E type
+;; its value is, as the typed route reads the binder (erase.shard l_to_etype unfolds it)
+(fn alias_etype ((es ESt) (sc Scope) (env CheckedEnv) (id Name)) EType
+  (match (if (init_seen sc) (env_find env id) None)
+    ((Some info)
+     (match info
+       ((DefnInfo _ _ _ _ _)
+        (match (ci_lparams info)
+          (Nil
+            (match (l_to_etype (w0 env) es sc (mk_const id Nil) Nil Nil)
+              ((Pair _ (Some t)) t)
+              ((Pair _ None) (ETCon id Nil))))
+          (_ (ETCon id Nil))))
+       (_ (ETCon id Nil))))
+    (None (ETCon id Nil))))
+;; is a binder's written type a proposition? Decided on its head, with no elaboration: a
+;; comparison's or a connective's spelling, a bound proposition or predicate, a constant of K
+;; whose type ends in Prop, a function type or a quantification into one. False is no claim
+;; that the type is data: it is then read as an E type, and what is neither is refused
+(fn prop_type ((r Rd) (s SExpr)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (prop_head r (sym_strip x)))
+    ((SList (Cons (SSym h) args))
+     (if (prop_spelling h) True
+     (if (bool_or (sym_eq h (quote ->)) (sym_eq h (quote forall)))
+       (match (last_of args)
+         ((Some l) (prop_type r l))
+         (None False))
+       (prop_head r (sym_strip h)))))
+    (_ False)))
+(fn prop_spelling ((h Symbol)) Bool
+  (bool_or (sym_eq h (quote =))
+    (bool_or (sym_eq h (quote !=))
+      (bool_or (sym_eq h (quote <))
+        (bool_or (sym_eq h (quote <=))
+          (bool_or (sym_eq h (quote >))
+            (bool_or (sym_eq h (quote >=))
+              (bool_or (sym_eq h (quote iff))
+                (bool_or (sym_eq h (quote and))
+                  (bool_or (sym_eq h (quote or))
+                    (bool_or (sym_eq h (quote not)) (sym_eq h (quote exists)))))))))))))
+(fn prop_head ((r Rd) (h Symbol)) Bool
+  (match (name_of_sym h)
+    (None False)
+    ((Some n)
+     (match (rd_find r n)
+       ((RdGhost p) p)
+       ((RdVar _) False)
+       (RdNone
+         (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+           ((RName k _)
+            (match (env_find (rd_env r) k)
+              ((Some info) (ends_in_prop (ci_type info)))
+              (None False)))
+           (_ False)))))))
+(fn ends_in_prop ((t Expr)) Bool
+  (measure (struct t))
+  (match t
+    ((Pi _ _ _ _ b) (ends_in_prop b))
+    ((Sort _ l) (is_zero (normalize l)))
+    (_ False)))
+;; `Prop`, or a function type into it: a binder of this type is a proposition or a predicate
+(fn is_pred_sort ((s SExpr)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x (quote Prop)))
+    ((SList (Cons (SSym a) args))
+     (if (sym_eq a (quote ->))
+       (match (last_of args)
+         ((Some l) (is_pred_sort l))
+         (None False))
+       False))
+    (_ False)))
 ;; the argument types in order; the TyRes carries the threaded parameters (its type is a placeholder)
 (fn read_etys
   ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (ss (List SExpr)) (acc (List EType)))
@@ -279,27 +395,77 @@
         (RNone (TyErr (quote unknown_type) (show_name n)))))))
 
 ;; ---- terms ----------------------------------------------------------------------------
-;; the reading context: the table, the scope, the environment (S E-types), the
-;; bound names innermost first
-(type Rd (Rd ESt Scope CheckedEnv (List Name)))
+;; a bound name: a runtime variable with its static type as far as the declarations fix it,
+;; or an erased one — a proof, a type parameter; True where it is a proposition or a
+;; predicate, whose applications are propositions (prop_type)
+(type Bd (BdVar Name (Option EType)) (BdGhost Name Bool))
+;; the reading context: the table, the scope, the environment, the bound names innermost
+;; first, the fn being read with its written binders' flags (its own call is read by them,
+;; before K holds its constant), and whether the typed route has read this same form — only
+;; then may a written proof be passed over (written_data)
+(type Rd (Rd ESt Scope CheckedEnv (List Bd) (Option (Pair Name (List (Pair Bool Symbol)))) Bool))
 (fn rd_es ((r Rd)) ESt
   (match r
-    ((Rd e _ _ _) e)))
+    ((Rd e _ _ _ _ _) e)))
 (fn rd_sc ((r Rd)) Scope
   (match r
-    ((Rd _ s _ _) s)))
+    ((Rd _ s _ _ _ _) s)))
 (fn rd_env ((r Rd)) CheckedEnv
   (match r
-    ((Rd _ _ e _) e)))
-(fn rd_bound ((r Rd)) (List Name)
+    ((Rd _ _ e _ _ _) e)))
+(fn rd_bound ((r Rd)) (List Bd)
   (match r
-    ((Rd _ _ _ b) b)))
-(fn rd_bind ((r Rd) (n Name)) Rd
+    ((Rd _ _ _ b _ _) b)))
+(fn rd_own ((r Rd)) (Option (Pair Name (List (Pair Bool Symbol))))
   (match r
-    ((Rd e s v b) (Rd e s v (Cons n b)))))
-(fn rd_bind_all ((r Rd) (ns (List Name))) Rd
+    ((Rd _ _ _ _ o _) o)))
+(fn rd_checked ((r Rd)) Bool
   (match r
-    ((Rd e s v b) (Rd e s v (rev_onto ns b)))))
+    ((Rd _ _ _ _ _ c) c)))
+(fn rd_push ((r Rd) (b Bd)) Rd
+  (match r
+    ((Rd e s v bs o c) (Rd e s v (Cons b bs) o c))))
+(fn rd_bind ((r Rd) (n Name) (t (Option EType))) Rd (rd_push r (BdVar n t)))
+(fn rd_ghost ((r Rd) (n Name)) Rd (rd_push r (BdGhost n False)))
+;; a pattern's variables in capture order, the last innermost, each with its type
+(fn rd_bind_all ((r Rd) (ns (List Name)) (ts (List (Option EType)))) Rd
+  (measure (struct ns))
+  (match ns
+    (Nil r)
+    ((Cons n nr)
+     (match ts
+       ((Cons t tr) (rd_bind_all (rd_bind r n t) nr tr))
+       (Nil (rd_bind_all (rd_bind r n None) nr Nil))))))
+(fn rd_ghost_all ((r Rd) (ns (List Name))) Rd
+  (measure (struct ns))
+  (match ns
+    (Nil r)
+    ((Cons n nr) (rd_ghost_all (rd_ghost r n) nr))))
+;; a name among the bound: its index among the runtime variables, or erased (a proposition?)
+(type RdHit (RdVar Int) (RdGhost Bool) (RdNone))
+(fn rd_find ((r Rd) (n Name)) RdHit (bd_find (rd_bound r) n 0))
+(fn bd_find ((bs (List Bd)) (n Name) (i Int)) RdHit
+  (measure (struct bs))
+  (match bs
+    (Nil RdNone)
+    ((Cons (BdVar m _) rest) (if (name_eq n m) (RdVar i) (bd_find rest n (+ i 1))))
+    ((Cons (BdGhost m p) rest) (if (name_eq n m) (RdGhost p) (bd_find rest n i)))))
+;; the runtime variables' types, innermost first (what c_type reads a body's variables by)
+(fn rd_tys ((r Rd)) (List (Option EType)) (bd_tys (rd_bound r)))
+(fn bd_tys ((bs (List Bd))) (List (Option EType))
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (BdVar _ t) rest) (Cons t (bd_tys rest)))
+    ((Cons (BdGhost _ _) rest) (bd_tys rest))))
+;; a read term's static type, where the reading uses one: in a file that sees Init, where a
+;; pattern's constructor is read at its scrutinee's type and a head by K's signature. A file
+;; that sees no Init has neither, and its bindings carry no type
+(fn rd_type ((r Rd) (t ETerm)) (Option EType)
+  (if (init_seen (rd_sc r)) (c_type (rd_es r) (rd_tys r) t) None))
+(fn erased_msg ((n Name)) (List Int)
+  (append (show_name n)
+    ": a proof or a type in a runtime position — both are erased from a program"))
 
 (type TRes (TOk ETerm) (TErr Symbol (List Int)))
 (fn read_et ((r Rd) (s SExpr)) TRes
@@ -314,21 +480,23 @@
      (if (sym_eq h (quote match)) (read_ematch r args)
      (if (sym_eq h (quote let)) (read_elet r args)
      (if (sym_eq h (quote if)) (read_eif r args)
-     (if (sym_eq h (quote dif))
-       (TErr (quote dif_needs_init)
-         "a dif names the hypothesis of a decided proposition: Decidable and dite are Init's, and this body is read E-first")
+     (if (sym_eq h (quote dif)) (read_edif r args)
      (if (sym_eq h (quote absurd))
-       (TErr (quote absurd_needs_init)
-         "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first")
-     (if (sym_eq h (quote quote))
-       (match args
-         ((Cons (SSym q) Nil) (TOk (ELit (LSym q))))
-         (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
-     (if (sym_eq h (quote list)) (read_elist r args)
-     (if (sym_eq h (quote fun))
-       (TErr (quote function_value)
-         "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E; this body has no L reading")
-       (read_eapp r h args))))))))))
+       ;; a refuted row: Init's absurd applied to a proof and its negation, neither read here
+       (if (if (rd_checked r) (init_const r (n1 (quote absurd)) (n1 (quote absurd))) False)
+         (TOk EAbsurd)
+         (TErr (quote absurd_needs_init)
+           "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first"))
+       (if (sym_eq h (quote proj)) (read_eproj r args)
+       (if (sym_eq h (quote quote))
+         (match args
+           ((Cons (SSym q) Nil) (TOk (ELit (LSym q))))
+           (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
+       (if (sym_eq h (quote list)) (read_elist r args)
+       (if (sym_eq h (quote fun))
+         (TErr (quote function_value)
+           "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E; this body has no L reading")
+         (read_eapp r h args)))))))))))
     ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
 
 ;; a bare name: bound, else a constructor without fields, else a fn of no parameters as its
@@ -347,9 +515,10 @@
   (match (name_of_sym x)
     (None (TErr (quote bad_name) (chars_of_sym x)))
     ((Some n)
-     (match (index_of n (rd_bound r) 0)
-       ((Some i) (TOk (EBVar i)))
-       (None
+     (match (rd_find r n)
+       ((RdVar i) (TOk (EBVar i)))
+       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+       (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((Cons (EHit id _ (EICtor _ _ k)) Nil)
             (if (= k 0) (TOk (ECtor id Nil))
@@ -387,46 +556,384 @@
        ((Some (CtorInfo _ ind _ _ _ _)) (is_nat_or_int ind))
        (_ False)))
     (_ False)))
-;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated
+;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated.
+;; `@HEAD` names every binder of a constant of K; `%` is `mod`'s other spelling
 (fn read_eapp ((r Rd) (h0 Symbol) (args (List SExpr))) TRes
-  (read_eapp_at r (if (sym_eq h0 (quote %)) (quote mod) h0) args))  ; `%` is `mod`'s other spelling
-(fn read_eapp_at ((r Rd) (h Symbol) (args (List SExpr))) TRes
+  (let ((h (at_strip (rd_sc r) h0)))
+    (read_eapp_at r (at_explicit (rd_sc r) h0) (if (sym_eq h (quote %)) (quote mod) h) args)))
+;; `@` is a spelling of files that see Init: elsewhere a head is its symbol as written (and
+;; its bytes are not read to find out)
+(fn at_explicit ((sc Scope) (x Symbol)) Bool (if (init_seen sc) (sym_explicit x) False))
+(fn at_strip ((sc Scope) (x Symbol)) Symbol (if (init_seen sc) (sym_strip x) x))
+(fn read_eapp_at ((r Rd) (ex Bool) (h Symbol) (args (List SExpr))) TRes
   (match (name_of_sym h)
     (None (TErr (quote bad_name) (chars_of_sym h)))
     ((Some n)
-     (match (index_of n (rd_bound r) 0)
-       ((Some _)
+     (match (rd_find r n)
+       ((RdVar _)
         (TErr (quote bad_head) (append (show_name n) " is a variable: there are no function values")))
-       (None
+       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+       (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
-           ((Cons (EHit id _ (EICtor _ _ k)) Nil) (read_head_args r id k args (quote ctor)))
-           ((Cons (EHit id _ (EIFn k)) Nil) (read_head_args r id k args (quote call)))
-           ((Cons (EHit id _ (EISig k)) Nil) (read_head_args r id k args (quote call)))
-           ((Cons (EHit id _ (EIExt k)) Nil) (read_head_args r id k args (quote ext)))
+           ((Cons (EHit id _ (EICtor _ _ k)) Nil) (read_known r id k ex args (quote ctor)))
+           ((Cons (EHit id _ (EIFn k)) Nil) (read_known r id k ex args (quote call)))
+           ((Cons (EHit id _ (EISig k)) Nil) (read_known r id k ex args (quote call)))
+           ((Cons (EHit id _ (EIExt k)) Nil) (read_known r id k ex args (quote ext)))
            ((Cons (EHit id _ (EITemplate _ ebs _ _)) Nil) (read_template_app r id ebs args))
            ((Cons (EHit a _ _) (Cons (EHit b _ _) _))
             (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
            (Nil
              (match (prim_head (rd_sc r) n)
-               ((Some (Pair id (Prim _ k))) (read_head_args r (table_entry id) k args (quote prim)))
+               ((Some (Pair id (Prim _ k))) (read_prim_head r id k args))
                (None
                  (match (init_row r h n args)
                    ((Some res) res)
                    (None
-                     (if (nat_ctor r n)
-                       (TErr (quote nat_constructor)
-                         (append (show_name n)
-                           ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
-                       (match (renamed_prim h)
-                         ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
-                         (None (TErr (quote unknown_head) (show_name n))))))))))
+                     (match (k_head r ex n args)
+                       ((Some res) res)
+                       (None
+                         (if (nat_ctor r n)
+                           (TErr (quote nat_constructor)
+                             (append (show_name n)
+                               ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
+                           (match (renamed_prim h)
+                             ((Some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
+                             (None (TErr (quote unknown_head) (show_name n))))))))))))
            ((Cons (EHit id _ _) Nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
+
+;; ---- the arguments written and the arguments that run ----------------------------------------
+;; What a call writes is not what it passes: a type and a proof are written and erased, and
+;; a binder marked implicit is not written at all. Which is which is the head's declared
+;; signature — its binders in order, each explicit or not, each `keep` (runtime data), `drop`
+;; (a type) or `proof` — read off K's constant by the roles the erasure reads (erase.shard
+;; tele_of), or off the written binders of the fn being read. Two refusals keep the reading
+;; honest. The elaborator fills in types and proofs only (LAW rule 24): a binder that is
+;; implicit and runtime data is an argument that runs and is not written. And a proof is
+;; passed over unread, so it must have a reader: where the typed route has not read this same
+;; form (`checked`), a written proof is refused — nothing checks it
+(type Wr (WrOk (List SExpr)) (WrErr Symbol (List Int)))
+(fn written_data
+  ((flags (List (Pair Bool Symbol)))
+   (ex Bool)
+   (checked Bool)
+   (args (List SExpr))
+   (acc (List SExpr)))
+  Wr
+  (measure (struct flags))
+  (match flags
+    (Nil
+      (match args
+        (Nil (WrOk (rev acc)))
+        (_
+          (WrErr (quote unsaturated)
+            (append " is given "
+              (append (show_nat (len args)) " more arguments than its signature has binders"))))))
+    ((Cons (Pair explicit role) fr)
+     (if (bool_or ex explicit)
+       (match args
+         (Nil
+           (WrErr (quote unsaturated)
+             " is given fewer arguments than its signature has binders: a function is no value"))
+         ((Cons a ar)
+          (if (sym_eq role (quote keep)) (written_data fr ex checked ar (Cons a acc))
+          (if (bool_and (sym_eq role (quote proof)) (bool_not checked))
+            (WrErr (quote unchecked_proof)
+              ": a proof is written here, and this body has no L reading — the plain reading passes a proof over unread, and nothing else checks it")
+            (written_data fr ex checked ar acc)))))
+     (if (sym_eq role (quote keep))
+       (WrErr (quote unwritten_argument)
+         ": a binder that is implicit and runtime data — its argument exists at run time and is not written; write the call with @ and every argument")
+       (written_data fr ex checked args acc))))))
+;; a head's binders' flags, where the file sees Init: the fn being read by its own written
+;; binders, else K's constant
+(fn head_flags ((r Rd) (id Name)) (Option (List (Pair Bool Symbol)))
+  (if (bool_not (init_seen (rd_sc r))) None
+  (match (rd_own r)
+    ((Some (Pair own flags)) (if (name_eq own id) (Some flags) (k_flags r id)))
+    (None (k_flags r id)))))
+(fn k_flags ((r Rd) (id Name)) (Option (List (Pair Bool Symbol)))
+  (match (env_find (rd_env r) id)
+    (None None)
+    ((Some info)
+     (match
+       (match info
+         ((CtorInfo _ _ _ nparams _ _)
+          (tele_of_fields (w0 (rd_env r)) (rd_es r) (rd_sc r) info nparams))
+         (_ (tele_of (w0 (rd_env r)) (rd_es r) (rd_sc r) info)))
+       ((TeleOk _ _ (Tele _ binds _ _)) (zip_flags (ci_type info) binds Nil))
+       ((TeleErr _ _) None)))))
+;; the binders' roles beside the binder infos of the type's own Pi chain; a function-typed
+;; binder is a template's (never read here), and a type that is no Pi chain gives nothing
+(fn zip_flags ((ty Expr) (binds (List TBind)) (acc (List (Pair Bool Symbol))))
+  (Option (List (Pair Bool Symbol)))
+  (measure (struct binds))
+  (match binds
+    (Nil (Some (rev acc)))
+    ((Cons (TBind _ role _) br)
+     (match ty
+       ((Pi _ _ bi _ body)
+        (match role
+          ((BStatic _) None)
+          ((BData _) (zip_flags body br (Cons (Pair (bi_explicit bi) (quote keep)) acc)))
+          (BType (zip_flags body br (Cons (Pair (bi_explicit bi) (quote drop)) acc)))
+          (BErased (zip_flags body br (Cons (Pair (bi_explicit bi) (quote proof)) acc)))))
+       (_ None)))))
+(fn bi_explicit ((bi BinderInfo)) Bool
+  (match bi
+    (BDefault True)
+    (_ False)))
+;; a head the E table knows: its runtime arguments among those written
+(fn read_known ((r Rd) (id Name) (k Int) (ex Bool) (args (List SExpr)) (kind Symbol)) TRes
+  (match (head_flags r id)
+    ((Some flags)
+     (match (written_data flags ex (rd_checked r) args Nil)
+       ((WrErr e m) (TErr e (append (show_name id) m)))
+       ((WrOk ss) (read_head_args r id (len ss) ss kind))))
+    (None
+      (if ex
+        (TErr (quote bad_head)
+          (append (show_name id)
+            ": @ names every binder of a constant of K, and this head's signature is not one K holds"))
+        (read_head_args r id k args kind)))))
+;; a primitive written by name: the table's entry; a decision of the registry is a value here —
+;; Decidable's cell by its test, as the erasure writes it (erasure.shard erase_dec_value)
+(fn read_prim_head ((r Rd) (id Name) (k Int) (args (List SExpr))) TRes
+  (match (decision_test id)
+    ((Some p) (read_decision r p args))
+    (None (read_head_args r (table_entry id) k args (quote prim)))))
+(fn read_decision ((r Rd) (p Name) (args (List SExpr))) TRes
+  (match (read_head_args r p 2 args (quote prim))
+    ((TErr e m) (TErr e m))
+    ((TOk test) (TOk (EIf test (dec_true) (dec_false))))))
+;; the comparison a decision of the registry answers (`Nat.decEq` is `=`)
+(fn decision_test ((id Name)) (Option Name)
+  (match (realization_of id)
+    ((Some p) (if (cmp_prim p) (Some p) None))
+    (None None)))
+
+;; ---- a head that is a constant of K and no entry of the E table ------------------------------
+;; where the file sees Init: `dite` and `ite` written with their decision, a refuted row, Bool's
+;; decidable equality, a row's constructor — its one runtime argument — and a projection
+;; function: of a row the subject itself, of a structure the field's variable under a match on
+;; its constructor (erasure.shard erase_const_at gives the same constants the same shapes)
+(fn k_head ((r Rd) (ex Bool) (n Name) (args (List SExpr))) (Option TRes)
+  (if (bool_not (init_seen (rd_sc r))) None
+  (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+    ((RName k _)
+     (if (name_eq k (n1 (quote dite))) (Some (read_ite r ex True args))
+     (if (name_eq k (n1 (quote ite))) (Some (read_ite r ex False args))
+     (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim))))
+       (Some
+         (if (rd_checked r) (TOk EAbsurd)
+         (TErr (quote absurd_needs_init)
+           "a refuted row is a proof of False: it reads on the typed route, and this body is read E-first")))
+     (if (name_eq k (n1 (quote instDecidableEqBool)))
+       (Some
+         (match (read_bool_eq r args)
+           ((TErr e m) (TErr e m))
+           ((TOk test) (TOk (EIf test (dec_true) (dec_false))))))
+       (match (env_find (rd_env r) k)
+         ((Some info)
+          (match info
+            ((CtorInfo _ ind _ _ _ _) (if (rep_row ind) (Some (read_row_ctor r ex k args)) None))
+            ((DefnInfo _ v _ _ _)
+             (match (proj_fn_of v 0)
+               ((Some (Pair (Pair sn i) depth))
+                (Some (read_proj_fn r ex k sn i (pi_explicit (ci_type info) depth) args)))
+               (None (Some (no_program k)))))
+            ((ThmInfo _ _ _) (Some (no_program k)))
+            ((AxiomInfo _ _) (Some (no_program k)))
+            ((OpaqueInfo _ _ _ _) (Some (no_program k)))
+            (_ None)))
+         (None None)))))))
+    (_ None))))
+;; a constant K holds that no table gives a program: a definition and nothing more, a theorem
+(fn no_program ((k Name)) TRes
+  (TErr (quote no_realization)
+    (append (show_name k)
+      ": no realization attached — realize it first, or import the file that does")))
+(fn read_row_ctor ((r Rd) (ex Bool) (k Name) (args (List SExpr))) TRes
+  (match (k_flags r k)
+    (None
+      (TErr (quote no_realization)
+        (append (show_name k) ": the registry's row does not describe this structure")))
+    ((Some flags)
+     (match (written_data flags ex (rd_checked r) args Nil)
+       ((WrErr e m) (TErr e (append (show_name k) m)))
+       ((WrOk (Cons a Nil)) (read_et r a))
+       ((WrOk _)
+        (TErr (quote no_realization)
+          (append (show_name k) ": a row's constructor has exactly one runtime field")))))))
+;; a projection function — a constant whose value is λ params self. self.i: the structure, the
+;; field and the number of its lambdas; which of them a call writes is its type's binder infos
+(fn proj_fn_of ((v Expr) (depth Int)) (Option (Pair (Pair Name Int) Int))
+  (measure (struct v))
+  (match v
+    ((Lam _ _ _ _ b) (proj_fn_of b (+ depth 1)))
+    ((Proj _ sn i (BVar _ 0)) (if (< depth 1) None (Some (Pair (Pair sn i) depth))))
+    (_ None)))
+(fn pi_explicit ((ty Expr) (k Int)) (List Bool)
+  (measure k)
+  (if (< k 1) Nil
+  (match ty
+    ((Pi _ _ bi _ body) (Cons (bi_explicit bi) (pi_explicit body (- k 1))))
+    (_ Nil))))
+;; applied to its structure exactly (the subject is its last lambda's argument)
+(fn read_proj_fn
+  ((r Rd) (ex Bool) (k Name) (sn Name) (i Int) (lams (List Bool)) (args (List SExpr)))
+  TRes
+  (if (bool_not (= (len args) (if ex (len lams) (count_true lams))))
+    (TErr (quote unsaturated)
+      (append (show_name k) ": a projection is applied to its structure, and to nothing past it"))
+    (match (last_of args)
+      (None
+        (TErr (quote unsaturated)
+          (append (show_name k) ": a projection is applied to its structure")))
+      ((Some x) (read_proj r sn i x)))))
+(fn last_of ((T Type) (xs (List T))) (Option T)
+  (measure (struct xs))
+  (match xs
+    (Nil None)
+    ((Cons x Nil) (Some x))
+    ((Cons _ rest) (last_of rest))))
+;; field i of the structure sn, of the subject x
+(fn read_proj ((r Rd) (sn Name) (i Int) (x SExpr)) TRes
+  (match (struct_ctor r sn)
+    (None (TErr (quote no_realization) (append (show_name sn) " is not a structure")))
+    ((Some c)
+     (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) c)
+       (None (TErr (quote no_realization) (show_name c)))
+       ((Some flags)
+        (match (runtime_index flags i 0 0)
+          (None
+            (TErr (quote erased_in_runtime)
+              (append (show_name sn) ": a projection of an erased field")))
+          ((Some (Pair j nrt))
+           (match (read_et r x)
+             ((TErr e m) (TErr e m))
+             ((TOk x1)
+              (if (rep_row sn)
+                (if (= nrt 1) (TOk x1)
+                (TErr (quote no_realization)
+                  (append (show_name sn)
+                    ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+                (match (es_info (rd_es r) c)
+                  ((Some (EICtor _ _ _))
+                   (TOk (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))
+                  (_ (TErr (quote no_realization) (append (show_name sn) " is not an E type"))))))))))))))
+(fn struct_ctor ((r Rd) (sn Name)) (Option Name)
+  (match (env_find (rd_env r) sn)
+    ((Some (InductInfo _ _ _ _ (Cons c Nil) _ _ _ _)) (Some c))
+    (_ None)))
+;; (proj S i E): field i of the structure S
+(fn read_eproj ((r Rd) (args (List SExpr))) TRes
+  (match args
+    ((Cons (SSym sx) (Cons (SNum i) (Cons x Nil)))
+     (match (name_of_sym sx)
+       (None (TErr (quote bad_name) (chars_of_sym sx)))
+       ((Some n)
+        (match
+          (if (init_seen (rd_sc r))
+            (resolve (cx_with_etype (cx0 (rd_sc r) (rd_env r) Nil Nil) True) n)
+            RNone)
+          ((RName sn _) (read_proj r sn i x))
+          (_ (TErr (quote unknown_head) (append (show_name n) " is not a structure of K")))))))
+    (_ (TErr (quote bad_shape) "(proj STRUCTURE INDEX E)"))))
+
+;; ---- decisions: a value and a condition ------------------------------------------------------
+;; (@dite T C DEC (fun ((h C)) A) (fun ((h (Not C))) B)) and (@ite T C DEC A B): an `if` on the
+;; decision. The type and the proposition are erased; a dite's branch is a lambda over its
+;; hypothesis, a proof. Without @ the decision is an instance argument — it runs and is not
+;; written — so the plain forms are `if` and `dif`
+(fn read_ite ((r Rd) (ex Bool) (dep Bool) (args (List SExpr))) TRes
+  (if (bool_not ex)
+    (TErr (quote unwritten_argument)
+      "ite and dite take their decision as an instance argument, which exists at run time and is not written: write (if C A B), (dif h C A B), or the @ form with its decision")
+    (match args
+      ((Cons _ (Cons _ (Cons d (Cons a (Cons b Nil)))))
+       (match (read_cond r d)
+         ((TErr e m) (TErr e m))
+         ((TOk c)
+          (match (read_branch r dep a)
+            ((TErr e m) (TErr e m))
+            ((TOk ta)
+             (match (read_branch r dep b)
+               ((TErr e m) (TErr e m))
+               ((TOk tb) (TOk (EIf c ta tb)))))))))
+      (_ (TErr (quote unsaturated) "@ite and @dite take five arguments")))))
+(fn read_branch ((r Rd) (dep Bool) (s SExpr)) TRes
+  (if (bool_not dep) (read_et r s)
+  (match s
+    ((SList (Cons (SSym f) (Cons (SList (Cons (SList (Cons (SSym x) _)) Nil)) (Cons body Nil))))
+     (if (sym_eq f (quote fun))
+       (match (name_of_sym x)
+         (None (TErr (quote bad_name) (chars_of_sym x)))
+         ((Some n) (read_et (rd_ghost r n) body)))
+       (TErr (quote function_value) "a dite's branch is (fun ((h P)) E)")))
+    (_ (TErr (quote function_value) "a dite's branch is (fun ((h P)) E)")))))
+;; a decision where an `if` reads it: a decision of the registry written by name is its bare
+;; test, Bool's decidable equality the test over its operands; anything else — the call of a
+;; derived decision, a variable — is its value, whose cell the `if` reads
+(type CondHead (CondPrim Name) (CondBoolEq) (CondNone))
+(fn read_cond ((r Rd) (s SExpr)) TRes
+  (if (bool_not (init_seen (rd_sc r))) (read_et r s) (read_cond_at r s)))
+(fn read_cond_at ((r Rd) (s SExpr)) TRes
+  (match s
+    ((SList (Cons (SSym h0) args))
+     (match (name_of_sym (sym_strip h0))
+       (None (read_et r s))
+       ((Some n)
+        (match (cond_head r n)
+          ((CondPrim p) (read_head_args r p 2 args (quote prim)))
+          (CondBoolEq (read_bool_eq r args))
+          (CondNone (read_et r s))))))
+    (_ (read_et r s))))
+(fn cond_head ((r Rd) (n Name)) CondHead
+  (if (bool_not (init_seen (rd_sc r))) CondNone
+  (match (rd_find r n)
+    (RdNone
+      (match (only_values (eresolve (rd_es r) (rd_sc r) n))
+        (Nil
+          (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+            ((RName k _)
+             (if (name_eq k (n1 (quote instDecidableEqBool))) CondBoolEq
+             (match (decision_test k)
+               ((Some p) (CondPrim p))
+               (None CondNone))))
+            (_ CondNone)))
+        (_ CondNone)))
+    (_ CondNone))))
+(fn read_bool_eq ((r Rd) (args (List SExpr))) TRes
+  (match (read_ets_list r args Nil)
+    ((Pair (Some (Pair e m)) _) (TErr e m))
+    ((Pair None (Cons a (Cons b Nil))) (TOk (bool_eq_cond a b)))
+    ((Pair None _) (TErr (quote unsaturated) "instDecidableEqBool takes 2 arguments"))))
+;; (dif h C A B): the `if` on C, its hypothesis a proof in both branches
+(fn read_edif ((r Rd) (args (List SExpr))) TRes
+  (if (bool_not (init_seen (rd_sc r)))
+    (TErr (quote dif_needs_init)
+      "a dif names the hypothesis of a decided proposition: Decidable and dite are Init's, and this file does not see Init")
+    (match args
+      ((Cons (SSym hn) (Cons c (Cons a (Cons b Nil))))
+       (match (name_of_sym hn)
+         (None (TErr (quote bad_name) (chars_of_sym hn)))
+         ((Some n)
+          (match (read_et r c)
+            ((TErr e m) (TErr e m))
+            ((TOk tc)
+             (match (read_et (rd_ghost r n) a)
+               ((TErr e m) (TErr e m))
+               ((TOk ta)
+                (match (read_et (rd_ghost r n) b)
+                  ((TErr e m) (TErr e m))
+                  ((TOk tb) (TOk (EIf tc ta tb)))))))))))
+      (_ (TErr (quote bad_shape) "(dif h C A B)")))))
 ;; the entry an operation of Init written by name is run as: the registry's (prog.shard
-;; realization_of — `Nat.add` is `+`), as the typed route's erasure writes it. A decision
-;; written by name keeps its own entry: its value is a cell and not the test
+;; realization_of — `Nat.add` is `+`), as the typed route's erasure writes it (a decision is
+;; read before it comes here: read_decision)
 (fn table_entry ((id Name)) Name
   (match (realization_of id)
-    ((Some p) (if (cmp_prim p) id p))
+    ((Some p) p)
     (None id)))
 ;; does the name resolve, through the scope, to the constant k of Init?
 (fn init_const ((r Rd) (n Name) (k Name)) Bool
@@ -452,7 +959,8 @@
      (if (name_eq k (n2 (quote Bool) (quote not))) (Some (read_bool_row r (quote not) args))
      (if (name_eq k (nm_nat_succ)) (Some (read_succ r args))
      (match (realization_of k)
-       ((Some p) (if (cmp_prim p) None (Some (read_head_args r p 2 args (quote prim)))))
+       ((Some p)
+        (Some (if (cmp_prim p) (read_decision r p args) (read_head_args r p 2 args (quote prim)))))
        (None
          (match (realization_type k)
            ((Some _) (Some (read_head_args r k 1 args (quote prim))))
@@ -554,12 +1062,13 @@
   (match (name_of_sym h)
     (None (TErr (quote bad_name) (chars_of_sym h)))
     ((Some n)
-     (match (index_of n (rd_bound r) 0)
-       ((Some _)
+     (match (rd_find r n)
+       ((RdVar _)
         (TErr (quote function_value)
           (append (show_name n)
             ": a variable as a static argument — there are no function values; a static argument names a fn")))
-       (None
+       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+       (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((Cons (EHit id _ (EIFn k)) Nil) (read_static_fn r id k gargs))
            ((Cons (EHit id _ (EISig k)) Nil) (read_static_fn r id k gargs))
@@ -607,32 +1116,33 @@
     ((Some (ESig _ nt _ _)) nt)
     (_ 0)))
 
-;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its body
+;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its
+;; body, typed from the scrutinee's static type (a constructor's name is read at that type)
 (fn read_ematch ((r Rd) (args (List SExpr))) TRes
   (match args
     ((Cons s arms)
      (match (read_et r s)
        ((TErr e m) (TErr e m))
        ((TOk t)
-        (match (read_earms r arms Nil)
+        (match (read_earms r (rd_type r t) arms Nil)
           ((Pair (Some (Pair e m)) _) (TErr e m))
           ((Pair None as)
            (match (dead_row_in as arms)
              ((Some m) (TErr (quote unreachable_arm) m))
              (None (TOk (EMatch t as)))))))))
     (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
-(fn read_earms ((r Rd) (arms (List SExpr)) (acc (List EArm)))
+(fn read_earms ((r Rd) (st (Option EType)) (arms (List SExpr)) (acc (List EArm)))
   (Pair (Option (Pair Symbol (List Int))) (List EArm))
   (measure (struct arms))
   (match arms
     (Nil (Pair None (rev acc)))
     ((Cons (SList (Cons p (Cons b Nil))) rest)
-     (match (read_epat r p)
+     (match (read_epat r st p)
        ((PErr e m) (Pair (Some (Pair e m)) Nil))
-       ((POk pat names)
-        (match (read_et (rd_bind_all r names) b)
+       ((POk pat names ghosts)
+        (match (read_et (rd_bind_all (rd_ghost_all r ghosts) names (pat_types (rd_es r) st pat)) b)
           ((TErr e m) (Pair (Some (Pair e m)) Nil))
-          ((TOk body) (read_earms r rest (Cons (EArm pat body) acc)))))))
+          ((TOk body) (read_earms r st rest (Cons (EArm pat body) acc)))))))
     (_ (Pair (Some (Pair (quote bad_shape) "an arm is (PAT E)")) Nil))))
 
 ;; a match whose rows all read is refused where a row that matches every value has rows
@@ -672,11 +1182,16 @@
         (_ None)))
     (_ None))))
 ;; ---- patterns: the variables in capture order (leftmost first) ------------------------------
-(type PRes (POk EPat (List Name)) (PErr Symbol (List Int)))
-(fn read_epat ((r Rd) (s SExpr)) PRes
+;; a pattern at the scrutinee's static type, as far as the declarations fix it: its runtime
+;; variables, and the names it gives erased fields (proofs). A constructor's name is the E
+;; table's in scope; a name the scope does not resolve is the constructor it names under the
+;; scrutinee's own inductive (`CAtom` at a `CNode` is `CNode.CAtom`), as the typed route reads
+;; a pattern's head (scope.shard resolve_ctor)
+(type PRes (POk EPat (List Name) (List Name)) (PErr Symbol (List Int)))
+(fn read_epat ((r Rd) (st (Option EType)) (s SExpr)) PRes
   (measure (struct s))
   (match s
-    ((SNum k) (POk (PLit (if (< k 0) (LInt k) (LNat k))) Nil))
+    ((SNum k) (POk (PLit (if (< k 0) (LInt k) (LNat k))) Nil Nil))
     ((SStr _) (PErr (quote pattern_literal) "a string is not a pattern: match its Cons and Nil"))
     ((SSymU _ _) (PErr (quote bad_universe_suffix) "a pattern takes no universe arguments"))
     ((SSym x)
@@ -685,14 +1200,20 @@
        ((Some n)
         (match (only_ctors (eresolve (rd_es r) (rd_sc r) n))
           (Nil
-            (match (only_values (eresolve (rd_es r) (rd_sc r) n))
-              (Nil (POk PVar (list n)))
-              ((Cons (EHit id _ _) _)
-               (PErr (quote pattern_name)
-                 (append (show_name id)
-                   " is a function: a pattern variable may not shadow one (it would match anything)")))))
+            (match (ctor_at r st n)
+              ((Some (Pair id k))
+               ;; under the scrutinee's inductive: its constructor where that has no fields,
+               ;; else a variable (elab.shard el_pat)
+               (if (= k 0) (POk (PCtor id Nil) Nil Nil) (POk PVar (list n) Nil)))
+              (None
+                (match (only_values (eresolve (rd_es r) (rd_sc r) n))
+                  (Nil (POk PVar (list n) Nil))
+                  ((Cons (EHit id _ _) _)
+                   (PErr (quote pattern_name)
+                     (append (show_name id)
+                       " is a function: a pattern variable may not shadow one (it would match anything)")))))))
           ((Cons (EHit id _ (EICtor _ _ k)) Nil)
-           (if (= k 0) (POk (PCtor id Nil) Nil)
+           (if (= k 0) (POk (PCtor id Nil) Nil Nil)
            (PErr (quote pattern_arity)
              (append (show_name id) (append " has " (append (show_nat k) " fields"))))))
           ((Cons (EHit a _ _) (Cons (EHit b _ _) _))
@@ -701,37 +1222,139 @@
     ((SList (Cons (SSym h) subs))
      (if (sym_eq h (quote quote))
        (match subs
-         ((Cons (SSym q) Nil) (POk (PLit (LSym q)) Nil))
+         ((Cons (SSym q) Nil) (POk (PLit (LSym q)) Nil Nil))
          (_ (PErr (quote bad_shape) "(quote SYMBOL)")))
        (match (name_of_sym h)
          (None (PErr (quote bad_name) (chars_of_sym h)))
          ((Some n)
           (match (only_ctors (eresolve (rd_es r) (rd_sc r) n))
-            (Nil (PErr (quote unknown_head) (append (show_name n) " is not a constructor")))
-            ((Cons (EHit id _ (EICtor _ _ k)) Nil)
-             (if (bool_not (= k (len subs)))
-               (PErr (quote pattern_arity)
-                 (append (show_name id)
-                   (append " has "
-                     (append (show_nat k) (append " fields, the pattern " (show_nat (len subs)))))))
-               (match (read_epats r subs Nil Nil)
-                 ((Pair (Some (Pair e m)) _) (PErr e m))
-                 ((Pair None (Pair ps names)) (POk (PCtor id ps) names)))))
+            (Nil
+              (match (ctor_at r st n)
+                ((Some (Pair id _)) (read_ctor_pat r st id subs))
+                (None
+                  (match (row_ctor r n)
+                    ((Some k) (read_row_pat r k subs))
+                    (None (PErr (quote unknown_head) (append (show_name n) " is not a constructor")))))))
+            ((Cons (EHit id _ (EICtor _ _ _)) Nil) (read_ctor_pat r st id subs))
             ((Cons (EHit a _ _) (Cons (EHit b _ _) _))
              (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
             (_ (PErr (quote bad_pattern) (show_name n))))))))
     (_ (PErr (quote bad_pattern) "a pattern is _, NAME, NUMERAL or (CTOR PAT…)"))))
-(fn read_epats ((r Rd) (ss (List SExpr)) (pacc (List EPat)) (nacc (List Name)))
-  (Pair (Option (Pair Symbol (List Int))) (Pair (List EPat) (List Name)))
+;; a row's constructor: its pattern is its one runtime field's pattern, on the scrutinee itself
+;; (erasure.shard mt_epat); the erased fields' names are proofs
+(fn row_ctor ((r Rd) (n Name)) (Option Name)
+  (if (bool_not (init_seen (rd_sc r))) None
+  (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+    ((RName k _)
+     (match (env_find (rd_env r) k)
+       ((Some (CtorInfo _ ind _ _ _ _)) (if (rep_row ind) (Some k) None))
+       (_ None)))
+    (_ None))))
+(fn read_row_pat ((r Rd) (k Name) (subs (List SExpr))) PRes
+  (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) k)
+    (None (PErr (quote bad_pattern) (show_name k)))
+    ((Some flags)
+     (if (bool_not (= (len flags) (len subs)))
+       (PErr (quote pattern_arity)
+         (append (show_name k)
+           (append " has "
+             (append (show_nat (len flags)) (append " fields, the pattern " (show_nat (len subs)))))))
+       (match (read_epats r Nil flags subs Nil Nil Nil)
+         ((Pair (Some (Pair e m)) _) (PErr e m))
+         ((Pair None (Pair (Cons p Nil) (Pair names ghosts))) (POk p names ghosts))
+         ((Pair None _)
+          (PErr (quote bad_pattern)
+            (append (show_name k) ": a row's constructor has exactly one runtime field"))))))))
+;; the constructor a name is under the scrutinee's inductive, with its written fields' number
+(fn ctor_at ((r Rd) (st (Option EType)) (n Name)) (Option (Pair Name Int))
+  (match st
+    ((Some (ETCon ind _))
+     (match (es_info (rd_es r) ind)
+       ((Some (EIInd _ ctors))
+        (let ((id (name_append ind n)))
+          (if (mem_name id ctors) (Some (Pair id (len (pat_fields r id)))) None)))
+       (_ None)))
+    (_ None)))
+;; a constructor's fields as a pattern writes them: True for a runtime field, False for an
+;; erased one — all of K's where K holds the constructor, else the E table's runtime fields
+(fn pat_fields ((r Rd) (id Name)) (List Bool)
+  (match (if (init_seen (rd_sc r)) (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) id) None)
+    ((Some flags) flags)
+    (None
+      (match (es_info (rd_es r) id)
+        ((Some (EICtor _ _ k)) (trues k))
+        (_ Nil)))))
+(fn read_ctor_pat ((r Rd) (st (Option EType)) (id Name) (subs (List SExpr))) PRes
+  (let ((flags (pat_fields r id)))
+    (if (bool_not (= (len flags) (len subs)))
+      (PErr (quote pattern_arity)
+        (append (show_name id)
+          (append " has "
+            (append (show_nat (len flags)) (append " fields, the pattern " (show_nat (len subs)))))))
+      (match
+        (read_epats r
+          (match (ctor_field_types (rd_es r) st id)
+            ((Some fts) (some_all fts))
+            (None Nil))
+          flags
+          subs
+          Nil
+          Nil
+          Nil)
+        ((Pair (Some (Pair e m)) _) (PErr e m))
+        ((Pair None (Pair ps (Pair names ghosts))) (POk (PCtor id ps) names ghosts))))))
+;; the fields' patterns in order: a runtime field's at its type (`sts`: the runtime fields'
+;; types, none known where empty), an erased field's a name bound as a proof
+(fn read_epats
+  ((r Rd)
+   (sts (List (Option EType)))
+   (flags (List Bool))
+   (ss (List SExpr))
+   (pacc (List EPat))
+   (nacc (List Name))
+   (gacc (List Name)))
+  (Pair (Option (Pair Symbol (List Int))) (Pair (List EPat) (Pair (List Name) (List Name))))
   (measure (struct ss))
   (match ss
-    (Nil (Pair None (Pair (rev pacc) nacc)))
+    (Nil (Pair None (Pair (rev pacc) (Pair nacc gacc))))
     ((Cons s rest)
-     (match (read_epat r s)
-       ((PErr e m) (Pair (Some (Pair e m)) (Pair Nil Nil)))
-       ((POk p names) (read_epats r rest (Cons p pacc) (append nacc names)))))))
+     (match flags
+       ((Cons False fr)
+        (match s
+          ((SSym x)
+           (match (name_of_sym x)
+             (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil (Pair Nil Nil))))
+             ((Some n) (read_epats r sts fr rest pacc nacc (append gacc (list n))))))
+          (_
+            (Pair
+              (Some
+                (Pair (quote bad_pattern)
+                  "an erased field's pattern is a name: a proof has no constructor to match"))
+              (Pair Nil (Pair Nil Nil))))))
+       (_
+         (match
+           (read_epat r
+             (match sts
+               ((Cons t _) t)
+               (Nil None))
+             s)
+           ((PErr e m) (Pair (Some (Pair e m)) (Pair Nil (Pair Nil Nil))))
+           ((POk p names ghosts)
+            (read_epats r
+              (match sts
+                ((Cons _ tr) tr)
+                (Nil Nil))
+              (match flags
+                ((Cons _ fr) fr)
+                (Nil Nil))
+              rest
+              (Cons p pacc)
+              (append nacc names)
+              (append gacc ghosts)))))))))
 
-;; (let ((x E)…) E): sequential — each right-hand side sees the bindings before it
+;; (let ((x E)…) E): sequential — each right-hand side sees the bindings before it. Where the
+;; file sees Init a binding may state its type, (x TYPE E): at a proposition it is a proof and
+;; vanishes with its variable, as the erasure drops it; a let of proofs alone is its body
 (fn read_elet ((r Rd) (args (List SExpr))) TRes
   (match args
     ((Cons (SList binds) (Cons body Nil))
@@ -740,26 +1363,45 @@
        ((Pair None (Pair rhss r1))
         (match (read_et r1 body)
           ((TErr e m) (TErr e m))
-          ((TOk b) (TOk (ELet rhss b)))))))
+          ((TOk b)
+           (match rhss
+             (Nil (TOk b))
+             (_ (TOk (ELet rhss b)))))))))
     (_ (TErr (quote bad_shape) "(let ((x E)…) E)"))))
 (fn read_ebinds ((r Rd) (binds (List SExpr)) (acc (List ETerm)))
   (Pair (Option (Pair Symbol (List Int))) (Pair (List ETerm) Rd))
   (measure (struct binds))
   (match binds
     (Nil (Pair None (Pair (rev acc) r)))
-    ((Cons (SList (Cons (SSym x) (Cons e Nil))) rest)
-     (match (name_of_sym x)
-       (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil r)))
-       ((Some n)
-        (match (read_et r e)
-          ((TErr e2 m) (Pair (Some (Pair e2 m)) (Pair Nil r)))
-          ((TOk t) (read_ebinds (rd_bind r n) rest (Cons t acc)))))))
+    ((Cons (SList (Cons (SSym x) (Cons e Nil))) rest) (read_ebind r x e rest acc))
+    ((Cons (SList (Cons (SSym x) (Cons ty (Cons e Nil)))) rest)
+     (if (bool_not (init_seen (rd_sc r)))
+       (Pair (Some (Pair (quote bad_shape) "a binding is (NAME E)")) (Pair Nil r))
+     (if (prop_type r ty)
+       (if (bool_not (rd_checked r))
+         (Pair
+           (Some
+             (Pair (quote unchecked_proof)
+               "a let binds a proof, and this body has no L reading — nothing checks it"))
+           (Pair Nil r))
+         (match (name_of_sym x)
+           (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil r)))
+           ((Some n) (read_ebinds (rd_ghost r n) rest acc))))
+       (read_ebind r x e rest acc))))
     (_ (Pair (Some (Pair (quote bad_shape) "a binding is (NAME E)")) (Pair Nil r)))))
+(fn read_ebind ((r Rd) (x Symbol) (e SExpr) (rest (List SExpr)) (acc (List ETerm)))
+  (Pair (Option (Pair Symbol (List Int))) (Pair (List ETerm) Rd))
+  (match (name_of_sym x)
+    (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil r)))
+    ((Some n)
+     (match (read_et r e)
+       ((TErr e2 m) (Pair (Some (Pair e2 m)) (Pair Nil r)))
+       ((TOk t) (read_ebinds (rd_bind r n (rd_type r t)) rest (Cons t acc)))))))
 
 (fn read_eif ((r Rd) (args (List SExpr))) TRes
   (match args
     ((Cons c (Cons a (Cons b Nil)))
-     (match (read_et r c)
+     (match (read_cond r c)
        ((TErr e m) (TErr e m))
        ((TOk tc)
         (match (read_et r a)
@@ -812,11 +1454,17 @@
 ;; ---- the declarations -------------------------------------------------------------------------
 ;; COkT: a fn whose body takes instances
 (type CRes (COk EDecl) (COkT EDecl (List EDemand)) (CErr Symbol (List Int)))
-;; fn / extern / type / sig fn / sig type
+;; fn / extern / type / sig fn / sig type: the form read alone — the program's only reading
 (fn classify_form ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
+  (classify_as es sc env False s))
+;; a fn the typed route has read and given a program: the second reading of the same form
+;; (loader.shard both_rec). Its proofs were checked there, and are passed over here
+(fn classify_checked ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
+  (classify_as es sc env True s))
+(fn classify_as ((es ESt) (sc Scope) (env CheckedEnv) (checked Bool) (s SExpr)) CRes
   (match s
     ((SList (Cons (SSym h) args))
-     (if (sym_eq h (quote fn)) (read_efn es sc env args)
+     (if (sym_eq h (quote fn)) (read_efn es sc env checked args)
      (if (sym_eq h (quote extern)) (read_eextern es sc env args)
      (if (sym_eq h (quote type)) (read_etype_decl es sc env args)
      (if (sym_eq h (quote sig))
@@ -837,30 +1485,54 @@
   (match hd
     ((SSym x) (Pair (name_of_sym x) Nil))
     (_ (Pair None Nil))))
-;; ((x TYPE)…): the names and E-types in order; `(T Type)` declares a type parameter
-(type PmRes (PmOk (List Name) (List EType) (List Name)) (PmErr Symbol (List Int)))
+;; ((x TYPE)…): the runtime binders' names and E-types in order; `(T Type)` declares a type
+;; parameter. Where the file sees Init a binder whose type is a proposition is a proof — written,
+;; and no parameter of the program — and one of type `Prop` or a function into it is a
+;; predicate. With them: every binder as the body's context has it (innermost first), and each
+;; written binder's flags in order — explicit, runtime data — which a call of the fn is read by
+(type PmRes
+  (PmOk (List Name) (List EType) (List Name) (List Bd) (List (Pair Bool Symbol)))
+  (PmErr Symbol (List Int)))
 (fn read_params
   ((es ESt)
    (sc Scope)
    (env CheckedEnv)
+   (checked Bool)
    (tps (List Name))
    (bs (List SExpr))
    (names (List Name))
-   (types (List EType)))
+   (types (List EType))
+   (bds (List Bd))
+   (flags (List (Pair Bool Symbol))))
   PmRes
   (measure (struct bs))
   (match bs
-    (Nil (PmOk (rev names) (rev types) tps))
+    (Nil (PmOk (rev names) (rev types) tps bds (rev flags)))
     ((Cons (SList (Cons (SSym x) (Cons ty Nil))) rest)
      (match (name_of_sym x)
        (None (PmErr (quote bad_binder) (chars_of_sym x)))
        ((Some n)
         (if (is_type_sym ty)  ; `(T Type)` is a type parameter in every file
-          (read_params es sc env (append tps (list n)) rest names types)
-          (match (read_ety es sc env tps ty)
-            ((TyErr e m) (PmErr e m))
-            ((TyOk t tps1) (read_params es sc env tps1 rest (Cons n names) (Cons t types))))))))
+          (read_params es sc env checked (append tps (list n)) rest names types
+            (if (init_seen sc) (Cons (BdGhost n False) bds) bds)
+            (Cons (Pair False (quote drop)) flags))
+        (if (if (ghosts_read sc checked) (is_pred_sort ty) False)
+          (read_params es sc env checked tps rest names types (Cons (BdGhost n True) bds)
+            (Cons (Pair True (quote proof)) flags))
+          ;; an `if`, not bool_and: the test resolves the type's head, and is run only where asked
+          (if (if (ghosts_read sc checked) (prop_type (Rd es sc env bds None checked) ty) False)
+            (read_params es sc env checked tps rest names types (Cons (BdGhost n False) bds)
+              (Cons (Pair True (quote proof)) flags))
+            (match (read_ety es sc env tps ty)
+              ((TyErr e m) (PmErr e m))
+              ((TyOk t tps1)
+               (read_params es sc env checked tps1 rest (Cons n names) (Cons t types)
+                 (Cons (BdVar n (Some t)) bds)
+                 (Cons (Pair True (quote keep)) flags))))))))))
     (_ (PmErr (quote bad_binder) "a binder is (x TYPE)"))))
+;; a binder that is a proof or a predicate is read as one where the file sees Init and the
+;; typed route has read the form: a hypothesis nothing checked is no hypothesis
+(fn ghosts_read ((sc Scope) (checked Bool)) Bool (bool_and checked (init_seen sc)))
 (fn is_type_sym ((s SExpr)) Bool
   (match s
     ((SSym x) (sym_eq x (quote Type)))
@@ -884,40 +1556,44 @@
           (match (index_of n pnames 0)
             ((Some i) (RcOk (RecStruct i)))
             (None (RcErr (quote bad_measure) (append (show_name n) " is not a parameter"))))))
-       (match (read_et r (SList (Cons (SSym s) (Cons (SSym x) Nil))))
-         ((TErr e m) (RcErr e m))
-         ((TOk t) (RcOk (RecMeasure t))))))
-    ((Some m)
-     (match (read_et r m)
-       ((TErr e m2) (RcErr e m2))
-       ((TOk t) (RcOk (RecMeasure t)))))))
+       (read_measure r (SList (Cons (SSym s) (Cons (SSym x) Nil))))))
+    ((Some m) (read_measure r m))))
+;; a measure term over the parameters. One that cites a function with no program — a
+;; definition and nothing more, a derived size — is K's alone: the program's clause says so
+;; and holds no term (erasure.shard predef_rec)
+(fn read_measure ((r Rd) (m SExpr)) RcRes
+  (match (read_et r m)
+    ((TErr e m2) (if (sym_eq e (quote no_realization)) (RcOk RecLogical) (RcErr e m2)))
+    ((TOk t) (RcOk (RecMeasure t)))))
 
 ;; (fn HEAD BINDERS RET (measure M)? BODY)
-(fn read_efn ((es ESt) (sc Scope) (env CheckedEnv) (args (List SExpr))) CRes
+(fn read_efn ((es ESt) (sc Scope) (env CheckedEnv) (checked Bool) (args (List SExpr))) CRes
   (match args
     ((Cons hd (Cons (SList bs) (Cons ret rest)))
      (match (head_params hd)
        ((Pair None _) (CErr (quote bad_name) "a declared name is NAME"))
-       ((Pair (Some short) tps0) (read_fn_rest es sc env (qualify sc short) tps0 bs ret rest))))
+       ((Pair (Some short) tps0)
+        (read_fn_rest es sc env checked (qualify sc short) tps0 bs ret rest))))
     (_ (CErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
 ;; BINDERS RET (measure M)? BODY under the identity id
 (fn read_fn_rest
   ((es ESt)
    (sc Scope)
    (env CheckedEnv)
+   (checked Bool)
    (id Name)
    (tps0 (List Name))
    (bs (List SExpr))
    (ret SExpr)
    (rest (List SExpr)))
   CRes
-  (match (read_params es sc env tps0 bs Nil Nil)
+  (match (read_params es sc env checked tps0 bs Nil Nil Nil Nil)
     ((PmErr e m) (CErr e m))
-    ((PmOk pnames ptypes tps1)
+    ((PmOk pnames ptypes tps1 bds flags)
      (match (read_ety es sc env tps1 ret)
        ((TyErr e m) (CErr e m))
        ((TyOk rt tps2)
-        (let ((r (Rd es sc env (rev pnames))))
+        (let ((r (Rd es sc env bds (Some (Pair id flags)) checked)))
           (match (measure_body rest)
             ((Pair None _) (CErr (quote bad_shape) "NAME ((x TYPE)…) RET (measure M)? BODY"))
             ((Pair (Some body) meas)
@@ -927,7 +1603,7 @@
                 (match
                   (take_instances es sc (some_all (rev ptypes))
                     ;; typed with the fn's own signature in the table: a call of itself has a type
-                    (settle_body (es_add_decl es (EFn id (len tps2) ptypes rt RecNone t00)) sc
+                    (settle_body (es_add_decl es (EFn id (len tps2) ptypes rt RecNone t00)) sc env
                       (some_all (rev ptypes))
                       (Some rt)
                       t00)
@@ -938,7 +1614,7 @@
                    (match (read_rec r pnames meas)
                      ((RcErr e m) (CErr e m))
                      ((RcOk rec0)
-                      (let ((rec (settle_rec es sc (some_all (rev ptypes)) rec0)))
+                      (let ((rec (settle_rec es sc env (some_all (rev ptypes)) rec0)))
                         (match (classify_both es id (some_all (rev ptypes)) t rec)
                           ((Some (Pair e m)) (CErr e m))
                           (None
@@ -978,9 +1654,9 @@
      (match (head_params hd)
        ((Pair None _) (SgErr (quote bad_name) "a declared name is NAME"))
        ((Pair (Some short) tps0)
-        (match (read_params es sc env tps0 bs Nil Nil)
+        (match (read_params es sc env False tps0 bs Nil Nil Nil Nil)
           ((PmErr e m) (SgErr e m))
-          ((PmOk _ ptypes tps1)
+          ((PmOk _ ptypes tps1 _ _)
            (match (read_ety es sc env tps1 ret)
              ((TyErr e m) (SgErr e m))
              ((TyOk rt tps2) (SgOk (qualify sc short) (len tps2) ptypes rt))))))))
@@ -1040,50 +1716,88 @@
 ;; takes the type of the operand beside it, else the type expected of the operation, else Nat.
 ;; A file that sees no Init has no Nat, and its `/` and `mod` are the bare entries: its bodies
 ;; are left as read.
-(fn settle_body ((es ESt) (sc Scope) (tys (List (Option EType))) (exp (Option EType)) (t ETerm))
+(fn settle_body
+  ((es ESt) (sc Scope) (env CheckedEnv) (tys (List (Option EType))) (exp (Option EType)) (t ETerm))
   ETerm
-  (if (init_seen sc) (settle_ops es tys exp t) t))
-(fn settle_rec ((es ESt) (sc Scope) (tys (List (Option EType))) (rec ERec)) ERec
+  (if (init_seen sc) (settle_ops es (derived_eqs es sc env) tys exp t) t))
+(fn settle_rec ((es ESt) (sc Scope) (env CheckedEnv) (tys (List (Option EType))) (rec ERec)) ERec
   (match rec
-    ((RecMeasure m) (RecMeasure (settle_body es sc tys (Some (ETCon (nm_nat) Nil)) m)))
+    ((RecMeasure m) (RecMeasure (settle_body es sc env tys (Some (ETCon (nm_nat) Nil)) m)))
     (_ rec)))
-(fn settle_ops ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (t ETerm)) ETerm
+;; the decisions of equality derived and visible here, each at the E type of the type it was
+;; derived at (scope.shard's table keys them by the L type)
+(fn derived_eqs ((es ESt) (sc Scope) (env CheckedEnv)) (List (Pair EType Name))
+  (derived_etypes es sc env (derived_visible sc (quote eq))))
+(fn derived_etypes ((es ESt) (sc Scope) (env CheckedEnv) (ds (List (Pair Expr Name))))
+  (List (Pair EType Name))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons (Pair t p) r)
+     (match (l_to_etype (w0 env) es sc t Nil Nil)
+       ((Pair _ (Some ty)) (Cons (Pair ty p) (derived_etypes es sc env r)))
+       ((Pair _ None) (derived_etypes es sc env r))))))
+;; the decisions at one type, each once
+(fn derived_at ((dv (List (Pair EType Name))) (t EType) (acc (List Name))) (List Name)
+  (measure (struct dv))
+  (match dv
+    (Nil acc)
+    ((Cons (Pair ty p) r)
+     (derived_at r t (if (bool_and (etype_eq ty t) (bool_not (mem_name p acc))) (Cons p acc) acc)))))
+(fn settle_ops
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (t ETerm))
+  ETerm
   (measure (struct t))
   (match t
     ((EBVar _) t)
     ((ELit _) t)
-    ((ECtor c as) (ECtor c (settle_args es tys (ctor_ptypes es c exp) as)))
-    ((ECall f as) (ECall f (settle_args es tys (head_ptypes es f exp) as)))
-    ((EExt f as) (EExt f (settle_args es tys (head_ptypes es f exp) as)))
-    ((EPrim p as) (settle_prim es tys exp p as))
+    ((ECtor c as) (ECtor c (settle_args es dv tys (ctor_ptypes es c exp) as)))
+    ((ECall f as) (ECall f (settle_args es dv tys (head_ptypes es f exp) as)))
+    ((EExt f as) (EExt f (settle_args es dv tys (head_ptypes es f exp) as)))
+    ((EPrim p as) (settle_prim es dv tys exp p as))
     ((EMatch s arms)
-     (let ((s1 (settle_ops es tys None s)))
-       (EMatch s1 (settle_arms es tys (c_type es tys s1) exp arms))))
-    ((ELet rs b) (settle_let es tys exp rs b Nil))
+     (let ((s1 (settle_ops es dv tys None s)))
+       (EMatch s1 (settle_arms es dv tys (c_type es tys s1) exp arms))))
+    ((ELet rs b) (settle_let es dv tys exp rs b Nil))
     ((EIf c a b)
-     (EIf (settle_ops es tys None c) (settle_ops es tys exp a) (settle_ops es tys exp b)))
+     (EIf (settle_ops es dv tys None c) (settle_ops es dv tys exp a) (settle_ops es dv tys exp b)))
     (EAbsurd t)))
 ;; the arguments, each under its parameter's declared type where the head states one
-(fn settle_args ((es ESt) (tys (List (Option EType))) (pts (List EType)) (as (List ETerm)))
+(fn settle_args
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (pts (List EType))
+   (as (List ETerm)))
   (List ETerm)
   (measure (struct as))
   (match as
     (Nil Nil)
     ((Cons a r)
      (match pts
-       ((Cons pt pr) (Cons (settle_ops es tys (Some pt) a) (settle_args es tys pr r)))
-       (Nil (Cons (settle_ops es tys None a) (settle_args es tys Nil r)))))))
+       ((Cons pt pr) (Cons (settle_ops es dv tys (Some pt) a) (settle_args es dv tys pr r)))
+       (Nil (Cons (settle_ops es dv tys None a) (settle_args es dv tys Nil r)))))))
 (fn settle_arms
-  ((es ESt) (tys (List (Option EType))) (st (Option EType)) (exp (Option EType)) (arms (List EArm)))
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (st (Option EType))
+   (exp (Option EType))
+   (arms (List EArm)))
   (List EArm)
   (measure (struct arms))
   (match arms
     (Nil Nil)
     ((Cons (EArm p b) r)
-     (Cons (EArm p (settle_ops es (rev_onto (pat_types es st p) tys) exp b))
-       (settle_arms es tys st exp r)))))
+     (Cons (EArm p (settle_ops es dv (rev_onto (pat_types es st p) tys) exp b))
+       (settle_arms es dv tys st exp r)))))
 (fn settle_let
   ((es ESt)
+   (dv (List (Pair EType Name)))
    (tys (List (Option EType)))
    (exp (Option EType))
    (rs (List ETerm))
@@ -1092,10 +1806,10 @@
   ETerm
   (measure (struct rs))
   (match rs
-    (Nil (ELet (rev out) (settle_ops es tys exp b)))
+    (Nil (ELet (rev out) (settle_ops es dv tys exp b)))
     ((Cons v r)
-     (let ((v1 (settle_ops es tys None v)))
-       (settle_let es (Cons (c_type es tys v1) tys) exp r b (Cons v1 out))))))
+     (let ((v1 (settle_ops es dv tys None v)))
+       (settle_let es dv (Cons (c_type es tys v1) tys) exp r b (Cons v1 out))))))
 (fn head_ptypes ((es ESt) (f Name) (exp (Option EType))) (List EType)
   (match (es_find_decl es f)
     ((Some (EFn _ _ ps rt _ _)) (ptypes_under ps rt exp))
@@ -1144,7 +1858,12 @@
     ((Some (ETCon n Nil)) (name_eq n (n1 (quote Bool))))
     (_ False)))
 (fn settle_prim
-  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (as (List ETerm)))
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (p Name)
+   (as (List ETerm)))
   ETerm
   (match as
     ((Cons a (Cons b Nil))
@@ -1152,33 +1871,71 @@
        ;; under an expected Nat or Int the operation is that type's and both operands are read
        ;; at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is the integer it is
        (if (bool_or (is_nat_type exp) (is_int_type exp))
-         (EPrim (arith_entry p exp) (list (settle_ops es tys exp a) (settle_ops es tys exp b)))
-         (settle_by_operand es tys exp p a b))
-       (if (cmp_prim p) (settle_by_operand es tys exp p a b)
-       (EPrim p (settle_args es tys (prim_ptypes p) as)))))
-    (_ (EPrim p (settle_args es tys (prim_ptypes p) as)))))
+         (EPrim (arith_entry p exp) (list (settle_ops es dv tys exp a) (settle_ops es dv tys exp b)))
+         (settle_by_operand es dv tys exp p a b))
+       (if (cmp_prim p) (settle_by_operand es dv tys exp p a b)
+       (EPrim p (settle_args es dv tys (prim_ptypes p) as)))))
+    (_ (EPrim p (settle_args es dv tys (prim_ptypes p) as)))))
 ;; no numeric type expected: the operation is the first operand's type's — of the second where
 ;; the first is numerals alone — and the other operand is read at that type (elab.shard
 ;; elab_op_at). An operand whose type the declarations do not fix leaves the operation as written
 (fn settle_by_operand
-  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a ETerm) (b ETerm))
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (p Name)
+   (a ETerm)
+   (b ETerm))
   ETerm
   (if (bool_and (lit_only a) (bool_not (lit_only b)))
-    (settle_second es tys exp p a (settle_ops es tys None b))
-    (settle_first es tys exp p (settle_ops es tys None a) b)))
+    (settle_second es dv tys exp p a (settle_ops es dv tys None b))
+    (settle_first es dv tys exp p (settle_ops es dv tys None a) b)))
 (fn settle_first
-  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a1 ETerm) (b ETerm))
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (p Name)
+   (a1 ETerm)
+   (b ETerm))
   ETerm
-  (settle_at exp p (c_type es tys a1) a1 (settle_ops es tys (c_type es tys a1) b)))
+  (settle_at dv exp p (c_type es tys a1) a1 (settle_ops es dv tys (c_type es tys a1) b)))
 (fn settle_second
-  ((es ESt) (tys (List (Option EType))) (exp (Option EType)) (p Name) (a ETerm) (b1 ETerm))
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (p Name)
+   (a ETerm)
+   (b1 ETerm))
   ETerm
-  (settle_at exp p (c_type es tys b1) (settle_ops es tys (c_type es tys b1) a) b1))
-(fn settle_at ((exp (Option EType)) (p Name) (ty (Option EType)) (a2 ETerm) (b2 ETerm)) ETerm
+  (settle_at dv exp p (c_type es tys b1) (settle_ops es dv tys (c_type es tys b1) a) b1))
+(fn settle_at
+  ((dv (List (Pair EType Name)))
+   (exp (Option EType))
+   (p Name)
+   (ty (Option EType))
+   (a2 ETerm)
+   (b2 ETerm))
+  ETerm
   (if (cmp_prim p)
-    (if (is_init_bool exp) (EIf (EPrim p (list a2 b2)) (bool_true) (bool_false))
-    (EPrim p (list a2 b2)))
+    (if (is_init_bool exp) (EIf (cmp_cond dv p ty a2 b2) (bool_true) (bool_false))
+    (cmp_cond dv p ty a2 b2))
     (EPrim (arith_entry p ty) (list a2 b2))))
+;; a comparison as the test an `if` reads: the primitive at Nat and Int; `=` at Init's Bool the
+;; test over its operands, at a type with one visible derived equality the call of that
+;; decision, whose cell the `if` reads (elab.shard decision_of; erasure.shard erase_cond)
+(fn cmp_cond ((dv (List (Pair EType Name))) (p Name) (ty (Option EType)) (a ETerm) (b ETerm)) ETerm
+  (if (bool_not (name_eq p (n1 (quote =)))) (EPrim p (list a b))
+  (if (bool_or (is_nat_type ty) (is_int_type ty)) (EPrim p (list a b))
+  (if (is_init_bool ty) (bool_eq_cond a b)
+  (match ty
+    ((Some t)
+     (match (derived_at dv t Nil)
+       ((Cons proc Nil) (ECall proc (list a b)))
+       (_ (EPrim p (list a b)))))
+    (None (EPrim p (list a b))))))))
 (fn arith_entry ((p Name) (ty (Option EType))) Name
   (if (is_nat_type ty)
     (if (name_eq p (n1 (quote -))) (n2 (quote Nat) (quote sub))
@@ -1272,7 +2029,7 @@
                (append (show_name st)
                  (append " with "
                    (append (show_name op)
-                     ": the comparison primitives are the integers' — an E-first body calls the type's derived decision by name, (T.decEq a b)"))))))))
+                     ": the comparison primitives are the integers', and `=` reads at a type only where exactly one derived equality at it is visible — a (derive TYPE eq) before this form, or the decision called by name, (T.decEq a b)"))))))))
       ((Some (IfType st k))
        (Some
          (Pair (quote if_type)
@@ -1504,8 +2261,10 @@
         (match (c_type es tys a)
           (None (captured_ok es tys ar pr))
           ((Some at)
-           (if (etype_eq at p) (captured_ok es tys ar pr)
-           (Some ": a captured value's type is not the parameter's")))))))))
+           ;; numerals alone under an Int parameter are the integer they are
+           (if (bool_or (etype_eq at p) (bool_and (lit_only a) (is_int_type (Some p))))
+             (captured_ok es tys ar pr)
+             (Some ": a captured value's type is not the parameter's")))))))))
 (fn eshape_keys ((ss (List EShape))) (List (Pair Name Int))
   (measure (struct ss))
   (match ss

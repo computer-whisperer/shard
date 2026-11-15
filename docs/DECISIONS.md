@@ -128,6 +128,19 @@ entries are explained under "Measured" at the end.
 - The classifier writes the entries the erasure writes by sharing its tables (`prog.shard`:
   `realization_of`, `realization_expr`), and types a body before it writes a row's expression;
   not a second copy of the erasure's cases.
+- Which written arguments run is read off the head's declared signature — K's constant by the
+  roles the erasure reads (`erase.shard` `tele_of`), or the binders of the `fn` being read — with
+  `@` naming every binder; not a table of Init's names kept beside the registry. Not ruled.
+- A call that leaves a runtime argument implicit is refused by the classifier
+  (`unwritten_argument`) and the source writes it: `Byte.decEq` in `std/derive.shard` writes
+  `(@BitVec.toNat 8 …)`; not the classifier inferring it, which is unification. Follows rule 24.
+- The classifier passes a written proof over only in a function the typed route has read; where
+  its reading is the only one a written proof is `unchecked_proof`; not passing proofs over
+  everywhere — a body the logic never read would then take a `Fin` on a proof nothing checked
+  (pin `dif_scope`). Not ruled.
+- A function that is only a program builds and reads the registry's rows by the table the
+  erasure reads; not the classifier refusing every row's constructor so that the two routes
+  could not disagree on a representation (pin `row_e_first` stated that). Not ruled.
 - `ev` is pure: an extern is `EvStuck extern` and only the driver's run performs it; fuel is spent
   at function entry; not effects inside the evaluator.
 - A primitive answers a value, a failed guard, or a resource exhausted, decided before the work;
@@ -274,14 +287,16 @@ measurements; measure again before building on one.
 - Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
 - The two readings (`load --both`) over the 473 functions of the examples, the library, the
-  formatter and the model: 370 one program, none different, 103 the classifier does not read —
-  69 pass a function (64 of them in `examples/template/workload.shard`), 11 are a derived
-  decision's own text or a `dite`, 8 convert a one-field structure or build a `Subtype`, 8 match
-  a view's constructors, 3 compare by a derived equality, 2 have a type that names a value, 2
-  pass a function of Init by name. Before the classifier took an operator's entry from its
-  operands: 341, 10 and 122.
-- Suite: 51 entrypoints, eight at a time: ~720 s on the bootstrap (4,160 s of entrypoint time),
-  ~120 s on the binaries (580 s). Loader pins on one shared Init base, each case loaded twice: 9 s
+  formatter and the model: 402 one program, none different, 71 the classifier does not read —
+  69 pass a function (64 of them in `examples/template/workload.shard`) and 2 pass a function of
+  Init by name. Over the 326 functions of the pins: 311, 8 written differently and run alike
+  (five numeral patterns, three runs of `let`s) and 7 not read (six pass a function, one projects
+  a package). Before the classifier read what is written and erased — proofs, types, the
+  registry's rows, a derived equality: 370, none and 103. Before it took an operator's entry
+  from its operands: 341, 10 and 122. One function of the 473 left a runtime argument to the
+  elaborator (`Byte.decEq`: `BitVec.toNat`'s width, an implicit binder of type `Nat`).
+- Suite: 51 entrypoints, eight at a time, over three runs of one day: 740–870 s on the bootstrap
+  (4,850–5,100 s of entrypoint time), 135–150 s on the binaries (670–770 s). Loader pins on one shared Init base, each case loaded twice: 9 s
   native, about 150 s on the bootstrap.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
