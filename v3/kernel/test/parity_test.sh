@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Frontend parity: over every toolchain entrypoint — the four drivers,
-# the calc harness, every test — the
-# V3 reader's Prog (`load.shard --dump`, kernel/dump.shard) and the Rust
-# bootstrap's Module over the same closure (`eval dump`, rust_bootstrap/src/
-# dump.rs) printed as one canonical text, compared byte for byte. The Rust
-# loader parses the toolchain's sources for the bootstrap's runs, and the V3
-# reader's agreement is what keeps it honest.
+# Reader parity over the toolchain: for every toolchain entrypoint — the four drivers, the
+# calc harness, every test — the V3 loader's program (`load.shard --dump`, kernel/dump.shard)
+# and the Rust bootstrap's reading of the same closure (`eval dump`, rust_bootstrap/src/
+# plain/) printed as one canonical text, compared byte for byte. The bootstrap reads the
+# toolchain's sources to run them — it is what every other check here runs on — and the V3
+# loader's agreement over those sources is what keeps its reader honest. plain_test.sh is the
+# same comparison over ordinary closures, which see Init.
 #
 # The text is a PROJECTION (dump.shard's header): names print as
 # their last component and a constructor, a call and an extern print alike,
@@ -14,18 +14,14 @@
 # heads (fn, extern, sig), among the types, among the constructors, and no
 # constructor named like a head. A closure that fails the check fails the
 # gate before its dumps are compared: byte agreement over an ambiguous
-# name would say nothing about which declaration either loader resolved.
+# name would say nothing about which declaration either reader resolved.
 #
-# The bootstrap also follows a directory import to the module's view and
-# implementation, reads
-# explicit `(T Type)` binders, binds `let` sequentially, skips a file's L
-# forms and canonicalizes a dotted citation to the declared name it ends
-# in; a block below ties one S closure with a directory module and
-# a theorem beside its E forms (v3/pins/loader/view_basic).
+# The bootstrap links every view it loads to its implementation; the loader links a directory
+# it is given as a root, and checks it there. So K's directory is named to the loader beside
+# each consumer of K's view, and the two programs hold K's implementation under the view's
+# sigs alike.
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
-read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "parity_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
-INIT="--init $EXPORT --init-index $INDEX"   # Init on demand from the pinned export and its index
 a=$(mktemp); b=$(mktemp); trap 'rm -f "$a" "$b"' EXIT
 n=0; decls=0; failed=0
 s=$(date +%s)
@@ -45,10 +41,9 @@ for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/ke
           for (n in k) if (k[n]>1) printf "ctor %s x%d; ", n, k[n]
           for (n in k) if (n in h) printf "ctor and head %s; ", n }' "$a")
   [ -z "$dups" ] || { echo "parity_test: $entry: the projection is not injective — $dups"; failed=$((failed+1)); continue; }
-  # K's directory as a second root: the consumer sees the view, the directory's own check links the
-  # implementation (the K seal) — as the bootstrap's flat closure holds both
-  # K's consumers only: the bootstrap's flat closure holds K's implementation (env_empty is its), a
-  # test inside the directory sees it directly, a closure without K gets no extra declarations
+  # K's directory as a second root for K's consumers: the consumer sees the view, the directory's
+  # own check links the implementation (env_empty is its). A test inside the directory imports
+  # the private files and no view; a closure without K gets no extra root
   if grep -q '^fn env_empty ' "$a" && [ "${entry#v3/kernel/k/}" = "$entry" ]; then kroot=v3/kernel/k; else kroot=""; fi
   "$EVAL" direct v3/kernel/load.shard --root v3 --dump "$entry" $kroot > "$b" 2>&1 || { echo "parity_test: load --dump failed on $entry"; head -3 "$b"; failed=$((failed+1)); continue; }
   if cmp -s "$a" "$b"; then
@@ -57,26 +52,6 @@ for entry in v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/ke
     echo "parity_test: $entry differs"; diff "$a" "$b" | head -6; failed=$((failed+1))
   fi
 done
-# an S closure with a directory module (the view's theorem and sig forms
-# beside the implementation's E forms; a dotted constructor citation)
-n=$((n+1))
-root=v3/pins/loader/view_basic
-if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
-   && "$EVAL" direct v3/kernel/load.shard --root "$root" $INIT --dump "$root/main.shard" "$root/lib" > "$b" 2>&1; then
-  if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
-else
-  echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
-fi
-# an S closure with records: the expansion — the type, the accessors and the
-# updaters, make and with rewritten — tied between the two readers
-n=$((n+1))
-root=v3/pins/loader/record_basic
-if "$EVAL" dump "$root/main.shard" > "$a" 2>&1 \
-   && "$EVAL" direct v3/kernel/load.shard --root "$root" $INIT --dump "$root/main.shard" > "$b" 2>&1; then
-  if cmp -s "$a" "$b"; then decls=$((decls + $(wc -l < "$a"))); else echo "parity_test: $root differs"; diff "$a" "$b" | head -6; failed=$((failed+1)); fi
-else
-  echo "parity_test: a dump failed on $root"; head -3 "$a" "$b"; failed=$((failed+1))
-fi
 e=$(date +%s)
 echo "parity_test: $n closures, $decls declarations, $failed differ, in $((e-s)) s"
 [ "$failed" -eq 0 ] && echo "parity_test: byte-identical, every closure's projection injective"

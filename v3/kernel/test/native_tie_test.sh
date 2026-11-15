@@ -20,7 +20,7 @@
 # the bootstrap does and failing loudly on a missing binary and a stale stamp; (2) the discriminating
 # cases v3/pins/emit/* built fresh and tied, the refused_* cases refused with their first
 # line's message, an ordinary case (at its root, no kernel/ directory) tied against the V3
-# driver's run rather than the bootstrap's flat read; (2b) calc's main, a program over
+# driver's run, a toolchain case against the bootstrap's own; (2b) calc's main, a program over
 # Init's types, built and tied to the driver's run over the differential's inputs; (2c)
 # the back end's own text — the loader's emit of one closure under both engines, every file
 # of it byte for byte; (3) the loader over pins' cases (a clean load, a refusal, a read error, a
@@ -141,9 +141,10 @@ for d in v3/pins/emit/*/; do
   checks=$((checks+1))
   if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
-    # an ordinary case's reference is the V3 driver's run: the bootstrap's flat
-    # read dispatches by bare name — an unknown head an effect, `-` at Nat the integer's
-    if [ "$law" = 1 ]; then run_into "$OUT/pin_$c/a" "$BOOT" direct v3/kernel/load.shard --root "$d" $INIT --run main.main "$f"; else run_into "$OUT/pin_$c/a" "$BOOT" direct "$f"; fi
+    # an ordinary case's reference is the V3 driver's run (the bootstrap reads a file that sees
+    # Init by the loader's table of facts: the loader stands in that reference either way); a
+    # toolchain case's is the bootstrap's own, the case's directory its root
+    if [ "$law" = 1 ]; then run_into "$OUT/pin_$c/a" "$BOOT" direct v3/kernel/load.shard --root "$d" $INIT --run main.main "$f"; else run_into "$OUT/pin_$c/a" "$BOOT" direct --root "$d" "$f"; fi
     run_into "$OUT/pin_$c/b" "$OUT/bin_$c"
     compare "pin $c" "$OUT/pin_$c/a" "$OUT/pin_$c/b" || bad "pin $c differs"
   else

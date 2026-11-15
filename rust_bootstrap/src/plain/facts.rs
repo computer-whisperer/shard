@@ -63,7 +63,7 @@ impl Fact {
 
 pub fn parse(src: &str) -> Result<HashMap<Name, Fact>, String> {
     let mut out = HashMap::new();
-    for v in crate::load::parse_all(src).map_err(|e| format!("the facts: {e}"))? {
+    for v in super::record::parse_all(src).map_err(|e| format!("the facts: {e}"))? {
         let (n, f) = fact(&v).ok_or_else(|| format!("the facts: not a fact: {v}"))?;
         out.insert(n, f);
     }

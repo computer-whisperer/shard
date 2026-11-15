@@ -152,6 +152,20 @@ pub fn dump(t: &Tables) -> String {
     out
 }
 
+/// The runtime's cells go to the evaluator by the names the runtime gives them: a
+/// constructor whose last component is `True`, `False`, `Nil`, `Cons`, `None`, `Some` or
+/// `Pair` is that cell, whichever module declares its type — the toolchain's prelude, or a
+/// file's own `Bool` and `List` (docs/KERNEL.md, the back end's refusals: such a constructor
+/// carries the cell's tag in a native binary). The evaluator's comparisons return `True` and
+/// `False`, its symbol bridge and the host speak `Cons` and `Nil` cells. Every other
+/// constructor, Init's among them, goes by its identity.
+fn cell(id: &str) -> String {
+    match last_component(id) {
+        c @ ("True" | "False" | "Nil" | "Cons" | "None" | "Some" | "Pair") => c.to_string(),
+        _ => id.to_string(),
+    }
+}
+
 fn ast_ty(t: &ETy) -> ast::Type {
     match t {
         ETy::Var(i) => ast::Type::TVar(format!("T{i}")),
@@ -164,9 +178,9 @@ fn ast_lit(l: &Lit) -> ast::Expr {
         Lit::Nat(k) | Lit::Int(k) => ast::Expr::IntLit(k.clone()),
         Lit::Sym(s) => ast::Expr::SymLit(s.clone()),
         Lit::Str(nl, cs, bs) => {
-            let mut acc = ast::Expr::Ctor(nl.clone(), Vec::new());
+            let mut acc = ast::Expr::Ctor(cell(nl), Vec::new());
             for b in bs.iter().rev() {
-                acc = ast::Expr::Ctor(cs.clone(), vec![ast::Expr::IntLit((*b).into()), acc]);
+                acc = ast::Expr::Ctor(cell(cs), vec![ast::Expr::IntLit((*b).into()), acc]);
             }
             acc
         }
@@ -176,7 +190,7 @@ fn ast_lit(l: &Lit) -> ast::Expr {
 fn ast_pat(p: &Pat) -> ast::Pat {
     match p {
         Pat::Var => ast::Pat::PVar,
-        Pat::Ctor(n, subs) => ast::Pat::PCtor(n.clone(), subs.iter().map(ast_pat).collect()),
+        Pat::Ctor(n, subs) => ast::Pat::PCtor(cell(n), subs.iter().map(ast_pat).collect()),
         Pat::Lit(Lit::Nat(k)) | Pat::Lit(Lit::Int(k)) => ast::Pat::PInt(k.clone()),
         Pat::Lit(Lit::Sym(s)) => ast::Pat::PSym(s.clone()),
         // the reader gives a pattern no string
@@ -189,7 +203,7 @@ fn ast_term(tm: &Tm) -> ast::Expr {
     match tm {
         Tm::BVar(i) => ast::Expr::BVar(*i as u32),
         Tm::Lit(l) => ast_lit(l),
-        Tm::Ctor(n, args) => ast::Expr::Ctor(n.clone(), all(args)),
+        Tm::Ctor(n, args) => ast::Expr::Ctor(cell(n), all(args)),
         // a call's head is its identity, a primitive's its table entry's name, an extern's the
         // name the host is asked by
         Tm::Call(n, args) | Tm::Ext(n, args) | Tm::Prim(n, args) => ast::Expr::Call(n.clone(), all(args)),
@@ -216,7 +230,7 @@ pub fn module(t: &Tables) -> ast::Module {
                 params: (0..*nparams).map(|i| format!("T{i}")).collect(),
                 ctors: ctors
                     .iter()
-                    .map(|(c, fts)| ast::CtorDef { name: c.clone(), fields: fts.iter().map(ast_ty).collect() })
+                    .map(|(c, fts)| ast::CtorDef { name: cell(c), fields: fts.iter().map(ast_ty).collect() })
                     .collect(),
             }),
             Decl::Fn { name, params, ret, body, .. } => m.fns.push(ast::FnDef {
@@ -235,6 +249,27 @@ pub fn module(t: &Tables) -> ast::Module {
         }
     }
     m
+}
+
+/// The externs declared over Init's types — `Prod`, `List`, `Option`, `Bool`, `ByteArray` by
+/// their identities — which the host answers in Init's cells; any other it answers in the
+/// runtime's (the toolchain's `v3/kernel/host.shard` over the prelude).
+pub fn externs_over_init(t: &Tables) -> std::collections::HashSet<String> {
+    fn init(t: &ETy) -> bool {
+        match t {
+            ETy::Var(_) => false,
+            ETy::Con(n, args) => matches!(n.as_str(), "Prod" | "List" | "Option" | "Bool" | "ByteArray") || args.iter().any(init),
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    for d in t.decls.values() {
+        if let Decl::Extern { name, params, ret, .. } = d {
+            if params.iter().any(init) || init(ret) {
+                out.insert(name.clone());
+            }
+        }
+    }
+    out
 }
 
 /// What a run of the closure starts from: its first root module's `main`, and the

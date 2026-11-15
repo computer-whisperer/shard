@@ -133,9 +133,13 @@ pub fn prim_find(n: &str) -> Option<(u32, usize)> {
     PRIMS.iter().find(|(p, _, _)| *p == n).map(|(_, c, k)| (*c, *k))
 }
 
-/// The first candidate the table knows.
-fn prim_of(cands: &[Name]) -> Option<(Name, usize)> {
-    cands.iter().find_map(|c| prim_find(c).map(|(_, k)| (c.clone(), k)))
+/// The first of the citation's candidates the table knows.
+fn prim_of(sc: &Scope, n: &str) -> Option<(Name, usize)> {
+    PRIMS
+        .iter()
+        .filter_map(|(p, _, k)| sc.rank(p, n).map(|r| (r, *p, *k)))
+        .min_by_key(|(r, _, _)| *r)
+        .map(|(_, p, k)| (p.to_string(), k))
 }
 
 /// The registry's rows: a resolved operation of Init → the table's entry.
@@ -700,7 +704,7 @@ fn read_esym(cx: &Cx, r: &Rd, x: &str) -> R<Tm> {
         [(id, EInfo::Fn(0))] | [(id, EInfo::Sig(0))] => Ok(Tm::Call(id.clone(), vec![])),
         [(id, _)] => unread("function_value", id.clone()),
         [] => {
-            if prim_of(&cx.sc.candidates(x)).is_some() {
+            if prim_of(cx.sc, x).is_some() {
                 unread("function_value", x)
             } else if cx.t.init_const(cx.sc, x, "Nat.zero") {
                 Ok(Tm::Lit(Lit::Nat(0.into())))
@@ -730,7 +734,7 @@ fn read_eapp(cx: &Cx, r: &Rd, h0: &str, args: &[&Value]) -> R<Tm> {
         [(id, EInfo::Template)] => unread("template", format!("{id}: a call of a template takes an instance")),
         [(id, _)] => unread("bad_head", format!("{id} is a type")),
         [] => {
-            if let Some((id, k)) = prim_of(&cx.sc.candidates(h)) {
+            if let Some((id, k)) = prim_of(cx.sc, h) {
                 return read_prim_head(cx, r, &id, k, args);
             }
             if let Some(res) = init_row(cx, r, h, args) {

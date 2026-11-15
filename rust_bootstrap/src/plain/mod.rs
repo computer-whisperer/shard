@@ -1,22 +1,30 @@
-//! The plain reader: an ordinary closure read as the V3 loader's plain route
-//! reads it (`v3/kernel/classify.shard`) — every name an identity (the module
-//! path plus the declared name; an imported constant of Init its own name),
-//! a citation resolved through the file's scope (`use`, the file's own
-//! types, the modules its imports make visible), a body read with the types
-//! its binders state: which written arguments run, an operator's entry by
-//! its operands' type, a proof and a type passed over.
+//! The reader: a closure read as the V3 loader's plain route reads it
+//! (`v3/kernel/classify.shard`) — every name an identity (the module path
+//! plus the declared name; an imported constant of Init its own name), a
+//! citation resolved through the file's scope (`use`, the file's own types,
+//! the modules its imports make visible), a body read with the types its
+//! binders state: which written arguments run, an operator's entry by its
+//! operands' type, a proof and a type passed over. The toolchain's own
+//! sources and an ordinary program are read alike; what differs follows from
+//! whether a file sees Init.
 //!
 //! What the classifier asks K about a constant of Init — its kind, its
 //! binders' roles, an inductive's constructors — this reader takes from a
 //! table the loader prints (`load.shard --facts`, `v3/kernel/facts.shard`):
 //! it has no K.
 //!
-//! It reads; it does not refuse. Exhaustiveness, the view's privacy, a proof
-//! nothing checked are the loader's refusals, made where the same sources
-//! are loaded by it. A form this reader has no reading for is recorded
-//! (`Tables::unread`) and its program left out.
+//! A directory module is its view; every view loaded is then linked to its
+//! implementation, whose `fn`s and `type`s take the places of the view's
+//! `sig`s (`Loader::link_views`), so the closure runs.
+//!
+//! It reads; it does not refuse. Exhaustiveness, the view's privacy, the
+//! match of an implementation against its view, a proof nothing checked are
+//! the loader's refusals, made where the same sources are loaded by it. A
+//! form this reader has no reading for is recorded (`Tables::unread`) and its
+//! program left out.
 //!
 //!   mod.rs     the data, the tables, resolution, the closure's files
+//!   record.rs  the host parser's entry, records expanded
 //!   facts.rs   the table of Init's constants
 //!   read.rs    types, terms, patterns, declarations (classify.shard's read_*)
 //!   settle.rs  static types, the operators by their operands' types, the rows
@@ -30,6 +38,7 @@ use lexpr::Value;
 pub mod facts;
 pub mod out;
 pub mod read;
+pub mod record;
 pub mod settle;
 
 use facts::{Fact, Flag, Role};
@@ -193,6 +202,36 @@ impl Scope {
         out
     }
 
+    /// Where among the candidates of the citation `n` the name `id` stands, if it is one
+    /// of them: a rank that orders names as `candidates(n)` does, found without building
+    /// them (a toolchain file opens fifty prefixes, and a body cites thousands of names).
+    pub fn rank(&self, id: &str, n: &str) -> Option<usize> {
+        let pre = if id == n {
+            Some("")
+        } else if id.len() > n.len() + 1 && id.ends_with(n) && id.as_bytes()[id.len() - n.len() - 1] == b'.' {
+            Some(&id[..id.len() - n.len() - 1])
+        } else {
+            None
+        };
+        if let Some(pre) = pre {
+            if !pre.is_empty() && pre == self.ident {
+                return Some(0);
+            }
+            let first = first_component(n);
+            for (i, o) in self.opened.iter().enumerate() {
+                match o {
+                    Open::All(p) if p == pre => return Some(1 + i),
+                    Open::Some(p, ms) if p == pre && ms.iter().any(|m| m == first) => return Some(1 + i),
+                    _ => {}
+                }
+            }
+        }
+        if self.init && init_prefixed(n) && id == drop_init(n) {
+            return Some(1 + self.opened.len());
+        }
+        if id == n { Some(2 + self.opened.len()) } else { None }
+    }
+
     /// The toolchain's own sources: a string literal there is the List in
     /// scope's chain of cells, not Init's String.
     pub fn toolchain(&self) -> bool {
@@ -252,6 +291,9 @@ pub enum Res {
 pub struct Tables {
     /// identity → the module it is registered under, its kind
     pub info: HashMap<Name, (Name, EInfo)>,
+    /// the registered identities by their last component: a citation's candidates all
+    /// end in the citation's
+    by_last: HashMap<String, Vec<Name>>,
     pub decls: HashMap<Name, Decl>,
     /// the declarations in the order they were reached
     pub order: Vec<Name>,
@@ -261,13 +303,32 @@ pub struct Tables {
     /// Init's inductives that are E types and no program form has cited yet
     init_views: HashMap<Name, (usize, Vec<(Name, Vec<ETy>)>)>,
     pub natives: HashMap<Name, Native>,
+    /// a view's parameter an implementation took the identity of: the view's module, which
+    /// a consumer sees where it does not see the implementation's
+    param_of: HashMap<Name, Name>,
     /// what was left unread: the identity (or the file), the reason
     pub unread: Vec<(Name, Unread)>,
 }
 
 impl Tables {
+    /// An identity registered under its module. A `fn` or a `type` registered where a view's
+    /// `sig` stands takes its place (etable.shard es_merge's substitution): the identity is
+    /// then citable from the view's module as from the implementation's.
     pub fn register(&mut self, id: &str, module: &str, info: EInfo) {
+        if let Some((m, EInfo::Sig(_) | EInfo::SigType(_))) = self.info.get(id) {
+            if m != module {
+                self.param_of.insert(id.to_string(), m.clone());
+            }
+        }
+        if !self.info.contains_key(id) {
+            self.by_last.entry(last_component(id).to_string()).or_default().push(id.to_string());
+        }
         self.info.insert(id.to_string(), (module.to_string(), info));
+    }
+
+    /// Does the scope see the identity registered under `module`?
+    fn in_sight(&self, sc: &Scope, id: &str, module: &str) -> bool {
+        sc.sees(module) || self.param_of.get(id).is_some_and(|v| sc.sees(v))
     }
 
     pub fn add_decl(&mut self, d: Decl) {
@@ -337,17 +398,21 @@ impl Tables {
         self.info.get(id).map(|(m, _)| m)
     }
 
-    /// etable.shard's eresolve: the E identities a citation names in this scope.
+    /// etable.shard's eresolve: the E identities a citation names in this scope, in the
+    /// order of the scope's candidates.
     pub fn e_hits(&self, sc: &Scope, n: &str) -> Vec<(Name, &EInfo)> {
-        let mut out: Vec<(Name, &EInfo)> = Vec::new();
-        for k in sc.candidates(n) {
-            if let Some((m, i)) = self.info.get(&k) {
-                if sc.sees(m) && !out.iter().any(|(id, _)| *id == k) {
-                    out.push((k, i));
+        let Some(ids) = self.by_last.get(last_component(n)) else { return Vec::new() };
+        let mut ranked: Vec<(usize, &Name, &EInfo)> = Vec::new();
+        for id in ids {
+            let Some(r) = sc.rank(id, n) else { continue };
+            if let Some((m, i)) = self.info.get(id) {
+                if self.in_sight(sc, id, m) {
+                    ranked.push((r, id, i));
                 }
             }
         }
-        out
+        ranked.sort_by_key(|(r, _, _)| *r);
+        ranked.into_iter().map(|(_, id, i)| (id.clone(), i)).collect()
     }
 
     /// The hits a term position sees: never a type.
@@ -379,7 +444,7 @@ impl Tables {
             }
         }
         if let Some((m, _)) = self.info.get(k) {
-            if m != "Init" && sc.sees(m) {
+            if m != "Init" && self.in_sight(sc, k, m) {
                 return true;
             }
         }
@@ -523,11 +588,19 @@ struct ModInfo {
     init: bool,
 }
 
+/// A view loaded and not yet linked: its directory, and the scope its last form was read in,
+/// which its implementation's forms stand after.
+struct Unlinked {
+    dir: Vec<String>,
+    scope: Scope,
+}
+
 pub struct Loader {
     root: PathBuf,
     pub t: Tables,
     mods: HashMap<Name, ModInfo>,
     stack: Vec<Name>,
+    unlinked: Vec<Unlinked>,
     /// the modules of the files named on the command line, in order
     pub roots: Vec<Name>,
 }
@@ -692,7 +765,7 @@ impl Loader {
                 t.init_views.insert(n.clone(), (*np, ctors.clone()));
             }
         }
-        Loader { root: root.to_path_buf(), t, mods: HashMap::new(), stack: Vec::new(), roots: Vec::new() }
+        Loader { root: root.to_path_buf(), t, mods: HashMap::new(), stack: Vec::new(), unlinked: Vec::new(), roots: Vec::new() }
     }
 
     /// A file named on the command line: under the root, spelled from the same base.
@@ -756,6 +829,15 @@ impl Loader {
         if self.path_of(&a).is_file() || self.path_of(&b).is_file() { dir.join(".") } else { mp.to_string() }
     }
 
+    /// A file's forms, its records expanded.
+    fn read_forms(&self, rel: &[String]) -> Result<Vec<Value>, LoadError> {
+        let path = self.path_of(rel);
+        let src = std::fs::read_to_string(&path).map_err(|e| LoadError(format!("reading {}: {}", path.display(), e)))?;
+        record::parse_all(&prelex(&src))
+            .and_then(record::expand)
+            .map_err(|e| LoadError(format!("{}: {}", path.display(), e)))
+    }
+
     fn load_file_module(&mut self, rel: &[String], mp: &str, view: bool) -> Result<(), LoadError> {
         if self.mods.contains_key(mp) {
             return Ok(());
@@ -763,22 +845,49 @@ impl Loader {
         if self.stack.iter().any(|m| m == mp) {
             return err(format!("import cycle through {mp}"));
         }
-        let path = self.path_of(rel);
-        let src = std::fs::read_to_string(&path).map_err(|e| LoadError(format!("reading {}: {}", path.display(), e)))?;
-        let forms = crate::load::expand_records(
-            crate::load::parse_all(&prelex(&src)).map_err(|e| LoadError(format!("{}: {}", path.display(), e)))?,
-        )
-        .map_err(|e| LoadError(format!("{}: {}", path.display(), e)))?;
+        let forms = self.read_forms(rel)?;
         let ident = self.sealed_ident(rel, mp, view);
+        let sc = Scope { ident, tag: mp.to_string(), opened: Vec::new(), vis: vec![mp.to_string()], init: false };
         self.stack.push(mp.to_string());
-        let r = self.load_forms(rel, mp, &ident, &forms);
+        let r = self.load_forms(rel, sc, &forms);
         self.stack.pop();
-        r
+        let sc = r?;
+        self.mods.insert(mp.to_string(), ModInfo { closure: sc.vis.clone(), init: sc.init });
+        if view {
+            // DIR/mod.req.shard, or the dir form DIR/mod.req/mod.req.shard
+            let up = if rel.len() >= 2 && rel[rel.len() - 2] == "mod.req" { 2 } else { 1 };
+            self.unlinked.push(Unlinked { dir: rel[..rel.len() - up].to_vec(), scope: sc });
+        }
+        Ok(())
     }
 
-    fn load_forms(&mut self, rel: &[String], mp: &str, ident: &str, forms: &[Value]) -> Result<(), LoadError> {
+    /// Every view loaded is linked: its implementation `DIR/BASE.shard` is read where the
+    /// view's forms end — the view's module, its scope — and each `fn` and `type` of the
+    /// directory that a `sig` of the view names takes the sig's place (docs/LANGUAGE.md
+    /// "Checking an implementation": the merge of the fork's programs). The loader links a
+    /// directory it is given as a root, and checks it there; this reader links every view it
+    /// loaded, and checks nothing. An implementation may bring further views.
+    pub fn link_views(&mut self) -> Result<(), LoadError> {
+        while !self.unlinked.is_empty() {
+            let u = self.unlinked.remove(0);
+            let Some(base) = u.dir.last() else { continue };
+            let mut rel = u.dir.clone();
+            rel.push(format!("{base}.shard"));
+            if !self.path_of(&rel).is_file() {
+                self.t.unread.push((u.scope.tag.clone(), Unread("missing_implementation", rel.join("/"))));
+                continue;
+            }
+            let forms = self.read_forms(&rel)?;
+            self.load_forms(&rel, u.scope, &forms)?;
+        }
+        Ok(())
+    }
+
+    /// A file's forms read from the scope given: a module's from its own, empty; an
+    /// implementation's from its view's. The scope after the last form.
+    fn load_forms(&mut self, rel: &[String], mut sc: Scope, forms: &[Value]) -> Result<Scope, LoadError> {
         use std::rc::Rc;
-        let mut sc = Scope { ident: ident.to_string(), tag: mp.to_string(), opened: Vec::new(), vis: vec![mp.to_string()], init: false };
+        let mp = sc.tag.clone();
         // every `type` of the file opens its constructors for the whole file
         for f in forms {
             if head_sym(f) == Some("type") {
@@ -863,13 +972,12 @@ impl Loader {
         for (s, f) in &scoped {
             read::body(&mut self.t, s, f);
         }
-        self.mods.insert(mp.to_string(), ModInfo { closure: sc.vis.clone(), init: sc.init });
-        Ok(())
+        Ok(sc)
     }
 }
 
-/// An ordinary closure loaded: the root files under `root`, read by the
-/// facts given for Init.
+/// A closure loaded: the root files under `root`, read by the facts given
+/// for Init, every view linked.
 pub fn load(root: &Path, facts_file: Option<&Path>, files: &[PathBuf]) -> Result<Loader, LoadError> {
     let facts = match facts_file {
         Some(p) => {
@@ -882,5 +990,6 @@ pub fn load(root: &Path, facts_file: Option<&Path>, files: &[PathBuf]) -> Result
     for f in files {
         l.load_root_file(f)?;
     }
+    l.link_views()?;
     Ok(l)
 }

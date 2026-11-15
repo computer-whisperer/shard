@@ -161,20 +161,45 @@ entries are explained under "Measured" at the end.
 - An instance is named by the classifier and read by the erasure alone; not the classifier
   reading a template's source at an instance's shapes, which nothing needs until something
   must run a template's instance without the elaborator (`OPEN.md` §4).
-- The Rust evaluator reads an ordinary closure by the classifier's reading written again in
-  Rust, function by function, and takes what that reading asks K about a constant of Init from
-  a table the loader prints from K (`facts.shard`, `load --facts`); not K or the export read in
+- The Rust evaluator reads a closure by the classifier's reading written again in Rust,
+  function by function, and takes what that reading asks K about a constant of Init from a
+  table the loader prints from K (`facts.shard`, `load --facts`); not K or the export read in
   Rust, and not the roles written by an author in the source. The table is made when a test
-  runs and no toolchain file is read by it; a table kept in the tree for the toolchain's own
-  closure would be something the bootstrap believes. Not ruled.
-- The Rust reader refuses nothing: exhaustiveness, a view's privacy, a proof's reader stay the
-  loader's, where the same files are loaded; not the language's refusals stated twice. Not
-  ruled.
+  runs; the toolchain's own files see no Init and are read without one. A table kept in the
+  tree for the toolchain's own closure, once it imports Init, would be something the bootstrap
+  believes. Not ruled.
+- The Rust evaluator has that one reader, for the toolchain's sources and for any program; not
+  a second, flat one for the toolchain (one name per declaration, a citation resolved by its
+  suffix), which let a toolchain file be something no ordinary file is. The reader that reads K
+  is 3,600 lines where the flat one was 900 — the trust base's engine grew by what reads names,
+  modules and views — and `parity_test.sh` holds it to the loader's program on every toolchain
+  root. Not ruled beyond the direction (`LAW.md` §6, 10).
+- The Rust reader links every view it loads to its implementation; not only a directory named
+  as a root, the loader's rule, which is where the implementation is checked: the Rust side
+  checks nothing and a run needs the link. A comparison with the loader names the directories
+  to it. Not ruled.
+- The evaluator's comparisons, its symbol bridge and the host build the cells `True False Nil
+  Cons None Some Pair`, and the reader hands it every constructor so named under that name,
+  whichever module declares its type; not those cells by the prelude's identities
+  (`kernel.prelude.Bool.True`), the rule of the loader's own evaluator. A native binary names
+  its cells the same way, and the sixteen back-end pins that declare their own `Bool` and
+  `List` run on the bootstrap and natively and are stuck under `ev`; by identity they would
+  each need the prelude as a file. Not ruled.
+- `eval` takes its package root as `--root DIR` and reads `v3` where none is named, as
+  `v3/build.sh` does; not the root inferred from the file's path, and not a root required on
+  every one of the suite's hundred invocations. Not ruled.
+- `load --facts` prints, with the load's own table, that of each implementation it linked; not
+  the main line's alone: the fork that checks an implementation is dropped with what it fetched
+  of Init, and a closure with a directory module would be read by half a table.
+- The Rust reader refuses nothing: exhaustiveness, a view's privacy, the match of an
+  implementation against its view, a proof's reader stay the loader's, where the same files
+  are loaded; not the language's refusals stated twice. Not ruled.
 - Three functions of Init the library ran by their derived view have their bodies written out
   — `BitVec.toNat`, `UInt8.toNat`, `Option.getD` (`std/bytes.shard`, `std/list.shard`): K
-  proves each and the programs are the same text; not the view's program handed to the Rust
-  reader in the table, a program no source writes. `(realize NAME (view))` stays in the
-  language, and the Rust reader does not read it. Not ruled.
+  proves each and the programs are the same text; not the library put back on the view with
+  the view's program handed to the Rust reader in the table, a program no source writes, and
+  not the form retired. `(realize NAME (view))` stays in the language, and the Rust reader does
+  not read it.
 - `ev` is pure: an extern is `EvStuck extern` and only the driver's run performs it; fuel is spent
   at function entry; not effects inside the evaluator.
 - A primitive answers a value, a failed guard, or a resource exhausted, decided before the work;
@@ -329,14 +354,17 @@ measurements; measure again before building on one.
   erased; 473 once it read a function as an argument. One function of the 473 left a runtime
   argument to the elaborator (`Byte.decEq`: `BitVec.toNat`'s width, an implicit binder of
   type `Nat`). No load of the 545 roots changed with the last step.
-- The Rust evaluator's plain reader over the same 59 roots, against the loader's program (the
-  canonical text, 775 lines: 704 functions, 62 types, 6 externs, 3 view signatures): 503 lines
-  the same, none different, 272 functions not read — 80 instances, 65 lifted lambdas and the
-  76 functions that call a template; the 43 functions derivations write and 8 that call one.
-  48 of the 59 roots read whole, the model's 174 declarations and the formatter's sources
-  among them. calc's closure, 59 declarations: read and run over five inputs in 4 ms, where
-  the loader's load of it takes 39 s on the bootstrap. A toolchain closure without K's
-  directory (357 and 349 declarations) reads to the flat reader's text.
+- The Rust evaluator's reader over the same 59 roots, against the loader's program (the
+  canonical text, the formatter's two directories linked on both sides; 773 lines: 705
+  functions, 62 types, 6 externs): 501 lines the same, none different, 272 functions not read
+  — 80 instances, 65 lifted lambdas and the 76 functions that call a template; the 43 functions
+  derivations write and 8 that call one. 51 of the 59 roots read whole, the model's 174
+  declarations and the formatter's binary, 173, among them. calc's closure, 59 declarations:
+  read and run over five inputs in 4 ms, where the loader's load of it takes 39 s on the
+  bootstrap. Over the 29 toolchain roots it reads every line the flat reader it replaced read,
+  byte for byte (9,175 declarations for the loader's own closure, K's 5,365 linked under its
+  view), and the 24 test programs among them print the same on it. It reads the loader's
+  closure in 0.19 s where the flat reader took 0.42 s.
 - Suite: 51 entrypoints, eight at a time, over three runs of one day: 740–870 s on the bootstrap
   (4,850–5,100 s of entrypoint time), 135–150 s on the binaries (670–770 s). Loader pins on one shared Init base, each case loaded twice: 9 s
   native, about 150 s on the bootstrap.

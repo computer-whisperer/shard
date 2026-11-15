@@ -440,10 +440,10 @@ fn intern(s: &str) -> u32 {
 }
 
 thread_local! {
-    // What an `if` reads of a cell that is not the prelude's True or False: by name id, 1
+    // What an `if` reads of a cell that is not the runtime's True or False: by name id, 1
     // for the first constructor of a two-constructor type, 2 for the second, 0 for any other
-    // name. The program's two-constructor types (`lower_program`), and the cells the plain
-    // reader writes by name whether or not the closure declares their types.
+    // name. The program's two-constructor types (`lower_program`), and Init's cells, which
+    // the reader writes by name whether or not the closure declares their types.
     static IF_ORD: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 

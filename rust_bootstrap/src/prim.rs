@@ -3,9 +3,11 @@
 //! `apply_other`: its fast arms first, then this table. A name or an
 //! argument shape the table does not cover leaves the call stuck.
 //!
-//! The comparisons (`=`, `sym_eq`, `<`, `<=`) return the constructors
-//! `True` / `False` by name: the evaluator is tied to the declaration
-//! `(type Bool (False) (True))` of `v3/kernel/prelude.shard`.
+//! The comparisons (`=`, `sym_eq`, `<`, `<=`) return the cells `True` /
+//! `False`, and the symbol bridge speaks `Cons` / `Nil` cells — the names
+//! the runtime gives its cells, under which the reader hands the evaluator
+//! the constructors so named (`plain/out.rs`): those of
+//! `v3/kernel/prelude.shard`, or a file's own.
 
 use num_traits::{Signed, ToPrimitive, Zero};
 
@@ -56,7 +58,7 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
         // Init's spellings (v3/kernel/prog.shard's entries 18–38, as v3/kernel/ev.shard
-        // applies them): what the plain reader writes for an ordinary file's operators.
+        // applies them): what the reader writes for the operators of a file that sees Init.
         // Int's divisions are total — a zero divisor gives 0, a remainder by zero the
         // dividend.
         ("Int.tdiv", [IntLit(a), IntLit(b)]) => Some(IntLit(if b.is_zero() { Int::zero() } else { a / b })),

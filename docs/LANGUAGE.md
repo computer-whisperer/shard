@@ -1575,7 +1575,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
-| `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format). The Rust evaluator reads an ordinary closure by that table (`eval dump --root DIR --facts OUT FILE`) |
+| `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads a closure that sees Init by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |

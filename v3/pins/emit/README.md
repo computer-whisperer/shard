@@ -11,12 +11,12 @@ authority and the comparison is the verdict.
 A case is one of two kinds by where its file lives, and a name marks a refusal:
 
 - **A toolchain case** (`CASE/kernel/main.shard`): a file written as the system's own sources
-  are — no Init, its own `List`, `Bool` and `World`. Its reference is the bootstrap's
-  `eval direct` on the file.
+  are — no Init, its own `List`, `Bool` and `World`, whose constructors the runtime's cells
+  are named by. Its reference is the bootstrap's `eval direct --root CASE` on the file.
 - **An ordinary case** (`CASE/main.shard`, no `kernel/` directory): a program that imports Init.
   The tie loads it with Init and takes the V3 driver's run (`load.shard --run main.main`) as its
-  reference, never the bootstrap's flat read, which dispatches by bare name — an unknown head an
-  effect, `-` at `Nat` the integer's.
+  reference: the bootstrap reads a file that sees Init by the loader's table of facts, so the
+  loader stands in the reference either way.
 - **A `refused_*` case** states the back end's refusal in its first line,
   `;; emit refused: MESSAGE`. The tie expects the build to fail with `EMIT: MESSAGE` in place of
   a binary; nothing is run.

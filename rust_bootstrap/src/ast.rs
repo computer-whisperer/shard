@@ -1,7 +1,7 @@
 //! The program AST: what the reader builds and the evaluator runs.
 //! `v3/kernel/prog.shard` has the same shape with every name resolved to an
 //! identity; `eval dump` and `load.shard --dump` print the two as one text
-//! (`dump.rs`).
+//! (`plain/out.rs`).
 //!
 //! Locally nameless: `BVar(idx)` is a bound variable as a 0-based de Bruijn
 //! index, 0 = innermost; `FVar(name)` is a bare identifier that names

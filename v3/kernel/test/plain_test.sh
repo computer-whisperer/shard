@@ -1,20 +1,31 @@
 #!/usr/bin/env bash
-# The Rust bootstrap's plain reader (rust_bootstrap/src/plain/) against the loader: an
-# ordinary closure — its files modules under the root, its names identities, Init's types its
-# data — read by the Rust evaluator with no K, from the source and the facts about Init's
-# constants the loader prints for it (`load.shard --facts OUT`, kernel/facts.shard), must be
+# The Rust bootstrap's reader (rust_bootstrap/src/plain/) against the loader, over ordinary
+# closures: one whose files are modules under a root, whose names are identities and whose data
+# is Init's, read by the Rust evaluator with no K — from the source and the facts about Init's
+# constants the loader prints for it (`load.shard --facts OUT`, kernel/facts.shard) — must be
 # the program the loader reads: the two dumps (`load.shard --dump`, `eval dump --root`) are one
-# canonical text (kernel/dump.shard's header).
+# canonical text (kernel/dump.shard's header). parity_test.sh is the same comparison over the
+# toolchain's own closures, which see no Init and need no facts.
 #
 #   complete  a closure the reader reads whole (it exits 0): the two dumps byte for byte
 #             — v3/examples/calc/calc_main.shard (calc over the host, std/bytes, std/list)
-#             — v3/std/mem.shard (records)
+#             — v3/std/mem.shard and v3/pins/loader/record_basic (records: the type, the
+#               accessors and the updaters, `make` and `with` rewritten)
+#             — v3/pins/loader/view_basic (a directory module: the view's sigs under the
+#               implementation's type and fns; a dotted constructor citation)
 #   partial   a closure with forms the reader has no reading for (a template's call, a
 #             derivation, a derived view; it exits 3 and names each on standard error):
 #             every line it prints is a line of the loader's dump, and their number is the
-#             one stated here — v3/pins/readings/main.shard, the two readings' fixture
+#             one stated here
+#             — v3/pins/readings/main.shard, the two readings' fixture
+#             — v3/tools/shardfmt/fmt.shard with its two directory modules (print, reads),
+#               their private files and what those cite of Init: every line read; the one
+#               form named is a derivation that writes no program
 #   run       calc's `main` run by the Rust evaluator directly on the closure it read prints
 #             what the loader's run of the same program prints, over the differential's inputs
+#
+# The reader links every view it loads to its implementation; the loader links a directory it
+# is given as a root (and checks it there), so a closure's directories are named to it.
 #
 # The loader runs on $EVAL, the suite's engine; the reader under test is always the Rust
 # evaluator's own.
@@ -29,35 +40,40 @@ d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 failed=0; checks=0
 s=$(date +%s)
 
-# ROOT: the loader's dump in $d/L and its facts in $d/facts, the reader's dump in $d/R, what it
-# left unread in $d/E, its exit code in $rc
+# ROOT FILE DIR…: the loader's dump in $d/L and its facts in $d/facts, the reader's dump in
+# $d/R, what it left unread in $d/E, its exit code in $rc
 both() {
-  "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --facts "$d/facts" --dump "$1" > "$d/L" 2>&1 \
-    || { echo "plain_test: load --dump failed on $1"; head -3 "$d/L"; return 1; }
-  "$RUST" dump --root v3 --facts "$d/facts" "$1" > "$d/R" 2> "$d/E"; rc=$?
+  local root=$1 file=$2; shift 2
+  "$EVAL" direct v3/kernel/load.shard --root "$root" $INIT --facts "$d/facts" --dump "$file" "$@" > "$d/L" 2>&1 \
+    || { echo "plain_test: load --dump failed on $file"; head -3 "$d/L"; return 1; }
+  "$RUST" dump --root "$root" --facts "$d/facts" "$file" > "$d/R" 2> "$d/E"; rc=$?
 }
-complete() {
+complete() {   # ROOT FILE DIR…
   checks=$((checks+1))
-  both "$1" || { failed=$((failed+1)); return; }
-  if [ "$rc" -ne 0 ]; then echo "plain_test: $1: the reader exits $rc"; head -3 "$d/E"; failed=$((failed+1)); return; fi
-  if cmp -s "$d/L" "$d/R"; then echo "plain_test: $1: complete, $(wc -l < "$d/L") declarations byte-identical"
-  else echo "plain_test: $1 differs"; diff "$d/L" "$d/R" | head -6 | cut -c1-200; failed=$((failed+1)); fi
+  both "$@" || { failed=$((failed+1)); return; }
+  if [ "$rc" -ne 0 ]; then echo "plain_test: $2: the reader exits $rc"; head -3 "$d/E"; failed=$((failed+1)); return; fi
+  if cmp -s "$d/L" "$d/R"; then echo "plain_test: $2: complete, $(wc -l < "$d/L") declarations byte-identical"
+  else echo "plain_test: $2 differs"; diff "$d/L" "$d/R" | head -6 | cut -c1-200; failed=$((failed+1)); fi
 }
-partial() {   # ROOT SAME TOTAL UNREAD
+partial() {   # SAME TOTAL UNREAD ROOT FILE DIR…
+  local same=$1 total=$2 unread=$3; shift 3
   checks=$((checks+1))
-  both "$1" || { failed=$((failed+1)); return; }
-  if [ "$rc" -ne 3 ]; then echo "plain_test: $1: the reader exits $rc, not 3"; head -3 "$d/E"; failed=$((failed+1)); return; fi
+  both "$@" || { failed=$((failed+1)); return; }
+  if [ "$rc" -ne 3 ]; then echo "plain_test: $2: the reader exits $rc, not 3"; head -3 "$d/E"; failed=$((failed+1)); return; fi
   extra=$(comm -13 <(sort "$d/L") <(sort "$d/R") | wc -l)
   got="$(wc -l < "$d/R") of $(wc -l < "$d/L"), $(grep -c '^UNREAD ' "$d/E") unread"
-  if [ "$extra" -ne 0 ]; then echo "plain_test: $1: $extra lines that are not the loader's"; comm -13 <(sort "$d/L") <(sort "$d/R") | head -3 | cut -c1-200; failed=$((failed+1)); return; fi
-  if [ "$got" = "$2 of $3, $4 unread" ]; then echo "plain_test: $1: partial, $got; every line the loader's"
-  else echo "plain_test: $1: $got, expected $2 of $3, $4 unread"; failed=$((failed+1)); fi
+  if [ "$extra" -ne 0 ]; then echo "plain_test: $2: $extra lines that are not the loader's"; comm -13 <(sort "$d/L") <(sort "$d/R") | head -3 | cut -c1-200; failed=$((failed+1)); return; fi
+  if [ "$got" = "$same of $total, $unread unread" ]; then echo "plain_test: $2: partial, $got; every line the loader's"
+  else echo "plain_test: $2: $got, expected $same of $total, $unread unread"; failed=$((failed+1)); fi
 }
 
-complete v3/examples/calc/calc_main.shard
+complete v3 v3/examples/calc/calc_main.shard
 cp "$d/facts" "$d/calc.facts"
-complete v3/std/mem.shard
-partial v3/pins/readings/main.shard 55 99 20
+complete v3 v3/std/mem.shard
+complete v3/pins/loader/record_basic v3/pins/loader/record_basic/main.shard
+complete v3/pins/loader/view_basic v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib
+partial 55 99 20 v3 v3/pins/readings/main.shard
+partial 149 149 1 v3 v3/tools/shardfmt/fmt.shard v3/tools/shardfmt/print v3/tools/shardfmt/reads
 
 # the run: one line of the differential's inputs per argument
 checks=$((checks+1))

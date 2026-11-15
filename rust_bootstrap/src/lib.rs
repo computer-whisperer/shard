@@ -1,21 +1,21 @@
-//! The bootstrap evaluator: it reads the toolchain's sources (v3/kernel/)
-//! and runs them.
+//! The bootstrap evaluator: it reads a shard program's sources — the
+//! toolchain's own (v3/kernel/) first of all — and runs them.
 //!
 //! The crate is in the trust base (docs/LAW.md "The trust base"). Its only
 //! contract is to load and evaluate programs faithfully — no proof work
 //! happens here. The checker and everything above it are programs this
 //! evaluator runs.
 //!
-//! Two readers hand the evaluator a program. `load` reads the toolchain's
-//! own sources: names flat, the prelude's types. `plain` reads an ordinary
-//! closure — modules, `use`, Init's types — as the V3 loader's plain route
-//! reads it, from the source and a table of facts about Init's constants;
-//! `v3/kernel/test/plain_test.sh` compares it with the loader.
+//! `plain` reads a closure as the V3 loader's plain route reads it: files as
+//! modules under a root, names as identities, `use`, views linked to their
+//! implementations; for a file that sees Init, from the source and a table
+//! of facts about Init's constants. `eval` runs what it read; `prim` is the
+//! primitives' table. `v3/kernel/test/parity_test.sh` (the toolchain's
+//! closures) and `plain_test.sh` (ordinary ones) compare the reader with the
+//! loader.
 
 pub mod ast;
-pub mod dump;
 pub mod eval;
-pub mod load;
 pub mod plain;
 pub mod prim;
 
@@ -30,14 +30,56 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod tests {
     use super::*;
 
-    fn eval_str(src: &str, call: &str) -> ast::Expr {
-        let module = load::module_from_str(src).expect("module loads");
-        let expr = load::expr_from_str(call, &module).expect("call parses");
-        eval::eval(&module, &expr).expect("eval succeeds")
+    /// The toolchain's prelude as the tree has it: the types whose
+    /// constructors the runtime names its cells by (plain/out.rs).
+    const PRELUDE: &str = include_str!("../../v3/kernel/prelude.shard");
+
+    /// What a toolchain file opens of it.
+    const OPEN: &str = "(import \"prelude.shard\")\n(use kernel.prelude)\n(use kernel.prelude.Bool)\n(use kernel.prelude.List)\n(use kernel.prelude.Option)\n(use kernel.prelude.Pair)\n";
+
+    /// A closure on disk under a scratch root of its own: its files (the last
+    /// is the root file), the facts.
+    fn closure(files: &[(&str, &str)], facts: &str) -> (std::path::PathBuf, plain::Loader) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!("shard_boot_{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&root);
+        for (rel, src) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, src).unwrap();
+        }
+        let fp = root.join("facts");
+        std::fs::write(&fp, facts).unwrap();
+        let entry = root.join(files.last().unwrap().0);
+        let l = plain::load(&root, Some(&fp), &[entry]).expect("the closure loads");
+        (root, l)
     }
 
-    fn fn_named<'a>(m: &'a ast::Module, name: &str) -> &'a ast::FnDef {
-        m.fns.iter().find(|f| f.name == name).expect("the fn is declared")
+    /// A toolchain closure — the prelude and one file `kernel/t.shard` that
+    /// opens it, holding `src` — read whole.
+    fn toolchain(src: &str) -> plain::Loader {
+        let file = format!("{OPEN}{src}\n");
+        let (root, l) = closure(&[("kernel/prelude.shard", PRELUDE), ("kernel/t.shard", &file)], "");
+        let _ = std::fs::remove_dir_all(root);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        l
+    }
+
+    /// The value of `call` in a toolchain file holding `src`.
+    fn eval_str(src: &str, call: &str) -> ast::Expr {
+        let l = toolchain(&format!("{src}\n(fn probe () Int {call})"));
+        let m = plain::out::module(&l.t);
+        eval::eval(&m, &ast::Expr::Call("kernel.t.probe".into(), vec![])).expect("eval succeeds")
+    }
+
+    fn has_line(l: &plain::Loader, line: &str) {
+        let dump = plain::out::dump(&l.t);
+        assert!(dump.lines().any(|x| x == line), "no line `{line}` in\n{dump}");
+    }
+
+    fn int(n: i64) -> ast::Expr {
+        ast::Expr::IntLit(n.into())
     }
 
     fn true_v() -> ast::Expr {
@@ -52,13 +94,18 @@ mod tests {
         ast::Expr::Ctor(name.into(), args)
     }
 
-    /// The `(List Int)` value `(Cons x0 (Cons x1 … Nil))`.
-    fn int_list(xs: &[i64]) -> ast::Expr {
+    /// A (List X) value of the runtime's cells from element values.
+    fn expr_spine(items: Vec<ast::Expr>) -> ast::Expr {
         let mut acc = nctor("Nil", Vec::new());
-        for &x in xs.iter().rev() {
-            acc = nctor("Cons", vec![ast::Expr::IntLit(x.into()), acc]);
+        for it in items.into_iter().rev() {
+            acc = nctor("Cons", vec![it, acc]);
         }
         acc
+    }
+
+    /// The `(List Int)` value `(Cons x0 (Cons x1 … Nil))`.
+    fn int_list(xs: &[i64]) -> ast::Expr {
+        expr_spine(xs.iter().map(|&x| int(x)).collect())
     }
 
     // ------------------------------------------------------------------
@@ -82,8 +129,7 @@ mod tests {
     /// pattern matching work on string literals with no new machinery.
     #[test]
     fn string_reuses_list_ops() {
-        let m = "(type (List T) (Nil) (Cons T (List T)))\
-                 (fn len ((xs (List Int))) Int \
+        let m = "(fn len ((xs (List Int))) Int \
                    (match xs (Nil 0) ((Cons _ r) (+ 1 (len r)))))";
         assert_eq!(eval_str(m, "(len \"hello\")"), ast::Expr::IntLit(5.into()));
         assert_eq!(eval_str(m, "(len \"\")"), ast::Expr::IntLit(0.into()));
@@ -193,14 +239,16 @@ mod tests {
         assert_eq!(eval_str(m, "(+ (* 10 (/ -7 10)) (mod -7 10))"), int(3));
     }
 
-    /// Source literals beyond the host parser's integer range must be a
-    /// LOAD ERROR, not silently degraded — lexpr falls back to lossy f64
-    /// for them. (The V3 reader builds integers by arithmetic and has no
-    /// such ceiling.)
+    /// A source literal beyond the host parser's integer range is read
+    /// exactly, never as the lossy f64 lexpr falls back to (the V3 reader
+    /// builds integers by arithmetic and has no such ceiling).
     #[test]
-    fn oversized_literal_is_rejected_at_load() {
-        let src = "(fn big (()) Int 99999999999999999999999999999999)";
-        assert!(load::module_from_str(src).is_err());
+    fn oversized_literal_is_exact() {
+        use std::str::FromStr;
+        let big = "99999999999999999999999999999999";
+        let want = ast::Expr::IntLit(ast::IntLit::from_str(big).expect("int"));
+        assert_eq!(eval_str("(fn id ((x Int)) Int x)", big), want);
+        assert_eq!(eval_str("(fn id ((x Int)) Int x)", &format!("(- 0 -{big})")), want);
     }
 
     #[test]
@@ -241,37 +289,25 @@ mod tests {
     // Control flow — if, match, let — and data types.
     // ------------------------------------------------------------------
 
-    /// `if` dispatches on True/False ctors returned by comparison.
+    /// `if` dispatches on the boolean a comparison returns — fused with the
+    /// comparison, and through a value (`neg` returns the cell, `abs2` reads it).
     #[test]
     fn if_branches() {
         let src = r#"
-(type Bool (False) (True))
 (fn abs ((x Int)) Int (if (< x 0) (- 0 x) x))
+(fn neg ((x Int)) Bool (< x 0))
+(fn abs2 ((x Int)) Int (if (neg x) (- 0 x) x))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        for (input, expected) in [("(abs -5)", 5), ("(abs 7)", 7), ("(abs 0)", 0)] {
-            let e = load::expr_from_str(input, &m).expect("parses");
-            assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(expected.into()));
+        for (input, expected) in [("(abs -5)", 5), ("(abs 7)", 7), ("(abs 0)", 0), ("(abs2 -5)", 5), ("(abs2 7)", 7)] {
+            assert_eq!(eval_str(src, input), int(expected));
         }
     }
 
     /// Constructors as values, no match — Ctor is just data.
     #[test]
     fn ctor_as_value() {
-        let src = r#"
-(type (Pair A B) (Pair A B))
-(fn make_pair ((x Int) (y Int)) (Pair Int Int) (Pair x y))
-"#;
-        let m = load::module_from_str(src).expect("loads");
-        let e = load::expr_from_str("(make_pair 3 7)", &m).expect("parses");
-        let result = eval::eval(&m, &e).expect("evals");
-        assert_eq!(
-            result,
-            ast::Expr::Ctor(
-                "Pair".into(),
-                vec![ast::Expr::IntLit(3.into()), ast::Expr::IntLit(7.into())]
-            )
-        );
+        let src = "(fn make_pair ((x Int) (y Int)) (Pair Int Int) (Pair x y))";
+        assert_eq!(eval_str(src, "(make_pair 3 7)"), nctor("Pair", vec![int(3), int(7)]));
     }
 
     /// Match + recursion: `len` over a List — type defs, ctor recognition,
@@ -280,16 +316,12 @@ mod tests {
     #[test]
     fn match_list_length() {
         let src = r#"
-(type (List T) (Nil) (Cons T (List T)))
 (fn len ((xs (List Int))) Int
   (match xs
     (Nil 0)
     ((Cons _ rest) (+ 1 (len rest)))))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let call = "(len (Cons 10 (Cons 20 (Cons 30 Nil))))";
-        let e = load::expr_from_str(call, &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(3.into()));
+        assert_eq!(eval_str(src, "(len (Cons 10 (Cons 20 (Cons 30 Nil))))"), int(3));
     }
 
     /// Nested pattern: `(Cons a (Cons b _))` binds two PVars at
@@ -298,23 +330,14 @@ mod tests {
     #[test]
     fn match_nested_pattern() {
         let src = r#"
-(type (List T) (Nil) (Cons T (List T)))
 (fn first_two_sum ((xs (List Int))) Int
   (match xs
     ((Cons a (Cons b _)) (+ a b))
     (_ 0)))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let two_plus = "(first_two_sum (Cons 10 (Cons 20 (Cons 30 Nil))))";
-        let too_short = "(first_two_sum (Cons 5 Nil))";
-        let empty = "(first_two_sum Nil)";
-
-        let e1 = load::expr_from_str(two_plus, &m).expect("parses");
-        let e2 = load::expr_from_str(too_short, &m).expect("parses");
-        let e3 = load::expr_from_str(empty, &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(30.into()));
-        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(0.into()));
-        assert_eq!(eval::eval(&m, &e3).unwrap(), ast::Expr::IntLit(0.into()));
+        assert_eq!(eval_str(src, "(first_two_sum (Cons 10 (Cons 20 (Cons 30 Nil))))"), int(30));
+        assert_eq!(eval_str(src, "(first_two_sum (Cons 5 Nil))"), int(0));
+        assert_eq!(eval_str(src, "(first_two_sum Nil)"), int(0));
     }
 
     /// Sequential `let`: each right-hand side sees the bindings before it,
@@ -328,21 +351,13 @@ mod tests {
         (bb (+ aa (* b b))))
     (+ aa bb)))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let e = load::expr_from_str("(add_squares 3 4)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(34.into()));
-        let f = fn_named(&m, "add_squares");
-        assert_eq!(
-            dump::dump(&m),
-            "fn add_squares 0 (Int Int) Int (let ((* #1 #1) (+ #0 (* #1 #1))) (+ #1 #0))\n"
-        );
-        assert_eq!(f.params.len(), 2);
+        assert_eq!(eval_str(src, "(add_squares 3 4)"), int(34));
+        has_line(&toolchain(src), "fn add_squares 0 (Int Int) Int (let ((* #1 #1) (+ #0 (* #1 #1))) (+ #1 #0))");
     }
 
-    /// A dotted citation resolves to the declared name it ends in (the
-    /// flat mirror of the V3 reader's suffix table): `Stack.mk` in a term
-    /// and a pattern, `lib.push` as a call head, `lib.Stack` as a type
-    /// printed by its last component.
+    /// A dotted citation names an identity, in full or from the file's own
+    /// module down: `Stack.mk` in a term and a pattern, `lib.push` as a call
+    /// head, `lib.Stack` as a type — each printed by its last component.
     #[test]
     fn dotted_citations() {
         let src = r#"
@@ -351,11 +366,13 @@ mod tests {
 (fn top ((s Stack)) Int (match s ((lib.Stack.mk k) k)))
 (fn go () Int (top (lib.push 5 (Stack.mk 1))))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let e = load::expr_from_str("(go)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(6.into()));
+        let (root, l) = closure(&[("lib.shard", src)], "");
+        let _ = std::fs::remove_dir_all(root);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        let m = plain::out::module(&l.t);
+        assert_eq!(eval::eval(&m, &ast::Expr::Call("lib.go".into(), vec![])).unwrap(), int(6));
         assert_eq!(
-            dump::dump(&m),
+            plain::out::dump(&l.t),
             "fn go 0 () Int (top (push 5 (mk 1)))\nfn push 0 (Int Stack) Stack (match #0 ((mk _) (mk (+ #0 #2))))\nfn top 0 (Stack) Int (match #0 ((mk _) #0))\ntype Stack 0 (mk Int)\n"
         );
     }
@@ -366,21 +383,18 @@ mod tests {
     #[test]
     fn type_binders() {
         let src = r#"
-(type (List T) (Nil) (Cons T (List T)))
 (fn first ((T Type) (xs (List T)) (d T)) T
   (match xs (Nil d) ((Cons x _) x)))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let f = fn_named(&m, "first");
+        let l = toolchain(src);
+        let m = plain::out::module(&l.t);
+        let f = m.fns.iter().find(|f| f.name == "kernel.t.first").expect("the fn is declared");
         assert_eq!(f.params.len(), 2);
-        assert_eq!(f.params[1], ast::Type::TVar("T".into()));
-        assert_eq!(f.ret, ast::Type::TVar("T".into()));
-        let e = load::expr_from_str("(first (Cons 7 Nil) 0)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(7.into()));
-        assert_eq!(
-            dump::dump(&m),
-            "fn first 1 ((List ?0) ?0) ?0 (match #1 (Nil #0) ((Cons _ _) #1))\ntype List 1 (Nil) (Cons ?0 (List ?0))\n"
-        );
+        assert_eq!(f.params[1], f.ret);
+        assert!(matches!(f.ret, ast::Type::TVar(_)));
+        assert_eq!(eval_str(src, "(first (Cons 7 Nil) 0)"), int(7));
+        has_line(&l, "fn first 1 ((List ?0) ?0) ?0 (match #1 (Nil #0) ((Cons _ _) #1))");
+        has_line(&l, "type List 1 (Nil) (Cons ?0 (List ?0))");
     }
 
     /// `match` on an `Option`-shaped value — bare zero-arg ctors AND
@@ -388,17 +402,13 @@ mod tests {
     #[test]
     fn match_option() {
         let src = r#"
-(type (Option T) (None) (Some T))
 (fn unwrap_or ((o (Option Int)) (default Int)) Int
   (match o
     (None default)
     ((Some x) x)))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let e1 = load::expr_from_str("(unwrap_or (Some 42) 0)", &m).unwrap();
-        let e2 = load::expr_from_str("(unwrap_or None 99)", &m).unwrap();
-        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(42.into()));
-        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(99.into()));
+        assert_eq!(eval_str(src, "(unwrap_or (Some 42) 0)"), int(42));
+        assert_eq!(eval_str(src, "(unwrap_or None 99)"), int(99));
     }
 
     // ------------------------------------------------------------------
@@ -429,15 +439,6 @@ mod tests {
         v.push(ast::IntLit::from_str("18446744073709551616").unwrap()); // 2^64
         v.push(ast::IntLit::from_str("-100000000000000000000000000000007").unwrap());
         v
-    }
-
-    /// A (List X) value from element values.
-    fn expr_spine(items: Vec<ast::Expr>) -> ast::Expr {
-        let mut acc = nctor("Nil", Vec::new());
-        for it in items.into_iter().rev() {
-            acc = nctor("Cons", vec![it, acc]);
-        }
-        acc
     }
 
     /// The evaluator's FAST ARMS (eval.rs `apply_other`: the primitives
@@ -484,7 +485,7 @@ mod tests {
 
     // ------------------------------------------------------------------
     // Init's entries of the table (prog.shard 18–38, as ev.shard applies
-    // them), the `if` rule, the plain reader.
+    // them), the `if` rule, the reader's names, views and types.
     // ------------------------------------------------------------------
 
     fn prim2(name: &str, a: i64, b: i64) -> Option<ast::Expr> {
@@ -541,27 +542,91 @@ mod tests {
 (type Dec (No) (Yes))
 (fn pick ((d Dec)) Int (if d 1 2))
 "#;
-        let m = load::module_from_str(src).expect("loads");
-        let yes = load::expr_from_str("(pick Yes)", &m).unwrap();
-        let no = load::expr_from_str("(pick No)", &m).unwrap();
-        assert_eq!(eval::eval(&m, &yes).unwrap(), ast::Expr::IntLit(1.into()));
-        assert_eq!(eval::eval(&m, &no).unwrap(), ast::Expr::IntLit(2.into()));
+        assert_eq!(eval_str(src, "(pick Yes)"), int(1));
+        assert_eq!(eval_str(src, "(pick No)"), int(2));
     }
 
-    /// A closure on disk under a scratch root: its files, the facts.
-    fn plain_closure(tag: &str, files: &[(&str, &str)], facts: &str) -> (std::path::PathBuf, plain::Loader) {
-        let root = std::env::temp_dir().join(format!("shard_plain_{}_{}", tag, std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        for (rel, src) in files {
-            let p = root.join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, src).unwrap();
+    /// The runtime's cells are named, not placed: a file that declares its
+    /// own `Bool` and `List` (no prelude) gets a comparison's result and a
+    /// symbol's bytes in them, as a native binary of it does.
+    #[test]
+    fn cells_by_the_runtimes_names() {
+        let src = r#"
+(type (List T) (Nil) (Cons T (List T)))
+(type Bool (False) (True))
+(fn less ((a Int) (b Int)) Bool (< a b))
+(fn pick ((b Bool)) Int (match b (True 1) (False 2)))
+(fn count ((xs (List Int))) Int (match xs (Nil 0) ((Cons _ r) (+ 1 (count r)))))
+(fn go () Int (+ (* 10 (pick (less 1 2))) (+ (pick (less 2 1)) (* 100 (count (chars_of_sym 'abc))))))
+"#;
+        let (root, l) = closure(&[("kernel/main.shard", src)], "");
+        let _ = std::fs::remove_dir_all(root);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        let m = plain::out::module(&l.t);
+        assert_eq!(eval::eval(&m, &ast::Expr::Call("kernel.main.go".into(), vec![])).unwrap(), int(312));
+    }
+
+    /// `Scope::rank` orders names as a citation's candidates stand, without
+    /// building them: every candidate has a rank, an earlier one a lower
+    /// rank, and a name that is no candidate has none.
+    #[test]
+    fn rank_is_the_candidates_order() {
+        use plain::{Open, Scope};
+        let sc = Scope {
+            ident: "a.b".into(),
+            tag: "a.b.c".into(),
+            opened: vec![
+                Open::All("x.y".into()),
+                Open::Some("a.b.T".into(), vec!["K".into(), "L".into()]),
+                Open::All(String::new()),
+                Open::All("a.b".into()),
+            ],
+            vis: vec![],
+            init: true,
+        };
+        let bare = Scope { ident: String::new(), opened: vec![], init: false, ..sc.clone() };
+        for sc in [&sc, &bare] {
+            for n in ["K", "f", "T.K", "L.m", "Init.List.cons", "Init", "y.f"] {
+                let cs = sc.candidates(n);
+                // each candidate once, where it first stands; the empty name is none
+                let firsts: Vec<&String> =
+                    cs.iter().enumerate().filter(|(i, k)| !k.is_empty() && cs.iter().position(|c| c == *k) == Some(*i)).map(|(_, k)| k).collect();
+                let ranks: Vec<usize> = firsts.iter().map(|k| sc.rank(k, n).unwrap_or_else(|| panic!("{k} for {n}: no rank"))).collect();
+                assert!(ranks.windows(2).all(|w| w[0] < w[1]), "{n}: {firsts:?} ranked {ranks:?}");
+                for other in ["q.K", "a.bK", "a.b.c.K", "xK", ""] {
+                    if !cs.iter().any(|c| c == other) {
+                        assert_eq!(sc.rank(other, n), None, "{other} for {n}");
+                    }
+                }
+            }
         }
-        let fp = root.join("facts");
-        std::fs::write(&fp, facts).unwrap();
-        let entry = root.join(files.last().unwrap().0);
-        let l = plain::load(&root, Some(&fp), &[entry]).expect("the closure loads");
-        (root, l)
+    }
+
+    /// A directory module: the consumer reads the view; the implementation
+    /// is linked after it — its `type` and `fn`s under the view's `sig`s,
+    /// by a private file of the sealed directory or by the implementation
+    /// file itself — and the closure runs.
+    #[test]
+    fn view_is_linked_to_its_implementation() {
+        let view = "(sig type Stack)\n(sig fn empty () Stack)\n(sig fn push ((n Int) (s Stack)) Stack)\n(sig fn top ((s Stack)) Int)\n";
+        let imp = "(import \"rep.shard\")\n(fn top ((s Stack)) Int (match s ((Stack.mk k) k)))\n";
+        let rep = "(type Stack (mk Int))\n(fn empty () Stack (Stack.mk 0))\n(fn push ((n Int) (s Stack)) Stack (match s ((Stack.mk k) (Stack.mk (+ k n)))))\n";
+        let app = "(import \"lib\")\n(use lib)\n(fn go () Int (top (push 5 (push 2 (empty)))))\n";
+        let (root, l) =
+            closure(&[("lib/mod.req.shard", view), ("lib/rep.shard", rep), ("lib/lib.shard", imp), ("app.shard", app)], "");
+        let _ = std::fs::remove_dir_all(root);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        assert_eq!(
+            plain::out::dump(&l.t),
+            "fn empty 0 () Stack (mk 0)
+fn go 0 () Int (top (push 5 (push 2 (empty))))
+fn push 0 (Int Stack) Stack (match #0 ((mk _) (mk (+ #0 #2))))
+fn top 0 (Stack) Int (match #0 ((mk _) #0))
+type Stack 0 (mk Int)
+"
+        );
+        let m = plain::out::module(&l.t);
+        assert_eq!(eval::eval(&m, &ast::Expr::Call("app.go".into(), vec![])).unwrap(), int(7));
     }
 
     /// Names are identities: a module per file, a citation through `use`,
@@ -579,7 +644,7 @@ mod tests {
 (fn top ((s Stack)) Int (match s ((Mk k) k)))
 (fn go () Int (top (push 5 (Mk (/ 7 2)))))
 "#;
-        let (root, l) = plain_closure("names", &[("a/lib.shard", lib), ("a/app.shard", app)], "");
+        let (root, l) = closure(&[("a/lib.shard", lib), ("a/app.shard", app)], "");
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         assert_eq!(
             plain::out::dump(&l.t),
@@ -627,7 +692,7 @@ type Stack 0 (Mk Int)
 (fn clamp ((n Nat) (h (< n 4))) (Fin 4) (Fin.mk n h))
 (fn go () Nat (match (firsts (cons 0 (cons 5 nil))) (nil 99) ((cons a _) (+ a (if (small 3) 100 200)))))
 "#;
-        let (root, l) = plain_closure("types", &[("app.shard", app)], facts);
+        let (root, l) = closure(&[("app.shard", app)], facts);
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         let dump = plain::out::dump(&l.t);
         for line in [
@@ -658,7 +723,7 @@ type Stack 0 (Mk Int)
 (fn inc ((x Int)) Int (+ x 1))
 (fn all ((xs (L Int))) (L Int) (each inc xs))
 "#;
-        let (root, l) = plain_closure("left", &[("app.shard", app)], "");
+        let (root, l) = closure(&[("app.shard", app)], "");
         assert_eq!(l.t.unread.len(), 1);
         assert_eq!((l.t.unread[0].0.as_str(), l.t.unread[0].1.0), ("app.all", "template"));
         assert_eq!(plain::out::dump(&l.t), "fn inc 0 (Int) Int (+ #0 1)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # K's tests through the V3 loader: every other entrypoint runs on the Rust
-# bootstrap, which resolves flat and enforces no seal, so a test that reached around K's
+# bootstrap, which reads and refuses nothing — no seal — so a test that reached around K's
 # view would still pass there. Here each K-facing test is loaded by the V3 loader and run
 # under `ev` (`load.shard --run`), the clients outside the directory with `v3/kernel/k` as
 # a second root (the directory's own check links the implementation), the tests inside

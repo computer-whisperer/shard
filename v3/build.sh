@@ -27,7 +27,7 @@
 #   eval direct v3/kernel/X.shard ARGS…    -> v3/bin/X ARGS…  (a driver or a test: this inventory)
 #   eval direct load.shard … --run M.FN F… -> v3/bin/load …   (the loader's own operation)
 #   eval direct load.shard … --dump F      -> v3/bin/load …   (the loader's own operation)
-#   eval dump F                            -> the bootstrap's (parity's second reader; no binary)
+#   eval dump F                            -> the bootstrap's (its reader's text for parity; no binary)
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
 # under V3_ENGINE=native, and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
@@ -110,7 +110,7 @@ write_shim() {
 #   direct FILE ARGS…   v3/bin/NAME ARGS… (NAME = FILE's stem) when that binary exists and its
 #                       stamp is current (v3/build.sh --stamp NAME); otherwise exit 70 with a
 #                       message — never a silent fallback to the bootstrap
-#   dump …              the bootstrap, unchanged (parity's second reader)
+#   dump …              the bootstrap, unchanged (its reader's text, for parity)
 # The command line's paths stay the caller's: every entrypoint runs from the repo root.
 set -u
 root=$(cd "$(dirname "$0")/../.." && pwd)

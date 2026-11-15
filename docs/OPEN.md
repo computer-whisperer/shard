@@ -23,7 +23,7 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | Two host shims of the runtime (`rt_read_range`, `rt_exit` in `rt.h`) untag their integer arguments without checking that they are small integers: an integer past 62 bits would be read as a pointer's bits. | read from the code |
 | A supplied `realize` that is no template and whose body is the first to take a template's instance may be refused "cited before its realization is attached" (`realize.shard`, `realize_order`); no pin has such a `realize`. | read from the code |
 | K's `check_level` does not refuse a level metavariable when it is given no list of level parameters. Admission always gives the list; the `infer` that K's view offers to callers does not. | read from the code |
-| The Rust bootstrap loads an identifier that names nothing as a free variable, and `eval dump` prints an undeclared bare type name as a type variable; a source of the toolchain with such a name is refused only when the V3 loader reads it. | reproduced on ordinary files; none in the toolchain |
+| The Rust bootstrap runs a closure in which a function has no reading — an identifier that names nothing, an undeclared type: `eval dump` names the function and exits 3, `eval direct` says nothing and stops only if the function is reached. A source of the toolchain with such a name fails `parity_test.sh` and is refused when the V3 loader reads it. | reproduced on a scratch file; none in the toolchain |
 | The text that says why a function got no definition is written and then dropped: where the loader prints `RUNNABLE fn NAME why=REASON` for a single function or for a group (`group_shape`, `group_measure`, `measure_type`, `callee_runnable`), the sentence `define.shard` built for that reason is not printed; it prints only for a recursive `def` and for a template. Two more texts can never print because an earlier check refuses first: `match_indexed` and the back end's string-pattern refusal. | read from the code; no run printed them |
 | Messages that say less than the case: five `LOAD-ERROR` records of the loader carry no detail; `no_l_meaning: F: an extern has no L meaning` is printed for a supplied `realize` body that calls an extern, where an extern is an opaque constant; `unknown_in_body` says "a fn without a definition" for any program-side name. | read from the code |
 | Small: the classifier offers a parameterized head `(NAME T…)` that it then refuses; `t0.shard` with `-p` and `--pins` prints only the `PINS` line; `define_test.sh` prints a constant `20 checks`; `v3/t0_full.sh` writes its log to the repository root, where nothing ignores it; `wf_proj` and `wf_proj_rest` in `define.shard` are one function written twice. | read from the code |
@@ -88,16 +88,21 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   its parameter's arity (`(fun ((a Int)) (Int.add a))` for a function of two); a type
   argument that only the type expected of the call fixes (`(pick inc List.nil)` at
   `(List Int)`).
-- The Rust evaluator reads an ordinary closure as the classifier does (`KERNEL.md`, The two
-  engines), and `plain_test.sh` holds three closures to the loader's text. Over the 59 roots of
-  the examples, the library, the formatter and the model nothing holds it; measured there
-  (`DECISIONS.md`, Measured), 48 read whole and no line differs. What it does not read, each
-  named on standard error and left out of the program: a call of a template — so no lifted
-  lambda and no instance; a `derive` and what calls a derived function, `=` at a derived
-  equality among them; a `(realize NAME (view))`. A directory import brings the view alone, so
-  a closure with one loads and does not link. It refuses nothing the loader refuses. No
-  toolchain file is read by it: a toolchain closure without K's directory reads to the flat
-  reader's text, one with it lacks K's implementation.
+- The Rust evaluator reads every closure as the classifier does (`KERNEL.md`, The two
+  engines): `parity_test.sh` holds it to the loader's text on every toolchain root, and
+  `plain_test.sh` on six ordinary closures. Over the 59 roots of the examples, the library, the
+  formatter and the model nothing holds it; measured there (`DECISIONS.md`, Measured), 51 read
+  whole and no line differs. What it does not read, each named on standard error and left out
+  of the program: a call of a template — so no lifted lambda and no instance; a `derive` and
+  what calls a derived function, `=` at a derived equality among them; a `(realize NAME
+  (view))`. It refuses nothing the loader refuses, and links a view to whatever implementation
+  file stands in its directory without comparing the two.
+- Three rules say which constructors are the runtime's cells. The Rust evaluator and a native
+  binary go by the constructor's name (`True`, `Cons`, …; a binary also fixes its place in its
+  type); the loader's evaluator `ev` goes by the prelude's identities and an extern's declared
+  types. They agree on the toolchain's sources. The sixteen back-end pins that declare their
+  own `Bool` and `List` run under the first two and are stuck under `ev`; no test runs one
+  program under all three.
 - "Could not show these equal" is never read as "these differ": no test.
 - A positive node id in K is written only by five constructors: no test. The test of K's state
   discipline believes the types the sources declare.
