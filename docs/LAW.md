@@ -186,6 +186,8 @@ admitted that the logic does not derive.
     small K itself is, the extra complexity of promoting the rust bootstrap to be capable of the
     same things seems worthwhile if it means K itself can be standard." (Rule 24 is the means: a
     program the Rust evaluator can read without the elaborator.)
+11. *No precedence among names.* "collisions should be refused overall." (Rule 13: a citation
+    that two visible names answer is refused, a file's own name against Init's included.)
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.

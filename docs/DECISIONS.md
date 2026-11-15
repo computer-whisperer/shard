@@ -52,6 +52,10 @@ entries are explained under "Measured" at the end.
   `List.foo` in `std/list.shard` is `std.list.List.foo`; an Init constant's very name: `name_taken`.
 - `import` opens nothing and `use PREFIX` opens; one mechanism for modules and namespaces — both
   are name prefixes. A citation under two opened prefixes is an error naming both, never a choice.
+- ★ A citation that two visible names answer is refused naming both (`ambiguous_name`), a file's
+  own name against a name of Init under an opened namespace included; not precedence for the
+  file's own module, over Init or over anything — an upgrade of Init can then refuse a file that
+  did not change, and the file is renamed or opens the namespace by name (`LAW.md` §6, 11).
 - A `type` opens its constructors for its own file; `(use M)` opens none, `(use M.T)` does — a
   prefix opens only what stands directly under it. An unused `use` is a lint (`UNUSED`), no refusal.
 - ★ A hash is a fingerprint, never an authority: it is affine in a literal, so a preimage is one
@@ -130,21 +134,21 @@ entries are explained under "Measured" at the end.
   not a second copy of the erasure's cases.
 - Which written arguments run is read off the head's declared signature — K's constant by the
   roles the erasure reads (`erase.shard` `tele_of`), or the binders of the `fn` being read — with
-  `@` naming every binder; not a table of Init's names kept beside the registry. Not ruled.
+  `@` naming every binder; not a table of Init's names kept beside the registry.
 - A call that leaves a runtime argument implicit is refused by the classifier
   (`unwritten_argument`) and the source writes it: `Byte.decEq` in `std/derive.shard` writes
   `(@BitVec.toNat 8 …)`; not the classifier inferring it, which is unification. Follows rule 24.
 - The classifier passes a written proof over only in a function the typed route has read; where
   its reading is the only one a written proof is `unchecked_proof`; not passing proofs over
   everywhere — a body the logic never read would then take a `Fin` on a proof nothing checked
-  (pin `dif_scope`). Not ruled.
+  (pin `dif_scope`).
 - A function that is only a program builds and reads the registry's rows by the table the
   erasure reads; not the classifier refusing every row's constructor so that the two routes
-  could not disagree on a representation (pin `row_e_first` stated that). Not ruled.
+  could not disagree on a representation (pin `row_e_first` stated that).
 - A lambda is read where it is written and lifted where its instance is taken: between the two
   the body as read holds it as a node of the term type (`ELam` in `prog.shard`), which no
   program holds; not a second term type for the classifier's passes, and not a result
-  channel through every reading function. Not ruled.
+  channel through every reading function.
 - A template's call is typed in the elaborator's order (`elab.shard` `elab_args`): its bare
   variables, the type expected of the call, its other arguments left to right, its numerals.
   A lambda's result type is what that order fixes for its parameter's result, else its body's
@@ -153,11 +157,11 @@ entries are explained under "Measured" at the end.
 - Numeral rows and a `let` of several bindings are written by the classifier as the
   elaborator reads them — tests in row order, a let in a let — where the file sees Init; not
   the erasure folding its tests back into a match. A file that sees no Init keeps the rows as
-  a match. Not ruled.
+  a match.
 - A function that is only a program passes a lambda, a constant of the registry or a package:
   the classifier lifts and names as the typed route does, and the instance's program stays
   the erasure of the template's elaborated body; not such a function refused for want of a
-  reading in the logic, as it was. Not ruled.
+  reading in the logic, as it was.
 - An instance is named by the classifier and read by the erasure alone; not the classifier
   reading a template's source at an instance's shapes, which nothing needs until something
   must run a template's instance without the elaborator (`OPEN.md` §4).
@@ -167,7 +171,7 @@ entries are explained under "Measured" at the end.
   Rust, and not the roles written by an author in the source. The table is made when a test
   runs; the toolchain's own files see no Init and are read without one. A table kept in the
   tree for the toolchain's own closure, once it imports Init, would be something the bootstrap
-  believes. Not ruled.
+  believes: that table is not decided.
 - The Rust evaluator has that one reader, for the toolchain's sources and for any program; not
   a second, flat one for the toolchain (one name per declaration, a citation resolved by its
   suffix), which let a toolchain file be something no ordinary file is. The reader that reads K
@@ -177,7 +181,7 @@ entries are explained under "Measured" at the end.
 - The Rust reader links every view it loads to its implementation; not only a directory named
   as a root, the loader's rule, which is where the implementation is checked: the Rust side
   checks nothing and a run needs the link. A comparison with the loader names the directories
-  to it. Not ruled.
+  to it.
 - The evaluator's comparisons, its symbol bridge and the host build the cells `True False Nil
   Cons None Some Pair`, and the reader hands it every constructor so named under that name,
   whichever module declares its type; not those cells by the prelude's identities
@@ -187,13 +191,13 @@ entries are explained under "Measured" at the end.
   each need the prelude as a file. Not ruled.
 - `eval` takes its package root as `--root DIR` and reads `v3` where none is named, as
   `v3/build.sh` does; not the root inferred from the file's path, and not a root required on
-  every one of the suite's hundred invocations. Not ruled.
+  every one of the suite's hundred invocations.
 - `load --facts` prints, with the load's own table, that of each implementation it linked; not
   the main line's alone: the fork that checks an implementation is dropped with what it fetched
   of Init, and a closure with a directory module would be read by half a table.
 - The Rust reader refuses nothing: exhaustiveness, a view's privacy, the match of an
   implementation against its view, a proof's reader stay the loader's, where the same files
-  are loaded; not the language's refusals stated twice. Not ruled.
+  are loaded; not the language's refusals stated twice.
 - Three functions of Init the library ran by their derived view have their bodies written out
   — `BitVec.toNat`, `UInt8.toNat`, `Option.getD` (`std/bytes.shard`, `std/list.shard`): K
   proves each and the programs are the same text; not the library put back on the view with
