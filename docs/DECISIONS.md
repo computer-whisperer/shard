@@ -128,7 +128,8 @@ entries are explained under "Measured" at the end.
   ones; not type inference in the Rust evaluator — the elaborator, the erasure and K's type
   checker, about 19,400 of the toolchain's lines, inside the engine that is the authority; not
   a seed — the Rust evaluator running the erased form a previous toolchain wrote, so that the
-  authority no longer runs the sources. Assent: "Let's adopt it and begin."
+  authority no longer runs the sources. Assent: "Let's adopt it and begin."; and once every
+  program the tree writes read the same both ways, "ratify it".
 - The classifier writes the entries the erasure writes by sharing its tables (`prog.shard`:
   `realization_of`, `realization_expr`), and types a body before it writes a row's expression;
   not a second copy of the erasure's cases.
@@ -153,7 +154,7 @@ entries are explained under "Measured" at the end.
   variables, the type expected of the call, its other arguments left to right, its numerals.
   A lambda's result type is what that order fixes for its parameter's result, else its body's
   own static type; not a result written in the source, which the typed route does not ask
-  for. Not ruled.
+  for. Left open by the owner: looked at again when the Rust reader reads templates.
 - Numeral rows and a `let` of several bindings are written by the classifier as the
   elaborator reads them — tests in row order, a let in a let — where the file sees Init; not
   the erasure folding its tests back into a match. A file that sees no Init keeps the rows as
@@ -177,7 +178,7 @@ entries are explained under "Measured" at the end.
   suffix), which let a toolchain file be something no ordinary file is. The reader that reads K
   is 3,600 lines where the flat one was 900 — the trust base's engine grew by what reads names,
   modules and views — and `parity_test.sh` holds it to the loader's program on every toolchain
-  root. Not ruled beyond the direction (`LAW.md` §6, 10).
+  root. The direction is `LAW.md` §6, 10.
 - The Rust reader links every view it loads to its implementation; not only a directory named
   as a root, the loader's rule, which is where the implementation is checked: the Rust side
   checks nothing and a run needs the link. A comparison with the loader names the directories
@@ -188,7 +189,8 @@ entries are explained under "Measured" at the end.
   (`kernel.prelude.Bool.True`), the rule of the loader's own evaluator. A native binary names
   its cells the same way, and the sixteen back-end pins that declare their own `Bool` and
   `List` run on the bootstrap and natively and are stuck under `ev`; by identity they would
-  each need the prelude as a file. Not ruled.
+  each need the prelude as a file. Kept until the toolchain moves onto Init, which deletes
+  the prelude and the question with it.
 - `eval` takes its package root as `--root DIR` and reads `v3` where none is named, as
   `v3/build.sh` does; not the root inferred from the file's path, and not a root required on
   every one of the suite's hundred invocations.
@@ -284,6 +286,11 @@ entries are explained under "Measured" at the end.
 - A file that imports Init sees all of it (`(import Init)`); not a horizon by position in the
   export (`(import Init NAME)`) — a horizon is raised lemma by lemma, and what the toolchain
   builds on by name was not held to it, so a file's records depended on the other roots of a load.
+- `(import Init)` stays as the line that makes a file an ordinary one until the toolchain's
+  files are ordinary too, and goes then; not Init seen by every file now — the toolchain's files
+  open a prelude whose `List`, `Bool` and `Option` would meet Init's, and their functions are
+  programs the logic has not read — and not a rule on the module path in the line's place,
+  which hides the switch.
 - What a file is given of Init is its own demand; not whatever the process loaded — records must
   not depend on load order. A name missed is fetched and the declaration read again; a file
   without Init is given nothing built of Init.
