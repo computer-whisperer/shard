@@ -495,7 +495,7 @@
        (if (sym_eq h (quote list)) (read_elist r args)
        (if (sym_eq h (quote fun))
          (TErr (quote function_value)
-           "a lambda: a static argument of a template, lifted to a fn on the typed route — never a value of E; this body has no L reading")
+           "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result")
          (read_eapp r h args)))))))))))
     ((SList (Cons _ _)) (TErr (quote bad_head) "a head is a name"))))
 
@@ -782,14 +782,17 @@
 (fn read_proj_fn
   ((r Rd) (ex Bool) (k Name) (sn Name) (i Int) (lams (List Bool)) (args (List SExpr)))
   TRes
+  (if (< (if ex (len lams) (count_true lams)) (len args))
+    (TErr (quote function_value)
+      (append (show_name k)
+        ": a projection applied past its structure — a field that is a function is a package's, read off the package constant's value, which this reading does not unfold: call the function the field holds by its name, or pass the package to a template"))
   (if (bool_not (= (len args) (if ex (len lams) (count_true lams))))
-    (TErr (quote unsaturated)
-      (append (show_name k) ": a projection is applied to its structure, and to nothing past it"))
+    (TErr (quote unsaturated) (append (show_name k) ": a projection is applied to its structure"))
     (match (last_of args)
       (None
         (TErr (quote unsaturated)
           (append (show_name k) ": a projection is applied to its structure")))
-      ((Some x) (read_proj r sn i x)))))
+      ((Some x) (read_proj r sn i x))))))
 (fn last_of ((T Type) (xs (List T))) (Option T)
   (measure (struct xs))
   (match xs
@@ -813,10 +816,14 @@
              ((TErr e m) (TErr e m))
              ((TOk x1)
               (if (rep_row sn)
-                (if (= nrt 1) (TOk x1)
-                (TErr (quote no_realization)
-                  (append (show_name sn)
-                    ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+                (if (= nrt 1)
+                  (TOk
+                    (match (row_field_proj sn)
+                      ((Some p) (EPrim p (list x1)))  ; kept by name while the body is typed
+                      (None x1)))
+                  (TErr (quote no_realization)
+                    (append (show_name sn)
+                      ": the registry's row does not describe this structure (one constructor, one runtime field)")))
                 (match (es_info (rd_es r) c)
                   ((Some (EICtor _ _ _))
                    (TOk (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))
@@ -1035,25 +1042,18 @@
           (match b
             ((EBData _) (read_et r a))
             ((EBStatic _ _) (read_static_arg r id a))
-            (EBPackage
-              (TErr (quote function_value)
-                (append (show_name id)
-                  ": a package parameter — a package constant is a def with no E value, so the taking body needs an L reading"))))
+            (EBPackage (read_package_arg r id a)))
           ((TErr e m) (Pair (Some (Pair e m)) Nil))
           ((TOk t) (read_tm_args r id br ar (Cons t acc)))))))))
-;; a static argument E-first: a name of the E table with a program and no type parameters, bare
-;; or applied to runtime terms (its captured values) short of its arity; anything else written
-;; is refused with its pointer — a lambda (lifting is the typed route's), a bound variable, a
-;; constant of the realization registry, a polymorphic fn, a template, a constructor, an extern
+;; a static argument: a lambda (read_elam); a name with a program and no type parameters — a fn
+;; or a sig fn of the E table, a constant of the realization registry —, bare or applied to
+;; runtime terms (its captured values) short of its arity. Anything else written is refused
+;; with its pointer — a bound variable, a polymorphic fn, a template, a constructor, an extern
 (fn read_static_arg ((r Rd) (tm Name) (s SExpr)) TRes
   (match s
     ((SSym x) (read_static_head r tm x Nil))
     ((SList (Cons (SSym h) gargs))
-     (if (sym_eq h (quote fun))
-       (TErr (quote function_value)
-         (append (show_name tm)
-           ": a lambda as a static argument in a body with no L reading — nothing lifts it here (lifting is the typed route's); name it as a fn and pass the name, or give the body an L reading"))
-       (read_static_head r tm h gargs)))
+     (if (sym_eq h (quote fun)) (read_elam r gargs) (read_static_head r tm h gargs)))
     (_
       (TErr (quote function_value)
         (append (show_name tm)
@@ -1087,12 +1087,15 @@
            ((Cons (EHit a _ _) (Cons (EHit b _ _) _))
             (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
            (Nil
-             (match (prim_of (scope_candidates (rd_sc r) n))
-               ((Some (Pair id _))
-                (TErr (quote function_value)
-                  (append (show_name id)
-                    ": a constant of the realization registry as a static argument in a body with no L reading — name a fn over it, (fn add ((a Int) (b Int)) Int (+ a b)), or give the body an L reading")))
-               (None (TErr (quote unbound_name) (show_name n)))))
+             (match (registry_const r n)
+               ((Some k) (read_static_registry r k gargs))
+               (None
+                 (match (prim_of (scope_candidates (rd_sc r) n))
+                   ((Some (Pair id _))
+                    (TErr (quote function_value)
+                      (append (show_name id)
+                        ": an operator as a static argument — a static argument names a function: the constant the operator is at its type (Int.add, Nat.mul), or a fn")))
+                   (None (TErr (quote unbound_name) (show_name n)))))))
            ((Cons (EHit id _ _) Nil)
             (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
 (fn read_static_fn ((r Rd) (id Name) (k Int) (gargs (List SExpr))) TRes
@@ -1115,6 +1118,88 @@
     ((Some (EFn _ nt _ _ _ _)) nt)
     ((Some (ESig _ nt _ _)) nt)
     (_ 0)))
+;; a name that resolves to a constant of the realization registry (prog.shard realization_of),
+;; in a file that sees Init: as a static argument it is its own shape — its instance calls the
+;; table's entry —, bare or applied to its first operand
+(fn registry_const ((r Rd) (n Name)) (Option Name)
+  (if (bool_not (init_seen (rd_sc r))) None
+  (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+    ((RName k _)
+     (match (realization_of k)
+       ((Some _) (Some k))
+       (None None)))
+    (_ None))))
+(fn read_static_registry ((r Rd) (k Name) (gargs (List SExpr))) TRes
+  (if (<= 2 (len gargs))
+    (TErr (quote function_value)
+      (append (show_name k)
+        (append " applied to "
+          (append (show_nat (len gargs))
+            " arguments leaves none of its 2 for the static parameter — a static argument is a function"))))
+    (match (read_ets_list r gargs Nil)
+      ((Pair (Some (Pair e m)) _) (TErr e m))
+      ((Pair None ts) (TOk (ECall k ts))))))
+;; a package argument: the name of a package constant — a def of K, closed, nothing of it
+;; captured; its shape is its identity. That its value is the structure's constructor applied
+;; is read where the instance is built (erasure.shard package_fields_of)
+(fn read_package_arg ((r Rd) (tm Name) (s SExpr)) TRes
+  (match
+    (match s
+      ((SSym x)
+       (match (name_of_sym x)
+         ((Some n)
+          (match (rd_find r n)
+            (RdNone
+              (match (resolve (cx0 (rd_sc r) (rd_env r) Nil Nil) n)
+                ((RName k _)
+                 (match (env_find (rd_env r) k)
+                   ((Some (DefnInfo _ _ _ _ _)) (Some k))
+                   (_ None)))
+                (_ None)))
+            (_ None)))
+         (None None)))
+      (_ None))
+    ((Some k) (TOk (ECall k Nil)))
+    (None
+      (TErr (quote function_value)
+        (append (show_name tm)
+          ": a package argument names a package constant — a def whose value is the structure's constructor applied")))))
+;; a lambda as a static argument: (fun ((x TYPE)…) E) — each binder states its type, a closed
+;; E type, and the body is read under them. It stays a lambda in the body as read (ELam) and
+;; is lifted to a fn where the instance is taken (take_lambda)
+(fn read_elam ((r Rd) (args (List SExpr))) TRes
+  (match args
+    ((Cons (SList bs) (Cons body Nil))
+     (match (read_lam_binders r bs Nil Nil)
+       ((Pair (Some (Pair e m)) _) (TErr e m))
+       ((Pair None (Pair Nil _))
+        (TErr (quote bad_shape) "a lambda binds a variable: (fun ((x TYPE)…) E)"))
+       ((Pair None (Pair names types))
+        (match (read_et (rd_bind_all r names (some_all types)) body)
+          ((TErr e m) (TErr e m))
+          ((TOk b) (TOk (ELam types None b)))))))
+    (_ (TErr (quote bad_shape) "(fun ((x TYPE)…) E)"))))
+(fn read_lam_binders ((r Rd) (bs (List SExpr)) (names (List Name)) (types (List EType)))
+  (Pair (Option (Pair Symbol (List Int))) (Pair (List Name) (List EType)))
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair None (Pair (rev names) (rev types))))
+    ((Cons (SList (Cons (SSym x) (Cons ty Nil))) rest)
+     (match (name_of_sym x)
+       (None (Pair (Some (Pair (quote bad_name) (chars_of_sym x))) (Pair Nil Nil)))
+       ((Some n)
+        (match (read_ety (rd_es r) (rd_sc r) (rd_env r) Nil ty)
+          ((TyErr e m)
+           (Pair
+             (Some
+               (Pair e
+                 (append m
+                   " — a lambda's binder states a closed type; a lambda over a type parameter is not supported")))
+             (Pair Nil Nil)))
+          ((TyOk t _) (read_lam_binders r rest (Cons n names) (Cons t types)))))))
+    (_
+      (Pair (Some (Pair (quote bad_shape) "a lambda's binder is (NAME TYPE): its type is written"))
+        (Pair Nil Nil)))))
 
 ;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its
 ;; body, typed from the scrutinee's static type (a constructor's name is read at that type)
@@ -1124,13 +1209,56 @@
      (match (read_et r s)
        ((TErr e m) (TErr e m))
        ((TOk t)
+        (if (if (init_seen (rd_sc r)) (has_numeral_row arms) False) (read_ematch_lit r t arms)
         (match (read_earms r (rd_type r t) arms Nil)
           ((Pair (Some (Pair e m)) _) (TErr e m))
           ((Pair None as)
            (match (dead_row_in as arms)
              ((Some m) (TErr (quote unreachable_arm) m))
-             (None (TOk (EMatch t as)))))))))
+             (None (TOk (EMatch t as))))))))))
     (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
+;; numeral rows, where the file sees Init: Lean's value patterns as the elaborator reads them
+;; (elab.shard elab_match_lit) — the scrutinee once, a test per row in row order, the last row
+;; `_` or a name for the scrutinee. A local scrutinee is itself in the tests; anything else
+;; is bound once. At Nat and Int, where the scrutinee's type is fixed
+(fn read_ematch_lit ((r Rd) (t ETerm) (arms (List SExpr))) TRes
+  (if (bool_not (numeral_typed (rd_type r t)))
+    (TErr (quote pattern_type) "a numeral row matches a value read at Nat or Int")
+    (match t
+      ((EBVar _) (read_lit_rows r t arms))
+      (_
+        (match (read_lit_rows (rd_bind r (n1 (lit_scrut)) (rd_type r t)) (EBVar 0) arms)
+          ((TErr e m) (TErr e m))
+          ((TOk chain) (TOk (ELet (list t) chain))))))))
+(fn numeral_typed ((t (Option EType))) Bool
+  (match t
+    (None True)
+    (_ (bool_or (is_nat_type t) (is_int_type t)))))
+(fn read_lit_rows ((r Rd) (x ETerm) (arms (List SExpr))) TRes
+  (measure (struct arms))
+  (match arms
+    (Nil
+      (TErr (quote match_not_exhaustive)
+        "numeral rows cover no type: close the match with a `_` row or a name"))
+    ((Cons (SList (Cons (SNum k) (Cons body Nil))) rest)
+     (match (read_et r body)
+       ((TErr e m) (TErr e m))
+       ((TOk b)
+        (match (read_lit_rows r x rest)
+          ((TErr e m) (TErr e m))
+          ((TOk e)
+           (TOk (EIf (EPrim (n1 (quote =)) (list x (ELit (if (< k 0) (LInt k) (LNat k))))) b e)))))))
+    ((Cons (SList (Cons (SSym v) (Cons body Nil))) Nil)
+     (if (sym_eq v (quote _)) (read_et r body)
+     (match (name_of_sym v)
+       (None (TErr (quote bad_name) (chars_of_sym v)))
+       ((Some n)
+        (match (read_et (rd_bind r n (rd_type r x)) body)
+          ((TErr e m) (TErr e m))
+          ((TOk b) (TOk (ELet (list x) b))))))))
+    (_
+      (TErr (quote literal_rows)
+        "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all"))))
 (fn read_earms ((r Rd) (st (Option EType)) (arms (List SExpr)) (acc (List EArm)))
   (Pair (Option (Pair Symbol (List Int))) (List EArm))
   (measure (struct arms))
@@ -1366,8 +1494,15 @@
           ((TOk b)
            (match rhss
              (Nil (TOk b))
-             (_ (TOk (ELet rhss b)))))))))
+             (_ (TOk (if (init_seen (rd_sc r)) (let_chain rhss b) (ELet rhss b))))))))))
     (_ (TErr (quote bad_shape) "(let ((x E)…) E)"))))
+;; where the file sees Init a let of several bindings is a let in a let, one binding each: the
+;; elaborator reads the form so, and the erasure writes K's lets one by one
+(fn let_chain ((rs (List ETerm)) (b ETerm)) ETerm
+  (measure (struct rs))
+  (match rs
+    (Nil b)
+    ((Cons v r) (ELet (list v) (let_chain r b)))))
 (fn read_ebinds ((r Rd) (binds (List SExpr)) (acc (List ETerm)))
   (Pair (Option (Pair Symbol (List Int))) (Pair (List ETerm) Rd))
   (measure (struct binds))
@@ -1452,13 +1587,14 @@
     ((Cons t r) (ECtor c (list t (cons_chain c nl r))))))
 
 ;; ---- the declarations -------------------------------------------------------------------------
-;; COkT: a fn whose body takes instances
-(type CRes (COk EDecl) (COkT EDecl (List EDemand)) (CErr Symbol (List Int)))
+;; COkT: a fn whose body takes instances — the lambdas it lifted, each a fn with its
+;; program, and the instances it demands
+(type CRes (COk EDecl) (COkT EDecl (List EDecl) (List EDemand)) (CErr Symbol (List Int)))
 ;; fn / extern / type / sig fn / sig type: the form read alone — the program's only reading
 (fn classify_form ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
   (classify_as es sc env False s))
 ;; a fn the typed route has read and given a program: the second reading of the same form
-;; (loader.shard both_rec). Its proofs were checked there, and are passed over here
+;; (loader.shard both_recs). Its proofs were checked there, and are passed over here
 (fn classify_checked ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
   (classify_as es sc env True s))
 (fn classify_as ((es ESt) (sc Scope) (env CheckedEnv) (checked Bool) (s SExpr)) CRes
@@ -1479,6 +1615,31 @@
          (_ (CErr (quote bad_shape) "(sig fn …) or (sig type …)")))
        (CErr (quote unknown_form) (chars_of_sym h)))))))
     (_ (CErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
+
+;; a supplied realize — (realize NAME ((x TYPE)…) RET (measure M)? BODY (equations …)?) — read
+;; as the fn it is: the realized constant's program under that constant's identity — a head
+;; of the table, as pre_realize made it or, for a constant this file defined after its
+;; forms were pre-registered, as made here; the equations it cites are K's. None for a form
+;; that supplies no body. The typed route has read the same form (loader.shard both_realized)
+(fn classify_realize ((es ESt) (sc Scope) (env CheckedEnv) (id Name) (s SExpr)) (Option CRes)
+  (match s
+    ((SList (Cons _ (Cons (SSym _) (Cons (SList bs) (Cons ret (Cons b rest))))))
+     (Some
+       (read_fn_rest (if (es_has es id) es (es_register es id (sc_tag sc) (EIFn (len bs)))) sc env
+         True
+         id
+         Nil
+         bs
+         ret
+         (without_equations (Cons b rest)))))
+    (_ None)))
+(fn without_equations ((rest (List SExpr))) (List SExpr)
+  (measure (struct rest))
+  (match rest
+    (Nil Nil)
+    ((Cons (SList (Cons (SSym h) more)) Nil)
+     (if (sym_eq h (quote equations)) Nil (list (SList (Cons (SSym h) more)))))
+    ((Cons x r) (Cons x (without_equations r)))))
 
 ;; HEAD: NAME (the type parameters are `(T Type)` binders; a parameterized head is refused)
 (fn head_params ((hd SExpr)) (Pair (Option Name) (List Name))
@@ -1607,22 +1768,25 @@
                       (some_all (rev ptypes))
                       (Some rt)
                       t00)
-                    Nil)
-                  ;; the instances the body takes
+                    (tk_new id))
+                  ;; the instances the body takes, the lambdas it lifts
                   ((TkErr e m) (CErr e m))
-                  ((TkOk t eds)
+                  ((TkOk t tk)
                    (match (read_rec r pnames meas)
                      ((RcErr e m) (CErr e m))
                      ((RcOk rec0)
                       (let ((rec (settle_rec es sc env (some_all (rev ptypes)) rec0)))
-                        (match (classify_both es id (some_all (rev ptypes)) t rec)
+                        (match
+                          (match (classify_both es id (some_all (rev ptypes)) t rec)
+                            ((Some x) (Some x))
+                            (None (classify_lifted es (tk_lifted tk))))
                           ((Some (Pair e m)) (CErr e m))
                           (None
                             (let
                               ((d (EFn id (len tps2) ptypes rt (expand_rec rec) (expand_rows t))))
-                              (match eds
+                              (match (tk_demands tk)
                                 (Nil (COk d))
-                                (_ (COkT d eds)))))))))))))))))))))
+                                (eds (COkT d (tk_lifted tk) eds)))))))))))))))))))))
 ;; the body, then a measure term, each over the parameters
 (fn classify_both ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec))
   (Option (Pair Symbol (List Int)))
@@ -1756,7 +1920,10 @@
     ((EBVar _) t)
     ((ELit _) t)
     ((ECtor c as) (ECtor c (settle_args es dv tys (ctor_ptypes es c exp) as)))
-    ((ECall f as) (ECall f (settle_args es dv tys (head_ptypes es f exp) as)))
+    ((ECall f as)
+     (match (es_info es f)
+       ((Some (EITemplate _ ebs rt nt)) (ECall f (settle_tm es dv tys exp ebs rt nt as)))
+       (_ (ECall f (settle_args es dv tys (head_ptypes es f exp) as)))))
     ((EExt f as) (EExt f (settle_args es dv tys (head_ptypes es f exp) as)))
     ((EPrim p as) (settle_prim es dv tys exp p as))
     ((EMatch s arms)
@@ -1765,7 +1932,79 @@
     ((ELet rs b) (settle_let es dv tys exp rs b Nil))
     ((EIf c a b)
      (EIf (settle_ops es dv tys None c) (settle_ops es dv tys exp a) (settle_ops es dv tys exp b)))
+    ((ELam ts rt b) (ELam ts rt (settle_ops es dv (rev_onto (some_all ts) tys) rt b)))
     (EAbsurd t)))
+;; a template's call, its arguments read in the elaborator's order (elab.shard elab_args): the
+;; bare variables first, each fixing type parameters by its type; then the type expected of
+;; the call against the template's result; then the other arguments left to right, each at
+;; its binder's type as fixed so far; the numerals last. A lambda's binders fix its static
+;; parameter's domains; its body is read at the parameter's result type where that is fixed,
+;; and its result type — the parameter's, else its body's own — is kept with it for the lift
+(fn settle_tm
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (exp (Option EType))
+   (ebs (List EBind))
+   (rt EType)
+   (nt Int)
+   (as (List ETerm)))
+  (List ETerm)
+  (let ((sub0 (tm_pass es Nil tys ebs as 0 Nil)))
+    (settle_tm_args es dv tys ebs nt as
+      (match exp
+        ((Some e) (unify_ty rt e sub0))
+        (None sub0)))))
+(fn settle_tm_args
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (ebs (List EBind))
+   (nt Int)
+   (as (List ETerm))
+   (sub (List (Pair Int EType))))
+  (List ETerm)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons a ar)
+     (match ebs
+       (Nil (Cons (settle_ops es dv tys None a) (settle_tm_args es dv tys Nil nt ar sub)))
+       ((Cons b br)
+        (if (bool_not (= (tm_arg_pass a) 1)) (Cons a (settle_tm_args es dv tys br nt ar sub))
+        (let ((a1 (settle_tm_arg es dv tys b nt a sub)))
+          (Cons a1 (settle_tm_args es dv tys br nt ar (tm_bind es Nil tys b a1 sub))))))))))
+(fn settle_tm_arg
+  ((es ESt)
+   (dv (List (Pair EType Name)))
+   (tys (List (Option EType)))
+   (b EBind)
+   (nt Int)
+   (a ETerm)
+   (sub (List (Pair Int EType))))
+  ETerm
+  (match b
+    ((EBData ty) (settle_ops es dv tys (fixed_type ty sub nt) a))
+    ((EBStatic doms res)
+     (match a
+       ((ELam ts _ body)
+        (let
+          ((expb (fixed_type res (unify_tys doms ts sub) nt)) (tys1 (rev_onto (some_all ts) tys)))
+          (let ((body1 (settle_ops es dv tys1 expb body)))
+            (ELam ts
+              (match expb
+                ((Some t) (Some t))
+                (None (c_type es tys1 body1)))
+              body1))))
+       ((ECall g cs)
+        (match (shape_signature es Nil g)
+          ((Some (Pair ps _)) (ECall g (settle_args es dv tys (take (len cs) ps) cs)))
+          (None (settle_ops es dv tys None a))))
+       (_ (settle_ops es dv tys None a))))
+    (EBPackage a)))
+;; a binder's type under the type arguments fixed so far, where they fix all of it
+(fn fixed_type ((ty EType) (sub (List (Pair Int EType))) (nt Int)) (Option EType)
+  (let ((t (subst_ty (params_from sub nt 0) ty))) (if (< 0 (tvar_count t)) None (Some t))))
 ;; the arguments, each under its parameter's declared type where the head states one
 (fn settle_args
   ((es ESt)
@@ -1957,7 +2196,8 @@
        (list (ETCon (n1 (quote Int)) Nil) (ETCon (n1 (quote Int)) Nil))
        Nil)))
     (None Nil)))
-;; the rows kept by name while the body was typed, written out: `Int.ofNat x` is x, a row with
+;; the rows kept by name while the body was typed, written out: `Int.ofNat x` and a row's
+;; projection (`Fin.val i`) are their argument, a row with
 ;; an expression is the expression over its argument bound once (prog.shard's registry; the
 ;; typed route's erasure writes the same)
 (fn expand_rows ((t ETerm)) ETerm
@@ -1969,7 +2209,7 @@
     ((ECall f as) (ECall f (expand_all as)))
     ((EExt f as) (EExt f (expand_all as)))
     ((EPrim p (Cons a Nil))
-     (if (name_eq p (n2 (quote Int) (quote ofNat))) (expand_rows a)
+     (if (row_identity p) (expand_rows a)
      (match (realization_expr p)
        ((Some body) (ELet (list (expand_rows a)) body))
        (None (EPrim p (list (expand_rows a)))))))
@@ -1977,6 +2217,7 @@
     ((EMatch s arms) (EMatch (expand_rows s) (expand_arms arms)))
     ((ELet rs b) (ELet (expand_all rs) (expand_rows b)))
     ((EIf c a b) (EIf (expand_rows c) (expand_rows a) (expand_rows b)))
+    ((ELam ts rt b) (ELam ts rt (expand_rows b)))
     (EAbsurd t)))
 (fn expand_all ((ts (List ETerm))) (List ETerm)
   (measure (struct ts))
@@ -2041,11 +2282,12 @@
                    (append ", which has "
                      (append (show_nat k) " constructors: an if takes a type of two")))))))))
       (None None))))
-;; ---- the instances an E-first body takes ----------------
-;; a static argument's shape as the E-first reader takes it — a named fn of the E table with no
-;; type parameters, the static parameter's arity, the captured values' declared types (their
-;; count the captured count, the name's second key) — and the instance
-;; a body demands: its name, the template, the type arguments solved, the shapes in order
+;; ---- the instances a body takes, the lambdas it lifts ---------------------------------------
+;; a static argument's shape as this reader takes it — its identity (a fn or a sig fn of the E
+;; table with no type parameters, a lambda the body lifted, a constant of the realization
+;; registry, a package constant), the static parameter's arity (0: a package), the captured
+;; values' declared types (their count the captured count, the name's second key) — and the
+;; instance a body demands: its name, the template, the type arguments solved, the shapes in order
 (type EShape (EShape Name Int (List EType)))
 (type EDemand (EDemand Name Name (List EType) (List EShape)))
 (fn edemand_name ((d EDemand)) Name
@@ -2054,13 +2296,32 @@
 (fn edemand_template ((d EDemand)) Name
   (match d
     ((EDemand _ c _ _) c)))
+;; what taking accumulates: the fn being read, the lambdas lifted so far — their count numbers
+;; the next, lam_N under the fn's name — with their programs, and the instances demanded
+(type Tk (Tk Name Int (List EDecl) (List EDemand)))
+(fn tk_new ((id Name)) Tk (Tk id 0 Nil Nil))
+(fn tk_lifted ((k Tk)) (List EDecl)
+  (match k
+    ((Tk _ _ ls _) ls)))
+(fn tk_demands ((k Tk)) (List EDemand)
+  (match k
+    ((Tk _ _ _ ds) ds)))
+(fn tk_numbered ((k Tk) (n Int)) Tk
+  (match k
+    ((Tk id _ ls ds) (Tk id n ls ds))))
+(fn tk_lift ((k Tk) (d EDecl)) Tk
+  (match k
+    ((Tk id n ls ds) (Tk id n (append ls (list d)) ds))))
+(fn tk_demand ((k Tk) (d EDemand)) Tk
+  (match k
+    ((Tk id n ls ds) (Tk id n ls (add_edemand ds d)))))
 ;; over the read body with its parameters' types (a match's variables typed from the scrutinee,
 ;; a let's from its value, as c_type reads them): every call of a template — (ECall T args) with
 ;; T of the E table as EITemplate — becomes the call of its instance at the captured values then
-;; the data, and the instance is demanded of the loader (EDemand); the first refusal stops
-(type TkRes (TkOk ETerm (List EDemand)) (TkErr Symbol (List Int)))
-(fn take_instances ((es ESt) (sc Scope) (tys (List (Option EType))) (t ETerm) (acc (List EDemand)))
-  TkRes
+;; the data, and the instance is demanded of the loader (EDemand); a lambda is lifted
+;; (take_lambda); the first refusal stops
+(type TkRes (TkOk ETerm Tk) (TkErr Symbol (List Int)))
+(fn take_instances ((es ESt) (sc Scope) (tys (List (Option EType))) (t ETerm) (acc Tk)) TkRes
   (measure (struct t))
   (match t
     ((EBVar _) (TkOk t acc))
@@ -2074,7 +2335,10 @@
        ((TkAllErr e m) (TkErr e m))
        ((TkAllOk as1 acc1)
         (match (es_info es f)
-          ((Some (EITemplate _ ebs _ nt)) (take_instance es sc tys f ebs nt as1 acc1))
+          ((Some (EITemplate _ ebs _ nt))
+           (match (captured_bad es tys ebs as)
+             ((Some m) (TkErr (quote type_mismatch) m))
+             (None (take_instance es sc f ebs nt (tm_solve es Nil tys ebs as) as1 acc1))))
           (_ (TkOk (ECall f as1) acc1))))))
     ((EPrim p as)
      (match (take_all es sc tys as acc Nil)
@@ -2088,7 +2352,7 @@
      (match (take_instances es sc tys s acc)
        ((TkErr e m) (TkErr e m))
        ((TkOk s1 acc1)
-        (match (take_arms es sc tys (c_type es tys s1) arms acc1 Nil)
+        (match (take_arms es sc tys (c_type es tys s) arms acc1 Nil)
           ((TkArmsErr e m) (TkErr e m))
           ((TkArmsOk arms1 acc2) (TkOk (EMatch s1 arms1) acc2))))))
     ((ELet rs b) (take_let es sc tys rs b acc Nil))
@@ -2102,15 +2366,11 @@
            (match (take_instances es sc tys b acc2)
              ((TkErr e m) (TkErr e m))
              ((TkOk b1 acc3) (TkOk (EIf c1 a1 b1) acc3))))))))
+    ((ELam ts rt b) (take_lambda es sc tys ts rt b acc))
     (EAbsurd (TkOk t acc))))
-(type TkAll (TkAllOk (List ETerm) (List EDemand)) (TkAllErr Symbol (List Int)))
+(type TkAll (TkAllOk (List ETerm) Tk) (TkAllErr Symbol (List Int)))
 (fn take_all
-  ((es ESt)
-   (sc Scope)
-   (tys (List (Option EType)))
-   (ts (List ETerm))
-   (acc (List EDemand))
-   (out (List ETerm)))
+  ((es ESt) (sc Scope) (tys (List (Option EType))) (ts (List ETerm)) (acc Tk) (out (List ETerm)))
   TkAll
   (measure (struct ts))
   (match ts
@@ -2119,14 +2379,14 @@
      (match (take_instances es sc tys t acc)
        ((TkErr e m) (TkAllErr e m))
        ((TkOk t1 acc1) (take_all es sc tys r acc1 (Cons t1 out)))))))
-(type TkArms (TkArmsOk (List EArm) (List EDemand)) (TkArmsErr Symbol (List Int)))
+(type TkArms (TkArmsOk (List EArm) Tk) (TkArmsErr Symbol (List Int)))
 (fn take_arms
   ((es ESt)
    (sc Scope)
    (tys (List (Option EType)))
    (st (Option EType))
    (arms (List EArm))
-   (acc (List EDemand))
+   (acc Tk)
    (out (List EArm)))
   TkArms
   (measure (struct arms))
@@ -2143,7 +2403,7 @@
    (tys (List (Option EType)))
    (rs (List ETerm))
    (b ETerm)
-   (acc (List EDemand))
+   (acc Tk)
    (out (List ETerm)))
   TkRes
   (measure (struct rs))
@@ -2155,69 +2415,270 @@
     ((Cons v r)
      (match (take_instances es sc tys v acc)
        ((TkErr e m) (TkErr e m))
-       ((TkOk v1 acc1) (take_let es sc (Cons (c_type es tys v1) tys) r b acc1 (Cons v1 out)))))))
-;; one template call: the type arguments solved by unification of the written binders' E types
-;; against the arguments' (a static binder's domains and result against its name's trailing
-;; parameter types and result; a data binder's type against its argument's static type), the
-;; shapes read off the static arguments, the instance named as on the typed route; a type
-;; argument left open — undetermined, or a type parameter of the body — is refused, as on it
-(fn take_instance
+       ;; typed as read: an instance's call has no type of its own
+       ((TkOk v1 acc1) (take_let es sc (Cons (c_type es tys v) tys) r b acc1 (Cons v1 out)))))))
+;; a lambda, lifted: OWNER.lam_N, numbered as the lambdas are met — an outer one before those
+;; in its body, as the erasure numbers them (erasure.shard lift_lambda). The body's variables
+;; that are not the lambda's own are captured, first occurrence first, as the fn's leading
+;; parameters at their declared types; its binders follow; its result is the type kept with
+;; it (settle_tm), else its body's static type. What it leaves in the body is the fn applied
+;; to the captured variables — a named partial application, which take_args reads as one written
+(fn take_lambda
   ((es ESt)
    (sc Scope)
    (tys (List (Option EType)))
+   (ts (List EType))
+   (rt (Option EType))
+   (b ETerm)
+   (acc Tk))
+  TkRes
+  (match acc
+    ((Tk owner n0 _ _)
+     (let ((n (+ n0 1)) (tys1 (rev_onto (some_all ts) tys)))
+       (match (take_instances es sc tys1 b (tk_numbered acc n))
+         ((TkErr e m) (TkErr e m))
+         ((TkOk b1 acc1)
+          (let ((free (rev (free_vars b (len ts) Nil))))
+            (match (closed_types tys free Nil)
+              (None
+                (TkErr (quote function_value)
+                  "a lambda over a local with no closed E type — one whose type the declarations do not fix, or one over a type parameter"))
+              ((Some ctys)
+               (match (lam_result es tys ts rt b)
+                 (None
+                   (TkErr (quote function_value)
+                     "a lambda whose result type the declarations do not fix: name it as a fn, whose result is written"))
+                 ((Some rty)
+                  (if (< 0 (tvar_count rty))
+                    (TkErr (quote function_value)
+                      "a lambda whose result is over a type parameter is not supported")
+                    (let
+                      ((name (name_append owner (n1 (sym_of_chars (append "lam_" (show_nat n)))))))
+                      (TkOk (ECall name (bvars_of free))
+                        (tk_lift acc1
+                          (EFn name 0 (append ctys ts) rty RecNone
+                            (expand_rows (lam_body b1 (len ts) free))))))))))))))))))
+;; the variables of a term past its d innermost binders, as indices of the body around it,
+;; newest first: each once, in order of first occurrence (an operator's operands and a call's
+;; arguments left to right, a match's scrutinee before its rows, a let's values before its body)
+(fn free_vars ((t ETerm) (d Int) (acc (List Int))) (List Int)
+  (measure (struct t))
+  (match t
+    ((EBVar i)
+     (if (< i d) acc
+     (if (mem_int (- i d) acc) acc
+     (Cons (- i d) acc))))
+    ((ELit _) acc)
+    ((ECtor _ as) (free_all as d acc))
+    ((ECall _ as) (free_all as d acc))
+    ((EPrim _ as) (free_all as d acc))
+    ((EExt _ as) (free_all as d acc))
+    ((EMatch s arms) (free_arms arms d (free_vars s d acc)))
+    ((ELet rs b) (free_let rs b d acc))
+    ((EIf a b c) (free_vars c d (free_vars b d (free_vars a d acc))))
+    ((ELam ts _ b) (free_vars b (+ d (len ts)) acc))
+    (EAbsurd acc)))
+(fn free_all ((ts (List ETerm)) (d Int) (acc (List Int))) (List Int)
+  (measure (struct ts))
+  (match ts
+    (Nil acc)
+    ((Cons t r) (free_all r d (free_vars t d acc)))))
+(fn free_arms ((arms (List EArm)) (d Int) (acc (List Int))) (List Int)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (EArm p b) r) (free_arms r d (free_vars b (+ d (pat_slots p)) acc)))))
+(fn free_let ((rs (List ETerm)) (b ETerm) (d Int) (acc (List Int))) (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil (free_vars b d acc))
+    ((Cons v r) (free_let r b (+ d 1) (free_vars v d acc)))))
+;; the slots a pattern binds
+(fn pat_slots ((p EPat)) Int
+  (measure (struct p))
+  (match p
+    (PVar 1)
+    ((PLit _) 0)
+    ((PCtor _ subs) (pat_slots_all subs))))
+(fn pat_slots_all ((ps (List EPat))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons p r) (+ (pat_slots p) (pat_slots_all r)))))
+;; the captured variables' types, each fixed and closed
+(fn closed_types ((tys (List (Option EType))) (free (List Int)) (acc (List EType)))
+  (Option (List EType))
+  (measure (struct free))
+  (match free
+    (Nil (Some (rev acc)))
+    ((Cons j r)
+     (match (nth tys j)
+       ((Some (Some t)) (if (< 0 (tvar_count t)) None (closed_types tys r (Cons t acc))))
+       (_ None)))))
+(fn bvars_of ((js (List Int))) (List ETerm)
+  (measure (struct js))
+  (match js
+    (Nil Nil)
+    ((Cons j r) (Cons (EBVar j) (bvars_of r)))))
+;; the lifted fn's body: a variable under the d binders in scope — the lambda's own and those
+;; of its body — is as it was; a captured one is its parameter, the captured leading
+(fn lam_body ((t ETerm) (d Int) (free (List Int))) ETerm
+  (measure (struct t))
+  (match t
+    ((EBVar i)
+     (if (< i d) t
+     (match (index_of_int (- i d) free 0)
+       ((Some p) (EBVar (+ d (- (- (len free) 1) p))))
+       (None t))))
+    ((ELit _) t)
+    ((ECtor c as) (ECtor c (lam_all as d free)))
+    ((ECall f as) (ECall f (lam_all as d free)))
+    ((EPrim q as) (EPrim q (lam_all as d free)))
+    ((EExt x as) (EExt x (lam_all as d free)))
+    ((EMatch s arms) (EMatch (lam_body s d free) (lam_arms arms d free)))
+    ((ELet rs b) (lam_let rs b d free Nil))
+    ((EIf a b c) (EIf (lam_body a d free) (lam_body b d free) (lam_body c d free)))
+    ((ELam ts rt b) (ELam ts rt (lam_body b (+ d (len ts)) free)))
+    (EAbsurd t)))
+(fn lam_all ((ts (List ETerm)) (d Int) (free (List Int))) (List ETerm)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t r) (Cons (lam_body t d free) (lam_all r d free)))))
+(fn lam_arms ((arms (List EArm)) (d Int) (free (List Int))) (List EArm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (EArm p b) r) (Cons (EArm p (lam_body b (+ d (pat_slots p)) free)) (lam_arms r d free)))))
+(fn lam_let ((rs (List ETerm)) (b ETerm) (d Int) (free (List Int)) (out (List ETerm))) ETerm
+  (measure (struct rs))
+  (match rs
+    (Nil (ELet (rev out) (lam_body b d free)))
+    ((Cons v r) (lam_let r b (+ d 1) free (Cons (lam_body v d free) out)))))
+;; one template call: the type arguments its arguments fix (tm_solve — over the arguments
+;; as read, before a lambda is lifted or an inner instance taken, where each still has its
+;; type), the shapes read off the static arguments, the instance named as on the typed route;
+;; a type argument left open — undetermined, or a type parameter of the body — is refused, as on it
+(fn take_instance
+  ((es ESt)
+   (sc Scope)
    (c Name)
    (ebs (List EBind))
    (nt Int)
+   (sub (List (Pair Int EType)))
    (args (List ETerm))
-   (acc (List EDemand)))
+   (acc Tk))
   TkRes
-  (match (take_args es tys c ebs args Nil Nil Nil Nil)
+  (match (take_args es (tk_lifted acc) c ebs args Nil Nil Nil)
     ((TaE e m) (TkErr e m))
-    ((TaS sub shapes caps data)
+    ((TaS shapes caps data)
      (let ((tye (params_from sub nt 0)))
        (if (< 0 (tvar_count_all tye))
          (TkErr (quote function_value)
            (append (show_name c)
              ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body; an instance is at closed types"))
          (let ((name (instance_name_of sc c tye (eshape_keys shapes))))
-           (TkOk (ECall name (append caps data)) (add_edemand acc (EDemand name c tye shapes)))))))))
-(type TaS
-  (TaS (List (Pair Int EType)) (List EShape) (List ETerm) (List ETerm))
-  (TaE Symbol (List Int)))
+           (TkOk (ECall name (append caps data)) (tk_demand acc (EDemand name c tye shapes)))))))))
+;; the type arguments a template's call fixes, in the elaborator's order: its bare variables,
+;; then its other arguments left to right, then its numerals — a type parameter is bound once,
+;; by the first that reaches it. What the type expected of the call fixes is in the lambdas'
+;; kept result types (settle_tm)
+(fn tm_solve
+  ((es ESt) (ls (List EDecl)) (tys (List (Option EType))) (ebs (List EBind)) (args (List ETerm)))
+  (List (Pair Int EType))
+  (tm_pass es ls tys ebs args 2 (tm_pass es ls tys ebs args 1 (tm_pass es ls tys ebs args 0 Nil))))
+(fn tm_pass
+  ((es ESt)
+   (ls (List EDecl))
+   (tys (List (Option EType)))
+   (ebs (List EBind))
+   (args (List ETerm))
+   (pass Int)
+   (sub (List (Pair Int EType))))
+  (List (Pair Int EType))
+  (measure (struct ebs))
+  (match ebs
+    (Nil sub)
+    ((Cons b br)
+     (match args
+       (Nil sub)
+       ((Cons a ar)
+        (tm_pass es ls tys br ar pass (if (= (tm_arg_pass a) pass) (tm_bind es ls tys b a sub) sub)))))))
+(fn tm_arg_pass ((a ETerm)) Int
+  (match a
+    ((EBVar _) 0)
+    ((ELit (LNat _)) 2)
+    ((ELit (LInt _)) 2)
+    (_ 1)))
+;; one argument against its binder: a data argument's static type; a static argument's
+;; parameter types past its captured values and its result — a lambda's binders and its kept
+;; result type, else its body's own
+(fn tm_bind
+  ((es ESt)
+   (ls (List EDecl))
+   (tys (List (Option EType)))
+   (b EBind)
+   (a ETerm)
+   (sub (List (Pair Int EType))))
+  (List (Pair Int EType))
+  (match b
+    ((EBData ty)
+     (match (c_type es tys a)
+       ((Some at) (unify_ty ty at sub))
+       (None sub)))
+    ((EBStatic doms res)
+     (match a
+       ((ELam ts rt body)
+        (match (lam_result es tys ts rt body)
+          ((Some t) (unify_ty res t (unify_tys doms ts sub)))
+          (None (unify_tys doms ts sub))))
+       ((ECall g cs)
+        (match (shape_signature es ls g)
+          ((Some (Pair ps grt)) (unify_ty res grt (unify_tys doms (drop (len cs) ps) sub)))
+          (None sub)))
+       (_ sub)))
+    (EBPackage sub)))
+(fn lam_result
+  ((es ESt) (tys (List (Option EType))) (ts (List EType)) (rt (Option EType)) (body ETerm))
+  (Option EType)
+  (match rt
+    ((Some t) (Some t))
+    (None (c_type es (rev_onto (some_all ts) tys) body))))
+;; a template's call's static type: its result under the type arguments its arguments fix
+(fn tm_call_type
+  ((es ESt) (tys (List (Option EType))) (ebs (List EBind)) (rt EType) (nt Int) (args (List ETerm)))
+  (Option EType)
+  (fixed_type rt (tm_solve es Nil tys ebs args) nt))
+;; the shapes of a call's static arguments, the captured values group by group, the data: over
+;; the arguments once taken — a lambda is by now its lifted fn applied to what it captured
+(type TaS (TaS (List EShape) (List ETerm) (List ETerm)) (TaE Symbol (List Int)))
 (fn take_args
   ((es ESt)
-   (tys (List (Option EType)))
+   (ls (List EDecl))
    (c Name)
    (ebs (List EBind))
    (args (List ETerm))
-   (sub (List (Pair Int EType)))
    (shapes (List EShape))
    (caps (List ETerm))
    (data (List ETerm)))
   TaS
   (measure (struct ebs))
   (match ebs
-    (Nil (TaS sub (rev shapes) (rev caps) (rev data)))
+    (Nil (TaS (rev shapes) (rev caps) (rev data)))
     ((Cons b br)
      (match args
-       (Nil (TaS sub (rev shapes) (rev caps) (rev data)))
+       (Nil (TaS (rev shapes) (rev caps) (rev data)))
        ((Cons a ar)
         (match b
-          ((EBData ty)
-           (match (c_type es tys a)
-             (None
-               (TaE (quote function_value)
-                 (append (show_name c)
-                   ": an argument whose type the declarations do not determine — the type arguments of an instance are read off its arguments' types")))
-             ((Some at) (take_args es tys c br ar (unify_ty ty at sub) shapes caps (Cons a data)))))
-          ((EBStatic doms res)
+          ((EBData _) (take_args es ls c br ar shapes caps (Cons a data)))
+          ((EBStatic doms _)
            (match a
              ((ECall g cs)
-              (match (fn_signature es g)
+              (match (shape_signature es ls g)
                 (None
                   (TaE (quote function_value)
                     (append (show_name g) ": a static argument with no program of the E table")))
-                ((Some (Pair ps grt))
+                ((Some (Pair ps _))
                  (let ((n (len cs)))
                    (if (bool_not (= (len (drop n ps)) (len doms)))
                      (TaE (quote function_value)
@@ -2226,29 +2687,68 @@
                            (append (show_nat (len (drop n ps)))
                              (append " parameters where the static parameter's arity is "
                                (show_nat (len doms)))))))
-                     (match (captured_ok es tys cs (take n ps))
-                       ((Some m) (TaE (quote type_mismatch) (append (show_name g) m)))
-                       (None
-                         (take_args es tys c br ar
-                           (unify_ty res grt (unify_tys doms (drop n ps) sub))
-                           (Cons (EShape g (len doms) (take n ps)) shapes)
-                           (rev_onto cs caps)
-                           data))))))))
+                     (take_args es ls c br ar (Cons (EShape g (len doms) (take n ps)) shapes)
+                       (rev_onto cs caps)
+                       data))))))
              (_
                (TaE (quote function_value)
                  (append (show_name c)
-                   ": a static argument is a name or a named partial application")))))
+                   ": a static argument is a lambda, a name or a named partial application")))))
           (EBPackage
-            (TaE (quote function_value)
-              (append (show_name c) ": a package parameter in a body with no L reading")))))))))
+            (match a
+              ((ECall g Nil) (take_args es ls c br ar (Cons (EShape g 0 Nil) shapes) caps data))
+              (_
+                (TaE (quote function_value)
+                  (append (show_name c) ": a package argument names a package constant")))))))))))
+;; a static argument's parameter types and result: a fn's or a sig fn's of the table, a lambda
+;; this body lifted, a constant of the realization registry (the erasure's shape_kind reads a
+;; program of the table before the registry)
+(fn shape_signature ((es ESt) (ls (List EDecl)) (g Name)) (Option (Pair (List EType) EType))
+  (match (fn_signature es g)
+    ((Some sg) (Some sg))
+    (None
+      (match (lifted_signature ls g)
+        ((Some sg) (Some sg))
+        (None (registry_signature g))))))
+(fn lifted_signature ((ls (List EDecl)) (g Name)) (Option (Pair (List EType) EType))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons (EFn n _ ps rt _ _) r) (if (name_eq n g) (Some (Pair ps rt)) (lifted_signature r g)))
+    ((Cons _ r) (lifted_signature r g))))
 ;; a fn's parameter types and result (an EFn's or an ESig's)
 (fn fn_signature ((es ESt) (g Name)) (Option (Pair (List EType) EType))
   (match (es_find_decl es g)
     ((Some (EFn _ _ ps rt _ _)) (Some (Pair ps rt)))
     ((Some (ESig _ _ ps rt)) (Some (Pair ps rt)))
     (_ None)))
-;; the captured values' static types against the declared parameter types, in order: None when
-;; every determined one agrees (an undetermined one is the run's, as any call's), else what differs
+;; a named partial application's captured values against its name's declared parameter types,
+;; over the call as read: None when every determined one agrees (an undetermined one is the
+;; run's, as any call's), else what differs
+(fn captured_bad ((es ESt) (tys (List (Option EType))) (ebs (List EBind)) (args (List ETerm)))
+  (Option (List Int))
+  (measure (struct ebs))
+  (match ebs
+    (Nil None)
+    ((Cons b br)
+     (match args
+       (Nil None)
+       ((Cons a ar)
+        (match
+          (match b
+            ((EBStatic _ _)
+             (match a
+               ((ECall g cs)
+                (match (shape_signature es Nil g)
+                  ((Some (Pair ps _))
+                   (match (captured_ok es tys cs (take (len cs) ps))
+                     ((Some m) (Some (append (show_name g) m)))
+                     (None None)))
+                  (None None)))
+               (_ None)))
+            (_ None))
+          ((Some m) (Some m))
+          (None (captured_bad es tys br ar))))))))
 (fn captured_ok ((es ESt) (tys (List (Option EType))) (cs (List ETerm)) (ps (List EType)))
   (Option (List Int))
   (measure (struct cs))
@@ -2277,6 +2777,16 @@
   (match ds
     (Nil False)
     ((Cons d r) (if (name_eq (edemand_name d) n) True (has_edemand r n)))))
+;; the lifted lambdas' bodies pass what the fn's own does (classify_body)
+(fn classify_lifted ((es ESt) (ls (List EDecl))) (Option (Pair Symbol (List Int)))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons (EFn n _ ps _ _ body) r)
+     (match (classify_body es n (some_all (rev ps)) body)
+       ((Some x) (Some x))
+       (None (classify_lifted es r))))
+    ((Cons _ r) (classify_lifted es r))))
 
 ;; what the typed pass refuses: a sig type matched against a constructor; a constructor of another
 ;; type; an `if` whose condition is a sig type, or a type that is not a two-constructor inductive;
@@ -2298,6 +2808,7 @@
        (bool_and (matrix_exh es (arm_rows arms) 1 (matrix_fuel)) (c_exh_arms es arms))))
     ((ELet rs b) (bool_and (c_exh_all es rs) (c_exh es b)))
     ((EIf a b c) (bool_and (c_exh es a) (bool_and (c_exh es b) (c_exh es c))))
+    ((ELam _ _ b) (c_exh es b))
     (EAbsurd True)))
 (fn c_exh_all ((es ESt) (ts (List ETerm))) Bool
   (measure (struct ts))
@@ -2407,6 +2918,7 @@
              (match (c_leak es tys b)
                ((Some x) (Some x))
                (None (c_leak es tys c))))))))
+    ((ELam ts _ b) (c_leak es (rev_onto (some_all ts) tys) b))
     (EAbsurd None)))
 ;; an `if`'s condition: where the declarations determine its static type, that type must be a
 ;; transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type — whose second
@@ -2571,7 +3083,10 @@
         (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt)))
        ((Some (ESig _ _ ps rt))
         (Some (subst_ty (params_from (unify_all es tys ps args Nil) (tvar_count rt) 0) rt)))
-       (_ None)))
+       (_
+         (match (es_info es f)
+           ((Some (EITemplate _ ebs rt nt)) (tm_call_type es tys ebs rt nt args))
+           (_ None)))))
     ((EExt f args)
      (match (es_find_decl es f)
        ((Some (EExtern _ _ ps rt))
@@ -2580,13 +3095,23 @@
     ((EPrim n args)
      (match (prim_find n)
        ((Some (Prim code _)) (Some (prim_static es tys code args)))
-       (None (realization_type n))))  ; a row kept by name while the body is typed (settle_ops)
+       ;; a row kept by name while the body is typed (settle_ops): a subtype's value is at its base
+       (None
+         (if (name_eq n (n2 (quote Subtype) (quote val)))
+           (match args
+             ((Cons x Nil)
+              (match (c_type es tys x)
+                ((Some (ETCon _ (Cons a Nil))) (Some a))
+                (_ None)))
+             (_ None))
+           (realization_type n)))))
     ((EMatch s arms)
      (match (live_arm arms)
        ((Some (EArm p b)) (c_type es (rev_onto (pat_types es (c_type es tys s) p) tys) b))
        (None None)))
     ((ELet rs b) (c_type_let es tys rs b))
     ((EIf _ b _) (c_type es tys b))
+    ((ELam _ _ _) None)
     (EAbsurd None)))
 ;; the first arm that is not a refuted row: a match's static type is read off it
 (fn live_arm ((arms (List EArm))) (Option EArm)

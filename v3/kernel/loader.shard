@@ -1388,7 +1388,8 @@
       ((RzOk es1 d aux thms pending lifted demands)
        (match (admit_matchers l f s aux)
          ((Pair l9 None) l9)
-         ((Pair l9 (Some f9)) (load_realized l9 f9 s es1 d thms pending lifted demands))))
+         ((Pair l9 (Some f9))
+          (both_realized (load_realized l9 f9 s es1 d thms pending lifted demands) l sc s d lifted))))
       ((RzTemplate k e body prec binds rt rl ls aux thms pending)
        (match (admit_matchers l f s aux)
          ((Pair l9 None) l9)
@@ -1566,14 +1567,30 @@
        (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d))
          (RRun (form_head s) (edecl_name d) why route))
        f))
-    ((COkT d eds)  ; the instances the body takes built first — programs, no L half
-     (match (build_e_demands l1 f (edecl_name d) eds)
+    ;; the lambdas the body lifted added, then the instances it takes built — programs, no L half
+    ((COkT d lifted eds)
+     (match (build_e_demands (add_e_lifted l1 f lifted why route) f (edecl_name d) eds)
        ((Pair l2 None) (Pair l2 f))
        ((Pair l2 (Some f2))
         (Pair
           (ld_rec (ld_with_e l2 (es_add_decl (Load.etab l2) d))
             (RRun (form_head s) (edecl_name d) why route))
           f2))))))
+;; the lambdas a body read by the classifier lifted: each a program alone, added once
+(fn add_e_lifted ((l Load) (f Fx) (ls (List EDecl)) (why Symbol) (route Symbol)) Load
+  (measure (struct ls))
+  (match ls
+    (Nil l)
+    ((Cons d r)
+     (add_e_lifted
+       (if (es_has (Load.etab l) (edecl_name d)) l
+       (ld_rec
+         (ld_with_e l (es_add_decl (es_register_all (Load.etab l) (Fx.module f) (decl_infos d)) d))
+         (RRun (quote fn) (edecl_name d) why route)))
+       f
+       r
+       why
+       route))))
 ;; the classifier's program for a fn whose signature did elaborate: a later body may still bind
 ;; it as a callee-local and stay on the typed route
 (fn load_e_sig ((l1 Load) (f Fx) (s SExpr) (why Symbol)) (Pair Load Fx)
@@ -1603,7 +1620,7 @@
                    (append (chars_of_sym r) (append ": " m)))))))))
        f))
     ((COk _) (load_e_sig (ld_miss l1 r m) f s (quote no_l_identity)))
-    ((COkT _ _) (load_e_sig (ld_miss l1 r m) f s (quote no_l_identity)))))
+    ((COkT _ _ _) (load_e_sig (ld_miss l1 r m) f s (quote no_l_identity)))))
 ;; a signature with no L reading: the classifier's program alone. When the classifier
 ;; refuses the form too, its refusal carries what the signature's reading met — a result type
 ;; the elaborator could not read is `unknown_type` to the classifier, which names the symbol
@@ -1621,7 +1638,7 @@
              m2)))
        f))
     ((COk _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))
-    ((COkT _ _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))))
+    ((COkT _ _ _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))))
 ;; what a signature's reading met, noted where the file sees Init (settle_missed); a file
 ;; that sees none has no L reading by construction, and nothing to fetch
 (fn unread_noted ((l Load) (f Fx) (e Symbol) (m (List Int))) Load
@@ -1746,7 +1763,8 @@
                      l1
                      sc
                      s
-                     d))
+                     d
+                     lifted))
                   ((DfErr e m) (Pair (ld_rec l1b (RClassify k e m)) f1b))
                   ((DfAux es2 auxs)
                    (if (< fuel 1)
@@ -1761,24 +1779,73 @@
                   ((DfOk es2 obls dd eqs wf)
                    (match (admit_matchers (ld_with_e l1b (es_add_decl es2 d)) f1b s (pd_aux pd))
                      ((Pair l2 (Some f2))
-                      (both_noted (load_defined l2 f2 d obls dd eqs wf) l1 sc s d))
+                      (both_noted (load_defined l2 f2 d obls dd eqs wf) l1 sc s d lifted))
                      ((Pair l2 None) (Pair l2 f1b)))))))))))))))
 ;; under --both: the classifier's reading of a fn the typed route gave a program, over the
 ;; same form in the state the typed route began in, compared with the erasure by the dump's
-;; text (dump.shard: a projection — a literal's kind and the recursion clause are outside it)
-(fn both_noted ((r (Pair Load Fx)) (l1 Load) (sc Scope) (s SExpr) (d EDecl)) (Pair Load Fx)
+;; text (dump.shard: a projection — a literal's kind and the recursion clause are outside it);
+;; then the lambdas the two readings lifted out of the body, name by name
+(fn both_noted ((r (Pair Load Fx)) (l1 Load) (sc Scope) (s SExpr) (d EDecl) (lifted (List Lifted)))
+  (Pair Load Fx)
   (if (bool_not (Load.both l1)) r
   (match r
-    ((Pair l2 f2) (Pair (ld_rec l2 (both_rec l1 sc s d)) f2)))))
-(fn both_rec ((l1 Load) (sc Scope) (s SExpr) (d EDecl)) Rec
-  (let ((k (form_name sc s)) (t (dm_decl (Load.etab l1) d)))
-    (match (classify_checked (Load.etab l1) sc (Load.env l1) s)
-      ((CErr e m) (RBoth k (quote unread) (append (chars_of_sym e) (append ": " m))))
-      ((COk d2) (both_cmp k t (dm_decl (Load.etab l1) d2)))
-      ((COkT d2 _) (both_cmp k t (dm_decl (Load.etab l1) d2))))))
+    ((Pair l2 f2) (Pair (ld_rec_all l2 (both_recs l1 sc s d lifted)) f2)))))
+(fn ld_rec_all ((l Load) (rs (List Rec))) Load
+  (measure (struct rs))
+  (match rs
+    (Nil l)
+    ((Cons x r) (ld_rec_all (ld_rec l x) r))))
+(fn both_recs ((l1 Load) (sc Scope) (s SExpr) (d EDecl) (lifted (List Lifted))) (List Rec)
+  (both_of (Load.etab l1) (form_name sc s) d lifted
+    (classify_checked (Load.etab l1) sc (Load.env l1) s)))
+(fn both_of ((es ESt) (k Name) (d EDecl) (lifted (List Lifted)) (res CRes)) (List Rec)
+  (match res
+    ((CErr e m) (list (RBoth k (quote unread) (append (chars_of_sym e) (append ": " m)))))
+    ((COk d2) (Cons (both_cmp k (dm_decl es d) (dm_decl es d2)) (both_lifted es lifted Nil)))
+    ((COkT d2 ls _) (Cons (both_cmp k (dm_decl es d) (dm_decl es d2)) (both_lifted es lifted ls)))))
+;; a supplied realize is compared as a fn is: the classifier's reading of its body under the
+;; realized constant's identity, in the state the typed route began in
+(fn both_realized ((l2 Load) (l1 Load) (sc Scope) (s SExpr) (d EDecl) (lifted (List Lifted))) Load
+  (if (bool_not (Load.both l1)) l2
+  (match (classify_realize (Load.etab l1) sc (Load.env l1) (edecl_name d) s)
+    (None l2)
+    ((Some res) (ld_rec_all l2 (both_of (Load.etab l1) (edecl_name d) d lifted res))))))
 (fn both_cmp ((k Name) (t (List Int)) (p (List Int))) Rec
   (if (int_list_eq t p) (RBoth k (quote same) Nil)
   (RBoth k (quote differs) (append "typed: " (append t (append " | plain: " p))))))
+;; each lambda of the typed route beside the classifier's of its name, then the classifier's
+;; the typed route has none of
+(fn both_lifted ((es ESt) (typed (List Lifted)) (plain (List EDecl))) (List Rec)
+  (measure (struct typed))
+  (match typed
+    (Nil (both_plain_only es plain))
+    ((Cons (Lifted n prog _) r)
+     (Cons
+       (match (edecl_named n plain)
+         ((Some d2) (both_cmp n (dm_decl es prog) (dm_decl es d2)))
+         (None
+           (RBoth n (quote differs)
+             (append "typed: " (append (dm_decl es prog) " | plain: no such lambda")))))
+       (both_lifted es r (edecls_without n plain))))))
+(fn both_plain_only ((es ESt) (plain (List EDecl))) (List Rec)
+  (measure (struct plain))
+  (match plain
+    (Nil Nil)
+    ((Cons d r)
+     (Cons
+       (RBoth (edecl_name d) (quote differs)
+         (append "typed: no such lambda | plain: " (dm_decl es d)))
+       (both_plain_only es r)))))
+(fn edecl_named ((n Name) (ds (List EDecl))) (Option EDecl)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d r) (if (name_eq (edecl_name d) n) (Some d) (edecl_named n r)))))
+(fn edecls_without ((n Name) (ds (List EDecl))) (List EDecl)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d r) (if (name_eq (edecl_name d) n) (edecls_without n r) (Cons d (edecls_without n r))))))
 ;; a template: defined in K as any fn — the definition, its equations
 ;; — and kept with its binders' roles for the instances later bodies demand; no program of its
 ;; own, so no RUNNABLE and no DEFINE: TEMPLATE. One that K cannot define has no L half to
@@ -1963,7 +2030,7 @@
      (let ((name (edemand_name ed)) (c (edemand_template ed)))
        (match (assoc_demand name (Load.instances l))
          ((Some d0)
-          (match (edemand_to_demand (Load.env l) ed)
+          (match (edemand_to_demand (Load.etab l) (Load.env l) ed)
             (None
               (Pair
                 (ld_rec l
@@ -2580,7 +2647,7 @@
     (match (classify_form (Load.etab l) (fx_scope l f) (Load.env l) s)
       ((CErr e m) (ld_rec l (RLoadErr (fx_file f) e m)))
       ((COk d) (ld_with_e l (es_add_decl (Load.etab l) d)))
-      ((COkT _ _) (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) "a twin takes no instance"))))))
+      ((COkT _ _ _) (ld_rec l (RLoadErr (fx_file f) (quote bad_shape) "a twin takes no instance"))))))
 ;; a view's `sig fn` whose signature names an E-only type (K holds no constant
 ;; for it) is an E parameter only — the head `run` links to the implementation's fn, no
 ;; axiom in K; the K seal's view is such a view
@@ -2593,7 +2660,7 @@
          (ld_rec (ld_with_e l (es_add_decl (Load.etab l) (ESig n nt ps rt))) (RParam n (quote fn) 0))
          (fx_mix f (hash_name n))))
       ((COk _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
-      ((COkT _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
+      ((COkT _ _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f))
       ((CErr _ _) (Pair (ld_rec l (RReadErr (fx_file f) e m)) f)))))
 ;; a view parameter: an axiom-kind constant to K, a parameter of the load to the policy
 (fn admit_param ((l Load) (f Fx) (d Declaration) (kind Symbol) (arity Int)) (Pair Load Fx)
@@ -3535,6 +3602,7 @@
     ((EBVar _) acc)
     ((ELit _) acc)
     (EAbsurd acc)
+    ((ELam _ _ b) (bin_heads b acc))
     ((ECtor _ as) (bin_heads_all as acc))
     ((EPrim _ as) (bin_heads_all as acc))
     ((ECall g as)
@@ -4281,7 +4349,7 @@
                (RImplErr n (quote impl_signature) "the implementation declares no fn of that name"))
              (im_mark im (quote fn) n)))))
       ((COk _) (Pair l im))
-      ((COkT _ _) (Pair l im)))))
+      ((COkT _ _ _) (Pair l im)))))
 ;; (fulfills NAME PROOF): the requirement's statement here, the proof a theorem or pending
 (fn fulfil ((l Load) (im Im) (n Name) (rargs (List SExpr)) (proof SExpr)) (Pair Load Im)
   (let ((sc (fx_scope l (im_fx_impl im))))

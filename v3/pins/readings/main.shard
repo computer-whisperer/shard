@@ -6,9 +6,13 @@
 ;; numerals alone; a comparison where a Bool is expected is the decision's value; Init's
 ;; operations written by name are the table's entries. Part 2: what is written and erased —
 ;; a type, a proof, a hypothesis — and what stands for its one runtime field: read both ways,
-;; one text. Part 3: the controls — a difference the comparison reports, a body the classifier
-;; does not read, a runtime argument that is not written. Part 4: a program the classifier
-;; alone reads (a Symbol has no form in the logic), run.
+;; one text. Part 3: a function as an argument — a lambda lifted to a fn of its own, which is
+;; read both ways too, a name, a constant of the registry, a package — two shapes, numeral
+;; rows and a let of several bindings, and a supplied realize: one text. Part 4: the controls — a runtime argument
+;; that is not written, a package's field read off its constant, and a lambda whose proof
+;; names a local its program does not, which the typed route captures and the classifier
+;; cannot see. Part 5: a program the classifier alone reads (a Symbol has no form in the
+;; logic), run.
 (import Init)
 
 ;; ---- 1. one program by both readings
@@ -65,17 +69,74 @@
 (fn eq_derived ((a Coin) (b Coin)) Nat (if (= a b) 1 0))
 (fn every_binder ((xs (List Nat))) (List Nat) (@List.cons Nat 0 xs))
 (fn width_written ((x (BitVec 8))) Nat (@BitVec.toNat 8 x))
+(fn row_typed ((i (Fin 9))) Nat (- (Fin.val i) 1))
 
-;; ---- 3. the controls
-(fn lit_pattern ((n Nat)) Nat
+;; ---- 3. a function as an argument, and two shapes
+(structure Monoid ((a Type)) (op (-> a a a)) (unit a))
+(def IntSum () (Monoid Int) (Monoid.mk Int.add 0))
+(fn twice ((f (-> Nat Nat)) (x Nat)) Nat (f (f x)))
+(fn each ((f (-> Int Int)) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (List.nil List.nil)
+    ((List.cons x t) (List.cons (f x) (each f t)))))
+(fn conv ((b Type) (f (-> Int b)) (xs (List Int))) (List b)
+  (measure (struct xs))
+  (match xs
+    (List.nil List.nil)
+    ((List.cons x t) (List.cons (f x) (conv f t)))))
+(fn any_of ((xs (List Int)) (p (-> Int Bool))) Bool
+  (measure (struct xs))
+  (match xs
+    (List.nil Bool.false)
+    ((List.cons x t) (if (p x) Bool.true (any_of t p)))))
+(fn fold ((a Type) (f (-> a Int a)) (init a) (xs (List Int))) a
+  (measure (struct xs))
+  (match xs
+    (List.nil init)
+    ((List.cons x t) (fold f (f init x) t))))
+(fn fold_m ((a Type) (m (Monoid a)) (xs (List a))) a
+  (measure (struct xs))
+  (match xs
+    (List.nil (Monoid.unit m))
+    ((List.cons x t) (Monoid.op m x (fold_m m t)))))
+(fn inc ((x Int)) Int (+ x 1))
+(fn scale ((k Int) (x Int)) Int (* k x))
+(fn lam_closed ((x Nat)) Nat (twice (fun ((y Nat)) (+ y 1)) x))
+(fn lam_captures ((n Int) (m Int) (xs (List Int))) Bool (any_of xs (fun ((x Int)) (< (+ m x) n))))
+(fn lam_nested ((k Nat) (x Nat)) Nat (twice (fun ((y Nat)) (twice (fun ((z Nat)) (+ z k)) y)) x))
+(fn lam_expected ((xs (List Int))) (List Int) (conv (fun ((x Int)) 0) xs))
+(fn lam_inner ((n Int) (xs (List Int))) (List Int)
+  (each (fun ((x Int)) (fold (fun ((acc Int) (y Int)) (+ acc (+ y n))) x xs)) xs))
+(fn named ((xs (List Int))) (List Int) (each inc xs))
+(fn named_partial ((k Int) (xs (List Int))) (List Int) (each (scale k) xs))
+(fn by_registry ((xs (List Int))) Int (fold Int.add 0 xs))
+(fn registry_partial ((k Int) (xs (List Int))) (List Int) (each (Int.add k) xs))
+(fn package ((xs (List Int))) Int (fold_m IntSum xs))
+(fn rows_local ((n Nat)) Nat
   (match n
     (0 1)
+    (7 2)
+    (m (+ m 1))))
+(fn rows_bound ((a Int) (b Int)) Int
+  (match (+ a b)
+    (0 1)
+    (-1 2)
     (_ 0)))
-(fn twice ((f (-> Nat Nat)) (x Nat)) Nat (f (f x)))
-(fn add_two ((x Nat)) Nat (twice (fun ((y Nat)) (+ y 1)) x))
-(fn width_inferred ((x (BitVec 8))) Nat (BitVec.toNat x))
+(fn let_run ((a Nat) (b Nat)) Nat (let ((s (+ a b)) (d (- s 1)) (q (* d d))) (+ q s)))
+(realize List.length ((a Type) (xs (List a))) Nat
+  (measure (struct xs))
+  (match xs
+    (List.nil 0)
+    ((List.cons _ t) (+ (List.length t) 1))))
 
-;; ---- 4. read by the classifier alone, and run
+;; ---- 4. the controls
+(fn width_inferred ((x (BitVec 8))) Nat (BitVec.toNat x))
+(fn field_at_constant ((x Int)) Int (Monoid.op IntSum x 1))
+(fn proof_captures ((n Nat) (x Nat)) Nat
+  (twice (fun ((y Nat)) (Fin.val (@Fin.mk (+ n 1) 0 (Nat.succ_pos n)))) x))
+
+;; ---- 5. read by the classifier alone, and run
 (type World (World Nat))
 (extern write_line ((bytes ByteArray) (w World)) World)
 (fn say ((s String) (w World)) World (write_line (String.toByteArray s) w))
@@ -86,18 +147,35 @@
 (fn p_low ((s Symbol) (c Int)) Bool (<= c 32))
 (fn p_same ((s Symbol) (a Coin) (b Coin)) Bool (= a b))
 (fn p_pack ((s Symbol) (l (List UInt8))) ByteArray (ByteArray.mk (Array.mk l)))
+(fn p_lift ((s Symbol) (k Int) (xs (List Int))) (List Int) (each (fun ((x Int)) (+ (* x 2) k)) xs))
+(fn p_sum ((s Symbol) (xs (List Int))) Int (fold Int.add 0 xs))
+(fn p_pkg ((s Symbol) (xs (List Int))) Int (fold_m IntSum xs))
+(fn p_rows ((s Symbol) (n Int)) Int
+  (match (+ n 1)
+    (0 10)
+    (5 20)
+    (m (let ((a (* m 2)) (b (+ a 1))) b))))
 (fn report ((ok Bool) (yes String) (no String) (w World)) World
   (match ok
     (Bool.true (say yes w))
     (Bool.false (say no w))))
 (fn main ((w World)) World
   (write_line (p_pack (quote x) (List.cons (row_make 111) (List.cons (row_make 107) List.nil)))
-    (report
-      (and (p_same (quote x) Coin.Heads Coin.Heads) (not (p_same (quote x) Coin.Heads Coin.Tails)))
-      "a derived equality: ok"
-      "a derived equality: WRONG"
-      (report (p_low (quote x) 7) "a comparison is a Bool: ok" "a comparison is a Bool: WRONG"
-        (report (= (p_abs (quote x) 0) 0) "natAbs then Nat.sub: ok" "natAbs then Nat.sub: WRONG"
-          (report (= (p_mod (quote x) -7) 2) "Int.emod: ok" "Int.emod: WRONG"
-            (report (= (p_div (quote x) -7) -4) "Int.ediv: ok" "Int.ediv: WRONG"
-              (report (= (p_sub (quote x) 3 5) 0) "Nat.sub: ok" "Nat.sub: WRONG" w))))))))
+    (report (and (= (p_rows (quote x) 4) 20) (= (p_rows (quote x) 9) 21)) "numeral rows: ok"
+      "numeral rows: WRONG"
+      (report (= (p_pkg (quote x) (List.cons 4 (List.cons 5 List.nil))) 9) "a package: ok"
+        "a package: WRONG"
+        (report (= (p_sum (quote x) (p_lift (quote x) 1 (List.cons 4 (List.cons 5 List.nil)))) 20)
+          "a lifted lambda: ok"
+          "a lifted lambda: WRONG"
+          (report
+            (and (p_same (quote x) Coin.Heads Coin.Heads)
+              (not (p_same (quote x) Coin.Heads Coin.Tails)))
+            "a derived equality: ok"
+            "a derived equality: WRONG"
+            (report (p_low (quote x) 7) "a comparison is a Bool: ok" "a comparison is a Bool: WRONG"
+              (report (= (p_abs (quote x) 0) 0) "natAbs then Nat.sub: ok"
+                "natAbs then Nat.sub: WRONG"
+                (report (= (p_mod (quote x) -7) 2) "Int.emod: ok" "Int.emod: WRONG"
+                  (report (= (p_div (quote x) -7) -4) "Int.ediv: ok" "Int.ediv: WRONG"
+                    (report (= (p_sub (quote x) 3 5) 0) "Nat.sub: ok" "Nat.sub: WRONG" w)))))))))))

@@ -13,6 +13,8 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | The compiled loader has the binary's integer limit: `v3/bin/load` ends with `rt trap: bignum too large (exceeds 2^3840)`, exit 3, on a theorem K evaluates past that size and on a `--run` that reaches it. The loader on the bootstrap accepts both. | reproduced: `(= (Nat.pow 2 4000) (* (Nat.pow 2 2000) (Nat.pow 2 2000)))` by `decide` |
 | Two files that each give a program to the same function of Init cannot be roots of one load: the second is `LOAD-ERROR … duplicate_name: List.length`, and what imports it `import_failed`. Each loads alone. | reproduced: `load --root v3 v3/std/list.shard v3/examples/path/path_main.shard` (`examples/path/path.shard` and `std/list.shard` both realize `List.length`) |
 | In a function that is only a program, an operator whose type is decided by a call of a function declared later in the file is left as written: `(- (late n) 5)` with `late` returning a `Nat` is integer subtraction, −2 at 3, where no `Nat` or `Int` is expected of it. With `late` declared first it is `Nat.sub` and gives 0. Nothing false is proved — such a function has no meaning in the logic — but a value declared `Nat` is negative at run time. | reproduced: `(fn early ((s Symbol) (n Nat)) Nat (let ((d (- (late n) 5))) d))` before `(fn late ((n Nat)) Nat n)` |
+| A lambda whose body takes a value apart by constructor rows is refused: the function it is lifted to names the body's matcher, which is admitted after it — `REFUSE F.lam_1 unknown_constant: F.match_1`. A lambda with numeral rows or an `if` reads. | reproduced: `(fn f ((d Int) (xs (List (Option Int)))) (List Int) (List.map (fun ((o (Option Int))) (match o (none d) ((some v) (+ v d)))) xs))` over `std/list.shard` |
+| The two readings of a lambda differ where a proof or a type argument in its body names a local that its program does not: the typed route captures the local as a parameter the program never reads, the classifier passes proofs over unread and does not, and the instance's name differs with the captured count. | reproduced: `proof_captures` in `v3/pins/readings/main.shard` (`load --both`) |
 | A wrong name of an Init lemma gets no suggestion: `unknown_constant: step 1: Nat.div_lt_slf`. | reproduced |
 | `v3/build.sh` names its log and its emit directory under `v3/bin/` by the output path's last component, wherever the output is: two builds of one name overwrite each other's. | reproduced |
 | A `match` on an indexed family: a constructor row is refused `pattern_constructor: C is not a constructor of T`, where C is one; a bare field-less constructor row (`Vec.nil`) is read as a variable. | reproduced |
@@ -75,12 +77,17 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
 - What runs is written (rule 24): no load refuses a function whose two readings differ, nor one
   that leaves a runtime argument to the elaborator — the classifier refuses that call
   (`unwritten_argument`), the typed route reads it. The comparison runs only under
-  `load --both`, over a `fn` and not over a template, an instance or a `realize`;
-  `readings_test.sh` holds one fixture to it. Measured over the tree's 473 functions
-  (`DECISIONS.md`, Measured): none differs, and the classifier does not read 71, each of which
-  passes a function.
-  Two shapes the two readings write differently and run alike: a numeral pattern (a chain of
-  tests, a `match`) and consecutive `let`s (nested, one).
+  `load --both`, over what a file writes — a `fn`, a lambda it lifts, a supplied `realize` —
+  and `readings_test.sh` holds one fixture to it. Over the tree every such program reads the
+  same both ways (`DECISIONS.md`, Measured). An instance is outside it: the classifier names
+  the instance a call takes and does not read one — its program is the erasure of the
+  template's elaborated body on both routes, so a template's source is read as a program by
+  nothing. What the typed route reads and the classifier refuses, each reproduced: a
+  package's field applied at its constant outside a template (`(Monoid.op IntAdd x y)` — the
+  typed route unfolds the constant; one function of the pins); a lambda of fewer binders than
+  its parameter's arity (`(fun ((a Int)) (Int.add a))` for a function of two); a type
+  argument that only the type expected of the call fixes (`(pick inc List.nil)` at
+  `(List Int)`).
 - "Could not show these equal" is never read as "these differ": no test.
 - A positive node id in K is written only by five constructors: no test. The test of K's state
   discipline believes the types the sources declare.

@@ -141,6 +141,26 @@ entries are explained under "Measured" at the end.
 - A function that is only a program builds and reads the registry's rows by the table the
   erasure reads; not the classifier refusing every row's constructor so that the two routes
   could not disagree on a representation (pin `row_e_first` stated that). Not ruled.
+- A lambda is read where it is written and lifted where its instance is taken: between the two
+  the body as read holds it as a node of the term type (`ELam` in `prog.shard`), which no
+  program holds; not a second term type for the classifier's passes, and not a result
+  channel through every reading function. Not ruled.
+- A template's call is typed in the elaborator's order (`elab.shard` `elab_args`): its bare
+  variables, the type expected of the call, its other arguments left to right, its numerals.
+  A lambda's result type is what that order fixes for its parameter's result, else its body's
+  own static type; not a result written in the source, which the typed route does not ask
+  for. Not ruled.
+- Numeral rows and a `let` of several bindings are written by the classifier as the
+  elaborator reads them — tests in row order, a let in a let — where the file sees Init; not
+  the erasure folding its tests back into a match. A file that sees no Init keeps the rows as
+  a match. Not ruled.
+- A function that is only a program passes a lambda, a constant of the registry or a package:
+  the classifier lifts and names as the typed route does, and the instance's program stays
+  the erasure of the template's elaborated body; not such a function refused for want of a
+  reading in the logic, as it was. Not ruled.
+- An instance is named by the classifier and read by the erasure alone; not the classifier
+  reading a template's source at an instance's shapes, which nothing needs until something
+  must run a template's instance without the elaborator (`OPEN.md` §4).
 - `ev` is pure: an extern is `EvStuck extern` and only the driver's run performs it; fuel is spent
   at function entry; not effects inside the evaluator.
 - A primitive answers a value, a failed guard, or a resource exhausted, decided before the work;
@@ -286,15 +306,15 @@ measurements; measure again before building on one.
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
 - Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
-- The two readings (`load --both`) over the 473 functions of the examples, the library, the
-  formatter and the model: 402 one program, none different, 71 the classifier does not read —
-  69 pass a function (64 of them in `examples/template/workload.shard`) and 2 pass a function of
-  Init by name. Over the 326 functions of the pins: 311, 8 written differently and run alike
-  (five numeral patterns, three runs of `let`s) and 7 not read (six pass a function, one projects
-  a package). Before the classifier read what is written and erased — proofs, types, the
-  registry's rows, a derived equality: 370, none and 103. Before it took an operator's entry
-  from its operands: 341, 10 and 122. One function of the 473 left a runtime argument to the
-  elaborator (`Byte.decEq`: `BitVec.toNat`'s width, an implicit binder of type `Nat`).
+- The two readings (`load --both`) over what the examples, the library, the formatter and the
+  model write — 473 functions, the 65 lambdas they lift, 9 supplied `realize` bodies: 547
+  programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
+  read (a package's field at its constant). Of the 473 functions alone, as the classifier came
+  to read more: 341 the same, 10 different and 122 not read; 370, none and 103 once it took
+  an operator's entry from its operands; 402, none and 71 once it read what is written and
+  erased; 473 once it read a function as an argument. One function of the 473 left a runtime
+  argument to the elaborator (`Byte.decEq`: `BitVec.toNat`'s width, an implicit binder of
+  type `Nat`). No load of the 545 roots changed with the last step.
 - Suite: 51 entrypoints, eight at a time, over three runs of one day: 740–870 s on the bootstrap
   (4,850–5,100 s of entrypoint time), 135–150 s on the binaries (670–770 s). Loader pins on one shared Init base, each case loaded twice: 9 s
   native, about 150 s on the bootstrap.

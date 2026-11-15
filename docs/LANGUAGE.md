@@ -762,6 +762,27 @@ name a `def` gives a type stands for that type. Two refusals keep this honest:
 | `unwritten_argument` | a binder is implicit *and* runtime data (`BitVec.toNat`'s width): the argument runs and is not written. The elaborator fills it in, so the typed route accepts the call and `--both` reports the function `unread` | write the call with `@` and every argument: `(@BitVec.toNat 8 x)` |
 | `unchecked_proof` | a function that is only a program writes a proof — an argument at a proposition binder, a `let` that binds one. The typed route did not read the body, and this reading passes a proof over: nothing would check it. `absurd` there is `absurd_needs_init` for the same reason | give the function a reading in the logic; a `dif` reads there as the `if` it is, and its hypothesis can be passed to nothing |
 
+**A function as an argument, read as a program alone.** A template's call is read in the
+elaborator's order — its bare variables, the type expected of the call, its other arguments
+left to right, its numerals — and takes the instance the typed route names. A lambda is lifted
+to `CALLER.lam_N`, numbered as the lambdas are met: its leading parameters are the locals its
+body names, in order of first occurrence, and its result is the type its position fixes, else
+its body's own. A constant of the registry (`Int.add`, bare or applied to its first operand)
+and a package constant are shapes by their names. Numeral rows are the tests they are in row
+order, and a `let` of several bindings is a `let` in a `let`. So a function that is only a
+program passes a function too: its lambdas are `RUNNABLE fn CALLER.lam_N`, and its instance has
+no equations.
+
+| not read | the typed route | what to do |
+|---|---|---|
+| a package's field applied at its constant outside a template, `(Monoid.op IntAdd x y)`: `function_value` | unfolds the constant and calls the field | call the function the field holds by its name, or pass the package to a template |
+| a lambda of fewer binders than its parameter's arity, `(fun ((a Int)) (Int.add a))` for a function of two: `unsaturated` | supplies the missing binders | write every binder |
+| a type argument that only the type expected of the call fixes: `function_value: … an instance at an open type` | takes it from the expected type | give the template an argument at that type |
+
+A lambda whose proof or type argument names a local that its program does not is read by both
+and differently: the typed route captures the local, this reading does not see it (`OPEN.md`
+§1).
+
 `RUNNABLE extern NAME` and `RUNNABLE type NAME` are the ordinary records of an extern and of a
 program-only type; `RUNNABLE extern NAME why=REASON` is an extern that got no constant.
 
@@ -1553,7 +1574,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--init-index INDEX` | the export's index (built by `v3/kernel/initindex.shard`) |
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
-| `--both` | also read each `fn` the typed route gave a program as a program alone, and compare the two (`BOTH` records) |
+| `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |
@@ -1607,7 +1628,7 @@ trusted because two fingerprints agree.
 | `UNUSED` | `M use=P,…` | `use` lines of M that no name in it needs | — |
 | `THREAD` | `N VERDICT[: DETAIL]` | whether the function N uses each World token once: `ok`, `world_twice`, `world_unsupported`, `world_forged` | — |
 | `STATE` | `N VERDICT[: DETAIL]` | under `--state`, N's use of the checker's state: `ok`, `primitive`, `reused`, `unsupported` | — |
-| `BOTH` | `N VERDICT[: DETAIL]` | under `--both`, N's program read without elaboration beside the erasure of its elaborated body: `same`; `differs: typed: TEXT \| plain: TEXT`; `unread: REASON: MESSAGE`, the refusal of the reading without elaboration | — |
+| `BOTH` | `N VERDICT[: DETAIL]` | under `--both`, N's program read without elaboration beside the erasure of its elaborated body — N a `fn`, a supplied `realize`, or a lambda lifted out of one (`F.lam_1`): `same`; `differs: typed: TEXT \| plain: TEXT`; `unread: REASON: MESSAGE`, the refusal of the reading without elaboration | — |
 | `BIN` | `N entry F externs K trusts K requires MET/TOTAL` | a `bin` form checked | — |
 | `UNMET`, `UNTHREADED`, `BAD-BIN` | `REQUIREMENT`; `FN VERDICT: DETAIL`; `N REASON: MESSAGE` | a bin's failure: a requirement still pending; a function it reaches is not threaded; any other (`bad_entry`, `extern_undeclared`, `extern_outside`, `unknown_requirement`, `unknown_trust`, `untrusted`) | errors |
 | `SIDECAR` | `FILE schema=N current=M` | the file's proof sidecar is of an older schema; it is replayed all the same | — |

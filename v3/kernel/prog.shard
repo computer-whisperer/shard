@@ -112,6 +112,7 @@
   (EMatch ETerm (List EArm))  ; first arm whose pattern matches; no arm = stuck
   (ELet (List ETerm) ETerm)  ; SEQUENTIAL: each rhs sees the bindings before it; pushed in order
   (EIf ETerm ETerm ETerm)  ; then-branch iff the condition's cell is the SECOND constructor of its type
+  (ELam (List EType) (Option EType) ETerm)  ; a lambda written as a template's static argument: its binders' types, its result type once the body is typed, its body under the binders — in a body as read only: the classifier lifts it to a fn where it takes the instance, and no program holds one
   (EAbsurd))  ; a refuted row — Init's `absurd` or `False.elim` in a body read on the typed route: unreachable, stuck if reached
 ;; RULES of `ev` per node: arguments left to right; a
 ;; call evaluates the callee's body in a fresh frame of exactly its
@@ -187,6 +188,7 @@
     ((EMatch s arms) (calls_arms arms (calls_acc s acc)))
     ((ELet rs b) (calls_acc b (calls_all rs acc)))
     ((EIf a b c) (calls_acc c (calls_acc b (calls_acc a acc))))
+    ((ELam _ _ b) (calls_acc b acc))
     (EAbsurd acc)))
 (fn calls_all ((ts (List ETerm)) (acc (List Name))) (List Name)
   (measure (struct ts))
@@ -356,6 +358,27 @@
     (if (name_eq c (n2 (quote Nat) (quote decLt))) (Some (n1 (quote <)))
     (if (name_eq c (n2 (quote Nat) (quote decLe))) (Some (n1 (quote <=)))
     None))))))))))))
+;; a registry row's signature as a function's: the two operands at the constant's own type,
+;; the result that type — a decision's, Decidable's cell. What a static argument that names the
+;; constant is typed by (classify.shard take_args)
+(fn registry_signature ((c Name)) (Option (Pair (List EType) EType))
+  (match (realization_of c)
+    (None None)
+    ((Some p)
+     (let
+       ((ty
+          (ETCon
+            (match c
+              ((Str (Str Anon t) _) (n1 t))
+              (_ (n1 (quote Int))))
+            Nil)))
+       (Some
+         (Pair (list ty ty)
+           (if
+             (bool_or (name_eq p (n1 (quote =)))
+               (bool_or (name_eq p (n1 (quote <))) (name_eq p (n1 (quote <=)))))
+             (ETCon (n1 (quote Decidable)) Nil)
+             ty)))))))
 ;; the registry's expression rows: a one-argument L operation with no
 ;; table entry of its own, as an E expression over the existing entries with the argument
 ;; bound once (#0) — it agrees with K's constant on every input, as the rows above do
@@ -373,7 +396,18 @@
 (fn realization_type ((c Name)) (Option EType)
   (if (name_eq c (n2 (quote Int) (quote natAbs))) (Some (ETCon (n1 (quote Nat)) Nil))
   (if (name_eq c (n2 (quote Int) (quote ofNat))) (Some (ETCon (n1 (quote Int)) Nil))
+  (if (name_eq c (n2 (quote Fin) (quote val))) (Some (ETCon (n1 (quote Nat)) Nil))
+  None))))
+;; a row whose field is at another type than the row itself: its projection is the identity
+;; on the value and is kept by name while a body is typed — `Fin.val i` is a Nat, `Subtype.val
+;; s` is at the subtype's base — and written out as its argument last, as `Int.ofNat` is
+(fn row_field_proj ((sn Name)) (Option Name)
+  (if (name_eq sn (n1 (quote Fin))) (Some (n2 (quote Fin) (quote val)))
+  (if (name_eq sn (n1 (quote Subtype))) (Some (n2 (quote Subtype) (quote val)))
   None)))
+(fn row_identity ((p Name)) Bool
+  (bool_or (name_eq p (n2 (quote Int) (quote ofNat)))
+    (bool_or (name_eq p (n2 (quote Fin) (quote val))) (name_eq p (n2 (quote Subtype) (quote val))))))
 ;; Init's Bool cells: what a decision's value converts to, and what the Bool connectives' rows
 ;; are built of
 (fn bool_true () ETerm (ECtor (n2 (quote Bool) (quote true)) Nil))
