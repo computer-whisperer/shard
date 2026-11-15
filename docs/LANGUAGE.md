@@ -424,7 +424,7 @@ NAME supplied|view equations=… pending=…`. Refusals (`REFUSE NAME REASON: �
 (`F.dec_N`, below); in the implementation of a view it proves one of the view's `requirement`s.
 Naming anything else is a load error that says which: `fulfills_not_obligation`, `fulfills_refused`
 (the function was refused above and stated no obligation), `fulfills_outside_impl` (also the
-answer when the function stayed a program and stated no obligation, as under `why=wf_unreached`).
+answer when the function stayed a program and stated no obligation, as under `why=measure_type`).
 
 **Names and refused forms.** A declaration may not take a name K already holds, nor a name of Init
 under the file's module path, and a `def` and a program-only `fn` may not share a name: `REFUSE
@@ -741,7 +741,6 @@ can name it. `route=typed`: the body was elaborated and the program is its erasu
 | `measure_type` | typed | `(measure M)` and `M` is not a `Nat` | write a `Nat` measure, e.g. `(Int.natAbs n)` |
 | `group_measure` | typed | a member of a group has no measure, or `(measure (struct x))` | `(measure M)` on every member |
 | `group_shape` | typed | a member of a group has a type parameter, or a result type over its parameters | make the members monomorphic and non-dependent |
-| `wf_unreached` | typed | the function has a measure and its file sees no Init: a measure is compiled on Init's `WellFounded.fix` | `(import Init)` before the file's first declaration |
 | `below_unreached` | typed | structural recursion over a `type` in a file that sees no Init: the recursion keeps its table in Init's `PProd` and `PUnit` | `(import Init)` before the file's first declaration |
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
 | `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
@@ -1142,8 +1141,8 @@ A refused step is the file's read error, and the file's reading ends there:
 the innermost block the step stands in; the record does not say which block. Steps build their
 terms from constants of Lean's `Init` (`Eq.mpr`, `congrArg`, `WellFounded.fix`, `Lean.Omega`'s
 lemmas). The loader fetches them for every file that sees Init, whether or not the source spells
-them (pin `init_step_lemma`); in a file that sees none, `wf` and `arith` say so (`wf_unreached`,
-`arith_unreached`).
+them (pin `init_step_lemma`). In a file that sees none `arith` finds no comparison to read
+(`arith_goal`), and a `wf` step is refused as any citation of Init is there (`init_not_imported`).
 
 ### The steps
 
@@ -1263,7 +1262,6 @@ two `(farkas …)` forms.
 | `cases_fields`, `induction_fields` | | `C's arm names N binder(s) and its case has M: name the constructor's K field(s) — (x : T) …`; under `induction`, `…, then J induction hypothesis name(s), one for each recursive field — (x : T) … (_ : P)`. The binders listed are the case's, each under the arm's name for it, `_` where the arm gave none |
 | `induction_eq` | induction | `induction takes no equation name: the hypotheses would be guarded by it (Lean has none either); name the equation under cases, or state the equation and induct on the local` |
 | `wf_local` | wf | `wf takes a local of the context (a variable, not a term)`; `the local's type is not a type` |
-| `wf_unreached` | wf | `(wf …) is built on Init's WellFounded.fix, and this file does not import Init: write (import Init) before the file's first declaration` |
 | `no_decision` | decide | `decide: the target has no decision`; at an equation it adds `, or its derived equality — a (derive TYPE eq) before this form` |
 | `decide_failed` | decide | `the decision does not evaluate to true: T` |
 | `unfold_stuck` | unfold | `no occurrence of the named constant unfolds — no equation of it matches (cases on its argument first), or its one delta step is a stuck recursor: T` |
@@ -1282,7 +1280,6 @@ two `(farkas …)` forms.
 | `arith_failed` | arith | `no weighting of the rows refutes them (linear arithmetic over the rationals with integer-tight strictness: no cut, no case split, a ≠ hypothesis is no row) — a fact is missing, or the goal is not linear in these atoms — rows: [0 <= -1 + -1*x + 1*y] …` |
 | `arith_budget` | arith | `the elimination passed 512 derived rows: give the certificate — (arith … (farkas K…)), a weight per row in the order shown` |
 | `arith_certificate` | arith | `the weights do not refute the rows: the coefficients must cancel and the constant be negative, no inequality's weight negative (a zero leaves its row out)`; `the certificate has N weights and the goal has M rows` |
-| `arith_unreached` | arith | `NAME is not visible here: arith builds its proof from Init's Lean.Omega lemmas, and this file does not import Init — write (import Init) before the file's first declaration` |
 
 `exact`, and every TERM, LEMMA and FACT inside a step, can also meet the term elaborator's own
 refusals (`type_mismatch`, `unknown_constant`, `unsolved_implicit`, …). In `simp_only` and
