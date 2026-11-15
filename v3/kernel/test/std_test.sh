@@ -49,7 +49,7 @@ for t in pow2_z pow2_s pow2_pos pow2_8 pow2_32 pow2_64 band_zero_l bor_zero_l bx
   checks=$((checks+1)); held std.bits.$t || bad "std/bits.shard: $t not accepted under Lean's axioms alone"
 done
 # std/list.shard: the realizations' equations, the list lemmas, sum_append, the sorted list
-for t in List.length.realize_1 List.length.realize_2 List.append.realize_1 List.append.realize_2 List.reverseAux.realize_1 List.reverseAux.realize_2 List.reverse.realize_1 List.take.realize_1 List.take.realize_2 List.drop.realize_1 List.drop.realize_2 List.get?Internal.realize_1 List.get?Internal.realize_2 List.getD.realize_1 List.get.realize_1 List.get.realize_2 \
+for t in List.length.realize_1 List.length.realize_2 List.append.realize_1 List.append.realize_2 List.reverseAux.realize_1 List.reverseAux.realize_2 List.reverse.realize_1 List.take.realize_1 List.take.realize_2 List.drop.realize_1 List.drop.realize_2 List.get?Internal.realize_1 List.get?Internal.realize_2 Option.getD.realize_1 Option.getD.realize_2 List.getD.realize_1 List.get.realize_1 List.get.realize_2 \
          take_nil_eq take_cons_eq drop_nil_eq drop_cons_eq get_opt_nil get_opt_cons get_bound get_nil_eq get_cons_eq list_append_nil_left list_append_cons list_rev_nil list_rev_cons list_len_nil list_len_cons list_take_nil list_drop_nil list_take_zero list_take_succ_cons list_drop_zero list_drop_succ_cons list_len_nonneg list_append_nil_right list_append_assoc list_len_append list_len_rev list_rev_append list_rev_rev list_drop_len list_drop_le list_drop_shortens list_take_le list_take_len sum_append insert mem_insert insert_sorted Sorted sorted_insert sorted_insert_val sorted_nil; do
   checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
 done
@@ -62,7 +62,14 @@ for t in List.map.realize_1 List.map.realize_2 List.filter.realize_1 List.filter
          List.foldr.realize_1 List.foldr.realize_2 List.any.realize_1 List.any.realize_2 List.all.realize_1 List.all.realize_2 filter_nil_eq filter_cons_eq; do
   checks=$((checks+1)); held std.list.$t || bad "std/list.shard: $t not accepted under Lean's axioms alone"
 done
-checks=$((checks+1)); grep -q '^REALIZE Option.getD view ' "$OUT/load.txt" || bad "Option.getD is not realized through its matcher's definition (the view)"
+# Init's Option.getD, a match there, and the two row projections of std/bytes.shard run by
+# bodies the library writes, each with its equations
+for t in Option.getD BitVec.toNat UInt8.toNat; do
+  checks=$((checks+1)); grep -q "^REALIZE $t supplied equations=" "$OUT/load.txt" || bad "$t is not realized by a body the library writes"
+done
+for t in BitVec.toNat.realize_1 UInt8.toNat.realize_1; do
+  checks=$((checks+1)); held std.bytes.$t || bad "std/bytes.shard: $t not accepted under Lean's axioms alone"
+done
 decls=$(grep -c '^ACCEPT ' "$OUT/load.txt")
 echo "std_test: the std root — $n files, $decls declarations accepted — loaded in one process in $((e-s)) s"
 echo "std_test: $checks checks, $fail failed"

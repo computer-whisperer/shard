@@ -5,6 +5,7 @@
 ;;;   eval direct v3/kernel/load.shard COMMON --run MODULE.FN [--fuel N] [--trace FILE]
 ;;;     [--lowered] FILE… [-- ARG…]
 ;;;   COMMON = --root DIR [--init EXPORT --init-index INDEX] [--instance-budget N] [--state]
+;;;            [--facts OUT]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (docs/LANGUAGE.md "What
 ;;; the loader prints") — one line per module and declaration —
@@ -34,6 +35,10 @@
 ;;; printed as dump.shard's canonical text — the V3 side of frontend parity
 ;;; (kernel/test/parity_test.sh) — and nothing else; a load failure prints the
 ;;; records and exits as above.
+;;; `--facts OUT`: a clean load — printing its records, or under `--dump` its program — also
+;;; writes to OUT the facts the plain reading takes from K about the constants of Init the
+;;; closure's files cite (facts.shard), one line each: what the Rust bootstrap reads an
+;;; ordinary closure by (`eval dump --root DIR --facts OUT …`).
 ;;; `--lowered` with `--run`: the program's restricted form (lower.shard) is run in its place —
 ;;; the same output or the lowering is wrong.
 ;;; `--emit DIR`: after a clean load, the
@@ -46,6 +51,7 @@
 (import "loader.shard")
 (import "ev.shard")
 (import "dump.shard")
+(import "facts.shard")
 (import "emit.shard")
 (import "lower.shard")
 (import "run.shard")
@@ -53,6 +59,7 @@
 (use kernel.emit)
 (use kernel.emit.EmitRes)
 (use kernel.etable)
+(use kernel.facts)
 (use kernel.ev)
 (use kernel.host)
 (use kernel.loader)
@@ -74,95 +81,54 @@
 (use kernel.prelude.Option)
 (use kernel.prelude.Pair)
 
-(type Args
-  (Args (List Int) (List Int) (List Int) (List (List Int)) (Option Name) Int (List (List Int)) Bool
-    Int
-    (List Int)
-    (List Int)
-    Bool
-    Bool
-    Bool))  ; root, the export, its index, files, the entry to run, fuel, the program's arguments, dump, the instance budget, the emit directory, the trace file, the state check, the lowered run, the two readings' comparison
+(record Args (root (List Int)) (export (List Int)) (index (List Int)) (files (List (List Int)))
+  (run (Option Name))
+  (fuel Int)
+  (argv (List (List Int)))  ; the program's arguments
+  (dump Bool)
+  (facts (List Int))  ; the file the facts are written to
+  (budget Int)  ; the instance budget
+  (emit (List Int))  ; the emit directory
+  (trace (List Int))  ; the trace file
+  (state Bool)  ; the state check
+  (lowered Bool)  ; the lowered run
+  (both Bool))  ; the two readings' comparison
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
-  (match a
-    ((Args root export index files run fuel argv dump budget emit trace stc low both)
-     (match args
-       (Nil (Args root export index (rev files) run fuel argv dump budget emit trace stc low both))
-       ((Cons x r)
-        (if (int_list_eq x "--")
-          (Args root export index (rev files) run fuel r dump budget emit trace stc low both)
-        (if (int_list_eq x "--root")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args v export index files run fuel argv dump budget emit trace stc low both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root v index files run fuel argv dump budget emit trace stc low both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--init-index")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export v files run fuel argv dump budget emit trace stc low both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--run")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export index files (name_of_sym (sym_of_chars v)) fuel argv dump budget
-                 emit
-                 trace
-                 stc
-                 low
-                 both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--fuel")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export index files run (digits_val v 0) argv dump budget emit trace stc
-                 low
-                 both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--state")
-          (parse_args r
-            (Args root export index files run fuel argv dump budget emit trace True low both))
-        (if (int_list_eq x "--both")
-          (parse_args r
-            (Args root export index files run fuel argv dump budget emit trace stc low True))
-        (if (int_list_eq x "--dump")
-          (parse_args r
-            (Args root export index files run fuel argv True budget emit trace stc low both))
-        (if (int_list_eq x "--lowered")
-          (parse_args r
-            (Args root export index files run fuel argv dump budget emit trace stc True both))
-        (if (int_list_eq x "--emit")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export index files run fuel argv dump budget v trace stc low both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--instance-budget")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export index files run fuel argv dump (digits_val v 0) emit trace stc low
-                 both)))
-            (Nil (parse_args Nil a)))
-        (if (int_list_eq x "--trace")
-          (match r
-            ((Cons v r2)
-             (parse_args r2
-               (Args root export index files run fuel argv dump budget emit v stc low both)))
-            (Nil (parse_args Nil a)))
-          (parse_args r
-            (Args root export index (Cons x files) run fuel argv dump budget emit trace stc low both))))))))))))))))))))
+  (match args
+    (Nil (with Args a (files (rev (Args.files a)))))
+    ((Cons x r)
+     (if (int_list_eq x "--") (with Args a (files (rev (Args.files a))) (argv r))
+     (if (int_list_eq x "--state") (parse_args r (with Args a (state True)))
+     (if (int_list_eq x "--both") (parse_args r (with Args a (both True)))
+     (if (int_list_eq x "--dump") (parse_args r (with Args a (dump True)))
+     (if (int_list_eq x "--lowered") (parse_args r (with Args a (lowered True)))
+     (if (valued_flag x)
+       (match r
+         ((Cons v r2) (parse_args r2 (flag_value a x v)))
+         (Nil (parse_args Nil a)))
+       (parse_args r (with Args a (files (Cons x (Args.files a))))))))))))))
+;; the flags that take the argument after them
+(fn valued_flag ((x (List Int))) Bool
+  (bool_or (int_list_eq x "--root")
+    (bool_or (int_list_eq x "--init")
+      (bool_or (int_list_eq x "--init-index")
+        (bool_or (int_list_eq x "--run")
+          (bool_or (int_list_eq x "--fuel")
+            (bool_or (int_list_eq x "--emit")
+              (bool_or (int_list_eq x "--instance-budget")
+                (bool_or (int_list_eq x "--trace") (int_list_eq x "--facts"))))))))))
+(fn flag_value ((a Args) (x (List Int)) (v (List Int))) Args
+  (if (int_list_eq x "--root") (with Args a (root v))
+  (if (int_list_eq x "--init") (with Args a (export v))
+  (if (int_list_eq x "--init-index") (with Args a (index v))
+  (if (int_list_eq x "--run") (with Args a (run (name_of_sym (sym_of_chars v))))
+  (if (int_list_eq x "--fuel") (with Args a (fuel (digits_val v 0)))
+  (if (int_list_eq x "--emit") (with Args a (emit v))
+  (if (int_list_eq x "--instance-budget") (with Args a (budget (digits_val v 0)))
+  (if (int_list_eq x "--facts") (with Args a (facts v))
+  (with Args a (trace v)))))))))))
 
-(fn ld_both_if ((both Bool) (l Load)) Load (if both (ld_with_both l) l))
 (fn load_files ((l Load) (files (List (List Int))) (w World)) (Pair Load World)
   (measure (struct files))
   (match files
@@ -180,34 +146,56 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
-     (match
-       (parse_args args
-         (Args Nil Nil Nil Nil None (default_fuel) Nil False (instance_budget) Nil Nil False False
-           False))
-       ((Args root export index files run fuel argv dump budget emit trace stc low both)
-        (match (parts_of root)
-          (None (exit 2 (write_line "load: --root DIR is required" w1)))
-          ((Some rootp)
-           (if (= (len rootp) 0) (exit 2 (write_line "load: --root DIR is required" w1))
-           (let
-             ((l0
-                (ld_both_if both
-                  (if stc (ld_with_states (ld_with_budget (ld_start rootp export index) budget))
-                  (ld_with_budget (ld_start rootp export index) budget)))))
-             (if dump (main_dump l0 files w1)
-             (if (< 0 (len emit)) (main_emit l0 files emit w1)
-             (match run
-               (None (main_records l0 files w1))
-               ((Some entry) (main_run l0 files entry argv fuel trace low w1))))))))))))))
+     (let
+       ((a
+          (parse_args args
+            (make Args (root Nil) (export Nil) (index Nil) (files Nil) (run None)
+              (fuel (default_fuel))
+              (argv Nil)
+              (dump False)
+              (facts Nil)
+              (budget (instance_budget))
+              (emit Nil)
+              (trace Nil)
+              (state False)
+              (lowered False)
+              (both False)))))
+       (match (parts_of (Args.root a))
+         (None (exit 2 (write_line "load: --root DIR is required" w1)))
+         ((Some rootp)
+          (if (= (len rootp) 0) (exit 2 (write_line "load: --root DIR is required" w1))
+          (let
+            ((l0
+               (load_flags a
+                 (ld_with_budget (ld_start rootp (Args.export a) (Args.index a)) (Args.budget a)))))
+            (if (Args.dump a) (main_dump l0 (Args.files a) (Args.facts a) w1)
+            (if (< 0 (len (Args.emit a))) (main_emit l0 (Args.files a) (Args.emit a) w1)
+            (match (Args.run a)
+              (None (main_records l0 (Args.files a) (Args.facts a) w1))
+              ((Some entry)
+               (main_run l0 (Args.files a) entry (Args.argv a) (Args.fuel a) (Args.trace a)
+                 (Args.lowered a)
+                 w1)))))))))))))
+;; the load under the driver's --state and --both
+(fn load_flags ((a Args) (l Load)) Load
+  (let ((l1 (if (Args.state a) (ld_with_states l) l))) (if (Args.both a) (ld_with_both l1) l1)))
 
 ;; a clean load, then the canonical text of the program it yielded
-(fn main_dump ((l0 Load) (files (List (List Int))) (w World)) World
+(fn main_dump ((l0 Load) (files (List (List Int))) (facts (List Int)) (w World)) World
   (match (load_files l0 files w)
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (if (< 0 (load_failures cs))
          (exit 2 (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))
-         (print_lines (dump_prog (Load.etab l) (es_prog (Load.etab l))) w2))))))
+         (print_lines (dump_prog (Load.etab l) (es_prog (Load.etab l))) (write_facts l facts w2)))))))
+;; under --facts FILE: what the plain reading asks K about the constants of Init the closure's
+;; files cite (facts.shard), written to FILE — the table the Rust bootstrap reads an ordinary
+;; closure by
+(fn write_facts ((l Load) (file (List Int)) (w World)) World
+  (if (= (len file) 0) w
+  (match (write_file file (join_lines (facts_lines (Load.etab l) (Load.env l) (ld_cited_init l))) w)
+    ((Pair True w1) w1)
+    ((Pair False w1) (exit 2 (write_line (append "FACTS: cannot write " file) w1))))))
 (fn print_lines ((ls (List (List Int))) (w World)) World
   (measure (struct ls))
   (match ls
@@ -286,13 +274,15 @@
        (match (write_file path text w)
          ((Pair True w2) (write_under dir r w2))
          ((Pair False w2) (Pair (Some path) w2)))))))
-;; the records and the counts; the exit code is refused + errors
-(fn main_records ((l0 Load) (files (List (List Int))) (w World)) World
+;; the records and the counts; the exit code is refused + errors; a clean load's facts under
+;; --facts
+(fn main_records ((l0 Load) (files (List (List Int))) (facts (List Int)) (w World)) World
   (match (load_files l0 files (write_line (append "LOAD root=" (join_path (Load.root l0))) w))
     ((Pair l w2)
      (let ((cs (rec_counts (ld_recs l) (zero_counts))))
        (exit (load_failures cs)
-         (write_line (append "LOAD: " (show_counts_load cs)) (print_recs (ld_recs l) w2)))))))
+         (write_line (append "LOAD: " (show_counts_load cs))
+           (print_recs (ld_recs l) (if (< 0 (load_failures cs)) w2 (write_facts l facts w2)))))))))
 ;; the program the load yielded, or under --lowered its restricted form (lower.shard) in its place:
 ;; the lowering's own gate — the two runs print the same (kernel/test/lower_test.sh)
 (fn run_as

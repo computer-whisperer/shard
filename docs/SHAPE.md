@@ -95,13 +95,13 @@ the development machine and about 65 in CI.
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 50,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 58 files | the test scripts and drivers |
+| `v3/kernel/test/` | 59 files | the test scripts and drivers |
 | `v3/pins/` | 507 files | small sources, each stating the outcome it expects; 337 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
-| `rust_bootstrap/` | 3,200 lines of Rust | the bootstrap evaluator |
+| `rust_bootstrap/` | 6,900 lines of Rust | the bootstrap evaluator: the engine and the toolchain's reader (3,600), a reader of ordinary files (3,200) |
 | `tools/zed-shard/` | | an editor grammar |
 
 Two programs are carried all the way: `calc` and `shardfmt` each have a native binary and a

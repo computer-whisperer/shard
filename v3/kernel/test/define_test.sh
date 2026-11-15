@@ -62,10 +62,10 @@ check v3/std/fresh.shard \
   'DEFINE std.fresh.Fresh.next equations=std.fresh.Fresh.next.eq_1' \
   'ACCEPT std.fresh.Fresh.next_ne .* axioms= ' \
   'runnable 0  refused 0  pending 0  realized 0  defined 14  errors 0'
-# bytes and text: Init's UInt8.toNat by its derived view, the S operations defined,
+# bytes and text: Init's UInt8.toNat by a body written out, the S operations defined,
 # Byte.ofNat tied to Init's UInt8.ofNat and the two round trips, each Eq.refl with no axiom
 out=$("$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/std/bytes.shard 2>&1)
-for pat in '^REALIZE UInt8.toNat view' \
+for pat in '^REALIZE UInt8.toNat supplied equations=std.bytes.UInt8.toNat.realize_1' \
            '^DEFINE std.bytes.Byte.ofNat equations=std.bytes.Byte.ofNat.eq_1' \
            '^ACCEPT std.bytes.Byte.ofNat_eq .* axioms= ' \
            '^ACCEPT std.bytes.Bytes.ofList_toList .* axioms= ' \

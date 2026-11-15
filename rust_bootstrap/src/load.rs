@@ -416,7 +416,7 @@ fn rewrite(recs: &[RecDef], v: &Value) -> Result<Value, LoadError> {
         _ => Ok(vlist(items1)),
     }
 }
-fn expand_records(values: Vec<Value>) -> Result<Vec<Value>, LoadError> {
+pub(crate) fn expand_records(values: Vec<Value>) -> Result<Vec<Value>, LoadError> {
     let mut recs: Vec<RecDef> = Vec::new();
     for v in &values {
         if is_head(v, "record") {
@@ -437,7 +437,7 @@ fn expand_records(values: Vec<Value>) -> Result<Vec<Value>, LoadError> {
     Ok(out)
 }
 
-fn parse_all(src: &str) -> Result<Vec<Value>, LoadError> {
+pub(crate) fn parse_all(src: &str) -> Result<Vec<Value>, LoadError> {
     let mut parser = Parser::from_str(src);
     let mut out = Vec::new();
     loop {

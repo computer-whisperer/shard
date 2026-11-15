@@ -366,7 +366,7 @@ them. An `(import Init)` there, in a file that saw no Init, is `late_init_import
 | `axiom` | `(axiom NAME.{u…} BINDERS TYPE)` | an assumption, only under `(trusts NAME)` | `(axiom exit_output ((code Int) (w World)) (= (w_output (exit code w)) (w_output w)))` (`v3/examples/calc/calc_bin.shard`) |
 | `fn` | `(fn NAME BINDERS RET (measure …)? BODY)` | a definition, its equations and a program | `(fn twice ((n Nat)) Nat (+ n n))` (`define_basic`) |
 | `extern` | `(extern NAME BINDERS RET)` | a host operation: an opaque constant and a program head | `(extern exit ((code Int) (w World)) World)` (`v3/std/host.shard`) |
-| `realize` | `(realize NAME BINDERS RET (measure …)? BODY (equations THM…)?)`, `(realize NAME (view))` | a program for a definition that exists | `(realize Option.getD (view))` (`v3/std/list.shard`) |
+| `realize` | `(realize NAME BINDERS RET (measure …)? BODY (equations THM…)?)`, `(realize NAME (view))` | a program for a definition that exists | `(realize Array.toList (view))` (`v3/pins/loader/realize_view`) |
 | `derive` | `(derive TYPE CAPABILITY…)` | generated functions for a type | `(derive CNode size)` (`v3/tools/shardfmt/print/cst.shard`) |
 | `fulfills` | `(fulfills NAME PROOF)` | the proof of an obligation | `(fulfills skip.dec_1 (by (intro xs acc) (arith)))` (`v3/pins/loader/mutual_three/main.shard`) |
 | `bin` | `(bin NAME (entry F) (externs E…) (trusts A…) (requires R…))` | an executable's declaration | `(bin hello (entry main) (externs write_line) (trusts write_line_output) (requires main_output))` (`bin_ok`) |
@@ -1575,6 +1575,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
+| `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format). The Rust evaluator reads an ordinary closure by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |

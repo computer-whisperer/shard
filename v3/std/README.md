@@ -32,8 +32,8 @@ comparison is the proposition `(<= a b)`; `/` and `%` at `Int` are the Euclidean
 the equations `NAME.realize_1`, `NAME.realize_2` as theorems. `take` and `drop` recurse on the list
 where Init recurses on the count; their equations are `take_nil_eq`, `take_cons_eq`, `drop_nil_eq`,
 `drop_cons_eq`, proven by cases on the count. `get?Internal` tests the index with an `if`
-(`get_opt_nil`, `get_opt_cons`). `Option.getD` runs as Init's own definition (`(realize Option.getD
-(view))`). `List.get` takes its index as a `Fin`; its nil row is refuted with `absurd` and its cons
+(`get_opt_nil`, `get_opt_cons`). `Option.getD` is Init's match, written out. `List.get` takes its
+index as a `Fin`; its nil row is refuted with `absurd` and its cons
 row carries the bound into the tail by `get_bound`.
 
 **Functions that take a function.** `List.map`, `List.filter`, `List.foldl`, `List.foldr`,

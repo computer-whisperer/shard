@@ -439,6 +439,30 @@ fn intern(s: &str) -> u32 {
     NAMES.with(|n| n.borrow_mut().intern(s))
 }
 
+thread_local! {
+    // What an `if` reads of a cell that is not the prelude's True or False: by name id, 1
+    // for the first constructor of a two-constructor type, 2 for the second, 0 for any other
+    // name. The program's two-constructor types (`lower_program`), and the cells the plain
+    // reader writes by name whether or not the closure declares their types.
+    static IF_ORD: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+fn if_ord(name: u32) -> u8 {
+    IF_ORD.with(|t| t.borrow().get(name as usize).copied().unwrap_or(0))
+}
+
+fn set_if_ord(first: &str, second: &str) {
+    let (a, b) = (intern(first) as usize, intern(second) as usize);
+    IF_ORD.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.len() <= a.max(b) {
+            t.resize(a.max(b) + 1, 0);
+        }
+        t[a] = 1;
+        t[b] = 2;
+    });
+}
+
 fn name_str(id: u32) -> Rc<str> {
     NAMES.with(|n| n.borrow().strs[id as usize].clone())
 }
@@ -632,6 +656,13 @@ fn lower_program<'a>(m: &'a Module, e: &'a Expr) -> (Prog, IExpr) {
         fnidx: HashMap::with_capacity(m.fns.len()),
         layout: Vec::new(),
     };
+    set_if_ord("Bool.false", "Bool.true");
+    set_if_ord("Decidable.isFalse", "Decidable.isTrue");
+    for t in &m.types {
+        if let [a, b] = t.ctors.as_slice() {
+            set_if_ord(&a.name, &b.name);
+        }
+    }
     let mut firsts: Vec<&'a FnDef> = Vec::with_capacity(m.fns.len());
     for f in &m.fns {
         if !lo.fnidx.contains_key(f.name.as_str()) {
@@ -773,6 +804,10 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
             IExpr::If(c, t, el) => match eval_sub(prog, st, c)? {
                 Val::Ctor(ref c) if c.len() == 0 && c.name() == TRUE_ID => e = t,
                 Val::Ctor(ref c) if c.len() == 0 && c.name() == FALSE_ID => e = el,
+                // the tag rule (v3/kernel/prog.shard EIf): the then-branch iff the cell is
+                // the SECOND constructor of a two-constructor type
+                Val::Ctor(ref c) if if_ord(c.name()) == 2 => e = t,
+                Val::Ctor(ref c) if if_ord(c.name()) == 1 => e = el,
                 other => return fail(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
 

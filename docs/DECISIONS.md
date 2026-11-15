@@ -161,6 +161,20 @@ entries are explained under "Measured" at the end.
 - An instance is named by the classifier and read by the erasure alone; not the classifier
   reading a template's source at an instance's shapes, which nothing needs until something
   must run a template's instance without the elaborator (`OPEN.md` §4).
+- The Rust evaluator reads an ordinary closure by the classifier's reading written again in
+  Rust, function by function, and takes what that reading asks K about a constant of Init from
+  a table the loader prints from K (`facts.shard`, `load --facts`); not K or the export read in
+  Rust, and not the roles written by an author in the source. The table is made when a test
+  runs and no toolchain file is read by it; a table kept in the tree for the toolchain's own
+  closure would be something the bootstrap believes. Not ruled.
+- The Rust reader refuses nothing: exhaustiveness, a view's privacy, a proof's reader stay the
+  loader's, where the same files are loaded; not the language's refusals stated twice. Not
+  ruled.
+- Three functions of Init the library ran by their derived view have their bodies written out
+  — `BitVec.toNat`, `UInt8.toNat`, `Option.getD` (`std/bytes.shard`, `std/list.shard`): K
+  proves each and the programs are the same text; not the view's program handed to the Rust
+  reader in the table, a program no source writes. `(realize NAME (view))` stays in the
+  language, and the Rust reader does not read it. Not ruled.
 - `ev` is pure: an extern is `EvStuck extern` and only the driver's run performs it; fuel is spent
   at function entry; not effects inside the evaluator.
 - A primitive answers a value, a failed guard, or a resource exhausted, decided before the work;
@@ -307,7 +321,7 @@ measurements; measure again before building on one.
 - Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
   the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
 - The two readings (`load --both`) over what the examples, the library, the formatter and the
-  model write — 473 functions, the 65 lambdas they lift, 9 supplied `realize` bodies: 547
+  model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
   programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
   read (a package's field at its constant). Of the 473 functions alone, as the classifier came
   to read more: 341 the same, 10 different and 122 not read; 370, none and 103 once it took
@@ -315,6 +329,14 @@ measurements; measure again before building on one.
   erased; 473 once it read a function as an argument. One function of the 473 left a runtime
   argument to the elaborator (`Byte.decEq`: `BitVec.toNat`'s width, an implicit binder of
   type `Nat`). No load of the 545 roots changed with the last step.
+- The Rust evaluator's plain reader over the same 59 roots, against the loader's program (the
+  canonical text, 775 lines: 704 functions, 62 types, 6 externs, 3 view signatures): 503 lines
+  the same, none different, 272 functions not read — 80 instances, 65 lifted lambdas and the
+  76 functions that call a template; the 43 functions derivations write and 8 that call one.
+  48 of the 59 roots read whole, the model's 174 declarations and the formatter's sources
+  among them. calc's closure, 59 declarations: read and run over five inputs in 4 ms, where
+  the loader's load of it takes 39 s on the bootstrap. A toolchain closure without K's
+  directory (357 and 349 declarations) reads to the flat reader's text.
 - Suite: 51 entrypoints, eight at a time, over three runs of one day: 740–870 s on the bootstrap
   (4,850–5,100 s of entrypoint time), 135–150 s on the binaries (670–770 s). Loader pins on one shared Init base, each case loaded twice: 9 s
   native, about 150 s on the bootstrap.

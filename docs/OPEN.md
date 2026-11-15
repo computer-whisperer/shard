@@ -88,6 +88,16 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   its parameter's arity (`(fun ((a Int)) (Int.add a))` for a function of two); a type
   argument that only the type expected of the call fixes (`(pick inc List.nil)` at
   `(List Int)`).
+- The Rust evaluator reads an ordinary closure as the classifier does (`KERNEL.md`, The two
+  engines), and `plain_test.sh` holds three closures to the loader's text. Over the 59 roots of
+  the examples, the library, the formatter and the model nothing holds it; measured there
+  (`DECISIONS.md`, Measured), 48 read whole and no line differs. What it does not read, each
+  named on standard error and left out of the program: a call of a template — so no lifted
+  lambda and no instance; a `derive` and what calls a derived function, `=` at a derived
+  equality among them; a `(realize NAME (view))`. A directory import brings the view alone, so
+  a closure with one loads and does not link. It refuses nothing the loader refuses. No
+  toolchain file is read by it: a toolchain closure without K's directory reads to the flat
+  reader's text, one with it lacks K's implementation.
 - "Could not show these equal" is never read as "these differ": no test.
 - A positive node id in K is written only by five constructors: no test. The test of K's state
   discipline believes the types the sources declare.

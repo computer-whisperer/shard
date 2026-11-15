@@ -55,6 +55,21 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("<",   [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
         ("<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
+        // Init's spellings (v3/kernel/prog.shard's entries 18–38, as v3/kernel/ev.shard
+        // applies them): what the plain reader writes for an ordinary file's operators.
+        // Int's divisions are total — a zero divisor gives 0, a remainder by zero the
+        // dividend.
+        ("Int.tdiv", [IntLit(a), IntLit(b)]) => Some(IntLit(if b.is_zero() { Int::zero() } else { a / b })),
+        ("Int.tmod", [IntLit(a), IntLit(b)]) => Some(IntLit(if b.is_zero() { a.clone() } else { a % b })),
+        ("Int.ediv", [IntLit(a), IntLit(b)]) => {
+            Some(IntLit(if b.is_zero() { Int::zero() } else { (a - rem_euclid(a, b)) / b }))
+        }
+        ("Int.emod", [IntLit(a), IntLit(b)]) => Some(IntLit(if b.is_zero() { a.clone() } else { rem_euclid(a, b) })),
+        // K's accelerated Nat set: defined on two naturals (a negative operand leaves the
+        // call stuck), total where Lean's are, and stuck where K's resource limits stop the
+        // work — a result past 2^27 bytes, a count past 32 bits.
+        (n, [IntLit(a), IntLit(b)]) if n.starts_with("Nat.") && !a.is_negative() && !b.is_negative() => nat_prim(n, a, b),
+
         // Symbol ↔ bytes, the bridge the V3 reader is written on: a
         // `Symbol` is otherwise opaque (`quote` literals and `sym_eq` only).
         // The list is the name's UTF-8 BYTES — the representation of a
@@ -65,6 +80,75 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("sym_of_chars", [list])     => decode_char_list(list).map(SymLit),
         ("chars_of_sym", [SymLit(s)]) => Some(encode_char_list(s)),
 
+        _ => None,
+    }
+}
+
+/// A constructor without fields, by its identity: Init's Bool and Decidable cells.
+fn cell(name: &str) -> Expr {
+    Expr::Ctor(name.into(), Vec::new())
+}
+
+/// The bytes a natural takes (`ev.shard` ev_nat_bytes): what K's size limit counts.
+fn nat_bytes(n: &Int) -> u64 {
+    n.bits().div_ceil(8)
+}
+
+const NAT_MAX_SIZE: u64 = 134_217_728;
+const COUNT_MAX: u64 = 4_294_967_295;
+
+/// A natural under K's literal size, else stuck.
+fn nat_sized(r: Int) -> Option<Expr> {
+    (nat_bytes(&r) <= NAT_MAX_SIZE).then_some(Expr::IntLit(r))
+}
+
+fn nat_prim(name: &str, a: &Int, b: &Int) -> Option<Expr> {
+    use num_traits::One;
+    let int = |n: Int| Some(Expr::IntLit(n));
+    match name {
+        "Nat.sub" => int(if a < b { Int::zero() } else { a - b }),
+        "Nat.land" => int(a & b),
+        "Nat.lor" => int(a | b),
+        "Nat.xor" => int(a ^ b),
+        "Nat.shiftLeft" => {
+            if a.is_zero() {
+                return int(Int::zero());
+            }
+            let k = b.to_u64().filter(|k| *k <= COUNT_MAX)?;
+            if nat_bytes(a) + k / 8 + 1 > NAT_MAX_SIZE {
+                return None;
+            }
+            int(a << k)
+        }
+        "Nat.shiftRight" => int(match b.to_u64() {
+            Some(k) => a >> k,
+            None => Int::zero(),
+        }),
+        "Nat.add" => nat_sized(a + b),
+        "Nat.mul" => nat_sized(a * b),
+        "Nat.div" => int(if b.is_zero() { Int::zero() } else { a / b }),
+        "Nat.mod" => int(if b.is_zero() { a.clone() } else { a % b }),
+        "Nat.gcd" => {
+            let (mut x, mut y) = (a.clone(), b.clone());
+            while !y.is_zero() {
+                let r = &x % &y;
+                x = y;
+                y = r;
+            }
+            int(x)
+        }
+        "Nat.pow" => {
+            let k = b.to_u64().filter(|k| *k <= COUNT_MAX)?;
+            if k >= 1 && *a > Int::one() && NAT_MAX_SIZE / k < nat_bytes(a) {
+                return None;
+            }
+            nat_sized(num_traits::pow(a.clone(), k as usize))
+        }
+        "Nat.beq" => Some(cell(if a == b { "Bool.true" } else { "Bool.false" })),
+        "Nat.ble" => Some(cell(if a <= b { "Bool.true" } else { "Bool.false" })),
+        "Nat.decEq" => Some(cell(if a == b { "Decidable.isTrue" } else { "Decidable.isFalse" })),
+        "Nat.decLt" => Some(cell(if a < b { "Decidable.isTrue" } else { "Decidable.isFalse" })),
+        "Nat.decLe" => Some(cell(if a <= b { "Decidable.isTrue" } else { "Decidable.isFalse" })),
         _ => None,
     }
 }

@@ -113,7 +113,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 
 | rule | held by |
 |---|---|
-| The Rust evaluator executes programs only and defines no rule and no front end of its own. | `parity_test.sh` |
+| The Rust evaluator executes programs and defines no rule of its own: what each of its two readers reads of a closure is what the V3 loader reads of the same files. | `parity_test.sh` (every toolchain root); `plain_test.sh` (ordinary closures: calc's, one with records, the two readings' fixture — not every ordinary root, `OPEN.md` §4) |
 | A compiled engine is confirmed against the interpreter byte for byte. | `native_tie_test.sh`, `suite_tie.sh`, `route2_test.sh`, `t0_gate_test.sh` |
 | The toolchain's sources are written in the language every file uses. | `parity_test.sh`; pin `rename_refused_kernel` (string literals under `kernel` remain byte lists) |
 | Every entry from outside is checked or preconditioned; a value built as data is not thereby well-typed. | `entry_test.shard`, `handle_test.shard`, `wire_test.sh`; pins `entry`, `entry_shape`, `handle_door` |

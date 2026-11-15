@@ -5,11 +5,18 @@
 //! contract is to load and evaluate programs faithfully — no proof work
 //! happens here. The checker and everything above it are programs this
 //! evaluator runs.
+//!
+//! Two readers hand the evaluator a program. `load` reads the toolchain's
+//! own sources: names flat, the prelude's types. `plain` reads an ordinary
+//! closure — modules, `use`, Init's types — as the V3 loader's plain route
+//! reads it, from the source and a table of facts about Init's constants;
+//! `v3/kernel/test/plain_test.sh` compares it with the loader.
 
 pub mod ast;
 pub mod dump;
 pub mod eval;
 pub mod load;
+pub mod plain;
 pub mod prim;
 
 // The process allocator. The evaluator's values are reference-counted
@@ -473,6 +480,191 @@ mod tests {
                 bad.into_iter().map(|b: i64| ast::Expr::IntLit(b.into())).collect();
             fast_path_point(&m, "sym_of_chars", &[expr_spine(es)]);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Init's entries of the table (prog.shard 18–38, as ev.shard applies
+    // them), the `if` rule, the plain reader.
+    // ------------------------------------------------------------------
+
+    fn prim2(name: &str, a: i64, b: i64) -> Option<ast::Expr> {
+        prim::try_apply(name, &[ast::Expr::IntLit(a.into()), ast::Expr::IntLit(b.into())])
+    }
+
+    /// Int's divisions are total (a zero divisor gives 0, a remainder by
+    /// zero the dividend); Nat's set is total where Lean's is, defined on
+    /// naturals only, and its decisions are Init's cells.
+    #[test]
+    fn prim_init_entries() {
+        let int = |n: i64| Some(ast::Expr::IntLit(n.into()));
+        assert_eq!(prim2("Int.tdiv", -7, 2), int(-3));
+        assert_eq!(prim2("Int.tdiv", 7, 0), int(0));
+        assert_eq!(prim2("Int.tmod", -7, 2), int(-1));
+        assert_eq!(prim2("Int.tmod", -7, 0), int(-7));
+        assert_eq!(prim2("Int.ediv", -7, 2), int(-4));
+        assert_eq!(prim2("Int.ediv", -7, 0), int(0));
+        assert_eq!(prim2("Int.emod", -7, 2), int(1));
+        assert_eq!(prim2("Int.emod", -7, 0), int(-7));
+        assert_eq!(prim2("Nat.sub", 3, 5), int(0));
+        assert_eq!(prim2("Nat.sub", 5, 3), int(2));
+        assert_eq!(prim2("Nat.div", 7, 0), int(0));
+        assert_eq!(prim2("Nat.mod", 7, 0), int(7));
+        assert_eq!(prim2("Nat.mod", 7, 4), int(3));
+        assert_eq!(prim2("Nat.gcd", 12, 18), int(6));
+        assert_eq!(prim2("Nat.gcd", 0, 5), int(5));
+        assert_eq!(prim2("Nat.pow", 2, 10), int(1024));
+        assert_eq!(prim2("Nat.pow", 7, 0), int(1));
+        assert_eq!(prim2("Nat.shiftLeft", 3, 4), int(48));
+        assert_eq!(prim2("Nat.shiftRight", 48, 4), int(3));
+        assert_eq!(prim2("Nat.shiftRight", 48, 200), int(0));
+        assert_eq!(prim2("Nat.land", 12, 10), int(8));
+        assert_eq!(prim2("Nat.lor", 12, 10), int(14));
+        assert_eq!(prim2("Nat.xor", 12, 10), int(6));
+        assert_eq!(prim2("Nat.beq", 4, 4), Some(nctor("Bool.true", vec![])));
+        assert_eq!(prim2("Nat.ble", 5, 4), Some(nctor("Bool.false", vec![])));
+        assert_eq!(prim2("Nat.decLt", 4, 5), Some(nctor("Decidable.isTrue", vec![])));
+        assert_eq!(prim2("Nat.decEq", 4, 5), Some(nctor("Decidable.isFalse", vec![])));
+        // outside the naturals, and past K's count limit: stuck, never a value
+        assert_eq!(prim2("Nat.sub", -1, 1), None);
+        assert_eq!(prim2("Nat.add", 1, -1), None);
+        assert_eq!(prim2("Nat.pow", 2, 5_000_000_000), None);
+        assert_eq!(prim2("Nat.shiftLeft", 1, 5_000_000_000), None);
+        assert_eq!(prim2("Nat.shiftLeft", 0, 5_000_000_000), int(0));
+    }
+
+    /// `if` takes the then-branch iff the cell is the second constructor of
+    /// a two-constructor type (prog.shard's EIf): the prelude's Bool, and
+    /// any other such type the closure declares.
+    #[test]
+    fn if_reads_the_second_constructor() {
+        let src = r#"
+(type Dec (No) (Yes))
+(fn pick ((d Dec)) Int (if d 1 2))
+"#;
+        let m = load::module_from_str(src).expect("loads");
+        let yes = load::expr_from_str("(pick Yes)", &m).unwrap();
+        let no = load::expr_from_str("(pick No)", &m).unwrap();
+        assert_eq!(eval::eval(&m, &yes).unwrap(), ast::Expr::IntLit(1.into()));
+        assert_eq!(eval::eval(&m, &no).unwrap(), ast::Expr::IntLit(2.into()));
+    }
+
+    /// A closure on disk under a scratch root: its files, the facts.
+    fn plain_closure(tag: &str, files: &[(&str, &str)], facts: &str) -> (std::path::PathBuf, plain::Loader) {
+        let root = std::env::temp_dir().join(format!("shard_plain_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (rel, src) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, src).unwrap();
+        }
+        let fp = root.join("facts");
+        std::fs::write(&fp, facts).unwrap();
+        let entry = root.join(files.last().unwrap().0);
+        let l = plain::load(&root, Some(&fp), &[entry]).expect("the closure loads");
+        (root, l)
+    }
+
+    /// Names are identities: a module per file, a citation through `use`,
+    /// a file's own types opened; without Init a body is left as read.
+    #[test]
+    fn plain_reader_names() {
+        let lib = r#"
+(type Stack (Mk Int))
+(fn push ((n Int) (s Stack)) Stack (match s ((Mk k) (Mk (+ k n)))))
+"#;
+        let app = r#"
+(import "lib.shard")
+(use a.lib)
+(use a.lib.Stack)
+(fn top ((s Stack)) Int (match s ((Mk k) k)))
+(fn go () Int (top (push 5 (Mk (/ 7 2)))))
+"#;
+        let (root, l) = plain_closure("names", &[("a/lib.shard", lib), ("a/app.shard", app)], "");
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        assert_eq!(
+            plain::out::dump(&l.t),
+            "fn go 0 () Int (top (push 5 (Mk (/ 7 2))))
+fn push 0 (Int Stack) Stack (match #0 ((Mk _) (Mk (+ #0 #2))))
+fn top 0 (Stack) Int (match #0 ((Mk _) #0))
+type Stack 0 (Mk Int)
+"
+        );
+        let m = plain::out::module(&l.t);
+        let call = ast::Expr::Call("a.app.go".into(), vec![]);
+        assert_eq!(eval::eval(&m, &call).unwrap(), ast::Expr::IntLit(8.into()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Where the file sees Init: an operator's entry is its operands'
+    /// type's, a comparison where Init's Bool is expected is the decision's
+    /// value, an implicit type argument is not written and a proof is
+    /// passed over — all from the binders' types and the facts.
+    #[test]
+    fn plain_reader_by_types() {
+        let facts = r#"
+(ind Nat - () (Nat.zero Nat.succ) int)
+(ind Bool - () (Bool.false Bool.true) (e 0 (Bool.false) (Bool.true)))
+(ind List - ((x k)) (List.nil List.cons) (e 1 (List.nil) (List.cons 0 (List 0))))
+(ctor List.nil List ((i d)) ())
+(ctor List.cons List ((i d) (x k) (x k)) (t t))
+(ctor Bool.false Bool () ())
+(ctor Bool.true Bool () ())
+(ind Fin - ((x d)) (Fin.mk) row)
+(ctor Fin.mk Fin ((i p) (x k) (x p)) (t f))
+(def Fin.val - ((i k) (x k)) (Fin 0 i x))
+"#;
+        let app = r#"
+(import Init)
+(use Init.List cons nil)
+(fn pred ((n Nat)) Nat (- n 1))
+(fn half ((x Int)) Int (/ x 2))
+(fn small ((n Nat)) Bool (< n 10))
+(fn firsts ((xs (List Nat))) (List Nat)
+  (match xs
+    (nil nil)
+    ((cons x t) (@List.cons Nat (pred x) (firsts t)))))
+(fn index ((i (Fin 4))) Nat (Fin.val i))
+(fn clamp ((n Nat) (h (< n 4))) (Fin 4) (Fin.mk n h))
+(fn go () Nat (match (firsts (cons 0 (cons 5 nil))) (nil 99) ((cons a _) (+ a (if (small 3) 100 200)))))
+"#;
+        let (root, l) = plain_closure("types", &[("app.shard", app)], facts);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        let dump = plain::out::dump(&l.t);
+        for line in [
+            "fn pred 0 (Nat) Nat (Nat.sub #0 1)",
+            "fn half 0 (Int) Int (Int.ediv #0 2)",
+            "fn small 0 (Nat) Bool (if (< #0 10) (true) (false))",
+            "fn firsts 0 ((List Nat)) (List Nat) (match #0 (nil (nil)) ((cons _ _) (cons (pred #1) (firsts #0))))",
+            "fn index 0 (Fin) Nat #0",
+            "fn clamp 0 (Nat) Fin #0",
+            "type Bool 0 (false) (true)",
+            "type List 1 (nil) (cons ?0 (List ?0))",
+        ] {
+            assert!(dump.lines().any(|l| l == line), "no line `{line}` in\n{dump}");
+        }
+        let m = plain::out::module(&l.t);
+        let call = ast::Expr::Call("app.go".into(), vec![]);
+        // pred 0 is 0 at Nat; small 3 is Init's true
+        assert_eq!(eval::eval(&m, &call).unwrap(), ast::Expr::IntLit(100.into()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// What has no reading is named and left out: a template's call.
+    #[test]
+    fn plain_reader_names_what_it_leaves() {
+        let app = r#"
+(type (L T) (N) (C T (L T)))
+(fn each ((f (-> Int Int)) (xs (L Int))) (L Int) (match xs (N N) ((C x t) (C (f x) (each f t)))))
+(fn inc ((x Int)) Int (+ x 1))
+(fn all ((xs (L Int))) (L Int) (each inc xs))
+"#;
+        let (root, l) = plain_closure("left", &[("app.shard", app)], "");
+        assert_eq!(l.t.unread.len(), 1);
+        assert_eq!((l.t.unread[0].0.as_str(), l.t.unread[0].1.0), ("app.all", "template"));
+        assert_eq!(plain::out::dump(&l.t), "fn inc 0 (Int) Int (+ #0 1)
+type L 1 (N) (C ?0 (L ?0))
+");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// One (name, args) point through `eval::eval` against the native table:
