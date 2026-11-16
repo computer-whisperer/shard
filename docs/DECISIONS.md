@@ -451,6 +451,9 @@ measurements; measure again before building on one.
   declaration and the runtime's symbol table (`OPEN.md` §1). With the generated rows put in an
   order where none cites a later one, and nothing else changed, the first load's K root takes
   53 s for 1,754 s and the second load 125 s and 6.3 GB, where the present loader takes 16 s
-  on the same roots; a profile then shows name hashing (`name.shard` `mix`, a call a byte)
-  and allocation at about 60%, K and the elaborator under 2% each. Nothing was run with the
-  ordinary `Symbol`, and the Rust reader was not changed.
+  on the same roots; a profile of that whole load: allocation 33%, name hashing
+  (`name.shard` `mix`, a call a byte) 27%, maps 10%, the symbol table and a symbol's bytes
+  8%, K's own functions and the elaborator under 2% each, the waiting list nothing. The
+  present loader's 17 s on those roots divide the same way: allocation 33%, name hashing 21%,
+  the symbol table 10%, maps 8%. Nothing was run with the ordinary `Symbol`, and the Rust
+  reader was not changed.
