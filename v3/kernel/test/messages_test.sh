@@ -39,7 +39,7 @@ printf '%s\n' '(theorem t ((a Nat) (b Nat) (h (Eq a b))) (Eq a b) (by (rw h) rfl
 printf '%s\n' '(fn twice ((n Nat)) Nat (+ n n))' > "$SCRATCH/far.shard"
 printf '%s\n' '(theorem a () (Eq 1 1) (exact (Eq.refl 1)))' '(import "far.shard")' '(theorem t ((n Nat) (h (Not (Eq n 0)))) (Nat.lt (Nat.sub n 1) n) (exact (Nat.sub_one_lt h)))' > "$SCRATCH/latefile.shard"
 printf '%s\n' '(import Init)' '(theorem t () (Eq 1 1) (exact (Eq.refl 1)))' > "$SCRATCH/named.shard"
-printf '%s\n' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (if (= n 0) 0 (g (- n 1))))' > "$SCRATCH/parked.shard"
+printf '%s\n' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (Nat.add n "one"))' > "$SCRATCH/parked.shard"
 printf '%s\n' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
 
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/step.shard" "$SCRATCH/latefile.shard" \
@@ -88,8 +88,8 @@ has "a capitalised variable in a last row is not a variable any more" "ev_dead_r
   "^RUNNABLE fn pins\.loader\.ev_dead_row\.kernel\.main\.first_or "
 
 # ---- nested recursion
-has "nested recursion: the refusal does not name the let the argument cites" "define_nested" \
-  "^REFUSE pins\.loader\.define_nested\.main\.f nested_recursion: .* it cites r, a let bound to the result of a recursive call"
+has "nested recursion: the reason does not name the let the argument cites" "define_nested" \
+  "^RUNNABLE fn pins\.loader\.define_nested\.main\.f why=nested_recursion route=typed: .* it cites r, a let bound to the result of a recursive call"
 lacks "a definition K refused for a free variable in an obligation" "fvar_in_type"
 
 # ---- what to write
@@ -102,8 +102,8 @@ has "class: the refusal does not say what stands in its place" "$S/class.shard" 
 lacks "a refusal that answers with a phase or a deferral" "(: phase [0-9]|is deferred)"
 has "a bare true: the refusal does not say to write Bool.true or (use Init.Bool)" "bool_bare" \
   "^REFUSE pins\.loader\.bool_bare\.main\.is_zero unknown_constant: true: Init's constructor is Bool\.true — write Bool\.true, or open the namespace with \(use Init\.Bool\)$"
-has "a function waiting on a refused one: not labelled callee_undeclared" "$S.parked" \
-  "^RUNNABLE fn $S\.parked\.f why=callee_undeclared route=e_first$"
+has "a function that calls a refused one: not refused with the callee named" "$S.parked" \
+  "^REFUSE $S\.parked\.f callee_undeclared: g: a function of this file that has no declaration — it was refused, so this one does not read$"
 lacks "a parked function labelled mutual_recursion" "why=mutual_recursion"
 checks=$((checks+1)); grep -Eq "^READ-ERROR main\.shard function_expected: the head resolved to Add — Init's declaration; .* applied to 1 more arguments than its type has: " "$OUT/shadowed.txt" || { bad "a head shadowed by Init's: the refusal does not name the head it resolved"; grep -E 'ERROR|REFUSE' "$OUT/shadowed.txt" | head -3 | cut -c1-400; }
 

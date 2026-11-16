@@ -12,10 +12,10 @@
 ;;; compiled as `Decidable.rec` so the branch's proof is one of them and a
 ;;; matcher carrying its equation so a row's is one too. The
 ;;; equations `NAME.eq_N` (one per leaf of the leading matchers: by `Eq.refl`,
-;;; a measured function's by `WellFounded.fix_eq`) come with it. What K's
-;;; projection cannot reach here leaves the function RUNNABLE with the obstacle
-;;; named (DfSkip); a definition that should exist and fails is refused (DfErr)
-;;; — never a silent fall-back. Also here: a native inductive's
+;;; a measured function's by `WellFounded.fix_eq`) come with it. Where no
+;;; definition comes of it the reason is named with its sentence (DfSkip): the
+;;; loader leaves a `fn` its program with that reason and refuses a `def` or a
+;;; template, which have no program to be left with. Also here: a native inductive's
 ;;; `below`/`brecOn` and its constructor-structure bundle.
 (import "realize.shard")
 (use Init.Bool false true)
@@ -60,21 +60,16 @@
 (use kernel.realize.Either3)
 
 ;; ---- the verdicts ----------------------------------------------------------------------------
-;; DfSkip: the function has no L meaning here (RUNNABLE, the obstacle named); DfErr: it should,
-;; and the definition failed (refused); DfAux: declarations to admit first (a native inductive's
-;; below and brecOn), then read and try again; DfOk: the E table, the obligations to admit as
-;; parameters, the definition, its equations, whether a measure is pending
+;; DfSkip: no definition, the reason and its sentence; DfAux: declarations to admit first (a
+;; native inductive's below and brecOn), then read and try again; DfOk: the E table, the
+;; obligations to admit as parameters, the definition, its equations, whether a measure is pending
 (type DfRes
   (DfSkip Symbol (List Int))
-  (DfErr Symbol (List Int))
   (DfAux ESt (List Declaration))
   (DfOk ESt (List Declaration) Declaration (List Declaration) Bool))
 ;; a value's result with the state: declarations to admit first, or the error
 (type TrAux (AuxOk Tr (List Declaration)) (AuxErr Tr Symbol (List Int)))
 
-;; what K's projection cannot reach here and the program does not need: RUNNABLE, named
-(fn df_obstacle ((e Symbol)) Bool (sym_eq e (quote measure_type)))
-(fn df_verdict ((e Symbol) (m (List Int))) DfRes (if (df_obstacle e) (DfSkip e m) (DfErr e m)))
 
 ;; ---- the entry: the K projection of a pre-definition ---------------------------------------------
 ;; the body is an L term over the binders' locals and the self-local (predef.shard). A body
@@ -155,15 +150,15 @@
        (let ((t (tr_new w es sc k tps)))
          (match (mt_inst_args (Tr.w t) (pd_type pd) (pd_binders pd))
            ((Prod.mk _ none)
-            (DfErr (quote define_matrix) "the declared type does not take the binders"))
+            (DfSkip (quote define_matrix) "the declared type does not take the binders"))
            ((Prod.mk w1 (some rl))
             (let ((t0 (tr_set_w t w1)) (recursive (mentions_any (pd_body pd) (list selfid))))
               (match (pj_value t0 pd tps data rl selfid recursive)
-                ((AuxErr _ e m) (df_verdict e m))
+                ((AuxErr _ e m) (DfSkip e m))
                 ((AuxOk t1 auxs)
                  (if (< 0 (len auxs)) (DfAux (Tr.es t1) auxs)
                  (match (Tr.value t1)
-                   (none (DfErr (quote define_matrix) "no value"))
+                   (none (DfSkip (quote define_matrix) "no value"))
                    ((some value)
                     (let
                       ((measured (bool_and recursive (pj_is_measure (pd_rec pd))))
@@ -178,7 +173,7 @@
                       ;; WellFounded.fix_eq
                       (match (w_admit_after (Tr.w t1) (if measured (tr_obls t1) nil) dd)
                         ((Prod.mk _ (some why))
-                         (DfErr (quote definition_refused)
+                         (DfSkip (quote definition_refused)
                            (append (show_name k)
                              (append ": K refused the definition (" (append (chars_of_sym why) ")")))))
                         ((Prod.mk w2 none)
@@ -194,14 +189,14 @@
                                (pd_body pd)
                                (budget_depth))
                              (TrOk (tr_set_w t1 w2) (pd_body pd)))
-                           ((TrErr e m) (DfErr e m))
+                           ((TrErr e m) (DfSkip e m))
                            ((TrOk t1b eqbody)
                             (match
                               (pj_equations t1b (mk_const k nil) selfid (pd_binders pd) rl eqbody
                                 nil
                                 true
                                 (if measured (some value) none))
-                              ((Prod.mk _ (Left3 e m)) (DfErr e m))
+                              ((Prod.mk _ (Left3 e m)) (DfSkip e m))
                               ((Prod.mk t2 (Right3 eqs))
                                (DfOk (Tr.es t2) (tr_obls t2) dd eqs measured)))))))))))))))))))))
 (fn pj_is_measure ((r PdRec)) Bool
@@ -1369,14 +1364,13 @@
 (record GrpM (pd PreDef) (data (List Expr)) (rl Expr) (m Expr) (con Name))
 ;; a member defined: its name, its definition, its equations
 (type GrpDef (GrpDef Name Declaration (List Declaration)))
-;; GrpSkip: the group has no L meaning here — every member RUNNABLE with the reason; GrpErr: it
-;; should and the definition failed; GrpOk: the E table, the obligations, the argument type
-;; with the fixpoint and its unfolding theorem, the members in order
+;; GrpSkip: no definition for the group — every member its program with the reason; GrpOk: the
+;; E table, the obligations, the argument type with the fixpoint and its unfolding theorem, the
+;; members in order
 (type GrpRes
   (GrpSkip Symbol (List Int))
-  (GrpErr Symbol (List Int))
   (GrpOk ESt (List Declaration) (List Declaration) (List GrpDef)))
-(type GrpPrep (GpOk Tr (List GrpM)) (GpSkip Symbol (List Int)) (GpErr Symbol (List Int)))
+(type GrpPrep (GpOk Tr (List GrpM)) (GpSkip Symbol (List Int)))
 (fn pd_names ((pds (List PreDef))) (List Name)
   (measure (struct pds))
   (match pds
@@ -1399,15 +1393,14 @@
 ;; the K projection of a group
 (fn define_group ((es ESt) (sc Scope) (pds (List PreDef))) GrpRes
   (match pds
-    (nil (GrpErr (quote define_matrix) "an empty group"))
+    (nil (GrpSkip (quote define_matrix) "an empty group"))
     ((cons first _)
      (match (pd_last pds)
-       (none (GrpErr (quote define_matrix) "an empty group"))
+       (none (GrpSkip (quote define_matrix) "an empty group"))
        ((some lastpd)
         (let ((t (tr_new (el_w (pd_state lastpd)) es sc (pd_name first) nil)))
           (match (grp_prepare t (pd_name first) pds (pd_names pds) 0 nil)
             ((GpSkip e m) (GrpSkip e m))
-            ((GpErr e m) (GrpErr e m))
             ((GpOk t1 ms) (grp_build t1 (pd_name first) ms)))))))))
 ;; each member with its data binders, its result type and its measure — or the reason the
 ;; group is not compiled
@@ -1431,7 +1424,7 @@
                    ": a member of a group of functions that call each other has type parameters — not compiled: make the member monomorphic"))
                (match (mt_inst_args (Tr.w t) (pd_type pd) (pd_binders pd))
                  ((Prod.mk _ none)
-                  (GpErr (quote define_matrix) "the declared type does not take the binders"))
+                  (GpSkip (quote define_matrix) "the declared type does not take the binders"))
                  ((Prod.mk w1 (some rl))
                   (if (mentions_any rl (pd_fvar_ids data))
                     (GpSkip (quote group_shape)
@@ -1546,8 +1539,6 @@
                     ((TrOk t4 b)
                      (match (tr_lams t4 (append data (list recl)) b)
                        ((Prod.mk t5 minor) (grp_minors t5 all r argc rel cfn (cons minor acc)))))))))))))))))
-(fn df_grp_verdict ((e Symbol) (m (List Int))) GrpRes
-  (if (df_obstacle e) (GrpSkip e m) (GrpErr e m)))
 ;; the argument type checked into the walk's environment; the result type and the measure by
 ;; constructor, the relation, the functional; then the fixpoint, its unfolding theorem and the
 ;; members, each checked into the walk's environment so the equations are stated where K
@@ -1560,7 +1551,7 @@
          ((adecl (InductDecl nil 0 (list (InductiveType aname (mk_sort (level_one)) ctors)) false)))
          (match (w_admit (Tr.w t1) adecl)
            ((Prod.mk _ (some why))
-            (GrpErr (quote definition_refused)
+            (GrpSkip (quote definition_refused)
               (append (show_name aname)
                 (append ": K refused the group's argument type (" (append (chars_of_sym why) ")")))))
            ((Prod.mk w2 none)
@@ -1582,7 +1573,7 @@
                                    (match (wf_relation t9 argc mfn)
                                      ((Prod.mk t10 (Prod.mk rel hwf))
                                       (match (grp_minors t10 ms ms argc rel cfn nil)
-                                        ((Prod.mk _ (Left2 e m)) (df_grp_verdict e m))
+                                        ((Prod.mk _ (Left2 e m)) (GrpSkip e m))
                                         ((Prod.mk t11 (Right2 (Prod.mk fmins _)))
                                          (match (grp_rec_type t11 argc rel x0 cfn)
                                            ((Prod.mk t12 recty)
@@ -1635,7 +1626,7 @@
                           (list mname))))
                      (match (w_admit_after (Tr.w t5) (tr_obls t5) mdecl)
                        ((Prod.mk _ (some why))
-                        (GrpErr (quote definition_refused)
+                        (GrpSkip (quote definition_refused)
                           (append (show_name mname)
                             (append ": K refused the group's fixpoint ("
                               (append (chars_of_sym why) ")")))))
@@ -1672,7 +1663,7 @@
                                                             (list ename))))
                                                        (match (w_admit (Tr.w t15) edecl)
                                                          ((Prod.mk _ (some why))
-                                                          (GrpErr (quote definition_refused)
+                                                          (GrpSkip (quote definition_refused)
                                                             (append (show_name ename)
                                                               (append
                                                                 ": K refused the fixpoint's unfolding ("
@@ -1709,7 +1700,7 @@
                     (list (pd_name pd)))))
                (match (w_admit (Tr.w t2) dd)
                  ((Prod.mk _ (some why))
-                  (GrpErr (quote definition_refused)
+                  (GrpSkip (quote definition_refused)
                     (append (show_name (pd_name pd))
                       (append ": K refused the definition (" (append (chars_of_sym why) ")")))))
                  ((Prod.mk w3 none)
@@ -1741,7 +1732,7 @@
                    (beyond nil))
                  (pd_body pd)
                  (budget_depth))
-               ((TrErr e m) (GrpErr e m))
+               ((TrErr e m) (GrpSkip e m))
                ((TrOk t1 eqbody)
                 (match (grp_subst_members t1 eqbody (pd_callees pd))
                   ((Prod.mk t2 eqbody1)
@@ -1751,11 +1742,11 @@
                        nil
                        true
                        (some v))
-                     ((Prod.mk _ (Left3 e m)) (GrpErr e m))
+                     ((Prod.mk _ (Left3 e m)) (GrpSkip e m))
                      ((Prod.mk t3 (Right3 eqs))
                       (grp_equations t3 r dr vr core (cons (GrpDef (pd_name pd) dd eqs) acc))))))))))
-          (nil (GrpErr (quote define_matrix) "a member without its value"))))
-       (nil (GrpErr (quote define_matrix) "a member without its definition"))))))
+          (nil (GrpSkip (quote define_matrix) "a member without its value"))))
+       (nil (GrpSkip (quote define_matrix) "a member without its definition"))))))
 ;; a body's callee-locals replaced by the members' constants
 (fn grp_subst_members ((t Tr) (e Expr) (cls (List CalleeLocal))) (Prod Tr Expr)
   (measure (struct cls))

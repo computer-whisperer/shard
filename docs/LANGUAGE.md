@@ -574,7 +574,7 @@ other arguments are free (an accumulator may change). The definition is built on
 It works on an inductive type whose recursor has one motive and eliminates into `Type`: Init's
 `List`, `Option` and the like, and a `type` of the program. It does not work on a *nested* type —
 one with a field that applies another type to it, `(type Tree (Leaf Nat) (Node (List Tree)))` —
-which is refused (`equation_form`, below): use a measure and `(derive Tree size)`.
+which gets no definition (`equation_form`, below): use a measure and `(derive Tree size)`.
 
 **By measure: `(measure M)`**, `M` a `Nat` over the binders — for an `Int` argument write
 `(Int.natAbs n)` (pin `measure_natabs`); `M` may cite a function that has no program, such as a
@@ -599,8 +599,8 @@ derived size. The definition is built on `WellFounded.fix`. Every self-call stat
   states the function's own values: a `let` bound to a recursive call, a `let` computed from one,
   and a fact about either — so a call in the scope of such a `let` has its obligation without it
   (pins `define_let_call`, `mutual_let_call`). A call whose *argument* cites such a `let`, or
-  holds a recursive call, is nested recursion and gets no definition: `REFUSE NAME
-  nested_recursion` (pin `define_nested`).
+  holds a recursive call, is nested recursion and gets no definition: `why=nested_recursion`
+  (pin `define_nested`).
 - *Numbering.* From 1, in the order the body is walked: arguments left to right, the rows of a
   `match` in order, and for an `if` the condition, the else-branch, then the then-branch. Two calls
   that state the same fact share one obligation. The records: `PARAM NAME.dec_N obligation` for
@@ -715,8 +715,16 @@ fields: `len.eq_2` states `len (List.cons x t) = 1 + len t` and is cited `(len.e
 ### When a function is only a program, or refused
 
 `RUNNABLE fn NAME why=REASON route=ROUTE` — the function runs, has no definition, and no theorem
-can name it. `route=typed`: the body was elaborated and the program is its erasure.
-`route=e_first`: the body could not be read as a term of the logic and was read as a program.
+can name it. `route=typed`: the body was elaborated, so its types are checked, and the program is
+its erasure; the sentence the definer gave for the reason follows the record, `…route=typed:
+SENTENCE`. `route=e_first`: the body could not be read as a term of the logic and was read as a
+program.
+
+A `fn` that reads and whose types check always has a program (`LAW.md` rule 25): whatever keeps
+it from a definition is a reason on that program, not a refusal. A `fn` that does not read, or
+whose types do not check, is refused, and so is one that calls a refused function
+(`callee_undeclared`). A `def` that recurses, a template and a supplied `realize` have no program
+to be left with: for them the reasons of the definer are refusals.
 
 | `why=` | route | cause | what to do |
 |---|---|---|---|
@@ -724,10 +732,15 @@ can name it. `route=typed`: the body was elaborated and the program is its erasu
 | `measure_type` | typed | `(measure M)` and `M` is not a `Nat` | write a `Nat` measure, e.g. `(Int.natAbs n)` |
 | `group_measure` | typed | a member of a group has no measure, or `(measure (struct x))` | `(measure M)` on every member |
 | `group_shape` | typed | a member of a group has a type parameter, or a result type over its parameters | make the members monomorphic and non-dependent |
+| `realize_recursion` | typed | the function calls itself and states no measure | add `(measure (struct x))` or `(measure M)` |
+| `realize_descent` | typed | a recursive call does not pass a part of the structural parameter, or passes the parameters themselves, or is at other type arguments | pass a pattern variable of a match on the parameter, or use `(measure M)` |
+| `equation_form`, `untyped_subterm` | typed | `(measure (struct x))` over a type structural recursion does not work on: a nested type, one that is no inductive type | `(measure (T.size x))` after `(derive T size)` |
+| `nested_recursion` | typed | the argument of a recursive call is computed by the recursion itself | pass an argument computed without a recursive call |
+| `function_value` | typed | the function's own name is not applied to all its arguments | apply the function fully |
+| `definition_refused`, `define_matrix`, `define_depth` | typed | the definer built something K refused, or met a shape it does not handle | a defect of the definer: report it; split a body too deep |
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
 | `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
 | `e_only_type` | e_first | the signature cannot be read: a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | declare the type first; the normal state of a function over `Symbol` |
-| `callee_undeclared` | e_first | at the file's end the function still waits on a function of the file that never got a declaration, because that one was refused | mend the refusal of the callee above |
 
 **What is written and erased.** A call writes more than it passes: a proof, a type under `@`,
 a value a type is indexed by. Read as a program alone, a call's arguments are sorted by the
@@ -767,8 +780,10 @@ and differently: the typed route captures the local, this reading does not see i
 `RUNNABLE extern NAME` and `RUNNABLE type NAME` are the ordinary records of an extern and of a
 program-only type; `RUNNABLE extern NAME why=REASON` is an extern that got no constant.
 
-`REFUSE NAME REASON: MESSAGE` — nothing is declared. The reasons that come from turning a function
-into a definition:
+`REFUSE NAME REASON: MESSAGE` — nothing is declared. The definer's reasons, with the sentence each
+carries. On a `fn` they are the reason of a program (`RUNNABLE fn NAME why=REASON route=typed:
+MESSAGE`, above), all but `bad_measure`, `name_taken`, `define_loop` and `callee_undeclared`,
+which refuse it; on a `def` that recurses, a template and a supplied `realize` each is a refusal:
 
 | reason | message | what to do |
 |---|---|---|
@@ -784,13 +799,14 @@ into a definition:
 | `definition_refused` | `NAME: K refused the definition (WHY)`; for a group also `… the group's argument type`, `… the group's fixpoint`, `… the fixpoint's unfolding` | a defect of the definer: report it |
 | `define_matrix`, `define_depth`, `define_loop` | internal shapes; `a body too deep`; `the auxiliaries did not settle` | split the function; report |
 | `name_taken` | `NAME is an admitted constant: realize it, or declare another name` | rename, or `realize` |
+| `callee_undeclared` | `G: a function of this file that has no declaration — it was refused, so this one does not read` | mend the refusal of `G` above; every function that calls this one is refused the same way |
 
 Two more families refuse a `fn`: any refusal of the elaborator on the signature, the measure or
 the body (*Terms*) — `type_mismatch`, `match_not_exhaustive`, `unsolved_implicit`, … — and any
 refusal of the erasure (*Programs*) — `function_value`, `erased_in_runtime`,
 `recursion_structure`, `noncomputable`. When a body falls to `route=e_first` and is refused there
 too, the record carries both: `REFUSE NAME REASON: MESSAGE — read E-first after the typed route's
-REASON2: MESSAGE2`. A refused group gives every member the same record.
+REASON2: MESSAGE2`. A group without a definition gives every member the same reason.
 
 ## Programs
 

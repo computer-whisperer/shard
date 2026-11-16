@@ -91,10 +91,10 @@ message says what to write. The second column of list 2 is that reason.
 
 | Lean | the loader prints | write instead |
 |---|---|---|
-| `partial def`; a recursive function with no termination argument | `lean_form`; `realize_recursion: f calls itself without a measure` | a measure: `(fn count_down ((n Nat)) Nat (measure n) (if (= n 0) 0 (count_down (- n 1))))` (pin `by_wf`); structural recursion is `(measure (struct xs))` |
+| `partial def`; a recursive function with no termination argument | `lean_form`; the function runs as a program without a definition, `RUNNABLE fn f why=realize_recursion` | for a definition, a measure: `(fn count_down ((n Nat)) Nat (measure n) (if (= n 0) 0 (count_down (- n 1))))` (pin `by_wf`); structural recursion is `(measure (struct xs))` |
 | `termination_by`, `decreasing_by` | `lean_form` | `(measure M)` after the return type, `M` a `Nat`. Each recursive call's descent is an obligation `f.dec_N`, proved after the `fn`: `(fulfills count_down.dec_1 (by (intro n h) (exact (Nat.sub_lt (Nat.pos_of_ne_zero h) (Nat.lt_succ_self 0)))))` (pin `by_wf`; list 3) |
 | a measure of type `Int` | `RUNNABLE fn f why=measure_type` | a `Nat` measure: `(measure (Int.natAbs n))` (pin `measure_natabs`) |
-| a recursive call on the parameters themselves | `realize_descent: … calls itself on its own parameters — no measure decreases` | pass a smaller argument (pin `realize_measure_loop`) |
+| a recursive call on the parameters themselves | no definition: `why=realize_descent`, `… calls itself on its own parameters — no measure decreases`; in a supplied `realize` a refusal | pass a smaller argument (pin `realize_measure_loop`) |
 | `mutual … end` | `lean_form` | no keyword. Write the functions one after another, each with `(measure N)`; the loader finds the group: `(fn ping ((n Nat)) Nat (measure n) (if (= n 0) 0 (pong (Nat.sub n 1))))`, `pong` likewise, then `(fulfills ping.dec_1 …)` and `(fulfills pong.dec_1 …)` (pin `mutual_measure`) |
 | a member of such a group with `(measure (struct xs))` or no measure; with a type parameter | `RUNNABLE fn f why=group_measure`; `why=group_shape` | `(measure N)` with `N` a `Nat` on every member — `(derive T size)` gives one for a data type (list 3); no type parameters in a group (pins `define_mutual`, `mutual_no_measure`, `mutual_shape`) |
 | `unsafe` | `lean_form` | nothing: every declaration is checked |

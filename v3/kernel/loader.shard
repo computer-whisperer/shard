@@ -272,7 +272,7 @@
   (RRefuse Name Symbol)  ; K refused
   (RPolicy Name (List Name))  ; outside the file's policy: the axioms it reaches that the policy lacks
   (RPending Name Symbol)  ; a pending proof and its cause (sorry, auto_missing, …): read, admits nothing
-  (RRun Symbol Name Symbol Symbol)  ; an E declaration without a definition, RUNNABLE: kind (fn / extern / type); a fn's obstacle to L meaning (none = not applicable); its route (typed — the program the erasure —, e_first — the classifier's —, none)
+  (RRun Symbol Name Symbol Symbol (List Int))  ; an E declaration without a definition, RUNNABLE: kind (fn / extern / type); a fn's reason for having none (none = not applicable); its route (typed — its types were checked and its program is the erasure —, e_first — the classifier's program); the reason's sentence, where the definer gave one
   (RDefine Name (List Name) (List Name))  ; a fn defined: its equations' identities, the pending roots it carries
   (RClassify Name Symbol (List Int))  ; the classifier refused: reason, message (counts as refused)
   (RRealize Name Symbol (List Name) (List Name))  ; a realization attached: kind (supplied / view), its equations' identities, the pending roots it carries
@@ -1547,7 +1547,7 @@
     ((COk d)
      (Prod.mk
        (ld_rec (ld_with_e l1 (es_add_decl (Load.etab l1) d))
-         (RRun (form_head s) (edecl_name d) why route))
+         (RRun (form_head s) (edecl_name d) why route nil))
        f))
     ;; the lambdas the body lifted added, then the instances it takes built — programs, no L half
     ((COkT d lifted eds)
@@ -1556,7 +1556,7 @@
        ((Prod.mk l2 (some f2))
         (Prod.mk
           (ld_rec (ld_with_e l2 (es_add_decl (Load.etab l2) d))
-            (RRun (form_head s) (edecl_name d) why route))
+            (RRun (form_head s) (edecl_name d) why route nil))
           f2))))))
 ;; the lambdas a body read by the classifier lifted: each a program alone, added once
 (fn add_e_lifted ((l Load) (f Fx) (ls (List EDecl)) (why Symbol) (route Symbol)) Load
@@ -1568,7 +1568,7 @@
        (if (es_has (Load.etab l) (edecl_name d)) l
        (ld_rec
          (ld_with_e l (es_add_decl (es_register_all (Load.etab l) (Fx.module f) (decl_infos d)) d))
-         (RRun (quote fn) (edecl_name d) why route)))
+         (RRun (quote fn) (edecl_name d) why route nil)))
        f
        r
        why
@@ -1623,7 +1623,7 @@
 (fn unread_noted ((l Load) (e Symbol) (m (List Int))) Load (ld_miss l e m))
 (fn ld_last_runnable ((l Load)) Bool
   (match (ld_recs_head l)
-    ((some (RRun _ _ _ _)) true)
+    ((some (RRun _ _ _ _ _)) true)
     (_ false)))
 ;; a `def` with a recursion clause — `(def NAME ((x TYPE)…) TYPE (measure (struct x)) BODY)` —
 ;; is the fn pipeline's K half alone: read once as a pre-definition with
@@ -1648,7 +1648,6 @@
       ((PdOk pd)
        (match (define_pd (Load.etab l1) sc pd)
          ((DfSkip why m) (Prod.mk (ld_rec l1 (RClassify k why m)) f))
-         ((DfErr e m) (Prod.mk (ld_rec l1 (RClassify k e m)) f))
          ((DfAux es2 auxs)
           (if (< fuel 1)
             (Prod.mk (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle"))
@@ -1735,18 +1734,19 @@
                ((Prod.mk l1b none) (Prod.mk l1b f))
                ((Prod.mk l1b (some f1b))
                 (match (define_pd (Load.etab l1b) sc pd)
-                  ((DfSkip why _)
+                  ;; no definition: the fn read and its types checked, so it has its program —
+                  ;; the erasure — and the reason with its sentence (LAW.md rule 25)
+                  ((DfSkip why m)
                    (both_noted
                      (Prod.mk
                        (ld_rec (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s)
-                         (RRun (quote fn) k why (quote typed)))
+                         (RRun (quote fn) k why (quote typed) m))
                        f1b)
                      l1
                      sc
                      s
                      d
                      lifted))
-                  ((DfErr e m) (Prod.mk (ld_rec l1b (RClassify k e m)) f1b))
                   ((DfAux es2 auxs)
                    (if (< fuel 1)
                      (Prod.mk
@@ -1855,7 +1855,6 @@
                  (append m
                    " — a template (a fn with a function-typed binder) needs its definition in K, which its instances unfold to")))
              f))
-          ((DfErr e m) (Prod.mk (ld_rec l1 (RClassify k e m)) f))
           ((DfAux es2 auxs)
            (if (< fuel 1)
              (Prod.mk (ld_rec l1 (RClassify k (quote define_loop) "the auxiliaries did not settle"))
@@ -2129,30 +2128,60 @@
      (match (load_fn l f s 2)
        ((Prod.mk l1 f1)
         (retry_each l1 f1 r (bool_or progressed (= (len (Load.parked l1)) (len (Load.parked l))))))))))
-;; the fns still parked at a file's end — a forward reference that never settled: each other's
-;; callee-locals, read once more — RUNNABLE route=typed with callee_runnable; one that parks
-;; even so calls a function of the file that got no declaration (it was refused) and is the
-;; classifier's, `why=callee_undeclared`
+;; the fns still parked at a file's end — a forward reference that never settled. Each is
+;; read with every other one a callee-local. One that parks even so calls a function of the
+;; file that got no declaration, because that one was refused: it does not read, and is
+;; refused with the callee named (`callee_undeclared`) — and is no callee-local of the rest,
+;; which are read again without it, until none parks. The rest are loaded: RUNNABLE
+;; route=typed with callee_runnable
 (fn flush_parked ((l Load) (f Fx)) Load
-  (let ((ps (Load.parked l)))
-    (flush_each (ld_with_parked (typed_all l (fx_scope l f) ps) nil) f ps)))
+  (let ((ps (Load.parked l))) (flush_settle (ld_with_parked l nil) f ps (+ 1 (len ps)))))
+(fn flush_settle ((l Load) (f Fx) (ps (List Parked)) (fuel Int)) Load
+  (measure fuel)
+  (let ((lt (typed_all l (fx_scope l f) ps)))
+    (match (flush_unread lt f ps)
+      (nil (flush_each lt f ps))
+      (bad
+        (if (< fuel 1) (flush_each lt f ps)
+        (flush_settle (flush_refuse l bad) f (parked_without ps (parked_names bad)) (- fuel 1)))))))
 (fn typed_all ((l Load) (sc Scope) (ps (List Parked))) Load
   (measure (struct ps))
   (match ps
     (nil l)
     ((cons (Parked k s _ _) r) (typed_all (ld_add_typed l k sc s) sc r))))
+;; the parked that park again in `lt`, each with the name it waits on; nothing of a reading is kept
+(fn flush_unread ((lt Load) (f Fx) (ps (List Parked))) (List Parked)
+  (measure (struct ps))
+  (match ps
+    (nil nil)
+    ((cons (Parked k s _ _) r)
+     (match (load_fn lt f s 2)
+       ((Prod.mk l1 _)
+        (match (Load.parked l1)
+          (nil (flush_unread lt f r))
+          ((cons (Parked _ _ why m) _) (cons (Parked k s why m) (flush_unread lt f r)))))))))
+(fn flush_refuse ((l Load) (bad (List Parked))) Load
+  (measure (struct bad))
+  (match bad
+    (nil l)
+    ((cons (Parked k _ why m) r)
+     (flush_refuse
+       (ld_rec l
+         (RClassify k why
+           (append m
+             ": a function of this file that has no declaration — it was refused, so this one does not read")))
+       r))))
 (fn flush_each ((l Load) (f Fx) (ps (List Parked))) Load
   (measure (struct ps))
   (match ps
     (nil l)
-    ((cons (Parked _ s why _) r)
+    ((cons (Parked k s _ _) r)
      (match (load_fn l f s 2)
        ((Prod.mk l1 _)
         (match (Load.parked l1)
           (nil (flush_each l1 f r))
-          (_
-            (match (load_e_first (ld_with_parked l1 nil) f s why (quote e_first))
-              ((Prod.mk l2 _) (flush_each l2 f r))))))))))
+          ((cons (Parked _ _ why m) _)
+           (flush_each (flush_refuse (ld_with_parked l1 nil) (list (Parked k s why m))) f r))))))))
 ;; ---- a group of functions that call each other, settled when its last member is read ------
 ;; After every fn the parked are looked at once more: a parked fn whose
 ;; wait leads round to itself is read with the parked as callee-locals, and so is every parked
@@ -2393,8 +2422,7 @@
          ((Prod.mk (Prod.mk l1 f1) none) (Prod.mk l1 f1))
          ((Prod.mk (Prod.mk l1 f1) (some ds))
           (match (define_group (Load.etab l1) sc pds)
-            ((GrpSkip why _) (Prod.mk (group_runnable l1 sc g ds why) f1))
-            ((GrpErr e m) (Prod.mk (group_refused l1 g e m) f1))
+            ((GrpSkip why m) (Prod.mk (group_runnable l1 sc g ds why m) f1))
             ((GrpOk es2 obls core defs)
              (match (admit_matchers (ld_with_e l1 es2) f1 (group_form g) (group_aux pds))
                ((Prod.mk l2 none) (Prod.mk l2 f1))
@@ -2464,9 +2492,11 @@
                dr
                r)))))
        (nil (Prod.mk l f))))))
-;; the group does not compile: each member its program, RUNNABLE with the reason, a
-;; callee-local of later bodies as any typed fn without a definition
-(fn group_runnable ((l Load) (sc Scope) (g (List Probe)) (ds (List EDecl)) (why Symbol)) Load
+;; no definition for the group: each member its program, RUNNABLE with the reason and its
+;; sentence, a callee-local of later bodies as any typed fn without a definition
+(fn group_runnable
+  ((l Load) (sc Scope) (g (List Probe)) (ds (List EDecl)) (why Symbol) (m (List Int)))
+  Load
   (measure (struct g))
   (match g
     (nil l)
@@ -2475,17 +2505,13 @@
        ((cons d dr)
         (group_runnable
           (ld_rec (ld_add_typed (ld_with_e l (es_add_decl (Load.etab l) d)) k sc s)
-            (RRun (quote fn) k why (quote typed)))
+            (RRun (quote fn) k why (quote typed) m))
           sc
           r
           dr
-          why))
+          why
+          m))
        (nil l)))))
-(fn group_refused ((l Load) (g (List Probe)) (e Symbol) (m (List Int))) Load
-  (measure (struct g))
-  (match g
-    (nil l)
-    ((cons (Probe k _ _) r) (group_refused (ld_rec l (RClassify k e m)) r e m))))
 ;; a group that does not read as one — a member's program is a template, a second reading
 ;; differs —: its members as the file's end settles the parked, each other's callee-locals
 (fn group_as_programs ((l Load) (f Fx) (sc Scope) (mine (List Parked))) (Prod Load Fx)
@@ -4570,13 +4596,14 @@
     ((RPolicy n out)
      (append "POLICY " (append (show_name n) (append " outside the policy: " (show_names_c out)))))
     ((RPending n r) (append "PENDING " (append (show_name n) (append " " (chars_of_sym r)))))
-    ((RRun k n why route)
+    ((RRun k n why route m)
      (append "RUNNABLE "
        (append (chars_of_sym k)
          (append " "
            (append (show_name n)
              (append (if (sym_eq why (quote none)) "" (append " why=" (chars_of_sym why)))
-               (if (sym_eq route (quote none)) "" (append " route=" (chars_of_sym route)))))))))
+               (append (if (sym_eq route (quote none)) "" (append " route=" (chars_of_sym route)))
+                 (if (= (len m) 0) "" (append ": " m)))))))))
     ((RDefine n eqs roots)
      (append "DEFINE "
        (append (show_name n)
@@ -4700,7 +4727,7 @@
        ((RModule _ _ _ _) (list (+ a 1) b u c d e f g))
        ((RAccept _ _ _ _ _ _) (list a (+ b 1) u c d e f g))
        ((RParam _ _ _) (list a (+ b 1) u c d e f g))
-       ((RRun _ _ _ _) (list a b (+ u 1) c d e f g))
+       ((RRun _ _ _ _ _) (list a b (+ u 1) c d e f g))
        ((RClassify _ _ _) (list a b u (+ c 1) d e f g))
        ((RRefuse _ _) (list a b u (+ c 1) d e f g))
        ((RPolicy _ _) (list a b u (+ c 1) d e f g))

@@ -206,8 +206,7 @@ admitted that the logic does not derive.
     where we may want to run or test shard programs before the full due diligence for proof
     assembly is paid for. Some minimum bar is reasonable, but it shouldn't take a whole research
     program to throw together some small mvp with almost no proof structures." And the bar:
-    "Type errors should result in refused programs." (Rule 25. The loader does not follow it
-    yet: `OPEN.md` §1.)
+    "Type errors should result in refused programs." (Rule 25.)
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.
