@@ -23,8 +23,6 @@ bad() { echo "build_test: $*"; fail=$((fail+1)); }
 ROOT=$SCRATCH/p; SRC=$ROOT/kernel/main.shard; OTHER=$ROOT/kernel/other.shard; OUT=$SCRATCH/$NAME
 mkdir -p "$ROOT/kernel" "$SCRATCH/stub"
 cat > "$SRC" <<'EOF'
-(type (List T) (Nil) (Cons T (List T)))
-(type Bool (False) (True))
 (type World (World Int))
 (extern write_line ((bytes (List Int)) (w World)) World)
 (fn main ((w World)) World (write_line "version one" w))

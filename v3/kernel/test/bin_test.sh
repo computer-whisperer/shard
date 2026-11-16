@@ -8,7 +8,7 @@
 # root file, byte-identical to the model world as calc_main_test.sh ties it; and two
 # negatives — the bin with a requirement left `sorry` fails the load with UNMET, and a
 # program with a write duplicated fails it with UNTHREADED — each a nonzero exit. The
-# native binary of calc's main (v3/build.sh over a root that imports Init) runs over the
+# native binary of calc's main (v3/build.sh over an ordinary root) runs over the
 # same inputs and is the driver's byte for byte.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.
@@ -87,7 +87,7 @@ done
 echo "bin_test: the nine bolts hold on the model host, with the ground run, in $((e-s)) s"
 
 # ---- (2d) the native binary of the program: calc's main
-# (v3/build.sh over a root that imports Init), run over the same inputs — stdout byte for byte the
+# (v3/build.sh over an ordinary root), run over the same inputs — stdout byte for byte the
 # driver's run through the bin, exit 0, nothing on stderr
 s=$(date +%s)
 v3/build.sh v3/examples/calc/calc_main.shard "$OUT/calc_native" --root v3 > "$OUT/build.txt" 2>&1; rc=$?

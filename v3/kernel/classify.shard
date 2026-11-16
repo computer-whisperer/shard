@@ -13,7 +13,6 @@
 ;;; eresolve): the hits in a visible module that the citation names among the
 ;;; scope's candidates. The primitive table is prog.shard's, keyed on identity.
 
-(import Init)
 (import "etable.shard")
 (import "erase.shard")
 (use Init.Bool false true)
@@ -56,22 +55,24 @@
 (use kernel.sexpr.SExpr)
 
 ;; ---- pre-registration ----------------------------------------------------------------
-;; a file's E heads — name, kind, arity, a type's constructors — before any body
+;; a file's E heads — name, kind, arity, a type's constructors — before any body. A `realize`
+;; names a constant that is another's: its head is registered once the file's directives and
+;; its demand of Init are in (pre_register_realize), never here — a target resolved here would
+;; be one the process happened to hold already
 (type PreRes (PreOk ESt) (PreErr Symbol (List Int)))
-(fn pre_register ((es ESt) (sc Scope) (env CheckedEnv) (forms (List SExpr))) PreRes
+(fn pre_register ((es ESt) (sc Scope) (forms (List SExpr))) PreRes
   (measure (struct forms))
   (match forms
     (nil (PreOk es))
     ((cons s r)
-     (match (pre_one es sc env s)
+     (match (pre_one es sc s)
        ((PreErr e m) (PreErr e m))
-       ((PreOk es1) (pre_register es1 sc env r))))))
-(fn pre_one ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) PreRes
+       ((PreOk es1) (pre_register es1 sc r))))))
+(fn pre_one ((es ESt) (sc Scope) (s SExpr)) PreRes
   (match s
     ((SList (cons (SSym h) args))
      (if (sym_eq h (quote fn)) (pre_head es sc args (quote fn))
      (if (sym_eq h (quote extern)) (pre_head es sc args (quote extern))
-     (if (sym_eq h (quote realize)) (pre_realize es sc env args)
      (if (sym_eq h (quote type)) (pre_type es sc args)
      (if (sym_eq h (quote sig))
        (match args
@@ -83,9 +84,10 @@
               (_ (PreOk es)))
             (PreOk es))))
          (_ (PreOk es)))
-       (PreOk es)))))))
+       (PreOk es))))))
     (_ (PreOk es))))
-;; the realize forms alone, after the file's directives made their targets visible
+;; the realize forms, after the file's directives made their targets visible and its demand
+;; of Init put them in the environment
 (fn pre_register_realize ((es ESt) (sc Scope) (env CheckedEnv) (forms (List SExpr))) PreRes
   (measure (struct forms))
   (match forms
@@ -230,7 +232,7 @@
      (if (sym_eq x (quote ->))  ; a function-typed binder makes a template, on the typed route
        (TyErr (quote function_value)
          "(-> …): a function is no value of E — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading")
-       (match (name_of_sym (at_strip sc x))
+       (match (name_of_sym (sym_strip x))
          (none (TyErr (quote bad_type) (chars_of_sym x)))
          ((some n)
           (match (type_ident es sc env n)
@@ -240,7 +242,7 @@
              ;; is its two cells, as the erasure has it (a view's sig fn that exports
              ;; a decision states its result this way)
              (if (name_eq id (n1 (quote Decidable))) (TyOk (ETCon id nil) tps)
-             (match (type_args sc env id (at_explicit sc x) args)
+             (match (type_args env id (sym_explicit x) args)
                ((WrErr e m)
                 (if (sym_eq e (quote unwritten_argument))
                   (TyErr e
@@ -257,8 +259,8 @@
 ;; too — `(Fin n)`, `(Subtype P)`, `(Decidable P)` — which no E type keeps (erase.shard
 ;; l_to_etype): its parameters' roles select the type arguments among those written, by the
 ;; binder infos of its own type (written_data). An E-only type's arguments are all types
-(fn type_args ((sc Scope) (env CheckedEnv) (id Name) (ex Bool) (args (List SExpr))) Wr
-  (match (if (init_seen sc) (type_flags env id) none)
+(fn type_args ((env CheckedEnv) (id Name) (ex Bool) (args (List SExpr))) Wr
+  (match (type_flags env id)
     ((some flags) (written_data flags ex true args nil))
     (none (WrOk args))))
 (fn type_flags ((env CheckedEnv) (id Name)) (Option (List (Prod Bool Symbol)))
@@ -285,7 +287,7 @@
 ;; a name that is a definition of K standing for a type (`(def Sorted () Type …)`): the E type
 ;; its value is, as the typed route reads the binder (erase.shard l_to_etype unfolds it)
 (fn alias_etype ((es ESt) (sc Scope) (env CheckedEnv) (id Name)) EType
-  (match (if (init_seen sc) (env_find env id) none)
+  (match (env_find env id)
     ((some info)
      (match info
        ((DefnInfo _ _ _ _ _)
@@ -367,15 +369,12 @@
      (match (read_ety es sc env tps s)
        ((TyErr e m) (Prod.mk (TyErr e m) nil))
        ((TyOk t tps1) (read_etys es sc env tps1 r (cons t acc)))))))
-;; a type name's identity: the built-in E types `Int`, `Nat`, `Symbol` in every
-;; file (where Init is in scope, `Int` and `Nat` are its constants under the same bare name);
-;; then, where Init is in scope, K's constants through the scope (a `type` K holds, a `sig
-;; type`, Init's inductives) and after them the E-only types; elsewhere the E table first —
-;; the same answer, since an ambiguity between a native and an imported type needs Init
+;; a type name's identity: the built-in E types `Int`, `Nat`, `Symbol` (`Int` and `Nat` are
+;; Init's constants under the same bare name); then K's constants through the scope (a `type`
+;; K holds, a `sig type`, Init's inductives) — a native type beside an imported one is an
+;; ambiguity K reports — and after them the E-only types
 (fn type_ident ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
-  (if (builtin_type n) (TyOk (ETCon n nil) nil)
-  (if (init_seen sc) (type_ident_k es sc env n)  ; K's constants first where Init is in scope: a native type beside an imported one is an ambiguity K reports
-  (type_ident_e es sc env n))))  ; faster than resolving in L; every K type has its E twin there
+  (if (builtin_type n) (TyOk (ETCon n nil) nil) (type_ident_k es sc env n)))
 (fn type_ident_k ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (match (resolve (cx_with_etype (cx0 sc env nil nil) true) n)
     ((RName k _) (TyOk (ETCon k nil) nil))
@@ -457,11 +456,9 @@
     (nil nil)
     ((cons (BdVar _ t) rest) (cons t (bd_tys rest)))
     ((cons (BdGhost _ _) rest) (bd_tys rest))))
-;; a read term's static type, where the reading uses one: in a file that sees Init, where a
-;; pattern's constructor is read at its scrutinee's type and a head by K's signature. A file
-;; that sees no Init has neither, and its bindings carry no type
-(fn rd_type ((r Rd) (t ETerm)) (Option EType)
-  (if (init_seen (rd_sc r)) (c_type (rd_es r) (rd_tys r) t) none))
+;; a read term's static type, where the reading uses one: a pattern's constructor is read at
+;; its scrutinee's type and a head by K's signature
+(fn rd_type ((r Rd) (t ETerm)) (Option EType) (c_type (rd_es r) (rd_tys r) t))
 (fn erased_msg ((n Name)) (List Int)
   (append (show_name n)
     ": a proof or a type in a runtime position — both are erased from a program"))
@@ -484,7 +481,7 @@
        ;; a refuted row: Init's absurd applied to a proof and its negation, neither read here
        (if (if (rd_checked r) (init_const r (n1 (quote absurd)) (n1 (quote absurd))) false)
          (TOk EAbsurd)
-         (TErr (quote absurd_needs_init)
+         (TErr (quote absurd_e_first)
            "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first"))
        (if (sym_eq h (quote proj)) (read_eproj r args)
        (if (sym_eq h (quote quote))
@@ -558,12 +555,8 @@
 ;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated.
 ;; `@HEAD` names every binder of a constant of K; `%` is `mod`'s other spelling
 (fn read_eapp ((r Rd) (h0 Symbol) (args (List SExpr))) TRes
-  (let ((h (at_strip (rd_sc r) h0)))
-    (read_eapp_at r (at_explicit (rd_sc r) h0) (if (sym_eq h (quote %)) (quote mod) h) args)))
-;; `@` is a spelling of files that see Init: elsewhere a head is its symbol as written (and
-;; its bytes are not read to find out)
-(fn at_explicit ((sc Scope) (x Symbol)) Bool (if (init_seen sc) (sym_explicit x) false))
-(fn at_strip ((sc Scope) (x Symbol)) Symbol (if (init_seen sc) (sym_strip x) x))
+  (let ((h (sym_strip h0)))
+    (read_eapp_at r (sym_explicit h0) (if (sym_eq h (quote %)) (quote mod) h) args)))
 (fn read_eapp_at ((r Rd) (ex Bool) (h Symbol) (args (List SExpr))) TRes
   (match (name_of_sym h)
     (none (TErr (quote bad_name) (chars_of_sym h)))
@@ -643,13 +636,11 @@
        (WrErr (quote unwritten_argument)
          ": a binder that is implicit and runtime data — its argument exists at run time and is not written; write the call with @ and every argument")
        (written_data fr ex checked args acc))))))
-;; a head's binders' flags, where the file sees Init: the fn being read by its own written
-;; binders, else K's constant
+;; a head's binders' flags: the fn being read by its own written binders, else K's constant
 (fn head_flags ((r Rd) (id Name)) (Option (List (Prod Bool Symbol)))
-  (if (bool_not (init_seen (rd_sc r))) none
   (match (rd_own r)
     ((some (Prod.mk own flags)) (if (name_eq own id) (some flags) (k_flags r id)))
-    (none (k_flags r id)))))
+    (none (k_flags r id))))
 (fn k_flags ((r Rd) (id Name)) (Option (List (Prod Bool Symbol)))
   (match (env_find (rd_env r) id)
     (none none)
@@ -711,12 +702,11 @@
     (none none)))
 
 ;; ---- a head that is a constant of K and no entry of the E table ------------------------------
-;; where the file sees Init: `dite` and `ite` written with their decision, a refuted row, Bool's
+;; `dite` and `ite` written with their decision, a refuted row, Bool's
 ;; decidable equality, a row's constructor — its one runtime argument — and a projection
 ;; function: of a row the subject itself, of a structure the field's variable under a match on
 ;; its constructor (erasure.shard erase_const_at gives the same constants the same shapes)
 (fn k_head ((r Rd) (ex Bool) (n Name) (args (List SExpr))) (Option TRes)
-  (if (bool_not (init_seen (rd_sc r))) none
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
      (if (name_eq k (n1 (quote dite))) (some (read_ite r ex true args))
@@ -724,7 +714,7 @@
      (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim))))
        (some
          (if (rd_checked r) (TOk EAbsurd)
-         (TErr (quote absurd_needs_init)
+         (TErr (quote absurd_e_first)
            "a refuted row is a proof of False: it reads on the typed route, and this body is read E-first")))
      (if (name_eq k (n1 (quote instDecidableEqBool)))
        (some
@@ -745,7 +735,7 @@
             ((OpaqueInfo _ _ _ _) (some (no_program k)))
             (_ none)))
          (none none)))))))
-    (_ none))))
+    (_ none)))
 ;; a constant K holds that no table gives a program: a definition and nothing more, a theorem
 (fn no_program ((k Name)) TRes
   (TErr (quote no_realization)
@@ -838,10 +828,7 @@
      (match (name_of_sym sx)
        (none (TErr (quote bad_name) (chars_of_sym sx)))
        ((some n)
-        (match
-          (if (init_seen (rd_sc r))
-            (resolve (cx_with_etype (cx0 (rd_sc r) (rd_env r) nil nil) true) n)
-            RNone)
+        (match (resolve (cx_with_etype (cx0 (rd_sc r) (rd_env r) nil nil) true) n)
           ((RName sn _) (read_proj r sn i x))
           (_ (TErr (quote unknown_head) (append (show_name n) " is not a structure of K")))))))
     (_ (TErr (quote bad_shape) "(proj STRUCTURE INDEX E)"))))
@@ -882,8 +869,6 @@
 ;; derived decision, a variable — is its value, whose cell the `if` reads
 (type CondHead (CondPrim Name) (CondBoolEq) (CondNone))
 (fn read_cond ((r Rd) (s SExpr)) TRes
-  (if (bool_not (init_seen (rd_sc r))) (read_et r s) (read_cond_at r s)))
-(fn read_cond_at ((r Rd) (s SExpr)) TRes
   (match s
     ((SList (cons (SSym h0) args))
      (match (name_of_sym (sym_strip h0))
@@ -895,7 +880,6 @@
           (CondNone (read_et r s))))))
     (_ (read_et r s))))
 (fn cond_head ((r Rd) (n Name)) CondHead
-  (if (bool_not (init_seen (rd_sc r))) CondNone
   (match (rd_find r n)
     (RdNone
       (match (only_values (eresolve (rd_es r) (rd_sc r) n))
@@ -908,7 +892,7 @@
                (none CondNone))))
             (_ CondNone)))
         (_ CondNone)))
-    (_ CondNone))))
+    (_ CondNone)))
 (fn read_bool_eq ((r Rd) (args (List SExpr))) TRes
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
@@ -916,24 +900,21 @@
     ((Prod.mk none _) (TErr (quote unsaturated) "instDecidableEqBool takes 2 arguments"))))
 ;; (dif h C A B): the `if` on C, its hypothesis a proof in both branches
 (fn read_edif ((r Rd) (args (List SExpr))) TRes
-  (if (bool_not (init_seen (rd_sc r)))
-    (TErr (quote dif_needs_init)
-      "a dif names the hypothesis of a decided proposition: Decidable and dite are Init's, and this file does not see Init")
-    (match args
-      ((cons (SSym hn) (cons c (cons a (cons b nil))))
-       (match (name_of_sym hn)
-         (none (TErr (quote bad_name) (chars_of_sym hn)))
-         ((some n)
-          (match (read_et r c)
-            ((TErr e m) (TErr e m))
-            ((TOk tc)
-             (match (read_et (rd_ghost r n) a)
-               ((TErr e m) (TErr e m))
-               ((TOk ta)
-                (match (read_et (rd_ghost r n) b)
-                  ((TErr e m) (TErr e m))
-                  ((TOk tb) (TOk (EIf tc ta tb)))))))))))
-      (_ (TErr (quote bad_shape) "(dif h C A B)")))))
+  (match args
+    ((cons (SSym hn) (cons c (cons a (cons b nil))))
+     (match (name_of_sym hn)
+       (none (TErr (quote bad_name) (chars_of_sym hn)))
+       ((some n)
+        (match (read_et r c)
+          ((TErr e m) (TErr e m))
+          ((TOk tc)
+           (match (read_et (rd_ghost r n) a)
+             ((TErr e m) (TErr e m))
+             ((TOk ta)
+              (match (read_et (rd_ghost r n) b)
+                ((TErr e m) (TErr e m))
+                ((TOk tb) (TOk (EIf tc ta tb)))))))))))
+    (_ (TErr (quote bad_shape) "(dif h C A B)"))))
 ;; the entry an operation of Init written by name is run as: the registry's (prog.shard
 ;; realization_of — `Nat.add` is `+`), as the typed route's erasure writes it (a decision is
 ;; read before it comes here: read_decision)
@@ -943,18 +924,16 @@
     (none id)))
 ;; does the name resolve, through the scope, to the constant k of Init?
 (fn init_const ((r Rd) (n Name) (k Name)) Bool
-  (if (bool_not (init_seen (rd_sc r))) false
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName c _) (name_eq c k))
-    (_ false))))
-;; a head no table knows, in a file that sees Init: a constant of Init with a fixed program —
+    (_ false)))
+;; a head no table knows: a constant of Init with a fixed program —
 ;; the rows the typed route's erasure gives the same constants (erasure.shard erase_const_at,
 ;; prog.shard's registry). An Int operation is the table's entry; `Nat.succ x` is x + 1; Init's
 ;; Bool connectives, `and` `or` `not` among them, are the `if` their definitions are; a row
 ;; with an expression (`Int.natAbs`) and the identity (`Int.ofNat`) keep their name as the
 ;; head until the body is typed (settle_ops) and are written out last (expand_rows)
 (fn init_row ((r Rd) (h Symbol) (n Name) (args (List SExpr))) (Option TRes)
-  (if (bool_not (init_seen (rd_sc r))) none
   (if (sym_eq h (quote and)) (some (read_bool_row r (quote and) args))
   (if (sym_eq h (quote or)) (some (read_bool_row r (quote or) args))
   (if (sym_eq h (quote not)) (some (read_bool_row r (quote not) args))
@@ -971,7 +950,7 @@
          (match (realization_type k)
            ((some _) (some (read_head_args r k 1 args (quote prim))))
            (none none)))))))))
-    (_ none)))))))
+    (_ none))))))
 (fn read_succ ((r Rd) (args (List SExpr))) TRes
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
@@ -1118,17 +1097,16 @@
     ((some (EFn _ nt _ _ _ _)) nt)
     ((some (ESig _ nt _ _)) nt)
     (_ 0)))
-;; a name that resolves to a constant of the realization registry (prog.shard realization_of),
-;; in a file that sees Init: as a static argument it is its own shape — its instance calls the
+;; a name that resolves to a constant of the realization registry (prog.shard realization_of):
+;; as a static argument it is its own shape — its instance calls the
 ;; table's entry —, bare or applied to its first operand
 (fn registry_const ((r Rd) (n Name)) (Option Name)
-  (if (bool_not (init_seen (rd_sc r))) none
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
      (match (realization_of k)
        ((some _) (some k))
        (none none)))
-    (_ none))))
+    (_ none)))
 (fn read_static_registry ((r Rd) (k Name) (gargs (List SExpr))) TRes
   (if (<= 2 (len gargs))
     (TErr (quote function_value)
@@ -1210,7 +1188,7 @@
      (match (read_et r s)
        ((TErr e m) (TErr e m))
        ((TOk t)
-        (if (if (init_seen (rd_sc r)) (has_numeral_row arms) false) (read_ematch_lit r t arms)
+        (if (has_numeral_row arms) (read_ematch_lit r t arms)
         (match (read_earms r (rd_type r t) arms nil)
           ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
           ((Prod.mk none as)
@@ -1218,7 +1196,7 @@
              ((some m) (TErr (quote unreachable_arm) m))
              (none (TOk (EMatch t as))))))))))
     (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
-;; numeral rows, where the file sees Init: Lean's value patterns as the elaborator reads them
+;; numeral rows: Lean's value patterns as the elaborator reads them
 ;; (elab.shard elab_match_lit) — the scrutinee once, a test per row in row order, the last row
 ;; `_` or a name for the scrutinee. A local scrutinee is itself in the tests; anything else
 ;; is bound once. At Nat and Int, where the scrutinee's type is fixed
@@ -1372,13 +1350,12 @@
 ;; a row's constructor: its pattern is its one runtime field's pattern, on the scrutinee itself
 ;; (erasure.shard mt_epat); the erased fields' names are proofs
 (fn row_ctor ((r Rd) (n Name)) (Option Name)
-  (if (bool_not (init_seen (rd_sc r))) none
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
      (match (env_find (rd_env r) k)
        ((some (CtorInfo _ ind _ _ _ _)) (if (rep_row ind) (some k) none))
        (_ none)))
-    (_ none))))
+    (_ none)))
 (fn read_row_pat ((r Rd) (k Name) (subs (List SExpr))) PRes
   (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) k)
     (none (PErr (quote bad_pattern) (show_name k)))
@@ -1407,7 +1384,7 @@
 ;; a constructor's fields as a pattern writes them: True for a runtime field, False for an
 ;; erased one — all of K's where K holds the constructor, else the E table's runtime fields
 (fn pat_fields ((r Rd) (id Name)) (List Bool)
-  (match (if (init_seen (rd_sc r)) (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) id) none)
+  (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) id)
     ((some flags) flags)
     (none
       (match (es_info (rd_es r) id)
@@ -1483,8 +1460,8 @@
               (append nacc names)
               (append gacc ghosts)))))))))
 
-;; (let ((x E)…) E): sequential — each right-hand side sees the bindings before it. Where the
-;; file sees Init a binding may state its type, (x TYPE E): at a proposition it is a proof and
+;; (let ((x E)…) E): sequential — each right-hand side sees the bindings before it. A
+;; binding may state its type, (x TYPE E): at a proposition it is a proof and
 ;; vanishes with its variable, as the erasure drops it; a let of proofs alone is its body
 (fn read_elet ((r Rd) (args (List SExpr))) TRes
   (match args
@@ -1497,9 +1474,9 @@
           ((TOk b)
            (match rhss
              (nil (TOk b))
-             (_ (TOk (if (init_seen (rd_sc r)) (let_chain rhss b) (ELet rhss b))))))))))
+             (_ (TOk (let_chain rhss b)))))))))
     (_ (TErr (quote bad_shape) "(let ((x E)…) E)"))))
-;; where the file sees Init a let of several bindings is a let in a let, one binding each: the
+;; a let of several bindings is a let in a let, one binding each: the
 ;; elaborator reads the form so, and the erasure writes K's lets one by one
 (fn let_chain ((rs (List ETerm)) (b ETerm)) ETerm
   (measure (struct rs))
@@ -1513,8 +1490,6 @@
     (nil (Prod.mk none (Prod.mk (rev acc) r)))
     ((cons (SList (cons (SSym x) (cons e nil))) rest) (read_ebind r x e rest acc))
     ((cons (SList (cons (SSym x) (cons ty (cons e nil)))) rest)
-     (if (bool_not (init_seen (rd_sc r)))
-       (Prod.mk (some (Prod.mk (quote bad_shape) "a binding is (NAME E)")) (Prod.mk nil r))
      (if (prop_type r ty)
        (if (bool_not (rd_checked r))
          (Prod.mk
@@ -1525,7 +1500,7 @@
          (match (name_of_sym x)
            (none (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym x))) (Prod.mk nil r)))
            ((some n) (read_ebinds (rd_ghost r n) rest acc))))
-       (read_ebind r x e rest acc))))
+       (read_ebind r x e rest acc)))
     (_ (Prod.mk (some (Prod.mk (quote bad_shape) "a binding is (NAME E)")) (Prod.mk nil r)))))
 (fn read_ebind ((r Rd) (x Symbol) (e SExpr) (rest (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod (List ETerm) Rd))
@@ -1568,14 +1543,8 @@
     (match (list_in_scope r)
       (none (TErr (quote no_list) "\"…\" needs a two-constructor List in scope"))
       ((some (Prod.mk nil_id cons_id)) (TOk (ELit (LStr nil_id cons_id bs)))))
-    (match (if (visible (rd_sc r) (nm_string)) (env_find (rd_env r) (nm_string)) none)
-      ;; String is Init's: seen only where the file sees Init
-      (none
-        (TErr (quote no_string)
-          "\"…\" is a String, which is Init's, and this file does not import Init: write (import Init) before the file's first declaration"))
-      ((some _)
-       (if (utf8_ok bs) (TOk (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
-       (TErr (quote bad_string) "a string literal's bytes are not UTF-8"))))))
+  (if (utf8_ok bs) (TOk (ELit (LStr (nm_list_nil) (nm_list_cons) bs)))
+  (TErr (quote bad_string) "a string literal's bytes are not UTF-8"))))
 (fn list_in_scope ((r Rd)) (Option (Prod Name Name))
   (match (type_ident (rd_es r) (rd_sc r) (rd_env r) (n1 (quote List)))
     ((TyOk (ETCon id _) _)
@@ -1650,7 +1619,7 @@
     ((SSym x) (Prod.mk (name_of_sym x) nil))
     (_ (Prod.mk none nil))))
 ;; ((x TYPE)…): the runtime binders' names and E-types in order; `(T Type)` declares a type
-;; parameter. Where the file sees Init a binder whose type is a proposition is a proof — written,
+;; parameter. A binder whose type is a proposition is a proof — written,
 ;; and no parameter of the program — and one of type `Prop` or a function into it is a
 ;; predicate. With them: every binder as the body's context has it (innermost first), and each
 ;; written binder's flags in order — explicit, runtime data — which a call of the fn is read by
@@ -1676,15 +1645,15 @@
      (match (name_of_sym x)
        (none (PmErr (quote bad_binder) (chars_of_sym x)))
        ((some n)
-        (if (is_type_sym ty)  ; `(T Type)` is a type parameter in every file
+        (if (is_type_sym ty)  ; `(T Type)` is a type parameter
           (read_params es sc env checked (append tps (list n)) rest names types
-            (if (init_seen sc) (cons (BdGhost n false) bds) bds)
+            (cons (BdGhost n false) bds)
             (cons (Prod.mk false (quote drop)) flags))
-        (if (if (ghosts_read sc checked) (is_pred_sort ty) false)
+        (if (if checked (is_pred_sort ty) false)
           (read_params es sc env checked tps rest names types (cons (BdGhost n true) bds)
             (cons (Prod.mk true (quote proof)) flags))
           ;; an `if`, not bool_and: the test resolves the type's head, and is run only where asked
-          (if (if (ghosts_read sc checked) (prop_type (Rd es sc env bds none checked) ty) false)
+          (if (if checked (prop_type (Rd es sc env bds none checked) ty) false)
             (read_params es sc env checked tps rest names types (cons (BdGhost n false) bds)
               (cons (Prod.mk true (quote proof)) flags))
             (match (read_ety es sc env tps ty)
@@ -1694,9 +1663,6 @@
                  (cons (BdVar n (some t)) bds)
                  (cons (Prod.mk true (quote keep)) flags))))))))))
     (_ (PmErr (quote bad_binder) "a binder is (x TYPE)"))))
-;; a binder that is a proof or a predicate is read as one where the file sees Init and the
-;; typed route has read the form: a hypothesis nothing checked is no hypothesis
-(fn ghosts_read ((sc Scope) (checked Bool)) Bool (bool_and checked (init_seen sc)))
 (fn is_type_sym ((s SExpr)) Bool
   (match s
     ((SSym x) (sym_eq x (quote Type)))
@@ -1882,12 +1848,10 @@
 ;; route the elaborator resolves these and the erasure writes the table's entry; this pass
 ;; writes the same entries into a body read here, from the types its binders state. A numeral
 ;; takes the type of the operand beside it, else the type expected of the operation, else Nat.
-;; A file that sees no Init has no Nat, and its `/` and `mod` are the bare entries: its bodies
-;; are left as read.
 (fn settle_body
   ((es ESt) (sc Scope) (env CheckedEnv) (tys (List (Option EType))) (exp (Option EType)) (t ETerm))
   ETerm
-  (if (init_seen sc) (settle_ops es (derived_eqs es sc env) tys exp t) t))
+  (settle_ops es (derived_eqs es sc env) tys exp t))
 (fn settle_rec ((es ESt) (sc Scope) (env CheckedEnv) (tys (List (Option EType))) (rec ERec)) ERec
   (match rec
     ((RecMeasure m) (RecMeasure (settle_body es sc env tys (some (ETCon (nm_nat) nil)) m)))

@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # v3/kernel/test/messages_test.sh — what a refusal says. A loader pin states the reason its
 # load must end in (v3/pins/loader/README.md); the text after the reason is no part of a pin's
-# header. This test loads a set of pins, and five sources of its own, and requires of each
-# record the words an author acts on: the counts a `cases` or `induction` arm is told, the
-# form the import of Init takes, the import to write where a file that sees no Init cites a
-# declaration of it, where a directive that brings Init belongs, the file a refusal inside an
-# implementation names,
+# header. This test loads a set of pins, and sources of its own, and requires of each
+# record the words an author acts on: the counts a `cases` or `induction` arm is told, what
+# to do with an `(import Init)` line, the file a refusal inside an implementation names,
 # the row that makes later rows unreachable, the let a nested recursion cites, and what to
 # write where Lean's `mutual`, `instance`, a bare `true` or a head shadowed by Init's was
 # written.
@@ -36,22 +34,18 @@ lacks() {   # WHAT REGEX
 # the test's own sources. step.shard and latefile.shard are the first roots of the load: what
 # each needs of Init — the lemmas a step builds on, a lemma cited after a file import that
 # follows a declaration — is fetched for it, nothing a root after them fetches being in the
-# environment yet. noinit.shard and latenone.shard see no Init; named.shard writes the import
-# with a name
-printf '%s\n' '(import Init)' '(theorem t ((a Nat) (b Nat) (h (Eq a b))) (Eq a b) (by (rw h) rfl))' > "$SCRATCH/step.shard"
-printf '%s\n' '(import Init)' '(fn twice ((n Nat)) Nat (+ n n))' > "$SCRATCH/far.shard"
-printf '%s\n' '(import Init)' '(theorem a () (Eq 1 1) (exact (Eq.refl 1)))' '(import "far.shard")' '(theorem t ((n Nat) (h (Not (Eq n 0)))) (Nat.lt (Nat.sub n 1) n) (exact (Nat.sub_one_lt h)))' > "$SCRATCH/latefile.shard"
-printf '%s\n' '(type Color (Red) (Green))' '(def n () Nat Nat.zero)' > "$SCRATCH/noinit.shard"
-printf '%s\n' '(type Color (Red) (Green))' '(fn pick ((c Color)) Color c)' '(import "far.shard")' > "$SCRATCH/latenone.shard"
-printf '%s\n' '(import Init Eq)' '(theorem t () (Eq 1 1) (exact (Eq.refl 1)))' > "$SCRATCH/named.shard"
-printf '%s\n' '(import Init)' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (if (= n 0) 0 (g (- n 1))))' > "$SCRATCH/parked.shard"
-printf '%s\n' '(import Init)' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
+# environment yet. named.shard writes the line that says a file sees Init
+printf '%s\n' '(theorem t ((a Nat) (b Nat) (h (Eq a b))) (Eq a b) (by (rw h) rfl))' > "$SCRATCH/step.shard"
+printf '%s\n' '(fn twice ((n Nat)) Nat (+ n n))' > "$SCRATCH/far.shard"
+printf '%s\n' '(theorem a () (Eq 1 1) (exact (Eq.refl 1)))' '(import "far.shard")' '(theorem t ((n Nat) (h (Not (Eq n 0)))) (Nat.lt (Nat.sub n 1) n) (exact (Nat.sub_one_lt h)))' > "$SCRATCH/latefile.shard"
+printf '%s\n' '(import Init)' '(theorem t () (Eq 1 1) (exact (Eq.refl 1)))' > "$SCRATCH/named.shard"
+printf '%s\n' '(fn f ((n Nat)) Nat (+ 1 (g n)))' '(fn g ((n Nat)) Nat (if (= n 0) 0 (g (- n 1))))' > "$SCRATCH/parked.shard"
+printf '%s\n' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
 
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT "$SCRATCH/step.shard" "$SCRATCH/latefile.shard" \
-  "$SCRATCH/noinit.shard" "$SCRATCH/latenone.shard" "$SCRATCH/named.shard" \
+  "$SCRATCH/named.shard" \
   $P/by_cases_arm_fields/main.shard $P/by_cases_fields/main.shard \
-  $P/init_import_late_none/main.shard \
-  $P/impl_read_error/lib $P/impl_load_error/lib $P/impl_import_late/lib \
+  $P/impl_read_error/lib $P/impl_load_error/lib \
   $P/define_nested/main.shard \
   $P/match_dead_row/main.shard $P/match_dead_row_def/main.shard $P/ev_dead_row/kernel/main.shard \
   $P/lean_mutual/main.shard $P/reserved_instance/main.shard "$SCRATCH/class.shard" $P/bool_bare/main.shard \
@@ -67,19 +61,11 @@ has "cases: an arm naming one of two fields is not told both counts" "by_cases_a
 has "induction: an arm naming the fields and no hypothesis is not told both counts" "by_cases_fields" \
   "induction_fields: step 1: List\.cons's arm names 2 binder\(s\) and its case has 3: name the constructor's 2 field\(s\), then 1 induction hypothesis name\(s\), one for each recursive field — \(x : Nat\) \(r : "
 
-# ---- Init: the import's form, a file that sees none, a directive that brings it late
-has "(import Init NAME): not refused with the form to write" "$S/named.shard" \
-  "^LOAD-ERROR $S/named\.shard bad_import: \(import Init NAME…\): the import takes no name — write \(import Init\): a file that imports Init sees every declaration of it$"
-has "a file that sees no Init cites a declaration of it: the refusal does not say to write the import" "$S/noinit.shard" \
-  "^READ-ERROR $S/noinit\.shard init_not_imported: Nat is a declaration of Init, and this file does not import Init: write \(import Init\) before the file's first declaration$"
-has "a late Init import in a file read without Init: not refused with where to write it" "init_import_late_none" \
-  "^LOAD-ERROR pins/loader/init_import_late_none/main\.shard late_init_import: \(import Init\) lets the file see Init, and it stands after the file's first declaration, which was read without Init: a file sees Init from its first declaration on, or not at all — write \(import Init\) before the first declaration$"
-has "a late file import that brings Init into a file read without it: not refused with what to write" "$S/latenone.shard" \
-  "^LOAD-ERROR $S/latenone\.shard late_init_import: the import of $S/far\.shard brings Init with it \(the imported module sees Init\), and it stands after the file's first declaration, which was read without Init: .* — write \(import Init\) before the first declaration$"
-has "an implementation's Init import where its view has none: not refused under the implementation's file, with the view named" "impl_import_late" \
-  "^IMPL LOAD-ERROR pins/loader/impl_import_late/lib/lib\.shard late_init_import: \(import Init\) lets the file see Init, and this implementation's view does not import Init: an implementation sees Init exactly when its view does — write \(import Init\) into its view \(mod\.req\.shard\)$"
+# ---- Init: the line that is no form, what a first root is given
+has "(import Init): not refused with what to do" "$S/named.shard" \
+  "^LOAD-ERROR $S/named\.shard bad_import: \(import Init\): every file sees Init, and no line says so — delete the line$"
 has "a step's lemmas: a theorem by rw in a first root is not accepted" "$S.step" "^ACCEPT $S\.step\.t "
-has "a late file import in a file that sees Init: a lemma cited after it is not found" "$S.latefile" "^ACCEPT $S\.latefile\.t "
+has "a late file import: a lemma cited after it is not found" "$S.latefile" "^ACCEPT $S\.latefile\.t "
 lacks "an INIT record" "^INIT "
 lacks "an Init position on a record" " init="
 lacks "a refusal that speaks of a horizon" "horizon"

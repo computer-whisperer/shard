@@ -1,7 +1,7 @@
 # Writing shard
 
-An ordinary program is a `.shard` file under a package root (`v3` here) that imports Init — Lean's
-base library, read from a pinned export — and is written over Init's types. Its functions run, and
+An ordinary program is a `.shard` file under a package root (`v3` here), written over the types of
+Init — Lean's base library, read from a pinned export, which every file sees. Its functions run, and
 most of them are also definitions in the logic, so theorems can be stated about them. The forms
 below are copied from files of the tree; where a table names no file, the form was run as written.
 The system's own code under `v3/kernel` is written the same way, but nearly all of it has no
@@ -40,18 +40,16 @@ declared later in the file; a theorem cites only what stands above it.
 |---|---|
 | `(import "FILE")` | loads the file once and makes its declarations citable by their full names; opens nothing |
 | `(import "DIR")` | the same for a directory that has a view (section 8) |
-| `(import Init)` | the file sees Lean's `Init`: every declaration of the export may be cited |
 
-Write `(import Init)` before the file's first declaration. A file that imports a file that sees
-Init sees it too, but the line costs nothing and says what the file is. The loader fetches from the
+Every file sees Lean's `Init`, and no line says so: every declaration of the export may be cited.
+The loader fetches from the
 export only what the file cites and what the toolchain builds on, so a lemma anywhere in Init is
-cited by its name and nothing else; section 15 shows how to find a lemma's name. In a file with
-no Init the functions are programs only, with no equations. Citing Init there is refused with the
-line to add:
+cited by its name and nothing else; section 15 shows how to find a lemma's name. An
+`(import Init)` line is refused with what to do:
 
 ```
-READ-ERROR FILE init_not_imported: NAME is a declaration of Init, and this file does not import
-Init: write (import Init) before the file's first declaration
+LOAD-ERROR FILE bad_import: (import Init): every file sees Init, and no line says so — delete
+the line
 ```
 
 With all of Init in sight, a name of the file can meet one of Init's under a namespace the file
@@ -116,7 +114,7 @@ The loader records what each function became:
 | `RUNNABLE fn F why=REASON` | a program with no definition; a theorem that cites it is refused `unknown_constant` |
 | `REFUSE F REASON: MESSAGE` | it should be a definition and is not; the load fails |
 
-A function is a definition when its file imports Init, every type and callee it names has a meaning
+A function is a definition when every type and callee it names has a meaning
 in the logic, and it either does not call itself or says how it recurses. A call to an `extern` is
 no obstacle. The equations are what proofs use: one per case of the leading `match` on a parameter
 (`perform.eq_1` to `perform.eq_3` in `v3/examples/calc/calc_bin.shard`), otherwise one for the body
@@ -306,10 +304,10 @@ speaks of rests on building it from the file the contract imports. The contract
 | `UNTHREADED F world_twice: parameter 2 used twice: std.host.write_line, std.host.write_line` | one `World` passed to two calls | pass each call's result on |
 | `BAD-BIN B extern_outside: X is called in F and is not in the roster`; `BAD-BIN B untrusted: T rests on A, which the bin does not trust`; `UNMET T` | the bin's `externs` or `trusts` misses a name; a requirement's proof is `sorry` | add the name; prove the requirement |
 | `LOAD-ERROR FILE private_module: PATH is inside the sealed directory DIR — import the directory` | a file behind a view, or a directory module nested behind it, imported from outside | `(import "DIR")` |
-| `LOAD-ERROR FILE late_init_import: (import Init) lets the file see Init, and it stands after the file's first declaration, which was read without Init: …` | an `(import Init)`, or the import of a file that sees Init, after a declaration of a file that saw none; in an implementation, where its view imports none | move it before the first declaration; for an implementation, write it in the view |
+| `LOAD-ERROR FILE bad_import: (import Init): every file sees Init, and no line says so — delete the line` | an `(import Init)` line | delete it |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: no fn MODULE.main to start from` | the file given declares no `main` (the contract's file, say) | give the program's file |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: MODULE.main takes N parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)` | a `main` with parameters before the `World` is an entry for `--run` only | take the arguments through `get_args` |
-| `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C is named as a cell of the runtime and must not be the second constructor of its type` (or `must be the second`) | a constructor named `True`, `False`, `Nil`, `Cons`, `None`, `Some`, `Pair` or `World` stands at another place in its type than the runtime's cell of that name (`True`, `Cons`, `Some` are second constructors; the others are not) | rename the constructor, or move it |
+| `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C is the World's cell and must not be the second constructor of its type` | a constructor named `World` stands second in its type | declare it first, or alone |
 | `v3/build.sh` prints `FAIL: NAME: the emit (exit 2); EMIT: the constructor C has N fields: a cell of the runtime holds at most 125` | a constructor of more than 125 fields | nest the fields in further types |
 | `v3/build.sh` prints `FAIL: NAME: cc: FILE:LINE: error: …` and the path of the log | the C compiler refused the generated program; the line shown is its first error | read the rest in `v3/bin/NAME.build.log`: it is a defect of the back end |
 | `v3/build.sh` prints `FAIL: NAME: changed during the build: FILE…` | a source of the program, or of the toolchain, was edited while the build ran; no stamp is written | build again |
@@ -462,8 +460,6 @@ The number is the declaration's position in the export.
 file under `v3/`, loaded as in section 13:
 
 ```
-(import Init)
-
 (theorem probe () False (by (cases @Nat.div_lt_self ())))
 ```
 ```

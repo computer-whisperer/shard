@@ -163,24 +163,18 @@ pub fn dump(t: &Tables) -> String {
 
 /// The runtime's cells go to the evaluator by the names the runtime gives them: `True`,
 /// `False`, `Nil`, `Cons`, `None`, `Some`, `Pair`. They are the constructors of Init's `Bool`,
-/// `List`, `Option` and `Prod`, by identity, and a constructor so named in a type a file
-/// declares for itself (docs/KERNEL.md, the back end's refusals: such a constructor carries
-/// the cell's tag in a native binary; lower.shard's wire roles are the same rule). The
+/// `List`, `Option` and `Prod`, by identity (lower.shard's wire roles are the same rule). The
 /// evaluator's comparisons return `True` and `False`, its symbol bridge and the host speak
 /// `Cons` and `Nil` cells. Every other constructor goes by its identity.
 fn cell(id: &str) -> String {
     match id {
-        "Bool.true" => return "True".into(),
-        "Bool.false" => return "False".into(),
-        "List.nil" => return "Nil".into(),
-        "List.cons" => return "Cons".into(),
-        "Option.none" => return "None".into(),
-        "Option.some" => return "Some".into(),
-        "Prod.mk" => return "Pair".into(),
-        _ => {}
-    }
-    match last_component(id) {
-        c @ ("True" | "False" | "Nil" | "Cons" | "None" | "Some" | "Pair") => c.to_string(),
+        "Bool.true" => "True".into(),
+        "Bool.false" => "False".into(),
+        "List.nil" => "Nil".into(),
+        "List.cons" => "Cons".into(),
+        "Option.none" => "None".into(),
+        "Option.some" => "Some".into(),
+        "Prod.mk" => "Pair".into(),
         _ => id.to_string(),
     }
 }

@@ -141,10 +141,11 @@ for d in v3/pins/emit/*/; do
   checks=$((checks+1))
   if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
-    # an ordinary case's reference is the V3 driver's run (the bootstrap reads a file that sees
-    # Init by the loader's table of facts: the loader stands in that reference either way); a
-    # toolchain case's is the bootstrap's own, the case's directory its root
-    if [ "$law" = 1 ]; then run_into "$OUT/pin_$c/a" "$BOOT" direct v3/kernel/load.shard --root "$d" $INIT --run main.main "$f"; else run_into "$OUT/pin_$c/a" "$BOOT" direct --root "$d" "$f"; fi
+    # an ordinary case's reference is the V3 driver's run (the bootstrap reads what a file cites
+    # of Init by a table of facts the loader prints: the loader stands in that reference either
+    # way); a toolchain case's is the bootstrap's own, read by the tree's table of the
+    # toolchain's facts, the case's directory its root
+    if [ "$law" = 1 ]; then run_into "$OUT/pin_$c/a" "$BOOT" direct v3/kernel/load.shard --root "$d" $INIT --run main.main "$f"; else run_into "$OUT/pin_$c/a" "$BOOT" direct --root "$d" --facts v3/kernel/init.facts "$f"; fi
     run_into "$OUT/pin_$c/b" "$OUT/bin_$c"
     compare "pin $c" "$OUT/pin_$c/a" "$OUT/pin_$c/b" || bad "pin $c differs"
   else

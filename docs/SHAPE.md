@@ -46,7 +46,7 @@ declarations of Lean's `Init` export with Lean's own axiom lists, and passes a b
 built to break it. It is not proven.
 
 **Init, Lean's library as the base.** `v3/export.sh` builds Lean v4.33.1 and exports its `Init`
-library as text. A source file that writes `(import Init)` sees all of it, and a load gives K
+library as text. Every source file sees all of it, and a load gives K
 only the part of Init the file cites, each declaration checked again. `v3/std/` holds only
 what Init lacks, and the programs Init's own functions run as.
 
@@ -94,7 +94,7 @@ the development machine and about 65 in CI.
 
 | where | size | what |
 |---|---|---|
-| `v3/kernel/` | 52,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
+| `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
 | `v3/kernel/test/` | 59 files | the test scripts and drivers |
 | `v3/pins/` | 507 files | small sources, each stating the outcome it expects; 337 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |

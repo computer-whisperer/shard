@@ -78,7 +78,7 @@ U='pins\.readings\.unchecked'
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/readings/unchecked.shard > "$OUT/unchecked.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" != 0 ] || bad "the load of the unchecked proofs succeeded"
 checks=$((checks+1)); grep -Eq "^REFUSE $U\.false_claim unchecked_proof: Fin\.mk: " "$OUT/unchecked.txt" || { bad "a proof with no reader is not refused"; grep -E "$U\.false_claim" "$OUT/unchecked.txt" | cut -c1-300; }
-checks=$((checks+1)); grep -Eq "^REFUSE $U\.refuted absurd_needs_init: " "$OUT/unchecked.txt" || { bad "a refuted row with no reader is not refused"; grep -E "$U\.refuted" "$OUT/unchecked.txt" | cut -c1-300; }
+checks=$((checks+1)); grep -Eq "^REFUSE $U\.refuted absurd_e_first: " "$OUT/unchecked.txt" || { bad "a refuted row with no reader is not refused"; grep -E "$U\.refuted" "$OUT/unchecked.txt" | cut -c1-300; }
 checks=$((checks+1)); grep -Eq "^RUNNABLE fn $U\.no_proof " "$OUT/unchecked.txt" || { bad "the row without a proof is not a program"; grep -E "$U\.no_proof" "$OUT/unchecked.txt" | cut -c1-300; }
 
 echo "readings_test: $checks checks, $fail failed"

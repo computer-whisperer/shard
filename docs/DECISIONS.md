@@ -94,7 +94,7 @@ entries are explained under "Measured" at the end.
   forward references already resolve, and a second surface would state the same fact twice.
 - ★ A group is one fixpoint over a type generated for it (a constructor per member); not Lean's
   `PSum` of tuples. The reason recorded was `PSum`'s position in the export under a horizon;
-  every file that imports Init now sees `PSum`, so this stands as built and is open.
+  every file now sees `PSum`, so this stands as built and is open.
 - ★ Not the structural route for groups: it owes no proofs but needs `below` for nested types and
   refuses a call that hands its argument on unchanged — five of the formatter's seven renderers.
 - ★ Every member of a group states a `Nat` measure; `(measure (struct x))` there is `group_measure`;
@@ -157,9 +157,8 @@ entries are explained under "Measured" at the end.
   own static type; not a result written in the source, which the typed route does not ask
   for. Left open by the owner: looked at again when the Rust reader reads templates.
 - Numeral rows and a `let` of several bindings are written by the classifier as the
-  elaborator reads them — tests in row order, a let in a let — where the file sees Init; not
-  the erasure folding its tests back into a match. A file that sees no Init keeps the rows as
-  a match.
+  elaborator reads them — tests in row order, a let in a let; not the erasure folding its
+  tests back into a match.
 - A function that is only a program passes a lambda, a constant of the registry or a package:
   the classifier lifts and names as the typed route does, and the instance's program stays
   the erasure of the template's elaborated body; not such a function refused for want of a
@@ -189,11 +188,10 @@ entries are explained under "Measured" at the end.
 - The runtime's seven cells — a comparison's `True` and `False`, the `Cons` and `Nil` of a
   symbol's bytes, the host's `Some`, `None` and `Pair` — are the constructors of Init's
   `Bool`, `List`, `Option` and `Prod`, by identity, on all three engines; not a prelude of
-  the toolchain's own beside Init's types, which it had while its files saw no Init. The
-  bootstrap and a native binary also take a constructor so named in a type a file declares
-  for itself, and the sixteen back-end pins that declare their own `Bool` and `List` run on
-  those two and are stuck under `ev`; that second rule goes with the last file that sees no
-  Init.
+  the toolchain's own beside Init's types, and not a constructor so named in whatever type
+  declares it — a program's own `(Pair …)` is its own, and the back end refused such a
+  constructor at another place in its type. A native binary still finds the World's cell by
+  the name `World` (`OPEN.md` §4).
 - The toolchain writes Init's constructors under Lean's names, opened by name in each file
   (`(use Init.List cons nil)`); not the namespaces opened whole — its own `append`, `take`
   and `drop` would then meet `List`'s and be refused — and not its old capitalised names
@@ -301,16 +299,19 @@ entries are explained under "Measured" at the end.
   and checked; not the whole export per load, not a cached or serialized environment.
 - No receipt that lets a load skip Init's typing judgments: measured, it saves a tenth to a
   fifth — the walk and ingestion are the cost — and only a full replay could write it.
-- A file that imports Init sees all of it (`(import Init)`); not a horizon by position in the
-  export (`(import Init NAME)`) — a horizon is raised lemma by lemma, and what the toolchain
-  builds on by name was not held to it, so a file's records depended on the other roots of a load.
-- `(import Init)` is still the line by which a file sees Init, the toolchain's files among
-  them now, and goes when the last files that see none do — pins written before the
-  toolchain stood on Init's types; not a rule on the module path in the line's place, which
-  hides the switch.
+- Every file sees all of Init; not a horizon by position in the export (`(import Init NAME)`)
+  — a horizon is raised lemma by lemma, and what the toolchain builds on by name was not held
+  to it, so a file's records depended on the other roots of a load.
+- No line says that a file sees Init; not an `(import Init)` line that some files write and
+  others do not — there were two languages by it, and the owner asked "why does the file
+  need marking at all?". The line is refused with the instruction to delete it (`bad_import`);
+  not read as nothing, which keeps a spelling that means nothing in the sources.
+- A load given no export loads no file (`init_unavailable`); not a file read without Init
+  where it cites none — that reading was the second language.
 - What a file is given of Init is its own demand; not whatever the process loaded — records must
-  not depend on load order. A name missed is fetched and the declaration read again; a file
-  without Init is given nothing built of Init.
+  not depend on load order. A name missed is fetched and the declaration read again. A
+  `realize`'s head is registered after the file's demand is in, for the same reason: before
+  it, its target resolves only where the process holds it already.
 
 ## Build and gates
 
@@ -371,11 +372,13 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (9,178 declarations) loads, lowers and generates in about
-  360 s on the bootstrap, `cc` 83 s, binary 5.7 MB; all 29 roots 490–550 s at 16 jobs. It was
-  34 s and 146–217 s while the toolchain's files saw no Init: the loader now checks some 250
-  of its own functions as definitions, and Init's fixed kit, on every load of a toolchain
-  root — 18 s for its own closure natively, where it took 4 s.
+- Back end: the loader's own closure (9,159 declarations) loads, lowers and generates in about
+  360 s on the bootstrap, `cc` 81 s, binary 5.6 MB; all 29 roots 480–550 s at 16 jobs. It was
+  34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
+  some 250 of its own functions as definitions, and Init's fixed kit, on every load of a
+  toolchain root — 12 s for its own closure natively, where it took 4 s.
+- Init's fixed kit, which every load reads once in a process: 2 s natively, 26 s on the
+  bootstrap, for a file of one function.
 - The two readings (`load --both`) over what the examples, the library, the formatter and the
   model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
   programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
@@ -392,13 +395,15 @@ measurements; measure again before building on one.
   derivations write and 8 that call one. 51 of the 59 roots read whole, the model's 174
   declarations and the formatter's binary, 173, among them. calc's closure, 59 declarations:
   read and run over five inputs in 4 ms, where the loader's load of it takes 39 s on the
-  bootstrap. Over the 29 toolchain roots, 146,432 declarations, its text is the loader's; it
-  reads the loader's own closure, 9,178 declarations by the table of Init's facts, in 0.34 s.
-- Suite: 52 entrypoints, eight at a time: 1,014 s on the bootstrap (7,380 s of entrypoint
-  time), 204 s on the binaries (1,117 s); it was 740–870 s and 135–150 s while the toolchain's
-  files saw no Init. The parity test loads its 29 closures eight at a time: one after
-  another they took 64 minutes on the bootstrap. Loader pins on one shared Init base, each
-  case loaded twice: 11 s native, about 180 s on the bootstrap.
+  bootstrap. Over the 29 toolchain roots, 146,247 declarations, its text is the loader's; it
+  reads the loader's own closure, 9,159 declarations by the table of Init's facts, in 0.29 s.
+- Suite: 52 entrypoints, eight at a time: 1,108 s on the bootstrap (8,216 s of entrypoint
+  time), 234 s on the binaries (1,411 s); it was 740–870 s and 135–150 s while the toolchain
+  stood on a prelude of its own, and 1,014 s and 204 s while a file that cited nothing of
+  Init loaded without it. The parity test loads its 29 closures eight at a time, 723 s on
+  the bootstrap and 97 s natively: one after another they took 64 minutes on the bootstrap.
+  Loader pins on one shared Init base, each case loaded twice: 21 s native, about 190 s on
+  the bootstrap. The native tie: 1,379 s, 858 s before every load read Init.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.

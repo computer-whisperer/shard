@@ -58,7 +58,7 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
         // Init's spellings (v3/kernel/prog.shard's entries 18–38, as v3/kernel/ev.shard
-        // applies them): what the reader writes for the operators of a file that sees Init.
+        // applies them): what the reader writes for Init's operators.
         // Int's divisions are total — a zero divisor gives 0, a remainder by zero the
         // dividend.
         ("Int.tdiv", [IntLit(a), IntLit(b)]) => Some(IntLit(if b.is_zero() { Int::zero() } else { a / b })),

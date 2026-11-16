@@ -8,8 +8,8 @@
 //!
 //! `plain` reads a closure as the V3 loader's plain route reads it: files as
 //! modules under a root, names as identities, `use`, views linked to their
-//! implementations; for a file that sees Init, from the source and a table
-//! of facts about Init's constants. `eval` runs what it read; `prim` is the
+//! implementations; from the source and a table of facts about the constants
+//! of Init it cites. `eval` runs what it read; `prim` is the
 //! primitives' table. `v3/kernel/test/parity_test.sh` (the toolchain's
 //! closures) and `plain_test.sh` (ordinary ones) compare the reader with the
 //! loader.
@@ -30,12 +30,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod tests {
     use super::*;
 
-    /// A file's own `List`, `Option`, `Bool` and `Pair`, their constructors named as the
-    /// runtime names its cells (plain/out.rs): what a closure that sees no Init runs on.
-    const PRELUDE: &str = "(type (List T) (Nil) (Cons T (List T)))\n(type (Option T) (None) (Some T))\n(type Bool (False) (True))\n(type (Pair A B) (Pair A B))\n";
+    /// What a toolchain file opens of Init: the constructors of `Bool`, `List` and `Option`,
+    /// by name (`Prod.mk` is written in full).
+    const OPEN: &str = "(use Init.Bool false true)\n(use Init.List cons nil)\n(use Init.Option none some)\n";
 
-    /// What a file opens of it.
-    const OPEN: &str = "(import \"prelude.shard\")\n(use kernel.prelude)\n(use kernel.prelude.Bool)\n(use kernel.prelude.List)\n(use kernel.prelude.Option)\n(use kernel.prelude.Pair)\n";
+    /// The table the toolchain's sources are read by, the tree's own.
+    const FACTS: &str = include_str!("../../v3/kernel/init.facts");
 
     /// A closure on disk under a scratch root of its own: its files (the last
     /// is the root file), the facts.
@@ -56,11 +56,11 @@ mod tests {
         (root, l)
     }
 
-    /// A closure that sees no Init — those types and one file `kernel/t.shard` that
-    /// opens them, holding `src` — read whole.
+    /// A toolchain file `kernel/t.shard` holding `src` under those opens, read whole by the
+    /// tree's table.
     fn toolchain(src: &str) -> plain::Loader {
         let file = format!("{OPEN}{src}\n");
-        let (root, l) = closure(&[("kernel/prelude.shard", PRELUDE), ("kernel/t.shard", &file)], "");
+        let (root, l) = closure(&[("kernel/t.shard", &file)], FACTS);
         let _ = std::fs::remove_dir_all(root);
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         l
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn string_reuses_list_ops() {
         let m = "(fn len ((xs (List Int))) Int \
-                   (match xs (Nil 0) ((Cons _ r) (+ 1 (len r)))))";
+                   (match xs (nil 0) ((cons _ r) (+ 1 (len r)))))";
         assert_eq!(eval_str(m, "(len \"hello\")"), ast::Expr::IntLit(5.into()));
         assert_eq!(eval_str(m, "(len \"\")"), ast::Expr::IntLit(0.into()));
     }
@@ -208,35 +208,30 @@ mod tests {
         );
     }
 
-    /// The paired division variants: `/`+`tmod` (truncating) and
-    /// `ediv`+`mod` (Euclidean) must each satisfy a = b*q + r across all
-    /// sign combinations, with their respective remainder ranges. The
-    /// mixed pair `/`+`mod` does NOT.
+    /// The table's paired division entries: `/`+`tmod` (truncating) and
+    /// `ediv`+`mod` (Euclidean) each satisfy a = b*q + r across all sign
+    /// combinations, with their respective remainder ranges. A source's `/`
+    /// and `mod` at Int are Init's `Int.ediv` and `Int.emod`, the Euclidean pair.
     #[test]
     fn prim_division_pairs() {
         let m = "(fn id ((x Int)) Int x)";
         let int = |n: i64| ast::Expr::IntLit(n.into());
         for (a, b) in [(7i64, 10i64), (-7, 10), (7, -10), (-7, -10), (23, 4), (-23, 4)] {
             // truncating pair: q rounds toward zero, r follows the dividend.
-            let q = eval_str(m, &format!("(/ {a} {b})"));
-            let r = eval_str(m, &format!("(tmod {a} {b})"));
-            assert_eq!(q, int(a / b), "(/ {a} {b})");
-            assert_eq!(r, int(a % b), "(tmod {a} {b})");
+            assert_eq!(prim2("/", a, b), Some(int(a / b)), "(/ {a} {b})");
+            assert_eq!(prim2("tmod", a, b), Some(int(a % b)), "(tmod {a} {b})");
             // Euclidean pair: 0 <= r < |b|.
-            let eq = eval_str(m, &format!("(ediv {a} {b})"));
-            let er = eval_str(m, &format!("(mod {a} {b})"));
+            let (eq, er) = (prim2("ediv", a, b).unwrap(), prim2("mod", a, b).unwrap());
             assert_eq!(er, int(a.rem_euclid(b)), "(mod {a} {b})");
             let (ast::Expr::IntLit(eqv), ast::Expr::IntLit(erv)) = (&eq, &er) else {
                 panic!("non-int division result");
             };
-            assert_eq!(
-                ast::IntLit::from(b) * eqv + erv,
-                a.into(),
-                "ediv/mod identity at ({a}, {b})"
-            );
+            assert_eq!(ast::IntLit::from(b) * eqv + erv, a.into(), "ediv/mod identity at ({a}, {b})");
+            // the source's pair is the Euclidean one
+            assert_eq!(eval_str(m, &format!("(/ {a} {b})")), eq, "source (/ {a} {b})");
+            assert_eq!(eval_str(m, &format!("(mod {a} {b})")), er, "source (mod {a} {b})");
+            assert_eq!(eval_str(m, &format!("(tmod {a} {b})")), int(a % b), "source (tmod {a} {b})");
         }
-        // The mixed pair on a negative: 10*(-7/10) + (-7 mod 10) = 3, not -7.
-        assert_eq!(eval_str(m, "(+ (* 10 (/ -7 10)) (mod -7 10))"), int(3));
     }
 
     /// A source literal beyond the host parser's integer range is read
@@ -306,7 +301,7 @@ mod tests {
     /// Constructors as values, no match — Ctor is just data.
     #[test]
     fn ctor_as_value() {
-        let src = "(fn make_pair ((x Int) (y Int)) (Pair Int Int) (Pair x y))";
+        let src = "(fn make_pair ((x Int) (y Int)) (Prod Int Int) (Prod.mk x y))";
         assert_eq!(eval_str(src, "(make_pair 3 7)"), nctor("Pair", vec![int(3), int(7)]));
     }
 
@@ -318,10 +313,10 @@ mod tests {
         let src = r#"
 (fn len ((xs (List Int))) Int
   (match xs
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (len rest)))))
+    (nil 0)
+    ((cons _ rest) (+ 1 (len rest)))))
 "#;
-        assert_eq!(eval_str(src, "(len (Cons 10 (Cons 20 (Cons 30 Nil))))"), int(3));
+        assert_eq!(eval_str(src, "(len (cons 10 (cons 20 (cons 30 nil))))"), int(3));
     }
 
     /// Nested pattern: `(Cons a (Cons b _))` binds two PVars at
@@ -332,12 +327,12 @@ mod tests {
         let src = r#"
 (fn first_two_sum ((xs (List Int))) Int
   (match xs
-    ((Cons a (Cons b _)) (+ a b))
+    ((cons a (cons b _)) (+ a b))
     (_ 0)))
 "#;
-        assert_eq!(eval_str(src, "(first_two_sum (Cons 10 (Cons 20 (Cons 30 Nil))))"), int(30));
-        assert_eq!(eval_str(src, "(first_two_sum (Cons 5 Nil))"), int(0));
-        assert_eq!(eval_str(src, "(first_two_sum Nil)"), int(0));
+        assert_eq!(eval_str(src, "(first_two_sum (cons 10 (cons 20 (cons 30 nil))))"), int(30));
+        assert_eq!(eval_str(src, "(first_two_sum (cons 5 nil))"), int(0));
+        assert_eq!(eval_str(src, "(first_two_sum nil)"), int(0));
     }
 
     /// Sequential `let`: each right-hand side sees the bindings before it,
@@ -352,7 +347,7 @@ mod tests {
     (+ aa bb)))
 "#;
         assert_eq!(eval_str(src, "(add_squares 3 4)"), int(34));
-        has_line(&toolchain(src), "fn add_squares 0 (Int Int) Int (let ((* #1 #1) (+ #0 (* #1 #1))) (+ #1 #0))");
+        has_line(&toolchain(src), "fn add_squares 0 (Int Int) Int (let ((* #1 #1)) (let ((+ #0 (* #1 #1))) (+ #1 #0)))");
     }
 
     /// A dotted citation names an identity, in full or from the file's own
@@ -384,7 +379,7 @@ mod tests {
     fn type_binders() {
         let src = r#"
 (fn first ((T Type) (xs (List T)) (d T)) T
-  (match xs (Nil d) ((Cons x _) x)))
+  (match xs (nil d) ((cons x _) x)))
 "#;
         let l = toolchain(src);
         let m = plain::out::module(&l.t);
@@ -392,9 +387,9 @@ mod tests {
         assert_eq!(f.params.len(), 2);
         assert_eq!(f.params[1], f.ret);
         assert!(matches!(f.ret, ast::Type::TVar(_)));
-        assert_eq!(eval_str(src, "(first (Cons 7 Nil) 0)"), int(7));
-        has_line(&l, "fn first 1 ((List ?0) ?0) ?0 (match #1 (List.Nil #0) ((List.Cons _ _) #1))");
-        has_line(&l, "type List 1 (List.Nil) (List.Cons ?0 (List ?0))");
+        assert_eq!(eval_str(src, "(first (cons 7 nil) 0)"), int(7));
+        has_line(&l, "fn first 1 ((List ?0) ?0) ?0 (match #1 (List.nil #0) ((List.cons _ _) #1))");
+        has_line(&l, "type List 1 (List.nil) (List.cons ?0 (List ?0))");
     }
 
     /// `match` on an `Option`-shaped value — bare zero-arg ctors AND
@@ -404,11 +399,11 @@ mod tests {
         let src = r#"
 (fn unwrap_or ((o (Option Int)) (default Int)) Int
   (match o
-    (None default)
-    ((Some x) x)))
+    (none default)
+    ((some x) x)))
 "#;
-        assert_eq!(eval_str(src, "(unwrap_or (Some 42) 0)"), int(42));
-        assert_eq!(eval_str(src, "(unwrap_or None 99)"), int(99));
+        assert_eq!(eval_str(src, "(unwrap_or (some 42) 0)"), int(42));
+        assert_eq!(eval_str(src, "(unwrap_or none 99)"), int(99));
     }
 
     // ------------------------------------------------------------------
@@ -546,33 +541,12 @@ mod tests {
         assert_eq!(eval_str(src, "(pick No)"), int(2));
     }
 
-    /// The runtime's cells are named, not placed: a file that declares its
-    /// own `Bool` and `List` (no prelude) gets a comparison's result and a
-    /// symbol's bytes in them, as a native binary of it does.
-    #[test]
-    fn cells_by_the_runtimes_names() {
-        let src = r#"
-(type (List T) (Nil) (Cons T (List T)))
-(type Bool (False) (True))
-(fn less ((a Int) (b Int)) Bool (< a b))
-(fn pick ((b Bool)) Int (match b (True 1) (False 2)))
-(fn count ((xs (List Int))) Int (match xs (Nil 0) ((Cons _ r) (+ 1 (count r)))))
-(fn go () Int (+ (* 10 (pick (less 1 2))) (+ (pick (less 2 1)) (* 100 (count (chars_of_sym 'abc))))))
-"#;
-        let (root, l) = closure(&[("kernel/main.shard", src)], "");
-        let _ = std::fs::remove_dir_all(root);
-        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
-        let m = plain::out::module(&l.t);
-        assert_eq!(eval::eval(&m, &ast::Expr::Call("kernel.main.go".into(), vec![])).unwrap(), int(312));
-    }
-
-    /// Init's `Bool`, `List`, `Option` and `Prod` are the runtime's cells too, by identity:
+    /// Init's `Bool`, `List`, `Option` and `Prod` are the runtime's cells, by identity:
     /// a comparison's result is a `Bool`, a symbol's bytes a `List`, read by the tree's own
     /// table of Init's facts.
     #[test]
     fn cells_are_inits_constructors() {
         let src = r#"
-(import Init)
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
@@ -586,7 +560,7 @@ mod tests {
     (+ (pick (less 2 1))
       (+ (* 100 (count (chars_of_sym 'abc))) (* 1000 (+ (first (Prod.mk 4 5)) (get (some 3))))))))
 "#;
-        let (root, l) = closure(&[("kernel/main.shard", src)], include_str!("../../v3/kernel/init.facts"));
+        let (root, l) = closure(&[("kernel/main.shard", src)], FACTS);
         let _ = std::fs::remove_dir_all(root);
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         let m = plain::out::module(&l.t);
@@ -609,9 +583,8 @@ mod tests {
                 Open::All("a.b".into()),
             ],
             vis: vec![],
-            init: true,
         };
-        let bare = Scope { ident: String::new(), opened: vec![], init: false, ..sc.clone() };
+        let bare = Scope { ident: String::new(), opened: vec![], ..sc.clone() };
         for sc in [&sc, &bare] {
             for n in ["K", "f", "T.K", "L.m", "Init.List.cons", "Init", "y.f"] {
                 let cs = sc.candidates(n);
@@ -657,7 +630,7 @@ type Stack 0 (Stack.mk Int)
     }
 
     /// Names are identities: a module per file, a citation through `use`,
-    /// a file's own types opened; without Init a body is left as read.
+    /// a file's own types opened.
     #[test]
     fn plain_reader_names() {
         let lib = r#"
@@ -675,7 +648,7 @@ type Stack 0 (Stack.mk Int)
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         assert_eq!(
             plain::out::dump(&l.t),
-            "fn go 0 () Int (top (push 5 (Stack.Mk (/ 7 2))))
+            "fn go 0 () Int (top (push 5 (Stack.Mk (Int.ediv 7 2))))
 fn push 0 (Int Stack) Stack (match #0 ((Stack.Mk _) (Stack.Mk (+ #0 #2))))
 fn top 0 (Stack) Int (match #0 ((Stack.Mk _) #0))
 type Stack 0 (Stack.Mk Int)
@@ -687,7 +660,7 @@ type Stack 0 (Stack.Mk Int)
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Where the file sees Init: an operator's entry is its operands'
+    /// An operator's entry is its operands'
     /// type's, a comparison where Init's Bool is expected is the decision's
     /// value, an implicit type argument is not written and a proof is
     /// passed over — all from the binders' types and the facts.
@@ -706,7 +679,6 @@ type Stack 0 (Stack.Mk Int)
 (def Fin.val - ((i k) (x k)) (Fin 0 i x))
 "#;
         let app = r#"
-(import Init)
 (use Init.List cons nil)
 (fn pred ((n Nat)) Nat (- n 1))
 (fn half ((x Int)) Int (/ x 2))

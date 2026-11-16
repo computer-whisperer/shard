@@ -38,7 +38,7 @@ digits throughout (`7x` is refused). `-` alone and `-x` are symbols. There is no
 or radix prefix. The reader keeps the sign; a term then gives the numeral the type its position
 expects, `Nat` or `Int`, and a negative numeral where a `Nat` is expected is refused
 `negative_numeral`. Examples: `(def five () Nat 5)` (`v3/pins/reader/world.shard`),
-`(fn neg () Int -7)` (`v3/pins/loader/ev_profile/kernel/k.shard`).
+`(fn neg () Int -7)` (`v3/pins/loader/kernel_literal/kernel/k.shard`).
 
 **Strings.** The escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\xHH` (one byte, two hex digits) and
 `\u{H…}` (a code point of one to six hex digits, stored as UTF-8). Every other byte is taken as
@@ -47,8 +47,8 @@ where the literal stands:
 
 | Where | What the literal is | Refused when |
 |---|---|---|
-| a term or a function body in an ordinary file: `(fn g () String "abc")` (`v3/pins/loader/ev_string/main.shard`) | a value of Init's `String` | the bytes are not valid UTF-8 (`bad_string`); `String` is not visible in the file (`no_string`) |
-| a function body in a module whose path begins `kernel`: `(fn hello () (List Int) "hi")` (`v3/pins/loader/ev_profile/kernel/k.shard`) | the list of its bytes, built from the two-constructor `List` in scope | no such `List` (`no_list`) |
+| a term or a function body in an ordinary file: `(fn g () String "abc")` (`v3/pins/loader/ev_string/main.shard`) | a value of Init's `String` | the bytes are not valid UTF-8 (`bad_string`) |
+| a function body in a module whose path begins `kernel`: `(fn hello () (List Int) "hi")` (`v3/pins/loader/kernel_literal/kernel/k.shard`) | the list of its bytes, built from the two-constructor `List` in scope | no such `List` (`no_list`) |
 | `(import "…")` | a path (see "Files, modules and names") | |
 
 **Characters.** There is no character literal. A byte is written as its number — the reader's own
@@ -65,7 +65,7 @@ A symbol is read as a name by splitting it at each `.`: `List.length` has two co
 component is non-empty; a component of digits only is a number.
 
 - `@NAME` in a term cites NAME with every argument written, the implicit ones included:
-  `(@Decidable.decide p d)` (`v3/pins/loader/init_inherited/main.shard`).
+  `(@Decidable.decide p d)` (`v3/pins/loader/instance_table/main.shard`).
 - A universe list after a *declared* name names its universe parameters:
   `(inductive Eq.{u} …)` (`v3/pins/reader/world.shard`). After a *cited* name it gives the universe
   arguments as level terms: `(PProd.{1 1} Nat Nat)` (`v3/pins/loader/discharge_measure/main.shard`).
@@ -127,7 +127,6 @@ declared name may itself be dotted: `(fn Byte.ofNat …)` in `v3/std/bytes.shard
 |---|---|---|
 | `(import "FILE.shard")` | a file; the path is relative to the importing file's directory | `(import "a.shard")` (`v3/pins/loader/basic/main.shard`) |
 | `(import "DIR")` | a directory module: its view and nothing else | `(import "lib")` (`v3/pins/loader/directory/main.shard`) |
-| `(import Init)` | Lean's `Init`: the file sees every declaration of it | `v3/pins/loader/init/main.shard` |
 
 An import makes identities **visible**; it opens no name — after `(import "a.shard")` a bare `Nat`
 is still `unknown_constant` (`v3/pins/loader/no_open`). A file sees its own module, every module it
@@ -137,14 +136,13 @@ environment but outside this closure cannot be cited.
 Each of these ends the importing file with a `LOAD-ERROR`: an absolute path (`absolute_import`), a
 path climbing above the root (`import_outside_root`), no such file (`missing_file`), a cycle
 (`import_cycle`), nesting deeper than 1,000 (`import_depth`), an imported file whose own loading
-failed (`import_failed`; it is not read a second time), an `(import Init)` with a name after it
-(`bad_import`), an import after a declaration that would let a file see Init where it saw none
-(`late_init_import`, under "`use`").
+failed (`import_failed`; it is not read a second time), an import that names no file
+(`bad_import`).
 
-**Importing `Init`.** The loader is given one pinned export of Lean's `Init` library and an index
-of it (`--init`, `--init-index`). A file **sees Init** when it writes `(import Init)` or imports a
-file that sees Init (`v3/pins/loader/init_inherited`); it then may cite every declaration of the
-export. A file that does neither sees none of it. Nothing is loaded wholesale: before a file's
+**`Init`.** The loader is given one pinned export of Lean's `Init` library and an index
+of it (`--init`, `--init-index`). Every file sees it: a file may cite every declaration of the
+export by its name, and no line says so (`v3/pins/loader/init/main.shard`). Nothing is loaded
+wholesale: before a file's
 first declaration the loader collects the names its forms and its stored proofs mention, adds a
 fixed set of names the toolchain itself builds on (the elaborator's, the proof steps', the
 arithmetic's, the definer's), and has the checker admit those the export declares and what they
@@ -153,19 +151,15 @@ depend on.
 - What a file is given does not depend on what else the load fetched. A name the toolchain builds
   from a type it meets, which is neither in the file's text nor in the fixed set, is fetched when
   a reading of a declaration is refused for lack of it, and the declaration is read again
-  (`init_fetch_second`). A file that sees no Init is given nothing built of Init — no equations
-  for its functions, no `noConfusion` for its types — whatever another root of the load fetched
-  (`init_unseen_bundle`).
-- Citing a declaration of Init in a file that sees none is `READ-ERROR … init_not_imported: NAME
-  is a declaration of Init, and this file does not import Init: write (import Init) before the
-  file's first declaration` (`init_not_imported`).
-- The import takes no name: `(import Init NAME)` is `LOAD-ERROR FILE bad_import: (import Init
-  NAME…): the import takes no name — write (import Init): a file that imports Init sees every
-  declaration of it` (`init_named`).
-- With all of Init visible, a name of the file can meet a name of Init under a namespace the file
-  opens: a function `lex` beside `(use Init.List)` is `ambiguous_name: lex: M.lex and List.lex`.
-  Rename the function, or open the namespace for the names needed (`(use Init.List length)`).
-- No export given is `init_unavailable`; an export whose first line is not the pinned Lean version
+  (`init_fetch_second`).
+- `(import Init)` is no form: `LOAD-ERROR FILE bad_import: (import Init): every file sees Init,
+  and no line says so — delete the line` (`init_import_line`).
+- With all of Init visible, a name of the file can meet a name of Init. A type `Bool` the file
+  declares beside Init's is `ambiguous_type` where it is cited bare (`same_spelled`), and a
+  function `lex` beside `(use Init.List)` is `ambiguous_name: lex: M.lex and List.lex`.
+  Rename the declaration, cite it in full, or open the namespace for the names needed
+  (`(use Init.List length)`).
+- No export given is `init_unavailable`, and no file loads; an export whose first line is not the pinned Lean version
   and exporter is `export_pin_mismatch`; a missing index, or one built over another export, is
   `init_index_stale`.
 
@@ -188,20 +182,10 @@ is listed without `Init.`); it is not an error.
 
 `import`, `use` and `trusts` are the **directives**; `(trusts NAME…)` widens its own file's
 assumption policy ("Acceptance: axioms and policy"). By convention the directives lead the file;
-nothing checks their place or their order. A `use`, a file `import` and a `trusts` that stand
-after a declaration are accepted and act on the forms after them; the names those forms cite of
+nothing checks their place or their order. A directive that stands
+after a declaration is accepted and acts on the forms after it; the names those forms cite of
 Init were fetched with the rest, before the first declaration (`v3/pins/loader/init_use_late`,
-`init_late_file_import`). A file sees Init from its first declaration on, or not at all: a
-directive after a declaration that would let the file see Init where it saw none — `(import Init)`,
-or the import of a file that sees Init — is refused, and the file's loading ends: `LOAD-ERROR FILE
-late_init_import: (import Init) lets the file see Init, and it stands after the file's first
-declaration, which was read without Init: a file sees Init from its first declaration on, or not at
-all — write (import Init) before the first declaration` (`init_import_late_none`,
-`init_late_file_import_none`). In a file that sees Init already, a further `(import Init)` changes
-nothing, wherever it stands (`init_import_again`). An implementation sees Init exactly when its
-view does: its forms stand after the view's declarations, so an `(import Init)` in an
-implementation whose view imports none is refused the same way, and the import belongs in the view
-(`impl_import_late`). The names an implementation cites of Init are fetched for it
+`init_late_file_import`). The names an implementation cites of Init are fetched for it
 (`impl_init_demand`).
 
 ### How a name resolves
@@ -211,7 +195,7 @@ as each of these candidates:
 
 1. `MODULE.N`, for the file's own module;
 2. `P.N`, for each opened prefix P;
-3. N without its leading `Init.`, when it has one and the file sees Init;
+3. N without its leading `Init.`, when it has one;
 4. N itself — a full identity, or an Init name.
 
 A candidate is a hit when the environment holds it and the file sees it. One hit is the answer; none
@@ -241,8 +225,8 @@ function a body that runs by attaching one (`realize`), never by declaring a nam
 
 ### Toolchain files and ordinary files
 
-The system's own sources (`v3/kernel/`, module paths beginning `kernel`) are ordinary files: each
-imports Init and works on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
+The system's own sources (`v3/kernel/`, module paths beginning `kernel`) are ordinary files: they
+work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). Two things still set them apart.
 
 - **A string literal** in a function body there is the list of its bytes, a `(List Int)`,
@@ -253,11 +237,6 @@ names opened by name (`(use Init.List cons nil)`). Two things still set them apa
   terms, declarations — is built on `Symbol`, which has no type in the logic, so a signature
   over it cannot be read (`why=e_only_type`). Of about 9,200 functions some 300, over lists,
   integers and bytes, are definitions the checker holds.
-
-A file that sees no Init is still read: its data is whatever types it declares for itself, its
-`fn`s and `extern`s are programs only where their types cite `Int` or `Nat`, and a `type` whose
-fields do is a program type only (`v3/pins/loader/type_e_only`). Nothing in the tree but pins is
-written so.
 
 An ordinary file may import a toolchain file and call it (`v3/tools/shardfmt/reads/reads.shard`
 imports `kernel/sexpr.shard`); the two share Init's types, and what it calls stays a program
@@ -284,11 +263,10 @@ A view holds no `fn`, `extern`, `realize`, `derive`, `fulfills` or `bin` (`LOAD-
 nor a `record`, which is refused as the functions it expands to (`view_form: fn: a view holds
 declarations and parameters, never bodies`). `sig` and `requirement` stand nowhere but in a view
 (`sig_outside_view`). A view may import
-Init, directory modules and files outside its own directory; importing a file of its own directory
+directory modules and files outside its own directory; importing a file of its own directory
 is `req_scope`. Example (`v3/pins/loader/view_basic/lib/mod.req.shard`):
 
 ```
-(import Init)
 (sig type Stack)
 (sig fn push ((n Nat) (s Stack)) Stack)
 (requirement stack_refl ((s Stack)) (Eq s s))
@@ -354,13 +332,12 @@ A source file is a sequence of s-expression forms: directives (`import`, `use`, 
 by convention lead the file, and declarations `(KEYWORD NAME …)`. The loader reads the
 declarations in order and prints one or more *records* for each: a line whose first word is the
 record's kind (`ACCEPT`, `DEFINE`, `RUNNABLE`, `REFUSE`, …). A directive may stand after a
-declaration: a `use`, a file `import` and a `trusts` are accepted there and act on the forms after
-them. An `(import Init)` there, in a file that saw no Init, is `late_init_import` ("`use`").
+declaration: it is accepted there and acts on the forms after it.
 
 | form | syntax | introduces | example (file) |
 |---|---|---|---|
-| `import` | `(import "FILE")`, `(import Init)` | a module made visible; Init made visible | `(import Init)` (`v3/examples/calc/calc.shard`) |
-| `use` | `(use PREFIX NAME…)` | a prefix opened for the rest of the file | `(use Init.List)` (same) |
+| `import` | `(import "FILE")` | a module made visible | `(import "calc.shard")` (`v3/examples/calc/calc_spec.shard`) |
+| `use` | `(use PREFIX NAME…)` | a prefix opened for the rest of the file | `(use Init.List)` (`v3/examples/calc/calc.shard`) |
 | `trusts` | `(trusts AXIOM…)` | axioms the file's policy admits | `(trusts write_line_output)` (`v3/pins/loader/bin_ok/main.shard`) |
 | `type` | `(type NAME (CTOR FIELD-TYPE…)…)`, `(type (NAME T…) …)` | a data type in the logic and in programs | `(type Exp (Num Int) (Add Exp Exp) (Sub Exp Exp))` (`calc.shard`) |
 | `record` | `(record NAME (ctor CTOR)? (FIELD TYPE)…)` | a one-constructor `type`, an accessor and an updater per field | `(record Point (x Int) (y Int))` (`v3/pins/loader/record_basic/main.shard`) |
@@ -395,11 +372,10 @@ not depend on each other. The loader opens a `type`'s constructors for the whole
 it is a program without a definition (`RUNNABLE fn F why=e_only_type route=e_first`), and a `def`
 there is `unknown_constant`. `inductive` is the general form (indices, dependent constructor types,
 universe parameters). For either, beside the type and its recursor, the loader generates and has K
-check `T.casesOn`; for a type without parameters or indices, where Init's `Eq` and `And` are
-visible, also `T.noConfusionType`, `T.noConfusion` and `T.C.inj` per constructor with fields; and,
+check `T.casesOn`; for a type without parameters or indices also `T.noConfusionType`, `T.noConfusion` and `T.C.inj` per constructor with fields; and,
 the first time a function recurses structurally over it, `T.below` and `T.brecOn`. Each is an
-`ACCEPT` record. A `type` with a field that has no type in the logic (`Symbol`; `Int` or `Nat` in
-a file that sees no Init; another such type) exists in programs only: `RUNNABLE type
+`ACCEPT` record. A `type` with a field that has no type in the logic (`Symbol`; another such
+type) exists in programs only: `RUNNABLE type
 NAME`, and a `def` or `theorem` naming it is `READ-ERROR … unknown_constant` (pin `type_e_only`).
 
 **`record`** is rewritten, before anything is read, into `(type NAME (CTOR TYPE…))` (CTOR defaults
@@ -464,8 +440,7 @@ LEVEL ::= NUMERAL | NAME | (succ LEVEL) | (max LEVEL LEVEL) | (imax LEVEL LEVEL)
 **Names.** A bound name shadows a constant. An unbound name resolves through the file's scope. Two
 candidates are `ambiguous_name`, unless the expected type is an inductive type and one candidate
 is its constructor, or a type is expected and one candidate is a type whose constructor is the
-other. No candidate is `unknown_constant`; when the name is a declaration of Init and the file
-imports none, the refusal is `init_not_imported` and names the import to write.
+other. No candidate is `unknown_constant`.
 
 **Application, implicit arguments, levels.** A constant's binders marked `implicit` or `inst` are
 filled by the elaborator; written arguments go to the explicit binders, left to right. The
@@ -711,7 +686,7 @@ derivation is visible wherever its module is. Refusals are `REFUSE MODULE.derive
 | `derive_type` | not a type here; `Nat` or `Int` (register a procedure with `by`); a proposition; not an inductive type; not closed; an argument that is a value, as in `(Fin 3)` |
 | `derive_shape` | an indexed family; a mutual type; a nested type (for `eq`, `ord`, `render`); no constructors; a field that is a proof or a type, or whose type depends on an earlier field (supply the procedure with `by`) |
 | `derive_field` | a function-valued field; no derivation at a field's type (`derive it first — (derive T CAP)`); two visible |
-| `derive_needs` | the generated source cites a constant the file cannot see: import Init, or the library file that declares it; for `eq` on a program's `type` with parameters, `C.inj` is not generated |
+| `derive_needs` | the generated source cites a constant the file cannot see: import the library file that declares it; for `eq` on a program's `type` with parameters, `C.inj` is not generated |
 | `derive_policy` | bare `ord`, or a policy other than `structural` |
 | `derive_duplicate`, `derive_by`, `bad_shape` | derived already; `F` has another type or universe parameters; an unknown capability, or `size` beside others |
 
@@ -748,10 +723,9 @@ can name it. `route=typed`: the body was elaborated and the program is its erasu
 | `measure_type` | typed | `(measure M)` and `M` is not a `Nat` | write a `Nat` measure, e.g. `(Int.natAbs n)` |
 | `group_measure` | typed | a member of a group has no measure, or `(measure (struct x))` | `(measure M)` on every member |
 | `group_shape` | typed | a member of a group has a type parameter, or a result type over its parameters | make the members monomorphic and non-dependent |
-| `below_unreached` | typed | structural recursion over a `type` in a file that sees no Init: the recursion keeps its table in Init's `PProd` and `PUnit` | `(import Init)` before the file's first declaration |
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
 | `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
-| `e_only_type` | e_first | the signature cannot be read: the file sees no Init, or a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | import Init; declare the type first; the normal state of a file that sees no Init |
+| `e_only_type` | e_first | the signature cannot be read: a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | declare the type first; the normal state of a function over `Symbol` |
 | `callee_undeclared` | e_first | at the file's end the function still waits on a function of the file that never got a declaration, because that one was refused | mend the refusal of the callee above |
 
 **What is written and erased.** A call writes more than it passes: a proof, a type under `@`,
@@ -766,7 +740,7 @@ name a `def` gives a type stands for that type. Two refusals keep this honest:
 | reason | when | what to do |
 |---|---|---|
 | `unwritten_argument` | a binder is implicit *and* runtime data (`BitVec.toNat`'s width): the argument runs and is not written. The elaborator fills it in, so the typed route accepts the call and `--both` reports the function `unread` | write the call with `@` and every argument: `(@BitVec.toNat 8 x)` |
-| `unchecked_proof` | a function that is only a program writes a proof — an argument at a proposition binder, a `let` that binds one. The typed route did not read the body, and this reading passes a proof over: nothing would check it. `absurd` there is `absurd_needs_init` for the same reason | give the function a reading in the logic; a `dif` reads there as the `if` it is, and its hypothesis can be passed to nothing |
+| `unchecked_proof` | a function that is only a program writes a proof — an argument at a proposition binder, a `let` that binds one. The typed route did not read the body, and this reading passes a proof over: nothing would check it. `absurd` there is `absurd_e_first` for the same reason | give the function a reading in the logic; a `dif` reads there as the `if` it is, and its hypothesis can be passed to nothing |
 
 **A function as an argument, read as a program alone.** A template's call is read in the
 elaborator's order — its bare variables, the type expected of the call, its other arguments
@@ -936,7 +910,7 @@ no equations, so a function that calls it is defined as usual and theorems can s
 call. Records: `ACCEPT NAME …` then `RUNNABLE extern NAME`. The constant needs a value to exist;
 the loader builds one from the result type (for an inductive type, the first constructor whose
 fields can all be built). A type with none — a proposition, a sort — is `extern_uninhabited`; that
-extern, one whose signature the logic cannot read, and any extern of a file without Init get no
+extern, and one whose signature the logic cannot read, get no
 constant, and their callers are programs only (`no_l_meaning`). The host's operations are declared
 in `v3/std/host.shard`: `get_args`, `read_file`, `write`, `write_line`, `write_file`, `exit`.
 
@@ -1021,7 +995,7 @@ An entry with the World alone takes any arguments and reads them through `get_ar
 | CODE | — | the program called `exit CODE` |
 | 2 | the load's records, then `LOAD: …` | the load failed; nothing ran |
 | 3 | `RUN: out of fuel in F`, `RUN: exhausted nat_size in F` | fuel, or a `Nat` result past 2^27 bytes (`nat_count`: a shift or power count past 32 bits) |
-| 4 | `RUN: stuck REASON in F` | `no_arm` (no match arm), `guard` (a toolchain primitive outside its domain, in a file that sees no Init: the bare `/` by zero, `bshl` or `bshr` by a count outside 0–63; in an ordinary file `/` and `mod` are Init's and total, and `Nat.shiftLeft`, `Nat.shiftRight` are computed at a count of 64 and more), `if_tag`, `extern` (an extern the host cannot perform at its declared types), `unlinked` (a `sig fn` whose implementation was not loaded), `unreachable` |
+| 4 | `RUN: stuck REASON in F` | `no_arm` (no match arm), `guard` (a toolchain primitive outside its domain: `tmod` or `ediv` by zero, `bshl` or `bshr` by a count outside 0–63; `/` and `mod` are Init's and total, and `Nat.shiftLeft`, `Nat.shiftRight` are computed at a count of 64 and more), `if_tag`, `extern` (an extern the host cannot perform at its declared types), `unlinked` (a `sig fn` whose implementation was not loaded), `unreachable` |
 | 5 | `RUN: link REASON: TEXT` | the entry cannot be prepared: `unknown_head`, `unlinked`, `bad_entry` (no World last; a parameter type no argument supplies), `preconditioned`, `lowering` |
 | 6 | `RUN: argument N REASON: TEXT` | `argument_count`, `not_an_int`, `not_a_nat`; e.g. `RUN: argument 1 not_a_nat: x` |
 
@@ -1147,9 +1121,8 @@ A refused step is the file's read error, and the file's reading ends there:
 `READ-ERROR FILE REASON: step N: MESSAGE — the goal: (x : T) … ⊢ TARGET`. N counts from 1 within
 the innermost block the step stands in; the record does not say which block. Steps build their
 terms from constants of Lean's `Init` (`Eq.mpr`, `congrArg`, `WellFounded.fix`, `Lean.Omega`'s
-lemmas). The loader fetches them for every file that sees Init, whether or not the source spells
-them (pin `init_step_lemma`). In a file that sees none `arith` finds no comparison to read
-(`arith_goal`), and a `wf` step is refused as any citation of Init is there (`init_not_imported`).
+lemmas). The loader fetches them for every file, whether or not the source spells
+them (pin `init_step_lemma`).
 
 ### The steps
 
@@ -1385,7 +1358,7 @@ checks the result.
 | S | `statement` | The elaborated statement closed over its binders. Binder names are outside it. | auto_stale |
 | D | `deps` | Every declaration of the load that the statement cites, directly or through other declarations, each by its content fingerprint. Init's declarations are not walked. 0 when there is none. | auto_stale_deps |
 | P | `policy` | The axioms the file `trusts`, and every parameter the file can see that the load has admitted so far: view parameters and descent obligations, discharged or not, of the file and of the modules in its closure. A parameter of another root is no part of it. | auto_stale_policy, auto_other_root |
-| E | `env` | The identity of the Init export (its record count and byte length) for a module that sees Init. 0 for a module without Init. | auto_stale_env |
+| E | `env` | The identity of the Init export (its record count and byte length). | auto_stale_env |
 
 ### The sidecar file
 
@@ -1579,7 +1552,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
-| `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads a closure that sees Init by that table (`eval dump --root DIR --facts OUT FILE`) |
+| `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads what a closure cites of Init by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |
 | `--run MODULE.FN` | after a clean load, run the program from that function; only its own output is printed |

@@ -5,8 +5,7 @@
 //! the modules its imports make visible), a body read with the types its
 //! binders state: which written arguments run, an operator's entry by its
 //! operands' type, a proof and a type passed over. The toolchain's own
-//! sources and an ordinary program are read alike; what differs follows from
-//! whether a file sees Init.
+//! sources and an ordinary program are read alike, and every file sees Init.
 //!
 //! What the classifier asks K about a constant of Init — its kind, its
 //! binders' roles, an inductive's constructors — this reader takes from a
@@ -161,15 +160,13 @@ pub enum Open {
 }
 
 /// A file's scope at a form: the prefix its declarations take, its own
-/// module, the opened prefixes in order, the visible modules, whether it
-/// sees Init.
+/// module, the opened prefixes in order, the visible modules. Every file sees Init.
 #[derive(Clone, Debug)]
 pub struct Scope {
     pub ident: Name,
     pub tag: Name,
     pub opened: Vec<Open>,
     pub vis: Vec<Name>,
-    pub init: bool,
 }
 
 impl Scope {
@@ -195,7 +192,7 @@ impl Scope {
                 }
             }
         }
-        if init_prefixed(n) && self.init {
+        if init_prefixed(n) {
             out.push(drop_init(n));
         }
         out.push(n.to_string());
@@ -226,7 +223,7 @@ impl Scope {
                 }
             }
         }
-        if self.init && init_prefixed(n) && id == drop_init(n) {
+        if init_prefixed(n) && id == drop_init(n) {
             return Some(1 + self.opened.len());
         }
         if id == n { Some(2 + self.opened.len()) } else { None }
@@ -239,7 +236,7 @@ impl Scope {
     }
 
     fn sees(&self, module: &str) -> bool {
-        if module == "Init" { self.init } else { self.vis.iter().any(|m| m == module) }
+        module == "Init" || self.vis.iter().any(|m| m == module)
     }
 }
 
@@ -371,7 +368,7 @@ impl Tables {
         }
     }
 
-    /// The pre-scan of a program form in a file that sees Init: each of its names that
+    /// The pre-scan of a program form: each of its names that
     /// resolves to an inductive of Init that is an E type, or to a constructor of one,
     /// registers it (erase.shard es_scan_init). A string is List cells.
     pub fn scan_init(&mut self, sc: &Scope, v: &Value) {
@@ -446,8 +443,7 @@ impl Tables {
     }
 
     /// Is `k` a constant K holds that this scope may cite? A constant of
-    /// Init where the file sees Init; a declaration of the closure in a
-    /// visible module.
+    /// Init; a declaration of the closure in a visible module.
     fn k_known(&self, sc: &Scope, k: &str) -> bool {
         if let Some(nv) = self.natives.get(k) {
             if sc.sees(&nv.module) {
@@ -459,7 +455,7 @@ impl Tables {
                 return true;
             }
         }
-        sc.init && self.facts.contains_key(k)
+        self.facts.contains_key(k)
     }
 
     fn k_inductive(&self, k: &str) -> bool {
@@ -521,10 +517,10 @@ impl Tables {
 
     /// Does the name resolve, through the scope, to the constant `k` of Init?
     pub fn init_const(&self, sc: &Scope, n: &str, k: &str) -> bool {
-        sc.init && self.k_name(sc, n).as_deref() == Some(k)
+        self.k_name(sc, n).as_deref() == Some(k)
     }
 
-    /// A head's binders' flags where the file sees Init: K's constant — a
+    /// A head's binders' flags: K's constant — a
     /// constant of Init by the facts, a declaration of the closure by its
     /// written binders.
     pub fn k_flags(&self, id: &str) -> Option<Vec<Flag>> {
@@ -608,7 +604,6 @@ pub fn builtin_type(n: &str) -> bool {
 
 struct ModInfo {
     closure: Vec<Name>,
-    init: bool,
 }
 
 /// A view loaded and not yet linked: its directory, and the scope its last form was read in,
@@ -873,12 +868,12 @@ impl Loader {
         }
         let forms = self.read_forms(rel)?;
         let ident = self.sealed_ident(rel, mp, view);
-        let sc = Scope { ident, tag: mp.to_string(), opened: Vec::new(), vis: vec![mp.to_string()], init: false };
+        let sc = Scope { ident, tag: mp.to_string(), opened: Vec::new(), vis: vec![mp.to_string()] };
         self.stack.push(mp.to_string());
         let r = self.load_forms(rel, sc, &forms);
         self.stack.pop();
         let sc = r?;
-        self.mods.insert(mp.to_string(), ModInfo { closure: sc.vis.clone(), init: sc.init });
+        self.mods.insert(mp.to_string(), ModInfo { closure: sc.vis.clone() });
         if view {
             // DIR/mod.req.shard, or the dir form DIR/mod.req/mod.req.shard
             let up = if rel.len() >= 2 && rel[rel.len() - 2] == "mod.req" { 2 } else { 1 };
@@ -935,8 +930,8 @@ impl Loader {
             match head_sym(f) {
                 Some("import") => {
                     let items = as_list(f).unwrap_or_default();
-                    if items.len() == 2 && items[1].as_symbol() == Some("Init") {
-                        sc.init = true;
+                    if items.get(1).and_then(|v| v.as_symbol()) == Some("Init") {
+                        return err(format!("{mp}: (import Init): every file sees Init, and no line says so — delete the line"));
                     } else if let Some(p) = items.get(1).and_then(|v| v.as_str()) {
                         let mut parts: Vec<String> = rel[..rel.len() - 1].to_vec();
                         parts.extend(split_path(p));
@@ -948,9 +943,8 @@ impl Loader {
                                 sc.vis.push(v.clone());
                             }
                         }
-                        sc.init = sc.init || m.init;
                     } else {
-                        return err(format!("{mp}: (import \"FILE\") or (import Init)"));
+                        return err(format!("{mp}: (import \"FILE\")"));
                     }
                     cur = None;
                 }
@@ -985,7 +979,7 @@ impl Loader {
             read::declare(&mut self.t, s, f);
         }
         for (s, f) in &scoped {
-            if s.init && matches!(head_sym(f), Some("fn" | "extern" | "type" | "sig" | "realize")) {
+            if matches!(head_sym(f), Some("fn" | "extern" | "type" | "sig" | "realize")) {
                 self.t.scan_init(s, f);
             }
         }

@@ -169,7 +169,7 @@ build_one() {
 # — a fresh tree, or after a change of kernel/index.shard or kernel/initindex.shard — the
 # bootstrap builds it, about half an hour over the export: the driver is a toolchain program,
 # and the loader needs the index to load it. Without an export nothing is built here, and a
-# root that sees Init fails at its load, which names the export.
+# root fails at its load, which names the export.
 ensure_index() {
   v3/kernel/test/init_index.sh --current > /dev/null 2>&1 && return 0
   [ -s "${V3_EXPORT_DIR:-.shard-cache/v3-export}/init.ndjson" ] || return 0

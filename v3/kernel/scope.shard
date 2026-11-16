@@ -7,7 +7,6 @@
 ;;; bound names, each with its fvar (terms are built over K's
 ;;; locals and closed by K's mk_binding, never by de Bruijn arithmetic).
 
-(import Init)
 (import "sexpr.shard")
 (import "k")
 (use Init.Bool false true)
@@ -38,11 +37,11 @@
 (type Derived (Derived Expr Symbol Name Name))
 (type Vis
   (VisAll)  ; a scratch scope: everything the environment holds
-  (VisOnly (List Name) Bool (IntMap (List (Prod Name Name))) (List Name) (List Derived)
+  (VisOnly (List Name) (IntMap (List (Prod Name Name))) (List Name) (List Derived)
     (IntMap (List (Prod Name Int)))))
-;; the visible modules (the file's import closure and itself), whether the file sees Init
-;; (it imports Init, or a module that sees it), declaration → module for every native
-;; declaration (a constant absent from the table is Init's), the pending
+;; the visible modules (the file's import closure and itself), declaration → module for every
+;; native declaration (a constant absent from the table is Init's, and every file sees
+;; Init), the pending
 ;; names, the derivation table, declaration → the export's ordinal for every
 ;; declaration the load imported from Init (what tells Init's own constant from a namesake)
 ;; the module prefix a file's declarations take (the sealed directory's for a file
@@ -166,7 +165,7 @@
     ((Str q s) (Str (name_after p q) s))
     ((Num q k) (Num (name_after p q) k)))))
 
-;; the declaration → module table (VisOnly's third field), keyed as the environment is
+;; the declaration → module table (VisOnly's second field), keyed as the environment is
 (fn tbl_find ((tbl (IntMap (List (Prod Name Name)))) (k Name)) (Option Name)
   (match (im_find tbl (env_key k))
     ((some b) (assoc_name k b))
@@ -184,10 +183,10 @@
 (fn visible ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll true)
-    ((VisOnly mods init tbl _ _ _)
+    ((VisOnly mods tbl _ _ _)
      (match (tbl_find tbl k)
        ((some m) (mem_name m mods))
-       (none init)))))  ; a constant no module of the load declared is Init's: citable where the file sees Init
+       (none true)))))  ; a constant no module of the load declared is Init's: citable from every file
 (fn ords_find ((ords (IntMap (List (Prod Name Int)))) (k Name)) (Option Int)
   (match (im_find ords (env_key k))
     ((some b) (ords_assoc k b))
@@ -210,7 +209,7 @@
 (fn derived_for ((sc Scope) (ty Expr) (cap Symbol)) (List Name)
   (match (sc_vis sc)
     (VisAll nil)
-    ((VisOnly mods _ _ _ ds _) (derived_among sc mods ds ty cap nil))))
+    ((VisOnly mods _ _ ds _) (derived_among sc mods ds ty cap nil))))
 (fn derived_among
   ((sc Scope) (mods (List Name)) (ds (List Derived)) (ty Expr) (cap Symbol) (acc (List Name)))
   (List Name)
@@ -230,7 +229,7 @@
 (fn derived_visible ((sc Scope) (cap Symbol)) (List (Prod Expr Name))
   (match (sc_vis sc)
     (VisAll nil)
-    ((VisOnly mods _ _ _ ds _) (derived_pairs sc mods ds cap))))
+    ((VisOnly mods _ _ ds _) (derived_pairs sc mods ds cap))))
 (fn derived_pairs ((sc Scope) (mods (List Name)) (ds (List Derived)) (cap Symbol))
   (List (Prod Expr Name))
   (measure (struct ds))
@@ -244,14 +243,14 @@
 (fn native_decl ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll false)
-    ((VisOnly _ _ tbl _ _ _)
+    ((VisOnly _ tbl _ _ _)
      (match (tbl_find tbl k)
        ((some _) true)
        (none false)))))
 (fn pending_name ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll false)
-    ((VisOnly _ _ _ p _ _) (mem_name k p))))
+    ((VisOnly _ _ p _ _) (mem_name k p))))
 
 ;; the universe arity of a citable constant: being declared here, or in the environment
 (fn const_arity ((c Cx) (n Name)) (Option Int)
@@ -279,12 +278,11 @@
       (match m
         (Anon nil)
         (_ (list (name_append m n))))
-      (append (prefixed (sc_opened sc) n) (append (init_cited sc n) (list n))))))
+      (append (prefixed (sc_opened sc) n) (append (init_cited n) (list n))))))
 ;; `Init.NAME` cites the imported NAME explicitly: imported names are bare in
-;; K and the loader shows them under the prefix Init, so the citation is the bare name when
-;; the scope sees Init — the spelling that tells Init's `Bool` from a native `main.Bool`
-(fn init_cited ((sc Scope) (n Name)) (List Name)
-  (if (bool_and (init_prefixed n) (init_seen sc)) (list (drop_init n)) nil))
+;; K and the loader shows them under the prefix Init, so the citation is the bare name —
+;; the spelling that tells Init's `Bool` from a native `main.Bool`
+(fn init_cited ((n Name)) (List Name) (if (init_prefixed n) (list (drop_init n)) nil))
 ;; the comparison primitives are `< <= =`: the spellings `lt le int_eq` are refused
 ;; everywhere with the one to write (`renamed_primitive`, from the classifier and from the
 ;; elaborator)
@@ -307,10 +305,6 @@
   (match (first_component n)
     ((some s) (sym_eq s (quote Init)))
     (none false)))
-(fn init_seen ((sc Scope)) Bool
-  (match (sc_vis sc)
-    (VisAll true)
-    ((VisOnly _ init _ _ _ _) init)))
 ;; the name without its leading `Init` component (`(use Init.List)` opens `List`)
 (fn drop_init ((n Name)) Name
   (measure (struct n))

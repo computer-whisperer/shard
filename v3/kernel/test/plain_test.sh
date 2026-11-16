@@ -5,7 +5,7 @@
 # constants the loader prints for it (`load.shard --facts OUT`, kernel/facts.shard) — must be
 # the program the loader reads: the two dumps (`load.shard --dump`, `eval dump --root`) are one
 # canonical text (kernel/dump.shard's header). parity_test.sh is the same comparison over the
-# toolchain's own closures, which see no Init and need no facts.
+# toolchain's own closures, read by the tree's table (v3/kernel/init.facts).
 #
 #   complete  a closure the reader reads whole (it exits 0): the two dumps byte for byte
 #             — v3/examples/calc/calc_main.shard (calc over the host, std/bytes, std/list)

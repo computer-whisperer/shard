@@ -2,7 +2,7 @@
 ;;; A package root and its files: each file is a module
 ;;; named by its path from the root; `import` loads a file once (a cycle is
 ;;; refused) and makes the imported module's closure visible, opening
-;;; nothing; `(import Init)` lets the module see Lean's Init — every
+;;; nothing; every module sees Lean's Init — every
 ;;; declaration of the pinned export, of which the ones the module needs are
 ;;; loaded on demand from the export's index (initload.shard), the meta
 ;;; line checked against the pin; `use` opens a prefix for the rest of
@@ -18,7 +18,6 @@
 ;;; modules and their hashes on their MODULE lines). Nothing here is
 ;;; authority: K's verdicts are K's.
 
-(import Init)
 (import "host.shard")
 (import "reader.shard")
 (import "k")
@@ -244,19 +243,17 @@
 ;; ---- the state -------------------------------------------------------------------------
 ;; a loaded module: path, root-relative file, hash (over its accepted
 ;; declarations' fingerprints, in order), its closure (the module paths
-;; visible in it, itself included), whether it sees Init (its importers then do);
+;; visible in it, itself included);
 ;; a view's module also keeps its fork point for the implementation
 ;; check, which may come after a consumer loaded the view
-(record Module (path Name) (file (List Int)) (hash Int) (closure (List Name)) (init Bool)
-  (fork (Option ForkPt))
+(record Module (path Name) (file (List Int)) (hash Int) (closure (List Name)) (fork (Option ForkPt))
   (ok Bool))
 ;; ok False: its loading failed — a later import fails the same way, never re-reads it
 ;; a file whose loading failed after its heads were pre-registered: recorded so that a
 ;; later import of it reports import_failed instead of re-reading it into duplicate_name
 (fn ld_add_failed ((l Load) (mp Name) (rel (List (List Int)))) Load
   (ld_add_mod l
-    (make Module (path mp) (file (join_path rel)) (hash 0) (closure nil) (init false) (fork none)
-      (ok false))))
+    (make Module (path mp) (file (join_path rel)) (hash 0) (closure nil) (fork none) (ok false))))
 
 ;; Init alone: an environment no native declaration entered, the records it holds, its ordinal
 ;; table. While a load has declared nothing its environment IS the base, and a demand enters
@@ -415,17 +412,15 @@
 ;; through the scope and the parameters the file can see, what `permitted` can be asked about
 ;; for a declaration of the file beyond the standard axioms: a parameter of a module outside
 ;; the file's closure reaches none of its declarations, so what another root admitted is no
-;; part of the key —, the environment's — for a module that sees Init the export's identity
-;; as the index's header states it (its record count and byte length); 0 for a module without
-;; Init, whose requirement rests on no export
+;; part of the key —, the environment's — the export's identity
+;; as the index's header states it (its record count and byte length)
 (fn req_ctx ((l Load) (f Fx)) ReqCtx
   (let ((sc (fx_scope l f)))
     (ReqCtx sc
       (req_names (append (trust_candidates sc (Fx.trusts f)) (params_seen sc (Load.params l))) 0)
-      (if (bool_not (Fx.init f)) 0
       (match (Load.init l)
         ((InitSt x _ _) (mix (ix_hdr_records (odx_hdr x)) (ix_hdr_bytes (odx_hdr x))))
-        (_ (mix 0 0)))))))
+        (_ (mix 0 0))))))
 (fn params_seen ((sc Scope) (ps (List Name))) (List Name)
   (measure (struct ps))
   (match ps
@@ -680,22 +675,18 @@
     ((cons m r) (if (name_eq (Module.path m) p) (some m) (ld_find_mod r p)))))
 
 ;; the file being loaded: module, root-relative parts, opened prefixes, the
-;; visible modules (itself included), whether it sees Init — it imports Init, or a module
-;; that sees it —, trusted names, hash so
+;; visible modules (itself included), trusted names, hash so
 ;; far, whether it is a view (the forms it may hold, the req-scope gate), the sidecar's
 ;; entries (FILE.auto.shard beside the file, read when a theorem or a fulfills says auto),
-;; whether its first declaration is reached (begun: there what the file sees of Init is
-;; settled and its demand fetched), whether it is the implementation file of a view (its
+;; whether it is the implementation file of a view (its
 ;; forms stand after the view's declarations), the names of Init under its identity, which
 ;; none of its declarations may take
 (record Fx (module Name) (ident Name) (parts (List (List Int))) (opened (List Open))
   (vis (List Name))
-  (init Bool)
   (trusts (List Name))
   (hash Int)
   (view Bool)
   (autos (List Auto))
-  (begun Bool)
   (impl Bool)
   (taken (List (List Int)))
   (ecount Int)
@@ -705,9 +696,8 @@
 (fn fx_private ((f Fx)) Bool (bool_not (name_eq (Fx.ident f) (Fx.module f))))
 (fn fx_file ((f Fx)) (List Int) (join_path (Fx.parts f)))
 (fn fx_open ((f Fx) (o Open)) Fx (with Fx f (opened (append (Fx.opened f) (list o)))))
-;; an import of a module that sees `mods`, and Init when `init`: the importer sees them too
-(fn fx_see ((f Fx) (mods (List Name)) (init Bool)) Fx
-  (with Fx f (vis (names_union (Fx.vis f) mods)) (init (bool_or (Fx.init f) init))))
+;; an import of a module that sees `mods`: the importer sees them too
+(fn fx_see ((f Fx) (mods (List Name))) Fx (with Fx f (vis (names_union (Fx.vis f) mods))))
 (fn fx_trust ((f Fx) (ns (List Name))) Fx (with Fx f (trusts (append (Fx.trusts f) ns))))
 (fn fx_mix ((f Fx) (x Int)) Fx (with Fx f (hash (mix (Fx.hash f) x))))
 (fn fx_add_bin ((f Fx) (s SExpr)) Fx (with Fx f (bins (append (Fx.bins f) (list s)))))
@@ -715,28 +705,13 @@
 ;; view, under the implementation file with its own sidecar's entries
 (fn fx_as_impl ((f Fx) (ifile (List (List Int))) (autos (List Auto))) Fx
   (with Fx f (view false) (impl true) (parts ifile) (autos autos)))
-;; a directive that would let the file see Init (`init`) where it does not, read after the
-;; file's first declaration: the declarations before it were read as those of a file that
-;; sees none, so the directive is refused. A file sees Init from its first declaration on,
-;; or not at all; an implementation's forms stand after its view's declarations, so it sees
-;; Init exactly when its view does
-(fn late_init ((f Fx) (init Bool)) Bool
-  (bool_and (Fx.begun f) (bool_and init (bool_not (Fx.init f)))))
-;; `what`: the directive as written; `brings`: how it brings Init
-(fn late_init_msg ((f Fx) (what (List Int)) (brings (List Int))) (List Int)
-  (append what
-    (append brings
-      (if (Fx.impl f)
-        ", and this implementation's view does not import Init: an implementation sees Init exactly when its view does — write (import Init) into its view (mod.req.shard)"
-        ", and it stands after the file's first declaration, which was read without Init: a file sees Init from its first declaration on, or not at all — write (import Init) before the first declaration"))))
 (fn fx_scope ((l Load) (f Fx)) Scope
   (Scope (Fx.ident f) (Fx.module f) (Fx.opened f)
-    (VisOnly (Fx.vis f) (Fx.init f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
+    (VisOnly (Fx.vis f) (Load.tbl l) (Load.pending l) (Load.derived l) (Load.inits l))))
 
 ;; ---- the forms -------------------------------------------------------------------------
 (type Form
   (FImportFile (List Int))
-  (FImportInit)
   (FUse Name (List Symbol))
   (FTrusts (List Name))
   (FDecl)
@@ -752,15 +727,12 @@
 (fn import_form ((args (List SExpr))) Form
   (match args
     ((cons (SStr p) nil) (FImportFile p))
-    ((cons (SSym i) rest)
+    ((cons (SSym i) _)
      (if (sym_eq i (quote Init))
-       (match rest
-         (nil FImportInit)
-         (_
-           (FBad (quote bad_import)
-             "(import Init NAME…): the import takes no name — write (import Init): a file that imports Init sees every declaration of it")))
-       (FBad (quote bad_import) "(import \"FILE\") or (import Init)")))
-    (_ (FBad (quote bad_import) "(import \"FILE\") or (import Init)"))))
+       (FBad (quote bad_import)
+         "(import Init): every file sees Init, and no line says so — delete the line")
+       (FBad (quote bad_import) "(import \"FILE\")")))
+    (_ (FBad (quote bad_import) "(import \"FILE\")"))))
 ;; (use P) opens P; (use P a b) opens P for the names a… and b…; a leading
 ;; `Init` is dropped (reader.shard's drop_init) — imported names are bare in
 ;; K, so (use Init) opens nothing new and (use Init.List) opens `List`
@@ -823,7 +795,7 @@
 (fn imported_decl ((sc Scope) (a Name)) Bool
   (match (sc_vis sc)
     (VisAll true)
-    ((VisOnly _ _ _ _ _ inits)
+    ((VisOnly _ _ _ _ inits)
      (match (ords_find inits a)
        ((some _) true)
        (none false)))))
@@ -1178,7 +1150,7 @@
                  (append (show_name k) " is already declared: a derivation generates this name")))
              f)
            false)
-         (match (pre_register (Load.etab l) (fx_scope l f) (Load.env l) (list s))
+         (match (pre_register (Load.etab l) (fx_scope l f) (list s))
            ((PreErr e m) (Prod.mk (Prod.mk (ld_rec l (RClassify k e m)) f) false))
            ((PreOk es)
             (match (load_decl (ld_with_e l es) f s)
@@ -1550,19 +1522,18 @@
            (settle_groups l2 f2 (+ 1 (len (Load.parked l2)))))))
       (load_extern l1 f s)))))
 ;; an extern: its L constant first — an opaque of the declared type with the type's default
-;; witness (reader.shard read_extern), an ACCEPT — then the classifier's EExtern, RUNNABLE. A
-;; file without Init has no L reading by construction: E only. The L reading refused — a
+;; witness (reader.shard read_extern), an ACCEPT — then the classifier's EExtern, RUNNABLE.
+;; The L reading refused — a
 ;; binder's type unknown to L, no witness — keeps the extern E-only with the obstacle on its
 ;; record, its callers E-first
 (fn load_extern ((l1 Load) (f Fx) (s SExpr)) (Prod Load Fx)
-  (if (bool_not (init_seen (fx_scope l1 f))) (load_e_first l1 f s (quote none) (quote none))
   (match (read_extern (fx_scope l1 f) (Load.env l1) (form_args s))
     ((RDOk ds)
      (match (admit_core l1 f ds)
        ((Prod.mk l2 none) (load_e_first l2 f s (quote none) (quote none)))
        ((Prod.mk l2 (some recs)) (load_e_first l2 (mix_recs f recs) s (quote none) (quote none)))))
     ((RDErr r _) (load_e_first l1 f s r (quote none)))
-    (_ (load_e_first l1 f s (quote no_l_reading) (quote none))))))
+    (_ (load_e_first l1 f s (quote no_l_reading) (quote none)))))
 (fn form_args ((s SExpr)) (List SExpr)
   (match s
     ((SList (cons _ args)) args)
@@ -1640,18 +1611,14 @@
      (Prod.mk
        (ld_rec l1
          (RClassify (form_name (fx_scope l1 f) s) e
-           (if (init_seen (fx_scope l1 f))  ; a file without Init has no L reading by construction: nothing to add
-             (append m2
-               (append " — its signature has no L reading: "
-                 (append (chars_of_sym r) (append ": " m))))
-             m2)))
+           (append m2
+             (append " — its signature has no L reading: "
+               (append (chars_of_sym r) (append ": " m))))))
        f))
-    ((COk _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))
-    ((COkT _ _ _) (load_e_first (unread_noted l1 f r m) f s (quote e_only_type) (quote e_first)))))
-;; what a signature's reading met, noted where the file sees Init (settle_missed); a file
-;; that sees none has no L reading by construction, and nothing to fetch
-(fn unread_noted ((l Load) (f Fx) (e Symbol) (m (List Int))) Load
-  (if (Fx.init f) (ld_miss l e m) l))
+    ((COk _) (load_e_first (unread_noted l1 r m) f s (quote e_only_type) (quote e_first)))
+    ((COkT _ _ _) (load_e_first (unread_noted l1 r m) f s (quote e_only_type) (quote e_first)))))
+;; what a signature's reading met, noted (settle_missed)
+(fn unread_noted ((l Load) (e Symbol) (m (List Int))) Load (ld_miss l e m))
 (fn ld_last_runnable ((l Load)) Bool
   (match (ld_recs_head l)
     ((some (RRun _ _ _ _)) true)
@@ -2595,9 +2562,9 @@
     ((cons t r) (if (int_list_eq t s) true (taken_has r s)))))
 ;; an S form's citations of the environment's E-eligible inductives enter the E table first
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
-  (if (Fx.init f) (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s)) l))  ; Init's inductives are citable only where the file sees Init
-;; a `type` enters K when its field types are L types; it is E only when a field cites a
-;; built-in E type with no L constant in scope — Int or Nat without Init, Symbol — or another
+  (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s)))
+;; a `type` enters K when its field types are L types; it is E only when a field cites
+;; Symbol, which has no L constant, or another
 ;; E-only type, transitively. Never the directory and never the file's imports: K checks any
 ;; L form in any file.
 (fn type_is_e_only ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) Bool
@@ -2630,7 +2597,8 @@
     ((SList (cons (SSym x) args))
      (if (head_e_only es sc env self x) true (fields_e_only es sc env self args)))
     (_ false)))
-;; a field type's head: Symbol has no L constant; Int and Nat have one iff Init is in scope; a
+;; a field type's head: Symbol has no L constant; Int and Nat are Init's unless the scope
+;; makes the name another's too; a
 ;; type of the E table is E-only iff K does not hold it — the type being declared excepted
 (fn head_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (x Symbol)) Bool
   (match (name_of_sym x)
@@ -2703,15 +2671,13 @@
 ;; environment holds Init beside the natives, and a demand enters it (init_load).
 ;;
 ;; What a file is given of Init does not depend on what the load fetched for another file.
-;; A file that sees Init has, before its first declaration, the closure of every name it can
+;; A file has, before its first declaration, the closure of every name it can
 ;; ask the environment for by itself: each token of its forms and of its sidecar's blocks
 ;; under every candidate resolution tries (init_demand), the kits — the constants the
 ;; toolchain builds by name (init_kit) — and the satellites of the inductives among them. A
 ;; name asked for beyond those — one a proof step or the definer builds from a type met in a
 ;; term — is refused by a message that names it, and the declaration is read again with the
-;; name fetched (settle_missed). A file that sees no Init is given nothing of it, whatever
-;; the environment holds: resolution finds no constant of Init there (scope.shard `visible`),
-;; and no gate asks the environment for one
+;; name fetched (settle_missed)
 (fn init_opened ((l Load) (w World)) (Prod (Prod Load (Option (Prod Symbol (List Int)))) World)
   (match (Load.init l)
     ((InitSt _ _ _) (Prod.mk (Prod.mk l none) w))
@@ -2866,33 +2832,28 @@
         (bool_or (= c 58) (bool_or (= c 44) (bool_or (= c 59) (bool_or (= c 34) (= c 96)))))))))
 (fn init_err ((l Load) (file (List Int)) (reason Symbol) (detail (List Int))) Load
   (ld_rec l (RLoadErr file reason detail)))
-;; a file prepared after its leading directives: the names of Init under its identity,
-;; which none of its declarations may take; then, where it sees Init, its demand fetched.
-;; From here the file's first declaration is reached (begun). None: the file fails here,
-;; its record says why
+;; a file prepared after its leading directives: the export opened (a load given none ends
+;; the file here, `init_unavailable`), the names of Init under its identity, which none of
+;; its declarations may take, then its demand fetched. None: the file fails here, its
+;; record says why
 (fn init_prepare ((l Load) (f Fx) (forms (List SExpr)) (w World))
   (Prod (Prod Load (Option Fx)) World)
-  (match (Load.init l)
-    (InitNone (Prod.mk (Prod.mk l (some (with Fx f (begun true)))) w))
-    (_
-      (match (init_opened l w)
-        ((Prod.mk (Prod.mk l1 (some (Prod.mk e m))) w1)
-         (Prod.mk (Prod.mk (init_err l1 (fx_file f) e m) none) w1))
-        ((Prod.mk (Prod.mk l1 none) w1)
-         (match (init_taken l1 f w1)
-           ((Prod.mk f2 w2)
-            (if (bool_not (Fx.init f2)) (Prod.mk (Prod.mk l1 (some (with Fx f2 (begun true)))) w2)
-            (match (init_demand l1 f2 forms w2)
-              ((Prod.mk (Prod.mk l2 true) w3)
-               (Prod.mk (Prod.mk l2 (some (with Fx f2 (begun true)))) w3))
-              ((Prod.mk (Prod.mk l2 false) w3) (Prod.mk (Prod.mk l2 none) w3)))))))))))
+  (match (init_opened l w)
+    ((Prod.mk (Prod.mk l1 (some (Prod.mk e m))) w1)
+     (Prod.mk (Prod.mk (init_err l1 (fx_file f) e m) none) w1))
+    ((Prod.mk (Prod.mk l1 none) w1)
+     (match (init_taken l1 f w1)
+       ((Prod.mk f2 w2)
+        (match (init_demand l1 f2 forms w2)
+          ((Prod.mk (Prod.mk l2 true) w3) (Prod.mk (Prod.mk l2 (some f2)) w3))
+          ((Prod.mk (Prod.mk l2 false) w3) (Prod.mk (Prod.mk l2 none) w3))))))))
 (fn init_taken ((l Load) (f Fx) (w World)) (Prod Fx World)
   (match (Load.init l)
     ((InitSt x _ _)
      (match (od_names_under x (append (show_name (Fx.ident f)) ".") w)
        ((Prod.mk ns w1) (Prod.mk (with Fx f (taken ns)) w1))))
     (_ (Prod.mk f w))))
-;; the demand of a file that sees Init, for these forms: every token of the forms and of the
+;; a file's demand of Init, for these forms: every token of the forms and of the
 ;; sidecar's blocks under the candidates resolution tries — under the prefixes the file has
 ;; opened and each one a `use` among the forms opens further down, so that no candidate of
 ;; a later citation is left to what another file fetched —, and the kits. False: the load
@@ -2948,14 +2909,13 @@
 
 ;; ---- a name the environment was asked for and did not hold -----------------------------------
 ;; One declaration has been read from the load `l0` into `l1`, and the words of its refusals
-;; that may name a constant are at hand (Load.missed, ld_miss). In a file that sees Init,
-;; every one of them that names — under the candidates resolution tries — a declaration of
+;; that may name a constant are at hand (Load.missed, ld_miss).
+;; Every one of them that names — under the candidates resolution tries — a declaration of
 ;; the export the environment lacks is fetched with its closure into `l0`, and the caller reads the
 ;; declaration again from there (True): so a constant a proof step, the definer, a derivation
 ;; or K asked for by a name it built is there on the second reading, and a file's record
 ;; never says that Init's constant is unknown. When nothing was fetched the reading stands
-;; (False). In a file that sees no Init nothing is fetched, and a refusal of a citation that
-;; names a declaration of Init says what to write (unseen_reworded). The words `l0`
+;; (False). The words `l0`
 ;; carried stay with the result: an enclosing reading settles them
 (fn settle_missed ((l0 Load) (l1 Load) (f Fx) (fuel Int) (w World)) (Prod (Prod Load Bool) World)
   (let ((stands (with Load l1 (missed (Load.missed l0)))))
@@ -2964,17 +2924,14 @@
       (ms
         (match (Load.init l0)
           ((InitSt _ _ _)
-           (if (bool_not (Fx.init f)) (unseen_reworded l0 stands f w)
            (if (< fuel 1) (Prod.mk (Prod.mk stands false) w)
-           (match (init_fetch l0 (words_names (seeing_scope l1 f) ms) w)
+           (match (init_fetch l0 (words_names (fx_scope l1 f) ms) w)
              ((Prod.mk (Prod.mk l2 none) w1)
               (Prod.mk (Prod.mk (with Load l2 (missed (Load.missed l0))) false) w1))  ; the fetch failed: its load error stands in the reading's place and ends the file
              ((Prod.mk (Prod.mk l2 (some n)) w1)
               (if (< 0 n) (Prod.mk (Prod.mk l2 true) w1)
-              (Prod.mk (Prod.mk (ld_with_init stands (Load.init l2)) false) w1)))))))
+              (Prod.mk (Prod.mk (ld_with_init stands (Load.init l2)) false) w1))))))
           (_ (Prod.mk (Prod.mk stands false) w)))))))
-;; the file's scope as one that sees Init has it: `Init.NAME` is NAME there
-(fn seeing_scope ((l Load) (f Fx)) Scope (fx_scope l (with Fx f (init true))))
 ;; the names the words can stand for: each under the candidates resolution tries
 (fn words_names ((sc Scope) (ws (List (List Int)))) (List Name)
   (measure (struct ws))
@@ -2984,41 +2941,6 @@
      (match (name_of_sym (sym_of_chars t))
        ((some n) (append (scope_candidates sc (init_strip_at n)) (words_names sc r)))
        (none (words_names sc r))))))
-;; a file that sees no Init: among the records the reading added, a refusal of a citation
-;; whose message names a declaration of the export is recorded `init_not_imported` with the
-;; import to write
-(fn unseen_reworded ((l0 Load) (l1 Load) (f Fx) (w World)) (Prod (Prod Load Bool) World)
-  (let ((k (- (len (Load.recs l1)) (len (Load.recs l0)))))
-    (if (< k 1) (Prod.mk (Prod.mk l1 false) w)
-    (match (Load.init l1)
-      ((InitSt x done base)
-       (match (reword_recs x (seeing_scope l1 f) f (take k (Load.recs l1)) nil w)
-         ((Prod.mk (Prod.mk x1 rs) w1)
-          (Prod.mk
-            (Prod.mk
-              (ld_with_init (ld_with_recs_raw l1 (append rs (drop k (Load.recs l1))))
-                (InitSt x1 done base))
-              false)
-            w1))))
-      (_ (Prod.mk (Prod.mk l1 false) w))))))
-(fn reword_recs ((x OdIx) (sc Scope) (f Fx) (rs (List Rec)) (acc (List Rec)) (w World))
-  (Prod (Prod OdIx (List Rec)) World)
-  (measure (struct rs))
-  (match rs
-    (nil (Prod.mk (Prod.mk x (rev acc)) w))
-    ((cons r rest)
-     (match (citation_refused r)
-       (none (reword_recs x sc f rest (cons r acc) w))
-       ((some m)
-        (match (first_declared x (words_names sc (msg_tokens m nil nil)) w)
-          ((Prod.mk (Prod.mk x1 none) w1) (reword_recs x1 sc f rest (cons r acc) w1))
-          ((Prod.mk (Prod.mk x1 (some n)) w1)
-           (reword_recs x1 sc f rest (cons (unseen_rec f r n) acc) w1))))))))
-(fn citation_refused ((r Rec)) (Option (List Int))
-  (match r
-    ((RReadErr _ e m) (if (citation_reason e) (some m) none))
-    ((RClassify _ e m) (if (citation_reason e) (some m) none))
-    (_ none)))
 ;; the refusals that say a name written in the source names nothing: the elaborator's
 ;; `unknown_constant` (K's is the same word), the classifier's `unknown_type`, `unknown_head`
 ;; and `unbound_name`
@@ -3026,25 +2948,6 @@
   (bool_or (sym_eq e (quote unknown_constant))
     (bool_or (sym_eq e (quote unknown_type))
       (bool_or (sym_eq e (quote unknown_head)) (sym_eq e (quote unbound_name))))))
-(fn first_declared ((x OdIx) (ns (List Name)) (w World)) (Prod (Prod OdIx (Option Name)) World)
-  (measure (struct ns))
-  (match ns
-    (nil (Prod.mk (Prod.mk x none) w))
-    ((cons n r)
-     (match (od_lookup x n w)
-       ((Prod.mk (Prod.mk x1 (some _)) w1) (Prod.mk (Prod.mk x1 (some n)) w1))
-       ((Prod.mk (Prod.mk x1 none) w1) (first_declared x1 r w1))))))
-(fn unseen_rec ((f Fx) (r Rec) (n Name)) Rec
-  (let
-    ((m
-       (append (show_name n)
-         (if (Fx.impl f)
-           " is a declaration of Init, and this implementation's view does not import Init: write (import Init) into its view (mod.req.shard)"
-           " is a declaration of Init, and this file does not import Init: write (import Init) before the file's first declaration"))))
-    (match r
-      ((RReadErr file _ _) (RReadErr file (quote init_not_imported) m))
-      ((RClassify k _ _) (RClassify k (quote init_not_imported) m))
-      (_ r))))
 ;; every candidate of every token (its `@` sigil of an explicit application dropped), except
 ;; those under a prefix the export declares nothing under (the file's own identity, an
 ;; opened native module): resolution's candidates, pruned
@@ -3120,8 +3023,7 @@
          acc)))))
 ;; the names the gates construct: K's own and the pins, the elaborator's,
 ;; the tactics', arith's, the derivations', the definer's, the spelling tables' — fetched
-;; for every module that sees Init, so that a gate's question "is this constant there" has
-;; one answer in such a module (yes) and one in a module that sees none (it is not asked)
+;; for every module, so that a gate's question "is this constant there" has one answer
 (fn init_kit () (List Name)
   (append (k_kit)
     (append (el_kit)
@@ -3211,7 +3113,7 @@
              (none acc)))))))))
 
 ;; the load a driver starts from: the export and its index named (`--init EXPORT --init-index
-;; INDEX`), opened at the first import of Init (init_opened); neither named: no Init
+;; INDEX`), opened at the first file (init_opened); neither named: no file loads
 (fn ld_start ((rootp (List (List Int))) (export (List Int)) (index (List Int))) Load
   (if (= (len export) 0) (load0 rootp) (ld_with_init (load0 rootp) (InitPaths export index))))
 
@@ -3298,12 +3200,10 @@
                             (pre_register_file l0a
                               (make Fx (module mp) (ident ip) (parts rel) (opened nil)
                                 (vis (list mp))
-                                (init false)
                                 (trusts nil)
                                 (hash (hash_name mp))
                                 (view view)
                                 (autos autos)
-                                (begun false)
                                 (impl false)
                                 (taken nil)
                                 (ecount 0)
@@ -3362,7 +3262,6 @@
                                                              (file (join_path rel))
                                                              (hash (Fx.hash f))
                                                              (closure (Fx.vis f))
-                                                             (init (Fx.init f))
                                                              (fork fp)
                                                              (ok true)))
                                                          f
@@ -3396,14 +3295,15 @@
              ((MPOk dm) (Prod.mk dm w1))
              (_ (Prod.mk mp w1))))
           ((Prod.mk false w1) (Prod.mk mp w1))))))))
-;; the realize heads, once the directives made their targets visible
+;; the realize heads, once the directives made their targets visible and the demand of Init
+;; is in the environment
 (fn pre_register_late ((l Load) (f Fx) (forms (List SExpr))) (Prod (Option Fx) Load)
   (match (pre_register_realize (Load.etab l) (fx_scope l f) (Load.env l) forms)
     ((PreErr e m) (Prod.mk none (ld_rec l (RLoadErr (fx_file f) e m))))
     ((PreOk es) (Prod.mk (some f) (ld_with_e l es)))))
 ;; the file's E heads registered before any body; a duplicate ends the file
 (fn pre_register_file ((l Load) (f Fx) (forms (List SExpr))) (Prod (Option Fx) Load)
-  (match (pre_register (Load.etab l) (fx_scope l f) (Load.env l) forms)
+  (match (pre_register (Load.etab l) (fx_scope l f) forms)
     ((PreErr e m) (Prod.mk none (ld_rec l (RLoadErr (fx_file f) e m))))
     ((PreOk es) (Prod.mk (some (open_types f (fx_scope l f) forms)) (ld_with_e l es)))))
 ;; every `type` of the file opens its constructors for the whole file: they are pre-registered
@@ -3739,8 +3639,7 @@
                  (Prod.mk (quote unknown_requirement)
                    (append (show_name r) ": no theorem of that name in scope"))
                  errs)))))))))
-;; a candidate counts where the file can cite it (`visible`): a theorem of Init only where
-;; the file sees Init, whatever the environment holds
+;; a candidate counts where the file can cite it (`visible`), whatever the environment holds
 (fn bin_theorem ((env CheckedEnv) (sc Scope) (cs (List Name))) (Option Name)
   (measure (struct cs))
   (match cs
@@ -3885,8 +3784,8 @@
        (if (im_has needed (name_key p)) acc
        (if (use_needed l sc p toks) acc
        (cons p acc))))))))
-;; the fallback: some token names, under P, a declaration of K the file can cite — one of
-;; Init's only where the file sees Init, whatever the environment holds
+;; the fallback: some token names, under P, a declaration of K the file can cite,
+;; whatever the environment holds
 (fn use_needed ((l Load) (sc Scope) (p Name) (toks (List Name))) Bool
   (measure (struct toks))
   (match toks
@@ -3897,7 +3796,7 @@
 ;; E: every hit of a token by suffix marks the prefix above the token in its identity, and the
 ;; module that registered the entry — a realization of Init's `List.append` is `std.list`'s, and
 ;; a program that runs it needs that module open. An entry counts where the file sees the
-;; module that registered it (Init's inductives: where the file sees Init), whatever another
+;; module that registered it (Init's inductives: everywhere), whatever another
 ;; root of the load put in the table
 (fn needed_e ((sc Scope) (es ESt) (toks (List Name)) (needed (IntMap Bool))) (IntMap Bool)
   (measure (struct toks))
@@ -4098,9 +3997,14 @@
                                    w3))))))))))))))))))))))
 ;; the implementation's own demand of Init, fetched into the fork before its first form: the
 ;; fork starts from what was fetched for the view's forms, and the implementation cites
-;; names its view does not. An implementation sees Init exactly when its view does
+;; names its view does not; then its realize heads, as a file's after its own demand
 (fn impl_demand ((l Load) (f Fx) (iforms (List SExpr)) (w World)) (Prod (Prod Load Bool) World)
-  (if (Fx.init f) (init_demand l f iforms w) (Prod.mk (Prod.mk l true) w)))
+  (match (init_demand l f iforms w)
+    ((Prod.mk (Prod.mk l1 true) w1)
+     (match (pre_register_late l1 f iforms)
+       ((Prod.mk none l2) (Prod.mk (Prod.mk l2 false) w1))
+       ((Prod.mk (some _) l2) (Prod.mk (Prod.mk l2 true) w1))))
+    (r r)))
 ;; the fork's records under IMPL; DISCHARGE and IMPL-ERROR as themselves
 (fn merge_impl_recs ((l Load) (rs (List Rec))) Load
   (measure (struct rs))
@@ -4467,20 +4371,6 @@
        ((FUse p ms)
         (load_forms l (fx_open f (if (= (len ms) 0) (OpenAll p) (OpenSome p ms))) r fuel w))
        ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
-       (FImportInit
-         (if (Fx.init f) (load_forms l f r fuel w)  ; the file sees Init already: nothing changes, wherever the line stands
-         (if (late_init f true)
-           (Prod.mk
-             (Prod.mk
-               (ld_rec l
-                 (RLoadErr (fx_file f) (quote late_init_import)
-                   (late_init_msg f "(import Init)" " lets the file see Init")))
-               none)
-             w)
-           (match (init_opened l w)
-             ((Prod.mk (Prod.mk l1 (some (Prod.mk e m))) w1)
-              (Prod.mk (Prod.mk (init_err l1 "Init" e m) none) w1))
-             ((Prod.mk (Prod.mk l1 none) w1) (load_forms l1 (fx_see f nil true) r fuel w1))))))
        ((FImportFile p)
         (match (import_file l f p (- fuel 1) w)
           ((Prod.mk (Prod.mk l1 (some f1)) w1) (load_forms l1 f1 r fuel w1))
@@ -4611,21 +4501,10 @@
        ((some mp)
         (match (ld_find_mod (Load.mods l1) mp)
           ((some m)
-           (if (Module.ok m)
-             (if (late_init f (Module.init m))
-               (Prod.mk
-                 (Prod.mk
-                   (ld_rec l1
-                     (RLoadErr (fx_file f) (quote late_init_import)
-                       (late_init_msg f (append "the import of " (join_path rel))
-                         " brings Init with it (the imported module sees Init)")))
-                   none)
-                 w1)
-               (Prod.mk (Prod.mk l1 (some (fx_see f (Module.closure m) (Module.init m)))) w1))
-             (Prod.mk
-               (Prod.mk (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel)))
-                 none)
-               w1)))
+           (if (Module.ok m) (Prod.mk (Prod.mk l1 (some (fx_see f (Module.closure m)))) w1)
+           (Prod.mk
+             (Prod.mk (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) none)
+             w1)))
           (none
             (Prod.mk
               (Prod.mk (ld_rec l1 (RLoadErr (fx_file f) (quote import_failed) (join_path rel))) none)

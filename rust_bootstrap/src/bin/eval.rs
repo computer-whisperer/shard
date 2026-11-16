@@ -14,7 +14,7 @@
 //! file is a module"); without `--root` it is `v3`, the root of the system's
 //! own sources, as `v3/build.sh`'s is. FILE is the table of facts about
 //! Init's constants the loader printed for the closure (`load.shard --facts
-//! FILE`): a closure that sees Init is read by it. Where none is named the
+//! FILE`): what the closure cites of Init is read by it. Where none is named the
 //! root's own is read, `DIR/kernel/init.facts` — the toolchain's, kept in the
 //! tree. A directory named among the files is its view; every view the
 //! closure loads is linked to its implementation.

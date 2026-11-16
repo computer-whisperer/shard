@@ -466,28 +466,22 @@ fn type_ident(cx: &Cx, n: &str) -> R<Name> {
     if builtin_type(n) {
         return Ok(n.to_string());
     }
-    if cx.sc.init {
-        match cx.t.k_resolve(cx.sc, n, true) {
-            Res::Name(k) => return Ok(k),
-            Res::Ambiguous(a, b) => return unread("ambiguous_type", format!("{n}: {a} and {b}")),
-            Res::None => {}
-        }
+    match cx.t.k_resolve(cx.sc, n, true) {
+        Res::Name(k) => return Ok(k),
+        Res::Ambiguous(a, b) => return unread("ambiguous_type", format!("{n}: {a} and {b}")),
+        Res::None => {}
     }
     let hs = cx.t.e_types(cx.sc, n);
     match hs.as_slice() {
         [(id, _)] => Ok(id.clone()),
         [(a, _), (b, _), ..] => unread("ambiguous_type", format!("{n}: {a} and {b}")),
-        [] => match cx.t.k_resolve(cx.sc, n, true) {
-            Res::Name(k) => Ok(k),
-            Res::Ambiguous(a, b) => unread("ambiguous_type", format!("{n}: {a} and {b}")),
-            Res::None => unread("unknown_type", n),
-        },
+        [] => unread("unknown_type", n),
     }
 }
 
 /// A name that is a definition standing for a type: the E type its value is.
 fn alias_etype(cx: &Cx, id: Name, depth: usize) -> ETy {
-    if cx.sc.init && depth < 16 {
+    if depth < 16 {
         if let Some(Native { kind: NativeKind::Def, form: Some((sc, form)), .. }) = cx.t.natives.get(&id) {
             let items = list_of(form);
             if items.len() == 5 && list_of(items[2]).is_empty() {
@@ -518,20 +512,16 @@ fn read_ety_at(cx: &Cx, tps: &[String], s: &Value, depth: usize) -> R<ETy> {
     if x == "->" {
         return unread("function_value", "(-> …): a function-typed binder makes a template");
     }
-    let (n, ex) = if cx.sc.init { (strip_at(x), x.starts_with('@')) } else { (x, false) };
+    let (n, ex) = (strip_at(x), x.starts_with('@'));
     let id = type_ident(cx, n)?;
     // (Decidable P): nothing of the proposition is in E — the type is its two cells
     if id == "Decidable" {
         return Ok(ETy::Con(id, vec![]));
     }
     // a type's written arguments that are types: its parameters' roles select them
-    let flags = if cx.sc.init {
-        match cx.t.facts.get(&id) {
-            Some(Fact::Ind { params, .. }) => params.clone(),
-            _ => None,
-        }
-    } else {
-        None
+    let flags = match cx.t.facts.get(&id) {
+        Some(Fact::Ind { params, .. }) => params.clone(),
+        _ => None,
     };
     let targs: Vec<&Value> = match flags {
         Some(flags) => written_data(&flags, ex, &items[1..], &id)?,
@@ -616,7 +606,7 @@ enum Kind {
 // -----------------------------------------------------------------------------
 
 fn rd_type(cx: &Cx, r: &Rd, t: &Tm) -> Option<ETy> {
-    if cx.sc.init { c_type(cx.t, &r.tys(), t) } else { None }
+    c_type(cx.t, &r.tys(), t)
 }
 
 fn read_et(cx: &Cx, r: &Rd, s: &Value) -> R<Tm> {
@@ -642,7 +632,7 @@ fn read_et(cx: &Cx, r: &Rd, s: &Value) -> R<Tm> {
             if cx.t.init_const(cx.sc, "absurd", "absurd") {
                 Ok(Tm::Absurd)
             } else {
-                unread("absurd_needs_init", "a refuted row is Init's absurd")
+                unread("absurd_e_first", "a refuted row is Init's absurd")
             }
         }
         "proj" => read_eproj(cx, r, args),
@@ -673,9 +663,6 @@ fn read_estr(cx: &Cx, bs: &[u8]) -> R<Tm> {
     if cx.sc.toolchain() {
         let (nl, cs) = list_in_scope(cx)?;
         return Ok(Tm::Lit(Lit::Str(nl, cs, bs.to_vec())));
-    }
-    if !cx.sc.init {
-        return unread("no_string", "\"…\" is a String, which is Init's");
     }
     Ok(Tm::Lit(Lit::Str("List.nil".into(), "List.cons".into(), bs.to_vec())))
 }
@@ -719,7 +706,7 @@ fn read_esym(cx: &Cx, r: &Rd, x: &str) -> R<Tm> {
 /// (HEAD E…): a constructor, a function or sig fn, an extern, a primitive —
 /// saturated. `@HEAD` names every binder; `%` is `mod`'s other spelling.
 fn read_eapp(cx: &Cx, r: &Rd, h0: &str, args: &[&Value]) -> R<Tm> {
-    let (h, ex) = if cx.sc.init { (strip_at(h0), h0.starts_with('@')) } else { (h0, false) };
+    let (h, ex) = (strip_at(h0), h0.starts_with('@'));
     let h = if h == "%" { "mod" } else { h };
     match r.find(h) {
         Hit::Var(_) => return unread("bad_head", format!("{h} is a variable: there are no function values")),
@@ -751,13 +738,9 @@ fn read_eapp(cx: &Cx, r: &Rd, h0: &str, args: &[&Value]) -> R<Tm> {
 
 /// A head the E table knows: its runtime arguments among those written.
 fn read_known(cx: &Cx, r: &Rd, id: &str, k: usize, ex: bool, args: &[&Value], kind: Kind) -> R<Tm> {
-    let flags = if !cx.sc.init {
-        None
-    } else {
-        match &r.own {
-            Some((own, flags)) if own == id => Some(flags.clone()),
-            _ => cx.t.k_flags(id),
-        }
+    let flags = match &r.own {
+        Some((own, flags)) if own == id => Some(flags.clone()),
+        _ => cx.t.k_flags(id),
     };
     match flags {
         Some(flags) => {
@@ -802,12 +785,8 @@ fn read_decision(cx: &Cx, r: &Rd, p: &str, args: &[&Value]) -> R<Tm> {
     Ok(Tm::If(Box::new(test), Box::new(dec_true()), Box::new(dec_false())))
 }
 
-/// A head no table knows, in a file that sees Init: a constant of Init
-/// with a fixed program (the registry's rows).
+/// A head no table knows: a constant of Init with a fixed program (the registry's rows).
 fn init_row(cx: &Cx, r: &Rd, h: &str, args: &[&Value]) -> Option<R<Tm>> {
-    if !cx.sc.init {
-        return None;
-    }
     if matches!(h, "and" | "or" | "not") {
         return Some(read_bool_row(cx, r, h, args));
     }
@@ -858,9 +837,6 @@ fn read_bool_row(cx: &Cx, r: &Rd, op: &str, args: &[&Value]) -> R<Tm> {
 /// `ite` written with their decision, a refuted row, Bool's decidable
 /// equality, a row's constructor, a projection function.
 fn k_head(cx: &Cx, r: &Rd, ex: bool, n: &str, args: &[&Value]) -> Option<R<Tm>> {
-    if !cx.sc.init {
-        return None;
-    }
     let k = cx.t.k_name(cx.sc, n)?;
     match k.as_str() {
         "dite" => return Some(read_ite(cx, r, ex, true, args)),
@@ -950,9 +926,6 @@ fn read_eproj(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
     match args {
         [s, i, x] if s.as_symbol().is_some() && i.as_u64().is_some() => {
             let sx = s.as_symbol().unwrap();
-            if !cx.sc.init {
-                return unread("unknown_head", format!("{sx} is not a structure of K"));
-            }
             match cx.t.k_resolve(cx.sc, sx, true) {
                 Res::Name(sn) => read_proj(cx, r, &sn, i.as_u64().unwrap() as usize, x),
                 _ => unread("unknown_head", format!("{sx} is not a structure of K")),
@@ -998,18 +971,16 @@ fn read_branch(cx: &Cx, r: &Rd, dep: bool, s: &Value) -> R<Tm> {
 /// name is its bare test, Bool's decidable equality the test over its
 /// operands; anything else is its value, whose cell the `if` reads.
 fn read_cond(cx: &Cx, r: &Rd, s: &Value) -> R<Tm> {
-    if cx.sc.init {
-        let items = list_of(s);
-        if let Some(h0) = items.first().and_then(|h| h.as_symbol()) {
-            let n = strip_at(h0);
-            if matches!(r.find(n), Hit::None) && cx.t.e_values(cx.sc, n).is_empty() {
-                if let Some(k) = cx.t.k_name(cx.sc, n) {
-                    if k == "instDecidableEqBool" {
-                        return read_bool_eq(cx, r, &items[1..]);
-                    }
-                    if let Some(p) = decision_test(&k) {
-                        return read_head_args(cx, r, p, 2, &items[1..], Kind::Prim);
-                    }
+    let items = list_of(s);
+    if let Some(h0) = items.first().and_then(|h| h.as_symbol()) {
+        let n = strip_at(h0);
+        if matches!(r.find(n), Hit::None) && cx.t.e_values(cx.sc, n).is_empty() {
+            if let Some(k) = cx.t.k_name(cx.sc, n) {
+                if k == "instDecidableEqBool" {
+                    return read_bool_eq(cx, r, &items[1..]);
+                }
+                if let Some(p) = decision_test(&k) {
+                    return read_head_args(cx, r, p, 2, &items[1..], Kind::Prim);
                 }
             }
         }
@@ -1028,9 +999,6 @@ fn read_bool_eq(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
 
 /// (dif h C A B): the `if` on C, its hypothesis a proof in both branches.
 fn read_edif(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
-    if !cx.sc.init {
-        return unread("dif_needs_init", "Decidable and dite are Init's");
-    }
     match args {
         [hn, c, a, b] if hn.as_symbol().is_some() => {
             let r1 = r.ghost(hn.as_symbol().unwrap());
@@ -1055,9 +1023,9 @@ fn read_eif(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
     }
 }
 
-/// (let ((x E)…) E): sequential. Where the file sees Init a binding may
-/// state its type, (x TYPE E): at a proposition it is a proof and vanishes;
-/// and a let of several bindings is a let in a let, one binding each.
+/// (let ((x E)…) E): sequential. A binding may state its type, (x TYPE E):
+/// at a proposition it is a proof and vanishes; and a let of several
+/// bindings is a let in a let, one binding each.
 fn read_elet(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
     let [binds, body] = args else { return unread("bad_shape", "(let ((x E)…) E)") };
     let mut r1 = r.clone();
@@ -1066,7 +1034,7 @@ fn read_elet(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
         let b = list_of(b);
         let (x, e) = match b.as_slice() {
             [x, e] if x.as_symbol().is_some() => (x.as_symbol().unwrap(), *e),
-            [x, ty, e] if x.as_symbol().is_some() && cx.sc.init => {
+            [x, ty, e] if x.as_symbol().is_some() => {
                 if prop_type(cx, &r1, ty) {
                     r1 = r1.ghost(x.as_symbol().unwrap());
                     continue;
@@ -1083,15 +1051,11 @@ fn read_elet(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
     if rhss.is_empty() {
         return Ok(b);
     }
-    if cx.sc.init {
-        let mut acc = b;
-        for v in rhss.into_iter().rev() {
-            acc = Tm::Let(vec![v], Box::new(acc));
-        }
-        Ok(acc)
-    } else {
-        Ok(Tm::Let(rhss, Box::new(b)))
+    let mut acc = b;
+    for v in rhss.into_iter().rev() {
+        acc = Tm::Let(vec![v], Box::new(acc));
     }
+    Ok(acc)
 }
 
 fn has_numeral_row(arms: &[&Value]) -> bool {
@@ -1103,7 +1067,7 @@ fn has_numeral_row(arms: &[&Value]) -> bool {
 fn read_ematch(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Tm> {
     let Some((s, arms)) = args.split_first() else { return unread("bad_shape", "(match E (PAT E)…)") };
     let t = read_et(cx, r, s)?;
-    if cx.sc.init && has_numeral_row(arms) {
+    if has_numeral_row(arms) {
         return read_ematch_lit(cx, r, t, arms);
     }
     let st = rd_type(cx, r, &t);
@@ -1133,7 +1097,7 @@ fn numeral_type(t: &Option<ETy>) -> bool {
     }
 }
 
-/// Numeral rows, where the file sees Init: the scrutinee once, a test per
+/// Numeral rows: the scrutinee once, a test per
 /// row in row order, the last row `_` or a name for the scrutinee.
 fn read_ematch_lit(cx: &Cx, r: &Rd, t: Tm, arms: &[&Value]) -> R<Tm> {
     let st = rd_type(cx, r, &t);
@@ -1195,8 +1159,7 @@ fn ctor_at(cx: &Cx, st: &Option<ETy>, n: &str) -> Option<(Name, usize)> {
 
 /// A constructor's fields as a pattern writes them.
 fn pat_fields(cx: &Cx, id: &str) -> Vec<bool> {
-    let flags = if cx.sc.init { cx.t.ctor_data_flags(id) } else { None };
-    match flags {
+    match cx.t.ctor_data_flags(id) {
         Some(f) => f,
         None => match cx.t.einfo(id) {
             Some(EInfo::Ctor { nfields, .. }) => vec![true; *nfields],
@@ -1250,12 +1213,10 @@ fn read_epat(cx: &Cx, r: &Rd, st: &Option<ETy>, s: &Value) -> R<PRes> {
             Some((id, _)) => read_ctor_pat(cx, r, st, &id, subs),
             None => {
                 // a row's constructor: its pattern is its one runtime field's pattern
-                if cx.sc.init {
-                    if let Some(k) = cx.t.k_name(cx.sc, h) {
-                        if let Some(Fact::Ctor { ind, .. }) = cx.t.facts.get(&k) {
-                            if rep_row(ind) {
-                                return read_row_pat(cx, r, &k, subs);
-                            }
+                if let Some(k) = cx.t.k_name(cx.sc, h) {
+                    if let Some(Fact::Ctor { ind, .. }) = cx.t.facts.get(&k) {
+                        if rep_row(ind) {
+                            return read_row_pat(cx, r, &k, subs);
                         }
                     }
                 }
@@ -1329,7 +1290,7 @@ struct Sig {
 }
 
 /// ((x TYPE)…) RET: the runtime binders' names and E types in order;
-/// `(T Type)` declares a type parameter; where the file sees Init a binder
+/// `(T Type)` declares a type parameter; a binder
 /// whose type is a proposition is a proof, written and no parameter of the
 /// program. With them each written binder's flags, which a call is read by.
 fn read_sig(cx: &Cx, bs: &[&Value], ret: &Value) -> R<Sig> {
@@ -1343,19 +1304,15 @@ fn read_sig(cx: &Cx, bs: &[&Value], ret: &Value) -> R<Sig> {
         };
         if is_type_sym(ty) {
             tps.push(x.to_string());
-            if cx.sc.init {
-                sig.bound.push(Bd::Ghost(x.to_string(), false));
-            }
+            sig.bound.push(Bd::Ghost(x.to_string(), false));
             sig.flags.push(Flag { explicit: false, role: Role::Drop });
             continue;
         }
-        if cx.sc.init {
-            let pred = is_pred_sort(ty);
-            if pred || prop_type(cx, &Rd { bound: sig.bound.clone(), own: None }, ty) {
-                sig.bound.push(Bd::Ghost(x.to_string(), pred));
-                sig.flags.push(Flag { explicit: true, role: Role::Proof });
-                continue;
-            }
+        let pred = is_pred_sort(ty);
+        if pred || prop_type(cx, &Rd { bound: sig.bound.clone(), own: None }, ty) {
+            sig.bound.push(Bd::Ghost(x.to_string(), pred));
+            sig.flags.push(Flag { explicit: true, role: Role::Proof });
+            continue;
         }
         if head_sym(ty) == Some("->") {
             return unread("template", "a function-typed binder: the fn is a template");
@@ -1474,7 +1431,7 @@ pub fn body(t: &mut Tables, sc: &Rc<Scope>, f: &Value) {
         let r = Rd { bound: sig.bound, own: Some((id.clone(), sig.flags)) };
         let t0 = read_et(&cx, &r, b)?;
         let tys: Vec<Option<ETy>> = sig.types.iter().cloned().map(Some).collect();
-        let t1 = if sc.init { settle::settle_ops(t, &tys, &Some(sig.ret.clone()), t0)? } else { t0 };
+        let t1 = settle::settle_ops(t, &tys, &Some(sig.ret.clone()), t0)?;
         Ok(settle::expand_rows(t1))
     })();
     match res {

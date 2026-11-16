@@ -1,18 +1,18 @@
 # `v3/pins/loader` — the loader's cases
 
 Each directory is a small package. `CASE/main.shard` is the file the loader is given, its imports
-resolve under `CASE/`, and its first line states the outcome the load must have. A case that imports
-Init — it writes `(import Init)` — reads from the pinned export, on demand, what it needs.
+resolve under `CASE/`, and its first line states the outcome the load must have. A case reads
+from the pinned export of Init, on demand, what it needs.
 
 `v3/kernel/test/loader_pins_test.shard` replays every case in its list and compares the outcome with
 the header; `v3/test.sh` runs it, and `loader_pins_list_test.sh` requires that the list and this
 directory name the same cases. `v3/kernel/test/loader_test.shard` holds the cases a header cannot
-state (two root files in order, a wrong export, the records' text, a loaded program run, a load with
-no export: `init_name_taken_l/Quot.shard`). Some shell tests read the records of a case: `define_test.sh`
+state (two root files in order, a wrong export, a load with no export, the records' text, a
+loaded program run). Some shell tests read the records of a case: `define_test.sh`
 (`route_callee`, `discharge_measure`, `registry_native`, `decidable_cells`, `mutual_measure`,
 `derive_refusals`), `derive_test.sh` (`derive_size`, `derive_size_plain`), `wire_test.sh`
 (`wire_*`), `template_test.sh` (`template_e_first`), `messages_test.sh` (the text after the reason:
-`by_cases_arm_fields`, `by_cases_fields`, `init_import_late_none`, `impl_import_late`,
+`by_cases_arm_fields`, `by_cases_fields`,
 `impl_read_error`, `impl_load_error`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`,
 `define_nested`, `lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`),
 `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh`
@@ -60,12 +60,10 @@ the reason its name spells, less a leading `by_`.
 | refused: `ev_duplicate`, `qualified_collision` (`duplicate_name`); `qualified_collision_l` (`already_declared`) | one name declared twice: in a file, by two modules that build the same name, and in K |
 | `type_opens`, `type_ctor_name`, `type_ctor_theorem` | a `type` opens its constructors for its file; a type whose constructor bears its name |
 | refused: `read_error` (`unterminated_list`); `retry` (`bad_constructor`) | a file that does not read; a file whose reading failed is loaded once |
-| `init`, `init_nested`, `init_inherited`; refused: `init_named` (`bad_import`) | Init's names are bare; two files of one load that see Init; a file sees Init through a file it imports; the import takes no name |
-| refused: `init_not_imported` (`init_not_imported`), `init_unseen_bundle` (`unknown_constant`) | a file that sees no Init: a citation of a declaration of Init is refused with the import to write; nothing built of Init — no equation — whatever another root of the load fetched |
-| `init_step_lemma`, `impl_init_demand`, `init_late_file_import`, `init_use_late`, `init_fetch_second` | what a file that sees Init is given: the lemmas a proof step builds on, an implementation's own citations, a name cited after a late file import or under a late `use`, a constant the toolchain builds by name from a type (fetched for a second reading) |
-| `init_import_again`; refused: `init_import_late_none`, `init_late_file_import_none`, `impl_import_late` (`late_init_import`) | a second `(import Init)` changes nothing, wherever it stands; a directive after a declaration that would let the file see Init is refused — `(import Init)`, a file import that brings it, an implementation's where its view imports none |
+| `init`, `init_nested`; refused: `init_import_line` (`bad_import`) | Init's names are bare; two files of one load that cite Init; `(import Init)` is no form, and the refusal says to delete the line |
+| `init_step_lemma`, `impl_init_demand`, `init_late_file_import`, `init_use_late`, `init_fetch_second` | what a file is given of Init: the lemmas a proof step builds on, an implementation's own citations, a name cited after a late file import or under a late `use`, a constant the toolchain builds by name from a type (fetched for a second reading) |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
-| `type_flip`; refused: `type_e_only` (`unknown_constant`) | the same type is a logical type in a file that imports Init and a runtime-only type in one that does not |
+| `type_in_logic`; refused: `type_e_only` (`unknown_constant`) | a type whose fields are types of the logic is a logical type; one with a `Symbol` field is a runtime-only type, and a `def` cannot cite it |
 | `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
 | `policy_axiom` (`policy`), `policy_trusts` (`param axiom`), `policy_cross` (`policy`) | an axiom needs `(trusts …)`; the policy is per file |
 
@@ -88,18 +86,18 @@ the reason its name spells, less a leading `by_`.
 | cases | what they pin |
 |---|---|
 | `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_symbol`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, a symbol, `(list …)`, nested patterns, a string literal |
-| `ev_profile`; refused: `ev_profile_form` (`unknown_constant`) | a file that sees no Init is a program only; a `def` there cannot cite `Int` |
+| `kernel_literal` | under the module path `kernel` a string literal is the list of its bytes |
 | refused: `ev_unknown_head` (`unknown_head`), `ev_unsaturated`, `ev_fn_value` (`type_mismatch`), `ev_ambiguous` (`ambiguous_name`), `ev_nonexhaustive` (`match_not_exhaustive`), `ev_pattern_type` (`pattern_constructor`), `ev_no_l_meaning` (`unknown_constant`) | the refusals of a body |
-| refused: `match_dead_row`, `match_dead_row_def`, `ev_dead_row` (`unreachable_arm`) | a row that matches every value — `_`, or a name no constructor bears, such as a misspelt one — with rows after it: in a `fn`, in a `def`, in a file that sees no Init; a capitalised variable in a last row stays a variable |
+| refused: `match_dead_row`, `match_dead_row_def`, `ev_dead_row` (`unreachable_arm`) | a row that matches every value — `_`, or a name no constructor bears, such as a misspelt one — with rows after it: in a `fn`, in a `def`, in a function that is a program only; a capitalised variable in a last row stays a variable |
 | refused: `bool_bare` (`unknown_constant`), `shadowed_head` (`function_expected`), `lean_mutual` (`lean_form`), `reserved_instance` (`reserved_form`) | refusals that say what to write: a bare `true`, a bare constructor that is Init's class of the same name, `mutual`, `instance` |
 | `if_ok`; refused: `if_one`, `if_type` (`if_type`) | an `if` takes a `Bool`, a two-constructor type or a comparison; not a one- or three-constructor type, not a `Nat` |
-| `dif_ok`; refused: `dif_needs_init`, `dif_type`; `dif_scope` (`unchecked_proof`) | the dependent `if` and its hypothesis's scope |
+| `dif_ok`; refused: `dif_type`; `dif_scope` (`unchecked_proof`) | the dependent `if` and its hypothesis's scope |
 | `bool_ops`, `op_expected`, `op_int_div`, `define_nat_operator`, `rename_ok` | `and`, `or`, `not` at `Bool`; an operator takes the expected type's meaning; `/` and `%`; `-` at `Nat`; `< <= =` |
 | refused: `rename_refused`, `rename_refused_e`, `rename_refused_kernel` (`renamed_primitive`) | `lt`, `le`, `int_eq` are refused with the spelling to write |
 | `literal_pattern`; `literal_nested` (`runnable no_l_identity`); refused: `literal_rows`; `literal_open` (`match_not_exhaustive`), `literal_type` (`pattern_type`), `match_literal` (`literal_pattern`) | numeral rows in a `match` |
-| refused: `str_no_string` (`no_string`), `str_bad_utf8` (`bad_string`) | a string literal needs Init's `String` and valid UTF-8 |
+| refused: `str_bad_utf8` (`bad_string`) | a string literal is valid UTF-8 |
 | `row_types`, `struct_proj`, `refined_row`; `row_e_first` (`runnable no_l_identity`); refused: `row_e_match` (`pattern_type`) | Init's types that run as their one field (`Fin`, `UInt8`, `ByteArray`, `String`, `Subtype`); a projection; a row built in a body with no L reading |
-| refused: `lean_form`, `lean_notation` (`lean_form`), `lean_symbol`, `lean_by_term` (`lean_symbol`), `infix_form`; `inhabited_default`, `inhabited_default_by` (`inhabited_default`), `absurd_e_first` (`absurd_needs_init`) | Lean spellings refused with a pointer: `partial`, `notation`, `==`, a `by` term, `(n + 1)`, `List.get!` |
+| refused: `lean_form`, `lean_notation` (`lean_form`), `lean_symbol`, `lean_by_term` (`lean_symbol`), `infix_form`; `inhabited_default`, `inhabited_default_by` (`inhabited_default`), `absurd_e_first` (`absurd_e_first`) | Lean spellings refused with a pointer: `partial`, `notation`, `==`, a `by` term, `(n + 1)`, `List.get!` |
 | `zero_arity_bare` | a function of no parameters written bare is its call |
 
 ### Records, structures, elaboration and matchers
