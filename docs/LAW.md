@@ -60,6 +60,13 @@ with a proof. Today's compiler is unproven and is to be replaced by it.
     elaboration fills in types and proofs, never an argument that exists at run time. A program
     can therefore be read without elaboration, and the reading that elaborates gives the same
     program.
+25. A function that reads and whose types check has a program. Where it cannot be given a
+    definition — its recursion is not justified, a function it calls has none, an operation it
+    uses has no meaning in the logic — it is a program alone and carries the reason. A function
+    that does not read, or whose types do not check, is refused.
+26. No type is special in the language by its name. An engine may store a type in a form of its
+    own; that is a shortcut: the type is an ordinary declaration with ordinary operations, and a
+    program run with the shortcut gives what it gives run as declared.
 
 **Elaboration and proofs**
 
@@ -190,6 +197,17 @@ admitted that the logic does not derive.
     program the Rust evaluator can read without the elaborator.)
 11. *No precedence among names.* "collisions should be refused overall." (Rule 13: a citation
     that two visible names answer is refused, a file's own name against Init's included.)
+12. *No type special by its name.* "I want to avoid types that gain special treatment in the
+    language overall by their name" … "The kernel's builtin evaluator taking an optimization
+    shortcut on Symbol that preserves all behavior an unprivileged version would seems fair to
+    me." (Rule 26. `Symbol` does not meet it yet: `OPEN.md` §2.)
+13. *A program before its proofs.* "I lean towards keeping an unaccepted function as a program
+    with a reason. I am thinking of what prototyping or rough sketch workflows may want here --
+    where we may want to run or test shard programs before the full due diligence for proof
+    assembly is paid for. Some minimum bar is reasonable, but it shouldn't take a whole research
+    program to throw together some small mvp with almost no proof structures." And the bar:
+    "Type errors should result in refused programs." (Rule 25. The loader does not follow it
+    yet: `OPEN.md` §1.)
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.

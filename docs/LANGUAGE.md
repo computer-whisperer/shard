@@ -231,7 +231,7 @@ file; two things about how they are written set them apart.
 
 - **Most of their functions are programs without a definition.** The toolchain's data — names,
   terms, declarations — is built on `Symbol`, which has no type in the logic, so a signature
-  over it cannot be read (`why=e_only_type`). Of about 9,200 functions some 370, over lists,
+  over it cannot be read (`why=e_only_type`). Of about 9,600 functions some 370, over lists,
   integers and bytes, are definitions the checker holds.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A function
   the checker reads converts a literal it uses as bytes: `(utf8 "…")` (`kernel/util.shard`),

@@ -258,6 +258,18 @@ entries are explained under "Measured" at the end.
 - The reader keeps no handle across a file's tactic steps: five links saved are ~6.5 ms of a
   1.7 s run, against a handle stale after every definition.
 
+- ★ `Symbol` is a type of its own, stored by the engines as an interned id; not `String` — a
+  `String` runs as the list of its bytes and a symbol as an id compared in one step, and one
+  type has one form at run time; not a `Name` literal in place of symbols — K's `Name` is
+  built of them. It has no type in the logic today. The direction recorded for giving it one
+  is a type of its own over text that the engines go on storing interned (`LAW.md` rule 26,
+  ruling 12); on a scratch loader that reads it so, 6,682 of the toolchain's 9,570 functions
+  are definitions with no source changed (Measured).
+- A function the checker cannot define is a program with its reason, and one whose types do
+  not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
+  checker cannot accept — a sketch would need its proofs before it ran; not a program for a
+  function with a type error — nothing would then check a program's types.
+
 ## Proofs and automation
 
 - ★ A proof block is a certificate: a step is a function of its node and the goal, replay searches
@@ -419,3 +431,26 @@ measurements; measure again before building on one.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.
+- `Symbol` as an ordinary type, on a scratch loader (2026-11-16; the loader built by the
+  present one, a function the checker refuses kept as a program with the refusal, and a typed
+  stand-in for every function without a definition so that each is judged on its own). Over
+  the 29 toolchain roots, 9,570 functions, of which 4,792 are the generated rows of
+  `k/accel_pins.shard`: 372 definitions as the tree stands; 6,682 with `Symbol` ordinary and
+  no source changed; 6,896 with two types moved above their first use; 7,371 with three more
+  moved and the three arm types of the program representations written as pairs (133
+  sites). Types in programs only: 293, 97, 66, 19. Of the 4,778 written functions 3,283 are
+  then definitions. The 2,199 left: a string literal used as bytes 1,361 (704 of them
+  generated rows); behind the loader's state 290; an integer measure 189; a group without a
+  measure on every member 173; a bare bit or division primitive 47; a recursion with no clause
+  34; a `match` whose type must be written 33; a stated structural recursion that is not one
+  20 (9 in K: `open_pis` recurses on an instantiated body); a callee still without a definition
+  31; others 21. By file, definitions of functions: `prog` 40 of 49, `lower` 20 of 60, `cgen`
+  33 of 84, `erasure` 103 of 151, `ev` 95 of 140. Time, native: the two loads that cover the
+  roots 1,803 s and 2,098 s, where the present loader takes seconds; in five profiles K is at
+  most 0.2% of it and the elaborator 0.7%, the rest the list of functions waiting on a later
+  declaration and the runtime's symbol table (`OPEN.md` §1). With the generated rows put in an
+  order where none cites a later one, and nothing else changed, the first load's K root takes
+  53 s for 1,754 s and the second load 125 s and 6.3 GB, where the present loader takes 16 s
+  on the same roots; a profile then shows name hashing (`name.shard` `mix`, a call a byte)
+  and allocation at about 60%, K and the elaborator under 2% each. Nothing was run with the
+  ordinary `Symbol`, and the Rust reader was not changed.
