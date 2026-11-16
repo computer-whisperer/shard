@@ -846,7 +846,9 @@ the push that carried the code.
 The whole push is examined, so code pushed with its documents is gated, and any doubt (a new
 branch, a manual run) runs the gates. `glab ci run -b main` forces a full run.
 
-*Durations the scripts record:* the loader's own closure (8,933 declarations) emits in 34 s on
-the bootstrap; the export takes 77 s and its axiom oracle 15 s; the full replay 745 s at 30 GB;
-the index about 1,950 s on the bootstrap on the CI runner, 14 times the binary's. CI's timeouts
+*Durations:* the loader's own closure (9,177 declarations) emits in about 160 s on the
+bootstrap, alone on the dev box; the export takes 77 s and its axiom oracle 15 s; the full
+replay 420 s on the dev box and 1,260 s on the CI runner, at 29 GB; the index about 1,950 s on
+the bootstrap on the CI runner, 14 times the binary's. The runner takes 2 to 3 times the dev
+box's time for a step (`DECISIONS.md`, Measured, has a pipeline's minutes). CI's timeouts
 are 30 min (`host`), 3 h (`v3`, `replay`, `native`) and 20 min (`suite_tie`).

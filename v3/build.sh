@@ -31,9 +31,9 @@
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
 # under V3_ENGINE=native, and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
-# THE EMIT'S ENGINE: the bootstrap for every root. The loader's own closure — 8,933
-# declarations — loads, lowers and generates in 34 s on it, so no binary builds another and a
-# build never trusts one.
+# THE EMIT'S ENGINE: the bootstrap for every root, so no binary builds another and a build
+# never trusts one. The loader's own closure — 9,177 declarations — loads, lowers and
+# generates in about 160 s on it, alone on the dev box (docs/DECISIONS.md, Measured).
 #
 # THE STAMP: sha256 over the root's closure sources (the emit's `sources` list),
 # the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,

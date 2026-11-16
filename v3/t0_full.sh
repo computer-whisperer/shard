@@ -12,10 +12,9 @@
 #  (4) every accelerator candidate present is pinned (the driver's -p line; all 20 on the
 #      full export).
 # The replay is one process over the 20,000-line chunks; its peak resident set is reported
-# (the export tables hold every referenced node: 30 GB, 745 s) and capped by
-# V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 stops after the tie, with (3) and (4)
-# checked on its 100,000 lines (the local smoke; the dev box does not replay the whole
-# export routinely).
+# (the export tables hold every referenced node: 29 GB; 420 s on the dev box, 1,260 s on CI's
+# runner) and capped by V3_T0_RSS_CAP_KB (default 400 GB). V3_T0_SKIP_FULL=1 stops after the
+# tie, with (3) and (4) checked on its 100,000 lines (the local smoke).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}

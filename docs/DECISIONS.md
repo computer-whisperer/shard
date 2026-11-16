@@ -404,8 +404,9 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (9,161 declarations) loads, lowers and generates in about
-  340 s on the bootstrap, `cc` 79 s, binary 5.6 MB; all 29 roots 460–550 s at 16 jobs. It was
+- Back end: the loader's own closure (9,177 declarations) loads, lowers and generates in about
+  160 s on the bootstrap, `cc` 79 s, binary 5.6 MB; all 29 roots 350 s at 16 jobs. It was 340 s
+  and 460–550 s before resolution hashed a citation's bytes once (above), and
   34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
   some 290 of its own functions as definitions, and Init's fixed kit, on every load of a
   toolchain root — 11 s for its own closure natively, where it took 4 s.
@@ -484,4 +485,8 @@ measurements; measure again before building on one.
   time for each step. One start of the loader on a file of 14 lines is 30 s on the bootstrap
   (64 s on the runner) and 2 to 4 s native, all of it Init's part: the declarations the file
   needs fetched from the export's text and checked. On the dev box the byte-tie takes 200 s
-  with 8 workloads at a time, where it took 1,350 s.
+  with 8 workloads at a time, where it took 1,350 s. With the work side by side and
+  resolution's change (#728): `v3` 31 minutes — the suite 27.5, which is its longest
+  entrypoint's time —, `replay` 29, `native` 27 (the build 10 with 6,399 s of C text summed,
+  the byte-tie 8, the suite on the binaries 7). The three start together; in #728 itself
+  `native` waited 29 minutes for a place behind an older pipeline, which made it 57.
