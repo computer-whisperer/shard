@@ -455,5 +455,6 @@ measurements; measure again before building on one.
   (`name.shard` `mix`, a call a byte) 27%, maps 10%, the symbol table and a symbol's bytes
   8%, K's own functions and the elaborator under 2% each, the waiting list nothing. The
   present loader's 17 s on those roots divide the same way: allocation 33%, name hashing 21%,
-  the symbol table 10%, maps 8%. Nothing was run with the ordinary `Symbol`, and the Rust
-  reader was not changed.
+  the symbol table 10%, maps 8% — the table was then searched one symbol after another; found
+  by a hash of the text (`rt.h`, `rt_intern`) the same load takes 13.4 s for 16.7 s, its output
+  the same. Nothing was run with the ordinary `Symbol`, and the Rust reader was not changed.

@@ -266,19 +266,44 @@ static inline value_t rt_cons(value_t h, value_t t) {
 }
 
 /* ---- symbols: intern table --------------------------------------------- */
-typedef struct { char *s; uint32_t len; } rt_symrec;
+/* A symbol's id is its place in rt_syms, in the order symbols are first made; rt_symidx finds
+   a text's id by hashing: open addressing, id + 1 in a slot, 0 an empty one, under half full. */
+typedef struct { char *s; uint32_t len; uint32_t h; } rt_symrec;
 static rt_symrec *rt_syms; static uint32_t rt_nsyms, rt_symcap;
+static uint32_t *rt_symidx; static uint32_t rt_symidxcap;
 
+static uint32_t rt_symhash(const char *s, uint32_t len) {
+  uint32_t h = 2166136261u;
+  for (uint32_t i = 0; i < len; i++) { h ^= (unsigned char)s[i]; h *= 16777619u; }
+  return h;
+}
+static void rt_symidx_put(uint32_t id) {
+  uint32_t m = rt_symidxcap - 1, i = rt_syms[id].h & m;
+  while (rt_symidx[i]) i = (i + 1) & m;
+  rt_symidx[i] = id + 1;
+}
 static uint32_t rt_intern(const char *s, uint32_t len) {
-  for (uint32_t i = 0; i < rt_nsyms; i++)
-    if (rt_syms[i].len == len && !memcmp(rt_syms[i].s, s, len)) return i;
+  uint32_t h = rt_symhash(s, len);
+  if (rt_symidxcap) {
+    uint32_t m = rt_symidxcap - 1;
+    for (uint32_t i = h & m; rt_symidx[i]; i = (i + 1) & m) {
+      rt_symrec *r = &rt_syms[rt_symidx[i] - 1];
+      if (r->h == h && r->len == len && !memcmp(r->s, s, len)) return rt_symidx[i] - 1;
+    }
+  }
   if (rt_nsyms == rt_symcap) {
     rt_symcap = rt_symcap ? rt_symcap * 2 : 4096;
     rt_syms = realloc(rt_syms, rt_symcap * sizeof(rt_symrec));
   }
+  if ((rt_nsyms + 1) * 2 > rt_symidxcap) {
+    rt_symidxcap = rt_symidxcap ? rt_symidxcap * 2 : 8192;
+    free(rt_symidx); rt_symidx = calloc(rt_symidxcap, sizeof(uint32_t));
+    for (uint32_t i = 0; i < rt_nsyms; i++) rt_symidx_put(i);
+  }
   rt_syms[rt_nsyms].s = malloc(len + 1);
   memcpy(rt_syms[rt_nsyms].s, s, len); rt_syms[rt_nsyms].s[len] = 0;
-  rt_syms[rt_nsyms].len = len;
+  rt_syms[rt_nsyms].len = len; rt_syms[rt_nsyms].h = h;
+  rt_symidx_put(rt_nsyms);
   return rt_nsyms++;
 }
 static value_t rt_sym(uint32_t id) {
