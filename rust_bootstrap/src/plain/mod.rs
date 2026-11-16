@@ -294,6 +294,9 @@ pub struct Tables {
     /// the registered identities by their last component: a citation's candidates all
     /// end in the citation's
     by_last: HashMap<String, Vec<Name>>,
+    /// the constants K holds beside those — a file's native declarations, Init's — by their
+    /// last component
+    k_last: HashMap<String, Vec<Name>>,
     pub decls: HashMap<Name, Decl>,
     /// the declarations in the order they were reached
     pub order: Vec<Name>,
@@ -324,6 +327,14 @@ impl Tables {
             self.by_last.entry(last_component(id).to_string()).or_default().push(id.to_string());
         }
         self.info.insert(id.to_string(), (module.to_string(), info));
+    }
+
+    /// A native declaration of the logic, recorded under its identity.
+    pub fn add_native(&mut self, id: Name, nv: Native) {
+        if !self.natives.contains_key(&id) {
+            self.k_last.entry(last_component(&id).to_string()).or_default().push(id.clone());
+        }
+        self.natives.insert(id, nv);
     }
 
     /// Does the scope see the identity registered under `module`?
@@ -461,11 +472,23 @@ impl Tables {
     /// that are citable constants; two are ambiguous — except in a type
     /// position, where the one that is an inductive is the one meant.
     pub fn k_resolve(&self, sc: &Scope, n: &str, etype: bool) -> Res {
-        let mut found: Option<Name> = None;
-        for k in sc.candidates(n) {
-            if !self.k_known(sc, &k) {
-                continue;
+        // the candidates that are citable constants, in the candidates' order (`Scope::rank`),
+        // found among the names that end as the citation does instead of built one by one
+        let last = last_component(n);
+        let mut ranked: Vec<(usize, &Name)> = Vec::new();
+        for ids in [self.by_last.get(last), self.k_last.get(last)].into_iter().flatten() {
+            for id in ids {
+                if let Some(r) = sc.rank(id, n) {
+                    if !ranked.iter().any(|(_, k)| *k == id) && self.k_known(sc, id) {
+                        ranked.push((r, id));
+                    }
+                }
             }
+        }
+        ranked.sort_by_key(|(r, _)| *r);
+        let mut found: Option<Name> = None;
+        for (_, k) in ranked {
+            let k = k.clone();
             match &found {
                 None => found = Some(k),
                 Some(f) if *f == k => {}
@@ -759,6 +782,9 @@ pub fn strip_at(x: &str) -> &str {
 impl Loader {
     pub fn new(root: &Path, facts: HashMap<Name, Fact>) -> Loader {
         let mut t = Tables { facts, ..Tables::default() };
+        for n in t.facts.keys() {
+            t.k_last.entry(last_component(n).to_string()).or_default().push(n.clone());
+        }
         // Init's inductives that are E types wait for their first citation
         for (n, f) in &t.facts {
             if let Fact::Ind { view: facts::View::E(np, ctors), .. } = f {

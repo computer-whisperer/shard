@@ -14,11 +14,11 @@
 //! file is a module"); without `--root` it is `v3`, the root of the system's
 //! own sources, as `v3/build.sh`'s is. FILE is the table of facts about
 //! Init's constants the loader printed for the closure (`load.shard --facts
-//! FILE`): a closure that sees Init is read by it; the toolchain's own
-//! closure sees none and needs none. A directory named among the files is its
-//! view; every view the closure loads is linked to its implementation.
+//! FILE`): a closure that sees Init is read by it. Where none is named the
+//! root's own is read, `DIR/kernel/init.facts` — the toolchain's, kept in the
+//! tree. A directory named among the files is its view; every view the
+//! closure loads is linked to its implementation.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -48,7 +48,8 @@ fn main() -> ExitCode {
 const USAGE: &str = "usage: eval direct [--root DIR] [--facts FILE] <app.shard> [args…] | eval dump [--root DIR] [--facts FILE] <file.shard>…";
 
 /// The options before the first file: the root (`v3` where none is named) and the table
-/// of Init's facts; then what follows them.
+/// of Init's facts (the root's own, `kernel/init.facts`, where none is named and the root
+/// has one); then what follows them.
 fn options(args: &[String]) -> Option<(PathBuf, Option<PathBuf>, &[String])> {
     let (mut root, mut facts, mut i) = (PathBuf::from("v3"), None, 0);
     while i < args.len() && (args[i] == "--root" || args[i] == "--facts") {
@@ -59,6 +60,12 @@ fn options(args: &[String]) -> Option<(PathBuf, Option<PathBuf>, &[String])> {
             facts = Some(v);
         }
         i += 2;
+    }
+    if facts.is_none() {
+        let own = root.join("kernel").join("init.facts");
+        if own.is_file() {
+            facts = Some(own);
+        }
     }
     Some((root, facts, &args[i..]))
 }
@@ -107,9 +114,8 @@ fn run() -> ExitCode {
         }
     };
     let vm = plain::out::module(&l.t);
-    let over_init = plain::out::externs_over_init(&l.t);
     drop(l);
-    eval::set_effect_handler(Some(Box::new(make_handler(prog_args, over_init))));
+    eval::set_effect_handler(Some(Box::new(make_handler(prog_args))));
     let call = ast::Expr::Call(entry, vec![ctor(&world_ctor, vec![ast::Expr::IntLit(0.into())])]);
     let result = eval::eval(&vm, &call);
     eval::set_effect_handler(None);
@@ -124,46 +130,26 @@ fn run() -> ExitCode {
     }
 }
 
-/// The cells the host speaks, by the names the evaluator holds them under: the runtime's
-/// own — the toolchain prelude's constructors, or a file's own so named (plain/out.rs) — or
-/// Init's identities.
-struct Cells {
-    pair: &'static str,
-    cons: &'static str,
-    nil: &'static str,
-    some: &'static str,
-    none: &'static str,
-    yes: &'static str,
-    no: &'static str,
-}
-
-const RUNTIME: Cells = Cells { pair: "Pair", cons: "Cons", nil: "Nil", some: "Some", none: "None", yes: "True", no: "False" };
-const INIT: Cells = Cells {
-    pair: "Prod.mk",
-    cons: "List.cons",
-    nil: "List.nil",
-    some: "Option.some",
-    none: "Option.none",
-    yes: "Bool.true",
-    no: "Bool.false",
-};
+// The host speaks the runtime's cells — `Pair`, `Cons`, `Nil`, `Some`, `None`, `True`,
+// `False` — which are Init's `Prod`, `List`, `Option` and `Bool` constructors and a file's
+// own so named (plain/out.rs).
 
 /// A byte slice as the list of its bytes.
-fn byte_list(c: &Cells, bytes: &[u8]) -> ast::Expr {
-    let mut acc = ctor(c.nil, vec![]);
+fn byte_list(bytes: &[u8]) -> ast::Expr {
+    let mut acc = ctor("Nil", vec![]);
     for b in bytes.iter().rev() {
-        acc = ctor(c.cons, vec![ast::Expr::IntLit((*b).into()), acc]);
+        acc = ctor("Cons", vec![ast::Expr::IntLit((*b).into()), acc]);
     }
     acc
 }
 
 /// A list of bytes back to raw bytes; elements are masked mod 256 (the boundary never
 /// widens past a byte).
-fn list_bytes(c: &Cells, e: &ast::Expr) -> Vec<u8> {
+fn list_bytes(e: &ast::Expr) -> Vec<u8> {
     let mut out = Vec::new();
     let mut cur = e;
     while let ast::Expr::Ctor(n, a) = cur {
-        if n == c.cons && a.len() == 2 {
+        if n == "Cons" && a.len() == 2 {
             if let ast::Expr::IntLit(b) = &a[0] {
                 // two's-complement BitAnd == mod 256 for negatives as well
                 out.push((b & &ast::IntLit::from(255)).to_u8().unwrap_or(0));
@@ -177,27 +163,27 @@ fn list_bytes(c: &Cells, e: &ast::Expr) -> Vec<u8> {
 }
 
 /// A byte-list path as an OS path (raw bytes on unix — binary-safe).
-fn path(c: &Cells, e: &ast::Expr) -> std::path::PathBuf {
+fn path(e: &ast::Expr) -> std::path::PathBuf {
     use std::os::unix::ffi::OsStrExt as _;
-    std::ffi::OsStr::from_bytes(&list_bytes(c, e)).into()
+    std::ffi::OsStr::from_bytes(&list_bytes(e)).into()
 }
 
-fn list(c: &Cells, items: Vec<ast::Expr>) -> ast::Expr {
-    let mut acc = ctor(c.nil, vec![]);
+fn list(items: Vec<ast::Expr>) -> ast::Expr {
+    let mut acc = ctor("Nil", vec![]);
     for it in items.into_iter().rev() {
-        acc = ctor(c.cons, vec![it, acc]);
+        acc = ctor("Cons", vec![it, acc]);
     }
     acc
 }
 
-fn pair(c: &Cells, a: ast::Expr, b: ast::Expr) -> ast::Expr {
-    ctor(c.pair, vec![a, b])
+fn pair(a: ast::Expr, b: ast::Expr) -> ast::Expr {
+    ctor("Pair", vec![a, b])
 }
 
-fn option(c: &Cells, v: Option<ast::Expr>) -> ast::Expr {
+fn option(v: Option<ast::Expr>) -> ast::Expr {
     match v {
-        Some(x) => ctor(c.some, vec![x]),
-        None => ctor(c.none, vec![]),
+        Some(x) => ctor("Some", vec![x]),
+        None => ctor("None", vec![]),
     }
 }
 
@@ -205,8 +191,7 @@ fn option(c: &Cells, v: Option<ast::Expr>) -> ast::Expr {
 /// the seven externs the host file declares (v3/kernel/host.shard for the toolchain,
 /// v3/std/host.shard for an ordinary closure) — get_args, read_file, read_range, write,
 /// write_line, write_file, exit — by the last component of the extern's identity, and
-/// answers in the cells of the types it is declared at: Init's for an extern over Init's
-/// types (`over_init`), the runtime's for any other. The World is a one-constructor cell
+/// answers in the runtime's cells. The World is a one-constructor cell
 /// over its clock; it is each extern's LAST argument and is returned with the clock
 /// advanced by one.
 ///
@@ -214,10 +199,9 @@ fn option(c: &Cells, v: Option<ast::Expr>) -> ast::Expr {
 /// sequence (each element 0..256), not Unicode codepoints. The host performs
 /// no encoding or decoding — reads are binary-safe, writes emit the list
 /// verbatim (elements masked mod 256).
-fn make_handler(prog_args: Vec<String>, over_init: HashSet<String>) -> impl FnMut(&str, &[ast::Expr]) -> Result<ast::Expr, String> {
+fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Result<ast::Expr, String> {
     use std::io::Write as _;
     move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
-        let cells = if over_init.contains(name) { INIT } else { RUNTIME };
         let (wname, clk) = match args.last() {
             Some(ast::Expr::Ctor(n, a)) if n.rsplit('.').next() == Some("World") && a.len() == 1 => match &a[0] {
                 ast::Expr::IntLit(k) => (n.as_str(), k.clone()),
@@ -229,14 +213,14 @@ fn make_handler(prog_args: Vec<String>, over_init: HashSet<String>) -> impl FnMu
         match name.rsplit('.').next().unwrap_or(name) {
             // the CLI arguments (after the binary name), each the list of its UTF-8 bytes
             "get_args" => {
-                let items: Vec<ast::Expr> = prog_args.iter().map(|a| byte_list(&cells, a.as_bytes())).collect();
-                Ok(pair(&cells, list(&cells, items), w1))
+                let items: Vec<ast::Expr> = prog_args.iter().map(|a| byte_list(a.as_bytes())).collect();
+                Ok(pair(list(items), w1))
             }
             // file contents as (Some bytes), or None on any read error.
             // Binary-safe: the raw bytes, whatever they are — no UTF-8 gate.
             "read_file" => {
-                let got = std::fs::read(path(&cells, &args[0])).ok().map(|c| byte_list(&cells, &c));
-                Ok(pair(&cells, option(&cells, got), w1))
+                let got = std::fs::read(path(&args[0])).ok().map(|c| byte_list(&c));
+                Ok(pair(option(got), w1))
             }
             // a byte range of a file: at most n bytes from offset off, as
             // (Some bytes) — fewer at the file's end, an empty list past it —
@@ -248,7 +232,7 @@ fn make_handler(prog_args: Vec<String>, over_init: HashSet<String>) -> impl FnMu
                 let got = match (off, n) {
                     (Some(off), Some(n)) => {
                         use std::io::{Read as _, Seek as _};
-                        std::fs::File::open(path(&cells, &args[0])).and_then(|mut f| {
+                        std::fs::File::open(path(&args[0])).and_then(|mut f| {
                             f.seek(std::io::SeekFrom::Start(off))?;
                             let mut buf = Vec::new();
                             f.take(n as u64).read_to_end(&mut buf)?;
@@ -257,10 +241,10 @@ fn make_handler(prog_args: Vec<String>, over_init: HashSet<String>) -> impl FnMu
                     }
                     _ => None,
                 };
-                Ok(pair(&cells, option(&cells, got.map(|b| byte_list(&cells, &b))), w1))
+                Ok(pair(option(got.map(|b| byte_list(&b))), w1))
             }
             "write" => {
-                let out = list_bytes(&cells, &args[0]);
+                let out = list_bytes(&args[0]);
                 let mut stdout = std::io::stdout();
                 let _ = stdout.write_all(&out);
                 let _ = stdout.flush();
@@ -270,11 +254,11 @@ fn make_handler(prog_args: Vec<String>, over_init: HashSet<String>) -> impl FnMu
             // whether it was written and the World. The toolchain writes its artifacts
             // through it (the Init index, a proof sidecar).
             "write_file" => {
-                let ok = std::fs::write(path(&cells, &args[0]), list_bytes(&cells, &args[1])).is_ok();
-                Ok(pair(&cells, ctor(if ok { cells.yes } else { cells.no }, vec![]), w1))
+                let ok = std::fs::write(path(&args[0]), list_bytes(&args[1])).is_ok();
+                Ok(pair(ctor(if ok { "True" } else { "False" }, vec![]), w1))
             }
             "write_line" => {
-                let mut out = list_bytes(&cells, &args[0]);
+                let mut out = list_bytes(&args[0]);
                 out.push(b'\n');
                 let mut stdout = std::io::stdout();
                 let _ = stdout.write_all(&out);

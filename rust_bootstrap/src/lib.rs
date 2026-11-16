@@ -30,11 +30,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod tests {
     use super::*;
 
-    /// The toolchain's prelude as the tree has it: the types whose
-    /// constructors the runtime names its cells by (plain/out.rs).
-    const PRELUDE: &str = include_str!("../../v3/kernel/prelude.shard");
+    /// A file's own `List`, `Option`, `Bool` and `Pair`, their constructors named as the
+    /// runtime names its cells (plain/out.rs): what a closure that sees no Init runs on.
+    const PRELUDE: &str = "(type (List T) (Nil) (Cons T (List T)))\n(type (Option T) (None) (Some T))\n(type Bool (False) (True))\n(type (Pair A B) (Pair A B))\n";
 
-    /// What a toolchain file opens of it.
+    /// What a file opens of it.
     const OPEN: &str = "(import \"prelude.shard\")\n(use kernel.prelude)\n(use kernel.prelude.Bool)\n(use kernel.prelude.List)\n(use kernel.prelude.Option)\n(use kernel.prelude.Pair)\n";
 
     /// A closure on disk under a scratch root of its own: its files (the last
@@ -56,8 +56,8 @@ mod tests {
         (root, l)
     }
 
-    /// A toolchain closure — the prelude and one file `kernel/t.shard` that
-    /// opens it, holding `src` — read whole.
+    /// A closure that sees no Init — those types and one file `kernel/t.shard` that
+    /// opens them, holding `src` — read whole.
     fn toolchain(src: &str) -> plain::Loader {
         let file = format!("{OPEN}{src}\n");
         let (root, l) = closure(&[("kernel/prelude.shard", PRELUDE), ("kernel/t.shard", &file)], "");
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(eval::eval(&m, &ast::Expr::Call("lib.go".into(), vec![])).unwrap(), int(6));
         assert_eq!(
             plain::out::dump(&l.t),
-            "fn go 0 () Int (top (push 5 (mk 1)))\nfn push 0 (Int Stack) Stack (match #0 ((mk _) (mk (+ #0 #2))))\nfn top 0 (Stack) Int (match #0 ((mk _) #0))\ntype Stack 0 (mk Int)\n"
+            "fn go 0 () Int (top (push 5 (Stack.mk 1)))\nfn push 0 (Int Stack) Stack (match #0 ((Stack.mk _) (Stack.mk (+ #0 #2))))\nfn top 0 (Stack) Int (match #0 ((Stack.mk _) #0))\ntype Stack 0 (Stack.mk Int)\n"
         );
     }
 
@@ -393,8 +393,8 @@ mod tests {
         assert_eq!(f.params[1], f.ret);
         assert!(matches!(f.ret, ast::Type::TVar(_)));
         assert_eq!(eval_str(src, "(first (Cons 7 Nil) 0)"), int(7));
-        has_line(&l, "fn first 1 ((List ?0) ?0) ?0 (match #1 (Nil #0) ((Cons _ _) #1))");
-        has_line(&l, "type List 1 (Nil) (Cons ?0 (List ?0))");
+        has_line(&l, "fn first 1 ((List ?0) ?0) ?0 (match #1 (List.Nil #0) ((List.Cons _ _) #1))");
+        has_line(&l, "type List 1 (List.Nil) (List.Cons ?0 (List ?0))");
     }
 
     /// `match` on an `Option`-shaped value — bare zero-arg ctors AND
@@ -566,6 +566,33 @@ mod tests {
         assert_eq!(eval::eval(&m, &ast::Expr::Call("kernel.main.go".into(), vec![])).unwrap(), int(312));
     }
 
+    /// Init's `Bool`, `List`, `Option` and `Prod` are the runtime's cells too, by identity:
+    /// a comparison's result is a `Bool`, a symbol's bytes a `List`, read by the tree's own
+    /// table of Init's facts.
+    #[test]
+    fn cells_are_inits_constructors() {
+        let src = r#"
+(import Init)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(fn less ((a Int) (b Int)) Bool (< a b))
+(fn pick ((b Bool)) Int (match b (true 1) (false 2)))
+(fn count ((xs (List Int))) Int (match xs (nil 0) ((cons _ r) (+ 1 (count r)))))
+(fn first ((p (Prod Int Int))) Int (match p ((Prod.mk a _) a)))
+(fn get ((o (Option Int))) Int (match o (none 0) ((some v) v)))
+(fn go () Int
+  (+ (* 10 (pick (less 1 2)))
+    (+ (pick (less 2 1))
+      (+ (* 100 (count (chars_of_sym 'abc))) (* 1000 (+ (first (Prod.mk 4 5)) (get (some 3))))))))
+"#;
+        let (root, l) = closure(&[("kernel/main.shard", src)], include_str!("../../v3/kernel/init.facts"));
+        let _ = std::fs::remove_dir_all(root);
+        assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
+        let m = plain::out::module(&l.t);
+        assert_eq!(eval::eval(&m, &ast::Expr::Call("kernel.main.go".into(), vec![])).unwrap(), int(7312));
+    }
+
     /// `Scope::rank` orders names as a citation's candidates stand, without
     /// building them: every candidate has a rank, an earlier one a lower
     /// rank, and a name that is no candidate has none.
@@ -618,11 +645,11 @@ mod tests {
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         assert_eq!(
             plain::out::dump(&l.t),
-            "fn empty 0 () Stack (mk 0)
+            "fn empty 0 () Stack (Stack.mk 0)
 fn go 0 () Int (top (push 5 (push 2 (empty))))
-fn push 0 (Int Stack) Stack (match #0 ((mk _) (mk (+ #0 #2))))
-fn top 0 (Stack) Int (match #0 ((mk _) #0))
-type Stack 0 (mk Int)
+fn push 0 (Int Stack) Stack (match #0 ((Stack.mk _) (Stack.mk (+ #0 #2))))
+fn top 0 (Stack) Int (match #0 ((Stack.mk _) #0))
+type Stack 0 (Stack.mk Int)
 "
         );
         let m = plain::out::module(&l.t);
@@ -648,10 +675,10 @@ type Stack 0 (mk Int)
         assert!(l.t.unread.is_empty(), "{:?}", l.t.unread);
         assert_eq!(
             plain::out::dump(&l.t),
-            "fn go 0 () Int (top (push 5 (Mk (/ 7 2))))
-fn push 0 (Int Stack) Stack (match #0 ((Mk _) (Mk (+ #0 #2))))
-fn top 0 (Stack) Int (match #0 ((Mk _) #0))
-type Stack 0 (Mk Int)
+            "fn go 0 () Int (top (push 5 (Stack.Mk (/ 7 2))))
+fn push 0 (Int Stack) Stack (match #0 ((Stack.Mk _) (Stack.Mk (+ #0 #2))))
+fn top 0 (Stack) Int (match #0 ((Stack.Mk _) #0))
+type Stack 0 (Stack.Mk Int)
 "
         );
         let m = plain::out::module(&l.t);
@@ -698,12 +725,12 @@ type Stack 0 (Mk Int)
         for line in [
             "fn pred 0 (Nat) Nat (Nat.sub #0 1)",
             "fn half 0 (Int) Int (Int.ediv #0 2)",
-            "fn small 0 (Nat) Bool (if (< #0 10) (true) (false))",
-            "fn firsts 0 ((List Nat)) (List Nat) (match #0 (nil (nil)) ((cons _ _) (cons (pred #1) (firsts #0))))",
+            "fn small 0 (Nat) Bool (if (< #0 10) (Bool.true) (Bool.false))",
+            "fn firsts 0 ((List Nat)) (List Nat) (match #0 (List.nil (List.nil)) ((List.cons _ _) (List.cons (pred #1) (firsts #0))))",
             "fn index 0 (Fin) Nat #0",
             "fn clamp 0 (Nat) Fin #0",
-            "type Bool 0 (false) (true)",
-            "type List 1 (nil) (cons ?0 (List ?0))",
+            "type Bool 0 (Bool.false) (Bool.true)",
+            "type List 1 (List.nil) (List.cons ?0 (List ?0))",
         ] {
             assert!(dump.lines().any(|l| l == line), "no line `{line}` in\n{dump}");
         }
@@ -727,7 +754,7 @@ type Stack 0 (Mk Int)
         assert_eq!(l.t.unread.len(), 1);
         assert_eq!((l.t.unread[0].0.as_str(), l.t.unread[0].1.0), ("app.all", "template"));
         assert_eq!(plain::out::dump(&l.t), "fn inc 0 (Int) Int (+ #0 1)
-type L 1 (N) (C ?0 (L ?0))
+type L 1 (L.N) (L.C ?0 (L ?0))
 ");
         let _ = std::fs::remove_dir_all(root);
     }

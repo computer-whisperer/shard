@@ -6,7 +6,7 @@
 # byte for byte; and programs whose externs are declared over a type the wire
 # has no codec for (wire_bad) or with a result the extern does not return
 # (wire_bad_result), which must be stuck before the host is asked.
-# The toolchain's own convention, the prelude's cells, is entry_test's.
+# The toolchain's own signatures, text as (List Int), are entry_test's.
 # Exit code = the number of failed checks.
 set -u
 cd "$(dirname "$0")/../../.."

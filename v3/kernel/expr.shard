@@ -48,20 +48,19 @@
 ;;; writes the final counter back; a direct caller of the checker on a
 ;;; checked env must start from `(st_for env)` (tc.shard).
 
+(import Init)
 (import "level.shard")
 (import "intmap.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.intmap)
 (use kernel.level)
 (use kernel.name)
-(use kernel.prelude)
 (use kernel.util)
 (use kernel.intmap.IntMap)
 (use kernel.level.Level)
 (use kernel.name.Name)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 
 (type BinderInfo (BDefault) (BImplicit) (BStrictImplicit) (BInstImplicit))
 ;; Binder info never affects a judgment; it is display/elaboration data
@@ -97,12 +96,12 @@
 ;; (the pair tables hold (t, s) ordered by hash). Reset per declaration:
 ;; the pin builds a fresh type_checker for every environment::add.
 (type Memo
-  (Memo (IntMap (List (Pair Expr Expr))) (IntMap (List (Pair Expr Expr)))
-    (IntMap (List (Pair Expr Expr)))
-    (IntMap (List (Pair Expr Expr)))
-    (IntMap (List (Pair Expr Expr)))
-    (IntMap (List (Pair Expr Expr)))
-    (IntMap (List (Pair Expr Expr)))))
+  (Memo (IntMap (List (Prod Expr Expr))) (IntMap (List (Prod Expr Expr)))
+    (IntMap (List (Prod Expr Expr)))
+    (IntMap (List (Prod Expr Expr)))
+    (IntMap (List (Prod Expr Expr)))
+    (IntMap (List (Prod Expr Expr)))
+    (IntMap (List (Prod Expr Expr)))))
 
 (fn memo_empty () Memo (Memo IMEmpty IMEmpty IMEmpty IMEmpty IMEmpty IMEmpty IMEmpty))
 
@@ -112,14 +111,14 @@
 (type St (St Int Int Int Memo))
 
 (fn st_init () St (St 0 0 0 (memo_empty)))
-(fn st_anon () St (St 0 0 (- 0 1) (memo_empty)))
+(fn st_anon () St (St 0 0 -1 (memo_empty)))
 (fn st_node ((st St)) Int
   (match st
     ((St _ _ k _) k)))
 ;; a fresh node id (ids start at 1; 0 is the anonymous id), or 0 in anonymous mode
-(fn st_fresh_node ((st St)) (Pair St Int)
+(fn st_fresh_node ((st St)) (Prod St Int)
   (match st
-    ((St g t k m) (if (< k 0) (Pair st 0) (Pair (St g t (+ k 1) m) (+ k 1))))))
+    ((St g t k m) (if (< k 0) (Prod.mk st 0) (Prod.mk (St g t (+ k 1) m) (+ k 1))))))
 
 ;; ======================================================================
 ;; TYPING — `infer_type_core(e, infer_only)` (l. 325). With infer_only
@@ -306,8 +305,8 @@
 (fn hash_levels ((ls (List Level)) (acc Int)) Int
   (measure (struct ls))
   (match ls
-    (Nil acc)
-    ((Cons l r) (hash_levels r (mix acc (hash_level l))))))
+    (nil acc)
+    ((cons l r) (hash_levels r (mix acc (hash_level l))))))
 
 (fn hash_lit ((l Literal)) Int
   (match l
@@ -317,13 +316,13 @@
 (fn levels_have_param ((ls (List Level))) Bool
   (measure (struct ls))
   (match ls
-    (Nil False)
-    ((Cons l r) (if (level_has_param l) True (levels_have_param r)))))
+    (nil false)
+    ((cons l r) (if (level_has_param l) true (levels_have_param r)))))
 (fn levels_have_mvar ((ls (List Level))) Bool
   (measure (struct ls))
   (match ls
-    (Nil False)
-    ((Cons l r) (if (level_has_mvar l) True (levels_have_mvar r)))))
+    (nil false)
+    ((cons l r) (if (level_has_mvar l) true (levels_have_mvar r)))))
 
 ;; ---- the node data ------------------------------------------------------------------
 
@@ -372,22 +371,22 @@
 ;; a term from above K can wear one id on two nodes
 (fn same_node ((a Expr) (b Expr)) Bool
   (let ((ia (expr_id a)))
-    (if (< 0 ia) (if (= ia (expr_id b)) (= (hash_expr a) (hash_expr b)) False) (expr_eq a b))))
+    (if (< 0 ia) (if (= ia (expr_id b)) (= (hash_expr a) (hash_expr b)) false) (expr_eq a b))))
 
 ;; ---- constructors ---------------------------------------------------------------------
 ;; leaves: always anonymous
-(fn mk_bvar ((i Int)) Expr (BVar (D 0 (mix 29 i) (+ i 1) False False False) i))
-(fn mk_fvar ((i Int)) Expr (FVar (D 0 (mix 31 i) 0 True False False) i))
+(fn mk_bvar ((i Int)) Expr (BVar (D 0 (mix 29 i) (+ i 1) false false false) i))
+(fn mk_fvar ((i Int)) Expr (FVar (D 0 (mix 31 i) 0 true false false) i))
 (fn mk_sort ((u Level)) Expr
-  (Sort (D 0 (mix 37 (hash_level u)) 0 False (level_has_param u) (level_has_mvar u)) u))
+  (Sort (D 0 (mix 37 (hash_level u)) 0 false (level_has_param u) (level_has_mvar u)) u))
 (fn mk_const ((n Name) (ls (List Level))) Expr
   (Const
-    (D 0 (mix3 41 (hash_name n) (hash_levels ls 1)) 0 False (levels_have_param ls)
+    (D 0 (mix3 41 (hash_name n) (hash_levels ls 1)) 0 false (levels_have_param ls)
       (levels_have_mvar ls))
     n
     ls))
-(fn mk_lit ((l Literal)) Expr (Lit (D 0 (hash_lit l) 0 False False False) l))
-(fn mk_mvar ((i Int)) Expr (MVar (D 0 (mix 73 i) 0 False False True) i))
+(fn mk_lit ((l Literal)) Expr (Lit (D 0 (hash_lit l) 0 false false false) l))
+(fn mk_mvar ((i Int)) Expr (MVar (D 0 (mix 73 i) 0 false false true) i))
 
 ;; the D of a compound node from its children
 (fn d_app ((id Int) (f Expr) (a Expr)) D
@@ -395,13 +394,13 @@
     ((D _ hf rf ff pf mf)
      (match (expr_d a)
        ((D _ ha ra fa pa ma)
-        (D id (mix3 43 hf ha) (max_int rf ra) (if ff True fa) (if pf True pa) (if mf True ma)))))))
+        (D id (mix3 43 hf ha) (max_int rf ra) (if ff true fa) (if pf true pa) (if mf true ma)))))))
 (fn d_bind ((id Int) (tag Int) (dm Expr) (b Expr)) D
   (match (expr_d dm)
     ((D _ hd rd fd pd md)
      (match (expr_d b)
        ((D _ hb rb fb pb mb)
-        (D id (mix3 tag hd hb) (max_int rd (- rb 1)) (if fd True fb) (if pd True pb) (if md True mb)))))))
+        (D id (mix3 tag hd hb) (max_int rd (- rb 1)) (if fd true fb) (if pd true pb) (if md true mb)))))))
 (fn d_let ((id Int) (t Expr) (v Expr) (b Expr)) D
   (match (expr_d t)
     ((D _ ht rt ft pt mt)
@@ -410,14 +409,14 @@
         (match (expr_d b)
           ((D _ hb rb fb pb mb)
            (D id (mix3 59 (mix ht hv) hb) (max_int (max_int rt rv) (- rb 1))
-             (if ft True
-             (if fv True
+             (if ft true
+             (if fv true
              fb))
-             (if pt True
-             (if pv True
+             (if pt true
+             (if pv true
              pb))
-             (if mt True
-             (if mv True
+             (if mt true
+             (if mv true
              mb))))))))))
 (fn d_proj ((id Int) (s Name) (i Int) (x Expr)) D
   (match (expr_d x)
@@ -428,29 +427,29 @@
 (fn mk_app_n ((f Expr) (args (List Expr))) Expr
   (measure (struct args))
   (match args
-    (Nil f)
-    ((Cons a r) (mk_app_n (mk_app f a) r))))
+    (nil f)
+    ((cons a r) (mk_app_n (mk_app f a) r))))
 (fn mk_lam ((n Name) (bi BinderInfo) (dm Expr) (b Expr)) Expr (Lam (d_bind 0 47 dm b) n bi dm b))
 (fn mk_pi ((n Name) (bi BinderInfo) (dm Expr) (b Expr)) Expr (Pi (d_bind 0 53 dm b) n bi dm b))
 (fn mk_let ((n Name) (t Expr) (v Expr) (b Expr)) Expr (Let (d_let 0 t v b) n t v b))
 (fn mk_proj ((s Name) (i Int) (x Expr)) Expr (Proj (d_proj 0 s i x) s i x))
 
 ;; identified compound nodes (an id minted from St)
-(fn new_app ((st St) (f Expr) (a Expr)) (Pair St Expr)
+(fn new_app ((st St) (f Expr) (a Expr)) (Prod St Expr)
   (match (st_fresh_node st)
-    ((Pair st1 id) (Pair st1 (App (d_app id f a) f a)))))
-(fn new_lam ((st St) (n Name) (bi BinderInfo) (dm Expr) (b Expr)) (Pair St Expr)
+    ((Prod.mk st1 id) (Prod.mk st1 (App (d_app id f a) f a)))))
+(fn new_lam ((st St) (n Name) (bi BinderInfo) (dm Expr) (b Expr)) (Prod St Expr)
   (match (st_fresh_node st)
-    ((Pair st1 id) (Pair st1 (Lam (d_bind id 47 dm b) n bi dm b)))))
-(fn new_pi ((st St) (n Name) (bi BinderInfo) (dm Expr) (b Expr)) (Pair St Expr)
+    ((Prod.mk st1 id) (Prod.mk st1 (Lam (d_bind id 47 dm b) n bi dm b)))))
+(fn new_pi ((st St) (n Name) (bi BinderInfo) (dm Expr) (b Expr)) (Prod St Expr)
   (match (st_fresh_node st)
-    ((Pair st1 id) (Pair st1 (Pi (d_bind id 53 dm b) n bi dm b)))))
-(fn new_let ((st St) (n Name) (t Expr) (v Expr) (b Expr)) (Pair St Expr)
+    ((Prod.mk st1 id) (Prod.mk st1 (Pi (d_bind id 53 dm b) n bi dm b)))))
+(fn new_let ((st St) (n Name) (t Expr) (v Expr) (b Expr)) (Prod St Expr)
   (match (st_fresh_node st)
-    ((Pair st1 id) (Pair st1 (Let (d_let id t v b) n t v b)))))
-(fn new_proj ((st St) (s Name) (i Int) (x Expr)) (Pair St Expr)
+    ((Prod.mk st1 id) (Prod.mk st1 (Let (d_let id t v b) n t v b)))))
+(fn new_proj ((st St) (s Name) (i Int) (x Expr)) (Prod St Expr)
   (match (st_fresh_node st)
-    ((Pair st1 id) (Pair st1 (Proj (d_proj id s i x) s i x)))))
+    ((Prod.mk st1 id) (Prod.mk st1 (Proj (d_proj id s i x) s i x)))))
 
 ;; ---- ingestion ------------------------------------------------------------------------
 ;; A raw term from outside K wears whatever node data its author wrote: its ids, hashes,
@@ -476,12 +475,12 @@
     ((Ingest st _) st)))
 (fn ing_leaf ((e Expr)) Bool
   (match e
-    ((App _ _ _) False)
-    ((Lam _ _ _ _ _) False)
-    ((Pi _ _ _ _ _) False)
-    ((Let _ _ _ _ _) False)
-    ((Proj _ _ _ _) False)
-    (_ True)))
+    ((App _ _ _) false)
+    ((Lam _ _ _ _ _) false)
+    ((Pi _ _ _ _ _) false)
+    ((Let _ _ _ _ _) false)
+    ((Proj _ _ _ _) false)
+    (_ true)))
 ;; two children the same: one node minted here, or two leaves equal (a leaf is never minted).
 ;; Two compound children without an id — the state anonymous, as `check`'s never is — are
 ;; not called the same: expr_eq would say so of two binders that differ in name, and what is
@@ -489,176 +488,176 @@
 ;; wrong
 (fn ing_same ((x Expr) (y Expr)) Bool
   (let ((ix (expr_id x)))
-    (if (< 0 ix) (if (= ix (expr_id y)) (= (hash_expr x) (hash_expr y)) False)
-    (if (< 0 (expr_id y)) False
+    (if (< 0 ix) (if (= ix (expr_id y)) (= (hash_expr x) (hash_expr y)) false)
+    (if (< 0 (expr_id y)) false
     (if (ing_leaf x) (expr_eq x y)
-    False)))))
+    false)))))
 (fn binfo_eq ((a BinderInfo) (b BinderInfo)) Bool
   (match a
     (BDefault
       (match b
-        (BDefault True)
-        (_ False)))
+        (BDefault true)
+        (_ false)))
     (BImplicit
       (match b
-        (BImplicit True)
-        (_ False)))
+        (BImplicit true)
+        (_ false)))
     (BStrictImplicit
       (match b
-        (BStrictImplicit True)
-        (_ False)))
+        (BStrictImplicit true)
+        (_ false)))
     (BInstImplicit
       (match b
-        (BInstImplicit True)
-        (_ False)))))
+        (BInstImplicit true)
+        (_ false)))))
 ;; two compound nodes the same in everything: the kind, the children, the binder's name and info
 (fn ing_is ((x Expr) (y Expr)) Bool
   (match x
     ((App _ f a)
      (match y
-       ((App _ g b) (if (ing_same f g) (ing_same a b) False))
-       (_ False)))
+       ((App _ g b) (if (ing_same f g) (ing_same a b) false))
+       (_ false)))
     ((Lam _ n bi d b)
      (match y
        ((Lam _ m bj e c)
-        (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) False) False)
-        False))
-       (_ False)))
+        (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) false) false)
+        false))
+       (_ false)))
     ((Pi _ n bi d b)
      (match y
        ((Pi _ m bj e c)
-        (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) False) False)
-        False))
-       (_ False)))
+        (if (ing_same d e) (if (ing_same b c) (if (name_eq n m) (binfo_eq bi bj) false) false)
+        false))
+       (_ false)))
     ((Let _ n t v b)
      (match y
        ((Let _ m u w c)
-        (if (ing_same t u) (if (ing_same v w) (if (ing_same b c) (name_eq n m) False) False) False))
-       (_ False)))
+        (if (ing_same t u) (if (ing_same v w) (if (ing_same b c) (name_eq n m) false) false) false))
+       (_ false)))
     ((Proj _ s i z)
      (match y
-       ((Proj _ r j w) (if (= i j) (if (ing_same z w) (name_eq s r) False) False))
-       (_ False)))
-    (_ False)))
+       ((Proj _ r j w) (if (= i j) (if (ing_same z w) (name_eq s r) false) false))
+       (_ false)))
+    (_ false)))
 (fn ing_find ((b (List Expr)) (x Expr)) (Option Expr)
   (measure (struct b))
   (match b
-    (Nil None)
-    ((Cons y r) (if (ing_is x y) (Some y) (ing_find r x)))))
+    (nil none)
+    ((cons y r) (if (ing_is x y) (some y) (ing_find r x)))))
 ;; the node the table holds for a compound node's anonymous spelling — its hash and its shape,
 ;; which no id is part of — if it holds one
 (fn ing_held ((g Ingest) (x Expr)) (Option Expr)
   (match g
     ((Ingest _ m)
      (match (im_find m (hash_expr x))
-       ((Some b) (ing_find b x))
-       (None None)))))
+       ((some b) (ing_find b x))
+       (none none)))))
 ;; a node just minted, with the state after it: entered in the table
-(fn ing_enter ((g Ingest) (r (Pair St Expr))) (Pair Ingest Expr)
+(fn ing_enter ((g Ingest) (r (Prod St Expr))) (Prod Ingest Expr)
   (match g
     ((Ingest _ m)
      (match r
-       ((Pair st1 x)
+       ((Prod.mk st1 x)
         (let ((h (hash_expr x)))
-          (Pair
+          (Prod.mk
             (Ingest st1
               (im_insert m h
-                (Cons x
+                (cons x
                   (match (im_find m h)
-                    ((Some xs) xs)
-                    (None Nil)))))
+                    ((some xs) xs)
+                    (none nil)))))
             x)))))))
-(fn ingest_expr ((g Ingest) (e Expr)) (Pair Ingest Expr)
+(fn ingest_expr ((g Ingest) (e Expr)) (Prod Ingest Expr)
   (measure (struct e))
   (match e
-    ((BVar _ i) (Pair g (mk_bvar i)))
-    ((FVar _ i) (Pair g (mk_fvar i)))
-    ((Sort _ u) (Pair g (mk_sort u)))
-    ((Const _ n ls) (Pair g (mk_const n ls)))
-    ((Lit _ l) (Pair g (mk_lit l)))
-    ((MVar _ i) (Pair g (mk_mvar i)))
+    ((BVar _ i) (Prod.mk g (mk_bvar i)))
+    ((FVar _ i) (Prod.mk g (mk_fvar i)))
+    ((Sort _ u) (Prod.mk g (mk_sort u)))
+    ((Const _ n ls) (Prod.mk g (mk_const n ls)))
+    ((Lit _ l) (Prod.mk g (mk_lit l)))
+    ((MVar _ i) (Prod.mk g (mk_mvar i)))
     ((App _ f a)
      (match (ingest_expr g f)
-       ((Pair g1 f1)
+       ((Prod.mk g1 f1)
         (match (ingest_expr g1 a)
-          ((Pair g2 a1)
+          ((Prod.mk g2 a1)
            (match (ing_held g2 (mk_app f1 a1))
-             ((Some y) (Pair g2 y))
-             (None (ing_enter g2 (new_app (ingest_st g2) f1 a1)))))))))
+             ((some y) (Prod.mk g2 y))
+             (none (ing_enter g2 (new_app (ingest_st g2) f1 a1)))))))))
     ((Lam _ n bi dm b)
      (match (ingest_expr g dm)
-       ((Pair g1 dm1)
+       ((Prod.mk g1 dm1)
         (match (ingest_expr g1 b)
-          ((Pair g2 b1)
+          ((Prod.mk g2 b1)
            (match (ing_held g2 (mk_lam n bi dm1 b1))
-             ((Some y) (Pair g2 y))
-             (None (ing_enter g2 (new_lam (ingest_st g2) n bi dm1 b1)))))))))
+             ((some y) (Prod.mk g2 y))
+             (none (ing_enter g2 (new_lam (ingest_st g2) n bi dm1 b1)))))))))
     ((Pi _ n bi dm b)
      (match (ingest_expr g dm)
-       ((Pair g1 dm1)
+       ((Prod.mk g1 dm1)
         (match (ingest_expr g1 b)
-          ((Pair g2 b1)
+          ((Prod.mk g2 b1)
            (match (ing_held g2 (mk_pi n bi dm1 b1))
-             ((Some y) (Pair g2 y))
-             (None (ing_enter g2 (new_pi (ingest_st g2) n bi dm1 b1)))))))))
+             ((some y) (Prod.mk g2 y))
+             (none (ing_enter g2 (new_pi (ingest_st g2) n bi dm1 b1)))))))))
     ((Let _ n t v b)
      (match (ingest_expr g t)
-       ((Pair g1 t1)
+       ((Prod.mk g1 t1)
         (match (ingest_expr g1 v)
-          ((Pair g2 v1)
+          ((Prod.mk g2 v1)
            (match (ingest_expr g2 b)
-             ((Pair g3 b1)
+             ((Prod.mk g3 b1)
               (match (ing_held g3 (mk_let n t1 v1 b1))
-                ((Some y) (Pair g3 y))
-                (None (ing_enter g3 (new_let (ingest_st g3) n t1 v1 b1)))))))))))
+                ((some y) (Prod.mk g3 y))
+                (none (ing_enter g3 (new_let (ingest_st g3) n t1 v1 b1)))))))))))
     ((Proj _ s i x)
      (match (ingest_expr g x)
-       ((Pair g1 x1)
+       ((Prod.mk g1 x1)
         (match (ing_held g1 (mk_proj s i x1))
-          ((Some y) (Pair g1 y))
-          (None (ing_enter g1 (new_proj (ingest_st g1) s i x1)))))))))
+          ((some y) (Prod.mk g1 y))
+          (none (ing_enter g1 (new_proj (ingest_st g1) s i x1)))))))))
 
 ;; ---- predicates ----------------------------------------------------------
 
 (fn is_sort ((e Expr)) Bool
   (match e
-    ((Sort _ _) True)
-    (_ False)))
+    ((Sort _ _) true)
+    (_ false)))
 (fn is_pi ((e Expr)) Bool
   (match e
-    ((Pi _ _ _ _ _) True)
-    (_ False)))
+    ((Pi _ _ _ _ _) true)
+    (_ false)))
 (fn is_lambda ((e Expr)) Bool
   (match e
-    ((Lam _ _ _ _ _) True)
-    (_ False)))
+    ((Lam _ _ _ _ _) true)
+    (_ false)))
 (fn is_app ((e Expr)) Bool
   (match e
-    ((App _ _ _) True)
-    (_ False)))
+    ((App _ _ _) true)
+    (_ false)))
 (fn is_lit ((e Expr)) Bool
   (match e
-    ((Lit _ _) True)
-    (_ False)))
+    ((Lit _ _) true)
+    (_ false)))
 (fn is_proj ((e Expr)) Bool
   (match e
-    ((Proj _ _ _ _) True)
-    (_ False)))
+    ((Proj _ _ _ _) true)
+    (_ false)))
 (fn is_const_named ((e Expr) (n Name)) Bool
   (match e
     ((Const _ c _) (name_eq c n))
-    (_ False)))
+    (_ false)))
 
 (fn lit_eq ((a Literal) (b Literal)) Bool
   (match a
     ((LitNat x)
      (match b
        ((LitNat y) (= x y))
-       (_ False)))
+       (_ false)))
     ((LitStr x)
      (match b
        ((LitStr y) (int_list_eq x y))
-       (_ False)))))
+       (_ false)))))
 
 ;; structural equality (expr_eq_fn.cpp `is_equal`): binder names and
 ;; binder info are NOT compared; levels structurally (level_eq). The
@@ -672,7 +671,7 @@
     ((D ia ha _ _ _ _)
      (match (expr_d b)
        ((D ib hb _ _ _ _)
-        (if (= ha hb) (if (= ia ib) (if (< 0 ia) True (expr_eq_core a b)) (expr_eq_core a b)) False))))))
+        (if (= ha hb) (if (= ia ib) (if (< 0 ia) true (expr_eq_core a b)) (expr_eq_core a b)) false))))))
 
 (fn expr_eq_core ((a Expr) (b Expr)) Bool
   (measure (struct a))
@@ -680,59 +679,59 @@
     ((BVar _ i)
      (match b
        ((BVar _ j) (= i j))
-       (_ False)))
+       (_ false)))
     ((FVar _ i)
      (match b
        ((FVar _ j) (= i j))
-       (_ False)))
+       (_ false)))
     ((Sort _ u)
      (match b
        ((Sort _ v) (level_eq u v))
-       (_ False)))
+       (_ false)))
     ((Const _ n ls)
      (match b
-       ((Const _ m ms) (if (name_eq n m) (levels_eq ls ms) False))
-       (_ False)))
+       ((Const _ m ms) (if (name_eq n m) (levels_eq ls ms) false))
+       (_ false)))
     ((App _ f x)
      (match b
-       ((App _ g y) (if (expr_eq f g) (expr_eq x y) False))
-       (_ False)))
+       ((App _ g y) (if (expr_eq f g) (expr_eq x y) false))
+       (_ false)))
     ((Lam _ _ _ d1 b1)
      (match b
-       ((Lam _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) False))
-       (_ False)))
+       ((Lam _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) false))
+       (_ false)))
     ((Pi _ _ _ d1 b1)
      (match b
-       ((Pi _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) False))
-       (_ False)))
+       ((Pi _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) false))
+       (_ false)))
     ((Let _ _ t1 v1 b1)
      (match b
-       ((Let _ _ t2 v2 b2) (if (expr_eq t1 t2) (if (expr_eq v1 v2) (expr_eq b1 b2) False) False))
-       (_ False)))
+       ((Let _ _ t2 v2 b2) (if (expr_eq t1 t2) (if (expr_eq v1 v2) (expr_eq b1 b2) false) false))
+       (_ false)))
     ((Lit _ l1)
      (match b
        ((Lit _ l2) (lit_eq l1 l2))
-       (_ False)))
+       (_ false)))
     ((MVar _ i)
      (match b
        ((MVar _ j) (= i j))
-       (_ False)))
+       (_ false)))
     ((Proj _ s1 i1 e1)
      (match b
-       ((Proj _ s2 i2 e2) (if (name_eq s1 s2) (if (= i1 i2) (expr_eq e1 e2) False) False))
-       (_ False)))))
+       ((Proj _ s2 i2 e2) (if (name_eq s1 s2) (if (= i1 i2) (expr_eq e1 e2) false) false))
+       (_ false)))))
 
 (fn exprs_eq ((a (List Expr)) (b (List Expr))) Bool
   (measure (struct a))
   (match a
-    (Nil
+    (nil
       (match b
-        (Nil True)
-        (_ False)))
-    ((Cons x ar)
+        (nil true)
+        (_ false)))
+    ((cons x ar)
      (match b
-       (Nil False)
-       ((Cons y br) (if (expr_eq x y) (exprs_eq ar br) False))))))
+       (nil false)
+       ((cons y br) (if (expr_eq x y) (exprs_eq ar br) false))))))
 
 ;; ---- the constants a term cites --------------------------------------------------
 ;; every Const name in the term (with repeats across distinct nodes; shared
@@ -742,125 +741,125 @@
 ;; under another hash is another node and is read (the loader reads an
 ;; elaborated body's constants with this, for a definition's height and a
 ;; requirement's key)
-(fn used_consts ((e Expr) (seen (IntMap Int)) (acc (List Name))) (Pair (IntMap Int) (List Name))
+(fn used_consts ((e Expr) (seen (IntMap Int)) (acc (List Name))) (Prod (IntMap Int) (List Name))
   (measure (struct e))
   (let ((id (expr_id e)))
     (if
       (bool_and (< 0 id)
         (match (im_find seen id)
-          ((Some h) (= h (hash_expr e)))
-          (None False)))
-      (Pair seen acc)
+          ((some h) (= h (hash_expr e)))
+          (none false)))
+      (Prod.mk seen acc)
       (let ((seen1 (if (< 0 id) (im_insert seen id (hash_expr e)) seen)))
         (match e
-          ((Const _ n _) (Pair seen1 (Cons n acc)))
+          ((Const _ n _) (Prod.mk seen1 (cons n acc)))
           ((App _ f a)
            (match (used_consts f seen1 acc)
-             ((Pair s1 a1) (used_consts a s1 a1))))
+             ((Prod.mk s1 a1) (used_consts a s1 a1))))
           ((Lam _ _ _ t b)
            (match (used_consts t seen1 acc)
-             ((Pair s1 a1) (used_consts b s1 a1))))
+             ((Prod.mk s1 a1) (used_consts b s1 a1))))
           ((Pi _ _ _ t b)
            (match (used_consts t seen1 acc)
-             ((Pair s1 a1) (used_consts b s1 a1))))
+             ((Prod.mk s1 a1) (used_consts b s1 a1))))
           ((Let _ _ t v b)
            (match (used_consts t seen1 acc)
-             ((Pair s1 a1)
+             ((Prod.mk s1 a1)
               (match (used_consts v s1 a1)
-                ((Pair s2 a2) (used_consts b s2 a2))))))
+                ((Prod.mk s2 a2) (used_consts b s2 a2))))))
           ((Proj _ _ _ x) (used_consts x seen1 acc))
-          (_ (Pair seen1 acc)))))))
+          (_ (Prod.mk seen1 acc)))))))
 
 (fn expr_consts ((e Expr)) (List Name)
-  (match (used_consts e IMEmpty Nil)
-    ((Pair _ ns) ns)))
+  (match (used_consts e IMEmpty nil)
+    ((Prod.mk _ ns) ns)))
 
 ;; ---- loose bound variables ---------------------------------------------
 
 ;; has_loose_bvar(e, i): does the loose index i occur?
 (fn has_loose_bvar ((e Expr) (i Int)) Bool
   (measure (struct e))
-  (if (<= (loose_bvar_range e) i) False
+  (if (<= (loose_bvar_range e) i) false
   (match e
     ((BVar _ j) (= i j))
-    ((App _ f a) (if (has_loose_bvar f i) True (has_loose_bvar a i)))
-    ((Lam _ _ _ d b) (if (has_loose_bvar d i) True (has_loose_bvar b (+ i 1))))
-    ((Pi _ _ _ d b) (if (has_loose_bvar d i) True (has_loose_bvar b (+ i 1))))
+    ((App _ f a) (if (has_loose_bvar f i) true (has_loose_bvar a i)))
+    ((Lam _ _ _ d b) (if (has_loose_bvar d i) true (has_loose_bvar b (+ i 1))))
+    ((Pi _ _ _ d b) (if (has_loose_bvar d i) true (has_loose_bvar b (+ i 1))))
     ((Let _ _ t v b)
-     (if (has_loose_bvar t i) True
-     (if (has_loose_bvar v i) True
+     (if (has_loose_bvar t i) true
+     (if (has_loose_bvar v i) true
      (has_loose_bvar b (+ i 1)))))
     ((Proj _ _ _ x) (has_loose_bvar x i))
-    (_ False))))
+    (_ false))))
 
 ;; lift_loose_bvars(e, s, d): every loose index ≥ s becomes index + d;
 ;; a subterm whose range is ≤ s has no such index and is kept as it is
-(fn lift_loose_bvars ((st St) (e Expr) (s Int) (d Int)) (Pair St Expr)
+(fn lift_loose_bvars ((st St) (e Expr) (s Int) (d Int)) (Prod St Expr)
   (measure (struct e))
-  (if (= d 0) (Pair st e)
-  (if (<= (loose_bvar_range e) s) (Pair st e)
+  (if (= d 0) (Prod.mk st e)
+  (if (<= (loose_bvar_range e) s) (Prod.mk st e)
   (match e
-    ((BVar _ i) (Pair st (mk_bvar (+ i d))))
+    ((BVar _ i) (Prod.mk st (mk_bvar (+ i d))))
     ((App _ f a)
      (match (lift_loose_bvars st f s d)
-       ((Pair st1 f1)
+       ((Prod.mk st1 f1)
         (match (lift_loose_bvars st1 a s d)
-          ((Pair st2 a1) (new_app st2 f1 a1))))))
+          ((Prod.mk st2 a1) (new_app st2 f1 a1))))))
     ((Lam _ n bi t b)
      (match (lift_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lift_loose_bvars st1 b (+ s 1) d)
-          ((Pair st2 b1) (new_lam st2 n bi t1 b1))))))
+          ((Prod.mk st2 b1) (new_lam st2 n bi t1 b1))))))
     ((Pi _ n bi t b)
      (match (lift_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lift_loose_bvars st1 b (+ s 1) d)
-          ((Pair st2 b1) (new_pi st2 n bi t1 b1))))))
+          ((Prod.mk st2 b1) (new_pi st2 n bi t1 b1))))))
     ((Let _ n t v b)
      (match (lift_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lift_loose_bvars st1 v s d)
-          ((Pair st2 v1)
+          ((Prod.mk st2 v1)
            (match (lift_loose_bvars st2 b (+ s 1) d)
-             ((Pair st3 b1) (new_let st3 n t1 v1 b1))))))))
+             ((Prod.mk st3 b1) (new_let st3 n t1 v1 b1))))))))
     ((Proj _ sn i x)
      (match (lift_loose_bvars st x s d)
-       ((Pair st1 x1) (new_proj st1 sn i x1))))
-    (_ (Pair st e))))))
+       ((Prod.mk st1 x1) (new_proj st1 sn i x1))))
+    (_ (Prod.mk st e))))))
 
 ;; lower_loose_bvars(e, s, d): every loose index ≥ s becomes index − d
 ;; (precondition: no loose index in [s−d, s))
-(fn lower_loose_bvars ((st St) (e Expr) (s Int) (d Int)) (Pair St Expr)
+(fn lower_loose_bvars ((st St) (e Expr) (s Int) (d Int)) (Prod St Expr)
   (measure (struct e))
-  (if (<= (loose_bvar_range e) s) (Pair st e)
+  (if (<= (loose_bvar_range e) s) (Prod.mk st e)
   (match e
-    ((BVar _ i) (Pair st (mk_bvar (- i d))))
+    ((BVar _ i) (Prod.mk st (mk_bvar (- i d))))
     ((App _ f a)
      (match (lower_loose_bvars st f s d)
-       ((Pair st1 f1)
+       ((Prod.mk st1 f1)
         (match (lower_loose_bvars st1 a s d)
-          ((Pair st2 a1) (new_app st2 f1 a1))))))
+          ((Prod.mk st2 a1) (new_app st2 f1 a1))))))
     ((Lam _ n bi t b)
      (match (lower_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lower_loose_bvars st1 b (+ s 1) d)
-          ((Pair st2 b1) (new_lam st2 n bi t1 b1))))))
+          ((Prod.mk st2 b1) (new_lam st2 n bi t1 b1))))))
     ((Pi _ n bi t b)
      (match (lower_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lower_loose_bvars st1 b (+ s 1) d)
-          ((Pair st2 b1) (new_pi st2 n bi t1 b1))))))
+          ((Prod.mk st2 b1) (new_pi st2 n bi t1 b1))))))
     ((Let _ n t v b)
      (match (lower_loose_bvars st t s d)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (lower_loose_bvars st1 v s d)
-          ((Pair st2 v1)
+          ((Prod.mk st2 v1)
            (match (lower_loose_bvars st2 b (+ s 1) d)
-             ((Pair st3 b1) (new_let st3 n t1 v1 b1))))))))
+             ((Prod.mk st3 b1) (new_let st3 n t1 v1 b1))))))))
     ((Proj _ sn i x)
      (match (lower_loose_bvars st x s d)
-       ((Pair st1 x1) (new_proj st1 sn i x1))))
-    (_ (Pair st e)))))
+       ((Prod.mk st1 x1) (new_proj st1 sn i x1))))
+    (_ (Prod.mk st e)))))
 
 ;; instantiate(e, s, subst) (instantiate.cpp l. 15): under `offset`
 ;; binders, a loose bvar with index vidx ≥ s+offset becomes
@@ -869,118 +868,118 @@
 ;; A subterm with range ≤ s+offset has no such index and is kept as it is
 ;; (the pin's `s1 >= get_loose_bvar_range(m)` return).
 (fn instantiate_go ((st St) (e Expr) (s Int) (subst (List Expr)) (n Int) (offset Int))
-  (Pair St Expr)
+  (Prod St Expr)
   (measure (struct e))
   (let ((s1 (+ s offset)))
-    (if (<= (loose_bvar_range e) s1) (Pair st e)
+    (if (<= (loose_bvar_range e) s1) (Prod.mk st e)
     (match e
       ((BVar _ i)
        (if (< i (+ s1 n))
          (match (nth subst (- i s1))
-           ((Some v) (lift_loose_bvars st v 0 offset))
-           (None (Pair st e)))
-         (Pair st (mk_bvar (- i n)))))
+           ((some v) (lift_loose_bvars st v 0 offset))
+           (none (Prod.mk st e)))
+         (Prod.mk st (mk_bvar (- i n)))))
       ((App _ f a)
        (match (instantiate_go st f s subst n offset)
-         ((Pair st1 f1)
+         ((Prod.mk st1 f1)
           (match (instantiate_go st1 a s subst n offset)
-            ((Pair st2 a1) (new_app st2 f1 a1))))))
+            ((Prod.mk st2 a1) (new_app st2 f1 a1))))))
       ((Lam _ nm bi t b)
        (match (instantiate_go st t s subst n offset)
-         ((Pair st1 t1)
+         ((Prod.mk st1 t1)
           (match (instantiate_go st1 b s subst n (+ offset 1))
-            ((Pair st2 b1) (new_lam st2 nm bi t1 b1))))))
+            ((Prod.mk st2 b1) (new_lam st2 nm bi t1 b1))))))
       ((Pi _ nm bi t b)
        (match (instantiate_go st t s subst n offset)
-         ((Pair st1 t1)
+         ((Prod.mk st1 t1)
           (match (instantiate_go st1 b s subst n (+ offset 1))
-            ((Pair st2 b1) (new_pi st2 nm bi t1 b1))))))
+            ((Prod.mk st2 b1) (new_pi st2 nm bi t1 b1))))))
       ((Let _ nm t v b)
        (match (instantiate_go st t s subst n offset)
-         ((Pair st1 t1)
+         ((Prod.mk st1 t1)
           (match (instantiate_go st1 v s subst n offset)
-            ((Pair st2 v1)
+            ((Prod.mk st2 v1)
              (match (instantiate_go st2 b s subst n (+ offset 1))
-               ((Pair st3 b1) (new_let st3 nm t1 v1 b1))))))))
+               ((Prod.mk st3 b1) (new_let st3 nm t1 v1 b1))))))))
       ((Proj _ sn i x)
        (match (instantiate_go st x s subst n offset)
-         ((Pair st1 x1) (new_proj st1 sn i x1))))
-      (_ (Pair st e))))))
+         ((Prod.mk st1 x1) (new_proj st1 sn i x1))))
+      (_ (Prod.mk st e))))))
 
-(fn instantiate_n ((st St) (e Expr) (s Int) (subst (List Expr))) (Pair St Expr)
+(fn instantiate_n ((st St) (e Expr) (s Int) (subst (List Expr))) (Prod St Expr)
   (let ((n (len subst)))
-    (if (= n 0) (Pair st e)
-    (if (<= (loose_bvar_range e) s) (Pair st e)
+    (if (= n 0) (Prod.mk st e)
+    (if (<= (loose_bvar_range e) s) (Prod.mk st e)
     (instantiate_go st e s subst n 0)))))
 
 ;; instantiate(e, v): BVar 0 := v
-(fn instantiate1 ((st St) (e Expr) (v Expr)) (Pair St Expr) (instantiate_n st e 0 (Cons v Nil)))
+(fn instantiate1 ((st St) (e Expr) (v Expr)) (Prod St Expr) (instantiate_n st e 0 (cons v nil)))
 
 ;; instantiate_rev(e, subst) (l. 99): subst given in BINDER order — the
 ;; LAST element replaces BVar 0 (the innermost binder). Implemented by
 ;; reversing and using `instantiate_n` at s = 0.
-(fn instantiate_rev ((st St) (e Expr) (subst (List Expr))) (Pair St Expr)
+(fn instantiate_rev ((st St) (e Expr) (subst (List Expr))) (Prod St Expr)
   (match subst
-    (Nil (Pair st e))
+    (nil (Prod.mk st e))
     (_ (instantiate_n st e 0 (rev subst)))))
 
 ;; abstract(e, fvars) (abstract.cpp l. 14): fvars in binder order; the
 ;; i-th fvar becomes BVar (offset + n − i − 1). A subterm without fvars is
 ;; kept; a rebuilt node whose children did not change is kept too (the
 ;; pin's `update_*` identity preservation).
-(fn abstract_go ((st St) (e Expr) (ids (List Int)) (n Int) (offset Int)) (Pair St Expr)
+(fn abstract_go ((st St) (e Expr) (ids (List Int)) (n Int) (offset Int)) (Prod St Expr)
   (measure (struct e))
-  (if (bool_not (has_fvar e)) (Pair st e)
+  (if (bool_not (has_fvar e)) (Prod.mk st e)
   (match e
     ((FVar _ id)
      (match (index_of_int id ids 0)
-       ((Some i) (Pair st (mk_bvar (- (+ offset n) (+ i 1)))))
-       (None (Pair st e))))
+       ((some i) (Prod.mk st (mk_bvar (- (+ offset n) (+ i 1)))))
+       (none (Prod.mk st e))))
     ((App _ f a)
      (match (abstract_go st f ids n offset)
-       ((Pair st1 f1)
+       ((Prod.mk st1 f1)
         (match (abstract_go st1 a ids n offset)
-          ((Pair st2 a1)
-           (if (same_node f f1) (if (same_node a a1) (Pair st2 e) (new_app st2 f1 a1))
+          ((Prod.mk st2 a1)
+           (if (same_node f f1) (if (same_node a a1) (Prod.mk st2 e) (new_app st2 f1 a1))
            (new_app st2 f1 a1)))))))
     ((Lam _ nm bi t b)
      (match (abstract_go st t ids n offset)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (abstract_go st1 b ids n (+ offset 1))
-          ((Pair st2 b1)
-           (if (same_node t t1) (if (same_node b b1) (Pair st2 e) (new_lam st2 nm bi t1 b1))
+          ((Prod.mk st2 b1)
+           (if (same_node t t1) (if (same_node b b1) (Prod.mk st2 e) (new_lam st2 nm bi t1 b1))
            (new_lam st2 nm bi t1 b1)))))))
     ((Pi _ nm bi t b)
      (match (abstract_go st t ids n offset)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (abstract_go st1 b ids n (+ offset 1))
-          ((Pair st2 b1)
-           (if (same_node t t1) (if (same_node b b1) (Pair st2 e) (new_pi st2 nm bi t1 b1))
+          ((Prod.mk st2 b1)
+           (if (same_node t t1) (if (same_node b b1) (Prod.mk st2 e) (new_pi st2 nm bi t1 b1))
            (new_pi st2 nm bi t1 b1)))))))
     ((Let _ nm t v b)
      (match (abstract_go st t ids n offset)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (abstract_go st1 v ids n offset)
-          ((Pair st2 v1)
+          ((Prod.mk st2 v1)
            (match (abstract_go st2 b ids n (+ offset 1))
-             ((Pair st3 b1)
+             ((Prod.mk st3 b1)
               (if (same_node t t1)
-                (if (same_node v v1) (if (same_node b b1) (Pair st3 e) (new_let st3 nm t1 v1 b1))
+                (if (same_node v v1) (if (same_node b b1) (Prod.mk st3 e) (new_let st3 nm t1 v1 b1))
                 (new_let st3 nm t1 v1 b1))
                 (new_let st3 nm t1 v1 b1)))))))))
     ((Proj _ sn i x)
      (match (abstract_go st x ids n offset)
-       ((Pair st1 x1) (if (same_node x x1) (Pair st1 e) (new_proj st1 sn i x1)))))
-    (_ (Pair st e)))))
+       ((Prod.mk st1 x1) (if (same_node x x1) (Prod.mk st1 e) (new_proj st1 sn i x1)))))
+    (_ (Prod.mk st e)))))
 
 (fn index_of_int ((x Int) (xs (List Int)) (i Int)) (Option Int)
   (measure (struct xs))
   (match xs
-    (Nil None)
-    ((Cons y r) (if (= x y) (Some i) (index_of_int x r (+ i 1))))))
+    (nil none)
+    ((cons y r) (if (= x y) (some i) (index_of_int x r (+ i 1))))))
 
-(fn abstract_fvars ((st St) (e Expr) (ids (List Int))) (Pair St Expr)
-  (if (has_fvar e) (abstract_go st e ids (len ids) 0) (Pair st e)))
+(fn abstract_fvars ((st St) (e Expr) (ids (List Int))) (Prod St Expr)
+  (if (has_fvar e) (abstract_go st e ids (len ids) 0) (Prod.mk st e)))
 
 ;; ---- application spines ---------------------------------------------------
 
@@ -993,11 +992,11 @@
 (fn get_app_args_go ((e Expr) (acc (List Expr))) (List Expr)
   (measure (struct e))
   (match e
-    ((App _ f a) (get_app_args_go f (Cons a acc)))
+    ((App _ f a) (get_app_args_go f (cons a acc)))
     (_ acc)))
 
 ;; the arguments in order (leftmost first)
-(fn get_app_args ((e Expr)) (List Expr) (get_app_args_go e Nil))
+(fn get_app_args ((e Expr)) (List Expr) (get_app_args_go e nil))
 
 (fn get_app_num_args ((e Expr)) Int
   (measure (struct e))
@@ -1005,61 +1004,61 @@
     ((App _ f _) (+ 1 (get_app_num_args f)))
     (_ 0)))
 
-(fn mk_app_list ((st St) (f Expr) (args (List Expr))) (Pair St Expr)
+(fn mk_app_list ((st St) (f Expr) (args (List Expr))) (Prod St Expr)
   (measure (struct args))
   (match args
-    (Nil (Pair st f))
-    ((Cons a r)
+    (nil (Prod.mk st f))
+    ((cons a r)
      (match (new_app st f a)
-       ((Pair st1 fa) (mk_app_list st1 fa r))))))
+       ((Prod.mk st1 fa) (mk_app_list st1 fa r))))))
 
 ;; ---- universe parameters in terms ----------------------------------------
 
 ;; instantiate_lparams (instantiate.cpp l. 236): a subterm without level
 ;; parameters is kept as it is; a rebuilt node whose children did not
 ;; change is kept too
-(fn expr_inst_lparams ((st St) (e Expr) (ps (List Name)) (ls (List Level))) (Pair St Expr)
+(fn expr_inst_lparams ((st St) (e Expr) (ps (List Name)) (ls (List Level))) (Prod St Expr)
   (measure (struct e))
-  (if (bool_not (has_lparam e)) (Pair st e)
+  (if (bool_not (has_lparam e)) (Prod.mk st e)
   (match e
-    ((Sort _ u) (Pair st (mk_sort (level_inst u ps ls))))
-    ((Const _ n us) (Pair st (mk_const n (levels_inst us ps ls))))
+    ((Sort _ u) (Prod.mk st (mk_sort (level_inst u ps ls))))
+    ((Const _ n us) (Prod.mk st (mk_const n (levels_inst us ps ls))))
     ((App _ f a)
      (match (expr_inst_lparams st f ps ls)
-       ((Pair st1 f1)
+       ((Prod.mk st1 f1)
         (match (expr_inst_lparams st1 a ps ls)
-          ((Pair st2 a1)
-           (if (same_node f f1) (if (same_node a a1) (Pair st2 e) (new_app st2 f1 a1))
+          ((Prod.mk st2 a1)
+           (if (same_node f f1) (if (same_node a a1) (Prod.mk st2 e) (new_app st2 f1 a1))
            (new_app st2 f1 a1)))))))
     ((Lam _ nm bi t b)
      (match (expr_inst_lparams st t ps ls)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (expr_inst_lparams st1 b ps ls)
-          ((Pair st2 b1)
-           (if (same_node t t1) (if (same_node b b1) (Pair st2 e) (new_lam st2 nm bi t1 b1))
+          ((Prod.mk st2 b1)
+           (if (same_node t t1) (if (same_node b b1) (Prod.mk st2 e) (new_lam st2 nm bi t1 b1))
            (new_lam st2 nm bi t1 b1)))))))
     ((Pi _ nm bi t b)
      (match (expr_inst_lparams st t ps ls)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (expr_inst_lparams st1 b ps ls)
-          ((Pair st2 b1)
-           (if (same_node t t1) (if (same_node b b1) (Pair st2 e) (new_pi st2 nm bi t1 b1))
+          ((Prod.mk st2 b1)
+           (if (same_node t t1) (if (same_node b b1) (Prod.mk st2 e) (new_pi st2 nm bi t1 b1))
            (new_pi st2 nm bi t1 b1)))))))
     ((Let _ nm t v b)
      (match (expr_inst_lparams st t ps ls)
-       ((Pair st1 t1)
+       ((Prod.mk st1 t1)
         (match (expr_inst_lparams st1 v ps ls)
-          ((Pair st2 v1)
+          ((Prod.mk st2 v1)
            (match (expr_inst_lparams st2 b ps ls)
-             ((Pair st3 b1)
+             ((Prod.mk st3 b1)
               (if (same_node t t1)
-                (if (same_node v v1) (if (same_node b b1) (Pair st3 e) (new_let st3 nm t1 v1 b1))
+                (if (same_node v v1) (if (same_node b b1) (Prod.mk st3 e) (new_let st3 nm t1 v1 b1))
                 (new_let st3 nm t1 v1 b1))
                 (new_let st3 nm t1 v1 b1)))))))))
     ((Proj _ sn i x)
      (match (expr_inst_lparams st x ps ls)
-       ((Pair st1 x1) (if (same_node x x1) (Pair st1 e) (new_proj st1 sn i x1)))))
-    (_ (Pair st e)))))
+       ((Prod.mk st1 x1) (if (same_node x x1) (Prod.mk st1 e) (new_proj st1 sn i x1)))))
+    (_ (Prod.mk st e)))))
 
 ;; ---- beta ----------------------------------------------------------------------
 
@@ -1067,37 +1066,37 @@
 ;; there are arguments; if the remaining body has no loose bvars, drop the
 ;; consumed arguments; if it is a bare BVar, select that argument; else
 ;; leave the term alone.
-(fn cheap_beta_reduce ((st St) (e Expr)) (Pair St Expr)
+(fn cheap_beta_reduce ((st St) (e Expr)) (Prod St Expr)
   (match e
     ((App _ _ _)
      (let ((fn (get_app_fn e)) (args (get_app_args e)))
        (if (is_lambda fn)
          (match (strip_lambdas fn (len args) 0)
-           ((Pair body i)
+           ((Prod.mk body i)
             (if (bool_not (has_loose_bvars body)) (mk_app_list st body (drop i args))
             (match body
               ((BVar _ k)
                (match (nth args (- (- i k) 1))
-                 ((Some a) (mk_app_list st a (drop i args)))
-                 (None (Pair st e))))
-              (_ (Pair st e))))))
-         (Pair st e))))
-    (_ (Pair st e))))
+                 ((some a) (mk_app_list st a (drop i args)))
+                 (none (Prod.mk st e))))
+              (_ (Prod.mk st e))))))
+         (Prod.mk st e))))
+    (_ (Prod.mk st e))))
 
 ;; strip up to n lambdas; returns (body, number stripped)
-(fn strip_lambdas ((f Expr) (n Int) (i Int)) (Pair Expr Int)
+(fn strip_lambdas ((f Expr) (n Int) (i Int)) (Prod Expr Int)
   (measure (struct f))
   (match f
-    ((Lam _ _ _ _ b) (if (< i n) (strip_lambdas b n (+ i 1)) (Pair f i)))
-    (_ (Pair f i))))
+    ((Lam _ _ _ _ b) (if (< i n) (strip_lambdas b n (+ i 1)) (Prod.mk f i)))
+    (_ (Prod.mk f i))))
 
 ;; beta-reduce the head with all available arguments at once (the App case
 ;; of whnf_core, type_checker.cpp l. 517–524): consume min(#lambdas, #args)
-(fn beta_head ((st St) (f Expr) (args (List Expr))) (Pair St Expr)
+(fn beta_head ((st St) (f Expr) (args (List Expr))) (Prod St Expr)
   (match (strip_lambdas f (len args) 0)
-    ((Pair body m)
+    ((Prod.mk body m)
      (match (instantiate_n st body 0 (rev (take m args)))
-       ((Pair st1 r) (mk_app_list st1 r (drop m args)))))))
+       ((Prod.mk st1 r) (mk_app_list st1 r (drop m args)))))))
 
 ;; ---- rendering (diagnostics, tests) ----------------------------------------
 
@@ -1107,7 +1106,7 @@
     ((BVar _ i) (append "#" (show_nat i)))
     ((FVar _ i) (append "?f" (show_nat i)))
     ((Sort _ u) (append "(Sort " (append (show_level u) ")")))
-    ((Const _ n Nil) (show_name n))
+    ((Const _ n nil) (show_name n))
     ((Const _ n ls) (append (show_name n) (append ".{" (append (show_levels ls) "}"))))
     ((App _ f a) (append "(" (append (show_expr f) (append " " (append (show_expr a) ")")))))
     ((Lam _ n _ d b)
@@ -1132,9 +1131,9 @@
 (fn show_levels ((ls (List Level))) (List Int)
   (measure (struct ls))
   (match ls
-    (Nil "")
-    ((Cons l Nil) (show_level l))
-    ((Cons l r) (append (show_level l) (append ", " (show_levels r))))))
+    (nil "")
+    ((cons l nil) (show_level l))
+    ((cons l r) (append (show_level l) (append ", " (show_levels r))))))
 
 (fn chars_of_name_last ((n Name)) (List Int)
   (match n

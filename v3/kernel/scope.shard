@@ -7,23 +7,22 @@
 ;;; bound names, each with its fvar (terms are built over K's
 ;;; locals and closed by K's mk_binding, never by de Bruijn arithmetic).
 
+(import Init)
 (import "sexpr.shard")
 (import "k")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.k)
 (use kernel.expr)
 (use kernel.intmap)
 (use kernel.name)
-(use kernel.prelude)
 (use kernel.sexpr)
 (use kernel.util)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ReducibilityHints)
 (use kernel.expr.Expr)
 (use kernel.name.Name)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 (use kernel.sexpr.SExpr)
 
 ;; the scope the loader builds (loader.shard): the module's own path
@@ -39,8 +38,8 @@
 (type Derived (Derived Expr Symbol Name Name))
 (type Vis
   (VisAll)  ; a scratch scope: everything the environment holds
-  (VisOnly (List Name) Bool (IntMap (List (Pair Name Name))) (List Name) (List Derived)
-    (IntMap (List (Pair Name Int)))))
+  (VisOnly (List Name) Bool (IntMap (List (Prod Name Name))) (List Name) (List Derived)
+    (IntMap (List (Prod Name Int)))))
 ;; the visible modules (the file's import closure and itself), whether the file sees Init
 ;; (it imports Init, or a module that sees it), declaration → module for every native
 ;; declaration (a constant absent from the table is Init's), the pending
@@ -61,8 +60,8 @@
 ;; field's type, over the bound `self`), and the E-type flag (a bare polymorphic constant takes
 ;; level 0 by rule there)
 (type Cx
-  (Cx Scope CheckedEnv (List Name) (List Defd) (List (Pair Name Expr))
-    (List (Pair Name (Pair Int Expr)))
+  (Cx Scope CheckedEnv (List Name) (List Defd) (List (Prod Name Expr))
+    (List (Prod Name (Prod Int Expr)))
     Bool))
 
 (fn cx_scope ((c Cx)) Scope
@@ -77,10 +76,10 @@
 (fn cx_defining ((c Cx)) (List Defd)
   (match c
     ((Cx _ _ _ d _ _ _) d)))
-(fn cx_bound ((c Cx)) (List (Pair Name Expr))
+(fn cx_bound ((c Cx)) (List (Prod Name Expr))
   (match c
     ((Cx _ _ _ _ b _ _) b)))
-(fn cx_aliases ((c Cx)) (List (Pair Name (Pair Int Expr)))
+(fn cx_aliases ((c Cx)) (List (Prod Name (Prod Int Expr)))
   (match c
     ((Cx _ _ _ _ _ a _) a)))
 (fn cx_etype ((c Cx)) Bool
@@ -88,53 +87,53 @@
     ((Cx _ _ _ _ _ _ t) t)))
 (fn cx_bind ((c Cx) (n Name) (fv Expr)) Cx
   (match c
-    ((Cx s e l d b a t) (Cx s e l d (Cons (Pair n fv) b) a t))))
+    ((Cx s e l d b a t) (Cx s e l d (cons (Prod.mk n fv) b) a t))))
 (fn cx_with_etype ((c Cx) (t Bool)) Cx
   (match c
     ((Cx s e l d b a _) (Cx s e l d b a t))))
-(fn cx_with_aliases ((c Cx) (a (List (Pair Name (Pair Int Expr))))) Cx
+(fn cx_with_aliases ((c Cx) (a (List (Prod Name (Prod Int Expr))))) Cx
   (match c
     ((Cx s e l d b _ t) (Cx s e l d b a t))))
 (fn cx_with_defining ((c Cx) (d (List Defd))) Cx
   (match c
     ((Cx s e l _ b a t) (Cx s e l d b a t))))
 (fn cx0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd))) Cx
-  (Cx sc env lps defining Nil Nil False))
+  (Cx sc env lps defining nil nil false))
 ;; the bound fvar of a name (innermost wins)
 (fn cx_lookup ((c Cx) (n Name)) (Option Expr) (assoc_name_expr n (cx_bound c)))
-(fn assoc_name_expr ((n Name) (xs (List (Pair Name Expr)))) (Option Expr)
+(fn assoc_name_expr ((n Name) (xs (List (Prod Name Expr)))) (Option Expr)
   (measure (struct xs))
   (match xs
-    (Nil None)
-    ((Cons (Pair m e) r) (if (name_eq n m) (Some e) (assoc_name_expr n r)))))
+    (nil none)
+    ((cons (Prod.mk m e) r) (if (name_eq n m) (some e) (assoc_name_expr n r)))))
 ;; the fvar ids in scope
 (fn cx_fvar_ids ((c Cx)) (List Int) (bound_ids (cx_bound c)))
-(fn bound_ids ((bs (List (Pair Name Expr)))) (List Int)
+(fn bound_ids ((bs (List (Prod Name Expr)))) (List Int)
   (measure (struct bs))
   (match bs
-    (Nil Nil)
-    ((Cons (Pair _ (FVar _ id)) r) (Cons id (bound_ids r)))
-    ((Cons _ r) (bound_ids r))))
+    (nil nil)
+    ((cons (Prod.mk _ (FVar _ id)) r) (cons id (bound_ids r)))
+    ((cons _ r) (bound_ids r))))
 
 ;; ---- names ---------------------------------------------------------------------------
 ;; a symbol's components on `.`; an all-digit component is a Num
 (fn name_of_bytes ((bs (List Int)) (comp (List Int)) (acc Name)) (Option Name)
   (measure (struct bs))
   (match bs
-    (Nil (name_push acc (rev comp)))
-    ((Cons c r)
+    (nil (name_push acc (rev comp)))
+    ((cons c r)
      (if (= c 46)
        (match (name_push acc (rev comp))
-         ((Some n) (name_of_bytes r Nil n))
-         (None None))
-       (name_of_bytes r (Cons c comp) acc)))))
+         ((some n) (name_of_bytes r nil n))
+         (none none))
+       (name_of_bytes r (cons c comp) acc)))))
 (fn name_push ((acc Name) (comp (List Int))) (Option Name)
   (match comp
-    (Nil None)
+    (nil none)
     (_
-      (if (all_digits comp) (Some (Num acc (digits_val comp 0)))
-      (Some (Str acc (sym_of_chars comp)))))))
-(fn name_of_sym ((s Symbol)) (Option Name) (name_of_bytes (chars_of_sym s) Nil Anon))
+      (if (all_digits comp) (some (Num acc (digits_val comp 0)))
+      (some (Str acc (sym_of_chars comp)))))))
+(fn name_of_sym ((s Symbol)) (Option Name) (name_of_bytes (chars_of_sym s) nil Anon))
 
 ;; p ++ n
 (fn name_append ((p Name) (n Name)) Name
@@ -168,105 +167,105 @@
     ((Num q k) (Num (name_after p q) k)))))
 
 ;; the declaration → module table (VisOnly's third field), keyed as the environment is
-(fn tbl_find ((tbl (IntMap (List (Pair Name Name)))) (k Name)) (Option Name)
+(fn tbl_find ((tbl (IntMap (List (Prod Name Name)))) (k Name)) (Option Name)
   (match (im_find tbl (env_key k))
-    ((Some b) (assoc_name k b))
-    (None None)))
-(fn tbl_add ((tbl (IntMap (List (Pair Name Name)))) (k Name) (m Name))
-  (IntMap (List (Pair Name Name)))
+    ((some b) (assoc_name k b))
+    (none none)))
+(fn tbl_add ((tbl (IntMap (List (Prod Name Name)))) (k Name) (m Name))
+  (IntMap (List (Prod Name Name)))
   (let ((h (env_key k)))
     (im_insert tbl h
-      (Cons (Pair k m)
+      (cons (Prod.mk k m)
         (match (im_find tbl h)
-          ((Some b) b)
-          (None Nil))))))
+          ((some b) b)
+          (none nil))))))
 ;; is the constant k citable from this scope? (a name being declared by the
 ;; current form is, always — resolve_go asks first)
 (fn visible ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
-    (VisAll True)
+    (VisAll true)
     ((VisOnly mods init tbl _ _ _)
      (match (tbl_find tbl k)
-       ((Some m) (mem_name m mods))
-       (None init)))))  ; a constant no module of the load declared is Init's: citable where the file sees Init
-(fn ords_find ((ords (IntMap (List (Pair Name Int)))) (k Name)) (Option Int)
+       ((some m) (mem_name m mods))
+       (none init)))))  ; a constant no module of the load declared is Init's: citable where the file sees Init
+(fn ords_find ((ords (IntMap (List (Prod Name Int)))) (k Name)) (Option Int)
   (match (im_find ords (env_key k))
-    ((Some b) (ords_assoc k b))
-    (None None)))
-(fn ords_assoc ((k Name) (b (List (Pair Name Int)))) (Option Int)
+    ((some b) (ords_assoc k b))
+    (none none)))
+(fn ords_assoc ((k Name) (b (List (Prod Name Int)))) (Option Int)
   (measure (struct b))
   (match b
-    (Nil None)
-    ((Cons (Pair n o) r) (if (name_eq k n) (Some o) (ords_assoc k r)))))
-(fn ords_add ((ords (IntMap (List (Pair Name Int)))) (k Name) (o Int))
-  (IntMap (List (Pair Name Int)))
+    (nil none)
+    ((cons (Prod.mk n o) r) (if (name_eq k n) (some o) (ords_assoc k r)))))
+(fn ords_add ((ords (IntMap (List (Prod Name Int)))) (k Name) (o Int))
+  (IntMap (List (Prod Name Int)))
   (let ((h (env_key k)))
     (im_insert ords h
-      (Cons (Pair k o)
+      (cons (Prod.mk k o)
         (match (im_find ords h)
-          ((Some b) b)
-          (None Nil))))))
+          ((some b) b)
+          (none nil))))))
 ;; the visible procedures derived for a capability at a type: none, the one, or — two modules
 ;; of the closure each derived it — several
 (fn derived_for ((sc Scope) (ty Expr) (cap Symbol)) (List Name)
   (match (sc_vis sc)
-    (VisAll Nil)
-    ((VisOnly mods _ _ _ ds _) (derived_among sc mods ds ty cap Nil))))
+    (VisAll nil)
+    ((VisOnly mods _ _ _ ds _) (derived_among sc mods ds ty cap nil))))
 (fn derived_among
   ((sc Scope) (mods (List Name)) (ds (List Derived)) (ty Expr) (cap Symbol) (acc (List Name)))
   (List Name)
   (measure (struct ds))
   (match ds
-    (Nil acc)
-    ((Cons (Derived t c p m) r)
+    (nil acc)
+    ((cons (Derived t c p m) r)
      (derived_among sc mods r ty cap
        (if
          (bool_and (sym_eq c cap)
            (bool_and (expr_eq t ty)
              (bool_and (mem_name m mods) (bool_and (visible sc p) (bool_not (mem_name p acc))))))
-         (Cons p acc)
+         (cons p acc)
          acc)))))
 ;; every visible procedure derived for a capability, with the type it was derived at (the
 ;; classifier keys them by E type: classify.shard derived_eqs)
-(fn derived_visible ((sc Scope) (cap Symbol)) (List (Pair Expr Name))
+(fn derived_visible ((sc Scope) (cap Symbol)) (List (Prod Expr Name))
   (match (sc_vis sc)
-    (VisAll Nil)
+    (VisAll nil)
     ((VisOnly mods _ _ _ ds _) (derived_pairs sc mods ds cap))))
 (fn derived_pairs ((sc Scope) (mods (List Name)) (ds (List Derived)) (cap Symbol))
-  (List (Pair Expr Name))
+  (List (Prod Expr Name))
   (measure (struct ds))
   (match ds
-    (Nil Nil)
-    ((Cons (Derived t c p m) r)
+    (nil nil)
+    ((cons (Derived t c p m) r)
      (if (bool_and (sym_eq c cap) (bool_and (mem_name m mods) (visible sc p)))
-       (Cons (Pair t p) (derived_pairs sc mods r cap))
+       (cons (Prod.mk t p) (derived_pairs sc mods r cap))
        (derived_pairs sc mods r cap)))))
 ;; a native declaration (in the declaration → module table); an imported one is not
 (fn native_decl ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
-    (VisAll False)
+    (VisAll false)
     ((VisOnly _ _ tbl _ _ _)
      (match (tbl_find tbl k)
-       ((Some _) True)
-       (None False)))))
+       ((some _) true)
+       (none false)))))
 (fn pending_name ((sc Scope) (k Name)) Bool
   (match (sc_vis sc)
-    (VisAll False)
+    (VisAll false)
     ((VisOnly _ _ _ p _ _) (mem_name k p))))
 
 ;; the universe arity of a citable constant: being declared here, or in the environment
 (fn const_arity ((c Cx) (n Name)) (Option Int)
   (match (find_defd n (cx_defining c))
-    ((Some (Defd _ k _)) (Some k))
-    (None
+    ((some (Defd _ k _)) (some k))
+    (none
       (match (env_find (cx_env c) n)
-        ((Some info) (Some (len (ci_lparams info))))
-        (None None)))))
+        ((some info) (some (len (ci_lparams info))))
+        (none none)))))
 (fn find_defd ((n Name) (ds (List Defd))) (Option Defd)
   (measure (struct ds))
   (match ds
-    (Nil None)
-    ((Cons (Defd m k t) r) (if (name_eq n m) (Some (Defd m k t)) (find_defd n r)))))
+    (nil none)
+    ((cons (Defd m k t) r) (if (name_eq n m) (some (Defd m k t)) (find_defd n r)))))
 
 ;; resolution: the module's own declarations, each opened prefix in
 ;; order, then the bare name (`(use Init)` is implicit). Two hits = ambiguous.
@@ -278,26 +277,26 @@
   (let ((m (sc_module sc)))
     (append
       (match m
-        (Anon Nil)
+        (Anon nil)
         (_ (list (name_append m n))))
       (append (prefixed (sc_opened sc) n) (append (init_cited sc n) (list n))))))
 ;; `Init.NAME` cites the imported NAME explicitly: imported names are bare in
 ;; K and the loader shows them under the prefix Init, so the citation is the bare name when
 ;; the scope sees Init — the spelling that tells Init's `Bool` from a native `main.Bool`
 (fn init_cited ((sc Scope) (n Name)) (List Name)
-  (if (bool_and (init_prefixed n) (init_seen sc)) (list (drop_init n)) Nil))
+  (if (bool_and (init_prefixed n) (init_seen sc)) (list (drop_init n)) nil))
 ;; the comparison primitives are `< <= =`: the spellings `lt le int_eq` are refused
 ;; everywhere with the one to write (`renamed_primitive`, from the classifier and from the
 ;; elaborator)
 (fn renamed_prim ((s Symbol)) (Option Symbol)
-  (if (sym_eq s (quote lt)) (Some (quote <))
-  (if (sym_eq s (quote le)) (Some (quote <=))
-  (if (sym_eq s (quote int_eq)) (Some (quote =))
-  None))))
+  (if (sym_eq s (quote lt)) (some (quote <))
+  (if (sym_eq s (quote le)) (some (quote <=))
+  (if (sym_eq s (quote int_eq)) (some (quote =))
+  none))))
 (fn renamed_spelling ((s Symbol)) Bool
   (match (renamed_prim s)
-    ((Some _) True)
-    (None False)))
+    ((some _) true)
+    (none false)))
 ;; the toolchain's own sources — the modules under `kernel`: a string literal there is the
 ;; List in scope's chain of cells, not Init's String
 (fn toolchain_scope ((sc Scope)) Bool (first_component_in (sc_module sc) (list (quote kernel))))
@@ -306,11 +305,11 @@
     (append " is spelled " (append (chars_of_sym new) ": write that instead"))))
 (fn init_prefixed ((n Name)) Bool
   (match (first_component n)
-    ((Some s) (sym_eq s (quote Init)))
-    (None False)))
+    ((some s) (sym_eq s (quote Init)))
+    (none false)))
 (fn init_seen ((sc Scope)) Bool
   (match (sc_vis sc)
-    (VisAll True)
+    (VisAll true)
     ((VisOnly _ init _ _ _ _) init)))
 ;; the name without its leading `Init` component (`(use Init.List)` opens `List`)
 (fn drop_init ((n Name)) Name
@@ -323,40 +322,40 @@
 (fn prefixed ((ps (List Open)) (n Name)) (List Name)
   (measure (struct ps))
   (match ps
-    (Nil Nil)
-    ((Cons (OpenAll p) r) (Cons (name_append p n) (prefixed r n)))
-    ((Cons (OpenSome p ms) r)
-     (if (first_component_in n ms) (Cons (name_append p n) (prefixed r n)) (prefixed r n)))))
+    (nil nil)
+    ((cons (OpenAll p) r) (cons (name_append p n) (prefixed r n)))
+    ((cons (OpenSome p ms) r)
+     (if (first_component_in n ms) (cons (name_append p n) (prefixed r n)) (prefixed r n)))))
 (fn first_component_in ((n Name) (ms (List Symbol))) Bool
   (match (first_component n)
-    ((Some s) (mem_sym s ms))
-    (None False)))
+    ((some s) (mem_sym s ms))
+    (none false)))
 (fn first_component ((n Name)) (Option Symbol)
   (measure (struct n))
   (match n
-    (Anon None)
-    ((Str Anon s) (Some s))
+    (Anon none)
+    ((Str Anon s) (some s))
     ((Str p _) (first_component p))
-    ((Num Anon _) None)
+    ((Num Anon _) none)
     ((Num p _) (first_component p))))
 (fn mem_sym ((s Symbol) (xs (List Symbol))) Bool
   (measure (struct xs))
   (match xs
-    (Nil False)
-    ((Cons y r) (if (sym_eq s y) True (mem_sym s r)))))
+    (nil false)
+    ((cons y r) (if (sym_eq s y) true (mem_sym s r)))))
 (fn is_defining ((c Cx) (k Name)) Bool
   (match (find_defd k (cx_defining c))
-    ((Some _) True)
-    (None False)))
+    ((some _) true)
+    (none false)))
 (fn resolve_go ((c Cx) (n Name) (cands (List Name)) (found Resolved)) Resolved
   (measure (struct cands))
   (match cands
-    (Nil found)
-    ((Cons k r)
+    (nil found)
+    ((cons k r)
      (if (pending_name (cx_scope c) k) (RPend k)
      (match (const_arity c k)
-       (None (resolve_go c n r found))
-       ((Some a)
+       (none (resolve_go c n r found))
+       ((some a)
         (if (bool_or (is_defining c k) (visible (cx_scope c) k))
           (match found
             (RNone (resolve_go c n r (RName k a)))
@@ -371,30 +370,30 @@
 (fn resolve_type_pick ((c Cx) (n Name) (r (List Name)) (found Resolved) (f Name) (k Name) (a Int))
   Resolved
   (if (cx_etype c)
-    (match (Pair (is_inductive c f) (is_inductive c k))
-      ((Pair True False) (resolve_go c n r found))
-      ((Pair False True) (resolve_go c n r (RName k a)))
+    (match (Prod.mk (is_inductive c f) (is_inductive c k))
+      ((Prod.mk true false) (resolve_go c n r found))
+      ((Prod.mk false true) (resolve_go c n r (RName k a)))
       (_ (RAmbiguous f k)))
     (RAmbiguous f k)))
 (fn is_inductive ((c Cx) (k Name)) Bool
   (match (env_find (cx_env c) k)
-    ((Some (InductInfo _ _ _ _ _ _ _ _ _)) True)
-    (_ False)))
+    ((some (InductInfo _ _ _ _ _ _ _ _ _)) true)
+    (_ false)))
 
 ;; a constructor by the type a position expects: the name under the
 ;; inductive's own prefix first (`Add` at an expected `Exp` is `Exp.Add`), then the scope's
 ;; candidates — the first that is a citable constructor of that inductive. A pattern's head
 ;; resolves through here; a term's does when the plain resolution is ambiguous
 (fn resolve_ctor ((c Cx) (n Name) (ind Name)) (Option Name)
-  (first_ctor_of c ind (Cons (name_append ind n) (scope_candidates (cx_scope c) n))))
+  (first_ctor_of c ind (cons (name_append ind n) (scope_candidates (cx_scope c) n))))
 (fn first_ctor_of ((c Cx) (ind Name) (cands (List Name))) (Option Name)
   (measure (struct cands))
   (match cands
-    (Nil None)
-    ((Cons k r)
+    (nil none)
+    ((cons k r)
      (match (env_find (cx_env c) k)
-       ((Some (CtorInfo _ i _ _ _ _))
-        (if (bool_and (name_eq i ind) (bool_or (is_defining c k) (visible (cx_scope c) k))) (Some k)
+       ((some (CtorInfo _ i _ _ _ _))
+        (if (bool_and (name_eq i ind) (bool_or (is_defining c k) (visible (cx_scope c) k))) (some k)
         (first_ctor_of c ind r)))
        (_ (first_ctor_of c ind r))))))
 
@@ -402,18 +401,18 @@
 (fn index_of ((n Name) (bs (List Name)) (i Int)) (Option Int)
   (measure (struct bs))
   (match bs
-    (Nil None)
-    ((Cons b r) (if (name_eq n b) (Some i) (index_of n r (+ i 1))))))
+    (nil none)
+    ((cons b r) (if (name_eq n b) (some i) (index_of n r (+ i 1))))))
 
 ;; ---- heads (the reader's and the classifier's) --------------------------------------
 ;; `@f`: Lean's explicit application — every binder of f takes a written argument
 (fn sym_explicit ((x Symbol)) Bool
   (match (chars_of_sym x)
-    ((Cons 64 _) True)
-    (_ False)))
+    ((cons 64 _) true)
+    (_ false)))
 (fn sym_strip ((x Symbol)) Symbol
   (match (chars_of_sym x)
-    ((Cons 64 r) (sym_of_chars r))
+    ((cons 64 r) (sym_of_chars r))
     (_ x)))
 ;; a match with a numeral row is a literal match — tests in row order, never a matcher (elab.shard
 ;; elab_match_lit, classify.shard read_ematch_lit) —, and the scrutinee's name in its tests is
@@ -421,44 +420,44 @@
 (fn has_numeral_row ((arms (List SExpr))) Bool
   (measure (struct arms))
   (match arms
-    (Nil False)
-    ((Cons (SList (Cons (SNum _) _)) _) True)
-    ((Cons _ r) (has_numeral_row r))))
+    (nil false)
+    ((cons (SList (cons (SNum _) _)) _) true)
+    ((cons _ r) (has_numeral_row r))))
 (fn lit_scrut () Symbol (sym_of_chars "match scrutinee"))
 (fn univ_params ((ls (List SExpr)) (acc (List Name))) (Option (List Name))
   (measure (struct ls))
   (match ls
-    (Nil (Some (rev acc)))
-    ((Cons (SSym u) r)
+    (nil (some (rev acc)))
+    ((cons (SSym u) r)
      (match (name_of_sym u)
-       ((Some n) (univ_params r (Cons n acc)))
-       (None None)))
-    (_ None)))
+       ((some n) (univ_params r (cons n acc)))
+       (none none)))
+    (_ none)))
 
 ;; (type (NAME T…) …) / (type NAME …): the qualified name and its parameters
-(fn type_head ((sc Scope) (s SExpr)) (Pair (Option (Pair Name (List Name))) (List Int))
+(fn type_head ((sc Scope) (s SExpr)) (Prod (Option (Prod Name (List Name))) (List Int))
   (match s
     ((SSym x)
      (match (name_of_sym x)
-       ((Some n) (Pair (Some (Pair (qualify sc n) Nil)) Nil))
-       (None (Pair None (chars_of_sym x)))))
-    ((SList (Cons (SSym x) ps))
+       ((some n) (Prod.mk (some (Prod.mk (qualify sc n) nil)) nil))
+       (none (Prod.mk none (chars_of_sym x)))))
+    ((SList (cons (SSym x) ps))
      (match (name_of_sym x)
-       (None (Pair None (chars_of_sym x)))
-       ((Some n)
-        (match (univ_params ps Nil)
-          ((Some names) (Pair (Some (Pair (qualify sc n) names)) Nil))
-          (None (Pair None "type parameters are names"))))))
-    (_ (Pair None "(type (NAME T…) …) or (type NAME …)"))))
+       (none (Prod.mk none (chars_of_sym x)))
+       ((some n)
+        (match (univ_params ps nil)
+          ((some names) (Prod.mk (some (Prod.mk (qualify sc n) names)) nil))
+          (none (Prod.mk none "type parameters are names"))))))
+    (_ (Prod.mk none "(type (NAME T…) …) or (type NAME …)"))))
 
 ;; ---- reducibility height (environment.cpp: 1 + the greatest height cited) -----------
 (fn def_height ((env CheckedEnv) (v Expr)) Int (+ 1 (max_height env (expr_consts v) 0)))
 (fn max_height ((env CheckedEnv) (ns (List Name)) (acc Int)) Int
   (measure (struct ns))
   (match ns
-    (Nil acc)
-    ((Cons n r)
+    (nil acc)
+    ((cons n r)
      (max_height env r
        (match (env_find env n)
-         ((Some (DefnInfo _ _ (HRegular h) _ _)) (max_int acc h))
+         ((some (DefnInfo _ _ (HRegular h) _ _)) (max_int acc h))
          (_ acc))))))

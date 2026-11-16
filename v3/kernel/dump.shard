@@ -5,11 +5,12 @@
 ;;; rust_bootstrap/src/plain/out.rs) compare byte for byte
 ;;; (kernel/test/parity_test.sh, plain_test.sh). `load.shard --dump FILE` prints it.
 ;;;
-;;;   type NAME n (CTOR T…)…        n type parameters; every name its last component
+;;;   type NAME n (CTOR T…)…        n type parameters; a name its last component, a constructor
+;;;                                 its type's and its own (Prod.mk, Tok.TPlus)
 ;;;   fn NAME n (T…) T BODY         n = the distinct type variables of the signature,
 ;;;   extern NAME n (T…) T            numbered ?i by first occurrence across the binders then the result
 ;;;   T   ::= Int | Symbol | NAME | (NAME T…) | ?i
-;;;   E   ::= #i | INT | 'sym | (NAME E…)            a constructor, a call, an extern (last component),
+;;;   E   ::= #i | INT | 'sym | (NAME E…)            a constructor (TYPE.CTOR), a call, an extern,
 ;;;         | (match E (PAT E)…) | (let (E…) E) | (if E E E)   a primitive (its full spelling)
 ;;;   PAT ::= _ | NAME | (NAME PAT…) | INT | 'sym
 ;;; A string and a `(list …)` are the constructor chains both loaders build;
@@ -17,7 +18,7 @@
 ;;; `let`); the measure clause is outside the text.
 ;;;
 ;;; The text is a PROJECTION of the Prog:
-;;; a name prints as its last component and a constructor, a call and an
+;;; a name prints as its last component, a constructor under its type's, and a call and an
 ;;; extern print alike, so two dumps agreeing byte for byte is evidence of
 ;;; agreement exactly where the projection is injective — parity_test.sh
 ;;; checks every closure for one declaration per short name among the heads
@@ -28,17 +29,16 @@
 ;;; print alike; the bootstrap has one integer type and the profile's
 ;;; literals are Int in both loaders). Nothing reads this text back.
 
+(import Init)
 (import "prog.shard")
 (import "etable.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.name)
-(use kernel.prelude)
 (use kernel.prog)
 (use kernel.util)
 (use kernel.name.Name)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 (use kernel.etable)
 (use kernel.etable.ESt)
 (use kernel.prog.EArm)
@@ -56,8 +56,8 @@
 (fn dm_decls ((es ESt) (ds (List EDecl))) (List (List Int))
   (measure (struct ds))
   (match ds
-    (Nil Nil)
-    ((Cons d r) (Cons (dm_decl es d) (dm_decls es r)))))
+    (nil nil)
+    ((cons d r) (cons (dm_decl es d) (dm_decls es r)))))
 
 (fn dm_decl ((es ESt) (d EDecl)) (List Int)
   (match d
@@ -76,45 +76,45 @@
 ;; prefix is the directory's, above its own tag)
 (fn dm_head ((es ESt) (n Name)) (List Int)
   (match (es_module es n)
-    (None (dm_short n))
-    ((Some m) (dm_join (dm_drop_common (dm_comps m) (dm_comps n))))))
+    (none (dm_short n))
+    ((some m) (dm_join (dm_drop_common (dm_comps m) (dm_comps n))))))
 (fn dm_comps ((n Name)) (List (List Int))
   (measure (struct n))
   (match n
-    (Anon Nil)
+    (Anon nil)
     ((Str p s) (append (dm_comps p) (list (chars_of_sym s))))
     ((Num p k) (append (dm_comps p) (list (show_int k))))))
 (fn dm_drop_common ((m (List (List Int))) (n (List (List Int)))) (List (List Int))
   (measure (struct m))
   (match m
-    (Nil n)
-    ((Cons x r)
+    (nil n)
+    ((cons x r)
      (match n
-       ((Cons y s) (if (int_list_eq x y) (dm_drop_common r s) n))
-       (Nil Nil)))))
+       ((cons y s) (if (int_list_eq x y) (dm_drop_common r s) n))
+       (nil nil)))))
 (fn dm_join ((cs (List (List Int)))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil "anon")
-    ((Cons c Nil) c)
-    ((Cons c r) (append c (append "." (dm_join r))))))
+    (nil "anon")
+    ((cons c nil) c)
+    ((cons c r) (append c (append "." (dm_join r))))))
 (fn dm_ctors ((cs (List ECtorDef))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons (ECtorDef c fs) r)
-     (append " (" (append (dm_short c) (append (dm_types fs Nil) (append ")" (dm_ctors r))))))))
+    (nil nil)
+    ((cons (ECtorDef c fs) r)
+     (append " (" (append (dm_ctor c) (append (dm_types fs nil) (append ")" (dm_ctors r))))))))
 ;; the signature: `n (T…) T` with the type variables renumbered by first occurrence
 (fn dm_sig ((ps (List EType)) (rt EType)) (List Int)
-  (let ((order (dm_vars_of rt (dm_vars_all ps Nil))))
+  (let ((order (dm_vars_of rt (dm_vars_all ps nil))))
     (append (show_int (len order))
-      (append " (" (append (dm_types_sp ps order True) (append ") " (dm_type rt order)))))))
+      (append " (" (append (dm_types_sp ps order true) (append ") " (dm_type rt order)))))))
 ;; type variables in order of first occurrence
 (fn dm_vars_all ((ts (List EType)) (acc (List Int))) (List Int)
   (measure (struct ts))
   (match ts
-    (Nil acc)
-    ((Cons t r) (dm_vars_all r (dm_vars_of t acc)))))
+    (nil acc)
+    ((cons t r) (dm_vars_all r (dm_vars_of t acc)))))
 (fn dm_vars_of ((t EType) (acc (List Int))) (List Int)
   (measure (struct t))
   (match t
@@ -124,88 +124,88 @@
   (measure (struct t))
   (match t
     ((ETVar i) (append "?" (show_int (dm_index i order 0))))
-    ((ETCon n Nil) (dm_short n))
+    ((ETCon n nil) (dm_short n))
     ((ETCon n args) (append "(" (append (dm_short n) (append (dm_types args order) ")"))))))
 (fn dm_index ((i Int) (order (List Int)) (k Int)) Int
   (measure (struct order))
   (match order
-    (Nil i)
-    ((Cons x r) (if (= x i) k (dm_index i r (+ k 1))))))
+    (nil i)
+    ((cons x r) (if (= x i) k (dm_index i r (+ k 1))))))
 ;; " T T …" (each preceded by a space), and the same without the leading space
 (fn dm_types ((ts (List EType)) (order (List Int))) (List Int)
   (measure (struct ts))
   (match ts
-    (Nil Nil)
-    ((Cons t r) (append " " (append (dm_type t order) (dm_types r order))))))
+    (nil nil)
+    ((cons t r) (append " " (append (dm_type t order) (dm_types r order))))))
 (fn dm_types_sp ((ts (List EType)) (order (List Int)) (first Bool)) (List Int)
   (measure (struct ts))
   (match ts
-    (Nil Nil)
-    ((Cons t r) (append (if first Nil " ") (append (dm_type t order) (dm_types_sp r order False))))))
+    (nil nil)
+    ((cons t r) (append (if first nil " ") (append (dm_type t order) (dm_types_sp r order false))))))
 
 (fn dm_term ((es ESt) (t ETerm)) (List Int)
   (measure (struct t))
   (match t
     ((EBVar i) (append "#" (show_int i)))
     ((ELit l) (dm_lit l))
-    ((ECtor n args) (dm_app es (dm_short n) args))
+    ((ECtor n args) (dm_app es (dm_ctor n) args))
     ((ECall n args) (dm_app es (dm_head es n) args))
     ((EPrim n args) (dm_app es (show_name n) args))
     ((EExt n args) (dm_app es (dm_head es n) args))
     ((EMatch s arms) (append "(match " (append (dm_term es s) (append (dm_arms es arms) ")"))))
     ((ELet rs body)
-     (append "(let (" (append (dm_terms_sp es rs True) (append ") " (append (dm_term es body) ")")))))
+     (append "(let (" (append (dm_terms_sp es rs true) (append ") " (append (dm_term es body) ")")))))
     ((EIf c a b)
      (append "(if "
        (append (dm_term es c)
          (append " " (append (dm_term es a) (append " " (append (dm_term es b) ")")))))))
     ((ELam ts _ b)
-     (append "(fun (" (append (dm_types_sp ts Nil True) (append ") " (append (dm_term es b) ")")))))
+     (append "(fun (" (append (dm_types_sp ts nil true) (append ") " (append (dm_term es b) ")")))))
     (EAbsurd "(absurd)")))
 (fn dm_app ((es ESt) (head (List Int)) (args (List ETerm))) (List Int)
   (append "(" (append head (append (dm_terms es args) ")"))))
 (fn dm_terms ((es ESt) (ts (List ETerm))) (List Int)
   (measure (struct ts))
   (match ts
-    (Nil Nil)
-    ((Cons t r) (append " " (append (dm_term es t) (dm_terms es r))))))
+    (nil nil)
+    ((cons t r) (append " " (append (dm_term es t) (dm_terms es r))))))
 (fn dm_terms_sp ((es ESt) (ts (List ETerm)) (first Bool)) (List Int)
   (measure (struct ts))
   (match ts
-    (Nil Nil)
-    ((Cons t r) (append (if first Nil " ") (append (dm_term es t) (dm_terms_sp es r False))))))
+    (nil nil)
+    ((cons t r) (append (if first nil " ") (append (dm_term es t) (dm_terms_sp es r false))))))
 (fn dm_arms ((es ESt) (arms (List EArm))) (List Int)
   (measure (struct arms))
   (match arms
-    (Nil Nil)
-    ((Cons (EArm p b) r)
+    (nil nil)
+    ((cons (EArm p b) r)
      (append " ("
        (append (dm_pat p) (append " " (append (dm_term es b) (append ")" (dm_arms es r)))))))))
 (fn dm_pat ((p EPat)) (List Int)
   (measure (struct p))
   (match p
     (PVar "_")
-    ((PCtor n Nil) (dm_short n))
-    ((PCtor n subs) (append "(" (append (dm_short n) (append (dm_pats subs) ")"))))
+    ((PCtor n nil) (dm_ctor n))
+    ((PCtor n subs) (append "(" (append (dm_ctor n) (append (dm_pats subs) ")"))))
     ((PLit l) (dm_lit l))))
 (fn dm_pats ((ps (List EPat))) (List Int)
   (measure (struct ps))
   (match ps
-    (Nil Nil)
-    ((Cons p r) (append " " (append (dm_pat p) (dm_pats r))))))
-;; a literal: a string is the constructor chain it names over its bytes — the prelude's in the
-;; toolchain's sources, as the bootstrap builds it; Init's List cells for a String
+    (nil nil)
+    ((cons p r) (append " " (append (dm_pat p) (dm_pats r))))))
+;; a literal: a string is the constructor chain it names over its bytes — Init's List cells,
+;; for a String and for the toolchain's byte list alike
 (fn dm_lit ((l ELit)) (List Int)
   (match l
     ((LNat k) (show_int k))
     ((LInt k) (show_int k))
-    ((LSym s) (Cons 39 (chars_of_sym s)))
-    ((LStr nl cs bs) (dm_bytes (dm_short nl) (dm_short cs) bs))))
+    ((LSym s) (cons 39 (chars_of_sym s)))
+    ((LStr nl cs bs) (dm_bytes (dm_ctor nl) (dm_ctor cs) bs))))
 (fn dm_bytes ((nl (List Int)) (cs (List Int)) (bs (List Int))) (List Int)
   (measure (struct bs))
   (match bs
-    (Nil (append "(" (append nl ")")))
-    ((Cons b r)
+    (nil (append "(" (append nl ")")))
+    ((cons b r)
      (append "("
        (append cs (append " " (append (show_int b) (append " " (append (dm_bytes nl cs r) ")")))))))))
 
@@ -214,28 +214,34 @@
     ((Str _ s) (chars_of_sym s))
     ((Num _ k) (show_int k))
     (Anon "anon")))
+;; a constructor: its type's last component and its own — Init has several named `mk`
+(fn dm_ctor ((n Name)) (List Int)
+  (match n
+    ((Str Anon _) (dm_short n))
+    ((Str p _) (append (dm_short p) (append "." (dm_short n))))
+    (_ (dm_short n))))
 
 ;; bytewise sort (merge)
 (fn dm_sort ((xs (List (List Int)))) (List (List Int))
   (measure (struct xs))
   (match xs
-    (Nil Nil)
-    ((Cons x Nil) (list x))
+    (nil nil)
+    ((cons x nil) (list x))
     (_
-      (match (dm_split xs Nil Nil)
-        ((Pair a b) (dm_merge (dm_sort a) (dm_sort b)))))))
+      (match (dm_split xs nil nil)
+        ((Prod.mk a b) (dm_merge (dm_sort a) (dm_sort b)))))))
 (fn dm_split ((xs (List (List Int))) (a (List (List Int))) (b (List (List Int))))
-  (Pair (List (List Int)) (List (List Int)))
+  (Prod (List (List Int)) (List (List Int)))
   (measure (struct xs))
   (match xs
-    (Nil (Pair a b))
-    ((Cons x Nil) (Pair (Cons x a) b))
-    ((Cons x (Cons y r)) (dm_split r (Cons x a) (Cons y b)))))
+    (nil (Prod.mk a b))
+    ((cons x nil) (Prod.mk (cons x a) b))
+    ((cons x (cons y r)) (dm_split r (cons x a) (cons y b)))))
 (fn dm_merge ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
   (measure (+ (len a) (len b)))
   (match a
-    (Nil b)
-    ((Cons x ar)
+    (nil b)
+    ((cons x ar)
      (match b
-       (Nil a)
-       ((Cons y br) (if (int_list_lt y x) (Cons y (dm_merge a br)) (Cons x (dm_merge ar b))))))))
+       (nil a)
+       ((cons y br) (if (int_list_lt y x) (cons y (dm_merge a br)) (cons x (dm_merge ar b))))))))

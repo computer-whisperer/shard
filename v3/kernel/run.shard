@@ -8,8 +8,12 @@
 ;;; program was erased from, and the run reads both there: an entry with either is refused
 ;;; `preconditioned`, naming the binder or the field, before any argument is read.
 
+(import Init)
 (import "loader.shard")
 (import "ev.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.decl.ConstantInfo)
 (use kernel.etable)
 (use kernel.ev)
@@ -27,11 +31,6 @@
 (use kernel.kw.W)
 (use kernel.loader)
 (use kernel.name)
-(use kernel.prelude)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 (use kernel.prog)
 (use kernel.prog.ECtorDef)
 (use kernel.prog.EDecl)
@@ -45,23 +44,23 @@
 ;; path the effect trace is written to (empty: none)
 (fn run_load
   ((l Load) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (w World))
-  (Pair RunRes World)
+  (Prod RunRes World)
   (run_load_as l (es_prog (Load.etab l)) entry argv fuel trace w))
 ;; the same door on a program derived from the load's — its restricted form (lower.shard), which
 ;; `load.shard --lowered --run` runs in the program's place: the entry's evidence is read from
 ;; the load's environment as before
 (fn run_load_as
   ((l Load) (p Prog) (entry Name) (argv (List (List Int))) (fuel Int) (trace (List Int)) (w World))
-  (Pair RunRes World)
-  (match (prepare p entry (policy_of Checked True trace fuel))
-    ((PrepNo e m) (Pair (RunLink e m) w))
+  (Prod RunRes World)
+  (match (prepare p entry (policy_of Checked true trace fuel))
+    ((PrepNo e m) (Prod.mk (RunLink e m) w))
     ((PrepOk h)
      (match (dropped_evidence (Load.env l) p entry (Handle.params h))
-       ((Cons m _)
-        (Pair (RunLink (quote preconditioned) (append (show_name entry) (append ": " m))) w))
-       (Nil
+       ((cons m _)
+        (Prod.mk (RunLink (quote preconditioned) (append (show_name entry) (append ": " m))) w))
+       (nil
          (match (text_args h argv)
-           ((TextNo r) (Pair r w))
+           ((TextNo r) (Prod.mk r w))
            ((TextOk vs) (invoke_run h vs argv w))))))))
 
 ;; ---- what the environment shows of an entry that its program does not state ----------------
@@ -74,14 +73,14 @@
 ;; proposition. A fn with no constant of K behind it has none
 (fn binder_evidence ((env CheckedEnv) (entry Name)) (List (List Int))
   (match (env_find env entry)
-    (None Nil)
-    ((Some info) (binder_texts (props_of (w0 env) (ci_type info) 0 (budget_depth) Nil)))))
+    (none nil)
+    ((some info) (binder_texts (props_of (w0 env) (ci_type info) 0 (budget_depth) nil)))))
 (fn binder_texts ((ns (List Name))) (List (List Int))
   (measure (struct ns))
   (match ns
-    (Nil Nil)
-    ((Cons n r)
-     (Cons
+    (nil nil)
+    ((cons n r)
+     (cons
        (append "the binder "
          (append (show_name n) " is evidence the erasure dropped: no value supplies it"))
        (binder_texts r)))))
@@ -90,20 +89,20 @@
   (measure fuel)
   (if (< fuel 1) (rev acc)
   (match (w_whnf w ty)
-    ((Pair w1 (Some (Pi _ n _ dom body)))
+    ((Prod.mk w1 (some (Pi _ n _ dom body)))
      (match (w_is_prop w1 dom)
-       ((Pair w2 p)
+       ((Prod.mk w2 p)
         (match (w_local w2 n dom)
-          ((Pair w3 fv)
+          ((Prod.mk w3 fv)
            (match (w_inst1 w3 body fv)
-             ((Pair w4 body1)
+             ((Prod.mk w4 body1)
               (props_of w4 body1 (- skip 1) (- fuel 1)
                 (if
                   (bool_and (< skip 1)
                     (match p
-                      ((Some True) True)
-                      (_ False)))
-                  (Cons n acc)
+                      ((some true) true)
+                      (_ false)))
+                  (cons n acc)
                   acc)))))))))
     (_ (rev acc)))))
 ;; the proposition fields of the constructors of every inductive a value at the parameter types
@@ -114,54 +113,54 @@
     ((Prog ds) (ctors_evidence env (reach_types (index_inds ds IMEmpty) params)))))
 ;; the constructors of the inductives reached, each inductive once
 (type Reach (Reach (List Name) (List Name)))  ; the inductives seen, their constructors
-(fn reach_types ((x (IntMap (List (Pair Name EDecl)))) (ts (List EType))) (List Name)
-  (match (reach_all x ts (Reach Nil Nil) (reach_fuel))
+(fn reach_types ((x (IntMap (List (Prod Name EDecl)))) (ts (List EType))) (List Name)
+  (match (reach_all x ts (Reach nil nil) (reach_fuel))
     ((Reach _ cs) (rev cs))))
 (fn reach_fuel () Int 1000000)
-(fn reach_all ((x (IntMap (List (Pair Name EDecl)))) (ts (List EType)) (acc Reach) (fuel Int)) Reach
+(fn reach_all ((x (IntMap (List (Prod Name EDecl)))) (ts (List EType)) (acc Reach) (fuel Int)) Reach
   (measure fuel)
   (if (< fuel 1) acc
   (match ts
-    (Nil acc)
-    ((Cons (ETVar _) r) (reach_all x r acc (- fuel 1)))
-    ((Cons (ETCon n as) r)
+    (nil acc)
+    ((cons (ETVar _) r) (reach_all x r acc (- fuel 1)))
+    ((cons (ETCon n as) r)
      (let ((acc1 (reach_all x as acc (- fuel 1))))
        (match acc1
          ((Reach seen cs)
           (if (mem_name n seen) (reach_all x r acc1 (- fuel 1))
           (match (decl_index_find x n)
-            ((Some (EInd _ _ cds))
-             (reach_all x r (reach_ctors x cds (Reach (Cons n seen) cs) (- fuel 1)) (- fuel 1)))
+            ((some (EInd _ _ cds))
+             (reach_all x r (reach_ctors x cds (Reach (cons n seen) cs) (- fuel 1)) (- fuel 1)))
             (_ (reach_all x r acc1 (- fuel 1))))))))))))
-(fn reach_ctors ((x (IntMap (List (Pair Name EDecl)))) (cds (List ECtorDef)) (acc Reach) (fuel Int))
+(fn reach_ctors ((x (IntMap (List (Prod Name EDecl)))) (cds (List ECtorDef)) (acc Reach) (fuel Int))
   Reach
   (measure fuel)
   (if (< fuel 1) acc
   (match cds
-    (Nil acc)
-    ((Cons (ECtorDef c fts) r)
+    (nil acc)
+    ((cons (ECtorDef c fts) r)
      (match (reach_all x fts acc (- fuel 1))
-       ((Reach seen cs) (reach_ctors x r (Reach seen (Cons c cs)) (- fuel 1))))))))
+       ((Reach seen cs) (reach_ctors x r (Reach seen (cons c cs)) (- fuel 1))))))))
 (fn ctors_evidence ((env CheckedEnv) (cs (List Name))) (List (List Int))
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons c r)
+    (nil nil)
+    ((cons c r)
      (append
        (match (env_find env c)
-         ((Some info)
+         ((some info)
           (match info
             ((CtorInfo _ _ _ np _ _)
-             (field_texts c (props_of (w0 env) (ci_type info) np (budget_depth) Nil)))
-            (_ Nil)))
-         (None Nil))
+             (field_texts c (props_of (w0 env) (ci_type info) np (budget_depth) nil)))
+            (_ nil)))
+         (none nil))
        (ctors_evidence env r)))))
 (fn field_texts ((c Name) (ns (List Name))) (List (List Int))
   (measure (struct ns))
   (match ns
-    (Nil Nil)
-    ((Cons n r)
-     (Cons
+    (nil nil)
+    ((cons n r)
+     (cons
        (append "the field "
          (append (show_name n)
            (append " of "

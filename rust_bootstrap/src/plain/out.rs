@@ -7,6 +7,15 @@ use crate::ast;
 
 use super::{Decl, ETy, Lit, Pat, Tables, Tm, last_component};
 
+/// A constructor prints under its type: the last two components of its identity
+/// (dump.shard dm_ctor) — Init has several constructors named `mk`.
+fn ctor_name(n: &str) -> &str {
+    match n.rmatch_indices('.').nth(1) {
+        Some((i, _)) => &n[i + 1..],
+        None => n,
+    }
+}
+
 /// A head prints as its identity beyond the module it was declared in.
 fn head(t: &Tables, n: &str) -> String {
     match t.module_of(n) {
@@ -59,7 +68,7 @@ fn lit(l: &Lit) -> String {
         Lit::Nat(k) | Lit::Int(k) => k.to_string(),
         Lit::Sym(s) => format!("'{s}"),
         Lit::Str(nl, cs, bs) => {
-            let (nl, cs) = (last_component(nl), last_component(cs));
+            let (nl, cs) = (ctor_name(nl), ctor_name(cs));
             let mut s = format!("({nl})");
             for b in bs.iter().rev() {
                 s = format!("({cs} {b} {s})");
@@ -72,10 +81,10 @@ fn lit(l: &Lit) -> String {
 fn pat(p: &Pat) -> String {
     match p {
         Pat::Var => "_".to_string(),
-        Pat::Ctor(n, subs) if subs.is_empty() => last_component(n).to_string(),
+        Pat::Ctor(n, subs) if subs.is_empty() => ctor_name(n).to_string(),
         Pat::Ctor(n, subs) => {
             let inner: Vec<String> = subs.iter().map(pat).collect();
-            format!("({} {})", last_component(n), inner.join(" "))
+            format!("({} {})", ctor_name(n), inner.join(" "))
         }
         Pat::Lit(l) => lit(l),
     }
@@ -95,7 +104,7 @@ fn term(t: &Tables, tm: &Tm) -> String {
     match tm {
         Tm::BVar(i) => format!("#{i}"),
         Tm::Lit(l) => lit(l),
-        Tm::Ctor(n, args) => app(t, last_component(n), args),
+        Tm::Ctor(n, args) => app(t, ctor_name(n), args),
         Tm::Call(n, args) | Tm::Ext(n, args) => app(t, &head(t, n), args),
         Tm::Prim(n, args) => app(t, n, args),
         Tm::Match(s, arms) => {
@@ -124,7 +133,7 @@ pub fn dump(t: &Tables) -> String {
             Decl::Ind { name, nparams, ctors } => {
                 let mut s = format!("type {} {}", last_component(name), nparams);
                 for (c, fts) in ctors {
-                    s.push_str(&format!(" ({}", last_component(c)));
+                    s.push_str(&format!(" ({}", ctor_name(c)));
                     for ft in fts {
                         s.push(' ');
                         s.push_str(&ty(ft, &[]));
@@ -152,14 +161,24 @@ pub fn dump(t: &Tables) -> String {
     out
 }
 
-/// The runtime's cells go to the evaluator by the names the runtime gives them: a
-/// constructor whose last component is `True`, `False`, `Nil`, `Cons`, `None`, `Some` or
-/// `Pair` is that cell, whichever module declares its type — the toolchain's prelude, or a
-/// file's own `Bool` and `List` (docs/KERNEL.md, the back end's refusals: such a constructor
-/// carries the cell's tag in a native binary). The evaluator's comparisons return `True` and
-/// `False`, its symbol bridge and the host speak `Cons` and `Nil` cells. Every other
-/// constructor, Init's among them, goes by its identity.
+/// The runtime's cells go to the evaluator by the names the runtime gives them: `True`,
+/// `False`, `Nil`, `Cons`, `None`, `Some`, `Pair`. They are the constructors of Init's `Bool`,
+/// `List`, `Option` and `Prod`, by identity, and a constructor so named in a type a file
+/// declares for itself (docs/KERNEL.md, the back end's refusals: such a constructor carries
+/// the cell's tag in a native binary; lower.shard's wire roles are the same rule). The
+/// evaluator's comparisons return `True` and `False`, its symbol bridge and the host speak
+/// `Cons` and `Nil` cells. Every other constructor goes by its identity.
 fn cell(id: &str) -> String {
+    match id {
+        "Bool.true" => return "True".into(),
+        "Bool.false" => return "False".into(),
+        "List.nil" => return "Nil".into(),
+        "List.cons" => return "Cons".into(),
+        "Option.none" => return "None".into(),
+        "Option.some" => return "Some".into(),
+        "Prod.mk" => return "Pair".into(),
+        _ => {}
+    }
     match last_component(id) {
         c @ ("True" | "False" | "Nil" | "Cons" | "None" | "Some" | "Pair") => c.to_string(),
         _ => id.to_string(),
@@ -249,27 +268,6 @@ pub fn module(t: &Tables) -> ast::Module {
         }
     }
     m
-}
-
-/// The externs declared over Init's types — `Prod`, `List`, `Option`, `Bool`, `ByteArray` by
-/// their identities — which the host answers in Init's cells; any other it answers in the
-/// runtime's (the toolchain's `v3/kernel/host.shard` over the prelude).
-pub fn externs_over_init(t: &Tables) -> std::collections::HashSet<String> {
-    fn init(t: &ETy) -> bool {
-        match t {
-            ETy::Var(_) => false,
-            ETy::Con(n, args) => matches!(n.as_str(), "Prod" | "List" | "Option" | "Bool" | "ByteArray") || args.iter().any(init),
-        }
-    }
-    let mut out = std::collections::HashSet::new();
-    for d in t.decls.values() {
-        if let Decl::Extern { name, params, ret, .. } = d {
-            if params.iter().any(init) || init(ret) {
-                out.insert(name.clone());
-            }
-        }
-    }
-    out
 }
 
 /// What a run of the closure starts from: its first root module's `main`, and the

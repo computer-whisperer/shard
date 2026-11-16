@@ -12,7 +12,7 @@ each, with who needs it. An item leaves this file when it is done; the commit sa
 | A binary and the evaluator differ at edges: a binary's integers stop at 2^3840, so an operation whose result reaches that — a `Nat.shiftLeft` among them — ends in `rt trap: bignum too large (exceeds 2^3840)` where the evaluator computes it; a stuck program exits 2 on the Rust bootstrap run directly, 4 under `load --run` and 3 as a binary. | reproduced |
 | The compiled loader has the binary's integer limit: `v3/bin/load` ends with `rt trap: bignum too large (exceeds 2^3840)`, exit 3, on a theorem K evaluates past that size and on a `--run` that reaches it. The loader on the bootstrap accepts both. | reproduced: `(= (Nat.pow 2 4000) (* (Nat.pow 2 2000) (Nat.pow 2 2000)))` by `decide` |
 | Two files that each give a program to the same function of Init cannot be roots of one load: the second is `LOAD-ERROR … duplicate_name: List.length`, and what imports it `import_failed`. Each loads alone. | reproduced: `load --root v3 v3/std/list.shard v3/examples/path/path_main.shard` (`examples/path/path.shard` and `std/list.shard` both realize `List.length`) |
-| In a function that is only a program, an operator whose type is decided by a call of a function declared later in the file is left as written: `(- (late n) 5)` with `late` returning a `Nat` is integer subtraction, −2 at 3, where no `Nat` or `Int` is expected of it. With `late` declared first it is `Nat.sub` and gives 0. Nothing false is proved — such a function has no meaning in the logic — but a value declared `Nat` is negative at run time. | reproduced: `(fn early ((s Symbol) (n Nat)) Nat (let ((d (- (late n) 5))) d))` before `(fn late ((n Nat)) Nat n)` |
+| The loader's program reader does not know the parameter and result types of a function declared later in the same file (it records name, kind and arity before the bodies; the Rust reader has every signature). What depends on them is read as if untyped: `(- (late n) 5)` with `late` returning a `Nat` is integer subtraction, −2 at 3; a subtraction of two numerals passed to such a function is `Nat.sub` (`(- 0 1)` is 0 where the Rust reader gives −1); a comparison passed to one is not made a `Bool`. With the callee declared first each is read right. Nothing false is proved — such a function has no meaning in the logic — and `parity_test.sh` fails on any toolchain function the two readers read apart; the toolchain writes negative numerals as literals for this reason. | reproduced: `(fn early ((s Symbol) (n Nat)) Nat (let ((d (- (late n) 5))) d))` before `(fn late ((n Nat)) Nat n)`; five functions of the loader's closure before their sites were rewritten |
 | A lambda whose body takes a value apart by constructor rows is refused: the function it is lifted to names the body's matcher, which is admitted after it — `REFUSE F.lam_1 unknown_constant: F.match_1`. A lambda with numeral rows or an `if` reads. | reproduced: `(fn f ((d Int) (xs (List (Option Int)))) (List Int) (List.map (fun ((o (Option Int))) (match o (none d) ((some v) (+ v d)))) xs))` over `std/list.shard` |
 | The two readings of a lambda differ where a proof or a type argument in its body names a local that its program does not: the typed route captures the local as a parameter the program never reads, the classifier passes proofs over unread and does not, and the instance's name differs with the captured count. | reproduced: `proof_captures` in `v3/pins/readings/main.shard` (`load --both`) |
 | A wrong name of an Init lemma gets no suggestion: `unknown_constant: step 1: Nat.div_lt_slf`. | reproduced |
@@ -43,7 +43,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a large computed result as a theorem | K's evaluation through a measured function gives out at depth 40 to 200; the rewriting step stops at 64 unfoldings |
 | packed byte buffers and machine words | bytes and strings are lists; every number is an arbitrary-size integer |
 | a binary's trace tied to its contract | a binary is compared on output and exit status only; the runtime writes no trace |
-| a meaning in the logic for the toolchain's own sources | under `v3/kernel/` a string literal is a byte list and a symbol has no logical identity; no load checks that those functions terminate |
+| a meaning in the logic for the toolchain's own sources | the sources stand on Init's types, and about 300 of their 9,200 functions are definitions; the rest are programs, because the toolchain's data is built on `Symbol`, which has no type in the logic. No load checks the measures those programs state. Under `v3/kernel/` a string literal is still a byte list, decided by the module's path (and the program reader gives it the static type `String`). Dropping that rule: delete the path test in both readers, so that a literal is a `String` there too; rework the 31 functions that would be definitions and use a literal as bytes; make every toolchain literal valid UTF-8. It waits for the files that see no Init to go |
 | a fixed identity for the `World` | an entry's last parameter is taken as the World whatever its type |
 
 ## 3. Missing, waiting for someone to need it
@@ -97,12 +97,17 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   what calls a derived function, `=` at a derived equality among them; a `(realize NAME
   (view))`. It refuses nothing the loader refuses, and links a view to whatever implementation
   file stands in its directory without comparing the two.
-- Three rules say which constructors are the runtime's cells. The Rust evaluator and a native
-  binary go by the constructor's name (`True`, `Cons`, …; a binary also fixes its place in its
-  type); the loader's evaluator `ev` goes by the prelude's identities and an extern's declared
-  types. They agree on the toolchain's sources. The sixteen back-end pins that declare their
-  own `Bool` and `List` run under the first two and are stuck under `ev`; no test runs one
-  program under all three.
+- Two rules say which constructors are the runtime's cells. All three engines take the seven
+  constructors of Init's `Bool`, `List`, `Option` and `Prod` by identity. The Rust evaluator
+  and a native binary also take a constructor named `True`, `Cons`, … in a type a file declares
+  for itself (a binary also fixes its place in its type); the loader's evaluator `ev` does
+  not. The sixteen back-end pins that declare their own `Bool` and `List` run under the first
+  two and are stuck under `ev`; no test runs one program under all three.
+- The table of Init's facts the bootstrap reads the toolchain by (`v3/kernel/init.facts`) is
+  believed. `parity_test.sh` compares it with what the loader prints from K — and that
+  loader is run by the bootstrap, reading by the table: a table wrong in a way that made the
+  loader print the same wrong table would pass. The loader's native binary, built from the
+  loader's own reading, prints it too (the suite on the binaries).
 - "Could not show these equal" is never read as "these differ": no test.
 - A positive node id in K is written only by five constructors: no test. The test of K's state
   discipline believes the types the sources declare.

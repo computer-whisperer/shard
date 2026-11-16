@@ -21,12 +21,14 @@
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "state_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # the toolchain's sources stand on Init's types
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 fail=0; checks=0
 bad() { echo "state_test: $*"; fail=$((fail+1)); }
 
 # ---- (1) K's implementation
-"$EVAL" direct v3/kernel/load.shard --root v3 --state v3/kernel/t0.shard v3/kernel/k > "$OUT/k.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --state v3/kernel/t0.shard v3/kernel/k > "$OUT/k.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the load of K under --state failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|IMPL REFUSE|IMPL-ERROR|LOAD:)' "$OUT/k.txt" | head -5 | cut -c1-300; }
 sed -n 's/^IMPL STATE //p; s/^STATE //p' "$OUT/k.txt" | grep -E '^kernel\.(k|expr)\.' > "$OUT/k.state"
 n=$(grep -c . "$OUT/k.state")
@@ -35,7 +37,7 @@ nok=$(grep -cE "$OKRE" "$OUT/k.state")
 nprim=$(grep -c ' primitive$' "$OUT/k.state")
 checks=$((checks+1)); [ "$n" -ge 300 ] || bad "only $n functions of K were judged (the check is not running over K)"
 checks=$((checks+1)); [ "$((nok+nprim))" = "$n" ] || { bad "$((n-nok-nprim)) function(s) of K neither ok nor primitive:"; grep -vE "$OKRE| primitive\$" "$OUT/k.state" | head -10 | cut -c1-300; }
-want_prims="kernel.expr.st_anon kernel.expr.st_fresh_node kernel.expr.st_init kernel.expr.st_node kernel.k.guard kernel.k.mk_local kernel.k.st_clear_memo kernel.k.st_for kernel.k.st_memo kernel.k.st_seed kernel.k.st_set_memo kernel.k.st_ticks"
+want_prims="kernel.expr.st_anon kernel.expr.st_fresh_node kernel.expr.st_init kernel.expr.st_node kernel.k.mk_local kernel.k.rec_guard kernel.k.st_clear_memo kernel.k.st_for kernel.k.st_memo kernel.k.st_seed kernel.k.st_set_memo kernel.k.st_ticks"
 got_prims=$(sed -n 's/ primitive$//p' "$OUT/k.state" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
 checks=$((checks+1)); [ "$got_prims" = "$want_prims" ] || { bad "the primitives are not the twelve listed"; echo "   got: $got_prims"; }
 want_res="kernel.k.check_into ok: resumes 3
@@ -49,7 +51,7 @@ checks=$((checks+1)); [ "$got_src" = "$want_src" ] || { bad "a state is made fro
 echo "state_test: K — $n functions judged: $nok ok, $nprim primitive, $((n-nok-nprim)) other"
 
 # ---- (2) the controls
-"$EVAL" direct v3/kernel/load.shard --root v3 --state v3/pins/state/main.shard > "$OUT/c.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --state v3/pins/state/main.shard > "$OUT/c.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the controls' load failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/c.txt" | head -5 | cut -c1-300; }
 sed -n 's/^STATE pins\.state\.main\.//p' "$OUT/c.txt" > "$OUT/c.state"
 for f in box_st box_set_st box_app ok_chain ok_drop ok_record ok_beside ok_beside_out ok_join; do

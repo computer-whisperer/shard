@@ -65,7 +65,8 @@ inventory() {   # NAME SRC per root, parity's list
   done
 }
 # the files NAME's stamp is made of, in the stamp's order: the root's closure sources (the emit's
-# `sources` list), the implementations behind its views, the toolchain's sources, the runtime
+# `sources` list), the implementations behind its views, the toolchain's sources, the table of
+# Init's facts the bootstrap reads those by, the runtime
 stamp_files() {
   local root
   root=$(cat "v3/bin/emit/$1/root" 2>/dev/null || echo v3)
@@ -73,7 +74,7 @@ stamp_files() {
   if [ -s "v3/bin/emit/$1/extra" ]; then
     while IFS= read -r d; do find "$d" -name '*.shard' | LC_ALL=C sort; done < "v3/bin/emit/$1/extra"
   fi
-  printf '%s\n' v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/rt.h
+  printf '%s\n' v3/kernel/*.shard v3/kernel/k/*.shard v3/kernel/init.facts v3/kernel/rt.h
 }
 # the stamp of NAME from its emitted sources list; empty when never emitted
 stamp_of() {
@@ -84,7 +85,7 @@ stamp_of() {
 sums() { sed 's://*:/:g' | LC_ALL=C sort -u | xargs -r sha256sum 2>/dev/null; }
 # snapshot ROOT EXTRA…: every file that can enter a stamp — the .shard files under the loader's
 # root and the extra roots, the toolchain's sources, the runtime — hashed before the emit reads any
-snapshot() { { find "$@" v3/kernel -name '*.shard' -type f 2>/dev/null; echo v3/kernel/rt.h; } | sums; }
+snapshot() { { find "$@" v3/kernel -name '*.shard' -type f 2>/dev/null; echo v3/kernel/init.facts; echo v3/kernel/rt.h; } | sums; }
 # changed_since NAME SNAPSHOT: the files of NAME's stamp whose content is not the snapshot's — a
 # source edited, created or removed while the build ran. A file outside the stamp is not looked at
 changed_since() {
@@ -134,10 +135,9 @@ build_one() {
   local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc snap err changed
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
   snap=$(snapshot "$root" "$@")
-  # Init on demand for a root under the naming law: the pinned export and its index when the
-  # index is current — never built here (a build by this lookup would run on the bootstrap,
-  # ~1,950 s: CI builds the index's driver before the index); the kernel's roots import no Init
-  # and need neither
+  # Init on demand: the pinned export and its index. Every root of the toolchain needs them —
+  # its sources stand on Init's types — and so does an ordinary root; ensure_index (below) has
+  # made the index current before the first emit
   local init=""; read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
   s=$(date +%s)
   "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" $init --emit "$emit" "$src" "$@" > "$log" 2>&1; rc=$?
@@ -165,6 +165,17 @@ build_one() {
   stamp_of "$name" > "$out.stamp"
   echo "OK: $out ($(sed -n 's/^EMIT: [^ ]* entry=[^ ]* //p' "$log" | tail -1); emit $t_emit s, cc $t_cc s)"
 }
+# The Init index current before any emit. Where the index's own driver has no current binary
+# — a fresh tree, or after a change of kernel/index.shard or kernel/initindex.shard — the
+# bootstrap builds it, about half an hour over the export: the driver is a toolchain program,
+# and the loader needs the index to load it. Without an export nothing is built here, and a
+# root that sees Init fails at its load, which names the export.
+ensure_index() {
+  v3/kernel/test/init_index.sh --current > /dev/null 2>&1 && return 0
+  [ -s "${V3_EXPORT_DIR:-.shard-cache/v3-export}/init.ndjson" ] || return 0
+  echo "v3/build.sh: the Init index is not current: building it (kernel/test/init_index.sh)" >&2
+  v3/kernel/test/init_index.sh > /dev/null || { echo "v3/build.sh: the Init index was not built" >&2; return 1; }
+}
 export -f stamp_files stamp_of sums snapshot changed_since extra_roots secs build_one inventory
 export RUST_EVAL CFLAGS
 
@@ -179,6 +190,7 @@ case ${1:-} in
     fi
     build_one "$name" "$src" "v3/bin/$name" v3 $(extra_roots "$src");;
   --all)
+    ensure_index || exit 1
     JOBS=${V3_BUILD_JOBS:-8}
     out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
     s=$(date +%s)
@@ -200,5 +212,6 @@ case ${1:-} in
     done
     [ -n "$OUT" ] || OUT=v3/bin/$(basename "$SRC" .shard)
     [ "$ROOT" = v3 ] && [ ${#EXTRA[@]} -eq 0 ] && EXTRA=($(extra_roots "$SRC"))
+    ensure_index || exit 1
     build_one "$(basename "$OUT")" "$SRC" "$OUT" "$ROOT" "${EXTRA[@]}";;
 esac

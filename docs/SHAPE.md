@@ -94,7 +94,7 @@ the development machine and about 65 in CI.
 
 | where | size | what |
 |---|---|---|
-| `v3/kernel/` | 50,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
+| `v3/kernel/` | 52,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
 | `v3/kernel/test/` | 59 files | the test scripts and drivers |
 | `v3/pins/` | 507 files | small sources, each stating the outcome it expects; 337 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |

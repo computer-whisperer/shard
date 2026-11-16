@@ -40,10 +40,10 @@ done
 lines=(); while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < v3/kernel/test/fixtures/calc_inputs.txt
 both "calc's main" '.' --root v3 $INIT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]:0:4}"
 for h in json_test level_test; do
-  both "harness $h" "^$h: failures = 0" --root v3 --run "kernel.test.$h.main" "v3/kernel/test/$h.shard"
+  both "harness $h" "^$h: failures = 0" --root v3 $INIT --run "kernel.test.$h.main" "v3/kernel/test/$h.shard"
 done
 head -n 100 "$EXPORT" > "$OUT/fix100.ndjson"
-both "t0 over 100 lines" '^T0: ' --root v3 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$OUT/fix100.ndjson"
+both "t0 over 100 lines" '^T0: ' --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$OUT/fix100.ndjson"
 # a lowering refused is the driver's refusal, not a run: the pin with a string pattern has none
 # under the loader's reader, so the refusal path is the generator's (native_tie_test.sh's
 # refused_* cases); here only that --lowered without --run changes nothing

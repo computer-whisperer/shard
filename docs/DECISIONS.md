@@ -29,7 +29,8 @@ entries are explained under "Measured" at the end.
 - An operator's type is the expected type, else its first non-numeral operand's; not the first
   operand's alone — `(- 1 2)` at `Int` would be a `Nat` subtraction, coerced.
 - ★ `"…"` is a `String` everywhere outside `kernel.*` modules; not list sugar chosen by the expected
-  type — one meaning per literal. (Under `kernel.*` it is still a byte list: no Init there.)
+  type — one meaning per literal. (Under `kernel.*` it is still a byte list, by the module's
+  path; that rule is to go: `OPEN.md` §2.)
 - ★ Numeral rows of a `match` are an `if` chain on `=`, the last row `_` or a name; not `Nat.succ`
   patterns through the matcher — `Nat` and `Int` run as integers and have no constructor cells.
 - ★ Notation, macros, `syntax`, `elab`, attributes, `set_option` are refused (`lean_form`); not an
@@ -169,10 +170,12 @@ entries are explained under "Measured" at the end.
 - The Rust evaluator reads a closure by the classifier's reading written again in Rust,
   function by function, and takes what that reading asks K about a constant of Init from a
   table the loader prints from K (`facts.shard`, `load --facts`); not K or the export read in
-  Rust, and not the roles written by an author in the source. The table is made when a test
-  runs; the toolchain's own files see no Init and are read without one. A table kept in the
-  tree for the toolchain's own closure, once it imports Init, would be something the bootstrap
-  believes: that table is not decided.
+  Rust, and not the roles written by an author in the source. For an ordinary closure the
+  table is made when a test runs.
+- For the toolchain's own closure the table is a file of the tree (`v3/kernel/init.facts`),
+  printed by the loader from K, which the bootstrap believes (`LAW.md` §4) and
+  `parity_test.sh` has K print again and compares; not the same facts as constants in the
+  Rust reader, written by hand where the file is printed. The owner chose the file.
 - The Rust evaluator has that one reader, for the toolchain's sources and for any program; not
   a second, flat one for the toolchain (one name per declaration, a citation resolved by its
   suffix), which let a toolchain file be something no ordinary file is. The reader that reads K
@@ -183,14 +186,29 @@ entries are explained under "Measured" at the end.
   as a root, the loader's rule, which is where the implementation is checked: the Rust side
   checks nothing and a run needs the link. A comparison with the loader names the directories
   to it.
-- The evaluator's comparisons, its symbol bridge and the host build the cells `True False Nil
-  Cons None Some Pair`, and the reader hands it every constructor so named under that name,
-  whichever module declares its type; not those cells by the prelude's identities
-  (`kernel.prelude.Bool.True`), the rule of the loader's own evaluator. A native binary names
-  its cells the same way, and the sixteen back-end pins that declare their own `Bool` and
-  `List` run on the bootstrap and natively and are stuck under `ev`; by identity they would
-  each need the prelude as a file. Kept until the toolchain moves onto Init, which deletes
-  the prelude and the question with it.
+- The runtime's seven cells — a comparison's `True` and `False`, the `Cons` and `Nil` of a
+  symbol's bytes, the host's `Some`, `None` and `Pair` — are the constructors of Init's
+  `Bool`, `List`, `Option` and `Prod`, by identity, on all three engines; not a prelude of
+  the toolchain's own beside Init's types, which it had while its files saw no Init. The
+  bootstrap and a native binary also take a constructor so named in a type a file declares
+  for itself, and the sixteen back-end pins that declare their own `Bool` and `List` run on
+  those two and are stuck under `ev`; that second rule goes with the last file that sees no
+  Init.
+- The toolchain writes Init's constructors under Lean's names, opened by name in each file
+  (`(use Init.List cons nil)`); not the namespaces opened whole — its own `append`, `take`
+  and `drop` would then meet `List`'s and be refused — and not its old capitalised names
+  kept (`LAW.md` rule 17).
+- A string literal under `kernel…` is still a byte list, by the module's path; not a `String`
+  there yet: the toolchain holds text as `(List Int)` in some 1,500 functions nothing
+  type-checks, and 31 that would be definitions use a literal as bytes. The owner: "We need
+  a path to dropping this, but we can defer the cutover if that makes more sense for
+  ordering." The path is `OPEN.md` §2.
+- A constructor prints under its type's name in the text the two readers are compared by
+  (`Prod.mk`, `Tok.TPlus`); not by its last component — Init has several named `mk`, and
+  the comparison is evidence only where the text tells declarations apart.
+- Two toolchain functions whose `(measure (struct x))` passed no subterm state `(measure (len
+  x))`, an `Int`, and stay programs; not a `Nat` measure with its proofs, which nothing in
+  the tree needs of them.
 - `eval` takes its package root as `--root DIR` and reads `v3` where none is named, as
   `v3/build.sh` does; not the root inferred from the file's path, and not a root required on
   every one of the suite's hundred invocations.
@@ -286,11 +304,10 @@ entries are explained under "Measured" at the end.
 - A file that imports Init sees all of it (`(import Init)`); not a horizon by position in the
   export (`(import Init NAME)`) — a horizon is raised lemma by lemma, and what the toolchain
   builds on by name was not held to it, so a file's records depended on the other roots of a load.
-- `(import Init)` stays as the line that makes a file an ordinary one until the toolchain's
-  files are ordinary too, and goes then; not Init seen by every file now — the toolchain's files
-  open a prelude whose `List`, `Bool` and `Option` would meet Init's, and their functions are
-  programs the logic has not read — and not a rule on the module path in the line's place,
-  which hides the switch.
+- `(import Init)` is still the line by which a file sees Init, the toolchain's files among
+  them now, and goes when the last files that see none do — pins written before the
+  toolchain stood on Init's types; not a rule on the module path in the line's place, which
+  hides the switch.
 - What a file is given of Init is its own demand; not whatever the process loaded — records must
   not depend on load order. A name missed is fetched and the declaration read again; a file
   without Init is given nothing built of Init.
@@ -354,8 +371,11 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (8,933 declarations) loads, lowers and generates in 34 s on
-  the bootstrap, `cc` 65 s, binary 5.2 MB; all 29 roots 146–217 s (2,826 s through the text chain).
+- Back end: the loader's own closure (9,178 declarations) loads, lowers and generates in about
+  360 s on the bootstrap, `cc` 83 s, binary 5.7 MB; all 29 roots 490–550 s at 16 jobs. It was
+  34 s and 146–217 s while the toolchain's files saw no Init: the loader now checks some 250
+  of its own functions as definitions, and Init's fixed kit, on every load of a toolchain
+  root — 18 s for its own closure natively, where it took 4 s.
 - The two readings (`load --both`) over what the examples, the library, the formatter and the
   model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
   programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
@@ -372,13 +392,13 @@ measurements; measure again before building on one.
   derivations write and 8 that call one. 51 of the 59 roots read whole, the model's 174
   declarations and the formatter's binary, 173, among them. calc's closure, 59 declarations:
   read and run over five inputs in 4 ms, where the loader's load of it takes 39 s on the
-  bootstrap. Over the 29 toolchain roots it reads every line the flat reader it replaced read,
-  byte for byte (9,175 declarations for the loader's own closure, K's 5,365 linked under its
-  view), and the 24 test programs among them print the same on it. It reads the loader's
-  closure in 0.19 s where the flat reader took 0.42 s.
-- Suite: 51 entrypoints, eight at a time, over three runs of one day: 740–870 s on the bootstrap
-  (4,850–5,100 s of entrypoint time), 135–150 s on the binaries (670–770 s). Loader pins on one shared Init base, each case loaded twice: 9 s
-  native, about 150 s on the bootstrap.
+  bootstrap. Over the 29 toolchain roots, 146,432 declarations, its text is the loader's; it
+  reads the loader's own closure, 9,178 declarations by the table of Init's facts, in 0.34 s.
+- Suite: 52 entrypoints, eight at a time: 1,014 s on the bootstrap (7,380 s of entrypoint
+  time), 204 s on the binaries (1,117 s); it was 740–870 s and 135–150 s while the toolchain's
+  files saw no Init. The parity test loads its 29 closures eight at a time: one after
+  another they took 64 minutes on the bootstrap. Loader pins on one shared Init base, each
+  case loaded twice: 11 s native, about 180 s on the bootstrap.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.

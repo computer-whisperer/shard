@@ -34,7 +34,7 @@ MA=$(basename "$A"); MB=$(basename "$B")
 
 # ---- (1) the replay
 load v3/examples/tactic/use_split.shard > "$OUT/replay.txt" 2>&1
-checks=$((checks+1)); grep -q 'accepted 17 .*pending 0 .*errors 0$' "$OUT/replay.txt" || { bad "the example does not load clean"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:' "$OUT/replay.txt" | head -4 | cut -c1-300; }
+checks=$((checks+1)); grep -q 'refused 0 .*pending 0 .*errors 0$' "$OUT/replay.txt" || { bad "the example does not load clean"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:' "$OUT/replay.txt" | head -4 | cut -c1-300; }
 for t in $NAMES; do checks=$((checks+1)); grep -q "^ACCEPT examples.tactic.use_split.$t " "$OUT/replay.txt" || bad "$t not accepted from the sidecar"; done
 checks=$((checks+1)); grep -q '^PROVED\|^TACTIC\|^ENGINE' "$OUT/replay.txt" && bad "the build ran a producer (a PROVED, TACTIC or ENGINE record under load.shard)"
 checks=$((checks+1)); grep -q '^SIDECAR' "$OUT/replay.txt" && bad "the committed sidecar is not at the current schema"

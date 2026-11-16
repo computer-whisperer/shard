@@ -170,7 +170,7 @@ echo "native_tie_test: the binary of a program over Init's types tied — calc's
 # ---- (2c) the back end's own text: one closure emitted by the loader
 # under both engines — main.c, its parts, the map and the sources byte for byte, the line too
 mkdir -p "$SCRATCH/emit"
-ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' tie "load emit" load --root v3 --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
+ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' tie "load emit" load --root v3 $INIT --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
 echo "native_tie_test: the back end's C text tied — the loader's emit of one closure under both engines"
 
 # ---- (3) the loader
@@ -179,8 +179,8 @@ tie "load view" load --root v3/pins/loader/view_basic $INIT v3/pins/loader/view_
 tie "load dump" load --root v3 $INIT --dump v3/examples/auto/auto.shard
 tie "load calc_spec" load --root v3 $INIT v3/examples/calc/calc_spec.shard
 head -n 300 "$DIR/init.ndjson" > "$SCRATCH/fix300.ndjson"
-VERDICT='^T0: ' tie "load run t0" load --root v3 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
-VERDICT='^RUN: out of fuel' tie "load run fuel" load --root v3 --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+VERDICT='^T0: ' tie "load run t0" load --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+VERDICT='^RUN: out of fuel' tie "load run fuel" load --root v3 $INIT --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
 echo "native_tie_test: the loader tied over four pins, a dump, an example, a run with and without fuel"
 
 # ---- (4) prove: the examples copied without their sidecars, the sidecars regenerated

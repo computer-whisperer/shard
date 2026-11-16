@@ -8,12 +8,11 @@
 ;;; Strings decode `\n \t \r \\ \" \xHH \u{HHHH}` to UTF-8 bytes. Errors
 ;;; carry a reason and the unconsumed input (its length is the offset).
 
+(import Init)
 (import "util.shard")
-(use kernel.prelude)
+(use Init.Bool false true)
+(use Init.List cons nil)
 (use kernel.util)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Pair)
 
 (type SExpr
   (SNum Int)  ; a numeral, any sign
@@ -40,49 +39,49 @@
       (bool_or (= c 41) (bool_or (= c 34) (bool_or (= c 59) (bool_or (= c 123) (= c 125))))))))
 
 (fn skip_blank ((cs (List Int))) (List Int)
-  (measure (struct cs))
+  (measure (len cs))
   (match cs
-    (Nil Nil)
-    ((Cons c r)
+    (nil nil)
+    ((cons c r)
      (if (is_ws c) (skip_blank r)
      (if (= c 59) (skip_blank (skip_line r))
      cs)))))
 (fn skip_line ((cs (List Int))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons c r) (if (= c 10) r (skip_line r)))))
+    (nil nil)
+    ((cons c r) (if (= c 10) r (skip_line r)))))
 
 ;; ---- atoms --------------------------------------------------------------------------
 ;; the bytes up to the next delimiter, and the rest
-(fn take_atom ((cs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
+(fn take_atom ((cs (List Int)) (acc (List Int))) (Prod (List Int) (List Int))
   (measure (struct cs))
   (match cs
-    (Nil (Pair (rev acc) Nil))
-    ((Cons c r) (if (is_delim c) (Pair (rev acc) cs) (take_atom r (Cons c acc))))))
+    (nil (Prod.mk (rev acc) nil))
+    ((cons c r) (if (is_delim c) (Prod.mk (rev acc) cs) (take_atom r (cons c acc))))))
 
 (fn all_digits ((cs (List Int))) Bool
   (measure (struct cs))
   (match cs
-    (Nil True)
-    ((Cons c r) (if (is_digit c) (all_digits r) False))))
+    (nil true)
+    ((cons c r) (if (is_digit c) (all_digits r) false))))
 (fn digits_val ((cs (List Int)) (acc Int)) Int
   (measure (struct cs))
   (match cs
-    (Nil acc)
-    ((Cons c r) (digits_val r (+ (* acc 10) (- c 48))))))
+    (nil acc)
+    ((cons c r) (digits_val r (+ (* acc 10) (- c 48))))))
 (fn ends_with_dot ((cs (List Int))) Bool
   (measure (struct cs))
   (match cs
-    (Nil False)
-    ((Cons c Nil) (= c 46))
-    ((Cons _ r) (ends_with_dot r))))
+    (nil false)
+    ((cons c nil) (= c 46))
+    ((cons _ r) (ends_with_dot r))))
 (fn drop_last ((cs (List Int))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons _ Nil) Nil)
-    ((Cons c r) (Cons c (drop_last r)))))
+    (nil nil)
+    ((cons _ nil) nil)
+    ((cons c r) (cons c (drop_last r)))))
 
 ;; ---- the reader ---------------------------------------------------------------------
 (fn read_budget () Int 100000000)
@@ -93,11 +92,11 @@
   (if (< fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
-      (Nil SEnd)
-      ((Cons c r)
-       (if (= c 40) (read_list r Nil (- fuel 1))
+      (nil SEnd)
+      ((cons c r)
+       (if (= c 40) (read_list r nil (- fuel 1))
        (if (= c 41) (SErr (quote unexpected_close) cs)
-       (if (= c 34) (read_string r Nil cs)
+       (if (= c 34) (read_string r nil cs)
        (if (= c 39)
          (match (read_expr r (- fuel 1))
            ((SOk x rest) (SOk (SList (list (SSym (quote quote)) x)) rest))
@@ -112,42 +111,42 @@
   (if (< fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
-      (Nil (SErr (quote unterminated_list) cs))
-      ((Cons c r)
+      (nil (SErr (quote unterminated_list) cs))
+      ((cons c r)
        (if (= c 41) (SOk (SList (rev acc)) r)
        (match (read_expr cs (- fuel 1))
-         ((SOk x rest) (read_list rest (Cons x acc) (- fuel 1)))
+         ((SOk x rest) (read_list rest (cons x acc) (- fuel 1)))
          (SEnd (SErr (quote unterminated_list) cs))
          ((SErr e at) (SErr e at)))))))))
 
 ;; a numeral or a symbol, with its universe list when the atom ends in `.` and `{` follows
 (fn read_atom ((cs (List Int)) (fuel Int)) SRes
-  (match (take_atom cs Nil)
-    ((Pair a rest)
+  (match (take_atom cs nil)
+    ((Prod.mk a rest)
      (match a
-       (Nil (SErr (quote empty_atom) cs))
-       ((Cons c0 _)
+       (nil (SErr (quote empty_atom) cs))
+       ((cons c0 _)
         (if (is_digit c0)
           (if (all_digits a) (SOk (SNum (digits_val a 0)) rest) (SErr (quote bad_numeral) cs))
         (if
           (bool_and (= c0 45)
             (match a
-              ((Cons _ (Cons d _)) (is_digit d))
-              (_ False)))
+              ((cons _ (cons d _)) (is_digit d))
+              (_ false)))
           ;; `-7`: a numeral (the L reader refuses the sign in an L position)
           (if (all_digits (drop_first a)) (SOk (SNum (- 0 (digits_val (drop_first a) 0))) rest)
           (SErr (quote bad_numeral) cs))
           (if (ends_with_dot a)
             (match rest
-              ((Cons 123 r2) (read_levels r2 Nil (sym_of_chars (drop_last a)) fuel))
+              ((cons 123 r2) (read_levels r2 nil (sym_of_chars (drop_last a)) fuel))
               (_ (SErr (quote bad_universe_suffix) cs)))
             (match rest
-              ((Cons 123 _) (SErr (quote bad_universe_suffix) cs))
+              ((cons 123 _) (SErr (quote bad_universe_suffix) cs))
               (_ (SOk (SSym (sym_of_chars a)) rest)))))))))))
 (fn drop_first ((cs (List Int))) (List Int)
   (match cs
-    (Nil Nil)
-    ((Cons _ r) r)))
+    (nil nil)
+    ((cons _ r) r)))
 
 ;; after `NAME.{`: the level terms to `}`
 (fn read_levels ((cs0 (List Int)) (acc (List SExpr)) (s Symbol) (fuel Int)) SRes
@@ -155,11 +154,11 @@
   (if (< fuel 0) (SErr (quote reader_fuel) cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
-      (Nil (SErr (quote unterminated_universe_list) cs))
-      ((Cons c r)
+      (nil (SErr (quote unterminated_universe_list) cs))
+      ((cons c r)
        (if (= c 125) (SOk (SSymU s (rev acc)) r)
        (match (read_expr cs (- fuel 1))
-         ((SOk x rest) (read_levels rest (Cons x acc) s (- fuel 1)))
+         ((SOk x rest) (read_levels rest (cons x acc) s (- fuel 1)))
          (SEnd (SErr (quote unterminated_universe_list) cs))
          ((SErr e at) (SErr e at)))))))))
 
@@ -167,49 +166,49 @@
 (fn read_string ((cs (List Int)) (acc (List Int)) (start (List Int))) SRes
   (measure (struct cs))
   (match cs
-    (Nil (SErr (quote unterminated_string) start))
-    ((Cons c r)
+    (nil (SErr (quote unterminated_string) start))
+    ((cons c r)
      (if (= c 34) (SOk (SStr (rev acc)) r)
      (if (= c 92)
        (match r
-         (Nil (SErr (quote unterminated_string) start))
-         ((Cons e r2)
-          (if (= e 110) (read_string r2 (Cons 10 acc) start)
-          (if (= e 116) (read_string r2 (Cons 9 acc) start)
-          (if (= e 114) (read_string r2 (Cons 13 acc) start)
-          (if (= e 92) (read_string r2 (Cons 92 acc) start)
-          (if (= e 34) (read_string r2 (Cons 34 acc) start)
+         (nil (SErr (quote unterminated_string) start))
+         ((cons e r2)
+          (if (= e 110) (read_string r2 (cons 10 acc) start)
+          (if (= e 116) (read_string r2 (cons 9 acc) start)
+          (if (= e 114) (read_string r2 (cons 13 acc) start)
+          (if (= e 92) (read_string r2 (cons 92 acc) start)
+          (if (= e 34) (read_string r2 (cons 34 acc) start)
           (if (= e 120)
             (match r2
-              ((Cons h1 (Cons h2 r3))
+              ((cons h1 (cons h2 r3))
                (if (bool_and (is_hex h1) (is_hex h2))
-                 (read_string r3 (Cons (+ (* 16 (hex_val h1)) (hex_val h2)) acc) start)
+                 (read_string r3 (cons (+ (* 16 (hex_val h1)) (hex_val h2)) acc) start)
                  (SErr (quote bad_escape) cs)))
               (_ (SErr (quote bad_escape) cs)))
           (if (= e 117)
             (match r2
-              ((Cons 123 r3)
+              ((cons 123 r3)
                (match (take_hex r3 0 0)
-                 ((Pair (Pair cp k) r4)
+                 ((Prod.mk (Prod.mk cp k) r4)
                   (match r4
-                    ((Cons 125 r5)
+                    ((cons 125 r5)
                      (if (bool_and (< 0 k) (<= k 6))
                        (read_string r5 (rev_onto (utf8_of cp) acc) start)
                        (SErr (quote bad_escape) cs)))
                     (_ (SErr (quote bad_escape) cs))))))
               (_ (SErr (quote bad_escape) cs)))
             (SErr (quote bad_escape) cs))))))))))
-       (read_string r (Cons c acc) start))))))
+       (read_string r (cons c acc) start))))))
 
 (fn is_hex ((c Int)) Bool
   (bool_or (is_digit c) (bool_or (bool_and (<= 97 c) (<= c 102)) (bool_and (<= 65 c) (<= c 70)))))
 ;; hex digits to a value: ((value, count), rest)
-(fn take_hex ((cs (List Int)) (acc Int) (k Int)) (Pair (Pair Int Int) (List Int))
+(fn take_hex ((cs (List Int)) (acc Int) (k Int)) (Prod (Prod Int Int) (List Int))
   (measure (struct cs))
   (match cs
-    ((Cons c r)
-     (if (is_hex c) (take_hex r (+ (* acc 16) (hex_val c)) (+ k 1)) (Pair (Pair acc k) cs)))
-    (Nil (Pair (Pair acc k) Nil))))
+    ((cons c r)
+     (if (is_hex c) (take_hex r (+ (* acc 16) (hex_val c)) (+ k 1)) (Prod.mk (Prod.mk acc k) cs)))
+    (nil (Prod.mk (Prod.mk acc k) nil))))
 ;; a code point as UTF-8 bytes
 (fn utf8_of ((cp Int)) (List Int)
   (if (< cp 128) (list cp)
@@ -219,13 +218,13 @@
     (+ 128 (band cp 63)))))))
 
 ;; ---- a whole file -------------------------------------------------------------------
-(fn read_all ((src (List Int))) RAll (read_all_go src (len src) Nil (read_budget)))
+(fn read_all ((src (List Int))) RAll (read_all_go src (len src) nil (read_budget)))
 (fn read_all_go ((cs (List Int)) (total Int) (acc (List SExpr)) (fuel Int)) RAll
   (measure fuel)
   (if (< fuel 0) (RAErr (quote reader_fuel) (- total (len cs)))
   (match (read_expr cs fuel)
     (SEnd (RAOk (rev acc)))
-    ((SOk x rest) (read_all_go rest total (Cons x acc) (- fuel 1)))
+    ((SOk x rest) (read_all_go rest total (cons x acc) (- fuel 1)))
     ((SErr e at) (RAErr e (- total (len at)))))))
 
 ;; ---- printing ------------------------------------------------------------------------
@@ -240,21 +239,21 @@
 (fn show_sexprs ((xs (List SExpr))) (List Int)
   (measure (struct xs))
   (match xs
-    (Nil Nil)
-    ((Cons x Nil) (show_sexpr x))
-    ((Cons x r) (append (show_sexpr x) (Cons 32 (show_sexprs r))))))
+    (nil nil)
+    ((cons x nil) (show_sexpr x))
+    ((cons x r) (append (show_sexpr x) (cons 32 (show_sexprs r))))))
 ;; the printable escapes back; other bytes raw
 (fn escape_str ((bs (List Int))) (List Int)
   (measure (struct bs))
   (match bs
-    (Nil Nil)
-    ((Cons c r)
-     (if (= c 34) (Cons 92 (Cons 34 (escape_str r)))
-     (if (= c 92) (Cons 92 (Cons 92 (escape_str r)))
-     (if (= c 10) (Cons 92 (Cons 110 (escape_str r)))
-     (if (= c 9) (Cons 92 (Cons 116 (escape_str r)))
-     (if (= c 13) (Cons 92 (Cons 114 (escape_str r)))
-     (Cons c (escape_str r))))))))))
+    (nil nil)
+    ((cons c r)
+     (if (= c 34) (cons 92 (cons 34 (escape_str r)))
+     (if (= c 92) (cons 92 (cons 92 (escape_str r)))
+     (if (= c 10) (cons 92 (cons 110 (escape_str r)))
+     (if (= c 9) (cons 92 (cons 116 (escape_str r)))
+     (if (= c 13) (cons 92 (cons 114 (escape_str r)))
+     (cons c (escape_str r))))))))))
 
 ;; the structural size (the measure for walks above this file)
 (fn size_sexpr ((s SExpr)) Int
@@ -266,5 +265,5 @@
 (fn size_sexprs ((xs (List SExpr))) Int
   (measure (struct xs))
   (match xs
-    (Nil 0)
-    ((Cons x r) (+ (size_sexpr x) (size_sexprs r)))))
+    (nil 0)
+    ((cons x r) (+ (size_sexpr x) (size_sexprs r)))))

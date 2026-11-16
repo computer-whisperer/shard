@@ -96,10 +96,9 @@ pub fn pat_types(t: &Tables, st: &Option<ETy>, p: &Pat) -> Vec<Option<ETy>> {
 /// A primitive's result type head (prog.shard prim_result).
 fn prim_result(code: u32) -> ETy {
     match code {
-        0 | 3 | 4 | 5 => con("kernel.prelude.Bool"),
+        0 | 3 | 4 | 5 | 34 | 35 => con("Bool"),
         16 => con("Symbol"),
-        17 => ETy::Con("kernel.prelude.List".into(), vec![con("Int")]),
-        34 | 35 => con("Bool"),
+        17 => ETy::Con("List".into(), vec![con("Int")]),
         36..=38 => con("Decidable"),
         22..=33 => con("Nat"),
         _ => con("Int"),

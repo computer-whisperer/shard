@@ -4,8 +4,8 @@ An ordinary program is a `.shard` file under a package root (`v3` here) that imp
 base library, read from a pinned export — and is written over Init's types. Its functions run, and
 most of them are also definitions in the logic, so theorems can be stated about them. The forms
 below are copied from files of the tree; where a table names no file, the form was run as written.
-The system's own code under `v3/kernel` is another kind: written over its own prelude, it has no
-meaning in the logic; section 8 shows how to call it.
+The system's own code under `v3/kernel` is written the same way, but nearly all of it has no
+meaning in the logic: its data is built on `Symbol`. Section 8 shows how to call it.
 
 ## 1. A file
 
@@ -201,8 +201,8 @@ function that only walks the list by its tail still says `(measure (struct ns))`
 
 A directory `D/` with a *view* `D/mod.req.shard` shows its consumers only signatures, such as
 `(sig fn reads_same ((a ByteArray) (b ByteArray)) Bool)` (`v3/tools/shardfmt/reads/mod.req.shard`).
-The implementation is `D/D.shard`; it may import kernel files and write their types in full
-(`kernel.prelude.List.Cons` beside Init's `List` in `v3/tools/shardfmt/reads/reads.shard`). A
+The implementation is `D/D.shard`; it may import kernel files, whose lists and options are
+Init's (`v3/tools/shardfmt/reads/reads.shard`). A
 consumer writes `(import "reads") (use tools.shardfmt.reads)` and sees `reads_same` as an opaque
 function: its own functions are definitions, and its theorems hold for any implementation. Files
 inside `D/` are private, and so is a directory with a view nested inside `D/`; importing one from

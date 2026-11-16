@@ -6,8 +6,8 @@
 //! The comparisons (`=`, `sym_eq`, `<`, `<=`) return the cells `True` /
 //! `False`, and the symbol bridge speaks `Cons` / `Nil` cells — the names
 //! the runtime gives its cells, under which the reader hands the evaluator
-//! the constructors so named (`plain/out.rs`): those of
-//! `v3/kernel/prelude.shard`, or a file's own.
+//! the constructors so named (`plain/out.rs`): those of Init's `Bool` and
+//! `List`, or a file's own.
 
 use num_traits::{Signed, ToPrimitive, Zero};
 

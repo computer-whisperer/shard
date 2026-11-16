@@ -9,8 +9,8 @@
 # loader refuses an index whose header names another byte count.
 #   read EXPORT INDEX < <(v3/kernel/test/init_index.sh)
 #   v3/kernel/test/init_index.sh --current   the paths when the index is current, exit 1 otherwise;
-#       never a build (v3/build.sh's per-root lookup: CI builds the driver before the index, and the
-#       bootstrap's build of the index takes 14× the native one's time)
+#       never a build (v3/build.sh's per-root lookup; the build makes the index current once,
+#       before its first emit)
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -23,13 +23,15 @@ if [ -s "$IDX" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$x" ]; then echo "$EXPORT
 [ "${1:-}" != "--current" ] || { echo "init_index.sh: the index is not current, and --current never builds it" >&2; exit 1; }
 mkdir -p v3/.cache
 tmp=$(mktemp "v3/.cache/init.index.XXXXXX")
-# the compiled driver (v3/build.sh v3/kernel/initindex.shard v3/bin/initindex) when it
-# is newer than the index's sources; the bootstrap otherwise (14× slower over the export)
+# the compiled driver (v3/bin/initindex) when it is newer than the index's sources; the
+# bootstrap otherwise — about a quarter of an hour over the export. The driver is a toolchain
+# program and the loader needs the index to load it, so a tree with no current index starts here.
 BIN=v3/bin/initindex
 if [ -x "$BIN" ] && [ "$BIN" -nt v3/kernel/index.shard ] && [ "$BIN" -nt v3/kernel/initindex.shard ]; then
   RUN=("$BIN")
 else
-  RUN=("$EVAL" direct v3/kernel/initindex.shard)
+  # the driver's walk of the export goes deeper than the bootstrap's default stack reserve
+  RUN=(env SHARD_STACK_MIB=${SHARD_STACK_MIB:-32768} "$EVAL" direct v3/kernel/initindex.shard)
 fi
 if "${RUN[@]}" "$EXPORT" "$tmp" > "$tmp.log" 2>&1 && [ -s "$tmp" ]; then
   mv "$tmp" "$IDX" && echo "$x" > "$STAMP"; rm -f "$tmp.log"

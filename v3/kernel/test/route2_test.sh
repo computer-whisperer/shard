@@ -5,13 +5,15 @@
 # engine's direct run of the driver.
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
+read EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "route2_test: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
+INIT="--init $EXPORT --init-index $INDEX"   # the toolchain's sources stand on Init's types
 DIR=${V3_EXPORT_DIR:-.shard-cache/v3-export}
 [ -s "$DIR/init.ndjson" ] || { echo "route2_test: no export at $DIR/init.ndjson (v3/export.sh)"; exit 1; }
 r3=$(mktemp); r2=$(mktemp); FIX=$(mktemp); trap 'rm -f "$r3" "$r2" "$FIX"' EXIT
 head -n 3000 "$DIR/init.ndjson" > "$FIX"
 "$EVAL" direct v3/kernel/t0.shard -a "$FIX" > "$r3" 2>&1; rc3=$?
 s=$(date +%s)
-"$EVAL" direct v3/kernel/load.shard --root v3 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$FIX" > "$r2" 2>&1; rc2=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$FIX" > "$r2" 2>&1; rc2=$?
 e=$(date +%s)
 echo "route2_test: the direct run exit $rc3, the run under ev exit $rc2 in $((e-s)) s, $(wc -l < "$r2") lines"
 [ "$rc3" -eq 0 ] || { echo "route2_test: the direct run failed"; tail -5 "$r3"; exit 1; }

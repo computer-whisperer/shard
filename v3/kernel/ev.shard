@@ -36,22 +36,21 @@
 ;;; — distinct through `EvRes` (`EvStuck` against `EvExhausted`) and the
 ;;; driver, since a result past a limit says nothing about the input's validity.
 
+(import Init)
 (import "host.shard")
 (import "prog.shard")
 (import "intmap.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.host)
 (use kernel.intmap)
 (use kernel.name)
-(use kernel.prelude)
 (use kernel.prog)
 (use kernel.util)
 (use kernel.host.World)
 (use kernel.intmap.IntMap)
 (use kernel.name.Name)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 (use kernel.prog.EArm)
 (use kernel.prog.ECtorDef)
 (use kernel.prog.EDecl)
@@ -83,47 +82,41 @@
   (LBody Name Int LTerm)  ; a function: identity, parameter count, body
   (LExtern Name Symbol Int (List EType) EType)  ; an extern: identity, its short name (the host's), parameter count, the declared types (the wire's codec reads them)
   (LUnlinked Name))  ; a sig fn no implementation was linked to
-;; the wire's tags: nil cons none some pair false true — and, for the table's Nat set
-;; Init's Bool.false Bool.true and Decidable.isFalse Decidable.isTrue
-(type Wire (Wire Int Int Int Int Int Int Int Int Int Int Int))
+;; the wire's tags, which the primitives answer in: List's nil and cons, Bool's false and
+;; true, Decidable's isFalse and isTrue
+(type Wire (Wire Int Int Int Int Int Int))
 (fn wire_nil ((w Wire)) Int
   (match w
-    ((Wire a _ _ _ _ _ _ _ _ _ _) a)))
+    ((Wire a _ _ _ _ _) a)))
 (fn wire_cons ((w Wire)) Int
   (match w
-    ((Wire _ a _ _ _ _ _ _ _ _ _) a)))
+    ((Wire _ a _ _ _ _) a)))
 (fn wire_false ((w Wire)) Int
   (match w
-    ((Wire _ _ _ _ _ a _ _ _ _ _) a)))
+    ((Wire _ _ a _ _ _) a)))
 (fn wire_true ((w Wire)) Int
   (match w
-    ((Wire _ _ _ _ _ _ a _ _ _ _) a)))
-(fn wire_bfalse ((w Wire)) Int
-  (match w
-    ((Wire _ _ _ _ _ _ _ a _ _ _) a)))
-(fn wire_btrue ((w Wire)) Int
-  (match w
-    ((Wire _ _ _ _ _ _ _ _ a _ _) a)))
+    ((Wire _ _ _ a _ _) a)))
 (fn wire_dfalse ((w Wire)) Int
   (match w
-    ((Wire _ _ _ _ _ _ _ _ _ a _) a)))
+    ((Wire _ _ _ _ a _) a)))
 (fn wire_dtrue ((w Wire)) Int
   (match w
-    ((Wire _ _ _ _ _ _ _ _ _ _ a) a)))
+    ((Wire _ _ _ _ _ a) a)))
 ;; functions by index, constructor tags by identity, identities by tag, function indices by identity, the wire
 (type Linked
-  (Linked (IntMap LFn) (IntMap (List (Pair Name Int))) (IntMap Name) (IntMap (List (Pair Name Int)))
+  (Linked (IntMap LFn) (IntMap (List (Prod Name Int))) (IntMap Name) (IntMap (List (Prod Name Int)))
     Wire))
 (fn lk_fns ((l Linked)) (IntMap LFn)
   (match l
     ((Linked f _ _ _ _) f)))
-(fn lk_tags ((l Linked)) (IntMap (List (Pair Name Int)))
+(fn lk_tags ((l Linked)) (IntMap (List (Prod Name Int)))
   (match l
     ((Linked _ t _ _ _) t)))
 (fn lk_names ((l Linked)) (IntMap Name)
   (match l
     ((Linked _ _ n _ _) n)))
-(fn lk_ids ((l Linked)) (IntMap (List (Pair Name Int)))
+(fn lk_ids ((l Linked)) (IntMap (List (Prod Name Int)))
   (match l
     ((Linked _ _ _ i _) i)))
 (fn lk_wire ((l Linked)) Wire
@@ -131,28 +124,28 @@
     ((Linked _ _ _ _ w) w)))
 
 ;; a name-keyed map of ints (the environment's key, collisions by list)
-(fn nmap_find ((m (IntMap (List (Pair Name Int)))) (n Name)) (Option Int)
+(fn nmap_find ((m (IntMap (List (Prod Name Int)))) (n Name)) (Option Int)
   (match (im_find m (name_key n))
-    (None None)
-    ((Some b) (assoc_int b n))))
-(fn assoc_int ((b (List (Pair Name Int))) (n Name)) (Option Int)
+    (none none)
+    ((some b) (assoc_int b n))))
+(fn assoc_int ((b (List (Prod Name Int))) (n Name)) (Option Int)
   (measure (struct b))
   (match b
-    (Nil None)
-    ((Cons (Pair k v) r) (if (name_eq k n) (Some v) (assoc_int r n)))))
-(fn nmap_add ((m (IntMap (List (Pair Name Int)))) (n Name) (v Int)) (IntMap (List (Pair Name Int)))
+    (nil none)
+    ((cons (Prod.mk k v) r) (if (name_eq k n) (some v) (assoc_int r n)))))
+(fn nmap_add ((m (IntMap (List (Prod Name Int)))) (n Name) (v Int)) (IntMap (List (Prod Name Int)))
   (let ((h (name_key n)))
     (im_insert m h
-      (Cons (Pair n v)
+      (cons (Prod.mk n v)
         (match (im_find m h)
-          ((Some b) b)
-          (None Nil))))))
+          ((some b) b)
+          (none nil))))))
 (fn fn_name ((lk Linked) (id Int)) Name
   (match (im_find (lk_fns lk) id)
-    ((Some (LBody n _ _)) n)
-    ((Some (LExtern n _ _ _ _)) n)
-    ((Some (LUnlinked n)) n)
-    (None Anon)))
+    ((some (LBody n _ _)) n)
+    ((some (LExtern n _ _ _ _)) n)
+    ((some (LUnlinked n)) n)
+    (none Anon)))
 (fn last_sym ((n Name)) Symbol
   (match n
     ((Str _ s) s)
@@ -161,7 +154,7 @@
 ;; ---- linking ----------------------------------------------------------------------------
 (type LinkRes (LkOk Linked) (LkErr Symbol (List Int)))
 ;; constructor tags: 2k for the k-th constructor interned, plus one when it is the second of its type
-(type Tags (Tags Int (IntMap (List (Pair Name Int))) (IntMap Name)))
+(type Tags (Tags Int (IntMap (List (Prod Name Int))) (IntMap Name)))
 (fn tag_of ((k Int) (ordinal Int)) Int (+ (* 2 k) (if (= ordinal 1) 1 0)))
 (fn intern_ctor ((t Tags) (c Name) (ordinal Int)) Tags
   (match t
@@ -170,255 +163,240 @@
 (fn intern_ctors ((t Tags) (cs (List ECtorDef)) (i Int)) Tags
   (measure (struct cs))
   (match cs
-    (Nil t)
-    ((Cons (ECtorDef c _) r) (intern_ctors (intern_ctor t c i) r (+ i 1)))))
+    (nil t)
+    ((cons (ECtorDef c _) r) (intern_ctors (intern_ctor t c i) r (+ i 1)))))
 (fn intern_decls ((t Tags) (ds (List EDecl))) Tags
   (measure (struct ds))
   (match ds
-    (Nil t)
-    ((Cons (EInd _ _ cs) r) (intern_decls (intern_ctors t cs 0) r))
-    ((Cons _ r) (intern_decls t r))))
+    (nil t)
+    ((cons (EInd _ _ cs) r) (intern_decls (intern_ctors t cs 0) r))
+    ((cons _ r) (intern_decls t r))))
 ;; a wire name the program lacks is interned with its ordinal
-(fn intern_wire ((t Tags) (c Name) (ordinal Int)) (Pair Tags Int)
+(fn intern_wire ((t Tags) (c Name) (ordinal Int)) (Prod Tags Int)
   (match t
     ((Tags _ n2t _)
      (match (nmap_find n2t c)
-       ((Some tag) (Pair t tag))
-       (None
+       ((some tag) (Prod.mk t tag))
+       (none
          (match (intern_ctor t c ordinal)
-           ((Tags k2 nt2 t2) (Pair (Tags k2 nt2 t2) (tag_of (- k2 1) ordinal)))))))))
-;; Init's cells, which the wire builds for a program over Init's types and a string literal
-;; is made of: interned like the prelude's, found by name
-(fn init_nil () Name (n2 (quote List) (quote nil)))
-(fn init_cons () Name (n2 (quote List) (quote cons)))
-(fn init_none () Name (n2 (quote Option) (quote none)))
-(fn init_some () Name (n2 (quote Option) (quote some)))
-(fn init_prod_mk () Name (n2 (quote Prod) (quote mk)))
-(fn intern_init ((t Tags)) Tags
-  (intern_each t
-    (list (Pair (init_nil) 0) (Pair (init_cons) 1) (Pair (init_none) 0) (Pair (init_some) 1)
-      (Pair (init_prod_mk) 0))))
-(fn intern_each ((t Tags) (cs (List (Pair Name Int)))) Tags
+           ((Tags k2 nt2 t2) (Prod.mk (Tags k2 nt2 t2) (tag_of (- k2 1) ordinal)))))))))
+(fn intern_each ((t Tags) (cs (List (Prod Name Int)))) Tags
   (measure (struct cs))
   (match cs
-    (Nil t)
-    ((Cons (Pair c o) r)
+    (nil t)
+    ((cons (Prod.mk c o) r)
      (match (intern_wire t c o)
-       ((Pair t1 _) (intern_each t1 r))))))
-(fn wire_of ((t0 Tags)) (Pair Tags Wire)
-  (match (intern_wire (intern_init t0) (prelude_nil) 0)
-    ((Pair t1 nl)
-     (match (intern_wire t1 (prelude_cons) 1)
-       ((Pair t2 cs)
-        (match (intern_wire t2 (prelude_none) 0)
-          ((Pair t3 nn)
-           (match (intern_wire t3 (prelude_some) 1)
-             ((Pair t4 sm)
-              (match (intern_wire t4 (prelude_mk_pair) 0)
-                ((Pair t5 pr)
-                 (match (intern_wire t5 (prelude_false) 0)
-                   ((Pair t6 fl)
-                    (match (intern_wire t6 (prelude_true) 1)
-                      ((Pair t7 tr)
-                       (match (intern_wire t7 (n2 (quote Bool) (quote false)) 0)
-                         ((Pair t8 bf)
-                          (match (intern_wire t8 (n2 (quote Bool) (quote true)) 1)
-                            ((Pair t9 bt)
-                             (match (intern_wire t9 (n2 (quote Decidable) (quote isFalse)) 0)
-                               ((Pair t10 df)
-                                (match (intern_wire t10 (n2 (quote Decidable) (quote isTrue)) 1)
-                                  ((Pair t11 dt) (Pair t11 (Wire nl cs nn sm pr fl tr bf bt df dt)))))))))))))))))))))))))
+       ((Prod.mk t1 _) (intern_each t1 r))))))
+(fn wire_of ((t0 Tags)) (Prod Tags Wire)
+  (match
+    (intern_wire
+      (intern_each t0
+        (list (Prod.mk (cell_nil) 0) (Prod.mk (cell_cons) 1) (Prod.mk (cell_none) 0)
+          (Prod.mk (cell_some) 1)
+          (Prod.mk (cell_mk) 0)))
+      (cell_nil)
+      0)
+    ((Prod.mk t1 nl)
+     (match (intern_wire t1 (cell_cons) 1)
+       ((Prod.mk t2 cs)
+        (match (intern_wire t2 (cell_false) 0)
+          ((Prod.mk t3 fl)
+           (match (intern_wire t3 (cell_true) 1)
+             ((Prod.mk t4 tr)
+              (match (intern_wire t4 (n2 (quote Decidable) (quote isFalse)) 0)
+                ((Prod.mk t5 df)
+                 (match (intern_wire t5 (n2 (quote Decidable) (quote isTrue)) 1)
+                   ((Prod.mk t6 dt) (Prod.mk t6 (Wire nl cs fl tr df dt)))))))))))))))
 ;; function indices
-(fn index_fns ((ds (List EDecl)) (j Int) (ids (IntMap (List (Pair Name Int)))))
-  (IntMap (List (Pair Name Int)))
+(fn index_fns ((ds (List EDecl)) (j Int) (ids (IntMap (List (Prod Name Int)))))
+  (IntMap (List (Prod Name Int)))
   (measure (struct ds))
   (match ds
-    (Nil ids)
-    ((Cons (EFn n _ _ _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
-    ((Cons (ESig n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
-    ((Cons (EExtern n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
-    ((Cons _ r) (index_fns r j ids))))
+    (nil ids)
+    ((cons (EFn n _ _ _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((cons (ESig n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((cons (EExtern n _ _ _) r) (index_fns r (+ j 1) (nmap_add ids n j)))
+    ((cons _ r) (index_fns r j ids))))
 
 (fn link ((p Prog)) LinkRes
   (match p
     ((Prog ds)
      (match (wire_of (intern_decls (Tags 0 IMEmpty IMEmpty) ds))
-       ((Pair (Tags _ n2t t2n) wire)
+       ((Prod.mk (Tags _ n2t t2n) wire)
         (let ((ids (index_fns ds 0 IMEmpty)))
           (let ((lk (Linked IMEmpty n2t t2n ids wire)))
             (match (lower_decls lk ds IMEmpty)
-              ((Pair (Some (Pair e m)) _) (LkErr e m))
-              ((Pair None fns) (LkOk (Linked fns n2t t2n ids wire)))))))))))
+              ((Prod.mk (some (Prod.mk e m)) _) (LkErr e m))
+              ((Prod.mk none fns) (LkOk (Linked fns n2t t2n ids wire)))))))))))
 (fn lower_decls ((lk Linked) (ds (List EDecl)) (fns (IntMap LFn)))
-  (Pair (Option (Pair Symbol (List Int))) (IntMap LFn))
+  (Prod (Option (Prod Symbol (List Int))) (IntMap LFn))
   (measure (struct ds))
   (match ds
-    (Nil (Pair None fns))
-    ((Cons (EFn n _ ps _ _ body) r)
+    (nil (Prod.mk none fns))
+    ((cons (EFn n _ ps _ _ body) r)
      (match (nmap_find (lk_ids lk) n)
-       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
-       ((Some id)
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name n))) fns))
+       ((some id)
         (match (lower lk body)
-          ((Pair (Some (Pair e m)) _) (Pair (Some (Pair e m)) fns))
-          ((Pair None t) (lower_decls lk r (im_insert fns id (LBody n (len ps) t))))))))
-    ((Cons (ESig n _ _ _) r)
+          ((Prod.mk (some (Prod.mk e m)) _) (Prod.mk (some (Prod.mk e m)) fns))
+          ((Prod.mk none t) (lower_decls lk r (im_insert fns id (LBody n (len ps) t))))))))
+    ((cons (ESig n _ _ _) r)
      (match (nmap_find (lk_ids lk) n)
-       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
-       ((Some id) (lower_decls lk r (im_insert fns id (LUnlinked n))))))
-    ((Cons (EExtern n _ ps rt) r)
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name n))) fns))
+       ((some id) (lower_decls lk r (im_insert fns id (LUnlinked n))))))
+    ((cons (EExtern n _ ps rt) r)
      (match (nmap_find (lk_ids lk) n)
-       (None (Pair (Some (Pair (quote unresolved) (show_name n))) fns))
-       ((Some id) (lower_decls lk r (im_insert fns id (LExtern n (last_sym n) (len ps) ps rt))))))
-    ((Cons _ r) (lower_decls lk r fns))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name n))) fns))
+       ((some id) (lower_decls lk r (im_insert fns id (LExtern n (last_sym n) (len ps) ps rt))))))
+    ((cons _ r) (lower_decls lk r fns))))
 ;; a term into the linked representation
-(fn lower ((lk Linked) (t ETerm)) (Pair (Option (Pair Symbol (List Int))) LTerm)
+(fn lower ((lk Linked) (t ETerm)) (Prod (Option (Prod Symbol (List Int))) LTerm)
   (measure (struct t))
   (match t
-    ((EBVar i) (Pair None (LBVar i)))
-    ((ELit l) (Pair None (LLit (lit_val lk l))))
+    ((EBVar i) (Prod.mk none (LBVar i)))
+    ((ELit l) (Prod.mk none (LLit (lit_val lk l))))
     ((ECtor c args)
      (match (nmap_find (lk_tags lk) c)
-       (None (Pair (Some (Pair (quote unresolved) (show_name c))) (LBVar 0)))
-       ((Some tag) (lower_args lk args (LCtor tag Nil) 0 tag))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name c))) (LBVar 0)))
+       ((some tag) (lower_args lk args (LCtor tag nil) 0 tag))))
     ((ECall f args)
      (match (nmap_find (lk_ids lk) f)
-       (None (Pair (Some (Pair (quote unresolved) (show_name f))) (LBVar 0)))
-       ((Some id) (lower_args lk args (LCall id Nil) 1 id))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name f))) (LBVar 0)))
+       ((some id) (lower_args lk args (LCall id nil) 1 id))))
     ((EPrim n args)
      (match (prim_find n)
-       (None (Pair (Some (Pair (quote unresolved) (show_name n))) (LBVar 0)))
-       ((Some (Prim code _)) (lower_args lk args (LPrim code Nil) 2 code))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name n))) (LBVar 0)))
+       ((some (Prim code _)) (lower_args lk args (LPrim code nil) 2 code))))
     ((EExt f args)
      (match (nmap_find (lk_ids lk) f)
-       (None (Pair (Some (Pair (quote unresolved) (show_name f))) (LBVar 0)))
-       ((Some id) (lower_args lk args (LExt id Nil) 3 id))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name f))) (LBVar 0)))
+       ((some id) (lower_args lk args (LExt id nil) 3 id))))
     ((EMatch s arms)
      (match (lower lk s)
-       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-       ((Pair None ls)
-        (match (lower_arms lk arms Nil)
-          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-          ((Pair None las) (Pair None (LMatch ls las)))))))
+       ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+       ((Prod.mk none ls)
+        (match (lower_arms lk arms nil)
+          ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+          ((Prod.mk none las) (Prod.mk none (LMatch ls las)))))))
     ((ELet rs b)
-     (match (lower_list lk rs Nil)
-       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-       ((Pair None lrs)
+     (match (lower_list lk rs nil)
+       ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+       ((Prod.mk none lrs)
         (match (lower lk b)
-          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-          ((Pair None lb) (Pair None (LLet lrs lb)))))))
+          ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+          ((Prod.mk none lb) (Prod.mk none (LLet lrs lb)))))))
     ((EIf a b c)
      (match (lower lk a)
-       ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-       ((Pair None la)
+       ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+       ((Prod.mk none la)
         (match (lower lk b)
-          ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-          ((Pair None lb)
+          ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+          ((Prod.mk none lb)
            (match (lower lk c)
-             ((Pair (Some e) _) (Pair (Some e) (LBVar 0)))
-             ((Pair None lc) (Pair None (LIf la lb lc)))))))))
+             ((Prod.mk (some e) _) (Prod.mk (some e) (LBVar 0)))
+             ((Prod.mk none lc) (Prod.mk none (LIf la lb lc)))))))))
     ((ELam _ _ _)
-     (Pair
-       (Some (Pair (quote function_value) "a lambda in a program: the classifier lifts each one"))
+     (Prod.mk
+       (some (Prod.mk (quote function_value) "a lambda in a program: the classifier lifts each one"))
        (LBVar 0)))
-    (EAbsurd (Pair None LAbsurd))))
+    (EAbsurd (Prod.mk none LAbsurd))))
 ;; the head's node over its lowered arguments (kind 0 ctor, 1 call, 2 prim, 3 ext)
 (fn lower_args ((lk Linked) (args (List ETerm)) (empty LTerm) (kind Int) (head Int))
-  (Pair (Option (Pair Symbol (List Int))) LTerm)
-  (match (lower_list lk args Nil)
-    ((Pair (Some e) _) (Pair (Some e) empty))
-    ((Pair None las)
-     (Pair None
+  (Prod (Option (Prod Symbol (List Int))) LTerm)
+  (match (lower_list lk args nil)
+    ((Prod.mk (some e) _) (Prod.mk (some e) empty))
+    ((Prod.mk none las)
+     (Prod.mk none
        (if (= kind 0) (LCtor head las)
        (if (= kind 1) (LCall head las)
        (if (= kind 2) (LPrim head las)
        (LExt head las))))))))
 (fn lower_list ((lk Linked) (ts (List ETerm)) (acc (List LTerm)))
-  (Pair (Option (Pair Symbol (List Int))) (List LTerm))
+  (Prod (Option (Prod Symbol (List Int))) (List LTerm))
   (measure (struct ts))
   (match ts
-    (Nil (Pair None (rev acc)))
-    ((Cons t r)
+    (nil (Prod.mk none (rev acc)))
+    ((cons t r)
      (match (lower lk t)
-       ((Pair (Some e) _) (Pair (Some e) Nil))
-       ((Pair None lt) (lower_list lk r (Cons lt acc)))))))
+       ((Prod.mk (some e) _) (Prod.mk (some e) nil))
+       ((Prod.mk none lt) (lower_list lk r (cons lt acc)))))))
 (fn lower_arms ((lk Linked) (arms (List EArm)) (acc (List LArm)))
-  (Pair (Option (Pair Symbol (List Int))) (List LArm))
+  (Prod (Option (Prod Symbol (List Int))) (List LArm))
   (measure (struct arms))
   (match arms
-    (Nil (Pair None (rev acc)))
-    ((Cons (EArm p b) r)
+    (nil (Prod.mk none (rev acc)))
+    ((cons (EArm p b) r)
      (match (lower_pat lk p)
-       ((Pair (Some e) _) (Pair (Some e) Nil))
-       ((Pair None lp)
+       ((Prod.mk (some e) _) (Prod.mk (some e) nil))
+       ((Prod.mk none lp)
         (match (lower lk b)
-          ((Pair (Some e) _) (Pair (Some e) Nil))
-          ((Pair None lb) (lower_arms lk r (Cons (LArm lp lb) acc)))))))))
-(fn lower_pat ((lk Linked) (p EPat)) (Pair (Option (Pair Symbol (List Int))) LPat)
+          ((Prod.mk (some e) _) (Prod.mk (some e) nil))
+          ((Prod.mk none lb) (lower_arms lk r (cons (LArm lp lb) acc)))))))))
+(fn lower_pat ((lk Linked) (p EPat)) (Prod (Option (Prod Symbol (List Int))) LPat)
   (measure (struct p))
   (match p
-    (PVar (Pair None LPVar))
-    ((PLit (LNat k)) (Pair None (LPInt k)))
-    ((PLit (LInt k)) (Pair None (LPInt k)))
-    ((PLit (LSym s)) (Pair None (LPSym s)))
-    ((PLit (LStr _ _ _)) (Pair (Some (Pair (quote pattern_literal) "a string pattern")) LPVar))
+    (PVar (Prod.mk none LPVar))
+    ((PLit (LNat k)) (Prod.mk none (LPInt k)))
+    ((PLit (LInt k)) (Prod.mk none (LPInt k)))
+    ((PLit (LSym s)) (Prod.mk none (LPSym s)))
+    ((PLit (LStr _ _ _))
+     (Prod.mk (some (Prod.mk (quote pattern_literal) "a string pattern")) LPVar))
     ((PCtor c subs)
      (match (nmap_find (lk_tags lk) c)
-       (None (Pair (Some (Pair (quote unresolved) (show_name c))) LPVar))
-       ((Some tag)
-        (match (lower_pats lk subs Nil)
-          ((Pair (Some e) _) (Pair (Some e) LPVar))
-          ((Pair None lps) (Pair None (LPCtor tag lps)))))))))
+       (none (Prod.mk (some (Prod.mk (quote unresolved) (show_name c))) LPVar))
+       ((some tag)
+        (match (lower_pats lk subs nil)
+          ((Prod.mk (some e) _) (Prod.mk (some e) LPVar))
+          ((Prod.mk none lps) (Prod.mk none (LPCtor tag lps)))))))))
 (fn lower_pats ((lk Linked) (ps (List EPat)) (acc (List LPat)))
-  (Pair (Option (Pair Symbol (List Int))) (List LPat))
+  (Prod (Option (Prod Symbol (List Int))) (List LPat))
   (measure (struct ps))
   (match ps
-    (Nil (Pair None (rev acc)))
-    ((Cons p r)
+    (nil (Prod.mk none (rev acc)))
+    ((cons p r)
      (match (lower_pat lk p)
-       ((Pair (Some e) _) (Pair (Some e) Nil))
-       ((Pair None lp) (lower_pats lk r (Cons lp acc)))))))
+       ((Prod.mk (some e) _) (Prod.mk (some e) nil))
+       ((Prod.mk none lp) (lower_pats lk r (cons lp acc)))))))
 (fn lit_val ((lk Linked) (l ELit)) IVal
   (match l
     ((LNat k) (IVInt k))
     ((LInt k) (IVInt k))
     ((LStr nl cs bs)  ; the cells the literal names: Init's List for a String, the List in scope's in the toolchain's sources
      (match (nmap_find (lk_tags lk) nl)
-       (None (bytes_in lk bs))
-       ((Some tnl)
+       (none (bytes_in lk bs))
+       ((some tnl)
         (match (nmap_find (lk_tags lk) cs)
-          (None (bytes_in lk bs))
-          ((Some tcs) (cells_in tnl tcs bs))))))
+          (none (bytes_in lk bs))
+          ((some tcs) (cells_in tnl tcs bs))))))
     ((LSym s) (IVSym s))))
 
-;; ---- the primitives' cells: the prelude's; the externs' are read by declared type, below ----
+;; ---- the primitives' cells: Init's; the externs' are read by declared type, below ----
 (fn bytes_in ((lk Linked) (bs (List Int))) IVal
   (measure (struct bs))
   (match bs
-    (Nil (IVCtor (wire_nil (lk_wire lk)) Nil))
-    ((Cons b r) (IVCtor (wire_cons (lk_wire lk)) (list (IVInt b) (bytes_in lk r))))))
+    (nil (IVCtor (wire_nil (lk_wire lk)) nil))
+    ((cons b r) (IVCtor (wire_cons (lk_wire lk)) (list (IVInt b) (bytes_in lk r))))))
 ;; a Cons chain of Int cells back to bytes; None when the value is not one
 (fn bytes_out ((lk Linked) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
   (cells_out (wire_nil (lk_wire lk)) (wire_cons (lk_wire lk)) v acc fuel))
 ;; a chain of integer cells under the tags nl and cs
 (fn cells_out ((nl Int) (cs Int) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
   (measure fuel)
-  (if (< fuel 0) None
+  (if (< fuel 0) none
   (match v
     ((IVCtor tag fields)
-     (if (= tag nl) (Some (rev acc))
+     (if (= tag nl) (some (rev acc))
      (if (= tag cs)
        (match fields
-         ((Cons (IVInt b) (Cons rest Nil)) (cells_out nl cs rest (Cons b acc) (- fuel 1)))
-         (_ None))
-       None)))
-    (_ None))))
+         ((cons (IVInt b) (cons rest nil)) (cells_out nl cs rest (cons b acc) (- fuel 1)))
+         (_ none))
+       none)))
+    (_ none))))
 (fn bool_cell ((lk Linked) (b Bool)) IVal
-  (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) Nil))
-;; Init's Bool and Decidable cells: what the table's Nat set returns
-(fn init_bool_cell ((lk Linked) (b Bool)) IVal
-  (IVCtor (if b (wire_btrue (lk_wire lk)) (wire_bfalse (lk_wire lk))) Nil))
+  (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) nil))
+;; Decidable's cells: what the table's Nat decisions return
 (fn dec_cell ((lk Linked) (b Bool)) IVal
-  (IVCtor (if b (wire_dtrue (lk_wire lk)) (wire_dfalse (lk_wire lk))) Nil))
+  (IVCtor (if b (wire_dtrue (lk_wire lk)) (wire_dfalse (lk_wire lk))) nil))
 (fn wire_budget () Int 1000000000)
 
 ;; ---- the machine ---------------------------------------------------------------------------
@@ -439,33 +417,33 @@
   (match t
     ((LBVar i)
      (match (nth env i)
-       ((Some v) (ev_ret lk v k cur fuel))
-       (None (HStuck (quote unbound) cur))))
+       ((some v) (ev_ret lk v k cur fuel))
+       (none (HStuck (quote unbound) cur))))
     ((LLit v) (ev_ret lk v k cur fuel))
     ;; an application: its first argument under the frame that holds the rest (kind 0 a cell,
     ;; 1 a call, 2 a primitive, 3 an extern), or the head applied where it has none; the
     ;; arguments after the first are ev_ret's (KArg)
     ((LCtor tag args)
      (match args
-       (Nil (ev_ret lk (IVCtor tag Nil) k cur fuel))
-       ((Cons a more) (ev_term lk env a (KArg 0 tag Nil more env cur k) cur fuel))))
+       (nil (ev_ret lk (IVCtor tag nil) k cur fuel))
+       ((cons a more) (ev_term lk env a (KArg 0 tag nil more env cur k) cur fuel))))
     ((LCall id args)
      (match args
-       (Nil (ev_call lk id Nil k cur fuel))
-       ((Cons a more) (ev_term lk env a (KArg 1 id Nil more env cur k) cur fuel))))
+       (nil (ev_call lk id nil k cur fuel))
+       ((cons a more) (ev_term lk env a (KArg 1 id nil more env cur k) cur fuel))))
     ((LPrim op args)
      (match args
-       (Nil (ev_prim lk op Nil k cur fuel))
-       ((Cons a more) (ev_term lk env a (KArg 2 op Nil more env cur k) cur fuel))))
+       (nil (ev_prim lk op nil k cur fuel))
+       ((cons a more) (ev_term lk env a (KArg 2 op nil more env cur k) cur fuel))))
     ((LExt id args)
      (match args
-       (Nil (HExt id Nil k cur fuel))
-       ((Cons a more) (ev_term lk env a (KArg 3 id Nil more env cur k) cur fuel))))
+       (nil (HExt id nil k cur fuel))
+       ((cons a more) (ev_term lk env a (KArg 3 id nil more env cur k) cur fuel))))
     ((LMatch s arms) (ev_term lk env s (KMatch arms env cur k) cur fuel))
     ((LLet rhss body)
      (match rhss
-       (Nil (ev_term lk env body k cur fuel))
-       ((Cons r1 rest) (ev_term lk env r1 (KLet rest body env cur k) cur fuel))))
+       (nil (ev_term lk env body k cur fuel))
+       ((cons r1 rest) (ev_term lk env r1 (KLet rest body env cur k) cur fuel))))
     ((LIf c a b) (ev_term lk env c (KIf a b env cur k) cur fuel))
     (LAbsurd (HStuck (quote unreachable) cur))))
 (fn ev_ret ((lk Linked) (v IVal) (k Kont) (cur Int) (fuel Int)) Halt
@@ -475,22 +453,22 @@
     ;; values (last first) — a cell, a call, a primitive, an extern
     ((KArg kind head done rest env cur1 next)
      (match rest
-       ((Cons a more)
-        (ev_term lk env a (KArg kind head (Cons v done) more env cur1 next) cur1 fuel))
-       (Nil
-         (if (= kind 0) (ev_ret lk (IVCtor head (rev (Cons v done))) next cur1 fuel)
-         (if (= kind 1) (ev_call lk head (Cons v done) next cur1 fuel)
-         (if (= kind 2) (ev_prim lk head (Cons v done) next cur1 fuel)
-         (HExt head (rev (Cons v done)) next cur1 fuel)))))))
+       ((cons a more)
+        (ev_term lk env a (KArg kind head (cons v done) more env cur1 next) cur1 fuel))
+       (nil
+         (if (= kind 0) (ev_ret lk (IVCtor head (rev (cons v done))) next cur1 fuel)
+         (if (= kind 1) (ev_call lk head (cons v done) next cur1 fuel)
+         (if (= kind 2) (ev_prim lk head (cons v done) next cur1 fuel)
+         (HExt head (rev (cons v done)) next cur1 fuel)))))))
     ((KMatch arms env cur1 next)
      (match (pick_arm v arms env)
        ((ArmAt env1 body) (ev_term lk env1 body next cur1 fuel))
        (ArmNone (HStuck (quote no_arm) cur1))))
     ((KLet rest body env cur1 next)
-     (let ((env1 (Cons v env)))
+     (let ((env1 (cons v env)))
        (match rest
-         (Nil (ev_term lk env1 body next cur1 fuel))
-         ((Cons r1 more) (ev_term lk env1 r1 (KLet more body env1 cur1 next) cur1 fuel)))))
+         (nil (ev_term lk env1 body next cur1 fuel))
+         ((cons r1 more) (ev_term lk env1 r1 (KLet more body env1 cur1 next) cur1 fuel)))))
     ((KIf a b env cur1 next)
      (match v
        ((IVCtor tag _) (ev_term lk env (if (= (band tag 1) 1) a b) next cur1 fuel))
@@ -498,8 +476,8 @@
 ;; a function over its arguments' values (last first: the body's frame): one unit of fuel
 (fn ev_call ((lk Linked) (head Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
   (match (im_find (lk_fns lk) head)
-    ((Some (LBody _ _ body)) (if (< fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
-    ((Some (LUnlinked _)) (HStuck (quote unlinked) head))
+    ((some (LBody _ _ body)) (if (< fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
+    ((some (LUnlinked _)) (HStuck (quote unlinked) head))
     (_ (HStuck (quote unknown_head) cur))))
 ;; a primitive over its arguments' values (last first)
 (fn ev_prim ((lk Linked) (op Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
@@ -512,42 +490,42 @@
 (fn pick_arm ((v IVal) (arms (List LArm)) (env (List IVal))) Arm
   (measure (struct arms))
   (match arms
-    (Nil ArmNone)
-    ((Cons (LArm p body) rest)
+    (nil ArmNone)
+    ((cons (LArm p body) rest)
      (match (match_pat p v env)
-       ((Some env1) (ArmAt env1 body))
-       (None (pick_arm v rest env))))))
+       ((some env1) (ArmAt env1 body))
+       (none (pick_arm v rest env))))))
 ;; the pattern's variables pushed in capture order: the last one bound is index 0
 (fn match_pat ((p LPat) (v IVal) (env (List IVal))) (Option (List IVal))
   (measure (struct p))
   (match p
-    (LPVar (Some (Cons v env)))
+    (LPVar (some (cons v env)))
     ((LPInt n)
      (match v
-       ((IVInt m) (if (= n m) (Some env) None))
-       (_ None)))
+       ((IVInt m) (if (= n m) (some env) none))
+       (_ none)))
     ((LPSym s)
      (match v
-       ((IVSym t) (if (sym_eq s t) (Some env) None))
-       (_ None)))
+       ((IVSym t) (if (sym_eq s t) (some env) none))
+       (_ none)))
     ((LPCtor tag subs)
      (match v
-       ((IVCtor t2 fields) (if (= tag t2) (match_fields subs fields env) None))
-       (_ None)))))
+       ((IVCtor t2 fields) (if (= tag t2) (match_fields subs fields env) none))
+       (_ none)))))
 (fn match_fields ((ps (List LPat)) (vs (List IVal)) (env (List IVal))) (Option (List IVal))
   (measure (struct ps))
   (match ps
-    (Nil
+    (nil
       (match vs
-        (Nil (Some env))
-        (_ None)))
-    ((Cons p pr)
+        (nil (some env))
+        (_ none)))
+    ((cons p pr)
      (match vs
-       (Nil None)
-       ((Cons v vr)
+       (nil none)
+       ((cons v vr)
         (match (match_pat p v env)
-          ((Some env1) (match_fields pr vr env1))
-          (None None)))))))
+          ((some env1) (match_fields pr vr env1))
+          (none none)))))))
 
 ;; ---- the primitives (prog.shard's codes) ----------------------------------------------------
 ;; a primitive's outcome: a value; the guard failed (the input outside the operation's
@@ -556,7 +534,7 @@
 (type PrimRes (PrimVal IVal) (PrimGuard) (PrimOut Symbol))
 (fn prim_apply ((lk Linked) (code Int) (args (List IVal))) PrimRes
   (match args
-    ((Cons a (Cons b Nil))
+    ((cons a (cons b nil))
      (match a
        ((IVInt x)
         (match b
@@ -567,11 +545,11 @@
           ((IVSym t) (if (= code 5) (PrimVal (bool_cell lk (sym_eq s t))) PrimGuard))
           (_ PrimGuard)))
        (_ PrimGuard)))
-    ((Cons a Nil)
+    ((cons a nil)
      (if (= code 16)
-       (match (bytes_out lk a Nil (wire_budget))
-         ((Some bs) (if (utf8_ok bs) (PrimVal (IVSym (sym_of_chars bs))) PrimGuard))
-         (None PrimGuard))
+       (match (bytes_out lk a nil (wire_budget))
+         ((some bs) (if (utf8_ok bs) (PrimVal (IVSym (sym_of_chars bs))) PrimGuard))
+         (none PrimGuard))
      (if (= code 17)
        (match a
          ((IVSym s) (PrimVal (bytes_in lk (chars_of_sym s))))
@@ -596,7 +574,7 @@
   (if (< code 16)
     (if (= code 8) (PrimVal (IVInt (* x y)))
     (if (= code 9) (if (= y 0) PrimGuard (PrimVal (IVInt (mod x y))))
-    (if (= code 10) (if (= y 0) PrimGuard (PrimVal (IVInt (/ x y))))
+    (if (= code 10) (if (= y 0) PrimGuard (PrimVal (IVInt (Int.tdiv x y))))
     (if (= code 11) (if (= y 0) PrimGuard (PrimVal (IVInt (tmod x y))))
     (if (= code 12) (if (= y 0) PrimGuard (PrimVal (IVInt (ediv x y))))
     (if (= code 13) (PrimVal (IVInt (bor x y)))
@@ -604,7 +582,7 @@
     (if (shift_ok y) (PrimVal (IVInt (bshl x y)))
     PrimGuard))))))))
   (if (< code 22)
-    (if (= code 18) (PrimVal (IVInt (if (= y 0) 0 (/ x y))))
+    (if (= code 18) (PrimVal (IVInt (Int.tdiv x y)))
     (if (= code 19) (PrimVal (IVInt (if (= y 0) x (tmod x y))))
     (if (= code 20) (PrimVal (IVInt (if (= y 0) 0 (ediv x y))))
     (if (= code 21) (PrimVal (IVInt (if (= y 0) x (mod x y))))
@@ -638,8 +616,8 @@
     (if (bool_and (< 1 x) (< (ediv (ev_nat_max_size) y) (ev_nat_bytes x)))
       (PrimOut (quote nat_size))
       (nat_sized (nat_pow_ev x y)))))
-  (if (= code 34) (PrimVal (init_bool_cell lk (= x y)))
-  (if (= code 35) (PrimVal (init_bool_cell lk (<= x y)))
+  (if (= code 34) (PrimVal (bool_cell lk (= x y)))
+  (if (= code 35) (PrimVal (bool_cell lk (<= x y)))
   (if (= code 36) (PrimVal (dec_cell lk (= x y)))
   (if (= code 37) (PrimVal (dec_cell lk (< x y)))
   (if (= code 38) (PrimVal (dec_cell lk (<= x y)))
@@ -669,23 +647,23 @@
 (fn val_in ((lk Linked) (v Val)) (Option IVal)
   (measure (struct v))
   (match v
-    ((VInt k) (Some (IVInt k)))
-    ((VSym s) (Some (IVSym s)))
+    ((VInt k) (some (IVInt k)))
+    ((VSym s) (some (IVSym s)))
     ((VCtor c vs)
      (match (nmap_find (lk_tags lk) c)
-       (None None)
-       ((Some tag)
-        (match (vals_in lk vs Nil)
-          (None None)
-          ((Some ivs) (Some (IVCtor tag ivs)))))))))
+       (none none)
+       ((some tag)
+        (match (vals_in lk vs nil)
+          (none none)
+          ((some ivs) (some (IVCtor tag ivs)))))))))
 (fn vals_in ((lk Linked) (vs (List Val)) (acc (List IVal))) (Option (List IVal))
   (measure (struct vs))
   (match vs
-    (Nil (Some (rev acc)))
-    ((Cons v r)
+    (nil (some (rev acc)))
+    ((cons v r)
      (match (val_in lk v)
-       (None None)
-       ((Some iv) (vals_in lk r (Cons iv acc)))))))
+       (none none)
+       ((some iv) (vals_in lk r (cons iv acc)))))))
 (fn val_out ((lk Linked) (v IVal)) Val
   (measure (struct v))
   (match v
@@ -694,14 +672,14 @@
     ((IVCtor tag vs)
      (VCtor
        (match (im_find (lk_names lk) tag)
-         ((Some n) n)
-         (None Anon))
+         ((some n) n)
+         (none Anon))
        (vals_out lk vs)))))
 (fn vals_out ((lk Linked) (vs (List IVal))) (List Val)
   (measure (struct vs))
   (match vs
-    (Nil Nil)
-    ((Cons v r) (Cons (val_out lk v) (vals_out lk r)))))
+    (nil nil)
+    ((cons v r) (cons (val_out lk v) (vals_out lk r)))))
 (fn halt_res ((lk Linked) (h Halt)) EvRes
   (match h
     ((HVal v) (EvOk (val_out lk v)))
@@ -713,7 +691,7 @@
 ;; preparation and one invocation through the assumed door (below): the caller answers for the
 ;; arguments' types, and only their constructors are resolved (`bad_value`)
 (fn ev ((p Prog) (f Name) (args (List Val)) (fuel Int)) EvRes
-  (match (prepare p f (policy_of Assumed False Nil fuel))
+  (match (prepare p f (policy_of Assumed false nil fuel))
     ((PrepNo e _) (EvStuck e f))
     ((PrepOk h)
      (match (invoke h args)
@@ -764,24 +742,24 @@
   (make Policy (door door) (effects effects) (trace trace) (fuel fuel)))
 (record Handle (lk Linked) (id Int) (entry Name) (params (List EType)) (policy Policy)
   (token (Option IVal))
-  (inds (IntMap (List (Pair Name EDecl)))))
+  (inds (IntMap (List (Prod Name EDecl)))))
 (type Prep (PrepOk Handle) (PrepNo Symbol (List Int)))  ; a refusal: the reason — a link error's, unknown_head, unlinked, bad_entry, preconditioned — and its text
 (fn prepare ((p Prog) (f Name) (pol Policy)) Prep
   (match (link p)
     ((LkErr e m) (PrepNo e m))
     ((LkOk lk)
      (match (nmap_find (lk_ids lk) f)
-       (None (PrepNo (quote unknown_head) (show_name f)))
-       ((Some id)
+       (none (PrepNo (quote unknown_head) (show_name f)))
+       ((some id)
         (match p
           ((Prog ds)
            (match (entry_types (fn_decl_at ds id) (Policy.door pol) f)
              ((EntNo e m) (PrepNo e m))
              ((EntOk ps)
-              (match (if (Policy.effects pol) (world_last lk ds ps) (Some (Pair ps None)))
-                (None
+              (match (if (Policy.effects pol) (world_last lk ds ps) (some (Prod.mk ps none)))
+                (none
                   (PrepNo (quote bad_entry) (append (show_name f) " does not take a World last")))
-                ((Some (Pair params token))
+                ((some (Prod.mk params token))
                  (let
                    ((h
                       (make Handle (lk lk) (id id) (entry f) (params params) (policy pol)
@@ -796,14 +774,14 @@
 (type Ent (EntOk (List EType)) (EntNo Symbol (List Int)))
 (fn entry_types ((d (Option EDecl)) (door Door) (f Name)) Ent
   (match d
-    ((Some (EFn _ _ ps _ _ _)) (EntOk ps))
-    ((Some (ESig _ _ ps _))
+    ((some (EFn _ _ ps _ _ _)) (EntOk ps))
+    ((some (ESig _ _ ps _))
      (match door
        (Assumed (EntOk ps))
        (Checked
          (EntNo (quote unlinked)
            (append (show_name f) " is a sig fn no implementation is linked to")))))
-    ((Some (EExtern _ _ ps _))
+    ((some (EExtern _ _ ps _))
      (match door
        (Assumed (EntOk ps))
        (Checked
@@ -814,48 +792,48 @@
 (fn fn_decl_at ((ds (List EDecl)) (j Int)) (Option EDecl)
   (measure (struct ds))
   (match ds
-    (Nil None)
-    ((Cons (EInd _ _ _) r) (fn_decl_at r j))
-    ((Cons (ESigType _ _) r) (fn_decl_at r j))
-    ((Cons d r) (if (< j 1) (Some d) (fn_decl_at r (- j 1))))))
+    (nil none)
+    ((cons (EInd _ _ _) r) (fn_decl_at r j))
+    ((cons (ESigType _ _) r) (fn_decl_at r j))
+    ((cons d r) (if (< j 1) (some d) (fn_decl_at r (- j 1))))))
 ;; under effects the entry takes the World last: the parameters before it are the client's,
 ;; the World's token its type's first constructor with its fields zero. The last parameter's
 ;; type is taken as the World, whatever its name — but the token
 ;; is a value of it: the constructor's fields are integers (`Int`, `Nat`), or it has none.
 ;; Of two inductives under the name, the later, as the linker's tags have it
 (fn world_last ((lk Linked) (ds (List EDecl)) (ps (List EType)))
-  (Option (Pair (List EType) (Option IVal)))
-  (match (split_last ps Nil)
-    (None None)
-    ((Some (Pair params wn))
-     (match (ind_last ds wn None)
-       ((Some (EInd _ _ (Cons (ECtorDef c fs) _)))
-        (if (bool_not (all_integers fs)) None
+  (Option (Prod (List EType) (Option IVal)))
+  (match (split_last ps nil)
+    (none none)
+    ((some (Prod.mk params wn))
+     (match (ind_last ds wn none)
+       ((some (EInd _ _ (cons (ECtorDef c fs) _)))
+        (if (bool_not (all_integers fs)) none
         (match (nmap_find (lk_tags lk) c)
-          ((Some tag) (Some (Pair params (Some (IVCtor tag (zeros_iv (len fs)))))))
-          (None None))))
-       (_ None)))))
+          ((some tag) (some (Prod.mk params (some (IVCtor tag (zeros_iv (len fs)))))))
+          (none none))))
+       (_ none)))))
 (fn ind_last ((ds (List EDecl)) (n Name) (acc (Option EDecl))) (Option EDecl)
   (measure (struct ds))
   (match ds
-    (Nil acc)
-    ((Cons (EInd m np cs) r) (ind_last r n (if (name_eq m n) (Some (EInd m np cs)) acc)))
-    ((Cons _ r) (ind_last r n acc))))
+    (nil acc)
+    ((cons (EInd m np cs) r) (ind_last r n (if (name_eq m n) (some (EInd m np cs)) acc)))
+    ((cons _ r) (ind_last r n acc))))
 (fn all_integers ((ts (List EType))) Bool
   (measure (struct ts))
   (match ts
-    (Nil True)
-    ((Cons (ETCon n Nil) r)
-     (if (bool_or (name_eq n (n1 (quote Int))) (name_eq n (n1 (quote Nat)))) (all_integers r) False))
-    ((Cons _ _) False)))
-(fn split_last ((ps (List EType)) (acc (List EType))) (Option (Pair (List EType) Name))
+    (nil true)
+    ((cons (ETCon n nil) r)
+     (if (bool_or (name_eq n (n1 (quote Int))) (name_eq n (n1 (quote Nat)))) (all_integers r) false))
+    ((cons _ _) false)))
+(fn split_last ((ps (List EType)) (acc (List EType))) (Option (Prod (List EType) Name))
   (measure (struct ps))
   (match ps
-    (Nil None)
-    ((Cons (ETCon n _) Nil) (Some (Pair (rev acc) n)))
-    ((Cons _ Nil) None)
-    ((Cons t r) (split_last r (Cons t acc)))))
-(fn zeros_iv ((k Int)) (List IVal) (measure k) (if (< k 1) Nil (Cons (IVInt 0) (zeros_iv (- k 1)))))
+    (nil none)
+    ((cons (ETCon n _) nil) (some (Prod.mk (rev acc) n)))
+    ((cons _ nil) none)
+    ((cons t r) (split_last r (cons t acc)))))
+(fn zeros_iv ((k Int)) (List IVal) (measure k) (if (< k 1) nil (cons (IVInt 0) (zeros_iv (- k 1)))))
 
 ;; the checked door's condition, decided once at `prepare`: every parameter states a closed
 ;; type, and every type a value of it reaches is one the validation below reads in full — an
@@ -867,41 +845,41 @@
 (type Tc (TcOk (List Name)) (TcNo (List Int)))
 (fn checked_door ((h Handle) (ds (List EDecl))) Prep
   (let ((inds (index_inds ds IMEmpty)))
-    (match (params_checked inds (Handle.params h) 1 Nil)
+    (match (params_checked inds (Handle.params h) 1 nil)
       ((TcNo m)
        (PrepNo (quote preconditioned)
          (append (show_name (Handle.entry h)) (append ": parameter " m))))
       ((TcOk _) (PrepOk (with Handle h (inds inds)))))))
-(fn index_inds ((ds (List EDecl)) (x (IntMap (List (Pair Name EDecl)))))
-  (IntMap (List (Pair Name EDecl)))
+(fn index_inds ((ds (List EDecl)) (x (IntMap (List (Prod Name EDecl)))))
+  (IntMap (List (Prod Name EDecl)))
   (measure (struct ds))
   (match ds
-    (Nil x)
-    ((Cons (EInd n np cs) r) (index_inds r (decl_index_add x (EInd n np cs))))
-    ((Cons _ r) (index_inds r x))))
+    (nil x)
+    ((cons (EInd n np cs) r) (index_inds r (decl_index_add x (EInd n np cs))))
+    ((cons _ r) (index_inds r x))))
 (fn params_checked
-  ((inds (IntMap (List (Pair Name EDecl)))) (ps (List EType)) (i Int) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl)))) (ps (List EType)) (i Int) (seen (List Name)))
   Tc
   (measure (struct ps))
   (match ps
-    (Nil (TcOk seen))
-    ((Cons t r)
+    (nil (TcOk seen))
+    ((cons t r)
      (match (ty_checked inds 0 t seen)
        ((TcNo m)
         (TcNo (append (show_nat i) (append " states " (append (show_etype t) (append ": " m))))))
        ((TcOk seen1) (params_checked inds r (+ i 1) seen1))))))
 ;; np: the type parameters in scope — none at a parameter of the entry, its inductive's at a field
 (fn tys_checked
-  ((inds (IntMap (List (Pair Name EDecl)))) (np Int) (ts (List EType)) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (ts (List EType)) (seen (List Name)))
   Tc
   (measure (struct ts))
   (match ts
-    (Nil (TcOk seen))
-    ((Cons t r)
+    (nil (TcOk seen))
+    ((cons t r)
      (match (ty_checked inds np t seen)
        ((TcNo m) (TcNo m))
        ((TcOk seen1) (tys_checked inds np r seen1))))))
-(fn ty_checked ((inds (IntMap (List (Pair Name EDecl)))) (np Int) (t EType) (seen (List Name))) Tc
+(fn ty_checked ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (t EType) (seen (List Name))) Tc
   (match t
     ((ETVar i)
      (if (bool_and (<= 0 i) (< i np)) (TcOk seen)
@@ -911,7 +889,7 @@
        ((TcNo m) (TcNo m))
        ((TcOk seen1) (tys_checked inds np args seen1))))))
 ;; a type's head applied to k types
-(fn head_checked ((inds (IntMap (List (Pair Name EDecl)))) (n Name) (k Int) (seen (List Name))) Tc
+(fn head_checked ((inds (IntMap (List (Prod Name EDecl)))) (n Name) (k Int) (seen (List Name))) Tc
   (if (door_reads n)
     (if (= k (if (name_eq n (n1 (quote Array))) 1 0)) (TcOk seen)
     (TcNo (arity_text n (if (name_eq n (n1 (quote Array))) 1 0) k)))
@@ -920,22 +898,22 @@
       (append (show_name n)
         "'s bound or predicate is a value argument E dropped, which no reading of a value restores"))
     (match (decl_index_find inds n)
-      ((Some (EInd _ np cs))
+      ((some (EInd _ np cs))
        (if (bool_not (= k np)) (TcNo (arity_text n np k))
        (if (mem_name n seen) (TcOk seen)
-       (ctors_checked inds np cs (Cons n seen)))))
+       (ctors_checked inds np cs (cons n seen)))))
       (_ (TcNo (append (show_name n) " is not a type the program defines")))))))
 (fn arity_text ((n Name) (takes Int) (k Int)) (List Int)
   (append (show_name n)
     (append " takes "
       (append (show_nat takes) (append " type argument(s) and is applied to " (show_nat k))))))
 (fn ctors_checked
-  ((inds (IntMap (List (Pair Name EDecl)))) (np Int) (cs (List ECtorDef)) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (cs (List ECtorDef)) (seen (List Name)))
   Tc
   (measure (struct cs))
   (match cs
-    (Nil (TcOk seen))
-    ((Cons (ECtorDef _ fts) r)
+    (nil (TcOk seen))
+    ((cons (ECtorDef _ fts) r)
      (match (tys_checked inds np fts seen)
        ((TcNo m) (TcNo m))
        ((TcOk seen1) (ctors_checked inds np r seen1))))))
@@ -969,23 +947,23 @@
 ;; the same for an entry prepared with effects: the World's token after the client's arguments,
 ;; every extern performed by the host's, argv what `get_args` answers, the trace written to
 ;; the policy's path
-(fn invoke_run ((h Handle) (args (List Val)) (argv (List (List Int))) (w World)) (Pair RunRes World)
+(fn invoke_run ((h Handle) (args (List Val)) (argv (List (List Int))) (w World)) (Prod RunRes World)
   (if (bool_not (Policy.effects (Handle.policy h)))
-    (Pair
+    (Prod.mk
       (RunLink (quote policy)
         (append (show_name (Handle.entry h)) " was prepared without effects (invoke)"))
       w)
     (match (args_at h args)
-      ((ArgsBad i r m) (Pair (RunArg i r m) w))
+      ((ArgsBad i r m) (Prod.mk (RunArg i r m) w))
       ((ArgsOk ivs)
-       (run_loop (Handle.lk h) (enter h ivs) argv (Policy.trace (Handle.policy h)) Nil w)))))
+       (run_loop (Handle.lk h) (enter h ivs) argv (Policy.trace (Handle.policy h)) nil w)))))
 ;; the machine entered at the handle's function: its arguments last first (the body's frame)
 (fn enter ((h Handle) (ivs (List IVal))) Halt
   (ev_call (Handle.lk h) (Handle.id h)
     (rev
       (match (Handle.token h)
-        ((Some tok) (append ivs (list tok)))
-        (None ivs)))
+        ((some tok) (append ivs (list tok)))
+        (none ivs)))
     KHalt
     (Handle.id h)
     (Policy.fuel (Handle.policy h))))
@@ -994,27 +972,27 @@
 (fn args_at ((h Handle) (args (List Val))) ArgsRes
   (match (Policy.door (Handle.policy h))
     (Assumed
-      (match (vals_in (Handle.lk h) args Nil)
-        (None (ArgsBad 0 (quote bad_value) Nil))
-        ((Some ivs) (ArgsOk ivs))))
-    (Checked (args_checked h (Handle.params h) args 1 Nil))))
+      (match (vals_in (Handle.lk h) args nil)
+        (none (ArgsBad 0 (quote bad_value) nil))
+        ((some ivs) (ArgsOk ivs))))
+    (Checked (args_checked h (Handle.params h) args 1 nil))))
 (fn args_checked ((h Handle) (ps (List EType)) (args (List Val)) (i Int) (acc (List IVal))) ArgsRes
   (measure (struct ps))
   (match ps
-    (Nil
+    (nil
       (match args
-        (Nil (ArgsOk (rev acc)))
+        (nil (ArgsOk (rev acc)))
         (_
           (ArgsBad i (quote argument_count)
             (count_msg (Handle.entry h) (- i 1) (+ (- i 1) (len args)))))))
-    ((Cons t r)
+    ((cons t r)
      (match args
-       (Nil
+       (nil
          (ArgsBad i (quote argument_count) (count_msg (Handle.entry h) (+ (- i 1) (len ps)) (- i 1))))
-       ((Cons a ar)
+       ((cons a ar)
         (match (val_at h t a)
           ((ChkNo e m) (ArgsBad i e m))
-          ((ChkOk iv) (args_checked h r ar (+ i 1) (Cons iv acc)))))))))
+          ((ChkOk iv) (args_checked h r ar (+ i 1) (cons iv acc)))))))))
 (fn count_msg ((f Name) (takes Int) (got Int)) (List Int)
   (append (show_name f)
     (append " takes " (append (show_nat takes) (append " argument(s), got " (show_nat got))))))
@@ -1039,37 +1017,37 @@
         (if (name_eq n (n1 (quote Symbol))) (ChkOk (IVSym s))
         (ChkNo (quote not_of_type) (at_type v t))))
        ((VCtor c vs)
-        (if (name_eq n (n1 (quote ByteArray))) (row_at h (ETCon (n1 (quote UInt8)) Nil) t v)
+        (if (name_eq n (n1 (quote ByteArray))) (row_at h (ETCon (n1 (quote UInt8)) nil) t v)
         (if (name_eq n (n1 (quote Array)))
           (match targs
-            ((Cons a Nil) (row_at h a t v))
+            ((cons a nil) (row_at h a t v))
             (_ (ChkNo (quote not_of_type) (at_type v t))))
         (if (name_eq n (n1 (quote String))) (string_at h t v)
         (if (door_reads n) (ChkNo (quote not_of_type) (at_type v t))  ; an integer's or a symbol's type has no constructor, whatever the program declares under its name
         (match (decl_index_find (Handle.inds h) n)
-          ((Some (EInd _ _ cs))
+          ((some (EInd _ _ cs))
            (match (fields_of cs c)
-             (None (ChkNo (quote not_of_type) (at_type v t)))
-             ((Some fts)
+             (none (ChkNo (quote not_of_type) (at_type v t)))
+             ((some fts)
               (if (bool_not (= (len fts) (len vs))) (ChkNo (quote field_count) (at_type v t))
               (match (nmap_find (lk_tags (Handle.lk h)) c)
-                (None (ChkNo (quote bad_value) (at_type v t)))
-                ((Some tag)
-                 (match (vals_at h (subst_tys targs fts) vs Nil)
+                (none (ChkNo (quote bad_value) (at_type v t)))
+                ((some tag)
+                 (match (vals_at h (subst_tys targs fts) vs nil)
                    ((ChksNo e m) (ChkNo e m))
                    ((ChksOk ivs) (ChkOk (IVCtor tag ivs))))))))))
           (_ (ChkNo (quote not_of_type) (at_type v t)))))))))))))
 (fn vals_at ((h Handle) (ts (List EType)) (vs (List Val)) (acc (List IVal))) Chks
   (measure (struct vs))
   (match vs
-    (Nil (ChksOk (rev acc)))
-    ((Cons v r)
+    (nil (ChksOk (rev acc)))
+    ((cons v r)
      (match ts
-       (Nil (ChksNo (quote field_count) Nil))
-       ((Cons t tr)
+       (nil (ChksNo (quote field_count) nil))
+       ((cons t tr)
         (match (val_at h t v)
           ((ChkNo e m) (ChksNo e m))
-          ((ChkOk iv) (vals_at h tr r (Cons iv acc)))))))))
+          ((ChkOk iv) (vals_at h tr r (cons iv acc)))))))))
 (fn int_at ((n Name) (k Int) (t EType)) Chk
   (if (name_eq n (n1 (quote Int))) (ChkOk (IVInt k))
   (if (name_eq n (n1 (quote Nat)))
@@ -1080,25 +1058,25 @@
 ;; a row's cells: an Array's and a ByteArray's are Init's List cells
 ;; of their elements — the spine walked as a loop, so a long buffer takes no host stack
 (fn row_at ((h Handle) (et EType) (t EType) (v Val)) Chk
-  (match (tags2 (Handle.lk h) (init_nil) (init_cons))
-    (None (ChkNo (quote bad_value) (at_type v t)))
-    ((Some tg) (row_cells h et t v Nil tg))))
-(fn row_cells ((h Handle) (et EType) (t EType) (v Val) (acc (List IVal)) (tg (Pair Int Int))) Chk
+  (match (tags2 (Handle.lk h) (cell_nil) (cell_cons))
+    (none (ChkNo (quote bad_value) (at_type v t)))
+    ((some tg) (row_cells h et t v nil tg))))
+(fn row_cells ((h Handle) (et EType) (t EType) (v Val) (acc (List IVal)) (tg (Prod Int Int))) Chk
   (measure (struct v))
   (match v
     ((VCtor c vs)
-     (if (name_eq c (init_nil))
+     (if (name_eq c (cell_nil))
        (match vs
-         (Nil
+         (nil
            (match tg
-             ((Pair tnl tcs) (ChkOk (cells_onto tcs acc (IVCtor tnl Nil))))))
+             ((Prod.mk tnl tcs) (ChkOk (cells_onto tcs acc (IVCtor tnl nil))))))
          (_ (ChkNo (quote field_count) (at_type v t))))
-     (if (name_eq c (init_cons))
+     (if (name_eq c (cell_cons))
        (match vs
-         ((Cons x (Cons rest Nil))
+         ((cons x (cons rest nil))
           (match (val_at h et x)
             ((ChkNo e m) (ChkNo e m))
-            ((ChkOk iv) (row_cells h et t rest (Cons iv acc) tg))))
+            ((ChkOk iv) (row_cells h et t rest (cons iv acc) tg))))
          (_ (ChkNo (quote field_count) (at_type v t))))
        (ChkNo (quote not_of_type) (at_type v t)))))
     (_ (ChkNo (quote not_of_type) (at_type v t)))))
@@ -1106,20 +1084,20 @@
 (fn cells_onto ((tcs Int) (acc (List IVal)) (tail IVal)) IVal
   (measure (struct acc))
   (match acc
-    (Nil tail)
-    ((Cons x r) (cells_onto tcs r (IVCtor tcs (list x tail))))))
+    (nil tail)
+    ((cons x r) (cells_onto tcs r (IVCtor tcs (list x tail))))))
 ;; a String is its ByteArray with the validity proof erased: the bytes, and that
 ;; they are UTF-8 — the invariant the erasure dropped, read back from the value
 (fn string_at ((h Handle) (t EType) (v Val)) Chk
-  (match (row_at h (ETCon (n1 (quote UInt8)) Nil) t v)
+  (match (row_at h (ETCon (n1 (quote UInt8)) nil) t v)
     ((ChkNo e m) (ChkNo e m))
     ((ChkOk iv)
-     (match (tags2 (Handle.lk h) (init_nil) (init_cons))
-       (None (ChkNo (quote bad_value) (at_type v t)))
-       ((Some (Pair tnl tcs))
-        (match (cells_out tnl tcs iv Nil (wire_budget))
-          ((Some bs) (if (utf8_ok bs) (ChkOk iv) (ChkNo (quote not_utf8) (at_type v t))))
-          (None (ChkNo (quote not_of_type) (at_type v t)))))))))
+     (match (tags2 (Handle.lk h) (cell_nil) (cell_cons))
+       (none (ChkNo (quote bad_value) (at_type v t)))
+       ((some (Prod.mk tnl tcs))
+        (match (cells_out tnl tcs iv nil (wire_budget))
+          ((some bs) (if (utf8_ok bs) (ChkOk iv) (ChkNo (quote not_utf8) (at_type v t))))
+          (none (ChkNo (quote not_of_type) (at_type v t)))))))))
 ;; a refusal's text: the value's head and the type it was read at
 (fn at_type ((v Val) (t EType)) (List Int)
   (append
@@ -1146,12 +1124,12 @@
 ;; every host call the run performs, in order, as one line — the extern's name, its arguments
 ;; and the host's answer by the wire (perform_at) — written when the path is not empty: at the
 ;; run's end, and before an `exit` is performed, since the host's exit never returns
-(fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Pair RunRes World)
-  (match (prepare p f (policy_of Checked True Nil fuel))
-    ((PrepNo e m) (Pair (RunLink e m) w))
+(fn run_prog ((p Prog) (f Name) (argv (List (List Int))) (fuel Int) (w World)) (Prod RunRes World)
+  (match (prepare p f (policy_of Checked true nil fuel))
+    ((PrepNo e m) (Prod.mk (RunLink e m) w))
     ((PrepOk h)
      (match (text_args h argv)
-       ((TextNo r) (Pair r w))
+       ((TextNo r) (Prod.mk r w))
        ((TextOk vs) (invoke_run h vs argv w))))))
 ;; the text codec: one producer of a checked handle's arguments — the command line's
 ;; against the parameters in order, i the 1-based position; an argument that does not parse is
@@ -1160,23 +1138,23 @@
 (type TextArgs (TextOk (List Val)) (TextNo RunRes))
 (type TextArg (TArgOk Val) (TArgBad Symbol) (TArgType (List Int)))
 (fn text_args ((h Handle) (argv (List (List Int)))) TextArgs
-  (if (= (len (Handle.params h)) 0) (TextOk Nil)
-  (text_args_go (Handle.entry h) (Handle.params h) argv 1 Nil)))
+  (if (= (len (Handle.params h)) 0) (TextOk nil)
+  (text_args_go (Handle.entry h) (Handle.params h) argv 1 nil)))
 (fn text_args_go ((f Name) (params (List EType)) (argv (List (List Int))) (i Int) (acc (List Val)))
   TextArgs
   (measure (struct params))
   (match params
-    (Nil
+    (nil
       (match argv
-        (Nil (TextOk (rev acc)))
+        (nil (TextOk (rev acc)))
         (_ (TextNo (RunArg i (quote argument_count) (count_msg f (- i 1) (+ (- i 1) (len argv))))))))
-    ((Cons t r)
+    ((cons t r)
      (match argv
-       (Nil
+       (nil
          (TextNo (RunArg i (quote argument_count) (count_msg f (+ (- i 1) (len params)) (- i 1)))))
-       ((Cons a ar)
+       ((cons a ar)
         (match (text_arg t a)
-          ((TArgOk v) (text_args_go f r ar (+ i 1) (Cons v acc)))
+          ((TArgOk v) (text_args_go f r ar (+ i 1) (cons v acc)))
           ((TArgBad reason) (TextNo (RunArg i reason a)))
           ((TArgType msg)
            (TextNo
@@ -1188,111 +1166,108 @@
     ((ETCon n _)
      (if (name_eq n (n1 (quote Int)))
        (match (arg_int a)
-         ((Some k) (TArgOk (VInt k)))
-         (None (TArgBad (quote not_an_int))))
+         ((some k) (TArgOk (VInt k)))
+         (none (TArgBad (quote not_an_int))))
      (if (name_eq n (n1 (quote Nat)))
        (match (arg_nat a)
-         ((Some k) (TArgOk (VInt k)))
-         (None (TArgBad (quote not_a_nat))))
+         ((some k) (TArgOk (VInt k)))
+         (none (TArgBad (quote not_a_nat))))
        (match (val_of_text t a)
-         ((Some v) (TArgOk v))
-         (None (TArgType (unsupplied n)))))))
+         ((some v) (TArgOk v))
+         (none (TArgType (unsupplied n)))))))
     (_ (TArgType "has a type variable's type, which no command-line argument supplies"))))
 ;; text as a value of a byte type, and back (a tactic library's goal in and
 ;; block out, through the same codec as the checked entry's arguments): the cells of the
 ;; type's list constructors; None when the type is no byte type, or the value no text
 (fn text_type ((t EType)) Bool
   (match (list_ctors t)
-    ((Some _) True)
-    (None False)))
+    ((some _) true)
+    (none false)))
 (fn val_of_text ((t EType) (bs (List Int))) (Option Val)
   (match (list_ctors t)
-    (None None)
-    ((Some (Pair nl cs)) (Some (text_cells nl cs bs)))))
+    (none none)
+    ((some (Prod.mk nl cs)) (some (text_cells nl cs bs)))))
 (fn text_cells ((nl Name) (cs Name) (bs (List Int))) Val
   (measure (struct bs))
   (match bs
-    (Nil (VCtor nl Nil))
-    ((Cons b r) (VCtor cs (list (VInt b) (text_cells nl cs r))))))
+    (nil (VCtor nl nil))
+    ((cons b r) (VCtor cs (list (VInt b) (text_cells nl cs r))))))
 (fn text_of_val ((v Val)) (Option (List Int))
   (measure (struct v))
   (match v
-    ((VCtor _ Nil) (Some Nil))
-    ((VCtor _ (Cons (VInt b) (Cons r Nil)))
+    ((VCtor _ nil) (some nil))
+    ((VCtor _ (cons (VInt b) (cons r nil)))
      (match (text_of_val r)
-       ((Some bs) (Some (Cons b bs)))
-       (None None)))
-    (_ None)))
+       ((some bs) (some (cons b bs)))
+       (none none)))
+    (_ none)))
 (fn unsupplied ((n Name)) (List Int)
   (append "has type "
     (append (show_name n)
-      ", which no command-line argument supplies (one supplies Int, Nat, the prelude's (List Int), Init's (List Nat) or (List Int), ByteArray)")))
-;; the byte-list codecs, by identity and element type: the prelude's
-;; (List Int), Init's (List Nat) and (List Int), and ByteArray, whose representation is Init's
-;; List cells — never by shape: were any two-constructor type with a nullary first and a binary
+      ", which no command-line argument supplies (one supplies Int, Nat, (List Nat) or (List Int), ByteArray)")))
+;; the byte-list codecs, by identity and element type: (List Nat) and (List Int), and
+;; ByteArray, whose representation is List's cells — never by shape: were any two-constructor type with a nullary first and a binary
 ;; second constructor to take the bytes, a `(type Tree (Empty) (Branch Tree Tree))` entry would
 ;; receive Branch cells with integers in its Tree fields — a value of no type, stuck at the
 ;; first match on it.
-(fn list_ctors ((t EType)) (Option (Pair Name Name))
+(fn list_ctors ((t EType)) (Option (Prod Name Name))
   (match t
-    ((ETCon n (Cons (ETCon e Nil) Nil))
-     (if (bool_and (name_eq n (prelude_list)) (name_eq e (n1 (quote Int))))
-       (Some (Pair (prelude_nil) (prelude_cons)))
+    ((ETCon n (cons (ETCon e nil) nil))
      (if
-       (bool_and (name_eq n (n1 (quote List)))
+       (bool_and (name_eq n (cell_list))
          (bool_or (name_eq e (n1 (quote Nat))) (name_eq e (n1 (quote Int)))))
-       (Some (Pair (init_nil) (init_cons)))
-       None)))
-    ((ETCon n Nil)
-     (if (name_eq n (n1 (quote ByteArray))) (Some (Pair (init_nil) (init_cons))) None))
-    (_ None)))
+       (some (Prod.mk (cell_nil) (cell_cons)))
+       none))
+    ((ETCon n nil)
+     (if (name_eq n (n1 (quote ByteArray))) (some (Prod.mk (cell_nil) (cell_cons))) none))
+    (_ none)))
 (fn cells_in ((nl Int) (cs Int) (bs (List Int))) IVal
   (measure (struct bs))
   (match bs
-    (Nil (IVCtor nl Nil))
-    ((Cons b r) (IVCtor cs (list (IVInt b) (cells_in nl cs r))))))
+    (nil (IVCtor nl nil))
+    ((cons b r) (IVCtor cs (list (IVInt b) (cells_in nl cs r))))))
 (fn arg_nat ((a (List Int))) (Option Int)
   (match a
-    (Nil None)
-    (_ (if (arg_all_digits a) (Some (arg_digits a 0)) None))))
+    (nil none)
+    (_ (if (arg_all_digits a) (some (arg_digits a 0)) none))))
 (fn arg_int ((a (List Int))) (Option Int)
   (match a
-    ((Cons b r)
+    ((cons b r)
      (if (= b 45)
        (match (arg_nat r)
-         ((Some k) (Some (- 0 k)))
-         (None None))
+         ((some k) (some (- 0 k)))
+         (none none))
        (arg_nat a)))
-    (Nil None)))
+    (nil none)))
 (fn arg_all_digits ((bs (List Int))) Bool
   (measure (struct bs))
   (match bs
-    (Nil True)
-    ((Cons b r) (if (bool_and (<= 48 b) (<= b 57)) (arg_all_digits r) False))))
+    (nil true)
+    ((cons b r) (if (bool_and (<= 48 b) (<= b 57)) (arg_all_digits r) false))))
 (fn arg_digits ((bs (List Int)) (acc Int)) Int
   (measure (struct bs))
   (match bs
-    (Nil acc)
-    ((Cons b r) (arg_digits r (+ (* acc 10) (- b 48))))))
+    (nil acc)
+    ((cons b r) (arg_digits r (+ (* acc 10) (- b 48))))))
 (fn run_loop
   ((lk Linked) (h Halt) (argv (List (List Int))) (path (List Int)) (tr (List (List Int))) (w World))
-  (Pair RunRes World)
+  (Prod RunRes World)
   (match h
-    ((HVal _) (Pair RunOk (tr_flush path tr w)))
-    ((HOut id) (Pair (RunOut (fn_name lk id)) (tr_flush path tr w)))
-    ((HStuck r id) (Pair (RunStuck r (fn_name lk id)) (tr_flush path tr w)))
-    ((HExhausted r id) (Pair (RunExhausted r (fn_name lk id)) (tr_flush path tr w)))
+    ((HVal _) (Prod.mk RunOk (tr_flush path tr w)))
+    ((HOut id) (Prod.mk (RunOut (fn_name lk id)) (tr_flush path tr w)))
+    ((HStuck r id) (Prod.mk (RunStuck r (fn_name lk id)) (tr_flush path tr w)))
+    ((HExhausted r id) (Prod.mk (RunExhausted r (fn_name lk id)) (tr_flush path tr w)))
     ((HExt id args k cur fuel)
      (match (im_find (lk_fns lk) id)
-       ((Some (LExtern _ short _ ps rt))
+       ((some (LExtern _ short _ ps rt))
         (match
           (perform lk short ps rt args argv
-            (if (sym_eq short (quote exit)) (tr_flush path (Cons (tr_exit_line args) tr) w) w))
-          ((Pair (Pair (Some v) line) w1)
-           (run_loop lk (ev_ret lk v k cur fuel) argv path (Cons line tr) w1))
-          ((Pair (Pair None _) w1)
-           (Pair (RunStuck (quote extern) (fn_name lk id)) (tr_flush path tr w1)))))
-       (_ (Pair (RunStuck (quote extern) (fn_name lk cur)) (tr_flush path tr w)))))))
+            (if (sym_eq short (quote exit)) (tr_flush path (cons (tr_exit_line args) tr) w) w))
+          ((Prod.mk (Prod.mk (some v) line) w1)
+           (run_loop lk (ev_ret lk v k cur fuel) argv path (cons line tr) w1))
+          ((Prod.mk (Prod.mk none _) w1)
+           (Prod.mk (RunStuck (quote extern) (fn_name lk id)) (tr_flush path tr w1)))))
+       (_ (Prod.mk (RunStuck (quote extern) (fn_name lk cur)) (tr_flush path tr w)))))))
 ;; ---- the effect trace -------------------------------------------------------------------------
 ;; one line per host call: the extern's short name, its arguments as the host saw them and the
 ;; host's answer where it carries data — `get_args "a" "b"`, `read_file "p" -> none` or
@@ -1302,25 +1277,25 @@
 ;; (kernel/test/calc_harness.shard), so the tie is the call lists', not a renderer's
 (fn tr_flush ((path (List Int)) (tr (List (List Int))) (w World)) World
   (match path
-    (Nil w)
+    (nil w)
     (_
       (match (write_file path (tr_join (rev tr)) w)
-        ((Pair _ w1) w1)))))
+        ((Prod.mk _ w1) w1)))))
 (fn tr_join ((ls (List (List Int)))) (List Int)
   (measure (struct ls))
   (match ls
-    (Nil Nil)
-    ((Cons x r) (append x (Cons 10 (tr_join r))))))
+    (nil nil)
+    ((cons x r) (append x (cons 10 (tr_join r))))))
 (fn tr_exit_line ((args (List IVal))) (List Int)
   (match args
-    ((Cons (IVInt code) _) (append "exit " (show_int code)))
+    ((cons (IVInt code) _) (append "exit " (show_int code)))
     (_ "exit ?")))
-(fn tr_quote ((bs (List Int))) (List Int) (Cons 34 (tr_quote_go bs)))
+(fn tr_quote ((bs (List Int))) (List Int) (cons 34 (tr_quote_go bs)))
 (fn tr_quote_go ((bs (List Int))) (List Int)
   (measure (struct bs))
   (match bs
-    (Nil (list 34))
-    ((Cons b r)
+    (nil (list 34))
+    ((cons b r)
      (append
        (if (= b 34) "\\\""
        (if (= b 92) "\\\\"
@@ -1335,141 +1310,126 @@
 (fn tr_args ((as (List (List Int)))) (List Int)
   (measure (struct as))
   (match as
-    (Nil Nil)
-    ((Cons a r) (append " " (append (tr_quote a) (tr_args r))))))
+    (nil nil)
+    ((cons a r) (append " " (append (tr_quote a) (tr_args r))))))
 (fn tr_opt ((o (Option (List Int)))) (List Int)
   (match o
-    (None "none")
-    ((Some bs) (append "(some " (append (tr_quote bs) ")")))))
+    (none "none")
+    ((some bs) (append "(some " (append (tr_quote bs) ")")))))
 ;; ---- the wire by declared type ---------------------------------------------------------------
 ;; each value of an extern is built and read by the E type the program declared — a codec by
-;; identity, as the entry's is: the prelude's cells under the toolchain's signatures
-;; (host.shard), Init's under v3/std/host.shard's. A declared type the host's value does not fit
+;; identity, as the entry's is: Init's List, Option, Prod and Bool. A declared type the host's value does not fit
 ;; yields no value (the extern is stuck), decided before the host is asked — the result's type
 ;; too: the World's token is returned at the type it was passed at (the extern's last parameter's)
-(fn tags2 ((lk Linked) (a Name) (b Name)) (Option (Pair Int Int))
+(fn tags2 ((lk Linked) (a Name) (b Name)) (Option (Prod Int Int))
   (match (nmap_find (lk_tags lk) a)
-    (None None)
-    ((Some ta)
+    (none none)
+    ((some ta)
      (match (nmap_find (lk_tags lk) b)
-       (None None)
-       ((Some tb) (Some (Pair ta tb)))))))
-;; a byte type's nil and cons: the prelude's (List Int), or ByteArray
-(fn wb_tags ((lk Linked) (t EType)) (Option (Pair Int Int))
+       (none none)
+       ((some tb) (some (Prod.mk ta tb)))))))
+;; a byte type's nil and cons: (List Int), or ByteArray
+(fn wb_tags ((lk Linked) (t EType)) (Option (Prod Int Int))
   (match t
-    ((ETCon n (Cons (ETCon e Nil) Nil))
-     (if (bool_and (name_eq n (prelude_list)) (name_eq e (n1 (quote Int))))
-       (tags2 lk (prelude_nil) (prelude_cons))
-       None))
-    ((ETCon n Nil) (if (name_eq n (n1 (quote ByteArray))) (tags2 lk (init_nil) (init_cons)) None))
-    (_ None)))
+    ((ETCon n (cons (ETCon e nil) nil))
+     (if (bool_and (name_eq n (cell_list)) (name_eq e (n1 (quote Int))))
+       (tags2 lk (cell_nil) (cell_cons))
+       none))
+    ((ETCon n nil) (if (name_eq n (n1 (quote ByteArray))) (tags2 lk (cell_nil) (cell_cons)) none))
+    (_ none)))
 ;; a list type's nil and cons, and its element type
-(fn wl_tags ((lk Linked) (t EType)) (Option (Pair (Pair Int Int) EType))
+(fn wl_tags ((lk Linked) (t EType)) (Option (Prod (Prod Int Int) EType))
   (match t
-    ((ETCon n (Cons e Nil))
-     (match
-       (if (name_eq n (prelude_list)) (tags2 lk (prelude_nil) (prelude_cons))
-       (if (name_eq n (n1 (quote List))) (tags2 lk (init_nil) (init_cons))
-       None))
-       (None None)
-       ((Some tg) (Some (Pair tg e)))))
-    (_ None)))
+    ((ETCon n (cons e nil))
+     (match (if (name_eq n (cell_list)) (tags2 lk (cell_nil) (cell_cons)) none)
+       (none none)
+       ((some tg) (some (Prod.mk tg e)))))
+    (_ none)))
 ;; an option type's none and some, and its element type
-(fn wo_tags ((lk Linked) (t EType)) (Option (Pair (Pair Int Int) EType))
+(fn wo_tags ((lk Linked) (t EType)) (Option (Prod (Prod Int Int) EType))
   (match t
-    ((ETCon n (Cons e Nil))
-     (match
-       (if (name_eq n (prelude_option)) (tags2 lk (prelude_none) (prelude_some))
-       (if (name_eq n (n1 (quote Option))) (tags2 lk (init_none) (init_some))
-       None))
-       (None None)
-       ((Some tg) (Some (Pair tg e)))))
-    (_ None)))
+    ((ETCon n (cons e nil))
+     (match (if (name_eq n (cell_option)) (tags2 lk (cell_none) (cell_some)) none)
+       (none none)
+       ((some tg) (some (Prod.mk tg e)))))
+    (_ none)))
 ;; a pair type's constructor and its first component's type; the second is the World's (wt)
-(fn wp_first ((lk Linked) (t EType) (wt EType)) (Option (Pair Int EType))
+(fn wp_first ((lk Linked) (t EType) (wt EType)) (Option (Prod Int EType))
   (match t
-    ((ETCon n (Cons a (Cons b Nil)))
-     (if (bool_not (etype_eq b wt)) None
-     (match
-       (nmap_find (lk_tags lk)
-         (if (name_eq n (prelude_pair)) (prelude_mk_pair)
-         (if (name_eq n (n1 (quote Prod))) (init_prod_mk)
-         Anon)))
-       (None None)
-       ((Some tg) (Some (Pair tg a))))))
-    (_ None)))
+    ((ETCon n (cons a (cons b nil)))
+     (if (bool_not (etype_eq b wt)) none
+     (match (nmap_find (lk_tags lk) (if (name_eq n (cell_prod)) (cell_mk) Anon))
+       (none none)
+       ((some tg) (some (Prod.mk tg a))))))
+    (_ none)))
 ;; a flag type's false and true
-(fn wf_tags ((lk Linked) (t EType)) (Option (Pair Int Int))
+(fn wf_tags ((lk Linked) (t EType)) (Option (Prod Int Int))
   (match t
-    ((ETCon n Nil)
-     (if (name_eq n (prelude_bool)) (tags2 lk (prelude_false) (prelude_true))
-     (if (name_eq n (n1 (quote Bool)))
-       (tags2 lk (n2 (quote Bool) (quote false)) (n2 (quote Bool) (quote true)))
-       None)))
-    (_ None)))
+    ((ETCon n nil) (if (name_eq n (cell_bool)) (tags2 lk (cell_false) (cell_true)) none))
+    (_ none)))
 ;; the host's data as values of the declared types
 (fn w_bytes ((lk Linked) (t EType) (bs (List Int))) (Option IVal)
   (match (wb_tags lk t)
-    (None None)
-    ((Some (Pair nl cs)) (Some (cells_in nl cs bs)))))
+    (none none)
+    ((some (Prod.mk nl cs)) (some (cells_in nl cs bs)))))
 (fn w_argv ((lk Linked) (t EType) (args (List (List Int)))) (Option IVal)
   (match (wl_tags lk t)
-    (None None)
-    ((Some (Pair (Pair nl cs) et))
+    (none none)
+    ((some (Prod.mk (Prod.mk nl cs) et))
      (match (wb_tags lk et)
-       (None None)
-       ((Some (Pair bn bc)) (Some (argv_cells nl cs bn bc args)))))))
+       (none none)
+       ((some (Prod.mk bn bc)) (some (argv_cells nl cs bn bc args)))))))
 (fn argv_cells ((nl Int) (cs Int) (bn Int) (bc Int) (args (List (List Int)))) IVal
   (measure (struct args))
   (match args
-    (Nil (IVCtor nl Nil))
-    ((Cons a r) (IVCtor cs (list (cells_in bn bc a) (argv_cells nl cs bn bc r))))))
+    (nil (IVCtor nl nil))
+    ((cons a r) (IVCtor cs (list (cells_in bn bc a) (argv_cells nl cs bn bc r))))))
 (fn w_opt_bytes ((lk Linked) (t EType) (o (Option (List Int)))) (Option IVal)
   (match (wo_tags lk t)
-    (None None)
-    ((Some (Pair (Pair nn sm) et))
+    (none none)
+    ((some (Prod.mk (Prod.mk nn sm) et))
      (match
        (w_bytes lk et
          (match o
-           ((Some bs) bs)
-           (None Nil)))
-       (None None)
-       ((Some v)
-        (Some
+           ((some bs) bs)
+           (none nil)))
+       (none none)
+       ((some v)
+        (some
           (match o
-            ((Some _) (IVCtor sm (list v)))
-            (None (IVCtor nn Nil)))))))))
+            ((some _) (IVCtor sm (list v)))
+            (none (IVCtor nn nil)))))))))
 (fn w_flag ((lk Linked) (t EType) (b Bool)) (Option IVal)
   (match (wf_tags lk t)
-    (None None)
-    ((Some (Pair fl tr)) (Some (IVCtor (if b tr fl) Nil)))))
+    (none none)
+    ((some (Prod.mk fl tr)) (some (IVCtor (if b tr fl) nil)))))
 ;; the first component's type of a pair-typed result, and the pair of a value with the World's token
 (fn w_first_type ((lk Linked) (t EType) (wt EType)) (Option EType)
   (match (wp_first lk t wt)
-    (None None)
-    ((Some (Pair _ a)) (Some a))))
+    (none none)
+    ((some (Prod.mk _ a)) (some a))))
 (fn w_paired ((lk Linked) (t EType) (wt EType) (a (Option IVal)) (tok IVal)) (Option IVal)
   (match (wp_first lk t wt)
-    (None None)
-    ((Some (Pair pt _))
+    (none none)
+    ((some (Prod.mk pt _))
      (match a
-       (None None)
-       ((Some v) (Some (IVCtor pt (list v tok))))))))
+       (none none)
+       ((some v) (some (IVCtor pt (list v tok))))))))
 ;; a program's byte value read back, by the type of the parameter it was passed at
 (fn r_bytes_at ((lk Linked) (ps (List EType)) (i Int) (v IVal)) (Option (List Int))
   (match (nth ps i)
-    (None None)
-    ((Some t)
+    (none none)
+    ((some t)
      (match (wb_tags lk t)
-       (None None)
-       ((Some (Pair nl cs)) (cells_out nl cs v Nil (wire_budget)))))))
+       (none none)
+       ((some (Prod.mk nl cs)) (cells_out nl cs v nil (wire_budget)))))))
 ;; the World's type as the extern declares it: its last parameter's
 (fn ext_world ((ps (List EType))) (Option EType)
   (measure (struct ps))
   (match ps
-    (Nil None)
-    ((Cons t Nil) (Some t))
-    ((Cons _ r) (ext_world r))))
+    (nil none)
+    ((cons t nil) (some t))
+    ((cons _ r) (ext_world r))))
 ;; the six host externs by short name, each value by its declared type; the program's World
 ;; value passes through, at its own type
 (fn perform
@@ -1480,10 +1440,10 @@
    (args (List IVal))
    (argv (List (List Int)))
    (w World))
-  (Pair (Pair (Option IVal) (List Int)) World)
+  (Prod (Prod (Option IVal) (List Int)) World)
   (match (ext_world ps)
-    (None (Pair (Pair None Nil) w))
-    ((Some wt) (perform_at lk short ps wt rt args argv w))))
+    (none (Prod.mk (Prod.mk none nil) w))
+    ((some wt) (perform_at lk short ps wt rt args argv w))))
 ;; the value, with the trace line of the call (empty where the extern is stuck)
 (fn perform_at
   ((lk Linked)
@@ -1494,73 +1454,75 @@
    (args (List IVal))
    (argv (List (List Int)))
    (w World))
-  (Pair (Pair (Option IVal) (List Int)) World)
+  (Prod (Prod (Option IVal) (List Int)) World)
   (if (sym_eq short (quote get_args))
     (match args
-      ((Cons tok Nil)
-       (Pair
-         (Pair
+      ((cons tok nil)
+       (Prod.mk
+         (Prod.mk
            (w_paired lk rt wt
              (match (w_first_type lk rt wt)
-               ((Some at) (w_argv lk at argv))
-               (None None))
+               ((some at) (w_argv lk at argv))
+               (none none))
              tok)
            (append "get_args" (tr_args argv)))
          w))
-      (_ (Pair (Pair None Nil) w)))
+      (_ (Prod.mk (Prod.mk none nil) w)))
   (if (sym_eq short (quote read_file))
     (match args
-      ((Cons path (Cons tok Nil))
-       (match (Pair (r_bytes_at lk ps 0 path) (w_first_type lk rt wt))
-         ((Pair (Some bs) (Some ot))
-          (match (w_opt_bytes lk ot None)
-            (None (Pair (Pair None Nil) w))
-            ((Some _)
+      ((cons path (cons tok nil))
+       (match (Prod.mk (r_bytes_at lk ps 0 path) (w_first_type lk rt wt))
+         ((Prod.mk (some bs) (some ot))
+          (match (w_opt_bytes lk ot none)
+            (none (Prod.mk (Prod.mk none nil) w))
+            ((some _)
              (match (read_file bs w)
-               ((Pair content w1)
-                (Pair
-                  (Pair (w_paired lk rt wt (w_opt_bytes lk ot content) tok)
+               ((Prod.mk content w1)
+                (Prod.mk
+                  (Prod.mk (w_paired lk rt wt (w_opt_bytes lk ot content) tok)
                     (append "read_file " (append (tr_quote bs) (append " -> " (tr_opt content)))))
                   w1))))))
-         (_ (Pair (Pair None Nil) w))))
-      (_ (Pair (Pair None Nil) w)))
+         (_ (Prod.mk (Prod.mk none nil) w))))
+      (_ (Prod.mk (Prod.mk none nil) w)))
   (if (sym_eq short (quote write))
     (match args
-      ((Cons bytes (Cons tok Nil))
-       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None)
-         (None (Pair (Pair None Nil) w))
-         ((Some bs) (Pair (Pair (Some tok) (append "write " (tr_quote bs))) (write bs w)))))
-      (_ (Pair (Pair None Nil) w)))
+      ((cons bytes (cons tok nil))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) none)
+         (none (Prod.mk (Prod.mk none nil) w))
+         ((some bs) (Prod.mk (Prod.mk (some tok) (append "write " (tr_quote bs))) (write bs w)))))
+      (_ (Prod.mk (Prod.mk none nil) w)))
   (if (sym_eq short (quote write_line))
     (match args
-      ((Cons bytes (Cons tok Nil))
-       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) None)
-         (None (Pair (Pair None Nil) w))
-         ((Some bs) (Pair (Pair (Some tok) (append "write_line " (tr_quote bs))) (write_line bs w)))))
-      (_ (Pair (Pair None Nil) w)))
+      ((cons bytes (cons tok nil))
+       (match (if (etype_eq rt wt) (r_bytes_at lk ps 0 bytes) none)
+         (none (Prod.mk (Prod.mk none nil) w))
+         ((some bs)
+          (Prod.mk (Prod.mk (some tok) (append "write_line " (tr_quote bs))) (write_line bs w)))))
+      (_ (Prod.mk (Prod.mk none nil) w)))
   (if (sym_eq short (quote write_file))
     (match args
-      ((Cons path (Cons bytes (Cons tok Nil)))
+      ((cons path (cons bytes (cons tok nil)))
        (match
-         (Pair (r_bytes_at lk ps 0 path) (Pair (r_bytes_at lk ps 1 bytes) (w_first_type lk rt wt)))
-         ((Pair (Some pbs) (Pair (Some bs) (Some ft)))
-          (match (w_flag lk ft False)
-            (None (Pair (Pair None Nil) w))
-            ((Some _)
+         (Prod.mk (r_bytes_at lk ps 0 path)
+           (Prod.mk (r_bytes_at lk ps 1 bytes) (w_first_type lk rt wt)))
+         ((Prod.mk (some pbs) (Prod.mk (some bs) (some ft)))
+          (match (w_flag lk ft false)
+            (none (Prod.mk (Prod.mk none nil) w))
+            ((some _)
              (match (write_file pbs bs w)
-               ((Pair ok w1)
-                (Pair
-                  (Pair (w_paired lk rt wt (w_flag lk ft ok) tok)
+               ((Prod.mk ok w1)
+                (Prod.mk
+                  (Prod.mk (w_paired lk rt wt (w_flag lk ft ok) tok)
                     (append "write_file "
                       (append (tr_quote pbs)
                         (append " " (append (tr_quote bs) (if ok " -> true" " -> false"))))))
                   w1))))))
-         (_ (Pair (Pair None Nil) w))))
-      (_ (Pair (Pair None Nil) w)))
+         (_ (Prod.mk (Prod.mk none nil) w))))
+      (_ (Prod.mk (Prod.mk none nil) w)))
   (if (sym_eq short (quote exit))
     (match args
-      ((Cons (IVInt code) (Cons tok Nil))
-       (if (etype_eq rt wt) (Pair (Pair (Some tok) (tr_exit_line args)) (exit code w))
-       (Pair (Pair None Nil) w)))
-      (_ (Pair (Pair None Nil) w)))
-    (Pair (Pair None Nil) w))))))))
+      ((cons (IVInt code) (cons tok nil))
+       (if (etype_eq rt wt) (Prod.mk (Prod.mk (some tok) (tr_exit_line args)) (exit code w))
+       (Prod.mk (Prod.mk none nil) w)))
+      (_ (Prod.mk (Prod.mk none nil) w)))
+    (Prod.mk (Prod.mk none nil) w))))))))

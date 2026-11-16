@@ -241,20 +241,27 @@ function a body that runs by attaching one (`realize`), never by declaring a nam
 
 ### Toolchain files and ordinary files
 
-The system's own sources (`v3/kernel/`, module paths beginning `kernel`) are written in the same
-language, but none imports Init. The loader makes two distinctions: one by the module path (the
-first row), one by what a file sees, whatever its path (the other rows).
+The system's own sources (`v3/kernel/`, module paths beginning `kernel`) are ordinary files: each
+imports Init and works on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
+names opened by name (`(use Init.List cons nil)`). Two things still set them apart.
 
-| | Ordinary file, seeing Init | Toolchain file, seeing no Init |
-|---|---|---|
-| a string literal in a function body | a `String` | the list of its bytes (decided by the path `kernel…`) |
-| data it works on | Init's: `List.cons`, `Bool.true`, `Nat` | its own: `v3/kernel/prelude.shard` declares `List` (`Nil`, `Cons`), `Option`, `Bool`, `Pair`; `Int` and `Symbol` are built in |
-| a `fn` | a definition the checker holds where it can be defined, and a program | a program only |
-| an `extern` | an opaque constant the checker holds, and a program | a program only |
-| a `type` whose fields cite `Int` or `Nat` | an inductive type the checker holds | a program type only; a `def` citing it is `unknown_constant` (`v3/pins/loader/type_e_only`) |
+- **A string literal** in a function body there is the list of its bytes, a `(List Int)`,
+  where anywhere else it is a `String`. This is decided by the module path `kernel…` and by
+  nothing else; a function holding one gets no definition (`RUNNABLE … why=no_l_identity`).
+  The rule is to go (`OPEN.md` §2).
+- **Most of their functions are programs without a definition.** The toolchain's data — names,
+  terms, declarations — is built on `Symbol`, which has no type in the logic, so a signature
+  over it cannot be read (`why=e_only_type`). Of about 9,200 functions some 300, over lists,
+  integers and bytes, are definitions the checker holds.
+
+A file that sees no Init is still read: its data is whatever types it declares for itself, its
+`fn`s and `extern`s are programs only where their types cite `Int` or `Nat`, and a `type` whose
+fields do is a program type only (`v3/pins/loader/type_e_only`). Nothing in the tree but pins is
+written so.
 
 An ordinary file may import a toolchain file and call it (`v3/tools/shardfmt/reads/reads.shard`
-imports `kernel/sexpr.shard`); what it calls stays a program without a definition.
+imports `kernel/sexpr.shard`); the two share Init's types, and what it calls stays a program
+without a definition where the callee is one.
 
 ## Views
 
@@ -1004,8 +1011,8 @@ the loader on the bootstrap goes on. Nothing is printed but the program's own ou
 | `--lowered` | run the back end's restricted form of the program in its place (a test of the lowering) |
 
 The parameters before the World are read from the arguments in order and validated before the
-program starts: `Int` (`-7`), `Nat` (`7`), and the byte-list types — the toolchain prelude's
-`(List Int)`, Init's `(List Nat)` and `(List Int)`, `ByteArray` — which take the argument's bytes.
+program starts: `Int` (`-7`), `Nat` (`7`), and the byte-list types — `(List Nat)`,
+`(List Int)`, `ByteArray` — which take the argument's bytes.
 An entry with the World alone takes any arguments and reads them through `get_args`.
 
 | exit | line printed | meaning |
@@ -1084,8 +1091,8 @@ by the extern's short name and builds and reads each value by the declared type.
 | `write_file` | `((path ByteArray) (bytes ByteArray) (w World)) (Prod Bool World)` | a file written whole; whether it succeeded |
 | `exit` | `((code Int) (w World)) World` | the process ends with the code |
 
-The toolchain's own sources declare the same six over the prelude's `(List Int)`, `Option`, `Pair`
-and `Bool` (`v3/kernel/host.shard`), and a seventh, `read_range path off n`: at most `n` bytes from
+The toolchain's own sources declare the same six with text as `(List Int)`
+(`v3/kernel/host.shard`), and a seventh, `read_range path off n`: at most `n` bytes from
 offset `off`. Under `--run` an extern outside the six, or one declared at types the host's values
 do not fit, is `RUN: stuck extern in F` before the host is asked (`v3/kernel/test/wire_test.sh`).
 A native binary also performs `read_range`; an extern its runtime lacks refuses the build.

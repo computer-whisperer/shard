@@ -364,7 +364,7 @@ pub fn declare(t: &mut Tables, sc: &Rc<Scope>, f: &Value) {
             _ => false,
         };
         let form = if kind == NativeKind::Def { Some((sc.clone(), f.clone())) } else { None };
-        t.natives.insert(sc.qualify(n), Native { module: sc.tag.clone(), kind, prop, form });
+        t.add_native(sc.qualify(n), Native { module: sc.tag.clone(), kind, prop, form });
         return;
     }
     match h {

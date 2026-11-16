@@ -32,19 +32,18 @@
 ;;; one translation unit for the compiler, no text of the whole program as one list for the
 ;;; engine that runs this file.
 
+(import Init)
 (import "lower.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
 (use kernel.intmap)
 (use kernel.lower)
 (use kernel.name)
-(use kernel.prelude)
 (use kernel.prog)
 (use kernel.util)
 (use kernel.intmap.IntMap)
 (use kernel.name.Name)
-(use kernel.prelude.Bool)
-(use kernel.prelude.List)
-(use kernel.prelude.Option)
-(use kernel.prelude.Pair)
 (use kernel.prog.EArm)
 (use kernel.prog.ECtorDef)
 (use kernel.prog.EDecl)
@@ -59,6 +58,7 @@
 (fn cg_cat3 ((a CgDoc) (b CgDoc) (c CgDoc)) CgDoc (CgCat a (CgCat b c)))
 (fn cg_cat4 ((a CgDoc) (b CgDoc) (c CgDoc) (d CgDoc)) CgDoc (CgCat a (CgCat b (CgCat c d))))
 (fn cg_flat ((d CgDoc) (tail (List Int))) (List Int)
+  (measure (struct d))
   (match d
     ((CgS s) (append s tail))
     ((CgCat a b) (cg_flat a (cg_flat b tail)))))
@@ -73,15 +73,15 @@
 (fn cg_mangle ((cs (List Int))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons c r)
-     (if (cg_alnum c) (Cons c (cg_mangle r))
-     (if (= c 95) (Cons 95 (Cons 95 (cg_mangle r)))
-     (Cons 95 (Cons 120 (Cons (cg_hex (/ c 16)) (Cons (cg_hex (mod c 16)) (cg_mangle r))))))))))
+    (nil nil)
+    ((cons c r)
+     (if (cg_alnum c) (cons c (cg_mangle r))
+     (if (= c 95) (cons 95 (cons 95 (cg_mangle r)))
+     (cons 95 (cons 120 (cons (cg_hex (/ c 16)) (cons (cg_hex (mod c 16)) (cg_mangle r))))))))))
 (fn cg_name ((n Name)) (List Int)
   (measure (struct n))
   (match n
-    (Anon Nil)
+    (Anon nil)
     ((Str Anon s) (cg_mangle (chars_of_sym s)))
     ((Str p s) (append (cg_name p) (append "_x2e" (cg_mangle (chars_of_sym s)))))
     ((Num p k) (append (cg_name p) (append "_j" (show_nat k))))))
@@ -90,46 +90,46 @@
 (fn cg_cstr ((cs (List Int))) (List Int)
   (measure (struct cs))
   (match cs
-    (Nil Nil)
-    ((Cons c r)
-     (if (= c 34) (Cons 92 (Cons 34 (cg_cstr r)))
-     (if (= c 92) (Cons 92 (Cons 92 (cg_cstr r)))
-     (if (= c 10) (Cons 92 (Cons 110 (cg_cstr r)))
-     (Cons c (cg_cstr r))))))))
+    (nil nil)
+    ((cons c r)
+     (if (= c 34) (cons 92 (cons 34 (cg_cstr r)))
+     (if (= c 92) (cons 92 (cons 92 (cg_cstr r)))
+     (if (= c 10) (cons 92 (cons 110 (cg_cstr r)))
+     (cons c (cg_cstr r))))))))
 
 ;; ---- the constructors' tags: identity → (tag, fields) ---------------------------------------
-(fn cg_tag_add ((t (IntMap (List (Pair Name (Pair Int Int))))) (c Name) (tag Int) (arity Int))
-  (IntMap (List (Pair Name (Pair Int Int))))
+(fn cg_tag_add ((t (IntMap (List (Prod Name (Prod Int Int))))) (c Name) (tag Int) (arity Int))
+  (IntMap (List (Prod Name (Prod Int Int))))
   (let ((h (name_key c)))
     (im_insert t h
-      (Cons (Pair c (Pair tag arity))
+      (cons (Prod.mk c (Prod.mk tag arity))
         (match (im_find t h)
-          ((Some b) b)
-          (None Nil))))))
-(fn cg_tag_find ((t (IntMap (List (Pair Name (Pair Int Int))))) (c Name)) (Option (Pair Int Int))
+          ((some b) b)
+          (none nil))))))
+(fn cg_tag_find ((t (IntMap (List (Prod Name (Prod Int Int))))) (c Name)) (Option (Prod Int Int))
   (match (im_find t (name_key c))
-    (None None)
-    ((Some b) (cg_tag_assoc b c))))
-(fn cg_tag_assoc ((b (List (Pair Name (Pair Int Int)))) (c Name)) (Option (Pair Int Int))
+    (none none)
+    ((some b) (cg_tag_assoc b c))))
+(fn cg_tag_assoc ((b (List (Prod Name (Prod Int Int)))) (c Name)) (Option (Prod Int Int))
   (measure (struct b))
   (match b
-    (Nil None)
-    ((Cons (Pair k v) r) (if (name_eq k c) (Some v) (cg_tag_assoc r c)))))
-(fn cg_tags ((ds (List EDecl)) (t (IntMap (List (Pair Name (Pair Int Int))))) (next Int))
-  (IntMap (List (Pair Name (Pair Int Int))))
+    (nil none)
+    ((cons (Prod.mk k v) r) (if (name_eq k c) (some v) (cg_tag_assoc r c)))))
+(fn cg_tags ((ds (List EDecl)) (t (IntMap (List (Prod Name (Prod Int Int))))) (next Int))
+  (IntMap (List (Prod Name (Prod Int Int))))
   (match ds
-    (Nil t)
-    ((Cons (EInd _ _ cs) r)
+    (nil t)
+    ((cons (EInd _ _ cs) r)
      (match (cg_tag_ctors cs t next 0)
-       ((Pair t1 next1) (cg_tags r t1 next1))))
-    ((Cons _ r) (cg_tags r t next))))
+       ((Prod.mk t1 next1) (cg_tags r t1 next1))))
+    ((cons _ r) (cg_tags r t next))))
 ;; i is the constructor's place in its type: the second one takes the odd tag of its two
 (fn cg_tag_ctors
-  ((cs (List ECtorDef)) (t (IntMap (List (Pair Name (Pair Int Int))))) (next Int) (i Int))
-  (Pair (IntMap (List (Pair Name (Pair Int Int)))) Int)
+  ((cs (List ECtorDef)) (t (IntMap (List (Prod Name (Prod Int Int))))) (next Int) (i Int))
+  (Prod (IntMap (List (Prod Name (Prod Int Int)))) Int)
   (match cs
-    (Nil (Pair t next))
-    ((Cons (ECtorDef c fs) r)
+    (nil (Prod.mk t next))
+    ((cons (ECtorDef c fs) r)
      (let ((role (lw_role c)))
        (if (< 0 role) (cg_tag_ctors r (cg_tag_add t c (cg_role_tag role) (len fs)) next (+ i 1))
        (cg_tag_ctors r (cg_tag_add t c (+ next (if (= i 1) 1 0)) (len fs)) (+ next 2) (+ i 1)))))))
@@ -146,20 +146,20 @@
 ;; reach. errs is newest first
 (fn cg_ctor_errs ((ds (List EDecl)) (errs (List (List Int)))) (List (List Int))
   (match ds
-    (Nil errs)
-    ((Cons (EInd _ _ cs) r) (cg_ctor_errs r (cg_ctor_errs_in cs 0 errs)))
-    ((Cons _ r) (cg_ctor_errs r errs))))
+    (nil errs)
+    ((cons (EInd _ _ cs) r) (cg_ctor_errs r (cg_ctor_errs_in cs 0 errs)))
+    ((cons _ r) (cg_ctor_errs r errs))))
 (fn cg_ctor_errs_in ((cs (List ECtorDef)) (i Int) (errs (List (List Int)))) (List (List Int))
   (match cs
-    (Nil errs)
-    ((Cons (ECtorDef c fs) r)
+    (nil errs)
+    ((cons (ECtorDef c fs) r)
      (cg_ctor_errs_in r (+ i 1) (cg_wide_err c (len fs) (cg_role_err c i errs))))))
 (fn cg_role_err ((c Name) (i Int) (errs (List (List Int)))) (List (List Int))
   (let ((role (lw_role c)))
     (if (< role 1) errs
     (let ((bit (mod (cg_role_tag role) 2)))
       (if (= bit (if (= i 1) 1 0)) errs
-      (Cons
+      (cons
         (append "the constructor "
           (append (show_name c)
             (if (= bit 1)
@@ -170,7 +170,7 @@
 (fn cg_max_fields () Int 125)
 (fn cg_wide_err ((c Name) (nf Int) (errs (List (List Int)))) (List (List Int))
   (if (<= nf (cg_max_fields)) errs
-  (Cons
+  (cons
     (append "the constructor "
       (append (show_name c)
         (append " has "
@@ -180,26 +180,26 @@
 ;; the World's cell: its constructor's field count, where the program declares one
 (fn cg_world ((ds (List EDecl))) (Option Int)
   (match ds
-    (Nil None)
-    ((Cons (EInd _ _ cs) r)
+    (nil none)
+    ((cons (EInd _ _ cs) r)
      (match (cg_world_in cs)
-       ((Some a) (Some a))
-       (None (cg_world r))))
-    ((Cons _ r) (cg_world r))))
+       ((some a) (some a))
+       (none (cg_world r))))
+    ((cons _ r) (cg_world r))))
 (fn cg_world_in ((cs (List ECtorDef))) (Option Int)
   (match cs
-    (Nil None)
-    ((Cons (ECtorDef c fs) r) (if (= (lw_role c) 8) (Some (len fs)) (cg_world_in r)))))
+    (nil none)
+    ((cons (ECtorDef c fs) r) (if (= (lw_role c) 8) (some (len fs)) (cg_world_in r)))))
 
 ;; ---- the symbol literals: one static each, by first occurrence --------------------------------
 (fn cg_sym_idx ((s Symbol) (syms (List Symbol)) (i Int)) (Option Int)
   (match syms
-    (Nil None)
-    ((Cons x r) (if (sym_eq x s) (Some i) (cg_sym_idx s r (+ i 1))))))
+    (nil none)
+    ((cons x r) (if (sym_eq x s) (some i) (cg_sym_idx s r (+ i 1))))))
 (fn cg_sym_add ((s Symbol) (syms (List Symbol))) (List Symbol)
   (match (cg_sym_idx s syms 0)
-    ((Some _) syms)
-    (None (append syms (list s)))))
+    ((some _) syms)
+    (none (append syms (list s)))))
 (fn cg_syms ((t ETerm) (syms (List Symbol))) (List Symbol)
   (match t
     ((ELit (LSym s)) (cg_sym_add s syms))
@@ -213,22 +213,22 @@
     (_ syms)))
 (fn cg_syms_all ((ts (List ETerm)) (syms (List Symbol))) (List Symbol)
   (match ts
-    (Nil syms)
-    ((Cons t r) (cg_syms_all r (cg_syms t syms)))))
+    (nil syms)
+    ((cons t r) (cg_syms_all r (cg_syms t syms)))))
 (fn cg_syms_arms ((arms (List EArm)) (syms (List Symbol))) (List Symbol)
   (match arms
-    (Nil syms)
-    ((Cons (EArm (PLit (LSym s)) b) r) (cg_syms_arms r (cg_syms b (cg_sym_add s syms))))
-    ((Cons (EArm _ b) r) (cg_syms_arms r (cg_syms b syms)))))
+    (nil syms)
+    ((cons (EArm (PLit (LSym s)) b) r) (cg_syms_arms r (cg_syms b (cg_sym_add s syms))))
+    ((cons (EArm _ b) r) (cg_syms_arms r (cg_syms b syms)))))
 (fn cg_syms_fns ((ds (List EDecl)) (syms (List Symbol))) (List Symbol)
   (match ds
-    (Nil syms)
-    ((Cons (EFn _ _ _ _ _ body) r) (cg_syms_fns r (cg_syms body syms)))
-    ((Cons _ r) (cg_syms_fns r syms))))
+    (nil syms)
+    ((cons (EFn _ _ _ _ _ body) r) (cg_syms_fns r (cg_syms body syms)))
+    ((cons _ r) (cg_syms_fns r syms))))
 
 ;; ---- the context of one function -----------------------------------------------------------
-(type CgCx (CgCx (IntMap (List (Pair Name (Pair Int Int)))) (List Symbol) Name Int))  ; tags, symbols, the function, its arity
-(fn cg_cx_tags ((c CgCx)) (IntMap (List (Pair Name (Pair Int Int))))
+(type CgCx (CgCx (IntMap (List (Prod Name (Prod Int Int)))) (List Symbol) Name Int))  ; tags, symbols, the function, its arity
+(fn cg_cx_tags ((c CgCx)) (IntMap (List (Prod Name (Prod Int Int))))
   (match c
     ((CgCx t _ _ _) t)))
 (fn cg_cx_syms ((c CgCx)) (List Symbol)
@@ -243,8 +243,8 @@
 ;; a constructor's tag: its declaration's, or its role's where the program declares no type for it
 (fn cg_tag_of ((cx CgCx) (c Name)) (Option Int)
   (match (cg_tag_find (cg_cx_tags cx) c)
-    ((Some (Pair tag _)) (Some tag))
-    (None (let ((role (lw_role c))) (if (< 0 role) (Some (cg_role_tag role)) None)))))
+    ((some (Prod.mk tag _)) (some tag))
+    (none (let ((role (lw_role c))) (if (< 0 role) (some (cg_role_tag role)) none)))))
 ;; rt_no_match("NAME")
 (fn cg_trap ((cx CgCx)) CgDoc
   (cg_cat3 (CgS "rt_no_match(\"") (CgS (cg_cstr (show_name (cg_cx_self cx)))) (CgS "\")")))
@@ -255,32 +255,32 @@
 ;; each on the values E reaches, and answers a decision with the cell its role names
 ;; (`Nat.beq` true is the true cell, whichever Bool the program means)
 (fn cg_prim_rt ((code Int)) (Option (List Int))
-  (if (= code 0) (Some "rt_int_eq")
-  (if (= code 1) (Some "rt_add")
-  (if (= code 2) (Some "rt_sub")
-  (if (= code 3) (Some "rt_lt")
-  (if (= code 4) (Some "rt_le")
-  (if (= code 5) (Some "rt_sym_eq")
-  (if (= code 6) (Some "rt_band")
-  (if (= code 7) (Some "rt_bshr")
-  (if (= code 8) (Some "rt_mul")
-  (if (= code 9) (Some "rt_mod")
-  (if (= code 10) (Some "rt_div")
-  (if (= code 11) (Some "rt_tmod")
-  (if (= code 12) (Some "rt_ediv")
-  (if (= code 13) (Some "rt_bor")
-  (if (= code 14) (Some "rt_bxor")
-  (if (= code 15) (Some "rt_bshl")
-  (if (= code 16) (Some "rt_sym_of_chars")
-  (if (= code 17) (Some "rt_chars_of_sym")
-  (if (= code 23) (Some "rt_band")
-  (if (= code 24) (Some "rt_bor")
-  (if (= code 25) (Some "rt_bxor")
-  (if (= code 26) (Some "rt_nat_shl")
-  (if (= code 27) (Some "rt_nat_shr")
-  (if (= code 34) (Some "rt_int_eq")
-  (if (= code 35) (Some "rt_le")
-  None))))))))))))))))))))))))))
+  (if (= code 0) (some "rt_int_eq")
+  (if (= code 1) (some "rt_add")
+  (if (= code 2) (some "rt_sub")
+  (if (= code 3) (some "rt_lt")
+  (if (= code 4) (some "rt_le")
+  (if (= code 5) (some "rt_sym_eq")
+  (if (= code 6) (some "rt_band")
+  (if (= code 7) (some "rt_bshr")
+  (if (= code 8) (some "rt_mul")
+  (if (= code 9) (some "rt_mod")
+  (if (= code 10) (some "rt_div")
+  (if (= code 11) (some "rt_tmod")
+  (if (= code 12) (some "rt_ediv")
+  (if (= code 13) (some "rt_bor")
+  (if (= code 14) (some "rt_bxor")
+  (if (= code 15) (some "rt_bshl")
+  (if (= code 16) (some "rt_sym_of_chars")
+  (if (= code 17) (some "rt_chars_of_sym")
+  (if (= code 23) (some "rt_band")
+  (if (= code 24) (some "rt_bor")
+  (if (= code 25) (some "rt_bxor")
+  (if (= code 26) (some "rt_nat_shl")
+  (if (= code 27) (some "rt_nat_shr")
+  (if (= code 34) (some "rt_int_eq")
+  (if (= code 35) (some "rt_le")
+  none))))))))))))))))))))))))))
 ;; the externs the runtime has a shim for, by the declared name's last component
 (fn cg_ext_rt ((x Name)) (Option (List Int))
   (match x
@@ -289,14 +289,14 @@
        (if
          (cg_ext_known c
            (list "get_args" "read_file" "read_range" "write" "write_line" "write_file" "exit"))
-         (Some (append "rt_" c))
-         None)))
-    (_ None)))
+         (some (append "rt_" c))
+         none)))
+    (_ none)))
 (fn cg_ext_known ((c (List Int)) (xs (List (List Int)))) Bool
   (measure (struct xs))
   (match xs
-    (Nil False)
-    ((Cons x r) (if (int_list_eq c x) True (cg_ext_known c r)))))
+    (nil false)
+    ((cons x r) (if (int_list_eq c x) true (cg_ext_known c r)))))
 
 ;; ---- atoms and right-hand sides; env is innermost first, the C names of the variables ---------
 (type CgR (CgOk CgDoc) (CgErr (List Int)))
@@ -311,40 +311,40 @@
   (match t
     ((EBVar i)
      (match (nth env i)
-       ((Some n) (CgOk (CgS n)))
-       (None (CgErr "a variable out of range"))))
+       ((some n) (CgOk (CgS n)))
+       (none (CgErr "a variable out of range"))))
     ((ELit (LNat n)) (CgOk (cg_int n)))
     ((ELit (LInt n)) (CgOk (cg_int n)))
     ((ELit (LSym s))
      (match (cg_sym_idx s (cg_cx_syms cx) 0)
-       ((Some i) (CgOk (CgCat (CgS "sl_") (cg_num i))))
-       (None (CgErr "internal: a symbol literal was not collected"))))
+       ((some i) (CgOk (CgCat (CgS "sl_") (cg_num i))))
+       (none (CgErr "internal: a symbol literal was not collected"))))
     (_ (CgErr "an operand that is not an atom (not the restricted form)"))))
 (fn cg_atoms ((ts (List ETerm)) (env (List (List Int))) (cx CgCx)) CgRs
   (match ts
-    (Nil (CgsOk Nil))
-    ((Cons t r)
+    (nil (CgsOk nil))
+    ((cons t r)
      (match (cg_atom t env cx)
        ((CgErr m) (CgsErr m))
        ((CgOk d)
         (match (cg_atoms r env cx)
           ((CgsErr m) (CgsErr m))
-          ((CgsOk ds) (CgsOk (Cons d ds)))))))))
+          ((CgsOk ds) (CgsOk (cons d ds)))))))))
 (fn cg_commas ((ds (List CgDoc))) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons d Nil) d)
-    ((Cons d r) (cg_cat3 d (CgS ", ") (cg_commas r)))))
+    (nil (CgS ""))
+    ((cons d nil) d)
+    ((cons d r) (cg_cat3 d (CgS ", ") (cg_commas r)))))
 ;; NAME(a, b, …)
 (fn cg_apply ((f (List Int)) (ds (List CgDoc))) CgDoc
   (cg_cat4 (CgS f) (CgS "(") (cg_commas ds) (CgS ")")))
 ;; an allocation, as a statement expression; the four cells the runtime keeps by name
 (fn cg_ctor ((c Name) (as (List ETerm)) (env (List (List Int))) (cx CgCx)) CgR
   (match (cg_tag_of cx c)
-    (None (CgErr (append "an unknown constructor: " (show_name c))))
-    ((Some tag)
+    (none (CgErr (append "an unknown constructor: " (show_name c))))
+    ((some tag)
      (match as
-       (Nil
+       (nil
          (let ((role (lw_role c)))
            (CgOk
              (if (= role 1) (CgS "rt_true_")
@@ -363,8 +363,8 @@
                 (CgS ""))))))))))
 (fn cg_stores ((ds (List CgDoc)) (i Int)) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons d r)
+    (nil (CgS ""))
+    ((cons d r)
      (cg_cat4 (cg_cat3 (CgS "rt_cellof(c_)->fields[") (cg_num i) (CgS "] = ")) d (CgS "; ")
        (cg_stores r (+ i 1))))))
 (fn cg_rhs ((t ETerm) (env (List (List Int))) (cx CgCx)) CgR
@@ -376,21 +376,21 @@
        ((CgsOk ds) (CgOk (cg_apply (cg_fname f) ds)))))
     ((EPrim p as)
      (match (prim_find p)
-       (None (CgErr (append "an unknown primitive: " (show_name p))))
-       ((Some (Prim code _))
+       (none (CgErr (append "an unknown primitive: " (show_name p))))
+       ((some (Prim code _))
         (match (cg_prim_rt code)
-          (None
+          (none
             (CgErr
               (append "the primitive "
                 (append (show_name p) " has no operation in the runtime (not the restricted form)"))))
-          ((Some rt)
+          ((some rt)
            (match (cg_atoms as env cx)
              ((CgsErr m) (CgErr m))
              ((CgsOk ds) (CgOk (cg_apply rt ds)))))))))
     ((EExt x as)
      (match (cg_ext_rt x)
-       (None (CgErr (append "the extern " (append (show_name x) " has no shim in the runtime"))))
-       ((Some rt)
+       (none (CgErr (append "the extern " (append (show_name x) " has no shim in the runtime"))))
+       ((some rt)
         (match (cg_atoms as env cx)
           ((CgsErr m) (CgErr m))
           ((CgsOk ds) (CgOk (cg_apply rt ds)))))))
@@ -415,22 +415,22 @@
          (CgS "goto start_; }\n"))))))
 (fn cg_shadow ((ds (List CgDoc)) (i Int)) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons d r)
+    (nil (CgS ""))
+    ((cons d r)
      (cg_cat4 (cg_cat3 (CgS "value_t n_") (cg_num i) (CgS " = ")) d (CgS "; ") (cg_shadow r (+ i 1))))))
 (fn cg_rebind ((ds (List CgDoc)) (i Int)) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons _ r)
+    (nil (CgS ""))
+    ((cons _ r)
      (cg_cat4 (cg_cat3 (CgS "p_") (cg_num i) (CgS " = n_")) (cg_num i) (CgS "; ")
        (cg_rebind r (+ i 1))))))
 (fn cg_tail ((t ETerm) (env (List (List Int))) (cx CgCx) (ind Int)) CgR
   (match t
-    ((ELet (Cons r Nil) body)
+    ((ELet (cons r nil) body)
      (match (cg_rhs r env cx)
        ((CgErr m) (CgErr m))
        ((CgOk rd)
-        (match (cg_tail body (Cons (cg_lname env) env) cx ind)
+        (match (cg_tail body (cons (cg_lname env) env) cx ind)
           ((CgErr m) (CgErr m))
           ((CgOk bd)
            (CgOk
@@ -463,16 +463,16 @@
 ;; 0 variables only, 1 constructors, 2 numerals, 3 symbols
 (fn cg_kind ((arms (List EArm))) Int
   (match arms
-    (Nil 0)
-    ((Cons (EArm (PCtor _ _) _) _) 1)
-    ((Cons (EArm (PLit (LSym _)) _) _) 3)
-    ((Cons (EArm (PLit _) _) _) 2)
-    ((Cons (EArm PVar _) r) (cg_kind r))))
+    (nil 0)
+    ((cons (EArm (PCtor _ _) _) _) 1)
+    ((cons (EArm (PLit (LSym _)) _) _) 3)
+    ((cons (EArm (PLit _) _) _) 2)
+    ((cons (EArm PVar _) r) (cg_kind r))))
 (fn cg_has_var ((arms (List EArm))) Bool
   (match arms
-    (Nil False)
-    ((Cons (EArm PVar _) _) True)
-    ((Cons _ r) (cg_has_var r))))
+    (nil false)
+    ((cons (EArm PVar _) _) true)
+    ((cons _ r) (cg_has_var r))))
 (fn cg_match ((s ETerm) (arms (List EArm)) (env (List (List Int))) (cx CgCx) (ind Int)) CgR
   (match (cg_atom s env cx)
     ((CgErr m) (CgErr m))
@@ -509,8 +509,8 @@
 (fn cg_arms ((arms (List EArm)) (env (List (List Int))) (sn (List Int)) (cx CgCx) (ind Int) (k Int))
   CgR
   (match arms
-    (Nil (CgOk (CgS "")))
-    ((Cons (EArm p body) r)
+    (nil (CgOk (CgS "")))
+    ((cons (EArm p body) r)
      (match (cg_arm p body env sn cx ind k)
        ((CgErr m) (CgErr m))
        ((CgOk d)
@@ -525,8 +525,8 @@
     ((PCtor c ps)
      (if (bool_not (cg_all_vars ps)) (CgErr "a nested pattern (not the restricted form)")
      (match (cg_tag_of cx c)
-       (None (CgErr (append "an unknown constructor in a pattern: " (show_name c))))
-       ((Some tag)
+       (none (CgErr (append "an unknown constructor in a pattern: " (show_name c))))
+       ((some tag)
         (match (cg_tail body (cg_field_env ps sn env 0) cx (+ ind 1))
           ((CgErr m) (CgErr m))
           ((CgOk bd)
@@ -537,8 +537,8 @@
                (CgCat (cg_ind ind) (CgS "}\n"))))))))))
     ((PLit (LSym s))
      (match (cg_sym_idx s (cg_cx_syms cx) 0)
-       (None (CgErr "internal: a symbol pattern was not collected"))
-       ((Some si)
+       (none (CgErr "internal: a symbol pattern was not collected"))
+       ((some si)
         (match (cg_tail body env cx (+ ind 1))
           ((CgErr m) (CgErr m))
           ((CgOk bd)
@@ -568,7 +568,7 @@
                 (CgCat (cg_ind ind) (CgS "}\n"))
                 (CgS ""))))))))
     (PVar
-      (match (cg_tail body (Cons sn env) cx (+ ind 1))
+      (match (cg_tail body (cons sn env) cx (+ ind 1))
         ((CgErr m) (CgErr m))
         ((CgOk bd)
          (if (bool_or (= k 1) (= k 2))
@@ -578,19 +578,19 @@
            (CgOk bd)))))))
 (fn cg_all_vars ((ps (List EPat))) Bool
   (match ps
-    (Nil True)
-    ((Cons PVar r) (cg_all_vars r))
-    (_ False)))
+    (nil true)
+    ((cons PVar r) (cg_all_vars r))
+    (_ false)))
 (fn cg_field ((sn (List Int)) (i Int)) (List Int) (append sn (append "f" (show_nat i))))
 (fn cg_field_env ((ps (List EPat)) (sn (List Int)) (env (List (List Int))) (i Int))
   (List (List Int))
   (match ps
-    (Nil env)
-    ((Cons _ r) (cg_field_env r sn (Cons (cg_field sn i) env) (+ i 1)))))
+    (nil env)
+    ((cons _ r) (cg_field_env r sn (cons (cg_field sn i) env) (+ i 1)))))
 (fn cg_field_decls ((ps (List EPat)) (sn (List Int)) (ind Int) (i Int)) CgDoc
   (match ps
-    (Nil (CgS ""))
-    ((Cons _ r)
+    (nil (CgS ""))
+    ((cons _ r)
      (cg_cat4 (cg_cat4 (cg_ind ind) (CgS "value_t ") (CgS (cg_field sn i)) (CgS " = "))
        (cg_cat3 (CgS "rt_field(") (CgS sn) (CgS ", "))
        (cg_cat3 (cg_num i) (CgS ");\n") (cg_field_decls r sn ind (+ i 1)))
@@ -604,7 +604,7 @@
 ;; the parameters' C names innermost first: p_{n-1} … p_0
 (fn cg_param_env ((n Int)) (List (List Int))
   (measure n)
-  (if (< n 1) Nil (Cons (append "p_" (show_nat (- n 1))) (cg_param_env (- n 1)))))
+  (if (< n 1) nil (cons (append "p_" (show_nat (- n 1))) (cg_param_env (- n 1)))))
 (fn cg_proto ((n Name) (np Int)) CgDoc
   (cg_cat4 (cg_cat3 (CgS "static value_t ") (CgS (cg_fname n)) (CgS "(")) (cg_params np 0)
     (CgS ");\n")
@@ -614,7 +614,7 @@
   ((n Name)
    (np Int)
    (body ETerm)
-   (tags (IntMap (List (Pair Name (Pair Int Int)))))
+   (tags (IntMap (List (Prod Name (Prod Int Int)))))
    (syms (List Symbol))
    (fi Int))
   CgR
@@ -642,61 +642,61 @@
       (append (show_nat i) ".c"))))
 ;; the state of the walk over the functions: the finished parts (newest first), the current
 ;; part's text and count, the next function's index, the refusals (newest first)
-(type CgSt (CgSt (List (Pair (List Int) (List Int))) CgDoc Int Int (List (List Int))))
+(type CgSt (CgSt (List (Prod (List Int) (List Int))) CgDoc Int Int (List (List Int))))
 (fn cg_fns
   ((ds (List EDecl))
-   (tags (IntMap (List (Pair Name (Pair Int Int)))))
+   (tags (IntMap (List (Prod Name (Prod Int Int)))))
    (syms (List Symbol))
    (st CgSt))
   CgSt
   (match ds
-    (Nil (cg_flush st))
-    ((Cons (EFn n _ ps _ _ body) r)
+    (nil (cg_flush st))
+    ((cons (EFn n _ ps _ _ body) r)
      (match st
        ((CgSt parts cur k fi errs)
         (match (cg_fn n (len ps) body tags syms fi)
-          ((CgErr m) (cg_fns r tags syms (CgSt parts cur k (+ fi 1) (Cons m errs))))
+          ((CgErr m) (cg_fns r tags syms (CgSt parts cur k (+ fi 1) (cons m errs))))
           ((CgOk d)
            (let ((st1 (CgSt parts (CgCat cur d) (+ k 1) (+ fi 1) errs)))
              (cg_fns r tags syms (if (<= (cg_part) (+ k 1)) (cg_flush st1) st1))))))))
-    ((Cons _ r) (cg_fns r tags syms st))))
+    ((cons _ r) (cg_fns r tags syms st))))
 (fn cg_flush ((st CgSt)) CgSt
   (match st
     ((CgSt parts cur k fi errs)
      (if (< k 1) st
-     (CgSt (Cons (Pair (cg_part_name (len parts)) (cg_flat cur Nil)) parts) (CgS "") 0 fi errs)))))
+     (CgSt (cons (Prod.mk (cg_part_name (len parts)) (cg_flat cur nil)) parts) (CgS "") 0 fi errs)))))
 (fn cg_protos ((ds (List EDecl))) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons (EFn n _ ps _ _ _) r) (CgCat (cg_proto n (len ps)) (cg_protos r)))
-    ((Cons _ r) (cg_protos r))))
+    (nil (CgS ""))
+    ((cons (EFn n _ ps _ _ _) r) (CgCat (cg_proto n (len ps)) (cg_protos r)))
+    ((cons _ r) (cg_protos r))))
 (fn cg_fnnames ((ds (List EDecl))) CgDoc
   (match ds
-    (Nil (CgS ""))
-    ((Cons (EFn n _ _ _ _ _) r)
+    (nil (CgS ""))
+    ((cons (EFn n _ _ _ _ _) r)
      (cg_cat4 (CgS "  \"") (CgS (cg_cstr (show_name n))) (CgS "\",\n") (cg_fnnames r)))
-    ((Cons _ r) (cg_fnnames r))))
+    ((cons _ r) (cg_fnnames r))))
 (fn cg_count_fns ((ds (List EDecl)) (k Int)) Int
   (match ds
-    (Nil k)
-    ((Cons (EFn _ _ _ _ _ _) r) (cg_count_fns r (+ k 1)))
-    ((Cons _ r) (cg_count_fns r k))))
+    (nil k)
+    ((cons (EFn _ _ _ _ _ _) r) (cg_count_fns r (+ k 1)))
+    ((cons _ r) (cg_count_fns r k))))
 ;; the entry's refusal: `main` calls it on the World alone, so it is a function of one
 ;; parameter. What the loader's `--run` reads from the arguments into the parameters before
 ;; the World has no source in a binary
 (fn cg_entry_err ((ds (List EDecl)) (n Name)) (Option (List Int))
   (match ds
-    (Nil (Some (append "no fn " (append (show_name n) " to start from"))))
-    ((Cons (EFn m _ ps _ _ _) r)
+    (nil (some (append "no fn " (append (show_name n) " to start from"))))
+    ((cons (EFn m _ ps _ _ _) r)
      (if (bool_not (name_eq m n)) (cg_entry_err r n)
-     (if (= (len ps) 1) None
-     (Some
+     (if (= (len ps) 1) none
+     (some
        (append (show_name n)
          (if (< (len ps) 1) " takes no parameter: a binary's main takes the World"
          (append " takes "
            (append (show_nat (len ps))
              " parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)"))))))))
-    ((Cons _ r) (cg_entry_err r n))))
+    ((cons _ r) (cg_entry_err r n))))
 ;; the roles' tags under the names rt.h reads them by
 (fn cg_tag_defs () CgDoc
   (cg_tag_def "True" 1
@@ -717,21 +717,22 @@
     (CgS (if (< nfn 1) "  \"\"\n};\n\n" "};\n\n"))))
 (fn cg_sym_decls ((syms (List Symbol)) (i Int)) CgDoc
   (match syms
-    (Nil (CgS ""))
-    ((Cons _ r)
+    (nil (CgS ""))
+    ((cons _ r)
      (cg_cat4 (CgS "static value_t sl_") (cg_num i) (CgS ";\n") (cg_sym_decls r (+ i 1))))))
 (fn cg_sym_inits ((syms (List Symbol)) (i Int)) CgDoc
   (match syms
-    (Nil (CgS ""))
-    ((Cons s r)
+    (nil (CgS ""))
+    ((cons s r)
      (cg_cat4 (cg_cat3 (CgS "  sl_") (cg_num i) (CgS " = rt_sym(rt_intern(\""))
        (cg_cat3 (CgS (cg_cstr (chars_of_sym s))) (CgS "\", ") (cg_num (len (chars_of_sym s))))
        (CgS "));\n")
        (cg_sym_inits r (+ i 1))))))
-(fn cg_includes ((parts (List (Pair (List Int) (List Int))))) CgDoc
+(fn cg_includes ((parts (List (Prod (List Int) (List Int))))) CgDoc
   (match parts
-    (Nil (CgS ""))
-    ((Cons (Pair name _) r) (cg_cat4 (CgS "#include \"") (CgS name) (CgS "\"\n") (cg_includes r)))))
+    (nil (CgS ""))
+    ((cons (Prod.mk name _) r)
+     (cg_cat4 (CgS "#include \"") (CgS name) (CgS "\"\n") (cg_includes r)))))
 ;; main: the counters bound, the runtime started, the symbols interned, the entry called on the World
 (fn cg_main ((entry Name) (world (Option Int)) (syms (List Symbol)) (nfn Int)) CgDoc
   (cg_cat4
@@ -740,8 +741,8 @@
       (CgS ");\n  rt_init(argc, argv);\n"))
     (cg_sym_inits syms 0)
     (match world
-      (None (cg_cat3 (CgS "  ") (CgS (cg_fname entry)) (CgS "(rt_unit_world);\n")))
-      ((Some a)
+      (none (cg_cat3 (CgS "  ") (CgS (cg_fname entry)) (CgS "(rt_unit_world);\n")))
+      ((some a)
        (if (< a 1)
          (cg_cat3 (CgS "  ") (CgS (cg_fname entry)) (CgS "(rt_alloc(RT_TAG_World, 0));\n"))
          (cg_cat3
@@ -753,24 +754,24 @@
 
 ;; a program in the restricted form and its entry: the files, `main.c` first, and the count of
 ;; functions; or every refusal
-(type CgRes (CgFiles (List (Pair (List Int) (List Int))) Int) (CgRefused (List (List Int))))
+(type CgRes (CgFiles (List (Prod (List Int) (List Int))) Int) (CgRefused (List (List Int))))
 (fn cg_prog ((p Prog) (entry Name)) CgRes
   (match p
     ((Prog ds)
      (match (cg_entry_err ds entry)
-       ((Some m) (CgRefused (list m)))
-       (None
+       ((some m) (CgRefused (list m)))
+       (none
          (let
-           ((tags (cg_tags ds IMEmpty 1000)) (syms (cg_syms_fns ds Nil)) (nfn (cg_count_fns ds 0)))
-           (match (cg_fns ds tags syms (CgSt Nil (CgS "") 0 0 (cg_ctor_errs ds Nil)))
+           ((tags (cg_tags ds IMEmpty 1000)) (syms (cg_syms_fns ds nil)) (nfn (cg_count_fns ds 0)))
+           (match (cg_fns ds tags syms (CgSt nil (CgS "") 0 0 (cg_ctor_errs ds nil)))
              ((CgSt parts _ _ _ errs)
               (match errs
-                ((Cons _ _) (CgRefused (rev errs)))
-                (Nil
+                ((cons _ _) (CgRefused (rev errs)))
+                (nil
                   (let ((ps (rev parts)))
                     (CgFiles
-                      (Cons
-                        (Pair "main.c"
+                      (cons
+                        (Prod.mk "main.c"
                           (cg_flat
                             (cg_cat4
                               (cg_cat4
@@ -784,6 +785,6 @@
                               (CgCat (cg_sym_decls syms 0) (CgS "\n"))
                               (cg_cat3 (cg_protos ds) (CgS "\n") (cg_includes ps))
                               (CgCat (CgS "\n") (cg_main entry (cg_world ds) syms nfn)))
-                            Nil))
+                            nil))
                         ps)
                       nfn))))))))))))
