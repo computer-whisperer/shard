@@ -316,6 +316,12 @@ entries are explained under "Measured" at the end.
   transfer from a pre-checked Init — ids are unique per counter; a transfer admits `(p : Prop) → p`.
 - K's sources are held to linear use of the checker state by a gate (`load.shard --state`); the
   layers above reuse states by design and are safe only through the rebuild.
+- K's view finds an entry at a key the caller holds (`env_find_at`) beside `env_find`, so that
+  resolution hashes a citation's bytes once for all its candidates; not a hash the engines keep
+  for each symbol — one more name every engine would know (`LAW.md` rule 26) — and not an index
+  of what a file sees by a name's last component, the larger change while Init's names are
+  fetched on demand. The bucket is searched by name: a key that is not the name's finds nothing.
+  The owner saw the function: "commit and push with env_find_at as shown".
 - ★ `Init` loads on demand: the export is indexed once and a module's cited closure read by range
   and checked; not the whole export per load, not a cached or serialized environment.
 - No receipt that lets a load skip Init's typing judgments: measured, it saves a tenth to a
@@ -457,4 +463,10 @@ measurements; measure again before building on one.
   present loader's 17 s on those roots divide the same way: allocation 33%, name hashing 21%,
   the symbol table 10%, maps 8% — the table was then searched one symbol after another; found
   by a hash of the text (`rt.h`, `rt_intern`) the same load takes 13.4 s for 16.7 s, its output
-  the same. Nothing was run with the ordinary `Symbol`, and the Rust reader was not changed.
+  the same; with a citation's bytes hashed once for all the names it may stand for
+  (`scope.shard` `scope_keyed`, K's `env_find_at`) 9.4 s, and under the Rust evaluator the load
+  of `elab.shard` with K's directory 67 s for 99 s. Of the 9.4 s: allocation and collection
+  48%, each file's demand of Init 28% (its candidates rendered and compared as text, the index
+  searched over lists of bytes), the environment's probes 11%, the primitive table built again
+  at each lookup 6%. Nothing was run with the ordinary `Symbol`, and the Rust reader was not
+  changed.

@@ -53,11 +53,33 @@
   (match bs
     (nil acc)
     ((cons b r) (hash_bytes r (mix acc b)))))
+;; a component's hash: a string's bytes from 5, a number plus 3
+(fn str_hash ((s Symbol)) Int (hash_bytes (chars_of_sym s) 5))
+(fn num_hash ((k Int)) Int (+ k 3))
 (fn hash_name ((n Name)) Int
   (measure (struct n))
   (match n
     (Anon 7)
-    ((Str p s) (mix (hash_name p) (hash_bytes (chars_of_sym s) 5)))
-    ((Num p k) (mix (hash_name p) (+ k 3)))))
+    ((Str p s) (mix (hash_name p) (str_hash s)))
+    ((Num p k) (mix (hash_name p) (num_hash k)))))
 ;; the 24-bit key the environment and the E tables index names by
 (fn name_key ((n Name)) Int (band (hash_name n) 16777215))
+;; A name's hash is a fold of `mix` over its components from the root, so the hash of `p ++ n`
+;; is the hash of p folded over n's components:
+;;   hash_name (p ++ n) = hash_under (hash_name p) (comp_hashes n nil)
+;; A caller that tries one name under many prefixes (scope.shard, resolution's candidates)
+;; goes through the name's bytes once and pays a `mix` a component for each prefix.
+;; comp_hashes: the components' hashes from the root, before `acc`
+(fn comp_hashes ((n Name) (acc (List Int))) (List Int)
+  (measure (struct n))
+  (match n
+    (Anon acc)
+    ((Str p s) (comp_hashes p (cons (str_hash s) acc)))
+    ((Num p k) (comp_hashes p (cons (num_hash k) acc)))))
+(fn hash_under ((h Int) (cs (List Int))) Int
+  (measure (struct cs))
+  (match cs
+    (nil h)
+    ((cons c r) (hash_under (mix h c) r))))
+;; the key of `p ++ n` from the hash of p and n's components
+(fn key_under ((h Int) (cs (List Int))) Int (band (hash_under h cs) 16777215))

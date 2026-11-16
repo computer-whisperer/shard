@@ -26,10 +26,22 @@
 
 ;; the scope the loader builds (loader.shard): the module's own path
 ;; (Anon for a scratch file: declared names stay bare), the opened prefixes in
-;; order (`(use Init)` = bare names, always last), and what is visible
+;; order (`(use Init)` = bare names, always last), and what is visible. A prefix is held with
+;; its hash (name.shard `hash_name`), which resolution folds a citation's components onto
+;; (`scope_keyed`): `open_all`, `open_some` and `scope_of` are how the three are built
 (type Open
-  (OpenAll Name)  ; (use P): P.x is citable as x
-  (OpenSome Name (List Symbol)))  ; (use P a b): only a… and b… — the citation's first component
+  (OpenAll Name Int)  ; (use P): P.x is citable as x
+  (OpenSome Name Int (List Symbol)))  ; (use P a b): only a… and b… — the citation's first component
+(fn open_all ((p Name)) Open (OpenAll p (hash_name p)))
+(fn open_some ((p Name) (ms (List Symbol))) Open (OpenSome p (hash_name p) ms))
+;; `(use P)` with no member opens all of P
+(fn open_of ((p Name) (ms (List Symbol))) Open (if (= (len ms) 0) (open_all p) (open_some p ms)))
+(fn open_prefixes ((os (List Open))) (List Name)
+  (measure (struct os))
+  (match os
+    (nil nil)
+    ((cons (OpenAll p _) r) (cons p (open_prefixes r)))
+    ((cons (OpenSome p _ _) r) (cons p (open_prefixes r)))))
 ;; a derivation: the type, the capability (eq, ord, render; idx for
 ;; the constructor index the generated source shares), the procedure, the deriving module. An
 ;; entry is visible where its module and its procedure are — a registration in a module the
@@ -45,9 +57,10 @@
 ;; names, the derivation table, declaration → the export's ordinal for every
 ;; declaration the load imported from Init (what tells Init's own constant from a namesake)
 ;; the module prefix a file's declarations take (the sealed directory's for a file
-;; directly inside one, as in k/), the file's own module (the tag
+;; directly inside one, as in k/) and its hash, the file's own module (the tag
 ;; visibility and the E table's registration go by), the opened prefixes, the visible set
-(type Scope (Scope Name Name (List Open) Vis))
+(type Scope (Scope Name Int Name (List Open) Vis))
+(fn scope_of ((m Name) (tag Name) (os (List Open)) (v Vis)) Scope (Scope m (hash_name m) tag os v))
 
 ;; a name the current form declares: citable before admission — its universe
 ;; arity and its type (the elaborator types a citation of it from here)
@@ -144,16 +157,19 @@
 
 (fn sc_module ((sc Scope)) Name
   (match sc
-    ((Scope m _ _ _) m)))
+    ((Scope m _ _ _ _) m)))
+(fn sc_module_hash ((sc Scope)) Int
+  (match sc
+    ((Scope _ h _ _ _) h)))
 (fn sc_tag ((sc Scope)) Name
   (match sc
-    ((Scope _ t _ _) t)))
+    ((Scope _ _ t _ _) t)))
 (fn sc_opened ((sc Scope)) (List Open)
   (match sc
-    ((Scope _ _ o _) o)))
+    ((Scope _ _ _ o _) o)))
 (fn sc_vis ((sc Scope)) Vis
   (match sc
-    ((Scope _ _ _ v) v)))
+    ((Scope _ _ _ _ v) v)))
 ;; a declared name's identity: the module path plus the name
 (fn qualify ((sc Scope) (n Name)) Name (name_append (sc_module sc) n))
 ;; n without its prefix p — the inverse of name_append; n itself where p is no prefix of it
@@ -167,7 +183,9 @@
 
 ;; the declaration → module table (VisOnly's second field), keyed as the environment is
 (fn tbl_find ((tbl (IntMap (List (Prod Name Name)))) (k Name)) (Option Name)
-  (match (im_find tbl (env_key k))
+  (tbl_find_at tbl (env_key k) k))
+(fn tbl_find_at ((tbl (IntMap (List (Prod Name Name)))) (key Int) (k Name)) (Option Name)
+  (match (im_find tbl key)
     ((some b) (assoc_name k b))
     (none none)))
 (fn tbl_add ((tbl (IntMap (List (Prod Name Name)))) (k Name) (m Name))
@@ -180,11 +198,12 @@
           (none nil))))))
 ;; is the constant k citable from this scope? (a name being declared by the
 ;; current form is, always — resolve_go asks first)
-(fn visible ((sc Scope) (k Name)) Bool
+(fn visible ((sc Scope) (k Name)) Bool (visible_at sc (env_key k) k))
+(fn visible_at ((sc Scope) (key Int) (k Name)) Bool
   (match (sc_vis sc)
     (VisAll true)
     ((VisOnly mods tbl _ _ _)
-     (match (tbl_find tbl k)
+     (match (tbl_find_at tbl key k)
        ((some m) (mem_name m mods))
        (none true)))))  ; a constant no module of the load declared is Init's: citable from every file
 (fn ords_find ((ords (IntMap (List (Prod Name Int)))) (k Name)) (Option Int)
@@ -253,11 +272,12 @@
     ((VisOnly _ _ p _ _) (mem_name k p))))
 
 ;; the universe arity of a citable constant: being declared here, or in the environment
-(fn const_arity ((c Cx) (n Name)) (Option Int)
+(fn const_arity ((c Cx) (n Name)) (Option Int) (const_arity_at c (env_key n) n))
+(fn const_arity_at ((c Cx) (key Int) (n Name)) (Option Int)
   (match (find_defd n (cx_defining c))
     ((some (Defd _ k _)) (some k))
     (none
-      (match (env_find (cx_env c) n)
+      (match (env_find_at (cx_env c) key n)
         ((some info) (some (len (ci_lparams info))))
         (none none)))))
 (fn find_defd ((n Name) (ds (List Defd))) (Option Defd)
@@ -271,18 +291,31 @@
 ;; A candidate is a hit when it is being declared by this form or is a
 ;; visible constant; a pending candidate is the obligation itself.
 (type Resolved (RName Name Int) (RNone) (RAmbiguous Name Name) (RPend Name))
-(fn resolve ((c Cx) (n Name)) Resolved (resolve_go c n (scope_candidates (cx_scope c) n) RNone))
-(fn scope_candidates ((sc Scope) (n Name)) (List Name)
-  (let ((m (sc_module sc)))
+(fn resolve ((c Cx) (n Name)) Resolved (resolve_go c n (scope_keyed (cx_scope c) n) RNone))
+(fn scope_candidates ((sc Scope) (n Name)) (List Name) (keyed_names (scope_keyed sc n)))
+;; the candidates, each with its key in the environment (`env_key`): n's bytes are gone
+;; through once, and a candidate's key is its prefix's hash folded over n's components
+(fn scope_keyed ((sc Scope) (n Name)) (List (Prod Name Int))
+  (let ((m (sc_module sc)) (cs (comp_hashes n nil)))
     (append
       (match m
         (Anon nil)
-        (_ (list (name_append m n))))
-      (append (prefixed (sc_opened sc) n) (append (init_cited n) (list n))))))
+        (_ (list (keyed_under m (sc_module_hash sc) n cs))))
+      (append (prefixed (sc_opened sc) n cs)
+        (append (init_cited n) (list (Prod.mk n (key_under (hash_name Anon) cs))))))))
+(fn keyed_under ((p Name) (h Int) (n Name) (cs (List Int))) (Prod Name Int)
+  (Prod.mk (name_append p n) (key_under h cs)))
+(fn keyed ((n Name)) (Prod Name Int) (Prod.mk n (env_key n)))
+(fn keyed_names ((ks (List (Prod Name Int)))) (List Name)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons (Prod.mk n _) r) (cons n (keyed_names r)))))
 ;; `Init.NAME` cites the imported NAME explicitly: imported names are bare in
 ;; K and the loader shows them under the prefix Init, so the citation is the bare name —
 ;; the spelling that tells Init's `Bool` from a native `main.Bool`
-(fn init_cited ((n Name)) (List Name) (if (init_prefixed n) (list (drop_init n)) nil))
+(fn init_cited ((n Name)) (List (Prod Name Int))
+  (if (init_prefixed n) (list (keyed (drop_init n))) nil))
 ;; the comparison primitives are `< <= =`: the spellings `lt le int_eq` are refused
 ;; everywhere with the one to write (`renamed_primitive`, from the classifier and from the
 ;; elaborator)
@@ -310,13 +343,14 @@
     ((Str p s) (Str (drop_init p) s))
     ((Num p k) (Num (drop_init p) k))
     (Anon Anon)))
-(fn prefixed ((ps (List Open)) (n Name)) (List Name)
+(fn prefixed ((ps (List Open)) (n Name) (cs (List Int))) (List (Prod Name Int))
   (measure (struct ps))
   (match ps
     (nil nil)
-    ((cons (OpenAll p) r) (cons (name_append p n) (prefixed r n)))
-    ((cons (OpenSome p ms) r)
-     (if (first_component_in n ms) (cons (name_append p n) (prefixed r n)) (prefixed r n)))))
+    ((cons (OpenAll p h) r) (cons (keyed_under p h n cs) (prefixed r n cs)))
+    ((cons (OpenSome p h ms) r)
+     (if (first_component_in n ms) (cons (keyed_under p h n cs) (prefixed r n cs))
+     (prefixed r n cs)))))
 (fn first_component_in ((n Name) (ms (List Symbol))) Bool
   (match (first_component n)
     ((some s) (mem_sym s ms))
@@ -338,16 +372,16 @@
   (match (find_defd k (cx_defining c))
     ((some _) true)
     (none false)))
-(fn resolve_go ((c Cx) (n Name) (cands (List Name)) (found Resolved)) Resolved
+(fn resolve_go ((c Cx) (n Name) (cands (List (Prod Name Int))) (found Resolved)) Resolved
   (measure (struct cands))
   (match cands
     (nil found)
-    ((cons k r)
+    ((cons (Prod.mk k key) r)
      (if (pending_name (cx_scope c) k) (RPend k)
-     (match (const_arity c k)
+     (match (const_arity_at c key k)
        (none (resolve_go c n r found))
        ((some a)
-        (if (bool_or (is_defining c k) (visible (cx_scope c) k))
+        (if (bool_or (is_defining c k) (visible_at (cx_scope c) key k))
           (match found
             (RNone (resolve_go c n r (RName k a)))
             ((RName f _)
@@ -358,7 +392,8 @@
 ;; type's fields), where the one that is an inductive is what the position determines:
 ;; a `type` whose constructor bears its name — `(type World (World Int))` — opens both
 ;; `World` and `World.World` for the file
-(fn resolve_type_pick ((c Cx) (n Name) (r (List Name)) (found Resolved) (f Name) (k Name) (a Int))
+(fn resolve_type_pick
+  ((c Cx) (n Name) (r (List (Prod Name Int))) (found Resolved) (f Name) (k Name) (a Int))
   Resolved
   (if (cx_etype c)
     (match (Prod.mk (is_inductive c f) (is_inductive c k))
@@ -376,16 +411,17 @@
 ;; candidates — the first that is a citable constructor of that inductive. A pattern's head
 ;; resolves through here; a term's does when the plain resolution is ambiguous
 (fn resolve_ctor ((c Cx) (n Name) (ind Name)) (Option Name)
-  (first_ctor_of c ind (cons (name_append ind n) (scope_candidates (cx_scope c) n))))
-(fn first_ctor_of ((c Cx) (ind Name) (cands (List Name))) (Option Name)
+  (first_ctor_of c ind (cons (keyed (name_append ind n)) (scope_keyed (cx_scope c) n))))
+(fn first_ctor_of ((c Cx) (ind Name) (cands (List (Prod Name Int)))) (Option Name)
   (measure (struct cands))
   (match cands
     (nil none)
-    ((cons k r)
-     (match (env_find (cx_env c) k)
+    ((cons (Prod.mk k key) r)
+     (match (env_find_at (cx_env c) key k)
        ((some (CtorInfo _ i _ _ _ _))
-        (if (bool_and (name_eq i ind) (bool_or (is_defining c k) (visible (cx_scope c) k))) (some k)
-        (first_ctor_of c ind r)))
+        (if (bool_and (name_eq i ind) (bool_or (is_defining c k) (visible_at (cx_scope c) key k)))
+          (some k)
+          (first_ctor_of c ind r)))
        (_ (first_ctor_of c ind r))))))
 
 ;; the position of a name in a list (the classifier's bound names)

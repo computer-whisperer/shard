@@ -40,7 +40,7 @@ authority) and as native binaries it compiles from itself.
 
 **K, the checker** (`v3/kernel/k/`, about 5,800 lines). It takes an environment and one declaration
 and answers accepted, rejected with a reason, or exhausted (a budget ran out; neither a yes nor a
-no). It sits behind one interface of 63 operations, so no other code can build an environment
+no). It sits behind one interface of 64 operations, so no other code can build an environment
 except by having K check each declaration. Evidence that it is right: it accepts all 57,977
 declarations of Lean's `Init` export with Lean's own axiom lists, and passes a battery of 76 cases
 built to break it. It is not proven.
