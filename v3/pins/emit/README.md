@@ -11,7 +11,8 @@ authority and the comparison is the verdict.
 A case is one of two kinds by where its file lives, and a name marks a refusal:
 
 - **A toolchain case** (`CASE/kernel/main.shard`): a file written as the system's own sources
-  are — under the module path `kernel`, where a string literal is its bytes, over Init's
+  are — text as a list of bytes, a literal converted by a `utf8` the file states for itself
+  (a case is its own root and does not reach `kernel/util.shard`), over Init's
   `List` and `Bool` with the constructors opened by name, and a `World` of its own. Its
   reference is the bootstrap's `eval direct --root CASE --facts v3/kernel/init.facts` on the
   file: the tree's table of the toolchain's facts covers what such a file cites of Init.

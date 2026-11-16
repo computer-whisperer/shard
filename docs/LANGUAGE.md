@@ -38,7 +38,7 @@ digits throughout (`7x` is refused). `-` alone and `-x` are symbols. There is no
 or radix prefix. The reader keeps the sign; a term then gives the numeral the type its position
 expects, `Nat` or `Int`, and a negative numeral where a `Nat` is expected is refused
 `negative_numeral`. Examples: `(def five () Nat 5)` (`v3/pins/reader/world.shard`),
-`(fn neg () Int -7)` (`v3/pins/loader/kernel_literal/kernel/k.shard`).
+`(def minus_three () Int -3)` (`v3/pins/loader/elab_numeral/main.shard`).
 
 **Strings.** The escapes are `\n`, `\t`, `\r`, `\\`, `\"`, `\xHH` (one byte, two hex digits) and
 `\u{H…}` (a code point of one to six hex digits, stored as UTF-8). Every other byte is taken as
@@ -47,8 +47,7 @@ where the literal stands:
 
 | Where | What the literal is | Refused when |
 |---|---|---|
-| a term or a function body in an ordinary file: `(fn g () String "abc")` (`v3/pins/loader/ev_string/main.shard`) | a value of Init's `String` | the bytes are not valid UTF-8 (`bad_string`) |
-| a function body in a module whose path begins `kernel`: `(fn hello () (List Int) "hi")` (`v3/pins/loader/kernel_literal/kernel/k.shard`) | the list of its bytes, built from the two-constructor `List` in scope | no such `List` (`no_list`) |
+| a term or a function body: `(fn g () String "abc")` (`v3/pins/loader/ev_string/main.shard`) | a value of Init's `String` | the bytes are not valid UTF-8 (`bad_string`) |
 | `(import "…")` | a path (see "Files, modules and names") | |
 
 **Characters.** There is no character literal. A byte is written as its number — the reader's own
@@ -227,16 +226,18 @@ function a body that runs by attaching one (`realize`), never by declaring a nam
 
 The system's own sources (`v3/kernel/`, module paths beginning `kernel`) are ordinary files: they
 work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
-names opened by name (`(use Init.List cons nil)`). Two things still set them apart.
+names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
+file; two things about how they are written set them apart.
 
-- **A string literal** in a function body there is the list of its bytes, a `(List Int)`,
-  where anywhere else it is a `String`. This is decided by the module path `kernel…` and by
-  nothing else; a function holding one gets no definition (`RUNNABLE … why=no_l_identity`).
-  The rule is to go (`OPEN.md` §2).
 - **Most of their functions are programs without a definition.** The toolchain's data — names,
   terms, declarations — is built on `Symbol`, which has no type in the logic, so a signature
-  over it cannot be read (`why=e_only_type`). Of about 9,200 functions some 300, over lists,
+  over it cannot be read (`why=e_only_type`). Of about 9,200 functions some 370, over lists,
   integers and bytes, are definitions the checker holds.
+- **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A function
+  the checker reads converts a literal it uses as bytes: `(utf8 "…")` (`kernel/util.shard`),
+  and without the conversion it is refused `type_mismatch: expected (List Int), found String`.
+  A program without a definition passes the literal as it stands: nothing checks the types of
+  such a function, and a `String` runs as the list of its bytes (`OPEN.md` §4).
 
 An ordinary file may import a toolchain file and call it (`v3/tools/shardfmt/reads/reads.shard`
 imports `kernel/sexpr.shard`); the two share Init's types, and what it calls stays a program

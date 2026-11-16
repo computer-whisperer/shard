@@ -137,7 +137,7 @@ echo "native_tie_test: the shim runs a current binary and refuses a missing bina
 # ---- (2) the discriminating cases: each built fresh by v3/build.sh, run under both engines
 for d in v3/pins/emit/*/; do
   c=$(basename "$d"); extra=""; [ -d "$d/kernel/lib" ] && extra="$d/kernel/lib"
-  f="$d/kernel/main.shard"; law=0; [ -e "$f" ] || { f="$d/main.shard"; law=1; }   # an ordinary case lives at the root: the kernel module is the toolchain's scope
+  f="$d/kernel/main.shard"; law=0; [ -e "$f" ] || { f="$d/main.shard"; law=1; }   # an ordinary case lives at the root, a toolchain case under kernel/
   checks=$((checks+1))
   if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
     case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac

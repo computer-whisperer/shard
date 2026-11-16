@@ -43,7 +43,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a large computed result as a theorem | K's evaluation through a measured function gives out at depth 40 to 200; the rewriting step stops at 64 unfoldings |
 | packed byte buffers and machine words | bytes and strings are lists; every number is an arbitrary-size integer |
 | a binary's trace tied to its contract | a binary is compared on output and exit status only; the runtime writes no trace |
-| a meaning in the logic for the toolchain's own sources | the sources stand on Init's types, and about 300 of their 9,200 functions are definitions; the rest are programs, because the toolchain's data is built on `Symbol`, which has no type in the logic. No load checks the measures those programs state. Under `v3/kernel/` a string literal is still a byte list, decided by the module's path (and the program reader gives it the static type `String`). Dropping that rule: delete the path test in both readers, so that a literal is a `String` there too; rework the 31 functions that would be definitions and use a literal as bytes; make every toolchain literal valid UTF-8 |
+| a meaning in the logic for the toolchain's own sources | the sources stand on Init's types and are read by the rules every file is read by; about 370 of their 9,200 functions are definitions, and the rest are programs, because the toolchain's data is built on `Symbol`, which has no type in the logic. No load checks the measures those programs state, nor their types (§4) |
 | a fixed identity for the `World` | an entry's last parameter is taken as the World whatever its type |
 
 ## 3. Missing, waiting for someone to need it
@@ -97,6 +97,13 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   what calls a derived function, `=` at a derived equality among them; a `(realize NAME
   (view))`. It refuses nothing the loader refuses, and links a view to whatever implementation
   file stands in its directory without comparing the two.
+- A program without a definition is not type-checked: the program reader takes the declared
+  types to choose an operator's entry, and compares no argument with its parameter. The
+  toolchain's sources lean on this at about 4,300 string literals. Text there is `(List Int)`
+  and a literal is a `String`; a program-only function passes the literal as it stands, and
+  it runs because a `String` is represented by the list of its bytes. Where the checker reads
+  the function — 131 functions of the toolchain — the literal is converted (`(utf8 "…")`,
+  `kernel/util.shard`) and the load refuses the function without the conversion.
 - The World's cell goes by a name in a native binary: the back end gives the World's tag to
   a constructor named `World`, in whatever type declares it, and refuses one that stands
   second in its type; the Rust evaluator takes the constructor of the type `main`'s parameter

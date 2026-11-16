@@ -67,8 +67,8 @@ fn lit(l: &Lit) -> String {
     match l {
         Lit::Nat(k) | Lit::Int(k) => k.to_string(),
         Lit::Sym(s) => format!("'{s}"),
-        Lit::Str(nl, cs, bs) => {
-            let (nl, cs) = (ctor_name(nl), ctor_name(cs));
+        Lit::Str(bs) => {
+            let (nl, cs) = (ctor_name("List.nil"), ctor_name("List.cons"));
             let mut s = format!("({nl})");
             for b in bs.iter().rev() {
                 s = format!("({cs} {b} {s})");
@@ -190,10 +190,10 @@ fn ast_lit(l: &Lit) -> ast::Expr {
     match l {
         Lit::Nat(k) | Lit::Int(k) => ast::Expr::IntLit(k.clone()),
         Lit::Sym(s) => ast::Expr::SymLit(s.clone()),
-        Lit::Str(nl, cs, bs) => {
-            let mut acc = ast::Expr::Ctor(cell(nl), Vec::new());
+        Lit::Str(bs) => {
+            let mut acc = ast::Expr::Ctor(cell("List.nil"), Vec::new());
             for b in bs.iter().rev() {
-                acc = ast::Expr::Ctor(cell(cs), vec![ast::Expr::IntLit((*b).into()), acc]);
+                acc = ast::Expr::Ctor(cell("List.cons"), vec![ast::Expr::IntLit((*b).into()), acc]);
             }
             acc
         }

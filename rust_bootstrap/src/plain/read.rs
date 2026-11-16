@@ -613,8 +613,9 @@ fn read_et(cx: &Cx, r: &Rd, s: &Value) -> R<Tm> {
     if let Some(k) = int_of(s)? {
         return Ok(Tm::Lit(num_lit(k)));
     }
+    // "…": a String — its UTF-8 bytes as Init's List cells
     if let Some(bs) = s.as_str() {
-        return read_estr(cx, bs.as_bytes());
+        return Ok(Tm::Lit(Lit::Str(bs.as_bytes().to_vec())));
     }
     if let Some(x) = s.as_symbol() {
         return read_esym(cx, r, x);
@@ -657,22 +658,12 @@ fn read_all(cx: &Cx, r: &Rd, args: &[&Value]) -> R<Vec<Tm>> {
     args.iter().map(|a| read_et(cx, r, a)).collect()
 }
 
-/// "…": a String — its UTF-8 bytes as Init's List cells; in the toolchain's
-/// own sources the chain of the List in scope.
-fn read_estr(cx: &Cx, bs: &[u8]) -> R<Tm> {
-    if cx.sc.toolchain() {
-        let (nl, cs) = list_in_scope(cx)?;
-        return Ok(Tm::Lit(Lit::Str(nl, cs, bs.to_vec())));
-    }
-    Ok(Tm::Lit(Lit::Str("List.nil".into(), "List.cons".into(), bs.to_vec())))
-}
-
 /// The two-constructor type `List` resolves to: its nil, its cons.
 fn list_in_scope(cx: &Cx) -> R<(Name, Name)> {
     let id = type_ident(cx, "List")?;
     match cx.t.einfo(&id) {
         Some(EInfo::Ind { ctors, .. }) if ctors.len() == 2 => Ok((ctors[0].clone(), ctors[1].clone())),
-        _ => unread("no_list", "(list …) and \"…\" need a two-constructor List in scope"),
+        _ => unread("no_list", "(list …) needs a two-constructor List in scope"),
     }
 }
 

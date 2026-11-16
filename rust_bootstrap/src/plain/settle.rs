@@ -111,16 +111,7 @@ pub fn c_type(t: &Tables, tys: &[Option<ETy>], tm: &Tm) -> Option<ETy> {
         Tm::BVar(i) => tys.len().checked_sub(1 + *i).and_then(|k| tys[k].clone()),
         Tm::Lit(Lit::Nat(_)) => Some(con("Nat")),
         Tm::Lit(Lit::Int(_)) => Some(con("Int")),
-        Tm::Lit(Lit::Str(nl, _, _)) => {
-            if nl == "List.nil" {
-                Some(con("String"))
-            } else {
-                match t.einfo(nl) {
-                    Some(EInfo::Ctor { ind, .. }) => Some(ETy::Con(ind.clone(), vec![con("Int")])),
-                    _ => None,
-                }
-            }
-        }
+        Tm::Lit(Lit::Str(_)) => Some(con("String")),
         Tm::Lit(Lit::Sym(_)) => Some(con("Symbol")),
         Tm::Ctor(c, args) => {
             let Some(EInfo::Ctor { ind, .. }) = t.einfo(c) else { return None };

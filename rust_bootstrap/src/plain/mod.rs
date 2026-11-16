@@ -69,7 +69,7 @@ pub enum Lit {
     Nat(crate::ast::IntLit),
     Int(crate::ast::IntLit),
     /// "…": nil, cons, the UTF-8 bytes
-    Str(Name, Name, Vec<u8>),
+    Str(Vec<u8>),
     Sym(String),
 }
 
@@ -227,12 +227,6 @@ impl Scope {
             return Some(1 + self.opened.len());
         }
         if id == n { Some(2 + self.opened.len()) } else { None }
-    }
-
-    /// The toolchain's own sources: a string literal there is the List in
-    /// scope's chain of cells, not Init's String.
-    pub fn toolchain(&self) -> bool {
-        first_component(&self.ident) == "kernel"
     }
 
     fn sees(&self, module: &str) -> bool {

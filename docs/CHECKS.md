@@ -115,7 +115,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 |---|---|
 | The Rust evaluator executes programs and defines no rule of its own: what its reader reads of a closure is what the V3 loader reads of the same files. | `parity_test.sh` (every toolchain root); `plain_test.sh` (ordinary closures: calc's, two with records, one with a directory module, the formatter's sources with their two, the two readings' fixture — not every ordinary root, `OPEN.md` §4) |
 | A compiled engine is confirmed against the interpreter byte for byte. | `native_tie_test.sh`, `suite_tie.sh`, `route2_test.sh`, `t0_gate_test.sh` |
-| The toolchain's sources are written in the language every file uses. | every toolchain root loads as an ordinary closure (`v3/build.sh`, `parity_test.sh`); pin `rename_refused_kernel` (string literals under `kernel` remain byte lists, the one rule by path) |
+| The toolchain's sources are written in the language every file uses. | every toolchain root loads as an ordinary closure (`v3/build.sh`, `parity_test.sh`); pin `rename_refused_kernel`; no rule reads a file by its module path |
 | Every entry from outside is checked or preconditioned; a value built as data is not thereby well-typed. | `entry_test.shard`, `handle_test.shard`, `wire_test.sh`; pins `entry`, `entry_shape`, `handle_door` |
 | Bulk buffers cross a boundary through explicit views. | no test found; no packed buffer exists |
 | Limits cover decoding, sizes, depth and primitives; exhaustion changes no state and is never cached. | `hostile_test.shard`; `prims_test.shard`; `index_test.sh` |

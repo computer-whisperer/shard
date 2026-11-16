@@ -28,9 +28,8 @@ entries are explained under "Measured" at the end.
   (`sp_canon`); not by transparency — `rw` and `simp_only` match by structure and need one spelling.
 - An operator's type is the expected type, else its first non-numeral operand's; not the first
   operand's alone — `(- 1 2)` at `Int` would be a `Nat` subtraction, coerced.
-- ★ `"…"` is a `String` everywhere outside `kernel.*` modules; not list sugar chosen by the expected
-  type — one meaning per literal. (Under `kernel.*` it is still a byte list, by the module's
-  path; that rule is to go: `OPEN.md` §2.)
+- ★ `"…"` is a `String` in every file; not list sugar chosen by the expected type — one
+  meaning per literal — and not a byte list in the toolchain's own files by their module path.
 - ★ Numeral rows of a `match` are an `if` chain on `=`, the last row `_` or a name; not `Nat.succ`
   patterns through the matcher — `Nat` and `Int` run as integers and have no constructor cells.
 - ★ Notation, macros, `syntax`, `elab`, attributes, `set_option` are refused (`lean_form`); not an
@@ -196,11 +195,21 @@ entries are explained under "Measured" at the end.
   (`(use Init.List cons nil)`); not the namespaces opened whole — its own `append`, `take`
   and `drop` would then meet `List`'s and be refused — and not its old capitalised names
   kept (`LAW.md` rule 17).
-- A string literal under `kernel…` is still a byte list, by the module's path; not a `String`
-  there yet: the toolchain holds text as `(List Int)` in some 1,500 functions nothing
-  type-checks, and 31 that would be definitions use a literal as bytes. The owner: "We need
-  a path to dropping this, but we can defer the cutover if that makes more sense for
-  ordering." The path is `OPEN.md` §2.
+- A string literal is a `String` in the toolchain's sources as in every file, and no rule
+  reads a file by its module path; not a byte list under `kernel…`. The owner: "We need a
+  path to dropping this, but we can defer the cutover if that makes more sense for
+  ordering.", and then "Let's continue with the string-literal cutover."
+- The toolchain's text stays a list of bytes, `(List Int)`, and a function the checker reads
+  converts the literals it uses as bytes — `(utf8 "…")`, a definition in `kernel/util.shard`
+  that copies the list a `String` is represented by; 131 functions, eleven of them in K's
+  directory. Not a conversion at every literal: the other 4,300 stand in functions nothing
+  type-checks (`OPEN.md` §4), each use of a converted literal copies it, and a conversion
+  there would be checked by nothing. Not the toolchain's text made `String`: every function
+  over text would change.
+- The table of Init's facts names the structure of every projection function it lists
+  (`facts.shard`); not the projection's line alone — the Rust reader could not read
+  `Array.toList` or `ByteArray.data` without the structure's line, the conversion's own body
+  among them.
 - A constructor prints under its type's name in the text the two readers are compared by
   (`Prod.mk`, `Tok.TPlus`); not by its last component — Init has several named `mk`, and
   the comparison is evidence only where the text tells declarations apart.
@@ -372,13 +381,16 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (9,159 declarations) loads, lowers and generates in about
-  360 s on the bootstrap, `cc` 81 s, binary 5.6 MB; all 29 roots 480–550 s at 16 jobs. It was
+- Back end: the loader's own closure (9,161 declarations) loads, lowers and generates in about
+  340 s on the bootstrap, `cc` 79 s, binary 5.6 MB; all 29 roots 460–550 s at 16 jobs. It was
   34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
-  some 250 of its own functions as definitions, and Init's fixed kit, on every load of a
-  toolchain root — 12 s for its own closure natively, where it took 4 s.
+  some 290 of its own functions as definitions, and Init's fixed kit, on every load of a
+  toolchain root — 11 s for its own closure natively, where it took 4 s.
 - Init's fixed kit, which every load reads once in a process: 2 s natively, 26 s on the
   bootstrap, for a file of one function.
+- The toolchain's string literals: 5,175, of which 841 stand in the 131 functions the checker
+  reads and are converted (`utf8`). Over the 29 roots 372 functions are definitions, 305
+  before those were read; a load of a one-function file takes the same 2 s and 26 s.
 - The two readings (`load --both`) over what the examples, the library, the formatter and the
   model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
   programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
@@ -395,15 +407,15 @@ measurements; measure again before building on one.
   derivations write and 8 that call one. 51 of the 59 roots read whole, the model's 174
   declarations and the formatter's binary, 173, among them. calc's closure, 59 declarations:
   read and run over five inputs in 4 ms, where the loader's load of it takes 39 s on the
-  bootstrap. Over the 29 toolchain roots, 146,247 declarations, its text is the loader's; it
-  reads the loader's own closure, 9,159 declarations by the table of Init's facts, in 0.29 s.
-- Suite: 52 entrypoints, eight at a time: 1,108 s on the bootstrap (8,216 s of entrypoint
-  time), 234 s on the binaries (1,411 s); it was 740–870 s and 135–150 s while the toolchain
+  bootstrap. Over the 29 toolchain roots, 146,322 declarations, its text is the loader's; it
+  reads the loader's own closure, 9,161 declarations by the table of Init's facts, in 0.29 s.
+- Suite: 52 entrypoints, eight at a time: 1,061 s on the bootstrap (7,725 s of entrypoint
+  time), 212 s on the binaries (1,265 s); it was 740–870 s and 135–150 s while the toolchain
   stood on a prelude of its own, and 1,014 s and 204 s while a file that cited nothing of
-  Init loaded without it. The parity test loads its 29 closures eight at a time, 723 s on
-  the bootstrap and 97 s natively: one after another they took 64 minutes on the bootstrap.
+  Init loaded without it. The parity test loads its 29 closures eight at a time, 655 s on
+  the bootstrap and 86 s natively: one after another they took 64 minutes on the bootstrap.
   Loader pins on one shared Init base, each case loaded twice: 21 s native, about 190 s on
-  the bootstrap. The native tie: 1,379 s, 858 s before every load read Init.
+  the bootstrap. The native tie: 1,336 s, 858 s before every load read Init.
 - Formatter binary: 591 sources in 3.8 s, a 26 MB file in 9.2 s. Reformat at 100 columns: 46,669
   to 65,525 lines over the gated tree, +40% (80 columns and one argument a line: +78%).
 - The engine closes 54 of calc's 100 claims unaided.

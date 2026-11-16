@@ -109,7 +109,7 @@ The detail, file by file, is in `KERNEL.md`.
   battery of hostile declarations that must be refused.
 - The engine that runs K: the Rust bootstrap (about 5,400 lines and the Rust compiler; 3,600
   of them are the reader, which reads K's sources as it reads any program's), and the table of
-  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 149 lines, printed by
+  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 155 lines, printed by
   the loader from K and compared with K's by a test). When K runs
   as a native binary, also the unproven compiler, its runtime and the C compiler; the binaries are
   compared with the bootstrap, not proven equal to it.

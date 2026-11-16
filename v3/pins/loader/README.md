@@ -86,7 +86,6 @@ the reason its name spells, less a leading `by_`.
 | cases | what they pin |
 |---|---|
 | `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_symbol`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, a symbol, `(list …)`, nested patterns, a string literal |
-| `kernel_literal` | under the module path `kernel` a string literal is the list of its bytes |
 | refused: `ev_unknown_head` (`unknown_head`), `ev_unsaturated`, `ev_fn_value` (`type_mismatch`), `ev_ambiguous` (`ambiguous_name`), `ev_nonexhaustive` (`match_not_exhaustive`), `ev_pattern_type` (`pattern_constructor`), `ev_no_l_meaning` (`unknown_constant`) | the refusals of a body |
 | refused: `match_dead_row`, `match_dead_row_def`, `ev_dead_row` (`unreachable_arm`) | a row that matches every value — `_`, or a name no constructor bears, such as a misspelt one — with rows after it: in a `fn`, in a `def`, in a function that is a program only; a capitalised variable in a last row stays a variable |
 | refused: `bool_bare` (`unknown_constant`), `shadowed_head` (`function_expected`), `lean_mutual` (`lean_form`), `reserved_instance` (`reserved_form`) | refusals that say what to write: a bare `true`, a bare constructor that is Init's class of the same name, `mutual`, `instance` |

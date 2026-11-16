@@ -24,8 +24,8 @@ ROOT=$SCRATCH/p; SRC=$ROOT/kernel/main.shard; OTHER=$ROOT/kernel/other.shard; OU
 mkdir -p "$ROOT/kernel" "$SCRATCH/stub"
 cat > "$SRC" <<'EOF'
 (type World (World Int))
-(extern write_line ((bytes (List Int)) (w World)) World)
-(fn main ((w World)) World (write_line "version one" w))
+(extern write_line ((bytes ByteArray) (w World)) World)
+(fn main ((w World)) World (write_line (String.toByteArray "version one") w))
 EOF
 echo ";; a file under the root that the program does not import" > "$OTHER"
 cat > "$SCRATCH/stub/cc" <<'EOF'
