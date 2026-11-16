@@ -3,7 +3,7 @@
 #
 #   bin/ci_docs_only.sh               exit 0: the push changed files and every one of them ends
 #                                     in `.md` — the gate jobs step aside (.gitlab-ci.yml:
-#                                     v3, native, suite_tie); exit 1: anything else, and
+#                                     v3, replay, native, suite_tie); exit 1: anything else, and
 #                                     every doubt
 #   bin/ci_docs_only.sh --self-test   the cases at the foot of this file on a scratch repository
 #                                     (the host job runs it first, on the runner's own git);

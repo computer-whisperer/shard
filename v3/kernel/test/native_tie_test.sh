@@ -30,6 +30,9 @@
 # verifying an index over the same lines; (7) one harness, loader_pins_test, over every
 # loader pin; (8) the tree's authored files byte-identical before and after. Exit = the
 # checks that failed. Run after `v3/build.sh --all`; v3/test.sh runs it under V3_NATIVE=1.
+#
+# The workloads of (2) to (7) are independent of each other and run V3_TIE_JOBS at a time
+# (default 8), each under both engines in turn; the log's order is fixed (below, THE WORKLOADS).
 cd "$(dirname "$0")/../../.."
 # the bootstrap side, never the shim: v3/test.sh exports EVAL=v3/bin/eval under V3_ENGINE=native
 BOOT=${RUST_EVAL:-./rust_bootstrap/target/release/eval}
@@ -86,6 +89,28 @@ tie() {
   compare "$l" "$OUT/$l/a" "$OUT/$l/b" && echo "   tie $l: exit $(cat "$OUT/$l/b/rc"), $(wc -l < "$OUT/$l/b/out") lines (bootstrap $ta s, native $tb s)" || bad "$l differs"
 }
 
+# ---- THE WORKLOADS, V3_TIE_JOBS at a time (default 8). Each is a unit: a function run in a
+# subshell of its own, its lines and its counts kept under $OUT/units. A unit shares nothing
+# another writes — its result directories are named by its label, its scratch paths are its
+# own — and inside a unit the two engines still run one after the other on the same paths.
+# The lines are printed below in one fixed order, whatever the job count and whichever unit
+# ended first; a unit that left no count is a failed check.
+JOBS=${V3_TIE_JOBS:-8}
+mkdir -p "$OUT/units"
+unit() {   # KEY CMD…: CMD started as a unit, once fewer than JOBS are running
+  local k=$1; shift
+  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; done
+  ( checks=0; fail=0; "$@" > "$OUT/units/$k.out" 2>&1; echo "$checks $fail" > "$OUT/units/$k.cnt" ) &
+}
+collect() {   # KEY…: the units' lines in this order, their counts added to the gate's
+  local k c f
+  for k in "$@"; do
+    cat "$OUT/units/$k.out" 2>/dev/null
+    if [ -s "$OUT/units/$k.cnt" ] && read -r c f < "$OUT/units/$k.cnt"; then checks=$((checks+c)); fail=$((fail+f))
+    else checks=$((checks+1)); bad "the workload $k did not end"; fi
+  done
+}
+
 # ---- (0) the gate's own test (t0_gate_test.sh's shape): the compare must detect an altered
 # verdict and a binary that is not there
 mkdir -p "$OUT/self/a" "$OUT/self/b"
@@ -98,7 +123,10 @@ checks=$((checks+1)); compare self-exit "$OUT/self/a" "$OUT/self/b" > /dev/null 
 mkdir -p "$OUT/self/a/artifacts" "$OUT/self/b/artifacts"; echo x > "$OUT/self/a/artifacts/f"; echo y > "$OUT/self/b/artifacts/f"; echo 0 > "$OUT/self/b/rc"
 checks=$((checks+1)); compare self-artifact "$OUT/self/a" "$OUT/self/b" > /dev/null && bad "the gate accepts a differing artifact"
 checks=$((checks+1)); f0=$fail; ( fail=0; tie self-missing no_such_binary_for_the_tie > /dev/null 2>&1; exit $fail ) && bad "a missing binary passes the tie"
-echo "native_tie_test: the gate detects an altered verdict, a differing exit, a differing artifact and a missing binary"
+# the units' own: a check failed inside a unit reaches the gate's count, and a unit that ends
+# without leaving its count is a failed check
+checks=$((checks+1)); ( fail=0; unit self_bad bad "a failed check"; unit self_dead exit 3; wait; collect self_bad self_dead > /dev/null; [ "$fail" = 2 ] ) || bad "a workload that failed or did not end passes the gate"
+echo "native_tie_test: the gate detects an altered verdict, a differing exit, a differing artifact, a missing binary, a workload that failed and one that did not end"
 # the suite comparison's own test: two kept runs identical up to a count of seconds pass; a verdict
 # altered, an exit altered and an entrypoint missing on one side each fail
 mkdir -p "$OUT/sa" "$OUT/sb"
@@ -134,13 +162,15 @@ run_into "$OUT/shim/a" "$BOOT" direct v3/kernel/test/json_test.shard; run_into "
 checks=$((checks+1)); compare "shim json_test" "$OUT/shim/a" "$OUT/shim/b" || bad "the shim's run of json_test differs from the bootstrap's"
 echo "native_tie_test: the shim runs a current binary and refuses a missing binary and a stale stamp"
 
-# ---- (2) the discriminating cases: each built fresh by v3/build.sh, run under both engines
-for d in v3/pins/emit/*/; do
+# ---- the workloads (THE WORKLOADS, above the gate's own test)
+# (2) one discriminating case: built fresh by v3/build.sh, run under both engines
+pin_case() {   # DIR
+  local d=$1 c extra f law msg
   c=$(basename "$d"); extra=""; [ -d "$d/kernel/lib" ] && extra="$d/kernel/lib"
   f="$d/kernel/main.shard"; law=0; [ -e "$f" ] || { f="$d/main.shard"; law=1; }   # an ordinary case lives at the root, a toolchain case under kernel/
   checks=$((checks+1))
   if v3/build.sh "$f" "$OUT/bin_$c" --root "$d" $extra > "$OUT/build_$c.txt" 2>&1; then
-    case $c in refused_*) bad "$c: built, but the case expects the emit refused"; continue;; esac
+    case $c in refused_*) bad "$c: built, but the case expects the emit refused"; return;; esac
     # an ordinary case's reference is the V3 driver's run (the bootstrap reads what a file cites
     # of Init by a table of facts the loader prints: the loader stands in that reference either
     # way); a toolchain case's is the bootstrap's own, read by the tree's table of the
@@ -154,58 +184,77 @@ for d in v3/pins/emit/*/; do
       *) bad "$c: the build failed"; grep -E 'EMIT|FAIL|REFUSE' "$OUT/build_$c.txt" | head -2 | cut -c1-200;;
     esac
   fi
-done
-echo "native_tie_test: the discriminating cases of v3/pins/emit tied, the refused ones refused"
-
-# ---- (2b) the binary of a program over Init's types: calc's main,
-# tied to the V3 driver's run over the differential's inputs — stdout, stderr and the exit status
+}
+# (2b) the binary of a program over Init's types: calc's main, tied to the V3 driver's run
+# over the differential's inputs — stdout, stderr and the exit status
 lines=(); while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < v3/kernel/test/fixtures/calc_inputs.txt
-checks=$((checks+1))
-if v3/build.sh v3/examples/calc/calc_main.shard "$OUT/bin_calc_main" --root v3 > "$OUT/build_calc_main.txt" 2>&1; then
-  ta=$(date +%s); run_into "$OUT/calc/a" "$BOOT" direct v3/kernel/load.shard --root v3 $INIT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]}"; ta=$(( $(date +%s) - ta ))
-  tb=$(date +%s); run_into "$OUT/calc/b" "$OUT/bin_calc_main" "${lines[@]}"; tb=$(( $(date +%s) - tb ))
-  if compare "calc binary" "$OUT/calc/a" "$OUT/calc/b"; then echo "   tie calc binary: exit $(cat "$OUT/calc/a/rc"), $(wc -l < "$OUT/calc/a/out") lines (bootstrap $ta s, native $tb s)"; else bad "calc's binary differs from the driver's run"; fi
-else bad "calc's main did not build"; grep -E 'EMIT|FAIL' "$OUT/build_calc_main.txt" | head -2 | cut -c1-200; fi
-echo "native_tie_test: the binary of a program over Init's types tied — calc's main over ${#lines[@]} inputs"
+calc_binary() {
+  local ta tb
+  checks=$((checks+1))
+  if v3/build.sh v3/examples/calc/calc_main.shard "$OUT/bin_calc_main" --root v3 > "$OUT/build_calc_main.txt" 2>&1; then
+    ta=$(date +%s); run_into "$OUT/calc/a" "$BOOT" direct v3/kernel/load.shard --root v3 $INIT --run examples.calc.calc_main.main v3/examples/calc/calc_main.shard -- "${lines[@]}"; ta=$(( $(date +%s) - ta ))
+    tb=$(date +%s); run_into "$OUT/calc/b" "$OUT/bin_calc_main" "${lines[@]}"; tb=$(( $(date +%s) - tb ))
+    if compare "calc binary" "$OUT/calc/a" "$OUT/calc/b"; then echo "   tie calc binary: exit $(cat "$OUT/calc/a/rc"), $(wc -l < "$OUT/calc/a/out") lines (bootstrap $ta s, native $tb s)"; else bad "calc's binary differs from the driver's run"; fi
+  else bad "calc's main did not build"; grep -E 'EMIT|FAIL' "$OUT/build_calc_main.txt" | head -2 | cut -c1-200; fi
+}
+# (6) initindex: the index built, the built index verified, the usage line — one unit, the
+# second run reads what the first wrote
+initindex_ties() {
+  ARTIFACT=$SCRATCH/fix.index VERDICT='^index: ' tie "initindex build" initindex "$SCRATCH/fix.ndjson" "$SCRATCH/fix.index"
+  cp "$OUT/initindex build/a/artifacts/fix.index" "$SCRATCH/fix.index"
+  VERDICT='^index: ' tie "initindex verify" initindex --verify "$SCRATCH/fix.ndjson" "$SCRATCH/fix.index"
+  tie "initindex usage" initindex
+}
 
-# ---- (2c) the back end's own text: one closure emitted by the loader
-# under both engines — main.c, its parts, the map and the sources byte for byte, the line too
+# what the units read, made before any starts: the export's first 300 and 3,000 lines, the
+# two examples copied without their sidecars, the emit's directory
 mkdir -p "$SCRATCH/emit"
-ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' tie "load emit" load --root v3 $INIT --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
-echo "native_tie_test: the back end's C text tied — the loader's emit of one closure under both engines"
-
-# ---- (3) the loader
-for c in basic refused read_error; do tie "load pin $c" load --root v3/pins/loader/$c $INIT v3/pins/loader/$c/main.shard; done
-tie "load view" load --root v3/pins/loader/view_basic $INIT v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib
-tie "load dump" load --root v3 $INIT --dump v3/examples/auto/auto.shard
-tie "load calc_spec" load --root v3 $INIT v3/examples/calc/calc_spec.shard
 head -n 300 "$DIR/init.ndjson" > "$SCRATCH/fix300.ndjson"
-VERDICT='^T0: ' tie "load run t0" load --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
-VERDICT='^RUN: out of fuel' tie "load run fuel" load --root v3 $INIT --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
-echo "native_tie_test: the loader tied over four pins, a dump, an example, a run with and without fuel"
-
-# ---- (4) prove: the examples copied without their sidecars, the sidecars regenerated
+head -n 3000 "$DIR/init.ndjson" > "$SCRATCH/fix.ndjson"
 for ex in auto tactic; do
   mkdir -p "$SCRATCH/$ex"; for f in v3/examples/$ex/*.shard; do case $f in *.auto.shard) ;; *) cp "$f" "$SCRATCH/$ex/";; esac; done
 done
-ARTIFACT=$SCRATCH/auto/auto.auto.shard VERDICT='^PROVE: ' tie "prove auto" prove --root v3 $INIT "$SCRATCH/auto/auto.shard"
-ARTIFACT=$SCRATCH/tactic/use_split.auto.shard VERDICT='^PROVE: ' tie "prove use_split" prove --root v3 $INIT "$SCRATCH/tactic/use_split.shard"
-VERDICT='^PROVE: \|^LOAD: ' tie "prove measure" prove --root v3 $INIT --measure v3/examples/calc/calc_ndigit.shard
+
+# started longest first — (7) the harness over every loader pin, the two runs of t0 under ev,
+# calc's binary — so that the last to end is not one that waited for a place
+VERDICT='^loader_pins_test: failures = ' unit harness tie "harness loader_pins_test" test/loader_pins_test
+VERDICT='^T0: ' unit load_run_t0 tie "load run t0" load --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+VERDICT='^RUN: out of fuel' unit load_run_fuel tie "load run fuel" load --root v3 $INIT --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+unit calc calc_binary
+VERDICT='^PROVE: \|^LOAD: ' unit prove_measure tie "prove measure" prove --root v3 $INIT --measure v3/examples/calc/calc_ndigit.shard
+unit load_calc_spec tie "load calc_spec" load --root v3 $INIT v3/examples/calc/calc_spec.shard
+# (2c) the back end's own text: one closure emitted by the loader under both engines —
+# main.c, its parts, the map and the sources byte for byte, the line too
+ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' unit load_emit tie "load emit" load --root v3 $INIT --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
+# (3) the loader
+for c in basic refused read_error; do unit "load_pin_$c" tie "load pin $c" load --root v3/pins/loader/$c $INIT v3/pins/loader/$c/main.shard; done
+unit load_view tie "load view" load --root v3/pins/loader/view_basic $INIT v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib
+unit load_dump tie "load dump" load --root v3 $INIT --dump v3/examples/auto/auto.shard
+# (4) prove: the sidecars of the two copied examples regenerated
+ARTIFACT=$SCRATCH/auto/auto.auto.shard VERDICT='^PROVE: ' unit prove_auto tie "prove auto" prove --root v3 $INIT "$SCRATCH/auto/auto.shard"
+ARTIFACT=$SCRATCH/tactic/use_split.auto.shard VERDICT='^PROVE: ' unit prove_use_split tie "prove use_split" prove --root v3 $INIT "$SCRATCH/tactic/use_split.shard"
+# (5) t0 over the export's first 3,000 lines; (6) initindex over the same
+VERDICT='^T0: ' unit t0_fixture tie "t0 fixture" t0 -v -a -p "$SCRATCH/fix.ndjson"
+unit t0_usage tie "t0 usage" t0
+VERDICT='^T0: ' unit t0_wrong_pin tie "t0 wrong pin" t0 -a v3/kernel/test/fixtures/init_wrong_pin.ndjson
+unit initindex initindex_ties
+pins=()
+for d in v3/pins/emit/*/; do pins+=("pin_$(basename "$d")"); unit "pin_$(basename "$d")" pin_case "$d"; done
+wait
+
+collect "${pins[@]}"
+echo "native_tie_test: the discriminating cases of v3/pins/emit tied, the refused ones refused"
+collect calc
+echo "native_tie_test: the binary of a program over Init's types tied — calc's main over ${#lines[@]} inputs"
+collect load_emit
+echo "native_tie_test: the back end's C text tied — the loader's emit of one closure under both engines"
+collect load_pin_basic load_pin_refused load_pin_read_error load_view load_dump load_calc_spec load_run_t0 load_run_fuel
+echo "native_tie_test: the loader tied over four pins, a dump, an example, a run with and without fuel"
+collect prove_auto prove_use_split prove_measure
 echo "native_tie_test: prove tied over two sidecars regenerated and a measure run"
-
-# ---- (5) t0 over the export's first 3,000 lines; (6) initindex over the same
-head -n 3000 "$DIR/init.ndjson" > "$SCRATCH/fix.ndjson"
-VERDICT='^T0: ' tie "t0 fixture" t0 -v -a -p "$SCRATCH/fix.ndjson"
-tie "t0 usage" t0
-VERDICT='^T0: ' tie "t0 wrong pin" t0 -a v3/kernel/test/fixtures/init_wrong_pin.ndjson
-ARTIFACT=$SCRATCH/fix.index VERDICT='^index: ' tie "initindex build" initindex "$SCRATCH/fix.ndjson" "$SCRATCH/fix.index"
-cp "$OUT/initindex build/a/artifacts/fix.index" "$SCRATCH/fix.index"
-VERDICT='^index: ' tie "initindex verify" initindex --verify "$SCRATCH/fix.ndjson" "$SCRATCH/fix.index"
-tie "initindex usage" initindex
+collect t0_fixture t0_usage t0_wrong_pin initindex
 echo "native_tie_test: t0 and initindex tied over the export's first 3,000 lines and their usage lines"
-
-# ---- (7) one harness: loader_pins_test over every loader pin
-VERDICT='^loader_pins_test: failures = ' tie "harness loader_pins_test" test/loader_pins_test
+collect harness
 echo "native_tie_test: the loader pins' harness tied"
 
 # ---- (8) the authored tree untouched

@@ -261,7 +261,7 @@ export's chunks), `prove.shard` (the producers), `initindex.shard` (the Init ind
 | `v3/kernel/test/init_index.sh` | keeps `v3/.cache/init.index` current and prints `EXPORT INDEX`; `--current` never builds | `v3/test.sh`, `v3/build.sh`, most shell tests |
 | `v3/kernel/test/suite_tie.sh` | compares two kept suite runs | CI (`suite_tie`), `native_tie_test.sh` (its self-test) |
 | `bin/ci_docs_only.sh` | exit 0 when a push changed only `.md` files; `--self-test` | CI (every gate job's first line; `host` runs the self-test) |
-| `.gitlab-ci.yml` | the four jobs `host`, `v3`, `native`, `suite_tie` | GitLab |
+| `.gitlab-ci.yml` | the five jobs `host`, `v3`, `replay`, `native`, `suite_tie` | GitLab |
 
 ## K
 
@@ -693,7 +693,7 @@ loader does not detect its engine, and its records do not name one.
 | `plain_test.sh` | the same over ordinary closures: byte for byte where the reader reads the whole closure, line for line where it does not; calc's `main` run on what it read against the loader's run |
 | `route2_test.sh` | K run directly by the engine against K loaded by the V3 loader and run under `ev` (`k_clients_test.sh` runs K's tests the second way) |
 | `lower_test.sh` | a program under `ev` as loaded and in its restricted form |
-| `native_tie_test.sh` | fixed workloads under the bootstrap and the binaries: stdout, stderr, exit status and every file written, byte for byte, nothing normalized |
+| `native_tie_test.sh` | fixed workloads under the bootstrap and the binaries: stdout, stderr, exit status and every file written, byte for byte, nothing normalized. The workloads are independent and run `V3_TIE_JOBS` at a time (default 8), each under both engines in turn; the log's order is fixed |
 | `suite_tie.sh A B` | two whole runs of the suite, one per engine, entrypoint by entrypoint; only counts of seconds, sizes in kB and scratch names are normalized |
 | `v3/t0_full.sh` | K's verbose output on the export's first 100,000 lines under both engines, before the full replay |
 
@@ -830,17 +830,23 @@ closure equal to Lean's own (`v3/t0_axioms_cmp.sh`); and all 20 accelerator cand
 | job | stage | runs |
 |---|---|---|
 | `host` | host | `bin/ci_docs_only.sh --self-test`; the Rust evaluator built; `cargo test` |
-| `v3` | gate | the export; `v3/bin/initindex` built, then the Init index; the suite on the bootstrap (outputs kept); `v3/build.sh`; `v3/t0_full.sh` |
-| `native` | gate | the export; `v3/build.sh --all`; the Init index; the native tie; the suite on the binaries (outputs kept) |
+| `v3` | gate | the export; the Init index; the suite on the bootstrap, 24 entrypoints at a time (outputs kept) |
+| `replay` | gate | the export; the Init index; `v3/build.sh`; `v3/t0_full.sh` |
+| `native` | gate | the export; the Init index; `v3/build.sh --all`, 28 roots at a time; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
 | `suite_tie` | tie | `suite_tie.sh` over the two kept runs |
 
-*Documents-only pushes.* When every file a push changed ends in `.md`, `v3`, `native` and
-`suite_tie` print `DOCUMENTATION-ONLY PUSH` and end green in seconds (`bin/ci_docs_only.sh`). Such
-a green pipeline says nothing about the tree: cite the pipeline of the push that carried the code.
+The three gate jobs run side by side on one machine, each held to 32 of its 64 cores by the
+runner; the work inside a job is processes of one thread each, so a job's time is its longest
+single process — in `v3`, one load of the imp model under the bootstrap.
+
+*Documents-only pushes.* When every file a push changed ends in `.md`, `v3`, `replay`, `native`
+and `suite_tie` print `DOCUMENTATION-ONLY PUSH` and end green in seconds
+(`bin/ci_docs_only.sh`). Such a green pipeline says nothing about the tree: cite the pipeline of
+the push that carried the code.
 The whole push is examined, so code pushed with its documents is gated, and any doubt (a new
 branch, a manual run) runs the gates. `glab ci run -b main` forces a full run.
 
 *Durations the scripts record:* the loader's own closure (8,933 declarations) emits in 34 s on
 the bootstrap; the export takes 77 s and its axiom oracle 15 s; the full replay 745 s at 30 GB;
 the index about 1,950 s on the bootstrap on the CI runner, 14 times the binary's. CI's timeouts
-are 30 min (`host`), 3 h (`v3`, `native`) and 20 min (`suite_tie`).
+are 30 min (`host`), 3 h (`v3`, `replay`, `native`) and 20 min (`suite_tie`).

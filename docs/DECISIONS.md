@@ -352,6 +352,11 @@ entries are explained under "Measured" at the end.
   tests compare regenerated text byte for byte.
 - The loader pins run in one process on one Init base, re-rooted per case; not Init loaded again
   for each case — 33 to 42 s against 783 s.
+- What a gate runs that is independent runs side by side: the byte-tie's workloads
+  (`V3_TIE_JOBS`), 24 of the suite's entrypoints at a time on CI, the Init replay in a job of
+  its own; not one after another — the tie was 59 of a pipeline's 88 minutes with one core of
+  64 busy. What is compared is unchanged, and a log's order does not depend on the count. The
+  owner: "go ahead with the two CI changes".
 
 ## Layout
 
@@ -470,3 +475,13 @@ measurements; measure again before building on one.
   searched over lists of bytes), the environment's probes 11%, the primitive table built again
   at each lookup 6%. Nothing was run with the ordinary `Symbol`, and the Rust reader was not
   changed.
+- A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
+  logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
+  (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
+  byte-tie 59, its workloads one after another, the suite on the binaries 7; the `v3` job 70 —
+  the suite on the bootstrap 43 at 8 entrypoints at a time (18,816 s summed; the longest, one
+  load of the imp model, 31), the Init replay 21. The runner takes 2 to 3 times the dev box's
+  time for each step. One start of the loader on a file of 14 lines is 30 s on the bootstrap
+  (64 s on the runner) and 2 to 4 s native, all of it Init's part: the declarations the file
+  needs fetched from the export's text and checked. On the dev box the byte-tie takes 200 s
+  with 8 workloads at a time, where it took 1,350 s.
