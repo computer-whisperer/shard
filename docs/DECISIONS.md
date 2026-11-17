@@ -261,10 +261,14 @@ entries are explained under "Measured" at the end.
 - ★ `Symbol` is a type of its own, stored by the engines as an interned id; not `String` — a
   `String` runs as the list of its bytes and a symbol as an id compared in one step, and one
   type has one form at run time; not a `Name` literal in place of symbols — K's `Name` is
-  built of them. It has no type in the logic today. The direction recorded for giving it one
-  is a type of its own over text that the engines go on storing interned (`LAW.md` rule 26,
-  ruling 12); on a scratch loader that reads it so, 6,682 of the toolchain's 9,570 functions
-  are definitions with no source changed (Measured).
+  built of them. It has no type in the logic today. The direction for giving it one is an
+  ordinary declaration over its bytes that every engine stores as declared (`LAW.md` rule
+  26); not the interned id kept beside it as an engine's shortcut — rule 26 allows one, but
+  it saves nothing on a native load, 5% of the Init replay and 1 to 10% of a load on the
+  bootstrap (Measured), and it would need a test that the two forms agree. Assent: "Agreed
+  with removing the engine's form of a symbol." On a scratch loader that reads the ordinary
+  type, 6,682 of the toolchain's 9,570 functions are definitions with no source changed
+  (Measured).
 - A function the checker cannot define is a program with its reason, and one whose types do
   not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
   checker cannot accept — a sketch would need its proofs before it ran; not a program for a
@@ -476,6 +480,16 @@ measurements; measure again before building on one.
   searched over lists of bytes), the environment's probes 11%, the primitive table built again
   at each lookup 6%. Nothing was run with the ordinary `Symbol`, and the Rust reader was not
   changed.
+- A symbol as the engines' interned id against a symbol as an ordinary cell holding its bytes
+  (2026-11-16, scratch trees; same sources, same inputs, the outputs identical in every pair).
+  Native, a loader that has the checker read every toolchain function, over 24 roots and K's
+  directory: 136.8 s and 6.29 GB interned, 134.7 s and 5.51 GB ordinary. Native, K's replay
+  of the whole Init export: 484 s of CPU and 26.6 GB interned, 510 s and 27.7 GB ordinary. On
+  the bootstrap, the toolchain's sources rewritten to an ordinary `Symbol` and the Rust reader
+  made to forget the built-in: `loader_test` 449 s to 468 s, `loader_pins_test` 210 to 230,
+  five more tests that link the loader 1 to 6% slower, the loader over the std root 116 to
+  123; `ev_test`, small and all symbols, 4 s to 8 s. Of 705 million dispatches of one loader
+  run, 3 million are the three symbol primitives.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
