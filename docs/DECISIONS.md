@@ -268,7 +268,10 @@ entries are explained under "Measured" at the end.
   bootstrap (Measured), and it would need a test that the two forms agree. Assent: "Agreed
   with removing the engine's form of a symbol." On a scratch loader that reads the ordinary
   type, 6,682 of the toolchain's 9,570 functions are definitions with no source changed
-  (Measured).
+  (Measured). A symbol is then written as an ordinary call, `(sym "x")`; not `(quote x)` kept
+  as syntax — a form of the readers for one type is what rule 26 removes, and a call needs
+  nothing of them. Assent: "(sym "x") sounds reasonable". Neither is in the tree yet: the
+  sources write `(quote x)` at about 4,900 places.
 - A function the checker cannot define is a program with its reason, and one whose types do
   not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
   checker cannot accept — a sketch would need its proofs before it ran; not a program for a
@@ -374,6 +377,15 @@ entries are explained under "Measured" at the end.
   while other actions take longer." CI builds every root on the bootstrap, so the tie there
   is the binary emitting each root again, seconds a root; if it becomes a pipeline's longest
   step it goes back to a job started by hand.
+- The C text is a translation unit a file, the files compiled side by side and linked
+  (`v3/build.sh`, THE COMPILE); not one unit for the whole program — `cc -O2` on the loader's
+  text was 66 s in one process, the larger part of what an edit of the toolchain waits for
+  after the emit. The owner: "we can try parallelizing the C compilation to speed things
+  up". A function and a symbol's variable are then external names of the program, and the
+  runtime is compiled once, in `main.c`'s unit, its short paths inline in every unit; the
+  binary runs as fast (Measured). Under `--all` the compiles of all the roots in flight share
+  one count (`V3_CC_JOBS`, by default the machine's processors); not a count for each root,
+  which would be that many compiles for each of the roots in flight.
 - A binary's stamp covers its sources, the toolchain's, the runtime, the flags and the
   implementation directories behind its views; not the emit's source list alone, which names views.
 - Files a tool writes (`*.auto.shard`, `k/accel_pins.shard`) are outside the format gate: their
@@ -433,7 +445,8 @@ measurements; measure again before building on one.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
 - Back end: the loader's own closure (9,182 declarations) loads, lowers and generates in
-  108 s on the bootstrap as a build reads it (144 s read checked), `cc` 69 s, binary 5.6 MB;
+  108 s on the bootstrap as a build reads it (144 s read checked), its C text compiles in 7 s
+  as 32 units side by side (the compile of the C text, below), binary 6.4 MB;
   all 29 roots on the bootstrap 246 s at 24 jobs (the build's chain, below). It was 340 s
   and 460–550 s before resolution hashed a citation's bytes once (above), and
   34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
@@ -536,6 +549,15 @@ measurements; measure again before building on one.
   reading of programs alone does not make such a comparison a `Bool` (`OPEN.md` §1). The
   two helpers now stand above their callers, and the three texts — the bootstrap reader's,
   the checked load's, the unchecked load's — are one for every root.
+- The compile of the C text (2026-11-17, dev box, gcc 16.2, 24 processors). The loader's
+  text, 367,000 lines: `cc -O2` on it as one translation unit 66 s; as 32 units 73 s of CPU
+  one after another, 11.7 s at 8 side by side, 7.4 s at 24, the largest unit 4.9 s alone. The
+  binary of the units against the binary of the one unit, on the checked load of the
+  loader's closure, six runs each: 7.75 s and 7.71 s of CPU, the outputs identical; 6.4 MB
+  for 5.6. The loader's own rebuild is then 117 s for 174 — the emit 110, the compile 7 —
+  and `v3/build.sh --all` 206 s at 8 roots at a time and 207 s at 24, for 336 s and 288 s.
+  With the allocator's reuse of a freed cell inline in every unit as well, the same load was
+  5% shorter in three runs and the binary 8.2 MB; not built.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

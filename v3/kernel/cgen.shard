@@ -3,7 +3,7 @@
 ;;; operands — and this file does no semantic work, only transcription onto the runtime
 ;;; (rt.h). A shape outside RS is refused, never guessed.
 ;;;
-;;;   a function    static value_t s_NAME(value_t p_0, …) { start_:; … }
+;;;   a function    value_t s_NAME(value_t p_0, …) { start_:; … }
 ;;;   a let         value_t v_D = RHS;            D the depth: unique in its C scope
 ;;;   a self tail call   the parameters reassigned, goto start_
 ;;;   a match       the scrutinee copied, then a switch on the tag (constructors), on the
@@ -27,10 +27,14 @@
 ;;; program's order, the odd one its own where it is the second of its type. The World's tag
 ;;; is fixed and even, so a constructor named `World` that is the second of its type is refused.
 ;;;
-;;; THE TEXT IN PARTS. `main.c` holds the tags, the runtime, the tables, the prototypes and
-;;; `main`; the functions are in `pNNNN.c`, cg_part of them a file, included by `main.c` —
-;;; one translation unit for the compiler, no text of the whole program as one list for the
-;;; engine that runs this file.
+;;; THE TEXT IN UNITS. `prog.h` holds the tags, the runtime's include and what every unit
+;;; reads of the program: the counters' and the symbols' declarations and the prototypes. The
+;;; functions are in `pNNNN.c`, cg_part of them a file; `main.c` holds the tables, the symbols
+;;; and `main`, and is the unit the runtime itself is compiled in (`RT_MAIN`, rt.h). Every `.c`
+;;; file includes `prog.h` and is a translation unit of its own: the C compiler runs on them
+;;; side by side (v3/build.sh), and the engine that runs this file never holds the text of the
+;;; whole program as one list. A function and a symbol's variable are therefore external names
+;;; of the program, which the mangling keeps apart.
 
 (import "lower.shard")
 (use Init.Bool false true)
@@ -188,7 +192,7 @@
     (nil none)
     ((cons (ECtorDef c fs) r) (if (= (lw_role c) 8) (some (len fs)) (cg_world_in r)))))
 
-;; ---- the symbol literals: one static each, by first occurrence --------------------------------
+;; ---- the symbol literals: one variable each, by first occurrence ------------------------------
 (fn cg_sym_idx ((s Symbol) (syms (List Symbol)) (i Int)) (Option Int)
   (match syms
     (nil none)
@@ -608,8 +612,7 @@
   (measure n)
   (if (< n 1) nil (cons (append (utf8 "p_") (show_nat (- n 1))) (cg_param_env (- n 1)))))
 (fn cg_proto ((n Name) (np Int)) CgDoc
-  (cg_cat4 (cg_cat3 (CgS "static value_t ") (CgS (cg_fname n)) (CgS "(")) (cg_params np 0)
-    (CgS ");\n")
+  (cg_cat4 (cg_cat3 (CgS "value_t ") (CgS (cg_fname n)) (CgS "(")) (cg_params np 0) (CgS ");\n")
     (CgS "")))
 ;; the counter's increment sits after start_: so a self tail call counts as a call
 (fn cg_fn
@@ -625,7 +628,7 @@
     ((CgOk bd)
      (CgOk
        (cg_cat4
-         (cg_cat3 (cg_cat3 (CgS "static value_t ") (CgS (cg_fname n)) (CgS "(")) (cg_params np 0)
+         (cg_cat3 (cg_cat3 (CgS "value_t ") (CgS (cg_fname n)) (CgS "(")) (cg_params np 0)
            (cg_cat3 (CgS ") {\nstart_:;\nrt_fnctr_g[") (cg_num fi) (CgS "]++;\n")))
          bd
          (CgS "}\n\n")
@@ -634,6 +637,8 @@
 ;; ---- the files ---------------------------------------------------------------------------
 ;; the functions of one part file
 (fn cg_part () Int 400)
+;; what every unit opens with
+(fn cg_unit_head () (List Int) (utf8 "#include \"prog.h\"\n"))
 (fn cg_part_name ((i Int)) (List Int)
   (append (utf8 "p")
     (append
@@ -666,7 +671,12 @@
   (match st
     ((CgSt parts cur k fi errs)
      (if (< k 1) st
-     (CgSt (cons (Prod.mk (cg_part_name (len parts)) (cg_flat cur nil)) parts) (CgS nil) 0 fi errs)))))
+     (CgSt
+       (cons (Prod.mk (cg_part_name (len parts)) (append (cg_unit_head) (cg_flat cur nil))) parts)
+       (CgS nil)
+       0
+       fi
+       errs)))))
 (fn cg_protos ((ds (List EDecl))) CgDoc
   (match ds
     (nil (CgS ""))
@@ -713,17 +723,23 @@
     (cg_num (cg_role_tag role))
     (CgS (utf8 "\n"))
     rest))
+;; the counters, a slot a function: declared for every unit, and in main.c with the names
+(fn cg_counters_decl ((nfn Int)) CgDoc
+  (cg_cat3 (CgS (utf8 "extern long long rt_fnctr_g[")) (cg_num (if (< nfn 1) 1 nfn))
+    (CgS (utf8 "];\n"))))
 (fn cg_counters ((ds (List EDecl)) (nfn Int)) CgDoc
-  (cg_cat4 (cg_cat3 (CgS "static long long rt_fnctr_g[") (cg_num (if (< nfn 1) 1 nfn)) (CgS "];\n"))
+  (cg_cat4 (cg_cat3 (CgS "long long rt_fnctr_g[") (cg_num (if (< nfn 1) 1 nfn)) (CgS "];\n"))
     (cg_cat3 (CgS "static const char *const rt_fnname_g[") (cg_num (if (< nfn 1) 1 nfn))
       (CgS "] = {\n"))
     (cg_fnnames ds)
     (CgS (if (< nfn 1) "  \"\"\n};\n\n" "};\n\n"))))
-(fn cg_sym_decls ((syms (List Symbol)) (i Int)) CgDoc
+;; the symbols' variables: under `extern ` declared for every unit, under nothing main.c's own
+(fn cg_sym_decls ((kw (List Int)) (syms (List Symbol)) (i Int)) CgDoc
   (match syms
     (nil (CgS ""))
     ((cons _ r)
-     (cg_cat4 (CgS "static value_t sl_") (cg_num i) (CgS ";\n") (cg_sym_decls r (+ i 1))))))
+     (cg_cat4 (CgCat (CgS kw) (CgS "value_t sl_")) (cg_num i) (CgS ";\n")
+       (cg_sym_decls kw r (+ i 1))))))
 (fn cg_sym_inits ((syms (List Symbol)) (i Int)) CgDoc
   (match syms
     (nil (CgS ""))
@@ -732,12 +748,6 @@
        (cg_cat3 (CgS (cg_cstr (chars_of_sym s))) (CgS "\", ") (cg_num (len (chars_of_sym s))))
        (CgS "));\n")
        (cg_sym_inits r (+ i 1))))))
-(fn cg_includes ((parts (List (Prod (List Int) (List Int))))) CgDoc
-  (measure (struct parts))
-  (match parts
-    (nil (CgS nil))
-    ((cons (Prod.mk name _) r)
-     (cg_cat4 (CgS (utf8 "#include \"")) (CgS name) (CgS (utf8 "\"\n")) (cg_includes r)))))
 ;; main: the counters bound, the runtime started, the symbols interned, the entry called on the World
 (fn cg_main ((entry Name) (world (Option Int)) (syms (List Symbol)) (nfn Int)) CgDoc
   (cg_cat4
@@ -757,8 +767,8 @@
            (CgS "(w); }\n")))))
     (CgS "  return 0;\n}\n")))
 
-;; a program in the restricted form and its entry: the files, `main.c` first, and the count of
-;; functions; or every refusal
+;; a program in the restricted form and its entry: the files — `main.c`, `prog.h`, the parts —
+;; and the count of functions; or every refusal
 (type CgRes (CgFiles (List (Prod (List Int) (List Int))) Int) (CgRefused (List (List Int))))
 (fn cg_prog ((p Prog) (entry Name)) CgRes
   (match p
@@ -779,17 +789,27 @@
                         (Prod.mk "main.c"
                           (cg_flat
                             (cg_cat4
-                              (cg_cat4
-                                (CgS "/* GENERATED by v3/kernel/cgen.shard — do not edit. */\n")
-                                (cg_tag_defs)
-                                (cg_cat3 (CgS "#include \"rt.h\"\n_Static_assert(RT_MAX_ARITY == ")
-                                  (cg_num (cg_max_fields))
-                                  (CgS
-                                    ", \"the generator's bound on a cell's fields is the runtime's\");\n\n"))
-                                (cg_counters ds nfn))
-                              (CgCat (cg_sym_decls syms 0) (CgS "\n"))
-                              (cg_cat3 (cg_protos ds) (CgS "\n") (cg_includes ps))
-                              (CgCat (CgS "\n") (cg_main entry (cg_world ds) syms nfn)))
+                              (CgS
+                                "/* GENERATED by v3/kernel/cgen.shard — do not edit. */\n#define RT_MAIN\n")
+                              (CgCat (CgS (cg_unit_head)) (CgS "\n"))
+                              (cg_cat3 (cg_counters ds nfn) (cg_sym_decls "" syms 0) (CgS "\n"))
+                              (cg_main entry (cg_world ds) syms nfn))
                             nil))
-                        ps)
+                        (cons
+                          (Prod.mk "prog.h"
+                            (cg_flat
+                              (cg_cat4
+                                (cg_cat3
+                                  (CgS "/* GENERATED by v3/kernel/cgen.shard — do not edit. */\n")
+                                  (cg_tag_defs)
+                                  (cg_cat3
+                                    (CgS "#include \"rt.h\"\n_Static_assert(RT_MAX_ARITY == ")
+                                    (cg_num (cg_max_fields))
+                                    (CgS
+                                      ", \"the generator's bound on a cell's fields is the runtime's\");\n\n")))
+                                (cg_counters_decl nfn)
+                                (CgCat (cg_sym_decls "extern " syms 0) (CgS "\n"))
+                                (cg_protos ds))
+                              nil))
+                          ps))
                       nfn))))))))))))

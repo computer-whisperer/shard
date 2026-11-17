@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # v3/build.sh — a native binary from a shard program: the root's closure as the V3 loader
 # accepted it, lowered and written as C by V3's own back end inside the loader's process
-# (`load.shard --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc`,
-# into v3/bin/ by default. The back end is unproven, so the Rust bootstrap stays the authority
+# (`load.shard --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc` on
+# each file of that text side by side, into v3/bin/ by default. The back end is unproven, so the Rust bootstrap stays the authority
 # and the byte-ties (v3/t0_full.sh; kernel/test/native_tie_test.sh) tie the two.
 #
 #   v3/build.sh [SRC [OUT]] [--native] [--root DIR] [EXTRA…]   one root: SRC's closure (default
@@ -39,9 +39,9 @@
 #
 # THE EMIT'S ENGINE. An emit is a run of the loader, and the loader runs on the bootstrap
 # (`eval direct v3/kernel/load.shard …`) or as its own binary (`v3/bin/load …`). `--all` builds
-# the loader's binary on the bootstrap and every other root by that binary: on the dev box,
-# 24 roots at a time, 29 binaries in 288 s — the loader's emit 107 s and its cc 67 s, then an
-# emit of 11 to 32 s and a cc of up to 81 s for each of the rest. One root is emitted on the
+# the loader's binary on the bootstrap and every other root by that binary: on the dev box 29
+# binaries in 206 s, at 8 roots at a time as at 24 — the loader's emit 107 s and its compile
+# 7 s, then the other 28, whose compiles fill the machine. One root is emitted on the
 # bootstrap unless --native names the binary. The binary must then be current: a missing or
 # stale v3/bin/load fails the build, and nothing falls back to the bootstrap. The loader's own
 # root is built on the bootstrap alone, so the chain has one link and no binary builds its
@@ -52,6 +52,12 @@
 # them — and compared with the build's, every file of it. It ends with a control: one byte of
 # one text altered must be reported. CI builds every root on the bootstrap (`--all
 # --bootstrap`) and ties each to the binary's emit, seconds a root, on every pipeline.
+#
+# THE COMPILE. The text is one translation unit a file (kernel/cgen.shard: main.c and the
+# parts, each over prog.h): `cc -O2 -c` runs on V3_CC_JOBS of them side by side (default: the
+# machine's processors), then one `cc` links the objects. Under --all the count is the whole
+# build's, not a root's: the roots in flight take their compiles' places from one fifo of
+# V3_CC_JOBS tokens (V3_CC_SEM). The objects are scratch, removed after the link.
 #
 # THE READING. A root of the inventory is loaded --unchecked (kernel/load.shard): each `fn` is
 # read as a program alone, nothing checks its types and it gets no definition. The check of the
@@ -75,7 +81,7 @@
 # after the compile: one that was edited, created or removed while the build ran fails the
 # build (`FAIL: NAME: changed during the build: FILE…`) and no stamp is left beside the binary.
 # A file outside the stamp, or a file touched with its content unchanged, fails nothing.
-# Generated files live under v3/bin/ (emit/NAME/ with main.c, its parts, map and sources;
+# Generated files live under v3/bin/ (emit/NAME/ with main.c, prog.h, the parts, map and sources;
 # NAME, NAME.stamp, NAME.build.log; NAME is OUT's last component); only a binary and its stamp
 # go elsewhere, when OUT names another place. An authored file is never written. v3/bin/ is
 # derived and untracked.
@@ -191,8 +197,28 @@ esac
 SHIM
   chmod +x v3/bin/eval
 }
+# cc_unit EMIT OBJ UNIT: one unit of the text to its object, the compiler's output beside it;
+# under --all a token of V3_CC_SEM is held while the compiler runs (THE COMPILE)
+cc_unit() {
+  local rc tok
+  if [ -n "${V3_CC_SEM:-}" ]; then exec 9<>"$V3_CC_SEM"; read -r -N 1 -u 9 tok || return 1; fi
+  cc $CFLAGS -c -o "$2/${3%.c}.o" "$1/$3" -I v3/kernel > "$2/$3.out" 2>&1; rc=$?
+  [ -z "${V3_CC_SEM:-}" ] || printf . >&9
+  return $rc
+}
+# compile EMIT OUT LOG: every unit of the text in EMIT to an object, V3_CC_JOBS of them side by
+# side, and the objects linked into OUT; the compiler's output is added to LOG in the units' order
+compile() {
+  local emit=$1 out=$2 log=$3 obj rc=0 u
+  obj=$(mktemp -d)
+  (cd "$emit" && ls -- *.c) | xargs -P "${V3_CC_JOBS:-$(nproc)}" -I{} bash -c 'cc_unit "$1" "$2" "$3"' _ "$emit" "$obj" {} || rc=1
+  for u in "$obj"/*.out; do cat "$u"; done >> "$log" 2>/dev/null
+  if [ "$rc" = 0 ]; then cc $CFLAGS -o "$out" "$obj"/*.o >> "$log" 2>&1 || rc=1; fi
+  rm -rf "$obj"
+  return $rc
+}
 # build_one ENGINE NAME SRC OUT ROOT EXTRA…: emit (the load, the lowering, the C text) by the
-# loader on ENGINE (bootstrap, native), cc; the stamp last
+# loader on ENGINE (bootstrap, native), the compile; the stamp last
 build_one() {
   local engine=$1 name=$2 src=$3 out=$4 root=$5; shift 5
   local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc snap err changed
@@ -212,7 +238,7 @@ build_one() {
   entry=$(sed -n 's/^EMIT: .* entry=\([^ ]*\).*/\1/p' "$log" | tail -1)
   [ -n "$entry" ] && [ -s "$emit/$entry" ] || { echo "FAIL: $name: no entry file after the emit"; tail -2 "$log" | cut -c1-200; return 1; }
   s=$(date +%s)
-  if ! cc $CFLAGS -o "$out" "$emit/$entry" -I v3/kernel >> "$log" 2>&1; then
+  if ! compile "$emit" "$out" "$log"; then
     # the compiler's first error, wherever in its output it stands; the whole output is the log
     err=$(grep -m1 'error:' "$log" | cut -c1-300); [ -n "$err" ] || err=$(tail -1 "$log" | cut -c1-300)
     echo "FAIL: $name: cc: $err"; echo "   the compiler's output: $log"; return 1
@@ -273,7 +299,7 @@ tie_one() {
   rm -rf "$d" "$d.log" "$d.diff" "$d.reader" "$d.build"; return 0
 }
 export -f stamp_files stamp_of sums snapshot changed_since extra_roots secs build_one inventory
-export -f toolchain_root loader_current emit_text same_text tie_one
+export -f toolchain_root loader_current emit_text same_text tie_one cc_unit compile
 export RUST_EVAL CFLAGS
 
 case ${1:-} in
@@ -313,6 +339,9 @@ case ${1:-} in
     ensure_index || exit 1
     JOBS=${V3_BUILD_JOBS:-8}
     out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
+    # one count of compiles over all the roots in flight (THE COMPILE)
+    export V3_CC_SEM=$out/cc.sem
+    mkfifo "$V3_CC_SEM"; exec 9<>"$V3_CC_SEM"; head -c "${V3_CC_JOBS:-$(nproc)}" /dev/zero | tr '\0' . >&9
     s=$(date +%s)
     if [ "${2:-}" = --bootstrap ]; then
       # every root on the bootstrap, side by side

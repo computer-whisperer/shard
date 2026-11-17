@@ -95,7 +95,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 |---|---|
 | `reader.shard` (1,005) | The entry for every proof: `read_proof` and `read_proof_go` choose among `(exact …)`, `(by …)`, `sorry`, `auto` (the `bad_proof` refusal is here); `read_auto` computes the key (`req_key`, `req_deps`), fits the sidecar entry (`auto_fit`) and, under mode `solve`, calls the engine or a named tactic (`run_tactic`); `read_fulfills` and `read_discharge` do the same for `fulfills`. |
 | `spelling.shard` | `sp_canon`: Lean's class-method spellings read as this language's function spellings in goals, lemmas and `arith` rows; `sp_instance`: the fixed instance table behind `instance_needed`. |
-| `load.shard` (362) | The `load` program: the records printed, the exit code (refusals plus errors). |
+| `load.shard` (363) | The `load` program: the records printed, the exit code (refusals plus errors). |
 | `k/add.shard` | `identity_hash`, the content fingerprint. |
 
 ### K, the Init import, the replay gate
@@ -220,11 +220,11 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `ev.shard` | 1,520 | `ev`, the definition of "run": links a `Prog` into a private form (constructors as tags, functions as indices) and runs it as a machine with an explicit continuation, fuel spent per function entry. Also `prepare`/`invoke`/`invoke_run` (the handle and its two doors), the argument validation, the text codec for command-line arguments, `run_prog`, the extern wire by declared type (six host calls), the effect trace. | `host`, `prog`, `intmap`, `util` | `run.shard` (the door on a load), `load.shard` (through `run.shard`), `reader.shard`/`loader.shard` (a tactic library's run), tests `ev_test`, `prims_test`, `entry_test`, `handle_test`, `rows_test`, `project_test`, `loader_test`, `calc_harness` |
 | `run.shard` | 167 | A load's program run from an entry, the command line's `--run`: `run_load`/`run_load_as` prepare the entry at `ev`'s checked door with effects, refuse it `preconditioned` for what the load's environment shows of it that the program does not state (an evidence binder, a proposition field of a parameter's constructor), read the arguments by the text codec and invoke once. | `loader`, `ev`, K's view (`kernel.k`), `kw`, `etable`, `prog` | `load.shard` (`--run`, `--lowered`), `test/entry_test.shard` |
 | `lower.shard` | 675 | Back end stage 1, `lw_prog : Prog → Prog`: to a named form, the seven expression rows for Init's primitives whose runtime operation differs (`Nat.sub div mod`, `Int.tdiv tmod ediv emod`), lifting of `if`/`match` in operand position, nested patterns to flat chains, every operand an atom, back to indices. `lw_role` gives the eight wire roles. Refuses unlinked `sig`s, primitives with no runtime operation, string patterns. | `prog`, `name`, `util` | `emit.shard`, `cgen.shard` (`lw_role`), `load.shard` (`--lowered`) |
-| `cgen.shard` | 795 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–908 by role, others from 1000, odd for a type's second constructor), symbol statics, per-function text, `main.c` plus parts of 400 functions, `main`. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main` or one with parameters before the World, a constructor of more than 125 fields, a constructor named as a cell of the runtime at another place in its type. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
-| `emit.shard` | 103 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`) |
-| `rt.h` | 991 (C) | The runtime every generated `main.c` includes: tagged small integers and bignum cells, cells and the allocator, the conservative mark–sweep collector, the intern table, the primitives, seven extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`) |
+| `cgen.shard` | 815 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–908 by role, others from 1000, odd for a type's second constructor), the symbols' variables, per-function text, the files (`prog.h` with what every unit reads, `main.c` with the tables and `main`, parts of 400 functions), each `.c` a translation unit of its own. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main` or one with parameters before the World, a constructor of more than 125 fields, a constructor named as a cell of the runtime at another place in its type. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
+| `emit.shard` | 104 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`) |
+| `rt.h` | 1,041 (C) | The runtime under the generated C, in two halves. Every unit's: tagged small integers, cells, the primitives' inline paths, declarations of the rest. `main.c`'s alone (`RT_MAIN`), once in a program: the allocator, the conservative mark–sweep collector, the intern table, bignum arithmetic, seven extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`) |
 | `host.shard` | 21 | The toolchain's World type and seven extern declarations, text as `(List Int)` (`get_args read_file read_range write write_line write_file exit`). | — | every toolchain entrypoint; `ev.shard` (its driver performs six of them through these) |
-| `load.shard` | 362 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
+| `load.shard` | 363 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
 | `dump.shard` | 247 | A `Prog` as the canonical text that the bootstrap's `eval dump` also prints: one line per declaration, sorted; a stated projection (last name components). | `prog`, `etable` | `load.shard --dump`; `test/parity_test.sh`, `test/plain_test.sh`, `test/template_test.sh` |
 | `facts.shard` | 240 | What the program-first reading asks K about Init's constants, as a table (`facts_lines`): for each constant a token of the closure's files can resolve to — with an inductive's constructors, a constructor's inductive, the types its fields are at and a projection function's structure — its kind, its binders' flags (written or not; runtime data, a type, a proof), an inductive's parameters, constructors and E view, a projection function's structure and field, whether its type ends in Prop. The driver prints the load's table joined with that of each implementation it linked, whose fork fetched what the main line did not (`facts_join`). The Rust bootstrap reads what a closure cites of Init by it. | `classify`, `erase`, `dump` | `load.shard --facts OUT`; `test/plain_test.sh` |
 | `intmap.shard` | 77 | A persistent map keyed by non-negative integers (a 4-ary trie). | — | `ev` (function and tag tables), `cgen` (tags), K and the loader |
@@ -252,7 +252,7 @@ export's chunks), `prove.shard` (the producers), `initindex.shard` (the Init ind
 
 | script | what it does | called by |
 |---|---|---|
-| `v3/build.sh` | the emit — on the bootstrap or by the loader's binary —, then `cc`; the inventory, the stamp, the shim `v3/bin/eval`; the emit tie (`--tie`) | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `build_test.sh`, `shardfmt_test.sh` |
+| `v3/build.sh` | the emit — on the bootstrap or by the loader's binary —, then `cc` on the text's units side by side and the link; the inventory, the stamp, the shim `v3/bin/eval`; the emit tie (`--tie`) | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `build_test.sh`, `shardfmt_test.sh` |
 | `v3/test.sh` | every entrypoint on one engine, in parallel; keeps outputs for the suite tie | CI (`v3`, `native`), authors |
 | `v3/fmt.sh` | lists or rewrites sources that are not canonical; builds `v3/bin/shardfmt` when stale | authors; `shardfmt_test.sh` (`--list`) |
 | `v3/t0_full.sh` | the engines' tie on 100,000 lines, then the full Init replay against its pins | CI (`v3`), `test/t0_gate_test.sh` (with stub engines) |
@@ -547,8 +547,8 @@ process (`load.shard --emit DIR FILE…`); no program text is printed and read b
 | representation | `prog.shard` | a `Prog`: declarations with every name an identity, every call head one of constructor, function, primitive, extern, every variable an index |
 | lowering | `lower.shard`, `lw_prog` | `Prog` → `Prog` in the restricted form, or refusals |
 | generation | `cgen.shard`, `cg_prog` | restricted form → C text over `rt.h`, or refusals |
-| driver | `emit.shard`, `emit_prog` | writes `DIR/main.c`, the functions in `DIR/pNNNN.c` (400 a file, included by `main.c`), `DIR/map` (each declaration: C name, kind, identity, source file) and `DIR/sources` (each module's file and hash); prints `EMIT: DIR entry=main.c modules=N declarations=M` |
-| compiler | `cc -O2 -o OUT DIR/main.c -I v3/kernel` | one translation unit; `rt.h` uses GNU C extensions and Linux `mmap` |
+| driver | `emit.shard`, `emit_prog` | writes `DIR/main.c`, `DIR/prog.h`, the functions in `DIR/pNNNN.c` (400 a file), `DIR/map` (each declaration: C name, kind, identity, source file) and `DIR/sources` (each module's file and hash); prints `EMIT: DIR entry=main.c modules=N declarations=M` |
+| compiler | `cc -O2 -c` on each `.c` of DIR with `-I v3/kernel`, then `cc -O2` over the objects | a translation unit a file, `V3_CC_JOBS` of them compiled side by side (`v3/build.sh`, THE COMPILE); `rt.h` uses GNU C extensions and Linux `mmap` |
 
 **The restricted form.** An atom is a variable, a numeral or a symbol. A right-hand side is an atom
 or a constructor, call, primitive or extern over atoms. A body is a right-hand side, a `let` of
@@ -724,9 +724,9 @@ The formatter is built on demand by `v3/fmt.sh`. A root of the inventory is load
 *The engine of an emit.* The loader's own root is emitted on the bootstrap and never by a
 binary, so no binary builds its successor. A missing or stale `v3/bin/load` fails a build that
 names it (`--native`, or a root of `--all` after the loader's); nothing falls back to the
-bootstrap. On the dev box, 24 roots at a time, `--all` builds the 29 binaries in 288 s: the
-loader's emit 107 s and its `cc` 67 s, then an emit of 11 to 32 s and a `cc` of up to 81 s for
-each of the rest. The tie of that build, the bootstrap emitting 28 roots again, is 174 s.
+bootstrap. On the dev box `--all` builds the 29 binaries in 206 s, at 8 roots at a time as at
+24: the loader's emit 107 s and its compile 7 s, then the other 28, whose compiles fill the
+machine. The tie of that build, the bootstrap emitting 28 roots again, is 174 s.
 
 *The tie's second comparison.* A build compiles the reading of programs alone, and
 `parity_test.sh` holds the bootstrap's reader to the checked load's program. So `--tie` also
@@ -749,8 +749,8 @@ FILE…` and leaves no stamp beside the binary. A file outside the stamp, or one
 content unchanged, fails nothing (`build_test.sh`).
 
 *What a build writes.* By default everything is under `v3/bin/` (untracked): `NAME`,
-`NAME.stamp`, `NAME.build.log`, `emit/NAME/` (`main.c` and its parts, `map`, `sources`, `root`,
-`extra`). NAME is OUT's last component. With an OUT elsewhere the binary and `OUT.stamp` stand
+`NAME.stamp`, `NAME.build.log`, `emit/NAME/` (`main.c`, `prog.h`, the parts, `map`, `sources`,
+`root`, `extra`, `engine`). The objects of the compile are scratch and removed after the link. NAME is OUT's last component. With an OUT elsewhere the binary and `OUT.stamp` stand
 there, and the log and the emit directory are still written under `v3/bin/` by that name, so two
 builds whose outputs share a last component overwrite each other's. A failed C compile prints
 `FAIL: NAME: cc:` with the compiler's first `error:` line, then the path of the log, which holds
@@ -852,7 +852,7 @@ closure equal to Lean's own (`v3/t0_axioms_cmp.sh`); and all 20 accelerator cand
 | `host` | host | `bin/ci_docs_only.sh --self-test`; the Rust evaluator built; `cargo test` |
 | `v3` | gate | the export; the Init index; the suite on the bootstrap, 24 entrypoints at a time (outputs kept) |
 | `replay` | gate | the export; the Init index; `v3/build.sh`; `v3/t0_full.sh` |
-| `native` | gate | the export; the Init index; `v3/build.sh --all --bootstrap`, 28 roots at a time; `v3/build.sh --tie`; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
+| `native` | gate | the export; the Init index; `v3/build.sh --all --bootstrap`, 28 roots and 28 compiles at a time; `v3/build.sh --tie`; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
 | `suite_tie` | tie | `suite_tie.sh` over the two kept runs |
 
 The three gate jobs run side by side on one machine, each held to 32 of its 64 cores by the
@@ -867,7 +867,7 @@ The whole push is examined, so code pushed with its documents is gated, and any 
 branch, a manual run) runs the gates. `glab ci run -b main` forces a full run.
 
 *Durations:* the loader's own closure (9,182 declarations) emits in about 108 s on the
-bootstrap as a build reads it, and in 10 s by the loader's binary, on the dev box; the export takes 77 s and its axiom oracle 15 s; the full
+bootstrap as a build reads it, and in 10 s by the loader's binary, on the dev box, and its C text — 32 units — compiles in 7 s side by side; the export takes 77 s and its axiom oracle 15 s; the full
 replay 420 s on the dev box and 1,260 s on the CI runner, at 29 GB; the index about 1,950 s on
 the bootstrap on the CI runner, 14 times the binary's. The runner takes 2 to 3 times the dev
 box's time for a step (`DECISIONS.md`, Measured, has a pipeline's minutes). CI's timeouts
