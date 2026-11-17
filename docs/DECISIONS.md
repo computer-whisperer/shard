@@ -557,7 +557,10 @@ measurements; measure again before building on one.
   for 5.6. The loader's own rebuild is then 117 s for 174 — the emit 110, the compile 7 —
   and `v3/build.sh --all` 206 s at 8 roots at a time and 207 s at 24, for 336 s and 288 s.
   With the allocator's reuse of a freed cell inline in every unit as well, the same load was
-  5% shorter in three runs and the binary 8.2 MB; not built.
+  5% shorter in three runs and the binary 8.2 MB; not built. On CI (#736, read from the
+  jobs' logs): the build of the 29 binaries 428 s where it was 591 (#733) — the loader's emit
+  383 s, its compile 40 s —, the `native` job 1,610 s for 1,766 and `replay` 1,737 s for
+  1,781; the pipeline's longest job is `v3`, 1,864 s, which builds nothing of the inventory.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
