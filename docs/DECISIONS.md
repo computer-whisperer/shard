@@ -489,4 +489,5 @@ measurements; measure again before building on one.
   resolution's change (#728): `v3` 31 minutes — the suite 27.5, which is its longest
   entrypoint's time —, `replay` 29, `native` 27 (the build 10 with 6,399 s of C text summed,
   the byte-tie 8, the suite on the binaries 7). The three start together; in #728 itself
-  `native` waited 29 minutes for a place behind an older pipeline, which made it 57.
+  `native` waited 29 minutes for a place behind an older pipeline, which made it 57. The next
+  pipeline, #729, on an idle runner: 31 minutes, its three gate jobs 30, 29 and 30.
