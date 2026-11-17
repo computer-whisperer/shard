@@ -5,13 +5,19 @@
 # into v3/bin/ by default. The back end is unproven, so the Rust bootstrap stays the authority
 # and the byte-ties (v3/t0_full.sh; kernel/test/native_tie_test.sh) tie the two.
 #
-#   v3/build.sh [SRC [OUT]] [--root DIR] [EXTRA…]   one root: SRC's closure (default
+#   v3/build.sh [SRC [OUT]] [--native] [--root DIR] [EXTRA…]   one root: SRC's closure (default
 #                        v3/kernel/t0.shard) into OUT (default v3/bin/STEM); --root the loader's
 #                        root (default v3); EXTRA… (after OUT) further roots for the load: the
 #                        directories of the views the program links (none named: K's, when the
-#                        closure consumes its view)
-#   v3/build.sh --all    the inventory below, V3_BUILD_JOBS roots at a time (default 8); a binary
-#                        whose stamp is current is kept; exit = the roots that failed
+#                        closure consumes its view); --native: the emit by the loader's binary
+#                        (THE EMIT'S ENGINE, below)
+#   v3/build.sh --all [--bootstrap]   the inventory below: the loader first, on the bootstrap,
+#                        then the other roots by its binary, V3_BUILD_JOBS at a time (default
+#                        8); under --bootstrap every root on the bootstrap, side by side; a
+#                        binary whose stamp is current is kept; exit = the roots that failed
+#   v3/build.sh --tie    after --all: the C text of every root of the inventory produced again
+#                        by the engine that did not build it and compared with the build's, byte
+#                        for byte, V3_BUILD_JOBS roots at a time; exit = the roots not the same
 #   v3/build.sh --stamp NAME   the stamp v3/bin/NAME would carry now (empty: never emitted)
 #   v3/build.sh --list   the inventory: NAME SRC
 #   v3/build.sh --shim   the engine shim v3/bin/eval (--all writes it last): the bootstrap's
@@ -31,9 +37,30 @@
 # The shim v3/bin/eval is these dispositions as a program: v3/test.sh runs every entrypoint on it
 # under V3_ENGINE=native, and kernel/test/suite_tie.sh compares that run with the bootstrap's.
 #
-# THE EMIT'S ENGINE: the bootstrap for every root, so no binary builds another and a build
-# never trusts one. The loader's own closure — 9,177 declarations — loads, lowers and
-# generates in about 160 s on it, alone on the dev box (docs/DECISIONS.md, Measured).
+# THE EMIT'S ENGINE. An emit is a run of the loader, and the loader runs on the bootstrap
+# (`eval direct v3/kernel/load.shard …`) or as its own binary (`v3/bin/load …`). `--all` builds
+# the loader's binary on the bootstrap and every other root by that binary: on the dev box,
+# 24 roots at a time, 29 binaries in 288 s — the loader's emit 107 s and its cc 67 s, then an
+# emit of 11 to 32 s and a cc of up to 81 s for each of the rest. One root is emitted on the
+# bootstrap unless --native names the binary. The binary must then be current: a missing or
+# stale v3/bin/load fails the build, and nothing falls back to the bootstrap. The loader's own
+# root is built on the bootstrap alone, so the chain has one link and no binary builds its
+# successor. v3/bin/emit/NAME/engine names the engine that emitted NAME.
+# A root the binary emitted rests on that binary being a right compile of the loader. `--tie`
+# is the check: each root's text is produced again by the other engine — the bootstrap for a
+# root the binary emitted, the binary for a root the bootstrap emitted, the loader's own among
+# them — and compared with the build's, every file of it. It ends with a control: one byte of
+# one text altered must be reported. CI builds every root on the bootstrap (`--all
+# --bootstrap`) and ties each to the binary's emit, seconds a root, on every pipeline.
+#
+# THE READING. A root of the inventory is loaded --unchecked (kernel/load.shard): each `fn` is
+# read as a program alone, nothing checks its types and it gets no definition. The check of the
+# toolchain's sources is a load without the flag (kernel/test/parity_test.sh loads every root
+# so). Any other SRC — an ordinary program, a tool — is loaded as every load is, checked.
+# The program a build compiles is then the reading of programs alone, and parity_test.sh ties
+# the bootstrap's reader to the checked load's program. `--tie` ties it to the build's: for
+# each root, the program the loader's binary reads --unchecked (`--dump`) is the text of the
+# bootstrap's reader (`eval dump`), byte for byte.
 #
 # THE STAMP: sha256 over the root's closure sources (the emit's `sources` list),
 # the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,
@@ -101,6 +128,41 @@ extra_roots() {
   if "$RUST_EVAL" dump "$1" 2>/dev/null | grep '^fn env_empty ' > /dev/null; then echo v3/kernel/k; fi
 }
 secs() { echo $(( $(date +%s) - $1 )); }
+# is SRC a root of the inventory (THE READING)
+toolchain_root() { inventory | awk '{print $2}' | grep -qxF "$1"; }
+# the loader's binary present and a build of the sources as they stand
+loader_current() {
+  local st; st=$(stamp_of load)
+  [ -x v3/bin/load ] && [ -n "$st" ] && [ "$(cat v3/bin/load.stamp 2>/dev/null)" = "$st" ]
+}
+# emit_text ENGINE DIR ROOT SRC EXTRA…: the load, the lowering and the C text of SRC's closure
+# into DIR by the loader on ENGINE; the loader's lines on stdout, its exit code returned
+emit_text() {
+  local engine=$1 dir=$2 root=$3 src=$4; shift 4
+  # Init on demand: the pinned export and its index. Every root of the toolchain needs them —
+  # its sources stand on Init's types — and so does an ordinary root; ensure_index (below) has
+  # made the index current before the first emit
+  local init="" flag=""
+  read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
+  toolchain_root "$src" && flag=--unchecked
+  case $engine in
+    native) v3/bin/load --root "$root" $init $flag --emit "$dir" "$src" "$@";;
+    *)      "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" $init $flag --emit "$dir" "$src" "$@";;
+  esac
+}
+# same_text A B: the two emits hold the same files with the same bytes (what the build itself
+# writes beside the loader's files — root, extra, engine — is not the loader's text); prints
+# the first files that differ
+same_text() {
+  local a=$1 b=$2 la lb f bad=0
+  la=$(cd "$a" && find . -type f ! -name root ! -name extra ! -name engine | LC_ALL=C sort)
+  lb=$(cd "$b" && find . -type f ! -name root ! -name extra ! -name engine | LC_ALL=C sort)
+  [ -n "$la" ] && [ "$la" = "$lb" ] || { echo "the two emits do not hold the same files"; return 1; }
+  while IFS= read -r f; do
+    cmp -s "$a/$f" "$b/$f" || { bad=$((bad+1)); [ "$bad" -le 3 ] && echo "${f#./} differs"; }
+  done <<< "$la"
+  [ "$bad" = 0 ]
+}
 # the engine shim: a generated file under v3/bin/, rewritten by every --all
 write_shim() {
   mkdir -p v3/bin
@@ -129,22 +191,23 @@ esac
 SHIM
   chmod +x v3/bin/eval
 }
-# build_one NAME SRC OUT ROOT EXTRA…: emit (the load, the lowering, the C text), cc; the stamp last
+# build_one ENGINE NAME SRC OUT ROOT EXTRA…: emit (the load, the lowering, the C text) by the
+# loader on ENGINE (bootstrap, native), cc; the stamp last
 build_one() {
-  local name=$1 src=$2 out=$3 root=$4; shift 4
+  local engine=$1 name=$2 src=$3 out=$4 root=$5; shift 5
   local emit=v3/bin/emit/$name log=v3/bin/$name.build.log s t_emit t_cc entry rc snap err changed
+  if [ "$engine" = native ]; then
+    [ "$src" != v3/kernel/load.shard ] || { echo "FAIL: $name: the loader's own root is built on the bootstrap, never by a binary"; return 1; }
+    loader_current || { echo "FAIL: $name: v3/bin/load is missing or stale, and nothing falls back to the bootstrap (v3/build.sh v3/kernel/load.shard, or --all)"; return 1; }
+  fi
   mkdir -p v3/bin; rm -rf "$emit"; mkdir -p "$emit"; : > "$log"
   snap=$(snapshot "$root" "$@")
-  # Init on demand: the pinned export and its index. Every root of the toolchain needs them —
-  # its sources stand on Init's types — and so does an ordinary root; ensure_index (below) has
-  # made the index current before the first emit
-  local init=""; read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
   s=$(date +%s)
-  "$RUST_EVAL" direct v3/kernel/load.shard --root "$root" $init --emit "$emit" "$src" "$@" > "$log" 2>&1; rc=$?
+  emit_text "$engine" "$emit" "$root" "$src" "$@" > "$log" 2>&1; rc=$?
   if [ "$rc" != 0 ]; then
     echo "FAIL: $name: the emit (exit $rc); $(grep -m1 '^EMIT: \|^LOAD: ' "$log" | cut -c1-200)"; grep -E '^(REFUSE|ERROR|EMIT)' "$log" | head -3 | cut -c1-300; return 1
   fi
-  t_emit=$(secs $s); echo "$root" > "$emit/root"
+  t_emit=$(secs $s); echo "$root" > "$emit/root"; echo "$engine" > "$emit/engine"
   for x in "$@"; do case $x in v3/kernel/k|v3/kernel/k/) ;; *) [ -d "$x" ] && echo "$x";; esac; done > "$emit/extra"
   entry=$(sed -n 's/^EMIT: .* entry=\([^ ]*\).*/\1/p' "$log" | tail -1)
   [ -n "$entry" ] && [ -s "$emit/$entry" ] || { echo "FAIL: $name: no entry file after the emit"; tail -2 "$log" | cut -c1-200; return 1; }
@@ -176,25 +239,90 @@ ensure_index() {
   echo "v3/build.sh: the Init index is not current: building it (kernel/test/init_index.sh)" >&2
   v3/kernel/test/init_index.sh > /dev/null || { echo "v3/build.sh: the Init index was not built" >&2; return 1; }
 }
+# tie_one NAME SRC: NAME's C text produced again by the engine that did not build it, into a
+# scratch directory, and compared with the build's; then the program the loader's binary reads
+# --unchecked compared with the text of the bootstrap's reader (THE READING)
+tie_one() {
+  local name=$1 src=$2 built=v3/bin/emit/$1 st engine other d rc s init="" extra
+  st=$(stamp_of "$name")
+  [ -x "v3/bin/$name" ] && [ -n "$st" ] && [ "$(cat "v3/bin/$name.stamp" 2>/dev/null)" = "$st" ] || { echo "FAIL: $name: v3/bin/$name is missing or stale (v3/build.sh --all)"; return 1; }
+  loader_current || { echo "FAIL: $name: v3/bin/load is missing or stale (v3/build.sh --all)"; return 1; }
+  engine=$(cat "$built/engine" 2>/dev/null)
+  case $engine in
+    bootstrap) other=native;;
+    native) other=bootstrap;;
+    *) echo "FAIL: $name: $built/engine does not name the engine that built it (v3/build.sh --all)"; return 1;;
+  esac
+  d=$(mktemp -d); s=$(date +%s); extra=$(extra_roots "$src")
+  emit_text "$other" "$d" v3 "$src" $extra > "$d.log" 2>&1; rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "FAIL: $name: the emit on the $other engine (exit $rc); $(grep -m1 '^EMIT: \|^LOAD: ' "$d.log" | cut -c1-200)"; rm -rf "$d" "$d.log"; return 1
+  fi
+  if ! same_text "$built" "$d" > "$d.diff"; then
+    echo "DIFFER: $name: built by the $engine engine, emitted again by the $other: $(tr '\n' ' ' < "$d.diff")"
+    rm -rf "$d" "$d.log" "$d.diff"; return 1
+  fi
+  read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
+  "$RUST_EVAL" dump "$src" > "$d.reader" 2> /dev/null
+  v3/bin/load --root v3 $init --unchecked --dump "$src" $extra > "$d.build" 2>&1; rc=$?
+  if [ "$rc" != 0 ] || ! cmp -s "$d.reader" "$d.build"; then
+    echo "DIFFER: $name: the program the build reads is not the bootstrap reader's (the loader's exit $rc): $(diff "$d.reader" "$d.build" | grep -m2 '^[<>]' | cut -c1-160 | tr '\n' ' ')"
+    rm -rf "$d" "$d.log" "$d.diff" "$d.reader" "$d.build"; return 1
+  fi
+  echo "same: $name ($(find "$d" -type f | wc -l) files; built by the $engine engine, emitted again by the $other in $(secs $s) s; the build's program is the bootstrap reader's, $(wc -l < "$d.reader") declarations)"
+  rm -rf "$d" "$d.log" "$d.diff" "$d.reader" "$d.build"; return 0
+}
 export -f stamp_files stamp_of sums snapshot changed_since extra_roots secs build_one inventory
+export -f toolchain_root loader_current emit_text same_text tie_one
 export RUST_EVAL CFLAGS
 
 case ${1:-} in
   --list) inventory; exit 0;;
   --shim) write_shim; exit 0;;
   --stamp) stamp_of "$2"; exit 0;;
-  --one)   # NAME SRC (the --all worker): current → kept, else built
+  --one)   # NAME SRC (the --all worker): current → kept, else built — the loader on the
+           # bootstrap, any other root by the loader's binary (on the bootstrap too under
+           # --all --bootstrap, which says so through V3_ALL_ENGINE)
     name=$2; src=$3
     if [ -x "v3/bin/$name" ] && [ -n "$(stamp_of "$name")" ] && [ "$(cat "v3/bin/$name.stamp" 2>/dev/null)" = "$(stamp_of "$name")" ]; then
       echo "current: v3/bin/$name"; exit 0
     fi
-    build_one "$name" "$src" "v3/bin/$name" v3 $(extra_roots "$src");;
-  --all)
+    engine=${V3_ALL_ENGINE:-native}; [ "$src" = v3/kernel/load.shard ] && engine=bootstrap
+    build_one "$engine" "$name" "$src" "v3/bin/$name" v3 $(extra_roots "$src");;
+  --tie-one) tie_one "$2" "$3";;   # NAME SRC (the --tie worker)
+  --tie)
     ensure_index || exit 1
     JOBS=${V3_BUILD_JOBS:-8}
     out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
     s=$(date +%s)
-    inventory | awk '{print NR, $1, $2}' | xargs -P "$JOBS" -L 1 bash -c 'v3/build.sh --one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
+    inventory | awk '{print NR, $1, $2}' | xargs -P "$JOBS" -L 1 bash -c 'v3/build.sh --tie-one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
+    n=0; same=0; bad=0
+    while read -r i name src; do
+      n=$((n+1)); cat "$out/$i.txt"
+      if [ "$(cat "$out/$i.rc" 2>/dev/null)" = 0 ]; then same=$((same+1)); else bad=$((bad+1)); fi
+    done < <(inventory | awk '{print NR, $1, $2}')
+    # the control: a comparison that cannot fail says nothing, so one byte of the loader's text
+    # is altered in a copy and the comparison must report its file
+    cp -r v3/bin/emit/load "$out/altered" 2>/dev/null && echo >> "$out/altered/main.c"
+    if [ "$(same_text v3/bin/emit/load "$out/altered" 2>/dev/null)" = "main.c differs" ]; then echo "control: an altered byte is reported"
+    else echo "FAIL: the control: an altered byte of v3/bin/emit/load/main.c was not reported"; bad=$((bad+1)); fi
+    echo "v3/build.sh --tie: $n roots, $same the same under the other engine, $bad not, in $(secs $s) s"
+    exit $bad;;
+  --all)
+    case ${2:-} in ""|--bootstrap) ;; *) echo "v3/build.sh: --all [--bootstrap]" >&2; exit 2;; esac
+    ensure_index || exit 1
+    JOBS=${V3_BUILD_JOBS:-8}
+    out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
+    s=$(date +%s)
+    if [ "${2:-}" = --bootstrap ]; then
+      # every root on the bootstrap, side by side
+      export V3_ALL_ENGINE=bootstrap
+      inventory | awk '{print NR, $1, $2}' | xargs -P "$JOBS" -L 1 bash -c 'v3/build.sh --one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
+    else
+      # the loader first, alone: every other root is emitted by its binary
+      inventory | awk '$1 == "load" {print NR, $1, $2}' | xargs -L 1 bash -c 'v3/build.sh --one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
+      inventory | awk '$1 != "load" {print NR, $1, $2}' | xargs -P "$JOBS" -L 1 bash -c 'v3/build.sh --one "$1" "$2" > "'"$out"'/$0.txt" 2>&1; echo $? > "'"$out"'/$0.rc"'
+    fi
     n=0; built=0; kept=0; failed=0
     while read -r i name src; do
       n=$((n+1)); cat "$out/$i.txt"
@@ -205,13 +333,13 @@ case ${1:-} in
     exit $failed;;
   *)
     SRC=${1:-v3/kernel/t0.shard}; [ $# -gt 0 ] && shift
-    OUT=""; ROOT=v3; EXTRA=()
+    OUT=""; ROOT=v3; EXTRA=(); ENGINE=bootstrap
     if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then OUT=$1; shift; fi
     while [ $# -gt 0 ]; do
-      case $1 in --root) ROOT=$2; shift 2;; *) EXTRA+=("$1"); shift;; esac
+      case $1 in --root) ROOT=$2; shift 2;; --native) ENGINE=native; shift;; *) EXTRA+=("$1"); shift;; esac
     done
     [ -n "$OUT" ] || OUT=v3/bin/$(basename "$SRC" .shard)
     [ "$ROOT" = v3 ] && [ ${#EXTRA[@]} -eq 0 ] && EXTRA=($(extra_roots "$SRC"))
     ensure_index || exit 1
-    build_one "$(basename "$OUT")" "$SRC" "$OUT" "$ROOT" "${EXTRA[@]}";;
+    build_one "$ENGINE" "$(basename "$OUT")" "$SRC" "$OUT" "$ROOT" "${EXTRA[@]}";;
 esac

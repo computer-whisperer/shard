@@ -338,7 +338,7 @@ E=./rust_bootstrap/target/release/eval; I="--init $EXPORT --init-index $INDEX"
 $E direct v3/kernel/load.shard --root v3 $I FILE [DIR…]                        # check; prints the records
 $E direct v3/kernel/load.shard --root v3 $I --run MODULE.main FILE [DIR…] -- ARG…   # run main
 $E direct v3/kernel/prove.shard --root v3 $I FILE                              # write FILE's sidecar
-v3/build.sh FILE OUT [--root v3] [DIR…]                                        # a native binary at OUT
+v3/build.sh FILE OUT [--native] [--root v3] [DIR…]                             # a native binary at OUT
 ```
 
 `v3/bin/load ARG…` and `v3/bin/prove ARG…` are the same two programs compiled

@@ -350,6 +350,30 @@ entries are explained under "Measured" at the end.
   byte for byte; on a difference the back end is fixed and rebuilt, the binary never patched.
 - ★ The shim `v3/bin/eval` exits 70 on a missing or stale binary; not a silent fallback to the
   bootstrap — a missing binary must not count as native coverage.
+- ★ The loader's binary emits every root but its own (`v3/build.sh --all`): the bootstrap
+  builds the loader, the loader's binary the other 28; not the bootstrap for every emit — a
+  rebuild after a toolchain edit waited on 29 interpreted emits, and on the dev box the
+  binary emits the loader's closure in 10 s where the bootstrap takes 108 (`LAW.md` ruling
+  14). Not the previous loader's binary as the seed of the next, which would make the loader's
+  own rebuild 80 s for 177: a stale binary would be run on purpose, an edit of the compiler
+  would need a second round, and a change of the language the toolchain is written in could
+  not be read by the old binary. What a binary-emitted root rests on is checked
+  (`v3/build.sh --tie`): the C text of each root under the other engine, byte for byte.
+- A build reads a toolchain root `--unchecked`: every `fn` a program alone; not the checked
+  load on every build — with `Symbol` an ordinary type the checked load of the loader's
+  closure is 41.6 minutes on the bootstrap for 4.4 (Measured), and the switch already takes
+  the emit from 144 s to 108. Assent: "We can do that in any case, and add a runtime switch
+  for the compiler to enable or disable checking." A build then compiles a function a checked
+  load would refuse, so the check is a load without the flag (`parity_test.sh` loads every
+  toolchain root so), and the tie holds the build's program to the bootstrap reader's text.
+  An ordinary root is never built `--unchecked`: its contract is what the check proves.
+- The emit tie runs on every pipeline, in CI's `native` job; not a job started by hand, the
+  owner's first choice ("I would make the trust path on CI something we trigger manually on
+  occasion.") and reversed by them: "So long as it is not the limiting factor, you may add
+  the --tie to the standard CI. I am reversing the decision to make it a separate CI task for
+  while other actions take longer." CI builds every root on the bootstrap, so the tie there
+  is the binary emitting each root again, seconds a root; if it becomes a pipeline's longest
+  step it goes back to a job started by hand.
 - A binary's stamp covers its sources, the toolchain's, the runtime, the flags and the
   implementation directories behind its views; not the emit's source list alone, which names views.
 - Files a tool writes (`*.auto.shard`, `k/accel_pins.shard`) are outside the format gate: their
@@ -408,8 +432,9 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (9,177 declarations) loads, lowers and generates in about
-  160 s on the bootstrap, `cc` 79 s, binary 5.6 MB; all 29 roots 350 s at 16 jobs. It was 340 s
+- Back end: the loader's own closure (9,182 declarations) loads, lowers and generates in
+  108 s on the bootstrap as a build reads it (144 s read checked), `cc` 69 s, binary 5.6 MB;
+  all 29 roots on the bootstrap 246 s at 24 jobs (the build's chain, below). It was 340 s
   and 460–550 s before resolution hashed a citation's bytes once (above), and
   34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
   some 290 of its own functions as definitions, and Init's fixed kit, on every load of a
@@ -490,6 +515,22 @@ measurements; measure again before building on one.
   five more tests that link the loader 1 to 6% slower, the loader over the std root 116 to
   123; `ev_test`, small and all symbols, 4 s to 8 s. Of 705 million dispatches of one loader
   run, 3 million are the three symbol primitives.
+- The build's chain (2026-11-17, dev box). The loader's own closure, 9,182 declarations with
+  K's directory: emitted on the bootstrap in 144 s as a checked load and 108 s `--unchecked`
+  (two runs side by side); by the loader's binary in 10 s, the C text — 34 files, 366,000
+  lines — byte for byte the bootstrap's; `cc -O2` on it 69 s, one process over 31 parts, and
+  the binary byte for byte the one built from the bootstrap's text. `v3/build.sh --all`, 24
+  roots at a time: 29 binaries in 288 s — the loader's emit 107 s and its `cc` 67 s, then an
+  emit of 11 to 32 s and a `cc` of up to 81 s for each other root. `v3/build.sh --tie` on
+  that build, the bootstrap emitting 28 roots again and the binary the loader's: 174 s, 29
+  the same. With every root on the bootstrap (`--all --bootstrap`, what CI builds) 246 s,
+  and the tie after it, the binary emitting each root again, 61 s. The checked and the unchecked reading of the loader's closure gave C text in
+  another order (88 of 9,177 functions: a checked function that cites a later one is settled
+  later) and, order set aside, two functions in another shape: `kernel.util.is_ws` and
+  `is_digit` passed a comparison to `bool_or` and `bool_and`, declared below them, and the
+  reading of programs alone does not make such a comparison a `Bool` (`OPEN.md` §1). The
+  two helpers now stand above their callers, and the three texts — the bootstrap reader's,
+  the checked load's, the unchecked load's — are one for every root.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

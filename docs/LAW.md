@@ -208,6 +208,14 @@ admitted that the logic does not derive.
     program to throw together some small mvp with almost no proof structures." And the bar:
     "Type errors should result in refused programs." (Rule 25.)
 
+14. *A binary may build a binary.* "My main objective here is speeding up development. We
+    still have lots of ways to run slow integrity checks in CI where things are interpreted to
+    reduce complexities when evaluating trust, but for day to day change tests we can get away
+    with a lot less." … "I am willing to completely remove the standing 'no binary builds
+    another' guideline so long as we have an alternate trust path that can be run on CI
+    occasionally, and we otherwise trust our compile and rust eval processes to be at least
+    roughly correct." (Rule 21 stands as written. The build: `DECISIONS.md`, Build and gates.)
+
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in

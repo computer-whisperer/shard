@@ -39,7 +39,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | `spelling.shard` | Two fixed tables over Init's names: `sp_canon` (a class method under Init's instance read as its function, e.g. `HAdd.hAdd Nat …` → `Nat.add`), `sp_instance` (the instance term for an instance-implicit binder at Nat/Int/Bool/List), and `sp_kit` (every constant the tables can write, for the Init demand). | `kw.shard` (K's view, `expr`, `level`, `name`) | `unify.shard` (import); `elab`, `tactic`, `arith`, `engine`; `loader.shard` (`sp_kit` in `init_kit`) |
 | `reader.shard` | The reader of the logic's forms: one S form → K `Declaration`s (`def abbrev opaque theorem axiom inductive type structure`), view parameters (`sig`, `requirement`), `fulfills` and discharge proofs, the proof forms (`exact`, `by`, `auto`, `sorry`) with the sidecar key (`Req`, `req_key`, `auto_fit`); routes `fn extern realize fulfills bin` and the directives to the loader; refuses reserved and Lean keywords with a pointer. | `elab.shard`, `engine.shard`, `ev.shard`, `etable.shard`, `inhabit.shard`; `tactic`, `scope`, `sexpr` | `loader.shard`, `predef.shard`; tests through `test/reader_kit.shard` |
 | `loader.shard` | The loader: package root, paths → module paths, imports (file, directory, Init) with cycle/collision/seal checks, `use`/`trusts`, the Init demand per file, per-form dispatch (K admission, policy check, `fn`/`extern`/`realize`/`derive`/`bin`/`fulfills` pipelines), views and the implementation check in a fork, the sidecar, the record type `Rec` with `show_rec`, the counts and the exit code. | `host`, `reader`, K's view, `realize`, `define`, `template`, `record`, `derive`, `initload`, `elab`, `tactic`, `arith`, `thread` | `load.shard`, `prove.shard`, `run.shard`, `test/calc_harness.shard`, `test/loader_kit.shard` |
-| `load.shard` | The loader's driver (`main`): parses the command line, loads the files, prints the records and the counts; the modes `--dump`, `--emit`, `--run` (with `--fuel`, `--trace`, `--lowered`); `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | nothing imports it; run as `eval direct v3/kernel/load.shard` or `v3/bin/load` by every test script and `v3/build.sh` |
+| `load.shard` | The loader's driver (`main`): parses the command line, loads the files, prints the records and the counts; the modes `--dump`, `--emit`, `--run` (with `--fuel`, `--trace`, `--lowered`); `--facts OUT` (`write_facts`); `--unchecked`, the reading of a build. | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | nothing imports it; run as `eval direct v3/kernel/load.shard` or `v3/bin/load` by every test script and `v3/build.sh` |
 | `initload.shard` | Init on demand: opens the export by its index (meta line against the pin `init_pin_*`, index header, export size), looks names up (`od_lookup`, `od_names_under`, `od_has_under`), walks the closure of a set of records by range reads and feeds it to K in export order (`od_load`). | `host`, `json`, `intmap`, `name`, `util`, `index`, K's view | `loader.shard` |
 | `index.shard` | The Init index's format, builder (`ix_build`) and verifier (`ix_verify`): header row, record table (ordinal, kind, offset, length, first ids), name table (sorted, name → ordinal), declaration table (name id → ordinal); all read by range. | `host`, `json`, `intmap`, `name`, `util` | `initindex.shard`, `initload.shard` |
 | `initindex.shard` | Driver for the index: `initindex.shard EXPORT INDEX` builds, `--verify EXPORT INDEX` reads back; one line of output, exit 0 or 1 (2 on usage). | `index.shard` | nothing imports it; run by `test/init_index.sh` and `test/index_test.sh` |
@@ -66,7 +66,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | `record.shard` | 431 | `(record …)` expanded at the s-expression level before anything is read: the `type`, accessor and updater `fn`s; `(make …)` and `(with …)` rewritten in every form of the file, also over a parameterless `structure`. | `sexpr`, `util` | `loader` (`expand_records`, per file) |
 | `inhabit.shard` | 102 | Builds a default value of a K type structurally (a lambda for a function type; the first constructor whose fields all close) — the value an `extern`'s opaque constant is declared with. | `kw` | `reader` (`read_extern`) |
 | `thread.shard` | 1153 | The use check over programs: World types and carriers, abstract tokens and boxes, the walk (`th_term`), a function's verdict (`th_fn`: `ok`, `world_twice`, `world_unsupported`, `world_forged`); second half: the same walk over the checker's own state, on request (`--state`). | `classify` (static types), `etable`, `prog` | `loader` (`rec_threads` at each file's end, `bin_threads`, `rec_states`) |
-| `loader.shard` (declaration parts) | 4771 | `load_decl_go` dispatches each form; `load_e_form`/`load_fn_with` (the `fn` pipeline: pre-definition → erasure → definition; parking on a forward reference), `settle_groups`/`find_group`/`load_group` (groups), `load_ldef` (a recursive `def`), `load_extern`, `load_realize`, `load_derive`, `load_discharge` (obligations), `load_template`/`build_demands` (instances), `admit_core`/`policy_pass` (K admission and the axiom policy), `check_bin`, `rec_threads`, `show_rec` (the printed records). | `reader`, `k`, `realize`, `define`, `template`, `record`, `derive`, `elab`, `tactic`, `thread`, `initload` | `load.shard` (the driver), `run.shard`, `prove.shard`, tests |
+| `loader.shard` (declaration parts) | 4779 | `load_decl_go` dispatches each form; `load_e_form`/`load_fn_with` (the `fn` pipeline: pre-definition → erasure → definition; parking on a forward reference), `settle_groups`/`find_group`/`load_group` (groups), `load_ldef` (a recursive `def`), `load_extern`, `load_realize`, `load_derive`, `load_discharge` (obligations), `load_template`/`build_demands` (instances), `admit_core`/`policy_pass` (K admission and the axiom policy), `check_bin`, `rec_threads`, `show_rec` (the printed records). | `reader`, `k`, `realize`, `define`, `template`, `record`, `derive`, `elab`, `tactic`, `thread`, `initload` | `load.shard` (the driver), `run.shard`, `prove.shard`, tests |
 
 Related files outside the list that the area depends on: `reader.shard` (the L declaration forms
 `def`, `abbrev`, `opaque`, `theorem`, `axiom`, `inductive`, `type`, `structure`, `sig`,
@@ -87,7 +87,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `matcher.shard` (567) | Generates the auxiliary definition a `match` elaborates to (`mt_generate`) and recognizes one by regenerating it from its type (`mt_is_matcher`). | `kw.shard`, `scope.shard`, K's view. | `elab.shard` (`elab_match`), `tactic.shard` (the case step of `reduce`), `define.shard`, `realize.shard`, `erasure.shard`, `derive.shard`, `template.shard`. |
 | `kw.shard` (178) | The walk over K's terms from outside K: an environment, a local context and checker state (`W`), with K's `whnf`, `infer`, `is_def_eq`, `is_prop`, local creation and binder closing wrapped so that a failure is a value. | K's view only. | Every elaborating file: `unify`, `elab`, `tactic`, `arith`, `spelling`, `matcher`, `reader`, `loader`, `define`, `realize`, `derive`, `erase`, `erasure`, `template`, `classify`, `inhabit`, `run`, `predef`. |
 | `elab.shard` (2,058), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (can the module cite this constant); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
-| `loader.shard` (4,771), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
+| `loader.shard` (4,779), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
 
 #### Other files on the path of a proof
 
@@ -95,7 +95,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 |---|---|
 | `reader.shard` (1,005) | The entry for every proof: `read_proof` and `read_proof_go` choose among `(exact …)`, `(by …)`, `sorry`, `auto` (the `bad_proof` refusal is here); `read_auto` computes the key (`req_key`, `req_deps`), fits the sidecar entry (`auto_fit`) and, under mode `solve`, calls the engine or a named tactic (`run_tactic`); `read_fulfills` and `read_discharge` do the same for `fulfills`. |
 | `spelling.shard` | `sp_canon`: Lean's class-method spellings read as this language's function spellings in goals, lemmas and `arith` rows; `sp_instance`: the fixed instance table behind `instance_needed`. |
-| `load.shard` (353) | The `load` program: the records printed, the exit code (refusals plus errors). |
+| `load.shard` (362) | The `load` program: the records printed, the exit code (refusals plus errors). |
 | `k/add.shard` | `identity_hash`, the content fingerprint. |
 
 ### K, the Init import, the replay gate
@@ -224,7 +224,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `emit.shard` | 103 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`) |
 | `rt.h` | 991 (C) | The runtime every generated `main.c` includes: tagged small integers and bignum cells, cells and the allocator, the conservative mark–sweep collector, the intern table, the primitives, seven extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`) |
 | `host.shard` | 21 | The toolchain's World type and seven extern declarations, text as `(List Int)` (`get_args read_file read_range write write_line write_file exit`). | — | every toolchain entrypoint; `ev.shard` (its driver performs six of them through these) |
-| `load.shard` | 353 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
+| `load.shard` | 362 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
 | `dump.shard` | 247 | A `Prog` as the canonical text that the bootstrap's `eval dump` also prints: one line per declaration, sorted; a stated projection (last name components). | `prog`, `etable` | `load.shard --dump`; `test/parity_test.sh`, `test/plain_test.sh`, `test/template_test.sh` |
 | `facts.shard` | 240 | What the program-first reading asks K about Init's constants, as a table (`facts_lines`): for each constant a token of the closure's files can resolve to — with an inductive's constructors, a constructor's inductive, the types its fields are at and a projection function's structure — its kind, its binders' flags (written or not; runtime data, a type, a proof), an inductive's parameters, constructors and E view, a projection function's structure and field, whether its type ends in Prop. The driver prints the load's table joined with that of each implementation it linked, whose fork fetched what the main line did not (`facts_join`). The Rust bootstrap reads what a closure cites of Init by it. | `classify`, `erase`, `dump` | `load.shard --facts OUT`; `test/plain_test.sh` |
 | `intmap.shard` | 77 | A persistent map keyed by non-negative integers (a 4-ary trie). | — | `ev` (function and tag tables), `cgen` (tags), K and the loader |
@@ -252,7 +252,7 @@ export's chunks), `prove.shard` (the producers), `initindex.shard` (the Init ind
 
 | script | what it does | called by |
 |---|---|---|
-| `v3/build.sh` | emit on the bootstrap, then `cc`; the inventory, the stamp, the shim `v3/bin/eval` | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `build_test.sh`, `shardfmt_test.sh` |
+| `v3/build.sh` | the emit — on the bootstrap or by the loader's binary —, then `cc`; the inventory, the stamp, the shim `v3/bin/eval`; the emit tie (`--tie`) | CI, `v3/fmt.sh`, the shim (`--stamp`), `native_tie_test.sh`, `bin_test.sh`, `build_test.sh`, `shardfmt_test.sh` |
 | `v3/test.sh` | every entrypoint on one engine, in parallel; keeps outputs for the suite tie | CI (`v3`, `native`), authors |
 | `v3/fmt.sh` | lists or rewrites sources that are not canonical; builds `v3/bin/shardfmt` when stale | authors; `shardfmt_test.sh` (`--list`) |
 | `v3/t0_full.sh` | the engines' tie on 100,000 lines, then the full Init replay against its pins | CI (`v3`), `test/t0_gate_test.sh` (with stub engines) |
@@ -671,10 +671,16 @@ the World's cell, by that name.
 `plain_test.sh` over ordinary closures, where it also runs calc's `main` on what was read.
 
 **The native binaries** (`v3/bin/NAME`) are the same sources compiled by the back end above. To
-build one, the bootstrap runs the loader over the root's closure with `--emit`: the loader loads
-the closure under its own rules, lowers it and writes C, and `cc` compiles that. The bootstrap
-runs every emit, so no binary builds another. The binaries are faster and unproven, so the
-bootstrap is the authority wherever the two differ.
+build one, the loader is run over the root's closure with `--emit`: it loads the closure, lowers
+it and writes C, and `cc` compiles that. The loader's own binary is built with the loader
+running on the bootstrap; every other root of `v3/build.sh --all` is emitted by that binary,
+seconds where the bootstrap takes minutes. A binary the loader's binary emitted rests on that
+binary being a right compile of the loader, and `v3/build.sh --tie` is the check: each root's C
+text produced again by the other engine and compared byte for byte. CI builds every root on the
+bootstrap and runs the tie on every pipeline. A build loads a toolchain root `--unchecked`:
+each `fn` is read as a program alone, and the check of the toolchain's sources is a load
+without the flag. The binaries are faster and unproven, so the bootstrap is the authority
+wherever the two differ.
 
 `eval direct` is the one spelling for "run this toolchain program". The test scripts call
 `$EVAL direct FILE ARGS…`; `EVAL` is the bootstrap by default, or the shim `v3/bin/eval`, which
@@ -705,13 +711,27 @@ A difference is a defect of the back end; the fix goes there and the build is re
 
 | command | does |
 |---|---|
-| `v3/build.sh [SRC [OUT]] [--root DIR] [EXTRA…]` | builds SRC's closure (default `v3/kernel/t0.shard`) into OUT (default `v3/bin/STEM`); `--root` is the loader's root (default `v3`); EXTRA are further root directories and can only follow OUT. Exit 1 on failure |
-| `v3/build.sh --all` | builds the inventory, `V3_BUILD_JOBS` roots at a time (default 8), keeps a binary whose stamp is current, writes the shim; exit = the roots that failed |
+| `v3/build.sh [SRC [OUT]] [--native] [--root DIR] [EXTRA…]` | builds SRC's closure (default `v3/kernel/t0.shard`) into OUT (default `v3/bin/STEM`); `--root` is the loader's root (default `v3`); EXTRA are further root directories and can only follow OUT. The emit runs on the bootstrap, or under `--native` by `v3/bin/load`, which must be current. Exit 1 on failure |
+| `v3/build.sh --all [--bootstrap]` | builds the inventory: the loader on the bootstrap, then the other roots by its binary, `V3_BUILD_JOBS` at a time (default 8); under `--bootstrap` every root on the bootstrap. Keeps a binary whose stamp is current, writes the shim; exit = the roots that failed |
+| `v3/build.sh --tie` | after `--all`: every root's C text produced again by the engine that did not build it (`v3/bin/emit/NAME/engine`) and compared with the build's, every file byte for byte; the program the loader's binary reads `--unchecked` compared with the bootstrap reader's; a control at the end, one altered byte that must be reported; exit = the roots not the same |
 | `v3/build.sh --list`, `--stamp NAME`, `--shim` | the inventory, `NAME SRC` per line; the stamp `v3/bin/NAME` would carry now (empty: never emitted); writes `v3/bin/eval` |
 
 *The inventory* is 29 roots: the four drivers (`load`, `prove`, `t0`, `initindex`),
 `test/calc_harness`, and every `v3/kernel/test/*_test.shard` and `v3/kernel/k/test/*_test.shard`.
-The formatter is built on demand by `v3/fmt.sh`.
+The formatter is built on demand by `v3/fmt.sh`. A root of the inventory is loaded
+`--unchecked`; any other SRC is loaded checked, as every load is.
+
+*The engine of an emit.* The loader's own root is emitted on the bootstrap and never by a
+binary, so no binary builds its successor. A missing or stale `v3/bin/load` fails a build that
+names it (`--native`, or a root of `--all` after the loader's); nothing falls back to the
+bootstrap. On the dev box, 24 roots at a time, `--all` builds the 29 binaries in 288 s: the
+loader's emit 107 s and its `cc` 67 s, then an emit of 11 to 32 s and a `cc` of up to 81 s for
+each of the rest. The tie of that build, the bootstrap emitting 28 roots again, is 174 s.
+
+*The tie's second comparison.* A build compiles the reading of programs alone, and
+`parity_test.sh` holds the bootstrap's reader to the checked load's program. So `--tie` also
+compares, for each root, the program `v3/bin/load` reads `--unchecked` (`--dump`) with the
+bootstrap reader's text (`eval dump`), byte for byte.
 
 *Extra roots.* A root that uses a directory module through its view needs the directory as a
 further root, or the emit refuses `unlinked sig fn`. K's directory `v3/kernel/k` is added
@@ -832,7 +852,7 @@ closure equal to Lean's own (`v3/t0_axioms_cmp.sh`); and all 20 accelerator cand
 | `host` | host | `bin/ci_docs_only.sh --self-test`; the Rust evaluator built; `cargo test` |
 | `v3` | gate | the export; the Init index; the suite on the bootstrap, 24 entrypoints at a time (outputs kept) |
 | `replay` | gate | the export; the Init index; `v3/build.sh`; `v3/t0_full.sh` |
-| `native` | gate | the export; the Init index; `v3/build.sh --all`, 28 roots at a time; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
+| `native` | gate | the export; the Init index; `v3/build.sh --all --bootstrap`, 28 roots at a time; `v3/build.sh --tie`; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
 | `suite_tie` | tie | `suite_tie.sh` over the two kept runs |
 
 The three gate jobs run side by side on one machine, each held to 32 of its 64 cores by the
@@ -846,8 +866,8 @@ the push that carried the code.
 The whole push is examined, so code pushed with its documents is gated, and any doubt (a new
 branch, a manual run) runs the gates. `glab ci run -b main` forces a full run.
 
-*Durations:* the loader's own closure (9,177 declarations) emits in about 160 s on the
-bootstrap, alone on the dev box; the export takes 77 s and its axiom oracle 15 s; the full
+*Durations:* the loader's own closure (9,182 declarations) emits in about 108 s on the
+bootstrap as a build reads it, and in 10 s by the loader's binary, on the dev box; the export takes 77 s and its axiom oracle 15 s; the full
 replay 420 s on the dev box and 1,260 s on the CI runner, at 29 GB; the index about 1,950 s on
 the bootstrap on the CI runner, 14 times the binary's. The runner takes 2 to 3 times the dev
 box's time for a step (`DECISIONS.md`, Measured, has a pipeline's minutes). CI's timeouts

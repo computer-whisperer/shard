@@ -741,6 +741,7 @@ to be left with: for them the reasons of the definer are refusals.
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
 | `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
 | `e_only_type` | e_first | the signature cannot be read: a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | declare the type first; the normal state of a function over `Symbol` |
+| `unchecked` | e_first | the load ran under `--unchecked`: no `fn` is checked or defined, and a type error is not refused | load without the flag; a build of the toolchain reads its sources so |
 
 **What is written and erased.** A call writes more than it passes: a proof, a type under `@`,
 a value a type is indexed by. Read as a program alone, a call's arguments are sorted by the
@@ -1569,6 +1570,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
+| `--unchecked` | read every `fn` as a program alone (`RUNNABLE fn F why=unchecked route=e_first`): nothing checks its types and it has no definition, so a type error is not refused and a theorem about a function of the load has nothing to cite. A `fn` that writes a proof is refused (`unchecked_proof`): nothing reads it. The reading of a build of the toolchain (`v3/build.sh`); the check of the same sources is a load without the flag |
 | `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads what a closure cites of Init by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |

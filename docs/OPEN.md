@@ -66,6 +66,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a proof that the evaluator is right, and results proven by running it | not built | the compile system, possibly (§2) |
 | a checked decoder from bytes to text | text enters a program as literals only | nobody yet |
 | host calls to list a directory or read a key | not built | nobody yet |
+| a build's reading that passes a written proof over | under `load --unchecked` a `fn` that writes a proof is refused (`unchecked_proof`): nothing reads the proof there, though the checked load of the same file does. A toolchain function that writes one would load checked and fail its build | the first toolchain function that writes a proof; none does |
 | a constructor of more than 125 fields in a binary | refused at the emit (the allocator's size classes end there); the evaluator runs it | nobody yet |
 | a constructor named `World` standing second in its type | refused at the emit: it carries the World's tag, and an `if` reads the place from the tag; the evaluator runs it | nobody yet |
 | a recogniser for the canonical layout | the gate compares the formatter's output | nobody yet |

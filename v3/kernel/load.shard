@@ -5,7 +5,7 @@
 ;;;   eval direct v3/kernel/load.shard COMMON --run MODULE.FN [--fuel N] [--trace FILE]
 ;;;     [--lowered] FILE… [-- ARG…]
 ;;;   COMMON = --root DIR [--init EXPORT --init-index INDEX] [--instance-budget N] [--state]
-;;;            [--facts OUT]
+;;;            [--facts OUT] [--unchecked]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (docs/LANGUAGE.md "What
 ;;; the loader prints") — one line per module and declaration —
@@ -17,6 +17,11 @@
 ;;; none loads no file (`init_unavailable`).
 ;;; `--state`: each function that takes or returns the checker's state is
 ;;; judged as well (STATE records).
+;;; `--unchecked`: every `fn` is read as a program alone (`RUNNABLE fn F why=unchecked
+;;; route=e_first`): nothing checks its types and it has no definition, so a type error is not
+;;; refused and a theorem about a function of the load has nothing to cite. What a build of
+;;; the toolchain reads its sources by (v3/build.sh); the check of the same sources is a load
+;;; without the flag.
 ;;; `--run`: after a clean load, the program the load yielded is run
 ;;; from MODULE.FN on the World with ARG… as its arguments, its externs
 ;;; performed (run.shard's run_load); nothing is printed but the program's
@@ -91,7 +96,8 @@
   (trace (List Int))  ; the trace file
   (state Bool)  ; the state check
   (lowered Bool)  ; the lowered run
-  (both Bool))  ; the two readings' comparison
+  (both Bool)  ; the two readings' comparison
+  (unchecked Bool))  ; every fn a program alone
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match args
@@ -100,13 +106,14 @@
      (if (int_list_eq x "--") (with Args a (files (rev (Args.files a))) (argv r))
      (if (int_list_eq x "--state") (parse_args r (with Args a (state true)))
      (if (int_list_eq x "--both") (parse_args r (with Args a (both true)))
+     (if (int_list_eq x "--unchecked") (parse_args r (with Args a (unchecked true)))
      (if (int_list_eq x "--dump") (parse_args r (with Args a (dump true)))
      (if (int_list_eq x "--lowered") (parse_args r (with Args a (lowered true)))
      (if (valued_flag x)
        (match r
          ((cons v r2) (parse_args r2 (flag_value a x v)))
          (nil (parse_args nil a)))
-       (parse_args r (with Args a (files (cons x (Args.files a))))))))))))))
+       (parse_args r (with Args a (files (cons x (Args.files a)))))))))))))))
 ;; the flags that take the argument after them
 (fn valued_flag ((x (List Int))) Bool
   (bool_or (int_list_eq x (utf8 "--root"))
@@ -158,7 +165,8 @@
               (trace nil)
               (state false)
               (lowered false)
-              (both false)))))
+              (both false)
+              (unchecked false)))))
        (match (parts_of (Args.root a))
          (none (exit 2 (write_line "load: --root DIR is required" w1)))
          ((some rootp)
@@ -175,9 +183,10 @@
                (main_run l0 (Args.files a) entry (Args.argv a) (Args.fuel a) (Args.trace a)
                  (Args.lowered a)
                  w1)))))))))))))
-;; the load under the driver's --state and --both
+;; the load under the driver's --state, --both and --unchecked
 (fn load_flags ((a Args) (l Load)) Load
-  (let ((l1 (if (Args.state a) (ld_with_states l) l))) (if (Args.both a) (ld_with_both l1) l1)))
+  (let ((l1 (if (Args.state a) (ld_with_states l) l)) (l2 (if (Args.both a) (ld_with_both l1) l1)))
+    (if (Args.unchecked a) (ld_with_unchecked l2) l2)))
 
 ;; a clean load, then the canonical text of the program it yielded
 (fn main_dump ((l0 Load) (files (List (List Int))) (facts (List Int)) (w World)) World

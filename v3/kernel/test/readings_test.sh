@@ -27,7 +27,13 @@
 #     row built there is its field;
 # (4) v3/pins/readings/unchecked.shard: where the classifier's is the only reading a written
 #     proof and a refuted row are refused — nothing checks them — and the same row without a
-#     proof is a program.
+#     proof is a program;
+# (5) the reading of a build, `load.shard --unchecked`, over v3/pins/readings/build.shard: a
+#     load without the flag defines `total` and refuses `mistyped`, a String where a list is
+#     declared, and `main` after it; under the flag each of the five fns is a program
+#     (`why=unchecked route=e_first`), nothing is defined or refused, and the program runs to
+#     its two lines — the type error is compiled, not refused. A written proof is not passed
+#     over: build_proof.shard's `first`, a definition without the flag, is refused under it.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.
 set -u
@@ -80,6 +86,28 @@ checks=$((checks+1)); [ "$rc" != 0 ] || bad "the load of the unchecked proofs su
 checks=$((checks+1)); grep -Eq "^REFUSE $U\.false_claim unchecked_proof: Fin\.mk: " "$OUT/unchecked.txt" || { bad "a proof with no reader is not refused"; grep -E "$U\.false_claim" "$OUT/unchecked.txt" | cut -c1-300; }
 checks=$((checks+1)); grep -Eq "^REFUSE $U\.refuted absurd_e_first: " "$OUT/unchecked.txt" || { bad "a refuted row with no reader is not refused"; grep -E "$U\.refuted" "$OUT/unchecked.txt" | cut -c1-300; }
 checks=$((checks+1)); grep -Eq "^RUNNABLE fn $U\.no_proof " "$OUT/unchecked.txt" || { bad "the row without a proof is not a program"; grep -E "$U\.no_proof" "$OUT/unchecked.txt" | cut -c1-300; }
+
+# ---- (5) the reading of a build
+B='pins\.readings\.build'
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/readings/build.shard > "$OUT/b_checked.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 2 ] || bad "the checked load of the build fixture exits $rc, not 2 (mistyped and main refused)"
+checks=$((checks+1)); grep -Eq "^DEFINE $B\.total " "$OUT/b_checked.txt" || { bad "total is not a definition in the checked load"; grep -E "$B\.total" "$OUT/b_checked.txt" | cut -c1-300; }
+checks=$((checks+1)); grep -Eq "^REFUSE $B\.mistyped type_mismatch: expected \(List\.\{0\} Nat\), found String\$" "$OUT/b_checked.txt" || { bad "the type error is not refused in the checked load"; grep -E "$B\.mistyped" "$OUT/b_checked.txt" | cut -c1-300; }
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked v3/pins/readings/build.shard > "$OUT/b_unchecked.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the load under --unchecked failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/b_unchecked.txt" | head -5 | cut -c1-300; }
+for f in say total mistyped report main; do
+  checks=$((checks+1)); grep -Eq "^RUNNABLE fn $B\.$f why=unchecked route=e_first\$" "$OUT/b_unchecked.txt" || { bad "$f is not a program alone under --unchecked"; grep -E "$B\.$f( |\$)" "$OUT/b_unchecked.txt" | cut -c1-300; }
+done
+checks=$((checks+1)); if grep -Eq '^(DEFINE|REFUSE) ' "$OUT/b_unchecked.txt"; then bad "a load under --unchecked defines or refuses"; grep -E '^(DEFINE|REFUSE) ' "$OUT/b_unchecked.txt" | head -3 | cut -c1-300; fi
+printf '%s\n' 'total: ok' 'a String where a list is declared: its bytes' > "$OUT/b_want.txt"
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked --run pins.readings.build.main v3/pins/readings/build.shard > "$OUT/b_run.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || bad "the run under --unchecked failed (exit $rc)"
+checks=$((checks+1)); cmp -s "$OUT/b_run.txt" "$OUT/b_want.txt" || { bad "the run under --unchecked does not print the two lines expected"; cut -c1-200 "$OUT/b_run.txt" | head -5; }
+P='pins\.readings\.build_proof'
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/readings/build_proof.shard > "$OUT/p_checked.txt" 2>&1; rc=$?
+checks=$((checks+1)); { [ "$rc" = 0 ] && grep -Eq "^DEFINE $P\.first " "$OUT/p_checked.txt"; } || { bad "the written proof is not checked into a definition without the flag (exit $rc)"; grep -E "$P\.first" "$OUT/p_checked.txt" | cut -c1-300; }
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked v3/pins/readings/build_proof.shard > "$OUT/p_unchecked.txt" 2>&1; rc=$?
+checks=$((checks+1)); { [ "$rc" != 0 ] && grep -Eq "^REFUSE $P\.first unchecked_proof: Fin\.mk: " "$OUT/p_unchecked.txt"; } || { bad "a written proof is not refused under --unchecked (exit $rc)"; grep -E "$P\.first" "$OUT/p_unchecked.txt" | cut -c1-300; }
 
 echo "readings_test: $checks checks, $fail failed"
 exit $fail
