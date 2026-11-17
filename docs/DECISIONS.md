@@ -367,9 +367,21 @@ entries are explained under "Measured" at the end.
   closure is 41.6 minutes on the bootstrap for 4.4 (Measured), and the switch already takes
   the emit from 144 s to 108. Assent: "We can do that in any case, and add a runtime switch
   for the compiler to enable or disable checking." A build then compiles a function a checked
-  load would refuse, so the check is a load without the flag (`parity_test.sh` loads every
-  toolchain root so), and the tie holds the build's program to the bootstrap reader's text.
+  load would refuse, so the check is a load without the flag (`toolchain_check.sh` loads
+  every toolchain root so), and `parity_test.sh` holds the build's program to the bootstrap
+  reader's text.
   An ordinary root is never built `--unchecked`: its contract is what the check proves.
+- The check of the toolchain's own sources — every root loaded checked, nothing refused, its
+  program the bootstrap reader's text — runs on the loader's binary (`toolchain_check.sh`,
+  CI's `native` job); not on the bootstrap, where it is the loader interpreted running the
+  checker over the sources it is written in: with `Symbol` an ordinary type that load is
+  41.6 minutes for the loader's closure alone (Measured). It was `parity_test.sh` on both
+  engines; that test now compares the reading of programs alone, and so does every test
+  that runs or dumps a toolchain root (`route2`, `lower`, `k_clients`, `state`, the native
+  tie's three). The two engines are compared on a part, the ten roots under 1,000
+  declarations (`LAW.md` rule 21, as for the replay). Step 1 of the `Symbol` change as put to
+  the owner, who answered the four steps together: "Good. Proceed with the symbol change
+  (full 1-4 scope)".
 - The emit tie runs on every pipeline, in CI's `native` job; not a job started by hand, the
   owner's first choice ("I would make the trust path on CI something we trigger manually on
   occasion.") and reversed by them: "So long as it is not the limiting factor, you may add

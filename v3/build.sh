@@ -61,12 +61,12 @@
 #
 # THE READING. A root of the inventory is loaded --unchecked (kernel/load.shard): each `fn` is
 # read as a program alone, nothing checks its types and it gets no definition. The check of the
-# toolchain's sources is a load without the flag (kernel/test/parity_test.sh loads every root
-# so). Any other SRC — an ordinary program, a tool — is loaded as every load is, checked.
-# The program a build compiles is then the reading of programs alone, and parity_test.sh ties
-# the bootstrap's reader to the checked load's program. `--tie` ties it to the build's: for
-# each root, the program the loader's binary reads --unchecked (`--dump`) is the text of the
-# bootstrap's reader (`eval dump`), byte for byte.
+# toolchain's sources is a load without the flag: kernel/test/toolchain_check.sh loads every
+# root so, on the loader's binary. Any other SRC — an ordinary program, a tool — is loaded as
+# every load is, checked. The program a build compiles is then the reading of programs alone:
+# kernel/test/parity_test.sh ties it to the text of the bootstrap's reader (`eval dump`) on
+# every root, under both engines, and toolchain_check.sh ties the checked load's program to
+# the same text.
 #
 # THE STAMP: sha256 over the root's closure sources (the emit's `sources` list),
 # the toolchain's sources — v3/kernel/*.shard, the back end among them, k/*.shard, k's view —,
@@ -266,10 +266,9 @@ ensure_index() {
   v3/kernel/test/init_index.sh > /dev/null || { echo "v3/build.sh: the Init index was not built" >&2; return 1; }
 }
 # tie_one NAME SRC: NAME's C text produced again by the engine that did not build it, into a
-# scratch directory, and compared with the build's; then the program the loader's binary reads
-# --unchecked compared with the text of the bootstrap's reader (THE READING)
+# scratch directory, and compared with the build's
 tie_one() {
-  local name=$1 src=$2 built=v3/bin/emit/$1 st engine other d rc s init="" extra
+  local name=$1 src=$2 built=v3/bin/emit/$1 st engine other d rc s extra
   st=$(stamp_of "$name")
   [ -x "v3/bin/$name" ] && [ -n "$st" ] && [ "$(cat "v3/bin/$name.stamp" 2>/dev/null)" = "$st" ] || { echo "FAIL: $name: v3/bin/$name is missing or stale (v3/build.sh --all)"; return 1; }
   loader_current || { echo "FAIL: $name: v3/bin/load is missing or stale (v3/build.sh --all)"; return 1; }
@@ -288,15 +287,8 @@ tie_one() {
     echo "DIFFER: $name: built by the $engine engine, emitted again by the $other: $(tr '\n' ' ' < "$d.diff")"
     rm -rf "$d" "$d.log" "$d.diff"; return 1
   fi
-  read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh --current 2>/dev/null) && [ -n "${INDEX:-}" ] && init="--init $EXPORT --init-index $INDEX"
-  "$RUST_EVAL" dump "$src" > "$d.reader" 2> /dev/null
-  v3/bin/load --root v3 $init --unchecked --dump "$src" $extra > "$d.build" 2>&1; rc=$?
-  if [ "$rc" != 0 ] || ! cmp -s "$d.reader" "$d.build"; then
-    echo "DIFFER: $name: the program the build reads is not the bootstrap reader's (the loader's exit $rc): $(diff "$d.reader" "$d.build" | grep -m2 '^[<>]' | cut -c1-160 | tr '\n' ' ')"
-    rm -rf "$d" "$d.log" "$d.diff" "$d.reader" "$d.build"; return 1
-  fi
-  echo "same: $name ($(find "$d" -type f | wc -l) files; built by the $engine engine, emitted again by the $other in $(secs $s) s; the build's program is the bootstrap reader's, $(wc -l < "$d.reader") declarations)"
-  rm -rf "$d" "$d.log" "$d.diff" "$d.reader" "$d.build"; return 0
+  echo "same: $name ($(find "$d" -type f | wc -l) files; built by the $engine engine, emitted again by the $other in $(secs $s) s)"
+  rm -rf "$d" "$d.log" "$d.diff"; return 0
 }
 export -f stamp_files stamp_of sums snapshot changed_since extra_roots secs build_one inventory
 export -f toolchain_root loader_current emit_text same_text tie_one cc_unit compile

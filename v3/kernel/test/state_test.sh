@@ -2,7 +2,8 @@
 # The state's check as a gate (docs/KERNEL.md "The state discipline";
 # kernel/thread.shard): K's node ids are unique because inside a check no version of the
 # checker's state is advanced twice, and this is what holds K's own sources to it.
-# (1) K's implementation — kernel/t0.shard with the directory kernel/k — loaded under
+# (1) K's implementation — kernel/t0.shard with the directory kernel/k — loaded --unchecked
+#     (the walk is over the programs; the check of these sources is toolchain_check.sh) under
 #     `--state`: every function of `kernel.k` and `kernel.expr` that takes or returns the
 #     state, opens or builds one, or calls a source of one is `ok` or a `primitive`; none is
 #     `reused`, none `unsupported`; the primitives (the functions that open the state or
@@ -28,7 +29,7 @@ fail=0; checks=0
 bad() { echo "state_test: $*"; fail=$((fail+1)); }
 
 # ---- (1) K's implementation
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --state v3/kernel/t0.shard v3/kernel/k > "$OUT/k.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked --state v3/kernel/t0.shard v3/kernel/k > "$OUT/k.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the load of K under --state failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|IMPL REFUSE|IMPL-ERROR|LOAD:)' "$OUT/k.txt" | head -5 | cut -c1-300; }
 sed -n 's/^IMPL STATE //p; s/^STATE //p' "$OUT/k.txt" | grep -E '^kernel\.(k|expr)\.' > "$OUT/k.state"
 n=$(grep -c . "$OUT/k.state")

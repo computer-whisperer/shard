@@ -695,7 +695,8 @@ loader does not detect its engine, and its records do not name one.
 
 | check of their agreement | compares |
 |---|---|
-| `parity_test.sh` | the bootstrap's reader and the V3 loader over every toolchain root: the two programs printed as one canonical text, byte for byte |
+| `parity_test.sh` | the bootstrap's reader and the V3 loader over every toolchain root: the two programs printed as one canonical text, byte for byte. The loader reads each root `--unchecked`, the reading a build compiles and a test runs |
+| `toolchain_check.sh` | the same roots loaded checked by the loader's binary: nothing refused, and the program again the bootstrap reader's text; the ten roots under 1,000 declarations loaded so on the bootstrap too, with the same text |
 | `plain_test.sh` | the same over ordinary closures: byte for byte where the reader reads the whole closure, line for line where it does not; calc's `main` run on what it read against the loader's run |
 | `route2_test.sh` | K run directly by the engine against K loaded by the V3 loader and run under `ev` (`k_clients_test.sh` runs K's tests the second way) |
 | `lower_test.sh` | a program under `ev` as loaded and in its restricted form |
@@ -713,7 +714,7 @@ A difference is a defect of the back end; the fix goes there and the build is re
 |---|---|
 | `v3/build.sh [SRC [OUT]] [--native] [--root DIR] [EXTRA…]` | builds SRC's closure (default `v3/kernel/t0.shard`) into OUT (default `v3/bin/STEM`); `--root` is the loader's root (default `v3`); EXTRA are further root directories and can only follow OUT. The emit runs on the bootstrap, or under `--native` by `v3/bin/load`, which must be current. Exit 1 on failure |
 | `v3/build.sh --all [--bootstrap]` | builds the inventory: the loader on the bootstrap, then the other roots by its binary, `V3_BUILD_JOBS` at a time (default 8); under `--bootstrap` every root on the bootstrap. Keeps a binary whose stamp is current, writes the shim; exit = the roots that failed |
-| `v3/build.sh --tie` | after `--all`: every root's C text produced again by the engine that did not build it (`v3/bin/emit/NAME/engine`) and compared with the build's, every file byte for byte; the program the loader's binary reads `--unchecked` compared with the bootstrap reader's; a control at the end, one altered byte that must be reported; exit = the roots not the same |
+| `v3/build.sh --tie` | after `--all`: every root's C text produced again by the engine that did not build it (`v3/bin/emit/NAME/engine`) and compared with the build's, every file byte for byte; a control at the end, one altered byte that must be reported; exit = the roots not the same |
 | `v3/build.sh --list`, `--stamp NAME`, `--shim` | the inventory, `NAME SRC` per line; the stamp `v3/bin/NAME` would carry now (empty: never emitted); writes `v3/bin/eval` |
 
 *The inventory* is 29 roots: the four drivers (`load`, `prove`, `t0`, `initindex`),
@@ -728,10 +729,15 @@ bootstrap. On the dev box `--all` builds the 29 binaries in 206 s, at 8 roots at
 24: the loader's emit 107 s and its compile 7 s, then the other 28, whose compiles fill the
 machine. The tie of that build, the bootstrap emitting 28 roots again, is 174 s.
 
-*The tie's second comparison.* A build compiles the reading of programs alone, and
-`parity_test.sh` holds the bootstrap's reader to the checked load's program. So `--tie` also
-compares, for each root, the program `v3/bin/load` reads `--unchecked` (`--dump`) with the
-bootstrap reader's text (`eval dump`), byte for byte.
+*The readings of a toolchain root.* A build compiles the reading of programs alone, and so
+does every test that runs or dumps a toolchain root: `--unchecked`. `parity_test.sh` holds
+that reading to the bootstrap reader's text (`eval dump`) on every root, under both engines.
+The load without the flag is the check of the toolchain's sources, and it runs on the
+loader's binary: `kernel/test/toolchain_check.sh` loads every root checked, requires that
+nothing is refused and compares the program with the same text. On the bootstrap that load
+is the loader interpreted, running the checker over the sources it is written in; the script
+runs it there for the ten roots under 1,000 declarations and compares the two engines
+(`LAW.md` rule 21).
 
 *Extra roots.* A root that uses a directory module through its view needs the directory as a
 further root, or the emit refuses `unlinked sig fn`. K's directory `v3/kernel/k` is added
@@ -803,7 +809,7 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `handle_cost_test.sh` | only `prepare` links; no other file names a handle's internals |
 | `imp_test.sh` | the imp machine model loads and its theorems are accepted |
 | `index_test.sh` | the Init index built and read back; four tampered inputs refused |
-| `k_clients_test.sh` | K's tests loaded by the V3 loader and run under `ev`, so K's view is enforced |
+| `k_clients_test.sh` | K's tests loaded by the V3 loader (`--unchecked`) and run under `ev`, so K's view is enforced |
 | `loader_pins_list_test.sh` | the cases `loader_pins_test.shard` lists are the directories of `v3/pins/loader/`: none unlisted, none missing, none twice |
 | `lower_test.sh` | seven programs as loaded and under `--lowered`: same streams, same exit |
 | `messages_test.sh` | what a refusal says after its reason: the counts of an arm's names, what to do with an `(import Init)` line, the file a refusal inside an implementation names, the row that makes rows unreachable, what to write for `mutual`, `instance`, a bare `true` |
@@ -852,7 +858,7 @@ closure equal to Lean's own (`v3/t0_axioms_cmp.sh`); and all 20 accelerator cand
 | `host` | host | `bin/ci_docs_only.sh --self-test`; the Rust evaluator built; `cargo test` |
 | `v3` | gate | the export; the Init index; the suite on the bootstrap, 24 entrypoints at a time (outputs kept) |
 | `replay` | gate | the export; the Init index; `v3/build.sh`; `v3/t0_full.sh` |
-| `native` | gate | the export; the Init index; `v3/build.sh --all --bootstrap`, 28 roots and 28 compiles at a time; `v3/build.sh --tie`; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
+| `native` | gate | the export; the Init index; `v3/build.sh --all --bootstrap`, 28 roots and 28 compiles at a time; `v3/build.sh --tie`; `toolchain_check.sh`, 24 roots at a time; the native tie, 24 workloads at a time; the suite on the binaries, 24 entrypoints at a time (outputs kept) |
 | `suite_tie` | tie | `suite_tie.sh` over the two kept runs |
 
 The three gate jobs run side by side on one machine, each held to 32 of its 64 cores by the

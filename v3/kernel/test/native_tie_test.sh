@@ -218,14 +218,14 @@ done
 # started longest first — (7) the harness over every loader pin, the two runs of t0 under ev,
 # calc's binary — so that the last to end is not one that waited for a place
 VERDICT='^loader_pins_test: failures = ' unit harness tie "harness loader_pins_test" test/loader_pins_test
-VERDICT='^T0: ' unit load_run_t0 tie "load run t0" load --root v3 $INIT --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
-VERDICT='^RUN: out of fuel' unit load_run_fuel tie "load run fuel" load --root v3 $INIT --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+VERDICT='^T0: ' unit load_run_t0 tie "load run t0" load --root v3 $INIT --unchecked --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
+VERDICT='^RUN: out of fuel' unit load_run_fuel tie "load run fuel" load --root v3 $INIT --unchecked --fuel 20000 --run kernel.t0.main v3/kernel/t0.shard v3/kernel/k -- -a "$SCRATCH/fix300.ndjson"
 unit calc calc_binary
 VERDICT='^PROVE: \|^LOAD: ' unit prove_measure tie "prove measure" prove --root v3 $INIT --measure v3/examples/calc/calc_ndigit.shard
 unit load_calc_spec tie "load calc_spec" load --root v3 $INIT v3/examples/calc/calc_spec.shard
 # (2c) the back end's own text: one closure emitted by the loader under both engines —
 # main.c, its parts, the map and the sources byte for byte, the line too
-ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' unit load_emit tie "load emit" load --root v3 $INIT --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
+ARTIFACT=$SCRATCH/emit VERDICT='^EMIT: ' unit load_emit tie "load emit" load --root v3 $INIT --unchecked --emit "$SCRATCH/emit" v3/kernel/test/json_test.shard
 # (3) the loader
 for c in basic refused read_error; do unit "load_pin_$c" tie "load pin $c" load --root v3/pins/loader/$c $INIT v3/pins/loader/$c/main.shard; done
 unit load_view tie "load view" load --root v3/pins/loader/view_basic $INIT v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib

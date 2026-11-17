@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Reader parity over the toolchain: for every toolchain entrypoint — the four drivers, the
-# calc harness, every test — the V3 loader's program (`load.shard --dump`, kernel/dump.shard)
-# and the Rust bootstrap's reading of the same closure (`eval dump`, rust_bootstrap/src/
-# plain/) printed as one canonical text, compared byte for byte. The bootstrap reads the
-# toolchain's sources to run them — it is what every other check here runs on — and the V3
-# loader's agreement over those sources is what keeps its reader honest. plain_test.sh is the
-# same comparison over ordinary closures.
+# calc harness, every test — the V3 loader's program (`load.shard --unchecked --dump`,
+# kernel/dump.shard) and the Rust bootstrap's reading of the same closure (`eval dump`,
+# rust_bootstrap/src/plain/) printed as one canonical text, compared byte for byte. The
+# bootstrap reads the toolchain's sources to run them — it is what every other check here
+# runs on — and the V3 loader's agreement over those sources is what keeps its reader honest.
+# plain_test.sh is the same comparison over ordinary closures.
+#
+# THE READING. The loader reads each closure --unchecked, a program alone for every `fn`: the
+# reading a build compiles (v3/build.sh) and every test runs. The load without the flag — the
+# check of the toolchain's sources, and the same comparison for the program it yields — is
+# kernel/test/toolchain_check.sh, on the loader's binary: under the bootstrap it is the
+# loader interpreted, running the checker over the sources it is written in.
 #
 # THE TABLE. The toolchain's sources stand on Init's List, Option, Bool and Prod, and the
 # bootstrap, which has no K, reads them by a table of facts about Init's constants kept in the
@@ -38,7 +44,7 @@ JOBS=${V3_PARITY_JOBS:-8}
 s=$(date +%s)
 # one I ENTRY: the two texts of one closure compared; $d/I.res holds `ok DECLS` or the failure's
 # lines, $d/I.facts the loader's table for the closure. The closures are independent, and the
-# loader's load of a toolchain root is minutes on the bootstrap: JOBS at a time
+# loader's load of a toolchain root is a minute or more on the bootstrap: JOBS at a time
 one() {
   local i=$1 entry=$2 a=$d/$1.a b=$d/$1.b dups kroot
   "$EVAL" dump "$entry" > "$a" 2>&1 || { { echo "parity_test: eval dump failed on $entry"; head -3 "$a"; } > "$d/$i.res"; return; }
@@ -59,7 +65,7 @@ one() {
   # own check links the implementation (env_empty is its). A test inside the directory imports
   # the private files and no view; a closure without K gets no extra root
   if grep -q '^fn env_empty ' "$a" && [ "${entry#v3/kernel/k/}" = "$entry" ]; then kroot=v3/kernel/k; else kroot=""; fi
-  "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --facts "$d/$i.facts" --dump "$entry" $kroot > "$b" 2>&1 || { { echo "parity_test: load --dump failed on $entry"; head -3 "$b"; } > "$d/$i.res"; return; }
+  "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked --facts "$d/$i.facts" --dump "$entry" $kroot > "$b" 2>&1 || { { echo "parity_test: load --dump failed on $entry"; head -3 "$b"; } > "$d/$i.res"; return; }
   if cmp -s "$a" "$b"; then echo "ok $(wc -l < "$a")" > "$d/$i.res"
   else { echo "parity_test: $entry differs"; diff "$a" "$b" | head -6; } > "$d/$i.res"; fi
   rm -f "$a" "$b"

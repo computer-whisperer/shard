@@ -96,9 +96,10 @@ with a proof. Today's compiler is unproven and is to be replaced by it.
 **Engines and gates**
 
 21. The Rust bootstrap evaluator is the authority. A compiled engine is confirmed against it by
-    comparing the two byte for byte on every test. One check is too slow for the bootstrap, the full
-    replay of Lean's library (76 minutes against 7): there the two are compared on the first part
-    and the binary runs the rest alone.
+    comparing the two byte for byte on every test. Two checks are too slow for the bootstrap: the
+    full replay of Lean's library (76 minutes against 7), and the checked load of the toolchain's
+    own sources, where the bootstrap interprets the loader checking the sources it is written
+    in. In each the two are compared on a part and the binary runs the rest alone.
 22. A missing or stale binary fails loudly. It never falls back silently to another engine.
 23. Every source file an author writes is kept in the canonical layout by a gate that refuses and
     does not rewrite. The layout serves agents reading and editing, not a human in an editor.
@@ -217,6 +218,10 @@ admitted that the logic does not derive.
     roughly correct." (Rule 21 stands as written. The build: `DECISIONS.md`, Build and gates.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
+
+Rule 21's second check is written from the owner's go-ahead for the ordinary `Symbol`, whose
+first step, as put to them, moved the toolchain's check onto the binaries: "Good. Proceed with
+the symbol change (full 1-4 scope)". The rule's wording is not yet ratified.
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.
