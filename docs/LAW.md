@@ -208,5 +208,7 @@ admitted that the logic does not derive.
     program to throw together some small mvp with almost no proof structures." And the bar:
     "Type errors should result in refused programs." (Rule 25.)
 
+The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
+
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.
