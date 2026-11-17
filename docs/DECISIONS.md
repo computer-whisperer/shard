@@ -524,7 +524,10 @@ measurements; measure again before building on one.
   emit of 11 to 32 s and a `cc` of up to 81 s for each other root. `v3/build.sh --tie` on
   that build, the bootstrap emitting 28 roots again and the binary the loader's: 174 s, 29
   the same. With every root on the bootstrap (`--all --bootstrap`, what CI builds) 246 s,
-  and the tie after it, the binary emitting each root again, 61 s. On CI (#733, read from the
+  and the tie after it, the binary emitting each root again, 61 s. At 8 roots at a time, the
+  script's default: the chain 336 s and 19 minutes of CPU, every root on the bootstrap 397 s
+  and 47 minutes — the chain waits for the loader before it starts the rest, so with a core
+  free for every root the bootstrap's build is the shorter. On CI (#733, read from the
   `native` job's log): the build 591 s where it was 703 (#729), the tie 81 s, the job 1,766 s
   for 1,783; the pipeline's longest job is `v3`, 1,845 s. The checked and the unchecked reading of the loader's closure gave C text in
   another order (88 of 9,177 functions: a checked function that cites a later one is settled
