@@ -904,6 +904,25 @@ measurements; measure again before building on one.
   3,107 (2,486 before the group) — the toolchain's check 280 s for 524 (335), the byte-tie
   1,362 s for 1,386 (967), its harness on the bootstrap 1,274 s for 1,296 (899) —, `v3`
   2,114 s, `replay` 1,866 s: a pipeline is 48 minutes for 52, and 41 before the group.
+- Where the byte-tie's time since `expr_eq`'s group went (2026-11-18), on the bootstrap. The
+  loader pins' harness on the tree before the group and on today's, side by side, each
+  line's time taken: 362 s and 522 s, and every case as long as it was but the three that
+  load K's view (`k_client_reach`, `k_client_admit`, `k_client_transfer`) — 33 s each
+  before, 60 s now, each loaded twice: 163 s of the 160. Such a load is 14 modules, K's
+  directory not among them; it accepts 1,482 declarations for 1,172, all 310 new ones in
+  `expr.shard`, 229 of them theorems: 182 the equations of `expr_eq_core` (121, one for each
+  pair of constructors) and `ing_is` (61). One of the three loaded alone by `load.shard`,
+  30 s of each figure the evaluator's start: 65 s with `expr.shard` as it was, 65 s with the
+  size derived and nothing measured by it, 89 s with the group measured and its proofs
+  absent, 93 s with them. With no key made for an accepted theorem, on a scratch loader:
+  60 s before the group and 68 s with it, where the same batch had 68 s and 96 s — of the
+  28 s a load, 21 are the keys of the new theorems, 8 their definitions, their checks and
+  their proofs. The count of calls says the same: 825 million more with the group, some
+  two thirds of them the hashing of names from their bytes; `req_walk` takes 1,034,000
+  steps for 309,000 and reaches a declaration some 50,000 times for 22,000. A walk that hashes a name
+  once a step and asks what it has seen first, on a scratch loader: the same records, 85 s
+  for 96. On the binary, the loader's own closure loaded checked: 47.5 s, and 33.3 s with
+  no key made, 11,469 of them. Nothing is changed in the tree.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
