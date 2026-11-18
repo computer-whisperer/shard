@@ -864,7 +864,10 @@ measurements; measure again before building on one.
   563 s for 363: it waits for the loader pins' harness on the bootstrap, 537 s for 343 (on
   the binary 25 s for 19) — three of its pins load K's view, and with it `expr.shard`,
   checked; how much of the 194 s is theirs is not measured. The suite 237 s on the binaries
-  and 974 s on the bootstrap, for 225 and 920.
+  and 974 s on the bootstrap, for 225 and 920. On CI (#750): `native` 3,107 s for 2,486 —
+  the toolchain's check 524 s for 335, the byte-tie 1,386 s for 967, its harness on the
+  bootstrap 1,296 s for 899 —, `v3` 2,126 s, `replay` 1,892 s: a pipeline is 52 minutes
+  for 41.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
