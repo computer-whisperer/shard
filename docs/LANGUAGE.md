@@ -230,13 +230,24 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **About a quarter of their functions are definitions.** The checker reads every one whose
-  signature reads: of the loader's closure, 8,850 functions, it holds 6,510 as definitions.
-  The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 1,100), a type in the signature is one of a group of types that
-  name each other (`e_only_type`, some 1,060), a measure that is an integer or a group of
-  functions that call each other (about 150), a numeral under a constructor pattern (18).
-  A type error in any of them is refused.
+- **Three quarters of their functions are definitions; of those written by hand, half.** The
+  checker reads every one whose signature reads: of the loader's closure, 8,850 functions —
+  4,790 of them the rows of a generated table —, it holds 6,790 as definitions. The others
+  are programs with the reason: a function they call is a program (`callee_runnable`, some
+  780), a type in the signature is one of a group of types that name each other
+  (`e_only_type`, some 1,060), a measure that is an integer or a group of functions that
+  call each other (about 190), a numeral under a constructor pattern (18). A type error in
+  any of them is refused.
+- **A function that recurses on an integer states a `Nat` measure and proves its descent
+  beside it.** `(measure (Int.natAbs n))`, then a `(fulfills F.dec_N …)` for each obligation
+  (below, "By measure"): it introduces what stands before the comparison and cites a fact of
+  `kernel/descent.shard` — a counter stepping down (`natAbs_pred`), a number losing a decimal
+  digit (`natAbs_div10`), an integer losing two bits (`natAbs_shr2_le`, `natAbs_shr2_lt`). A
+  `fulfills` follows a function that is defined by then, so what the function calls stands
+  above it. A build passes these proofs over (`--unchecked`); `toolchain_check.sh` checks
+  them. Three functions are written so (`util.shard` `show_nat_go`, `unify.shard`
+  `inst_level_go`, `intmap.shard` `im_split`); the others that recurse on an integer state
+  the integer and are programs (`measure_type`).
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.
@@ -616,7 +627,8 @@ derived size. The definition is built on `WellFounded.fix`. Every self-call stat
 ```
 
 - *Statement.* A `<` at `Nat`, under every variable in scope at the call, outermost first: the
-  parameters — one data parameter stands under its own name, several stand as a single tuple `p :
+  function's type parameters, each under its own name (pin `measure_type_param`), then the data
+  parameters — one stands under its own name, several stand as a single tuple `p :
   PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, … —, then pattern variables and
   `let`s, and the facts the enclosing branches give: under an `if`, `h : C` in the then-branch and
   `h : ¬C` in the else-branch; under a `match` row, `h : scrutinee = pattern`. Left out is what
@@ -1594,7 +1606,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
-| `--unchecked` | read every `fn` as a program alone (`RUNNABLE fn F why=unchecked route=e_first`): nothing checks its types and it has no definition, so a type error is not refused and a theorem about a function of the load has nothing to cite. A `fn` that writes a proof is refused (`unchecked_proof`): nothing reads it. The reading of a build of the toolchain (`v3/build.sh`); the check of the same sources is a load without the flag |
+| `--unchecked` | read every `fn` as a program alone (`RUNNABLE fn F why=unchecked route=e_first`): nothing checks its types and it has no definition, so a type error is not refused. A `fn` that writes a proof is refused (`unchecked_proof`): nothing reads it. A `theorem` and a `fulfills` are passed over: the functions they speak of have no definition there, and no program is made of a proof. The reading of a build of the toolchain (`v3/build.sh`); the check of the same sources is a load without the flag |
 | `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads what a closure cites of Init by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
 | `--emit DIR` | after a clean load, write the program's C text under DIR: `EMIT: DIR entry=FILE modules=N declarations=M` |

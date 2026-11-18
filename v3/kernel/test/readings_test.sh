@@ -32,8 +32,10 @@
 #     load without the flag defines `total` and refuses `mistyped`, a String where a list is
 #     declared, and `main` after it; under the flag each of the five fns is a program
 #     (`why=unchecked route=e_first`), nothing is defined or refused, and the program runs to
-#     its two lines — the type error is compiled, not refused. A written proof is not passed
-#     over: build_proof.shard's `first`, a definition without the flag, is refused under it.
+#     its two lines — the type error is compiled, not refused. A proof written inside a fn is
+#     not passed over: build_proof.shard's `first`, a definition without the flag, is refused
+#     under it. A `theorem` and a `fulfills` are: build_theorem.shard's descent is proven and
+#     its theorem accepted without the flag, and under it the load accepts and proves nothing.
 # Runs on either engine (EVAL); under v3/test.sh the two runs are compared byte for byte.
 # Exit code = the number of failed checks.
 set -u
@@ -108,6 +110,12 @@ P='pins\.readings\.build_proof'
 checks=$((checks+1)); { [ "$rc" = 0 ] && grep -Eq "^DEFINE $P\.first " "$OUT/p_checked.txt"; } || { bad "the written proof is not checked into a definition without the flag (exit $rc)"; grep -E "$P\.first" "$OUT/p_checked.txt" | cut -c1-300; }
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked v3/pins/readings/build_proof.shard > "$OUT/p_unchecked.txt" 2>&1; rc=$?
 checks=$((checks+1)); { [ "$rc" != 0 ] && grep -Eq "^REFUSE $P\.first unchecked_proof: Fin\.mk: " "$OUT/p_unchecked.txt"; } || { bad "a written proof is not refused under --unchecked (exit $rc)"; grep -E "$P\.first" "$OUT/p_unchecked.txt" | cut -c1-300; }
+T='pins\.readings\.build_theorem'
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/pins/readings/build_theorem.shard > "$OUT/t_checked.txt" 2>&1; rc=$?
+checks=$((checks+1)); { [ "$rc" = 0 ] && grep -Eq "^DISCHARGE $T\.count\.dec_1 proved\$" "$OUT/t_checked.txt" && grep -Eq "^ACCEPT $T\.count_two " "$OUT/t_checked.txt"; } || { bad "the descent is not proven or the theorem not accepted without the flag (exit $rc)"; grep -E "^(DISCHARGE|READ-ERROR|LOAD-ERROR|REFUSE) " "$OUT/t_checked.txt" | head -3 | cut -c1-300; }
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked v3/pins/readings/build_theorem.shard > "$OUT/t_unchecked.txt" 2>&1; rc=$?
+checks=$((checks+1)); { [ "$rc" = 0 ] && grep -Eq "^RUNNABLE fn $T\.count why=unchecked route=e_first\$" "$OUT/t_unchecked.txt"; } || { bad "the load of a theorem and a fulfills under --unchecked failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/t_unchecked.txt" | head -3 | cut -c1-300; }
+checks=$((checks+1)); if grep -Eq '^(ACCEPT|DEFINE|DISCHARGE|PARAM|PENDING) ' "$OUT/t_unchecked.txt"; then bad "a load under --unchecked reads a theorem or a fulfills"; grep -E '^(ACCEPT|DEFINE|DISCHARGE|PARAM|PENDING) ' "$OUT/t_unchecked.txt" | head -3 | cut -c1-300; fi
 
 echo "readings_test: $checks checks, $fail failed"
 exit $fail

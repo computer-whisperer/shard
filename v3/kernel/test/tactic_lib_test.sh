@@ -78,9 +78,10 @@ load "$A/use_split.shard" > "$OUT/replayA2.txt" 2>&1
 checks=$((checks+1)); [ "$(acc "$OUT/replayA2.txt" "$MA" | wc -l)" = 6 ] || { bad "the hints-changed copy does not replay 6 theorems"; grep -E 'PENDING|ERROR' "$OUT/replayA2.txt" | head -3 | cut -c1-300; }
 echo "tactic_lib_test: an older schema is reported and replays; changed hints replay unchanged"
 
-# ---- (6) --measure: both producers on every statement
+# ---- (6) --measure: both producers on every statement. The example's six are counted: its
+# closure holds the toolchain's own proofs too (kernel/descent.shard), which no producer closes
 prove --measure v3/examples/tactic/use_split.shard > "$OUT/measure.txt" 2>&1
-checks=$((checks+1)); grep -q '^ENGINE: solved 6 of 6$' "$OUT/measure.txt" || bad "the engine does not close 6 of 6 under --measure"
+checks=$((checks+1)); [ "$(grep -c '^ENGINE examples.tactic.use_split.[a-z_]* solved$' "$OUT/measure.txt")" = 6 ] || bad "the engine does not close the example's 6 under --measure"
 checks=$((checks+1)); [ "$(grep -c '^TACTIC examples.tactic.use_split.[a-z_]* examples.tactic.bool_split.solve solved$' "$OUT/measure.txt")" = 6 ] || bad "the tactic does not close 6 of 6 under --measure"
 echo "tactic_lib_test: $checks checks, $fail failed"
 exit $fail

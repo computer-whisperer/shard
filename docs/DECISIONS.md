@@ -124,8 +124,31 @@ entries are explained under "Measured" at the end.
   they have, `(measure (struct m))` — a child of the map at each call; not `(measure k)`, the
   key: an `Int` measure gives a function no definition (`measure_type`), and the key is not
   what ends the walk. Assent: "Good. Let's change the two measure lines and see where that
-  gets us." The lookup is a definition by it; the insert is not yet — it calls `im_split`,
-  whose recursion is on the two keys alone.
+  gets us." Both are definitions by it.
+- A toolchain function that recurses on an integer states a `Nat` measure, `(measure
+  (Int.natAbs n))`, and the proof of each descent stands beside it, over a fact of
+  `kernel/descent.shard`; not the obligations left pending — every theorem resting on such a
+  function would list them, and under the measure `im_split` stated, its key, the one it
+  owed is false at -1, which a shift leaves -1; not all 83 such functions at once — first
+  the three under which the most others stood (`util.shard` `show_nat_go`, `unify.shard`
+  `inst_level_go`, `intmap.shard` `im_split`), to learn what a proof costs. Assent, of the
+  three ways put to them (leave pending, prove all, pilot three): "C works -- pilot the three
+  largest first. If that works, probably the answer is to fork out the bulk changes to opus
+  subagents."
+- Chosen in building the pilot, not put to the owner one by one. `im_split` takes over from
+  `im_insert` the test that the two keys are the same, and its measure is the two keys'
+  distances from 0 together: keys that differ are not both -1, so one comes nearer at each
+  call — the function ends at every pair of integers and returns what it returned; not a
+  guard that turns a negative key away — the map as written finds and parts negative keys,
+  and a guard would change what it returns for them. The facts are a toolchain file of
+  theorems alone, which `util.shard` and `intmap.shard` import, so it is in K's closure; not
+  in `util.shard` — the int map imports nothing else. A measured function's obligation is
+  stated over its type parameters first: over the data binders alone it left a type
+  parameter free, K refused the statement, and a measured function with a type parameter
+  had no definition (`definition_refused`); `im_split` is the toolchain's one such.
+  One committed sidecar is made again with it (`examples/tactic/use_split.auto.shard`): a
+  sidecar's key takes in the descent obligations of every module in its file's closure,
+  proven or not, and that file imports `kernel/sexpr.shard` (`OPEN.md` §1).
 
 ## Programs and the back end
 
@@ -149,6 +172,17 @@ entries are explained under "Measured" at the end.
   its reading is the only one a written proof is `unchecked_proof`; not passing proofs over
   everywhere — a body the logic never read would then take a `Fin` on a proof nothing checked
   (pin `dif_scope`).
+- A build's load (`--unchecked`) passes a `theorem` and a `fulfills` over; not checking them
+  in every build — each of the 29 roots would prove again what its closure states, the
+  loader's own on the bootstrap —; not the load error a `fulfills` was there, the function
+  it names being a program that owes nothing; not refused as a proof written inside a `fn`
+  is — no value of the program rests on one, and the check of the same file is the load
+  without the flag (`toolchain_check.sh`); not the proofs kept in files outside every
+  build's closure — a function and the proof that it ends would be edited apart. Nor does
+  such a load ask the export for a constant that only a passed-over form cites: the table
+  the bootstrap reads Init by (`kernel/init.facts`, made under the flag) would else take a
+  line for each lemma a proof names, and every new proof would send it to be made again.
+  Chosen in building the pilot of the integer measures (Definitions and recursion).
 - A function that is only a program builds and reads the registry's rows by the table the
   erasure reads; not the classifier refusing every row's constructor so that the two routes
   could not disagree on a representation (pin `row_e_first` stated that).
@@ -728,6 +762,22 @@ measurements; measure again before building on one.
   `unify.inst_level_go` 169, `intmap.im_split` 101 —; 347 a group of functions that call
   each other (`expr.expr_eq` 227); 78 a numeral under a constructor pattern
   (`json.parse_int` 38). The three readings of every toolchain root are one text.
+- The pilot of three integer measures (2026-11-18, dev box, a loader built from the tree).
+  The checked load of the loader's closure, 8,854 functions: 6,786 definitions for 6,578 —
+  of the written functions 1,994 for 1,786 (K's own 376 for 335) —, 987 type-checked without
+  one, 1,081 not read, no obligation pending; in 77 s for 116. The same loader on the
+  sources before takes the 116 s: a checked function is read again for each callee that is
+  a program only (`OPEN.md` §1), and `show_nat`, the int map's insert and `inst_level` are
+  callees of hundreds. What it took: eight facts (43 lines); six proofs — one step after the
+  introductions for the two counters' and the digit's obligations, a case split and two
+  citations for the two keys'; the two changes of the loader (a build passes proofs over, an
+  obligation is stated over type parameters). What the functions without a definition start
+  at now: 1,060 the groups of types that name each other; 425 an integer measure, which 96
+  functions state (`unify.inst_go` 170); 427 a group of functions that call each other, 91
+  functions (`expr.expr_eq` 244); 82 a numeral under a constructor pattern. 9,022 accepted
+  declarations list `propext`. All 29 roots loaded checked, 12 at a time: 258 s for 402; the
+  suite 229 s on the binaries and 983 s on the bootstrap, for 234 and 1,021. On CI for the
+  int map's two lines before it (#746): `native` 2,469 s, `v3` 2,192 s, `replay` 1,871 s.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

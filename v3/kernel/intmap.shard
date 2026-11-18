@@ -9,8 +9,10 @@
 ;;; quarter of every dispatch in a kernel replay, most of it in tables of a
 ;;; few hundred entries (the memo tables reset per declaration).
 
+(import "descent.shard")
 (use Init.Bool false true)
 (use Init.Option none some)
+(use kernel.descent)
 
 (type (IntMap V)
   (IMEmpty)
@@ -29,39 +31,6 @@
        (if (= b 2) (im_find c2 r)
        (im_find c3 r))))))))
 
-;; key 0 is stored at the node itself; the low two bits select the child
-;; and the remaining bits index into it. Only keys ≥ 0 are ever used.
-(fn im_insert ((V Type) (m (IntMap V)) (k Int) (v V)) (IntMap V)
-  (measure (struct m))
-  (match m
-    (IMEmpty (IMLeaf k v))
-    ((IMLeaf j w) (if (= j k) (IMLeaf k v) (im_split j w k v)))
-    ((IMNode w c0 c1 c2 c3)
-     (if (= k 0) (IMNode (some v) c0 c1 c2 c3)
-     (let ((b (band k 3)) (r (bshr k 2)))
-       (if (= b 0) (IMNode w (im_insert c0 r v) c1 c2 c3)
-       (if (= b 1) (IMNode w c0 (im_insert c1 r v) c2 c3)
-       (if (= b 2) (IMNode w c0 c1 (im_insert c2 r v) c3)
-       (IMNode w c0 c1 c2 (im_insert c3 r v))))))))))
-
-;; A node holding exactly the two entries (j, w) and (k, v), j ≠ k: they
-;; part at the first level where their low bits differ (or where one of
-;; them is key 0, which lives at the node itself).
-(fn im_split ((V Type) (j Int) (w V) (k Int) (v V)) (IntMap V)
-  (measure k)
-  (if (= k 0) (im_put (IMNode (some v) IMEmpty IMEmpty IMEmpty IMEmpty) j w)
-  (if (= j 0) (im_put (IMNode (some w) IMEmpty IMEmpty IMEmpty IMEmpty) k v)
-  (let ((bj (band j 3)) (bk (band k 3)))
-    (if (= bj bk)
-      (im_with_child (IMNode none IMEmpty IMEmpty IMEmpty IMEmpty) bk
-        (im_split (bshr j 2) w (bshr k 2) v))
-      (im_put (im_put (IMNode none IMEmpty IMEmpty IMEmpty IMEmpty) j w) k v))))))
-
-;; (im_put node k v): the leaf for a nonzero key k under the child its low
-;; two bits select — that child must be empty.
-(fn im_put ((V Type) (m (IntMap V)) (k Int) (v V)) (IntMap V)
-  (im_with_child m (band k 3) (IMLeaf (bshr k 2) v)))
-
 (fn im_with_child ((V Type) (m (IntMap V)) (b Int) (c (IntMap V))) (IntMap V)
   (match m
     ((IMNode w c0 c1 c2 c3)
@@ -70,6 +39,56 @@
      (if (= b 2) (IMNode w c0 c1 c c3)
      (IMNode w c0 c1 c2 c)))))
     (_ m)))
+
+;; (im_put node k v): the leaf for a nonzero key k under the child its low
+;; two bits select — that child must be empty.
+(fn im_put ((V Type) (m (IntMap V)) (k Int) (v V)) (IntMap V)
+  (im_with_child m (band k 3) (IMLeaf (bshr k 2) v)))
+
+;; The subtree holding the two entries (j, w) and (k, v). The same key: one leaf, with v. Else
+;; a node where they part — at the first level where their low bits differ, or where one of
+;; them is key 0, which lives at the node itself. The measure is the two keys' distances from
+;; 0 together: a shift by two bits brings a key nearer to 0 unless it is 0 or -1, and two keys
+;; that differ are not both -1 (descent.shard).
+(fn im_split ((V Type) (j Int) (w V) (k Int) (v V)) (IntMap V)
+  (measure (+ (Int.natAbs j) (Int.natAbs k)))
+  (if (= j k) (IMLeaf k v)
+  (if (= k 0) (im_put (IMNode (some v) IMEmpty IMEmpty IMEmpty IMEmpty) j w)
+  (if (= j 0) (im_put (IMNode (some w) IMEmpty IMEmpty IMEmpty IMEmpty) k v)
+  (let ((bj (band j 3)) (bk (band k 3)))
+    (if (= bj bk)
+      (im_with_child (IMNode none IMEmpty IMEmpty IMEmpty IMEmpty) bk
+        (im_split (bshr j 2) w (bshr k 2) v))
+      (im_put (im_put (IMNode none IMEmpty IMEmpty IMEmpty IMEmpty) j w) k v)))))))
+;; k is -1 or it is not: where it is not, k comes nearer to 0 and j no further; where it is, j
+;; is not -1, and the same with the two exchanged
+(fulfills im_split.dec_1
+  (by
+    (intro V p hjk hk hj hb)
+    (cases (Int.decEq (proj PProd 0 (proj PProd 1 (proj PProd 1 p))) -1)
+      ((isFalse (ne)
+         (arith (natAbs_shr2_lt (proj PProd 0 (proj PProd 1 (proj PProd 1 p))) hk ne)
+           (natAbs_shr2_le (proj PProd 0 p))))
+       (isTrue (e)
+         (have nj (Not (= (proj PProd 0 p) -1))
+           (exact (fun ((z (= (proj PProd 0 p) -1))) (hjk (Eq.trans z (Eq.symm e))))))
+         (arith (natAbs_shr2_lt (proj PProd 0 p) hj nj)
+           (natAbs_shr2_le (proj PProd 0 (proj PProd 1 (proj PProd 1 p))))))))))
+
+;; key 0 is stored at the node itself; the low two bits select the child
+;; and the remaining bits index into it. Only keys ≥ 0 are ever used.
+(fn im_insert ((V Type) (m (IntMap V)) (k Int) (v V)) (IntMap V)
+  (measure (struct m))
+  (match m
+    (IMEmpty (IMLeaf k v))
+    ((IMLeaf j w) (im_split j w k v))
+    ((IMNode w c0 c1 c2 c3)
+     (if (= k 0) (IMNode (some v) c0 c1 c2 c3)
+     (let ((b (band k 3)) (r (bshr k 2)))
+       (if (= b 0) (IMNode w (im_insert c0 r v) c1 c2 c3)
+       (if (= b 1) (IMNode w c0 (im_insert c1 r v) c2 c3)
+       (if (= b 2) (IMNode w c0 c1 (im_insert c2 r v) c3)
+       (IMNode w c0 c1 c2 (im_insert c3 r v))))))))))
 
 (fn im_has ((m (IntMap Bool)) (k Int)) Bool
   (match (im_find m k)
