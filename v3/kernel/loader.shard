@@ -320,6 +320,7 @@
   (params (List Name))
   (etab ESt)
   (parked (List Parked))
+  (reads Reads)  ; how the readings of the parked fns ended, kept by the search for a group while they hold (settle_groups)
   (pm (List (Prod Name (List Name))))
   (forms (IntMap (List (Prod Name (Prod Scope SExpr)))))
   (discharged (List (Prod Name (List Name))))  ; a descent obligation proved: the axioms and parameters its proof rests on, which stand in its place in every closure
@@ -349,6 +350,7 @@
     (pm nil)
     (forms IMEmpty)
     (parked nil)
+    (reads (Reads nil nil))
     (typed nil)
     (discharged nil)
     (derived nil)
@@ -660,6 +662,114 @@
 ;; a fn whose definition waits on a callee not yet defined (a forward reference, or a
 ;; callee itself parked): the fn, its form, the obstacle and the callee named
 (type Parked (Parked Name SExpr Symbol (List Int)))
+;; What the search for a group keeps of its readings. It reads a parked fn once more for each
+;; callee-local, on every walk that reaches it, after every later fn of the file; how one
+;; reading ended is the same until something it rests on changes, so it is kept: for a fn,
+;; under the callee-locals it was read with — their names, in order —, whether the form read
+;; whole, stopped at a name the environment lacks, or did not read. A reading is of the form
+;; in the file's scope and the environment, with those locals. Parking a fn changes none: a
+;; parked fn has no constant. A function that gets its definition puts constants under its
+;; own name alone, so it changes the readings of the forms that name it, and those are
+;; forgotten (reads_forget); a form other than a fn, a `use`, an import and a fetch from Init
+;; can change any, and all are forgotten (ld_forget_all). What a callee is — parked, a
+;; program, nothing yet — is never kept: the search asks it anew each time
+(type ReadEnd (ReWhole) (ReStops (List Int)) (ReNo))
+(type Kept (Kept (List Name) ReadEnd))
+;; a parked fn's readings, with the components of the names its form cites
+(type Known (Known Name (List Symbol) (List Kept)))
+;; the parked fns at the last search, and what is kept
+(type Reads (Reads (List Name) (List Known)))
+(fn ld_with_reads ((l Load) (r Reads)) Load (with Load l (reads r)))
+(fn ld_forget_all ((l Load)) Load (with Load l (reads (Reads nil nil))))
+(fn ids_eq ((a (List Name)) (b (List Name))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x ar)
+     (match b
+       (nil false)
+       ((cons y br) (if (name_eq x y) (ids_eq ar br) false))))))
+(fn kept_find ((ss (List Kept)) (ids (List Name))) (Option ReadEnd)
+  (measure (struct ss))
+  (match ss
+    (nil none)
+    ((cons (Kept is e) r) (if (ids_eq is ids) (some e) (kept_find r ids)))))
+(fn reads_find ((ks (List Known)) (k Name) (ids (List Name))) (Option ReadEnd)
+  (measure (struct ks))
+  (match ks
+    (nil none)
+    ((cons (Known n _ ss) r) (if (name_eq n k) (kept_find ss ids) (reads_find r k ids)))))
+;; the components of a name, and of the names a form cites, each once
+(fn part_in ((c Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (nil false)
+    ((cons x r) (if (sym_eq x c) true (part_in c r)))))
+(fn name_parts ((n Name) (acc (List Symbol))) (List Symbol)
+  (measure (struct n))
+  (match n
+    (Anon acc)
+    ((Str p c) (name_parts p (if (part_in c acc) acc (cons c acc))))
+    ((Num p _) (name_parts p acc))))
+(fn sym_parts ((x Symbol) (acc (List Symbol))) (List Symbol)
+  (match (name_of_sym x)
+    ((some n) (name_parts n acc))
+    (none acc)))
+(fn form_parts ((s SExpr) (acc (List Symbol))) (List Symbol)
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_parts x acc))
+    ((SSymU x us) (sym_parts x (forms_parts us acc)))
+    ((SList items) (forms_parts items acc))
+    (_ acc)))
+(fn forms_parts ((ss (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct ss))
+  (match ss
+    (nil acc)
+    ((cons s r) (forms_parts r (form_parts s acc)))))
+(fn reads_add ((ks (List Known)) (k Name) (s SExpr) (ids (List Name)) (e ReadEnd)) (List Known)
+  (measure (struct ks))
+  (match ks
+    (nil (list (Known k (form_parts s nil) (list (Kept ids e)))))
+    ((cons (Known n ps ss) r)
+     (if (name_eq n k) (cons (Known n ps (cons (Kept ids e) ss)) r)
+     (cons (Known n ps ss) (reads_add r k s ids e))))))
+(fn parts_meet ((ps (List Symbol)) (xs (List Symbol))) Bool
+  (measure (struct ps))
+  (match ps
+    (nil false)
+    ((cons c r) (if (part_in c xs) true (parts_meet r xs)))))
+;; without the fns whose form cites a name with one of the components
+(fn reads_forget ((ks (List Known)) (xs (List Symbol))) (List Known)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons (Known n ps ss) r)
+     (if (parts_meet ps xs) (reads_forget r xs) (cons (Known n ps ss) (reads_forget r xs))))))
+;; the readings of the named fns alone
+(fn reads_only ((ks (List Known)) (ns (List Name))) (List Known)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons (Known n ps ss) r)
+     (if (mem_name n ns) (cons (Known n ps ss) (reads_only r ns)) (reads_only r ns)))))
+(fn last_parts ((ns (List Name))) (List Symbol)
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons n r) (cons (last_component n) (last_parts r)))))
+(fn names_gone ((was (List Name)) (now (List Name))) (List Name)
+  (measure (struct was))
+  (match was
+    (nil nil)
+    ((cons n r) (if (mem_name n now) (names_gone r now) (cons n (names_gone r now))))))
+;; a function has its definition: the readings of the forms that name it are forgotten
+(fn ld_forget ((l Load) (n Name)) Load
+  (match (Load.reads l)
+    ((Reads seen ks) (ld_with_reads l (Reads seen (reads_forget ks (list (last_component n))))))))
 (fn ld_with_recs_raw ((l Load) (rs (List Rec))) Load (with Load l (recs rs)))
 (fn ld_add_form ((l Load) (n Name) (sc Scope) (s SExpr)) Load
   (let ((k (name_key n)) (fo (Load.forms l)))
@@ -1039,7 +1149,7 @@
 ;; and `extern` are read by the classifier; `type` and `sig` gain their E
 ;; twins beside K's — a `type` over E's built-in types alone is E only
 ;; (type_is_e_only). K checks any L form in any file.
-(fn load_decl ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
+(fn load_decl_at ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
   (let ((sc (fx_scope l f)) (h (form_head s)))
     (load_decl_go
       (if (bool_and (fx_private f) (bool_or (sym_eq h (sym "fn")) (sym_eq h (sym "type"))))
@@ -1047,6 +1157,14 @@
         l)
       f
       s)))
+(fn load_decl ((l0 Load) (f Fx) (s SExpr)) (Prod Load Fx)
+  (let ((h (form_head s)))
+    ;; a form other than a fn can change any reading the search for a group keeps (a type, a
+    ;; proof, a derivation — which writes its table after the fns it generates): none is kept
+    ;; across one
+    (if (sym_eq h (sym "fn")) (load_decl_at l0 f s)
+    (match (load_decl_at (ld_forget_all l0) f s)
+      ((Prod.mk l1 f1) (Prod.mk (ld_forget_all l1) f1))))))
 ;; under the driver's --unchecked a load reads programs, and a proof is no part of one: a
 ;; theorem and a fulfills are passed over, as the bootstrap's reader passes them. (A proof
 ;; written inside a fn is refused there, `unchecked_proof`: a value would rest on it.)
@@ -1562,7 +1680,8 @@
       (match (load_fn l1 f s 2)
         ((Prod.mk l2 f2)
          (if (= (len (Load.parked l2)) (len (Load.parked l1)))
-           (match (retry_parked l2 f2 (+ 1 (len (Load.parked l2))))
+           ;; loaded, not parked: the readings kept of the forms that name it hold no longer
+           (match (retry_parked (ld_forget l2 (form_name sc s)) f2 (+ 1 (len (Load.parked l2))))
              ((Prod.mk l3 f3) (settle_groups l3 f3 (+ 1 (len (Load.parked l3))))))
            (settle_groups l2 f2 (+ 1 (len (Load.parked l2))))))))
       (load_extern l1 f s)))))
@@ -2311,42 +2430,62 @@
        ((some next)
         (if (bool_or (name_eq next k) (mem_name next seen)) true
         (waits_round lt sc next (cons k seen) (- fuel 1)))))))))
+;; how a reading ends, as the search takes it
+(fn read_end ((r PdRes)) ReadEnd
+  (match r
+    ((PdOk _) ReWhole)
+    ((PdSkip _ _) ReNo)
+    ((PdErr e m) (if (sym_eq e (sym "unknown_constant")) (ReStops m) ReNo))))
+;; one reading of a parked fn under callee-locals: the one kept, or read now and kept
+(fn reading ((lt Load) (sc Scope) (k Name) (s SExpr) (callees (List Callee)) (ks (List Known)))
+  (Prod ReadEnd (List Known))
+  (let ((ids (callee_ids callees)))
+    (match (reads_find ks k ids)
+      ((some e) (Prod.mk e ks))
+      (none
+        (let ((e (read_end (read_predef sc (Load.env lt) s callees))))
+          (Prod.mk e (reads_add ks k s ids e)))))))
 ;; a parked fn read with the parked as callee-locals — the retry's loop without a load: its
 ;; callees; or the name it still waits on; or an obstacle of its own (settled at the file's end)
-(fn probe_fn ((lt Load) (sc Scope) (s SExpr) (callees (List Callee)) (cfuel Int)) Probed
+(fn probe_fn
+  ((lt Load) (sc Scope) (k Name) (s SExpr) (callees (List Callee)) (cfuel Int) (ks (List Known)))
+  (Prod Probed (List Known))
   (measure cfuel)
-  (match (read_predef sc (Load.env lt) s callees)
-    ((PdOk _) (ProbedOk callees))
-    ((PdSkip _ _) ProbedNo)
-    ((PdErr r m)
-     (if (bool_not (sym_eq r (sym "unknown_constant"))) ProbedNo
+  (match (reading lt sc k s callees ks)
+    ((Prod.mk ReWhole ks1) (Prod.mk (ProbedOk callees) ks1))
+    ((Prod.mk ReNo ks1) (Prod.mk ProbedNo ks1))
+    ((Prod.mk (ReStops m) ks1)
      (match (callee_state lt sc m)
        ((CsTyped c)
-        (if (< cfuel 1) ProbedNo (probe_fn lt sc s (append callees (list c)) (- cfuel 1))))
-       (CsPark (ProbedWaits m))
-       (_ ProbedNo))))))
+        (if (< cfuel 1) (Prod.mk ProbedNo ks1)
+        (probe_fn lt sc k s (append callees (list c)) (- cfuel 1) ks1)))
+       (CsPark (Prod.mk (ProbedWaits m) ks1))
+       (_ (Prod.mk ProbedNo ks1))))))
 ;; every parked fn the start reaches through parked callees, each read: the probes, or the
 ;; first that does not read — with the name it waits on, kept on its entry so the next look
 ;; ends at the recorded waits
 (type ProbeReach (ReachOk (List Probe)) (ReachWaits Name (List Int)) (ReachNo))
-(fn probe_reach ((lt Load) (sc Scope) (todo (List Name)) (done (List Probe)) (fuel Int)) ProbeReach
+(fn probe_reach
+  ((lt Load) (sc Scope) (todo (List Name)) (done (List Probe)) (fuel Int) (ks (List Known)))
+  (Prod ProbeReach (List Known))
   (measure fuel)
-  (if (< fuel 1) ReachNo
+  (if (< fuel 1) (Prod.mk ReachNo ks)
   (match todo
-    (nil (ReachOk (rev done)))
+    (nil (Prod.mk (ReachOk (rev done)) ks))
     ((cons k r)
      (match (probe_find done k)
-       ((some _) (probe_reach lt sc r done (- fuel 1)))
+       ((some _) (probe_reach lt sc r done (- fuel 1) ks))
        (none
          (match (parked_find (Load.parked lt) k)
-           (none ReachNo)  ; a callee with a program and no definition, outside the parked: callee_runnable at the file's end
+           (none (Prod.mk ReachNo ks))  ; a callee with a program and no definition, outside the parked: callee_runnable at the file's end
            ((some (Parked _ s _ _))
-            (match (probe_fn lt sc s nil 16)
-              ((ProbedOk callees)
+            (match (probe_fn lt sc k s nil 16 ks)
+              ((Prod.mk (ProbedOk callees) ks1)
                (probe_reach lt sc (append r (callee_ids callees)) (cons (Probe k s callees) done)
-                 (- fuel 1)))
-              ((ProbedWaits m) (ReachWaits k m))
-              (ProbedNo ReachNo))))))))))
+                 (- fuel 1)
+                 ks1))
+              ((Prod.mk (ProbedWaits m) ks1) (Prod.mk (ReachWaits k m) ks1))
+              ((Prod.mk ProbedNo ks1) (Prod.mk ReachNo ks1)))))))))))
 ;; the names a name reaches through one call or more, among the probes
 (fn reach_names ((ps (List Probe)) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
   (measure (Int.natAbs fuel))
@@ -2392,15 +2531,23 @@
          ((some p) (cons p (probes_in_order r probes ks)))
          (none (probes_in_order r probes ks)))
        (probes_in_order r probes ks)))))
+;; what is kept, brought to the parked of now: a fn that is parked no longer was loaded —
+;; the readings of the forms that name it are forgotten, and its own
+(fn reads_settled ((l Load)) Load
+  (match (Load.reads l)
+    ((Reads seen kept)
+     (let ((now (parked_names (Load.parked l))))
+       (ld_with_reads l
+         (Reads now (reads_only (reads_forget kept (last_parts (names_gone seen now))) now)))))))
 ;; the parked looked at from the last one back: a closed set's lowest cycle, settled; then the
 ;; retry, and again
-(fn settle_groups ((l Load) (f Fx) (fuel Int)) (Prod Load Fx)
+(fn settle_groups ((l0 Load) (f Fx) (fuel Int)) (Prod Load Fx)
   (measure fuel)
-  (if (< fuel 1) (Prod.mk l f)
-  (match (Load.parked l)
-    (nil (Prod.mk l f))
+  (if (< fuel 1) (Prod.mk l0 f)
+  (match (Load.parked l0)
+    (nil (Prod.mk (ld_forget_all l0) f))
     (ps
-      (let ((sc (fx_scope l f)))
+      (let ((l (reads_settled l0)) (sc (fx_scope l0 f)))
         (match (find_group (typed_all l sc ps) sc l (rev ps) (+ 1 (len ps)))
           ((Prod.mk l1 none) (Prod.mk l1 f))
           ((Prod.mk l1 (some g))
@@ -2416,17 +2563,22 @@
     (nil (Prod.mk l none))
     ((cons (Parked k _ _ _) r)
      (if (bool_not (waits_round lt sc k nil fuel)) (find_group lt sc l r fuel)
-     (match (probe_reach lt sc (list k) nil (* 4 fuel))
-       ((ReachOk probes)
-        (match (lowest_cycle probes probes)
-          ((some ks) (Prod.mk l (some (probes_in_order (Load.parked l) probes ks))))
-          (none (find_group lt sc l r fuel))))
-       ((ReachWaits n m)
-        (find_group (ld_with_parked lt (parked_waits (Load.parked lt) n m)) sc
-          (ld_with_parked l (parked_waits (Load.parked l) n m))
-          r
-          fuel))
-       (ReachNo (find_group lt sc l r fuel)))))))
+     (match (Load.reads l)
+       ((Reads seen kept)
+        (match (probe_reach lt sc (list k) nil (* 4 fuel) kept)
+          ((Prod.mk reach kept1)
+           (let ((l1 (ld_with_reads l (Reads seen kept1))))
+             (match reach
+               ((ReachOk probes)
+                (match (lowest_cycle probes probes)
+                  ((some ks) (Prod.mk l1 (some (probes_in_order (Load.parked l1) probes ks))))
+                  (none (find_group lt sc l1 r fuel))))
+               ((ReachWaits n m)
+                (find_group (ld_with_parked lt (parked_waits (Load.parked lt) n m)) sc
+                  (ld_with_parked l1 (parked_waits (Load.parked l1) n m))
+                  r
+                  fuel))
+               (ReachNo (find_group lt sc l1 r fuel))))))))))))
 ;; the group's members read one after the other in one state (predef.shard read_predef_from)
 (fn read_group ((sc Scope) (env CheckedEnv) (g (List Probe)) (base (Option El)) (acc (List PreDef)))
   (Option (List PreDef))
@@ -3017,7 +3169,7 @@
              ((Prod.mk (Prod.mk l2 none) w1)
               (Prod.mk (Prod.mk (with Load l2 (missed (Load.missed l0))) false) w1))  ; the fetch failed: its load error stands in the reading's place and ends the file
              ((Prod.mk (Prod.mk l2 (some n)) w1)
-              (if (< 0 n) (Prod.mk (Prod.mk l2 true) w1)
+              (if (< 0 n) (Prod.mk (Prod.mk (ld_forget_all l2) true) w1)  ; constants fetched: no reading kept holds
               (Prod.mk (Prod.mk (ld_with_init stands (Load.init l2)) false) w1))))))
           (_ (Prod.mk (Prod.mk stands false) w)))))))
 ;; the names the words can stand for: each under the candidates resolution tries
@@ -4287,8 +4439,12 @@
 ;; — the E signatures compared, the parameter then admitted; (fulfills NAME
 ;; PROOF) — the requirement's statement re-read here, the proof checked or
 ;; pending; anything else the implementation's own
-(fn impl_form ((l Load) (im Im) (s SExpr) (fuel Int) (w World)) (Prod (Prod Load Im) World)
-  (let ((sc (fx_scope l (im_fx_impl im))) (h (form_head s)))
+(fn impl_form ((la Load) (im Im) (s SExpr) (fuel Int) (w World)) (Prod (Prod Load Im) World)
+  (let
+    ((sc (fx_scope la (im_fx_impl im)))
+     (h (form_head s))
+     ;; as in a plain file, no reading of a parked fn is kept across a form other than a fn
+     (l (if (sym_eq (form_head s) (sym "fn")) la (ld_forget_all la))))
     (match (form_of s)
       (FDecl
         (if (sym_eq h (sym "type"))
@@ -4313,7 +4469,7 @@
                  (none (Prod.mk (Prod.mk l0 (im_with_fx im f0)) w))
                  ((some sig)
                   (match (check_signature l0 (im_with_fx im f0) sig n)
-                    ((Prod.mk l1 im1) (Prod.mk (Prod.mk l1 im1) w))))))))
+                    ((Prod.mk l1 im1) (Prod.mk (Prod.mk (ld_forget l1 n) im1) w))))))))  ; the view's parameter of this name is met: the forms that name it read anew
         (if (sym_eq h (sym "fulfills"))
           (match s
             ((SList (cons _ (cons (SSym x) (cons proof nil))))
@@ -4475,16 +4631,18 @@
   (measure fuel)
   (match forms
     (nil
-      (match (flush_fetching (ld_settled l) f (refetches) w)  ; the fns parked on a forward reference that never came
+      (match (flush_fetching (ld_settled (ld_forget_all l)) f (refetches) w)  ; the fns parked on a forward reference that never came
         ((Prod.mk l1 w1) (Prod.mk (Prod.mk l1 (some f)) w1))))
     ((cons s r)
      (match (form_of s)
        ((FBad e m) (Prod.mk (Prod.mk (ld_rec l (RLoadErr (fx_file f) e m)) none) w))
-       ((FUse p ms) (load_forms l (fx_open f (open_of p ms)) r fuel w))
-       ((FTrusts ns) (load_forms l (fx_trust f ns) r fuel w))
+       ;; a `use`, a `trusts` and an import change the scope the fns after them are read in:
+       ;; no reading is kept across one (ld_forget_all)
+       ((FUse p ms) (load_forms (ld_forget_all l) (fx_open f (open_of p ms)) r fuel w))
+       ((FTrusts ns) (load_forms (ld_forget_all l) (fx_trust f ns) r fuel w))
        ((FImportFile p)
-        (match (import_file l f p (- fuel 1) w)
-          ((Prod.mk (Prod.mk l1 (some f1)) w1) (load_forms l1 f1 r fuel w1))
+        (match (import_file (ld_forget_all l) f p (- fuel 1) w)
+          ((Prod.mk (Prod.mk l1 (some f1)) w1) (load_forms (ld_forget_all l1) f1 r fuel w1))
           ((Prod.mk (Prod.mk l1 none) w1) (Prod.mk (Prod.mk l1 none) w1))))
        (FDecl
          (match (load_decl_fetching (ld_settled l) f s (refetches) w)

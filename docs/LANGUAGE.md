@@ -231,11 +231,11 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Four fifths of their functions are definitions; of those written by hand, more than
-  half.** The checker reads every one whose signature reads: of the loader's closure, 8,850
-  functions — 4,790 of them the rows of a generated table —, it holds 7,120 as definitions.
+  half.** The checker reads every one whose signature reads: of the loader's closure, 8,880
+  functions — 4,790 of them the rows of a generated table —, it holds 7,130 as definitions.
   The others are programs with the reason: a function they call is a program
   (`callee_runnable`, some 510), a type in the signature is one of a group of types that name
-  each other (`e_only_type`, some 1,060), a group of functions that call each other (about
+  each other (`e_only_type`, some 1,070), a group of functions that call each other (about
   95), a numeral under a constructor pattern (18), an integer measure (21). A type error in
   any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
@@ -273,7 +273,7 @@ file; two things about how they are written set them apart.
   `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
   Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
   type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 43
+  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 44
   groups more state a structural clause or none and are programs (`group_measure`). A size
   is the one derivation a build reads: its functions are definitions with no program, the
   loader makes them under `--unchecked` too, and the Rust reader passes the form over.
@@ -691,6 +691,9 @@ loader finds a group. A function whose callee is not yet declared waits; after e
 read the loader looks whether a waiting function's wait leads back to itself, reads every waiting
 function it reaches with the others standing as variables, and settles the smallest cycle among
 them. So a group is defined when its last member has been read, and later forms can cite it.
+It is found whatever stands between its members and after them — other functions, one a member
+names among them, a type, a `use` (pins `mutual_forward_after`, `mutual_callee_settles`,
+`mutual_type_between`, `mutual_use_between`).
 
 A group is compiled into **one** definition by well-founded recursion, on three conditions: every
 member has `(measure M)` with `M` a `Nat` over its own binders (`(measure (struct x))` does not

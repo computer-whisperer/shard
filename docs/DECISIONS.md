@@ -192,6 +192,22 @@ entries are explained under "Measured" at the end.
   (Measured; `OPEN.md` §1): ending a walk at the first function read that calls a program
   outside the waiting ones was tried on a scratch loader, gave the same records and took 4 s
   of 107 off, and is not in.
+- The search for a group keeps how each reading of a waiting function ended — whole, stopped
+  at a name the environment lacks, or not read — under the callee-variables it was read with,
+  and takes it again while it holds. The search itself is as it was: its walks, its fuels,
+  the waits it records; and what a callee is — waiting, a program, nothing yet — it asks anew
+  each time, so a function that comes to wait ends nothing kept. A reading is forgotten when a
+  function its form names is read and loaded, when a waiting function it names is, and every
+  one at a form that is no function, a `use`, a `trusts`, an import, a fetch from Init and a
+  file's end. Not the search made less often, or from the newest waiting function alone:
+  which of its looks are idle hangs on its fuel and on the waits it records, and nothing
+  showed the same groups would be found. It rests on one thing no load checks: a function's
+  definition puts constants under its own name alone, so it changes the reading of a form
+  only if the form names it (`OPEN.md` §4). A reading wrongly kept can leave a group without
+  its definition; it cannot define one wrongly — a group found is read again in one state
+  and K checks it. Assent, of the three ways put to them after `expr_eq`'s group doubled the
+  toolchain's check (this, the remaining groups first, that landing taken back): "Let's go
+  ahead with trying to fix the group search".
 
 ## Programs and the back end
 
@@ -868,6 +884,23 @@ measurements; measure again before building on one.
   the toolchain's check 524 s for 335, the byte-tie 1,386 s for 967, its harness on the
   bootstrap 1,296 s for 899 —, `v3` 2,126 s, `replay` 1,892 s: a pipeline is 52 minutes
   for 41.
+- The search for a group keeping its readings (2026-11-18), on the binaries: the checked
+  load of the loader's closure 44 s for 107 (71 before `expr_eq`'s group was a definition),
+  `k/tc.shard` 6.6 s for 59; all 29 roots loaded checked, 12 at a time, 151 s for 467 (235).
+  The loader before it and the loader with it, on the tree before it, record for record and
+  exit for exit: the 29 toolchain roots, 4,171 s of load for 1,355; and each of the 542
+  source files of the pins, the examples, the library, the tools and the model loaded as a
+  root — 317 load, 225 fail, alike. Each of four rules that forget a reading has a pin that
+  fails on a loader built without it (`mutual_forward_after`, `mutual_callee_settles`,
+  `mutual_type_between`, `mutual_use_between`); the rules at a `trusts`, an import, a fetch
+  from Init, a file's end and in a directory's implementation have none — each drops every
+  reading kept. The loader's closure with it: 8,878 functions, 7,134 definitions, 12 of the
+  23 the change adds among them; 44 groups without a measure, the pair that collects the
+  names a form cites one of them. The gate: the byte-tie 534 s for 563 — still not the 363 s
+  it was: it waits for the loader pins' harness on the bootstrap, 510 s for 537 (343 before
+  the group), which this does not touch; a checked load of `expr.shard` on the binary is
+  4.6 s for 3.4 by the group's definition and its proofs, and three pins load it. The
+  suite 225 s on the binaries, 946 s on the bootstrap.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
