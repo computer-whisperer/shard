@@ -2,8 +2,9 @@
 # v3/build.sh — a native binary from a shard program: the root's closure as the V3 loader
 # accepted it, lowered and written as C by V3's own back end inside the loader's process
 # (`load.shard --emit`: kernel/lower.shard, kernel/cgen.shard, over kernel/rt.h), then `cc` on
-# each file of that text side by side, into v3/bin/ by default. The back end is unproven, so the Rust bootstrap stays the authority
-# and the byte-ties (v3/t0_full.sh; kernel/test/native_tie_test.sh) tie the two.
+# each file of that text side by side, into v3/bin/ by default. The back end is unproven: a binary
+# stands in for the evaluator written in shard as the Rust bootstrap does (LAW.md rule 21), and
+# the byte-ties (v3/t0_full.sh; kernel/test/native_tie_test.sh) hold the two engines together.
 #
 #   v3/build.sh [SRC [OUT]] [--native] [--root DIR] [EXTRA…]   one root: SRC's closure (default
 #                        v3/kernel/t0.shard) into OUT (default v3/bin/STEM); --root the loader's

@@ -532,7 +532,10 @@
           (_ PrimGuard)))
        (_ PrimGuard)))
     (_ PrimGuard)))
-(fn shift_ok ((k Int)) Bool (bool_and (<= 0 k) (< k 64)))
+;; K's limits (k/tc.shard nat_max_size, count_max), above the operations that read them: a
+;; program's operator takes its entry from a type the reader has met
+(fn ev_nat_max_size () Int 134217728)
+(fn count_max_ev () Int 4294967295)
 (fn nonneg2 ((x Int) (y Int)) Bool (bool_and (<= 0 x) (<= 0 y)))
 (fn prim_ii ((lk Linked) (code Int) (x Int) (y Int)) PrimRes
   (if (< code 8)
@@ -542,22 +545,22 @@
     (if (= code 3) (PrimVal (bool_cell lk (< x y)))
     (if (= code 4) (PrimVal (bool_cell lk (<= x y)))
     (if (= code 6) (PrimVal (IVInt (band x y)))
-    (if (= code 7) (if (shift_ok y) (PrimVal (IVInt (bshr x y))) PrimGuard)
+    (if (= code 7) (if (< y 0) PrimGuard (PrimVal (IVInt (int_shr x y))))
     PrimGuard)))))))
   (if (< code 16)
     (if (= code 8) (PrimVal (IVInt (* x y)))
     (if (= code 9) (if (= y 0) PrimGuard (PrimVal (IVInt (mod x y))))
     (if (= code 10) (if (= y 0) PrimGuard (PrimVal (IVInt (Int.tdiv x y))))
-    (if (= code 11) (if (= y 0) PrimGuard (PrimVal (IVInt (tmod x y))))
-    (if (= code 12) (if (= y 0) PrimGuard (PrimVal (IVInt (ediv x y))))
+    (if (= code 11) (if (= y 0) PrimGuard (PrimVal (IVInt (Int.tmod x y))))
+    (if (= code 12) (if (= y 0) PrimGuard (PrimVal (IVInt (/ x y))))
     (if (= code 13) (PrimVal (IVInt (bor x y)))
     (if (= code 14) (PrimVal (IVInt (bxor x y)))
-    (if (shift_ok y) (PrimVal (IVInt (bshl x y)))
-    PrimGuard))))))))
+    (if (< y 0) PrimGuard
+    (int_shl x y)))))))))
   (if (< code 22)
     (if (= code 18) (PrimVal (IVInt (Int.tdiv x y)))
-    (if (= code 19) (PrimVal (IVInt (if (= y 0) x (tmod x y))))
-    (if (= code 20) (PrimVal (IVInt (if (= y 0) 0 (ediv x y))))
+    (if (= code 19) (PrimVal (IVInt (Int.tmod x y)))
+    (if (= code 20) (PrimVal (IVInt (/ x y)))
     (if (= code 21) (PrimVal (IVInt (if (= y 0) x (mod x y))))
     PrimGuard))))
   (if (bool_not (nonneg2 x y)) PrimGuard
@@ -568,7 +571,7 @@
   (if (= code 26)
     (if (= x 0) (PrimVal (IVInt 0))  ; the zero shortcut first: no count, no size, no work
     (if (< (count_max_ev) y) (PrimOut (sym "nat_count"))
-    (if (< (ev_nat_max_size) (+ (ev_nat_bytes x) (+ (ediv y 8) 1))) (PrimOut (sym "nat_size"))
+    (if (< (ev_nat_max_size) (+ (ev_nat_bytes x) (+ (/ y 8) 1))) (PrimOut (sym "nat_size"))
     (PrimVal (IVInt (* x (nat_pow_ev 2 y)))))))
   (if (= code 27) (PrimVal (IVInt (nat_shr x y)))
   (nat_prim lk code x y))))))))))))
@@ -586,35 +589,50 @@
   (if (= code 33)
     (if (< (count_max_ev) y) (PrimOut (sym "nat_count"))
     (if (< y 1) (nat_sized (nat_pow_ev x y))  ; x^0 = 1; the size estimate below divides by y
-    (if (bool_and (< 1 x) (< (ediv (ev_nat_max_size) y) (ev_nat_bytes x)))
-      (PrimOut (sym "nat_size"))
-      (nat_sized (nat_pow_ev x y)))))
+    (if (bool_and (< 1 x) (< (/ (ev_nat_max_size) y) (ev_nat_bytes x))) (PrimOut (sym "nat_size"))
+    (nat_sized (nat_pow_ev x y)))))
   (if (= code 34) (PrimVal (bool_cell lk (= x y)))
   (if (= code 35) (PrimVal (bool_cell lk (<= x y)))
   (if (= code 36) (PrimVal (dec_cell lk (= x y)))
   (if (= code 37) (PrimVal (dec_cell lk (< x y)))
   (if (= code 38) (PrimVal (dec_cell lk (<= x y)))
   PrimGuard))))))))))))
-(fn ev_nat_max_size () Int 134217728)
 (fn ev_nat_bytes_go ((n Int) (acc Int)) Int
   (measure n)
-  (if (<= n 0) acc (ev_nat_bytes_go (ediv n 256) (+ acc 1))))
+  (if (<= n 0) acc (ev_nat_bytes_go (/ n 256) (+ acc 1))))
 (fn ev_nat_bytes ((n Int)) Int (ev_nat_bytes_go n 0))
-(fn count_max_ev () Int 4294967295)
 (fn nat_sized ((r Int)) PrimRes
   (if (< (ev_nat_max_size) (ev_nat_bytes r)) (PrimOut (sym "nat_size")) (PrimVal (IVInt r))))
 (fn nat_gcd_ev ((a Int) (b Int)) Int (measure b) (if (<= b 0) a (nat_gcd_ev b (mod a b))))
 (fn nat_pow_ev ((b Int) (e Int)) Int
   (measure e)
-  (if (<= e 0) 1 (let ((h (nat_pow_ev b (ediv e 2)))) (if (= (mod e 2) 0) (* h h) (* (* h h) b)))))
+  (if (<= e 0) 1 (let ((h (nat_pow_ev b (/ e 2)))) (if (= (mod e 2) 0) (* h h) (* (* h h) b)))))
 ;; Nat.shiftLeft n k = n · 2^k (K's form, after the guards above) and Nat.shiftRight n k =
 ;; n / 2^k, total (Lean's), the right shift in steps of 62 bits over the host's guarded
 ;; shift, stopping at zero — so its work is bounded by n's size, never by k
 (fn nat_shr ((n Int) (k Int)) Int
   (measure k)
   (if (= n 0) 0
-  (if (< k 62) (bshr n k)
+  (if (< k 62) (bshr n (Int.natAbs k))
   (nat_shr (bshr n 62) (- k 62)))))
+
+;; `bshl` and `bshr` (codes 15 and 7) by any count that is a natural number, the engine's side of
+;; Int.shiftLeft m n = m · 2^n and Int.shiftRight m n = ⌊m / 2^n⌋ (prog.shard realization_of):
+;; the host's own shift under 62 bits; past them the left one by Nat.shiftLeft's guards and
+;; product, the right one in steps, ending where nothing is left but the sign
+(fn int_shl ((x Int) (y Int)) PrimRes
+  (if (< y 62) (PrimVal (IVInt (bshl x (Int.natAbs y))))
+  (if (= x 0) (PrimVal (IVInt 0))
+  (if (< (count_max_ev) y) (PrimOut (sym "nat_count"))
+  (if (< (ev_nat_max_size) (+ (ev_nat_bytes (if (< x 0) (- 0 x) x)) (+ (/ y 8) 1)))
+    (PrimOut (sym "nat_size"))
+    (PrimVal (IVInt (* x (nat_pow_ev 2 y)))))))))
+(fn int_shr ((x Int) (y Int)) Int
+  (measure y)
+  (if (< y 62) (bshr x (Int.natAbs y))
+  (if (= x 0) 0
+  (if (= x -1) -1
+  (int_shr (bshr x 62) (- y 62))))))
 
 ;; ---- `ev` -----------------------------------------------------------------------------------
 (fn val_in ((lk Linked) (v Val)) (Option IVal)

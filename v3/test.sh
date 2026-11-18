@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v3/test.sh — run every V3 test entrypoint on an engine; exit = the entrypoints that failed.
 # The Rust bootstrap (`eval direct` reads each test's import closure and runs its main; the
-# exit code is its failure count) is the authority — V3_ENGINE=bootstrap, the default.
+# exit code is its failure count) is the default engine — V3_ENGINE=bootstrap.
 # V3_ENGINE=native runs the same entrypoints on the native binaries: the shim v3/bin/eval
 # answers `direct` with v3/bin/NAME when its stamp is current and fails loudly otherwise,
 # never a silent fallback. The bootstrap reads and refuses nothing — no seal, no view's

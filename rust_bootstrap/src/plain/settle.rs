@@ -178,6 +178,22 @@ fn arith_op(p: &str) -> bool {
     matches!(p, "+" | "-" | "*" | "/" | "mod")
 }
 
+/// The bit-level five, whose entry is their operands' type's too: Init's at
+/// Nat, the bare one at Int and where no type is known.
+fn bit_op(p: &str) -> bool {
+    matches!(p, "band" | "bor" | "bxor") || shift_op(p)
+}
+
+fn shift_op(p: &str) -> bool {
+    matches!(p, "bshl" | "bshr")
+}
+
+/// The type an operator's second operand is read at, the first's being `ty`:
+/// a shift's count is a Nat.
+fn second_type(p: &str, ty: &Option<ETy>) -> Option<ETy> {
+    if shift_op(p) { Some(con("Nat")) } else { ty.clone() }
+}
+
 /// A numeral, or an operator over numerals: it has no type of its own.
 fn lit_only(t: &Tm) -> bool {
     match t {
@@ -193,6 +209,11 @@ fn arith_entry(p: &str, ty: &Option<ETy>) -> String {
             "-" => "Nat.sub",
             "/" => "Nat.div",
             "mod" => "Nat.mod",
+            "band" => "Nat.land",
+            "bor" => "Nat.lor",
+            "bxor" => "Nat.xor",
+            "bshl" => "Nat.shiftLeft",
+            "bshr" => "Nat.shiftRight",
             _ => p,
         }
     } else if is_named(ty, "Int") {
@@ -306,13 +327,14 @@ pub fn settle_ops(t: &Tables, tys: &[Option<ETy>], exp: &Option<ETy>, tm: Tm) ->
 }
 
 fn settle_prim(t: &Tables, tys: &[Option<ETy>], exp: &Option<ETy>, p: String, mut args: Vec<Tm>) -> R<Tm> {
-    if args.len() == 2 && (arith_op(&p) || cmp_prim(&p)) {
+    if args.len() == 2 && (arith_op(&p) || bit_op(&p) || cmp_prim(&p)) {
         let b = args.pop().unwrap();
         let a = args.pop().unwrap();
         // under an expected Nat or Int the operation is that type's and both operands are
-        // read at it
-        if arith_op(&p) && (is_named(exp, "Nat") || is_named(exp, "Int")) {
-            return Ok(Tm::Prim(arith_entry(&p, exp), vec![settle_ops(t, tys, exp, a)?, settle_ops(t, tys, exp, b)?]));
+        // read at it (a shift's count at Nat)
+        if !cmp_prim(&p) && (is_named(exp, "Nat") || is_named(exp, "Int")) {
+            let a2 = settle_ops(t, tys, exp, a)?;
+            return Ok(Tm::Prim(arith_entry(&p, exp), vec![a2, settle_ops(t, tys, &second_type(&p, exp), b)?]));
         }
         // no numeric type expected: the operation is the first operand's type's — of the
         // second where the first is numerals alone — and the other operand is read at it
@@ -323,7 +345,7 @@ fn settle_prim(t: &Tables, tys: &[Option<ETy>], exp: &Option<ETy>, p: String, mu
         } else {
             let a1 = settle_ops(t, tys, &None, a)?;
             let ty = c_type(t, tys, &a1);
-            (ty.clone(), a1, settle_ops(t, tys, &ty, b)?)
+            (ty.clone(), a1, settle_ops(t, tys, &second_type(&p, &ty), b)?)
         };
         if cmp_prim(&p) {
             let cond = cmp_cond(t, &p, &ty, a2, b2)?;

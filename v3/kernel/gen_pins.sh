@@ -4,7 +4,7 @@
 # into) through the last candidate's declaration: chunks 0–35 (Nat, String, Char,
 # List and most Nat operations in chunks 0–1; Char.ofNat and String.ofList in 3;
 # Nat.lor and Nat.shiftLeft in 9; Nat.xor at line 702,093, chunk 35). Runs on the
-# bootstrap — the authority produces the table: t0.shard --pins replays the
+# bootstrap, which reads no binary's word for the table: t0.shard --pins replays the
 # chunks, then k/refgen.shard prints every candidate's identity closure as the
 # declarations K admitted (k/add.shard `pin_if_matches` is the gate that compares
 # against them). The hand-written header above the marker is kept, but for its

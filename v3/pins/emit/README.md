@@ -43,9 +43,10 @@ A case is one of two kinds by where its file lives, and a name marks a refusal:
 | `init_list` | an ordinary case: its own World, an extern over `ByteArray`, a string literal. Init's `Bool`, `List`, `Option` and `Prod` are the cells the runtime's externs build and read, so the literal needs no rewrite |
 | `init_prim` | an ordinary case: Init's arithmetic at the values where the runtime's own operations differ — `Nat.sub` at an underflow, `Nat.div`/`Nat.mod` and the four `Int` divisions by zero and on negative operands, the bitwise five, `Nat.beq`/`ble`; `Nat.shiftLeft` and `Nat.shiftRight` by counts of 63, 64 and more, on small and large numbers, up to the last power of two a binary's integers hold, where the runtime's bare-named shifts stop at 63. Each row is silent when Init's result holds and prints its name otherwise; the last line is always printed |
 | `if_second` | an ordinary case: an `if` on a value of a program's own type (without fields, with fields, with the fields on the first constructor, each declared after a type of three constructors), of Init's `Option`, `List` and `Bool`, and on a decision — each on its first constructor, then its second, printing the branch taken: the then-branch on the second constructor, read in a binary from the tag's low bit |
-| `prims` | the integer primitives at their edges (`/` and `mod` at Int, the bare `tmod` and `ediv` on negative operands, the bitwise five, a product near 2^62): the binary's runtime against the bootstrap's |
+| `prims` | the integer primitives at their edges (`/` and `mod` at Int and `Int.tmod` on negative operands; the bitwise five on both signs, shifts by 63, by 64 and by more, of a negative number and of one past 2^100; a product near 2^62): the binary's runtime against the bootstrap's |
+| `int_bits` | an ordinary case: the bit-level operators at `Int` held to their definitions — each of 41 cases is a theorem K checks by computing the definition (the base's `land`, `lor`, `xor`, Init's two shifts) and a row the engine computes by its own operation; a row prints only where the two differ |
 
-`v3/kernel/test/lower_test.sh` also runs the ordinary cases `init_list` and `init_prim`, each as
+`v3/kernel/test/lower_test.sh` also runs the ordinary cases `init_list`, `init_prim` and `int_bits`, each as
 loaded and in its lowered form, and requires the same output.
 
 The loader's own cases — a malformed input, a refused declaration, a run out of fuel, a sidecar

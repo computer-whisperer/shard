@@ -211,7 +211,9 @@ mod tests {
     /// The table's paired division entries: `/`+`tmod` (truncating) and
     /// `ediv`+`mod` (Euclidean) each satisfy a = b*q + r across all sign
     /// combinations, with their respective remainder ranges. A source's `/`
-    /// and `mod` at Int are Init's `Int.ediv` and `Int.emod`, the Euclidean pair.
+    /// and `mod` at Int are Init's `Int.ediv` and `Int.emod`, the Euclidean pair,
+    /// and its truncating remainder is `Int.tmod`: the bare `tmod` and `ediv`
+    /// are the back end's, and a source that writes one is not read.
     #[test]
     fn prim_division_pairs() {
         let m = "(fn id ((x Int)) Int x)";
@@ -230,8 +232,31 @@ mod tests {
             // the source's pair is the Euclidean one
             assert_eq!(eval_str(m, &format!("(/ {a} {b})")), eq, "source (/ {a} {b})");
             assert_eq!(eval_str(m, &format!("(mod {a} {b})")), er, "source (mod {a} {b})");
-            assert_eq!(eval_str(m, &format!("(tmod {a} {b})")), int(a % b), "source (tmod {a} {b})");
+            assert_eq!(eval_str(m, &format!("(Int.tmod {a} {b})")), int(a % b), "source (Int.tmod {a} {b})");
         }
+        for spelling in ["(fn f ((a Int) (b Int)) Int (ediv a b))", "(fn f ((a Int) (b Int)) Int (tmod a b))"] {
+            let file = format!("{OPEN}{spelling}\n");
+            let (root, l) = closure(&[("kernel/t.shard", &file)], FACTS);
+            let _ = std::fs::remove_dir_all(root);
+            assert!(l.t.unread.iter().any(|u| format!("{u:?}").contains("renamed_primitive")), "{spelling}: {:?}", l.t.unread);
+        }
+    }
+
+    /// `bshl` and `bshr` by any count that is a natural number: Init's
+    /// `Int.shiftLeft` and `Int.shiftRight`. A negative count is stuck.
+    #[test]
+    fn prim_shifts_by_any_count() {
+        let int = |n: i64| Some(ast::Expr::IntLit(n.into()));
+        assert_eq!(prim2("bshr", 5, 64), int(0));
+        assert_eq!(prim2("bshr", -5, 64), int(-1));
+        assert_eq!(prim2("bshr", -5, 1), int(-3));
+        assert_eq!(prim2("bshr", -1, 5_000_000_000), int(-1));
+        assert_eq!(prim2("bshl", 0, 5_000_000_000), int(0));
+        assert_eq!(prim2("bshl", 1, 5_000_000_000), None);
+        assert_eq!(prim2("bshl", 1, -1), None);
+        assert_eq!(prim2("bshr", 1, -1), None);
+        let big = prim2("bshl", -5, 100).unwrap();
+        assert_eq!(format!("{big:?}").contains("6338253001141147007483516026880"), true, "{big:?}");
     }
 
     /// A source literal beyond the host parser's integer range is read
@@ -439,9 +464,9 @@ mod tests {
     /// The evaluator's FAST ARMS (eval.rs `apply_other`: the primitives
     /// tagged at lowering and applied directly on `Val`s) agree with the
     /// native table on the full pair matrix — values AND domains: where the
-    /// table leaves a call stuck (b=0 division, a shift amount outside
-    /// 0..64) the evaluator must report UnknownCall, never a value or a
-    /// crash. Untagged names take the general path, so the sweep also pins
+    /// table leaves a call stuck (b=0 division, a negative shift count, a
+    /// left shift past the sizes) the evaluator must report UnknownCall,
+    /// never a value or a crash. Untagged names take the general path, so the sweep also pins
     /// that path's conversion for every shared primitive.
     #[test]
     fn prim_fast_path_matches_table() {

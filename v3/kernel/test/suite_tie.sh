@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v3/kernel/test/suite_tie.sh A B — the suite's two runs compared entrypoint by entrypoint.
 # A and B are V3_TEST_OUT directories of `bash v3/test.sh`
-# (DIR/NAME.out, .rc, .secs; DIR/engine, DIR/wall), one on the bootstrap — the authority — and one
+# (DIR/NAME.out, .rc, .secs; DIR/engine, DIR/wall), one on the bootstrap and one
 # on the binaries: the same entrypoints on both sides, each with the same exit status and the same
 # output under THE NORMALIZATION, in full: a count of seconds or milliseconds (`N s`, `N ms` — the
 # second for handle_cost_test's link-once ratio), a scratch path's generated name (mktemp's

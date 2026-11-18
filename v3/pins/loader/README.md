@@ -92,7 +92,8 @@ the reason its name spells, less a leading `by_`.
 | `if_ok`; refused: `if_one`, `if_type` (`if_type`) | an `if` takes a `Bool`, a two-constructor type or a comparison; not a one- or three-constructor type, not a `Nat` |
 | `dif_ok`; refused: `dif_type`; `dif_scope` (`unchecked_proof`) | the dependent `if` and its hypothesis's scope |
 | `bool_ops`, `op_expected`, `op_int_div`, `define_nat_operator`, `rename_ok` | `and`, `or`, `not` at `Bool`; an operator takes the expected type's meaning; `/` and `%`; `-` at `Nat`; `< <= =` |
-| refused: `rename_refused`, `rename_refused_e`, `rename_refused_kernel` (`renamed_primitive`) | `lt`, `le`, `int_eq` are refused with the spelling to write |
+| refused: `rename_refused`, `rename_refused_e`, `rename_refused_kernel`, `rename_refused_ediv` (`renamed_primitive`) | `lt`, `le`, `int_eq`, and the back end's `ediv` and `tmod`, are refused with the spelling to write |
+| `bit_ops`; refused: `bit_shift_count` (`type_mismatch`), `reserved_module` (load error) | the bit-level operators by their operand's type, definitions K computes; a shift's count a `Nat`; the base's module no file's |
 | `literal_pattern`; `literal_nested` (`runnable no_l_identity`); refused: `literal_rows`; `literal_open` (`match_not_exhaustive`), `literal_type` (`pattern_type`), `match_literal` (`literal_pattern`) | numeral rows in a `match` |
 | refused: `str_bad_utf8` (`bad_string`) | a string literal is valid UTF-8 |
 | `row_types`, `struct_proj`, `refined_row`; `row_e_first` (`runnable no_l_identity`); refused: `row_e_match` (`pattern_type`) | Init's types that run as their one field (`Fin`, `UInt8`, `ByteArray`, `String`, `Subtype`); a projection; a row built in a body with no L reading |
@@ -125,7 +126,7 @@ the reason its name spells, less a leading `by_`.
 | `fulfills_refused`, `fulfills_not_obligation`, `fulfills_outside` (each a load error) | a `fulfills` of a refused function's obligation, of a declaration, of nothing |
 | `realize_supplied`, `realize_native`, `realize_view`, `realize_equations`, `realize_param_use`, `realize_theorem`, `realize_imported` | a program attached to a declaration of Init: by a supplied body, by Init's own definition, with named equation theorems; theorems cited before and after |
 | `realize_pending`, `realize_pending_via` (`pending measure`) | a realization under a measure not yet discharged, and a caller of one |
-| refused: `realize_recursion`, `realize_primitive`, `realize_signature`; `realize_wrong` (`conversion`), `realize_loop`, `realize_measure_loop` (`realize_descent`), `realize_brecon` (`recursion_structure`), `realize_order` (`no_realization`), `realize_fn` (`no_l_meaning`), `realize_no_l_identity` (`no_l_identity`), `realize_prop` (`realize_signature`), `realize_unknown` (`unknown_constant`), `realize_dup` (`duplicate_name`) | each way a realization is refused |
+| refused: `realize_recursion`, `realize_primitive`, `realize_signature`; `realize_wrong` (`conversion`), `realize_loop`, `realize_measure_loop` (`realize_descent`), `realize_brecon` (`recursion_structure`), `realize_order` (`no_realization`), `realize_fn` (`no_l_meaning`), `realize_prop` (`realize_signature`), `realize_unknown` (`unknown_constant`), `realize_dup` (`duplicate_name`) | each way a realization is refused |
 
 ### Deriving and templates
 

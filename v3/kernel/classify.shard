@@ -582,7 +582,10 @@
             (TErr (sym "ambiguous_head") (ambiguous_msg n a b)))
            (nil
              (match (prim_head (rd_sc r) n)
-               ((some (Prod.mk id (Prim _ k))) (read_prim_head r id k args))
+               ((some (Prod.mk id (Prim _ k)))
+                (match (renamed_prim h)
+                  ((some new) (TErr (sym "renamed_primitive") (renamed_msg h new)))
+                  (none (read_prim_head r id k args))))
                (none
                  (match (init_row r h n args)
                    ((some res) res)
@@ -2082,6 +2085,16 @@
     (bool_or (name_eq p (n1 (sym "-")))
       (bool_or (name_eq p (n1 (sym "*")))
         (bool_or (name_eq p (n1 (sym "/"))) (name_eq p (n1 (sym "mod"))))))))
+;; the bit-level five, whose entry is their operands' type's too: Init's at Nat, the bare one —
+;; the engine's operation on integers — at Int and where no type is known (elab.shard is_bit_op)
+(fn bit_op ((p Name)) Bool
+  (bool_or (name_eq p (n1 (sym "band")))
+    (bool_or (name_eq p (n1 (sym "bor"))) (bool_or (name_eq p (n1 (sym "bxor"))) (shift_op p)))))
+(fn shift_op ((p Name)) Bool (bool_or (name_eq p (n1 (sym "bshl"))) (name_eq p (n1 (sym "bshr")))))
+;; the type an operator's second operand is read at, the first's being `ty`: a shift's count
+;; is a Nat
+(fn second_type ((p Name) (ty (Option EType))) (Option EType)
+  (if (shift_op p) (some (ETCon (nm_nat) nil)) ty))
 ;; a numeral, or an operator over numerals: it has no type of its own
 (fn lit_only ((t ETerm)) Bool
   (measure (struct t))
@@ -2107,11 +2120,12 @@
   ETerm
   (match as
     ((cons a (cons b nil))
-     (if (arith_op p)
+     (if (bool_or (arith_op p) (bit_op p))
        ;; under an expected Nat or Int the operation is that type's and both operands are read
        ;; at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is the integer it is
        (if (bool_or (is_nat_type exp) (is_int_type exp))
-         (EPrim (arith_entry p exp) (list (settle_ops es dv tys exp a) (settle_ops es dv tys exp b)))
+         (EPrim (arith_entry p exp)
+           (list (settle_ops es dv tys exp a) (settle_ops es dv tys (second_type p exp) b)))
          (settle_by_operand es dv tys exp p a b))
        (if (cmp_prim p) (settle_by_operand es dv tys exp p a b)
        (EPrim p (settle_args es dv tys (prim_ptypes p) as)))))
@@ -2140,7 +2154,8 @@
    (a1 ETerm)
    (b ETerm))
   ETerm
-  (settle_at dv exp p (c_type es tys a1) a1 (settle_ops es dv tys (c_type es tys a1) b)))
+  (settle_at dv exp p (c_type es tys a1) a1
+    (settle_ops es dv tys (second_type p (c_type es tys a1)) b)))
 (fn settle_second
   ((es ESt)
    (dv (List (Prod EType Name)))
@@ -2181,7 +2196,12 @@
     (if (name_eq p (n1 (sym "-"))) (n2 (sym "Nat") (sym "sub"))
     (if (name_eq p (n1 (sym "/"))) (n2 (sym "Nat") (sym "div"))
     (if (name_eq p (n1 (sym "mod"))) (n2 (sym "Nat") (sym "mod"))
-    p)))
+    (if (name_eq p (n1 (sym "band"))) (n2 (sym "Nat") (sym "land"))
+    (if (name_eq p (n1 (sym "bor"))) (n2 (sym "Nat") (sym "lor"))
+    (if (name_eq p (n1 (sym "bxor"))) (n2 (sym "Nat") (sym "xor"))
+    (if (name_eq p (n1 (sym "bshl"))) (n2 (sym "Nat") (sym "shiftLeft"))
+    (if (name_eq p (n1 (sym "bshr"))) (n2 (sym "Nat") (sym "shiftRight"))
+    p))))))))
   (if (is_int_type ty)
     (if (name_eq p (n1 (sym "/"))) (n2 (sym "Int") (sym "ediv"))
     (if (name_eq p (n1 (sym "mod"))) (n2 (sym "Int") (sym "emod"))

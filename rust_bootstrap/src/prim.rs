@@ -41,13 +41,16 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("ediv", [IntLit(a), IntLit(b)]) if !b.is_zero()   => Some(IntLit((a - rem_euclid(a, b)) / b)),
 
         // Bitwise operations; a negative operand is read in two's
-        // complement (BigInt's operators). A shift count outside 0..64
-        // leaves the call stuck.
-        ("band", [IntLit(a), IntLit(b)])                              => Some(IntLit(a & b)),
-        ("bor",  [IntLit(a), IntLit(b)])                              => Some(IntLit(a | b)),
-        ("bxor", [IntLit(a), IntLit(b)])                              => Some(IntLit(a ^ b)),
-        ("bshl", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a << shift_amount(b)?)),
-        ("bshr", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a >> shift_amount(b)?)),
+        // complement (BigInt's operators). A shift is by any count that is a
+        // natural number — the engine's side of Init's `Int.shiftLeft` and
+        // `Int.shiftRight` (v3/kernel/prog.shard realization_of): m · 2^n, and
+        // ⌊m / 2^n⌋. A negative count leaves the call stuck; a left shift past
+        // the evaluator's sizes is stuck as `Nat.shiftLeft` is.
+        ("band", [IntLit(a), IntLit(b)])                       => Some(IntLit(a & b)),
+        ("bor",  [IntLit(a), IntLit(b)])                       => Some(IntLit(a | b)),
+        ("bxor", [IntLit(a), IntLit(b)])                       => Some(IntLit(a ^ b)),
+        ("bshl", [IntLit(a), IntLit(b)]) if !b.is_negative()   => shl_any(a, b).map(IntLit),
+        ("bshr", [IntLit(a), IntLit(b)]) if !b.is_negative()   => Some(IntLit(shr_any(a, b))),
 
         // Equality and comparison: `True` / `False` (the module header).
         ("=", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
@@ -149,10 +152,26 @@ pub(crate) fn rem_euclid(a: &Int, b: &Int) -> Int {
     if r.is_negative() { r + b.abs() } else { r }
 }
 
-/// The shift guard: a shift count must be in `0..64`.
-/// None outside that range (the call stays stuck).
-fn shift_amount(b: &Int) -> Option<u64> {
-    b.to_u64().filter(|k| *k < 64)
+/// `a · 2^k` for a count `k >= 0`, under `Nat.shiftLeft`'s guards: the count
+/// within 32 bits and the result within the literal size, else None (stuck).
+fn shl_any(a: &Int, k: &Int) -> Option<Int> {
+    if a.is_zero() {
+        return Some(Int::zero());
+    }
+    let k = k.to_u64().filter(|k| *k <= COUNT_MAX)?;
+    if nat_bytes(a) + k / 8 + 1 > NAT_MAX_SIZE {
+        return None;
+    }
+    Some(a << k)
+}
+
+/// `⌊a / 2^k⌋` for a count `k >= 0`: BigInt's shift rounds toward −∞, and a
+/// count past 64 bits leaves the sign alone.
+fn shr_any(a: &Int, k: &Int) -> Int {
+    match k.to_u64() {
+        Some(k) => a >> k,
+        None => if a.is_negative() { Int::from(-1) } else { Int::zero() },
+    }
 }
 
 fn bool_ctor(b: bool) -> Expr {

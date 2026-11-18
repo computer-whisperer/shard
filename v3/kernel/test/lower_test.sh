@@ -35,7 +35,7 @@ both() {
   echo "   same $l: exit $ra, $(wc -l < "$OUT/a.out") lines"
 }
 
-for c in init_list init_prim; do
+for c in init_list init_prim int_bits; do
   both "pin $c" '.' --root "v3/pins/emit/$c" $INIT --run main.main "v3/pins/emit/$c/main.shard"
 done
 lines=(); while IFS= read -r line || [ -n "$line" ]; do lines+=("$line"); done < v3/kernel/test/fixtures/calc_inputs.txt

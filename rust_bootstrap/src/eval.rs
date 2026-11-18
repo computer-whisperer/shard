@@ -877,7 +877,8 @@ fn bool_val(b: bool) -> Val {
     if b { TRUE_V.with(Val::clone) } else { FALSE_V.with(Val::clone) }
 }
 
-/// A shift amount the table accepts (`prim::shift_amount`): 0..64.
+/// A shift amount the fast path takes: 0..64. Any other count goes to the table (`prim.rs`),
+/// which shifts by every natural number.
 #[inline]
 fn shift_ok(k: i64) -> bool {
     (0..64).contains(&k)

@@ -48,7 +48,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a large computed result as a theorem | K's evaluation through a measured function gives out at depth 40 to 200; the rewriting step stops at 64 unfoldings |
 | packed byte buffers and machine words | bytes and strings are lists; every number is an arbitrary-size integer |
 | a binary's trace tied to its contract | a binary is compared on output and exit status only; the runtime writes no trace |
-| a meaning in the logic for the rest of the toolchain's sources | the sources stand on Init's types and are read by the rules every file is read by; of the 8,833 functions of the loader's closure the checker holds 2,513 as definitions and reads the types of 5,215 more, which are programs because a function they call is one (`callee_runnable`, 5,092) or for their recursion — an integer measure, a group of functions that call each other (about 120). The other 1,105 it does not read: 1,057 have a signature over a type that is a program only (`e_only_type`) — types that name each other, the three representations of a program among them (`prog.shard` `ETerm`, `ev.shard` `LTerm`, `lower.shard` `LwE`, each with its arm type) and the loader's state; 45 use a bit primitive with no meaning in the logic or match a numeral under a constructor. 64 types are programs only. No load checks the types of those 1,105, nor the measure any of the programs states (§4) |
+| a meaning in the logic for the rest of the toolchain's sources | the sources stand on Init's types and are read by the rules every file is read by; of the 8,853 functions of the loader's closure the checker holds 6,512 as definitions and reads the types of 1,261 more, which are programs because a function they call is one (`callee_runnable`, 1,103) or for their recursion — an integer measure, a group of functions that call each other (about 150; the int map's lookup, which states `(measure k)` and recurses on a child of the map, stands under 490). The other 1,080 it does not read: 1,059 have a signature over a type that is a program only (`e_only_type`) — types that name each other, the three representations of a program among them (`prog.shard` `ETerm`, `ev.shard` `LTerm`, `lower.shard` `LwE`, each with its arm type) and the loader's state; 18 match a numeral under a constructor. 64 types are programs only. No load checks the types of those 1,080, nor the measure any of the programs states (§4) |
 | a fixed identity for the `World` | an entry's last parameter is taken as the World whatever its type |
 
 ## 3. Missing, waiting for someone to need it
@@ -105,8 +105,8 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   file stands in its directory without comparing the two.
 - A function the typed route does not read is not type-checked: the program reader takes the
   declared types to choose an operator's entry, and compares no argument with its parameter.
-  In the toolchain those are the functions whose signature names a program-only type, 1,057
-  of the loader's 8,833. Their string literals are converted like every other
+  In the toolchain those are the functions whose signature names a program-only type, 1,059
+  of the loader's 8,853. Their string literals are converted like every other
   (`(utf8 "…")`), and nothing holds them to it: an unconverted one would run, a `String`
   being the list of its bytes.
 - The World's cell goes by a name in a native binary: the back end gives the World's tag to

@@ -32,11 +32,13 @@
 (import "arith.shard")
 (import "thread.shard")
 (import "dump.shard")
+(import "base.shard")
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.k)
 (use kernel.kw)
+(use kernel.base)
 (use kernel.classify)
 (use kernel.sym)
 (use kernel.thread)
@@ -3196,16 +3198,38 @@
 ;; of its forms; its MODULE record when its forms are done
 (fn load_module ((l Load) (rel (List (List Int))) (fuel Int) (w World)) (Prod Load World)
   (measure fuel)
-  (match (module_of rel)
-    ((MPBad m) (Prod.mk (ld_rec l (RLoadErr (join_path rel) (sym "bad_module_name") m)) w))
-    (MPDir (load_dir l rel fuel w))
-    ((MPView mp)
-     (match (load_file_module l rel mp true fuel w)
-       ((Prod.mk (Prod.mk l1 _) w1) (Prod.mk l1 w1))))
-    ((MPOk mp)
-     (match (load_file_module l rel mp false fuel w)
-       ((Prod.mk (Prod.mk l1 _) w1) (Prod.mk l1 w1))))))
+  (if (base_reserved rel)
+    (Prod.mk
+      (ld_rec l
+        (RLoadErr (join_path rel) (sym "reserved_module")
+          (utf8 "the module `shard` is the system's own: the base every file sees")))
+      w)
+    (match (module_of rel)
+      ((MPBad m) (Prod.mk (ld_rec l (RLoadErr (join_path rel) (sym "bad_module_name") m)) w))
+      (MPDir (load_dir l rel fuel w))
+      ((MPView mp)
+       (match (load_file_module l rel mp true fuel w)
+         ((Prod.mk (Prod.mk l1 _) w1) (Prod.mk l1 w1))))
+      ((MPOk mp)
+       (match (load_file_module l rel mp false fuel w)
+         ((Prod.mk (Prod.mk l1 _) w1) (Prod.mk l1 w1)))))))
 
+;; the base (base.shard) before a file whose forms use one of its operators: read once in a
+;; load, as the module `shard.int`, and seen by the file that asked; then the file's demand
+;; of Init. The E count is taken after both: the file's own declarations from here (rec_threads)
+(fn init_prepare_base ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World))
+  (Prod (Prod Load (Option Fx)) World)
+  (measure fuel)
+  (if (bool_not (uses_base (Load.unchecked l) forms))
+    (init_prepare l (with Fx f (ecount (es_count (Load.etab l)))) forms w)
+    (match
+      (match (ld_find_mod (Load.mods l) (base_module))
+        ((some _) (Prod.mk (Prod.mk l none) w))
+        (none (load_source_module l (base_rel) (base_module) false (- fuel 1) (base_source) w)))
+      ((Prod.mk (Prod.mk l1 _) w1)
+       (init_prepare l1 (with Fx (fx_see f (list (base_module))) (ecount (es_count (Load.etab l1))))
+         forms
+         w1)))))
 ;; one file as the module `mp`; a view when `view`. Returns, for a view, the
 ;; fork point: the loader's state after the view's leading
 ;; directives, the file's context then, and the forms after them
@@ -3240,107 +3264,97 @@
                    (join_path (append (Load.root l) rel))))
                none)
              w1))
-          ((Prod.mk (some src) w1)
-           (match (read_all src)
-             ((RAErr e off)
-              (Prod.mk
-                (Prod.mk
-                  (ld_rec l (RReadErr (join_path rel) e (append (utf8 "at byte ") (show_nat off))))
-                  none)
-                w1))
-             ((RAOk forms0)
-              (match (expand_records forms0)
-                ((RxErr e m) (Prod.mk (Prod.mk (ld_rec l (RReadErr (join_path rel) e m)) none) w1))
-                ((RxOk forms)
-                 (match (sealed_ident l rel mp view w1)
-                   ((Prod.mk ip w1s)
-                    (match (split_directives forms nil)
-                      ((Prod.mk dirs rest)
-                       (match (read_sidecar l rel rest w1s)
-                         ((Prod.mk (Prod.mk l0a autos) w1s2)
-                          (match
-                            (pre_register_file l0a
-                              (make Fx (module mp) (ident ip) (parts rel) (opened nil)
-                                (vis (list mp))
-                                (trusts nil)
-                                (hash (hash_name mp))
-                                (view view)
-                                (autos autos)
-                                (impl false)
-                                (taken nil)
-                                (ecount 0)
-                                (bins nil))
-                              rest)
-                            ((Prod.mk none l0)
-                             (Prod.mk (Prod.mk (ld_add_failed l0 mp rel) none) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed
-                            ((Prod.mk (some f0) l0)
-                             (match
-                               (load_forms (ld_with_stack l0 (cons mp (Load.stack l))) f0 dirs fuel
-                                 w1s2)
-                               ((Prod.mk (Prod.mk l1 none) w2)
+          ((Prod.mk (some src) w1) (load_source_module l rel mp view fuel src w1))))))))
+;; a module's text as the module `mp`: a file's that load_file_module read, or the base's
+;; (base.shard), which no file holds
+(fn load_source_module
+  ((l Load) (rel (List (List Int))) (mp Name) (view Bool) (fuel Int) (src (List Int)) (w1 World))
+  (Prod (Prod Load (Option ForkPt)) World)
+  (measure fuel)
+  (match (read_all src)
+    ((RAErr e off)
+     (Prod.mk
+       (Prod.mk (ld_rec l (RReadErr (join_path rel) e (append (utf8 "at byte ") (show_nat off))))
+         none)
+       w1))
+    ((RAOk forms0)
+     (match (expand_records forms0)
+       ((RxErr e m) (Prod.mk (Prod.mk (ld_rec l (RReadErr (join_path rel) e m)) none) w1))
+       ((RxOk forms)
+        (match (sealed_ident l rel mp view w1)
+          ((Prod.mk ip w1s)
+           (match (split_directives forms nil)
+             ((Prod.mk dirs rest)
+              (match (read_sidecar l rel rest w1s)
+                ((Prod.mk (Prod.mk l0a autos) w1s2)
+                 (match
+                   (pre_register_file l0a
+                     (make Fx (module mp) (ident ip) (parts rel) (opened nil) (vis (list mp))
+                       (trusts nil)
+                       (hash (hash_name mp))
+                       (view view)
+                       (autos autos)
+                       (impl false)
+                       (taken nil)
+                       (ecount 0)
+                       (bins nil))
+                     rest)
+                   ((Prod.mk none l0) (Prod.mk (Prod.mk (ld_add_failed l0 mp rel) none) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed
+                   ((Prod.mk (some f0) l0)
+                    (match
+                      (load_forms (ld_with_stack l0 (cons mp (Load.stack l))) f0 dirs fuel w1s2)
+                      ((Prod.mk (Prod.mk l1 none) w2)
+                       (Prod.mk
+                         (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) none)
+                         w2))
+                      ((Prod.mk (Prod.mk l1p (some f1p)) w2p)
+                       (match (init_prepare_base l1p f1p rest fuel w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names
+                         ((Prod.mk (Prod.mk l1 none) w2)
+                          (Prod.mk
+                            (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) none)
+                            w2))
+                         ((Prod.mk (Prod.mk l1a (some f1)) w2)
+                          (match (pre_register_late l1a f1 rest)
+                            ((Prod.mk none l1)
+                             (Prod.mk
+                               (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
+                                 none)
+                               w2))
+                            ((Prod.mk (some _) l1)
+                             (match (load_forms l1 f1 rest fuel w2)
+                               ((Prod.mk (Prod.mk l2 (some f)) w3)
+                                (let
+                                  ((fp
+                                     (if view
+                                       (some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest))
+                                       none)))
+                                  (Prod.mk
+                                    (Prod.mk
+                                      (ld_rec
+                                        (rec_bins
+                                          (rec_states
+                                            (rec_threads
+                                              (rec_unused
+                                                (ld_add_mod (ld_with_stack l2 (Load.stack l))
+                                                  (make Module (path mp) (file (join_path rel))
+                                                    (hash (Fx.hash f))
+                                                    (closure (Fx.vis f))
+                                                    (fork fp)
+                                                    (ok true)))
+                                                f
+                                                dirs
+                                                rest)
+                                              f)
+                                            f)
+                                          f)
+                                        (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
+                                      fp)
+                                    w3)))
+                               ((Prod.mk (Prod.mk l2 none) w3)
                                 (Prod.mk
-                                  (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
+                                  (Prod.mk (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel)
                                     none)
-                                  w2))
-                               ((Prod.mk (Prod.mk l1p (some f1p)) w2p)
-                                (match
-                                  (init_prepare l1p
-                                    (with Fx f1p (ecount (es_count (Load.etab l1p))))
-                                    rest
-                                    w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names
-                                  ((Prod.mk (Prod.mk l1 none) w2)
-                                   (Prod.mk
-                                     (Prod.mk
-                                       (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
-                                       none)
-                                     w2))
-                                  ((Prod.mk (Prod.mk l1a (some f1)) w2)
-                                   (match (pre_register_late l1a f1 rest)
-                                     ((Prod.mk none l1)
-                                      (Prod.mk
-                                        (Prod.mk
-                                          (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
-                                          none)
-                                        w2))
-                                     ((Prod.mk (some _) l1)
-                                      (match (load_forms l1 f1 rest fuel w2)
-                                        ((Prod.mk (Prod.mk l2 (some f)) w3)
-                                         (let
-                                           ((fp
-                                              (if view
-                                                (some
-                                                  (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest))
-                                                none)))
-                                           (Prod.mk
-                                             (Prod.mk
-                                               (ld_rec
-                                                 (rec_bins
-                                                   (rec_states
-                                                     (rec_threads
-                                                       (rec_unused
-                                                         (ld_add_mod
-                                                           (ld_with_stack l2 (Load.stack l))
-                                                           (make Module (path mp)
-                                                             (file (join_path rel))
-                                                             (hash (Fx.hash f))
-                                                             (closure (Fx.vis f))
-                                                             (fork fp)
-                                                             (ok true)))
-                                                         f
-                                                         dirs
-                                                         rest)
-                                                       f)
-                                                     f)
-                                                   f)
-                                                 (RModule mp (join_path rel) (Fx.hash f) (Fx.vis f)))
-                                               fp)
-                                             w3)))
-                                        ((Prod.mk (Prod.mk l2 none) w3)
-                                         (Prod.mk
-                                           (Prod.mk
-                                             (ld_add_failed (ld_with_stack l2 (Load.stack l)) mp rel)
-                                             none)
-                                           w3))))))))))))))))))))))))))))
+                                  w3))))))))))))))))))))))
 ;; the prefix a file's declarations take: its own module, or the sealed directory's for a file
 ;; directly inside a directory that has a view (one module across the directory's files; the
 ;; view and the implementation already carry it)

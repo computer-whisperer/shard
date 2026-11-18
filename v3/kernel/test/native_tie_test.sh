@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v3/kernel/test/native_tie_test.sh — the byte-tie gate of the native toolchain: a fixed
-# set of the suite's workloads run under both engines — the Rust bootstrap (`eval direct`,
-# the authority) and the binaries v3/build.sh built (kernel/lower.shard, kernel/cgen.shard) —
+# set of the suite's workloads run under both engines — the Rust bootstrap (`eval direct`)
+# and the binaries v3/build.sh built (kernel/lower.shard, kernel/cgen.shard) —
 # and compared on four things: stdout, stderr, the exit status and every artifact written
 # (a sidecar, the back end's C text, an index), byte for byte. Both runs use the same scratch
 # paths (the first engine's artifacts are set aside before the second runs), so a path

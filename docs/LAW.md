@@ -123,7 +123,7 @@ The detail, file by file, is in `KERNEL.md`.
   battery of hostile declarations that must be refused.
 - The engine that runs K: the Rust bootstrap (about 5,200 lines and the Rust compiler; 3,600
   of them are the reader, which reads K's sources as it reads any program's), and the table of
-  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 36 lines, printed by
+  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 38 lines, printed by
   the loader from K and compared with K's by a test). When K runs
   as a native binary, also the unproven compiler, its runtime and the C compiler; the binaries are
   compared with the bootstrap, not proven equal to it.
@@ -138,7 +138,11 @@ The detail, file by file, is in `KERNEL.md`.
 
 - the axioms about host calls that the contract trusts, and the host calls themselves;
 - that the program derived from a function computes what the function's definition denotes
-  (the erasure: reviewed, tested, not proven);
+  (the erasure: reviewed, tested, not proven) — and in it, that an engine's operation computes
+  the definition a row of the registry runs it for (`kernel/prog.shard`): Init's arithmetic on
+  `Nat` and `Int`, its two shifts on `Int`, and the `and`, `or`, `xor` on `Int` that the
+  system defines itself (`kernel/base.shard`). A wrong row makes a program compute what its
+  definition does not; it proves nothing, K reading the definition alone;
 - the check that the World is used once;
 - the compiler, its runtime, the C compiler, libc and the operating system.
 
@@ -237,8 +241,8 @@ admitted that the logic does not derive.
     don't mean that we should cheat and axiomize everything, but we will need to expand our
     operator and logical proof base over time beyond what Lean happened to implement for
     us." (An operator's meaning is a definition K checks and its facts are proven from it;
-    what is believed is that an engine's operation computes that definition. Nothing is
-    built yet: `DECISIONS.md`, Programs and the back end.)
+    what is believed is that an engine's operation computes that definition: §4. Built for
+    the bit-level five: `DECISIONS.md`, Programs and the back end.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

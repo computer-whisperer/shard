@@ -10,9 +10,9 @@
 # The checked load of the toolchain is too slow for the bootstrap (LAW 21: the loader
 # interpreted, running the checker over the sources it is written in), so the two engines
 # are compared on a part:
-#   (3) for the roots whose closure is under V3_CHECK_SMALL declarations (default 400: eight
-#       of them, each some seconds on the binary and a minute or two on the bootstrap) the
-#       loader on the bootstrap exits the same and prints the same text.
+#   (3) for the roots whose closure is under V3_CHECK_SMALL declarations (default 400: the
+#       smallest few, each some seconds on the binary and a minute or two on the bootstrap)
+#       the loader on the bootstrap exits the same and prints the same text.
 # parity_test.sh is the same comparison for the reading of programs alone, on both engines.
 # Needs v3/bin/load current (v3/build.sh --all): a missing or stale binary fails here, and
 # nothing falls back to the bootstrap. V3_CHECK_JOBS roots at a time (default 8).

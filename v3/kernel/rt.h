@@ -19,8 +19,8 @@
  *   even = pointer to cell { tag, arity, fields... }.
  * Ints outside i63 are BIGNUM cells (tag RT_TAG_BIG_, see the bignum
  * section) — arithmetic is exact like the interpreted engines, up to the
- * explicit guards (shift counts, RT_BIG_MAXLIMB), which trap: loud, never
- * wrong.
+ * explicit guards (a negative shift count, RT_BIG_MAXLIMB), which trap: loud,
+ * never wrong.
  *
  * Allocator: bump pointer over a big MAP_NORESERVE region, backed by a
  * CONSERVATIVE mark-sweep collector (rt_gc). GC runs only inside rt_alloc,
@@ -35,9 +35,9 @@
  * 32-bit tag, cleared by the sweep so the hot rt_tag path is untouched
  * between collections. Reclaimed cells go to size-segregated free lists
  * (non-moving — conservative roots can't be relocated). Nothing here is
- * proven: the Rust bootstrap is the authority wherever a binary differs from
- * it, and the ties (test/native_tie_test.sh, test/suite_tie.sh) compare the
- * two byte for byte.
+ * proven: a binary that differs from the other engines is wrong or they are
+ * (LAW.md rule 21), and the ties (test/native_tie_test.sh, test/suite_tie.sh)
+ * compare it with the Rust bootstrap byte for byte.
  */
 #ifndef RT_H
 #define RT_H
@@ -115,8 +115,9 @@ static inline value_t rt_cons(value_t h, value_t t) {
  * to small ints in rt_big_make) — so tagged-word equality stays valid for
  * smalls and small-vs-big is never equal. Slow paths only: every prim keeps
  * its small-int fast path and falls through on overflow or a big operand.
- * Semantics authority = prim.rs (num-bigint): truncating `/`+`tmod`,
- * euclidean `mod`+`ediv`, two's-complement bitwise, floor shifts. Division
+ * The operations are the other engines' (prim.rs on num-bigint, ev.shard):
+ * truncating `/`+`tmod`, euclidean `mod`+`ediv`, two's-complement bitwise,
+ * floor shifts by any count that is a natural number. Division
  * is bit-serial (simple over fast) past 128 bits; a dividend within 128 bits
  * over a divisor within 64 takes the machine's division (rt_idiv2): a
  * structural hash written whole (name.shard `mix_whole`) is a multiply and a
@@ -234,13 +235,21 @@ static inline value_t rt_bxor(value_t a, value_t b) {
   if (a & b & 1) return rt_mk_small(rt_untag(a) ^ rt_untag(b));
   return rt_ibit2(2, a, b);
 }
-/* shift counts stay guarded to 0..63 (the interpreted engines' stuck rule;
- * a big count is out of range by canonicality) */
+static inline int rt_is_neg(value_t v) {
+  return (v & 1) ? rt_untag(v) < 0 : rt_big_sign(v) < 0;
+}
+/* bshl and bshr by any count that is a natural number: the engine's side of
+ * Init's Int.shiftLeft m n = m * 2^n and Int.shiftRight m n = floor(m / 2^n)
+ * (prog.shard realization_of). A negative count is stuck on the interpreted
+ * engines. A left shift whose result reaches 2^3840 ends as every integer of
+ * that size does, and a count past 3840 on a nonzero m is always one; a right
+ * shift by such a count leaves the sign. */
 static inline value_t rt_bshl(value_t a, value_t b) {
-  if (!(b & 1)) rt_trap("bshl shift out of range (stuck on engines)");
+  if (rt_is_neg(b)) rt_trap("bshl shift out of range (stuck on engines)");
+  if (a == rt_mk_small(0)) return a;         /* zero whatever the count */
+  if (!(b & 1) || rt_untag(b) > 32 * RT_BIG_MAXLIMB) rt_trap("bignum too large (exceeds 2^3840)");
   int64_t s = rt_untag(b);
-  if (s < 0 || s >= 64) rt_trap("bshl shift out of range (stuck on engines)");
-  if (a & 1) {
+  if ((a & 1) && s < 63) {
     int64_t r = rt_untag(a);
     if (s < 2 || (r <= (RT_INT_MAX >> s) && r >= (RT_INT_MIN >> s)))
       /* shift via unsigned: defined for negative r, same bits */
@@ -249,10 +258,10 @@ static inline value_t rt_bshl(value_t a, value_t b) {
   return rt_ishl2(a, (uint32_t)s);
 }
 static inline value_t rt_bshr(value_t a, value_t b) {
-  if (!(b & 1)) rt_trap("bshr shift out of range (stuck on engines)");
+  if (rt_is_neg(b)) rt_trap("bshr shift out of range (stuck on engines)");
+  if (!(b & 1) || rt_untag(b) > 32 * RT_BIG_MAXLIMB) return rt_mk_small(rt_is_neg(a) ? -1 : 0);
   int64_t s = rt_untag(b);
-  if (s < 0 || s >= 64) rt_trap("bshr shift out of range (stuck on engines)");
-  if (a & 1) return rt_mk_small(rt_untag(a) >> s);  /* arithmetic = floor */
+  if (a & 1) return rt_mk_small(s < 63 ? rt_untag(a) >> s : (rt_untag(a) < 0 ? -1 : 0));  /* arithmetic = floor */
   return rt_ishr2(a, (uint32_t)s);
 }
 /* Nat.shiftLeft and Nat.shiftRight: total on the naturals, as the evaluator
@@ -261,9 +270,6 @@ static inline value_t rt_bshr(value_t a, value_t b) {
  * to 0..63. A negative operand is no natural: stuck on the interpreted
  * engines. A left shift whose result reaches 2^3840 ends as every integer of
  * that size does; a count past 3840 on a nonzero n is always one. */
-static inline int rt_is_neg(value_t v) {
-  return (v & 1) ? rt_untag(v) < 0 : rt_big_sign(v) < 0;
-}
 static inline value_t rt_nat_shl(value_t a, value_t b) {
   if (rt_is_neg(a) || rt_is_neg(b)) rt_trap("Nat.shiftLeft of a negative (stuck on the interpreted engines)");
   if (a == rt_mk_small(0)) return a;         /* zero whatever the count */

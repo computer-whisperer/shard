@@ -72,7 +72,7 @@ cp "$d/facts" "$d/calc.facts"
 complete v3 v3/std/mem.shard
 complete v3/pins/loader/record_basic v3/pins/loader/record_basic/main.shard
 complete v3/pins/loader/view_basic v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib
-partial 58 102 20 v3 v3/pins/readings/main.shard
+partial 61 105 20 v3 v3/pins/readings/main.shard
 partial 140 140 1 v3 v3/tools/shardfmt/fmt.shard v3/tools/shardfmt/print v3/tools/shardfmt/reads
 
 # the run: one line of the differential's inputs per argument

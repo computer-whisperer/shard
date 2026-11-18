@@ -139,6 +139,14 @@ fn prim_of(sc: &Scope, n: &str) -> Option<(Name, usize)> {
         .map(|(_, p, k)| (p.to_string(), k))
 }
 
+fn renamed_prim(h: &str) -> Option<&'static str> {
+    match h {
+        "ediv" => Some("/"),
+        "tmod" => Some("Int.tmod"),
+        _ => None,
+    }
+}
+
 /// The registry's rows: a resolved operation of Init → the table's entry.
 pub fn realization_of(c: &str) -> Option<&'static str> {
     Some(match c {
@@ -148,6 +156,8 @@ pub fn realization_of(c: &str) -> Option<&'static str> {
         "Int.decEq" | "Nat.decEq" => "=",
         "Int.decLt" | "Nat.decLt" => "<",
         "Int.decLe" | "Nat.decLe" => "<=",
+        "Int.shiftLeft" => "bshl",
+        "Int.shiftRight" => "bshr",
         _ => return None,
     })
 }
@@ -707,6 +717,11 @@ fn read_eapp(cx: &Cx, r: &Rd, h0: &str, args: &[&Value]) -> R<Tm> {
         [(id, _)] => unread("bad_head", format!("{id} is a type")),
         [] => {
             if let Some((id, k)) = prim_of(cx.sc, h) {
+                // the two divisions the table keeps for the back end's own use: in a source
+                // they are Init's (v3/kernel/scope.shard renamed_prim)
+                if let Some(new) = renamed_prim(h) {
+                    return unread("renamed_primitive", format!("{h} is spelled {new}: write that instead"));
+                }
                 return read_prim_head(cx, r, &id, k, args);
             }
             if let Some(res) = init_row(cx, r, h, args) {

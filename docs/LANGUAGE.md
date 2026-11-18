@@ -231,12 +231,12 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **About a quarter of their functions are definitions.** The checker reads every one whose
-  signature reads: of the loader's closure, 9,170 declarations, it holds 2,510 as definitions.
+  signature reads: of the loader's closure, 8,850 functions, it holds 6,510 as definitions.
   The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 5,100), a type in the signature is one of a group of types that
+  (`callee_runnable`, some 1,100), a type in the signature is one of a group of types that
   name each other (`e_only_type`, some 1,060), a measure that is an integer or a group of
-  functions that call each other (about 110), a bit-level primitive or a numeral under a
-  constructor pattern (45). A type error in any of them is refused.
+  functions that call each other (about 150), a numeral under a constructor pattern (18).
+  A type error in any of them is refused.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.
@@ -490,6 +490,8 @@ as `(Int.natAbs i)`.
 | `-` | `Nat.sub` (stops at 0) | `Int.sub` | | |
 | `/` | `Nat.div` | `Int.ediv` | | |
 | `mod`, `%` | `Nat.mod` | `Int.emod` | | |
+| `band` `bor` `bxor` | `Nat.land` `Nat.lor` `Nat.xor` | the base's `shard.int.land` `lor` `xor` | | |
+| `bshl` `bshr` | `Nat.shiftLeft` `Nat.shiftRight` | `Int.shiftLeft` `Int.shiftRight` | | |
 | `<` `<=` | `Nat.lt` `Nat.le` | `Int.lt` `Int.le` | | |
 | `>` `>=` | `<`, `<=` with the operands swapped | same | | |
 | `min` `max` | `Min.min` `Max.max` | same | | |
@@ -497,10 +499,22 @@ as `(Int.natAbs i)`.
 | `not`, `iff` | | | `Not`, `Iff` | `Bool.not` |
 | `=` `!=` | `Eq`, `Ne` at any type | | | |
 
-The type that decides: for `+ - * / mod %`, an expected type of `Nat` or `Int` decides and both
-operands are read at it, so `(- 1 2)` where an `Int` is expected is `Int.sub 1 2`, that is −1.
-Otherwise the first operand's type decides — or the second's when the first is built from numerals
-alone, so `(<= 48 c)` is read at `c`'s type. A type with no row is `no_operator_identity`.
+The type that decides: for `+ - * / mod %` and the bit-level five, an expected type of `Nat` or
+`Int` decides and both operands are read at it, so `(- 1 2)` where an `Int` is expected is
+`Int.sub 1 2`, that is −1. Otherwise the first operand's type decides — or the second's when the
+first is built from numerals alone, so `(<= 48 c)` is read at `c`'s type. A type with no row is
+`no_operator_identity`.
+
+**The bit-level five.** An integer is its two's complement at any size, so `(band -4 -6)` is −8
+and `(bxor -1 5)` is −6; at `Nat` the three are Init's. A shift's count is a `Nat` at either
+type, and any natural number: `(bshl 1 64)` is 2^64, `(bshr -5 64)` is −1, the right shift
+rounding down. An `Int` as the count is `type_mismatch: expected Nat, found Int` — write the
+conversion, `(bshr a (Int.natAbs k))`. Init has no `and`, `or`, `xor` on `Int`: those three are
+defined by the system itself, in a base every file sees with no import (`shard.int.land`, `lor`,
+`xor`: by cases on the integer's two constructors over Init's `Nat.land`, `Nat.lor`, `Nat.xor`;
+`v3/kernel/base.shard`). A theorem states them through the operators, and K computes them from
+the definitions (`(theorem t () (= (band 12 10) 8) (by (decide)))`); like Init's `Nat.land`,
+what cites one lists `propext`. No file's module may be named `shard` (`reserved_module`).
 
 No operator is refused at `Nat`: `(- a b)` there is `Nat.sub`, which stops at zero, in the
 definition and in its program alike (pin `define_nat_operator`); to go below zero, work at `Int`.
@@ -513,7 +527,8 @@ elsewhere (`v3/pins/readings`).
 `/` and `mod` are Init's and total: `7 / 0` is 0 at `Nat` and at `Int`, `7 % 0` is 7 at `Nat`,
 `-7 mod 0` is −7 at `Int`, under `--run` and in a binary alike. `min` and `max` are `Min.min` and
 `Max.max` at `Nat` and at `Int` (pin `instance_table`).
-The spellings `lt`, `le`, `int_eq` are `renamed_primitive` (write `<`, `<=`, `=`). Lean's `==`,
+The spellings `lt`, `le`, `int_eq` are `renamed_primitive` (write `<`, `<=`, `=`), and so are
+`ediv` and `tmod` (write `/`, which is `Int.ediv` at `Int`, and `Int.tmod`). Lean's `==`,
 `&&`, `||`, `!x`, `∀`, `→`, `≤` and the like are `lean_symbol`, each with its spelling here; a
 name ending in `!` (`List.get!`) is `inhabited_default`.
 
@@ -748,7 +763,7 @@ to be left with: for them the reasons of the definer are refusals.
 | `function_value` | typed | the function's own name is not applied to all its arguments | apply the function fully |
 | `definition_refused`, `define_matrix`, `define_depth` | typed | the definer built something K refused, or met a shape it does not handle | a defect of the definer: report it; split a body too deep |
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
-| `no_l_identity` | e_first | the body uses something with no form in the logic: a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
+| `no_l_identity` | e_first | the body uses something with no form in the logic: a numeral under a constructor pattern | bind the field and compare with `if` |
 | `e_only_type` | e_first | the signature cannot be read: a binder is a program-only `type`, or a `type` declared later in the file | declare the type first |
 | `unchecked` | e_first | the load ran under `--unchecked`: no `fn` is checked or defined, and a type error is not refused | load without the flag; a build of the toolchain reads its sources so |
 
@@ -1021,8 +1036,8 @@ An entry with the World alone takes any arguments and reads them through `get_ar
 | 0 | — | the entry returned |
 | CODE | — | the program called `exit CODE` |
 | 2 | the load's records, then `LOAD: …` | the load failed; nothing ran |
-| 3 | `RUN: out of fuel in F`, `RUN: exhausted nat_size in F` | fuel, or a `Nat` result past 2^27 bytes (`nat_count`: a shift or power count past 32 bits) |
-| 4 | `RUN: stuck REASON in F` | `no_arm` (no match arm), `guard` (a toolchain primitive outside its domain: `tmod` or `ediv` by zero, `bshl` or `bshr` by a count outside 0–63; `/` and `mod` are Init's and total, and `Nat.shiftLeft`, `Nat.shiftRight` are computed at a count of 64 and more), `if_tag`, `extern` (an extern the host cannot perform at its declared types), `unlinked` (a `sig fn` whose implementation was not loaded), `unreachable` |
+| 3 | `RUN: out of fuel in F`, `RUN: exhausted nat_size in F` | fuel, or a `Nat` result or a left shift's past 2^27 bytes (`nat_count`: a shift or power count past 32 bits) |
+| 4 | `RUN: stuck REASON in F` | `no_arm` (no match arm), `guard` (a primitive outside its domain: `bshl` or `bshr` by a negative count, which a function nothing type-checks can pass; `/` and `mod` are Init's and total, and a shift is computed at a count of 64 and more), `if_tag`, `extern` (an extern the host cannot perform at its declared types), `unlinked` (a `sig fn` whose implementation was not loaded), `unreachable` |
 | 5 | `RUN: link REASON: TEXT` | the entry cannot be prepared: `unknown_head`, `unlinked`, `bad_entry` (no World last; a parameter type no argument supplies), `preconditioned`, `lowering` |
 | 6 | `RUN: argument N REASON: TEXT` | `argument_count`, `not_an_int`, `not_a_nat`; e.g. `RUN: argument 1 not_a_nat: x` |
 

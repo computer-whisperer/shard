@@ -51,7 +51,7 @@ M='pins\.readings\.main'
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the load under --both failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/both.txt" | head -5 | cut -c1-300; }
 
 # ---- (1) one program by both readings
-for f in sub_nat sub_int numeral_right numerals_at_int numerals_at_nat div_both mod_both under_int under_list cmp_value cmp_cond abs_pred connectives succ_zero by_name self_call \
+for f in sub_nat sub_int numeral_right numerals_at_int numerals_at_nat div_both mod_both under_int under_list cmp_value cmp_cond abs_pred connectives succ_zero by_name bits_nat bits_int bits_expected self_call \
          Coin.ctorIdx Coin.decEq row_make row_field row_pattern value_in_type proof_binder proof_call alias_type hypothesis decision_value decision_cond decision_cells eq_bool eq_derived every_binder width_written row_typed \
          inc scale lam_closed lam_closed.lam_1 lam_captures lam_captures.lam_1 lam_nested lam_nested.lam_1 lam_nested.lam_2 lam_expected lam_expected.lam_1 lam_inner lam_inner.lam_1 lam_inner.lam_2 \
          named named_partial by_registry registry_partial package rows_local rows_bound let_run \
@@ -68,7 +68,7 @@ checks=$((checks+1)); grep -Eq "^BOTH $M\.field_at_constant unread: function_val
 checks=$((checks+1)); grep -Eq "^BOTH $M\.proof_captures differs: typed: fn proof_captures 0 \(Nat Nat\) Nat \([a-z_]*proof_captures_lam_1_1 #1 #0\) \| plain: fn proof_captures 0 \(Nat Nat\) Nat \([a-z_]*proof_captures_lam_1_0 #0\)\$" "$OUT/both.txt" || { bad "the local a proof alone names is not reported with the two programs"; grep -E "^BOTH $M\.proof_captures " "$OUT/both.txt" | cut -c1-300; }
 checks=$((checks+1)); grep -Eq "^BOTH $M\.proof_captures\.lam_1 differs: typed: fn lam_1 0 \(Nat Nat\) Nat 0 \| plain: fn lam_1 0 \(Nat\) Nat 0\$" "$OUT/both.txt" || { bad "the lifted lambda is not reported with its two programs"; grep -E "^BOTH $M\.proof_captures\.lam_1 " "$OUT/both.txt" | cut -c1-300; }
 n=$(grep -c '^BOTH ' "$OUT/both.txt")
-checks=$((checks+1)); [ "$n" = 63 ] || { bad "$n BOTH records, not the sixty-three of the fixture"; grep '^BOTH ' "$OUT/both.txt" | cut -c1-120; }
+checks=$((checks+1)); [ "$n" = 66 ] || { bad "$n BOTH records, not the sixty-six of the fixture"; grep '^BOTH ' "$OUT/both.txt" | cut -c1-120; }
 "$EVAL" direct v3/kernel/load.shard --root v3 $INIT $F > "$OUT/plain.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || bad "the load without the flag failed (exit $rc)"
 checks=$((checks+1)); if grep -q '^BOTH ' "$OUT/plain.txt"; then bad "a load without --both has BOTH records"; fi

@@ -31,10 +31,12 @@
 (import "scope.shard")
 (import "unify.shard")
 (import "matcher.shard")
+(import "base.shard")
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.k)
+(use kernel.base)
 (use kernel.expr)
 (use kernel.kw)
 (use kernel.level)
@@ -1059,7 +1061,14 @@
                             (bool_or (sym_eq x (sym "or"))
                               (bool_or (sym_eq x (sym "not"))
                                 (bool_or (sym_eq x (sym "iff"))
-                                  (bool_or (sym_eq x (sym "min")) (sym_eq x (sym "max"))))))))))))))))))))
+                                  (bool_or (sym_eq x (sym "min"))
+                                    (bool_or (sym_eq x (sym "max")) (is_bit_op x))))))))))))))))))))
+;; the bit-level five: Init's at Nat; at Int its two shifts, and the base's `and`, `or`, `xor`
+;; (base.shard), which Init does not define
+(fn is_bit_op ((x Symbol)) Bool
+  (bool_or (sym_eq x (sym "band"))
+    (bool_or (sym_eq x (sym "bor"))
+      (bool_or (sym_eq x (sym "bxor")) (bool_or (sym_eq x (sym "bshl")) (sym_eq x (sym "bshr")))))))
 ;; an operator is a term: inside an E-type position — a fn's `(Decidable (= a b))` — its
 ;; constants take their levels by unification, not the position's level 0
 (fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
@@ -1130,9 +1139,10 @@
 ;; an arithmetic operator under an expected type that is Nat or Int takes that type's identity
 ;; and reads both operands at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is cast
 ;; at the leaf — as Lean's binop% reads `(n + 1 : Int)`; chosen from an operand with the result
-;; coerced, `(- 1 2)` at Int would be 0
+;; coerced, `(- 1 2)` at Int would be 0. A bit-level operator likewise, its operands read at
+;; the identity's binders: a shift's count is a Nat at either type
 (fn op_expected ((e El) (x Symbol) (expected (Option Expr))) (Prod El (Option Name))
-  (if (bool_not (is_arith_op x)) (Prod.mk e none)
+  (if (bool_not (bool_or (is_arith_op x) (is_bit_op x))) (Prod.mk e none)
   (match expected
     (none (Prod.mk e none))
     ((some ty)
@@ -1189,7 +1199,13 @@
   (if (sym_eq x (sym "<=")) (some (n2 t (sym "le")))
   (if (sym_eq x (sym "min")) (some (n2 (sym "Min") (sym "min")))
   (if (sym_eq x (sym "max")) (some (n2 (sym "Max") (sym "max")))
-  none))))))))))
+  (if (sym_eq x (sym "band")) (some (bit_at t (sym "land")))
+  (if (sym_eq x (sym "bor")) (some (bit_at t (sym "lor")))
+  (if (sym_eq x (sym "bxor")) (some (bit_at t (sym "xor")))
+  (if (sym_eq x (sym "bshl")) (some (n2 t (sym "shiftLeft")))
+  (if (sym_eq x (sym "bshr")) (some (n2 t (sym "shiftRight")))
+  none)))))))))))))))
+(fn bit_at ((t Symbol) (op Symbol)) Name (if (sym_eq t (sym "Int")) (base_op op) (n2 t op)))
 (fn op_prop ((x Symbol)) (Option Name)
   (if (sym_eq x (sym "and")) (some (n1 (sym "And")))
   (if (sym_eq x (sym "or")) (some (n1 (sym "Or")))

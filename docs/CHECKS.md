@@ -146,7 +146,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | Two environments joined through K's interface: `(p : Prop) → p` accepted with no axiom. | `hostile_test.shard` case 18; pins `k_client_transfer`, `k_client_admit`; `state_test.sh` |
 | Unnumbered nodes compared without names; a caller's memo table answered a query; one id on two nodes. | `hostile_test.shard` cases 19b, 20, 21 |
 | A native axiom named `Classical.choice` passed the policy as Lean's. | pin `init_name_taken_l`; beside it `def_takes_fn` |
-| A registry row answered for any constant of its name; a decision had two runtime forms. | pins `registry_native`, `decidable_cells`, `derive_name_taken`, `derive_visible` |
+| A registry row answered for any constant of its name; a decision had two runtime forms. | pins `registry_native`, `decidable_cells`, `derive_name_taken`, `derive_visible`; a row speaks for a native declaration only where it is the base's, whose module no file can be: pins `reserved_module`, `bit_ops` |
 | `(- 1 2)` at `Int` was read as 0, and K proved the statement so read. | pin `op_expected` |
 | A module's meaning depended on load order. | pins `init_step_lemma`, `impl_init_demand`, `init_late_file_import`; `loader_pins_test.shard` loads every case a second time in the reverse order and compares the records |
 | An entry decoded by constructor shape let a value of no type in. | pin `entry_shape`; `entry_test.shard` |

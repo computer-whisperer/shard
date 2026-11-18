@@ -278,17 +278,38 @@ entries are explained under "Measured" at the end.
   not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
   checker cannot accept — a sketch would need its proofs before it ran; not a program for a
   function with a type error — nothing would then check a program's types.
-- NOT BUILT, chosen: the bit-level primitives (`band bor bxor bshl bshr`, and `ediv`) get a
-  meaning in the logic (`LAW.md` ruling 16) as operators that take it from an operand's
-  type, as `+` does — Init's `Nat.land` and its kin at `Nat`, `Int.shiftRight`,
-  `Int.shiftLeft` and `Int.ediv` at `Int`, and for `and`, `or`, `xor` at `Int`, which Init
-  lacks, three definitions of the system's own that every file sees — and run as the
-  engine operations they are today by rows of the engines' fixed table; not a rewrite of
-  the toolchain's functions over division or over Init's `Nat` operations — the operations
-  are wanted in ordinary code; not functions a file imports — two spellings; not a form in
-  source that declares a definition's engine operation — no second consumer yet. Assent:
-  "Yes, operators by type with the fixed table, measure first". Measured on a scratch
-  loader before anything is built (`Measured`).
+- The bit-level five (`band bor bxor bshl bshr`) have a meaning in the logic (`LAW.md`
+  ruling 16) as operators that take it from an operand's type, as `+` does — Init's
+  `Nat.land` and its kin at `Nat`, `Int.shiftLeft` and `Int.shiftRight` at `Int`, and for
+  `and`, `or`, `xor` at `Int`, which Init lacks, three definitions of the system's own that
+  every file sees — and run as the engine operations they were, by rows of the engines'
+  fixed table; not a rewrite of the toolchain's functions over division or over Init's
+  `Nat` operations — the operations are wanted in ordinary code; not functions a file
+  imports — two spellings; not a form in source that declares a definition's engine
+  operation — no second consumer yet. Assent: "Yes, operators by type with the fixed
+  table, measure first"; and after the measurement, of the two points put to them — a row
+  of the registry speaking for a declaration that is not Init's, and a base of the
+  system's own that every file sees — with the smaller consequences: "The two points are
+  approved, as well as the smaller consequences -- proceed."
+- Chosen in building it, not put to the owner one by one. The base is TEXT inside the
+  loader (`kernel/base.shard`), read as the module `shard.int` when a file's forms first
+  use one of its operators; not a file the loader finds — a load's root is the package it
+  loads (each pin is its own), the loader reads no file outside it, and a text of the
+  loader's is in every binary's stamp already; not read at every load — on the bootstrap
+  each load would fetch and check what the three definitions cite of Init. No file's module
+  may be `shard` (`reserved_module`). The three definitions are by cases on an integer's
+  two constructors over Init's `Nat.land`, `Nat.lor`, `Nat.xor`, and rest on `propext`
+  because Init's own three do: what the owner was told would rest on no axiom does not. An
+  expected type of `Nat` or `Int` decides a bit-level operator as it decides an arithmetic
+  one, so `(bshl 1 k)` where an `Int` is expected is the integer's; a shift's count is a
+  `Nat` at either type, and an `Int` there is a type error (three functions of the
+  toolchain convert theirs with `Int.natAbs`). The engines' `bshl` and `bshr` shift by any
+  count that is a natural number, as Init's do, where they were stuck past 63; a negative
+  count is still stuck. The bare `ediv` and `tmod` stay in the engines' table for the back
+  end's own use and are refused in a source with the spelling to write — `/`, which is
+  `Int.ediv` at `Int`, and `Int.tmod` (21 and 2 uses rewritten): at a zero divisor those
+  are total where the bare ones were stuck. Init's two shifts at `Int` written by name are
+  read as the bare operators, by all three readers.
 
 ## Proofs and automation
 
@@ -673,6 +694,23 @@ measurements; measure again before building on one.
   `unify.inst_level_go` 169, `intmap.im_split` 101 — which does not end on a negative key
   as written); 344 a group of functions that call each other (`expr.expr_eq` 227); 78 a
   numeral under a constructor pattern.
+- The bit-level operators as landed (2026-11-18, dev box). The checked load of the loader's
+  closure, 8,853 functions: 6,512 definitions for 2,513 — every generated row of
+  `k/accel_pins.shard`, and of the 4,061 written functions 1,720 for 1,525 (K's own 630:
+  306 for 259) —, 1,261 type-checked without one, 1,080 not read; in 116 s for 115. 8,062
+  of its accepted declarations list `propext`. What the functions without a definition
+  start at: 1,059 the groups of types that name each other; 947 an integer measure — 490
+  of them the int map's lookup, which recurses on a child of the map and states `(measure
+  k)`, 233 `util.show_nat_go`; 208 a group of functions that call each other; 76 a numeral
+  under a constructor pattern. The three readings of every toolchain root — the Rust
+  reader's, the loader's of programs alone, the checked load's — are one text; one use of
+  `/` read otherwise in the loader's own, its first operand a function declared below
+  (`OPEN.md` §1), and the two constants stand above it now. All 29 roots loaded checked,
+  12 at a time: 402 s for 380. `v3/build.sh --all` 267 s, the emit tie 314 s, the
+  native tie 321 s, the suite 234 s on the binaries and 1,021 s on the bootstrap. On CI
+  for the type move before it (#743 against #739): `native` 2,419 s for 2,255 — the
+  toolchain's check 505 s for 329 —, `v3` 2,203 s, `replay` 1,851 s: a pipeline is 40
+  minutes.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
