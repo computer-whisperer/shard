@@ -7,10 +7,10 @@
 ;;;
 ;;; RS IS A PROG. `lw_prog : Prog → Prog` (or the refusals), and in the result
 ;;;
-;;;   atom ::= EBVar | ELit of a numeral or a symbol
+;;;   atom ::= EBVar | ELit of a numeral
 ;;;   rhs  ::= atom | ECtor/ECall/EPrim/EExt over atoms | EAbsurd
 ;;;   body ::= rhs | ELet (rhs) body | EIf atom body body | EMatch atom arm…
-;;;   arm  ::= a constructor over variables | a numeral | a symbol | a variable
+;;;   arm  ::= a constructor over variables | a numeral | a variable
 ;;;
 ;;; a match with no arm being the sink (stuck under `ev`, a trap in the binary). Being a
 ;;; Prog, RS runs under `ev`: the lowering is tested against the program it came from
@@ -53,6 +53,7 @@
 (use Init.Option none some)
 (use kernel.name)
 (use kernel.prog)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.name.Name)
 (use kernel.prog.EArm)
@@ -68,7 +69,7 @@
 ;; ---- the wire roles: 0 none; 1 true, 2 false, 3 nil, 4 cons, 5 none, 6 some, 7 pair, 8 the World
 (fn lw_role ((n Name)) Int
   (match n
-    ((Str _ s) (if (int_list_eq (chars_of_sym s) "World") 8 (lw_role_init (show_name n))))
+    ((Str _ s) (if (int_list_eq (chars_of_sym s) (utf8 "World")) 8 (lw_role_init (show_name n))))
     (_ 0)))
 (fn lw_role_init ((s (List Int))) Int
   (if (bool_or (int_list_eq s (utf8 "Bool.true")) (int_list_eq s (utf8 "Decidable.isTrue"))) 1
@@ -84,7 +85,6 @@
 (type LwE
   (LwVar Int)
   (LwInt Int)
-  (LwSym Symbol)
   (LwCtor Name (List LwE))
   (LwCall Name (List LwE))
   (LwPrim Name (List LwE))
@@ -94,7 +94,7 @@
   (LwLet Int LwE LwE)
   (LwAbsurd))
 (type LwArm (LwArm LwP LwE))
-(type LwP (LwPVar Int) (LwPInt Int) (LwPSym Symbol) (LwPCtor Name (List LwP)))
+(type LwP (LwPVar Int) (LwPInt Int) (LwPCtor Name (List LwP)))
 
 ;; an application's operands, and the same head over other operands
 (fn lw_args ((e LwE)) (Option (List LwE))
@@ -129,7 +129,7 @@
     ((EBVar i)
      (match (nth env i)
        ((some v) (LwOk (LwVar v) k))
-       (none (LwErr "a variable out of range"))))
+       (none (LwErr (utf8 "a variable out of range")))))
     ((ELit l) (LwOk (lw_lit l) k))
     ((ECtor c as)
      (match (lw_named_all as env k)
@@ -165,7 +165,8 @@
            (match (lw_named b env k2)
              ((LwErr m) (LwErr m))
              ((LwOk rb k3) (LwOk (LwIf rc ra rb) k3))))))))
-    ((ELam _ _ _) (LwErr "internal: a lambda in a program — the classifier lifts each one"))
+    ((ELam _ _ _)
+     (LwErr (utf8 "internal: a lambda in a program — the classifier lifts each one")))
     (EAbsurd (LwOk LwAbsurd k))))
 (fn lw_named_all ((ts (List ETerm)) (env (List Int)) (k Int)) LwRs
   (match ts
@@ -206,9 +207,8 @@
     (PVar (LwPOk (LwPVar k) (list k) (+ k 1)))
     ((PLit (LNat n)) (LwPOk (LwPInt n) nil k))
     ((PLit (LInt n)) (LwPOk (LwPInt n) nil k))
-    ((PLit (LSym s)) (LwPOk (LwPSym s) nil k))
     ((PLit (LStr _))
-     (LwPErr "a string pattern has no arm in a native binary (match its cons and nil cells)"))
+     (LwPErr (utf8 "a string pattern has no arm in a native binary (match its cons and nil cells)")))
     ((PCtor c subs)
      (match (lw_pats subs k)
        ((LwPsErr m) (LwPErr m))
@@ -228,7 +228,6 @@
   (match l
     ((LNat n) (LwInt n))
     ((LInt n) (LwInt n))
-    ((LSym s) (LwSym s))
     ((LStr bs) (lw_str bs))))
 (fn lw_str ((bs (List Int))) LwE
   (measure (struct bs))
@@ -249,7 +248,8 @@
     (bool_or (= code 30) (bool_or (= code 31) (bool_and (<= 18 code) (<= code 21))))))
 (fn lw_prim ((p Name) (rs (List LwE)) (k Int)) LwR
   (match (prim_find p)
-    (none (LwErr (append "the primitive " (append (show_name p) " is not in the table"))))
+    (none
+      (LwErr (append (utf8 "the primitive ") (append (show_name p) (utf8 " is not in the table")))))
     ((some (Prim code _))
      (if (bool_or (< code 18) (lw_prim_kept code)) (LwOk (LwPrim p rs) k)
      (if (lw_prim_expr code)
@@ -257,22 +257,25 @@
          ((cons a (cons b nil))
           (LwOk (LwLet k a (LwLet (+ k 1) b (lw_row code (LwVar k) (LwVar (+ k 1))))) (+ k 2)))
          (_
-           (LwErr (append "the primitive " (append (show_name p) " is not applied to two operands")))))
+           (LwErr
+             (append (utf8 "the primitive ")
+               (append (show_name p) (utf8 " is not applied to two operands"))))))
        (LwErr
-         (append "the primitive "
+         (append (utf8 "the primitive ")
            (append (show_name p)
-             " has no operation in a native binary (those that have one: the eighteen bare-named primitives; Nat.sub div mod land lor xor shiftLeft shiftRight beq ble; Int.tdiv tmod ediv emod)"))))))))
+             (utf8
+               " has no operation in a native binary (those that have one: the eighteen bare-named primitives; Nat.sub div mod land lor xor shiftLeft shiftRight beq ble; Int.tdiv tmod ediv emod)")))))))))
 ;; both operands bound once, then Init's result where the runtime's operation differs
 (fn lw_row ((code Int) (a LwE) (b LwE)) LwE
   (if (= code 22)
-    (LwIf (LwPrim (lw_pn (quote <)) (list a b)) (LwInt 0) (LwPrim (lw_pn (quote -)) (list a b)))
-  (if (bool_or (= code 30) (= code 18)) (lw_at_zero (quote /) a b (LwInt 0))
-  (if (= code 20) (lw_at_zero (quote ediv) a b (LwInt 0))
-  (if (bool_or (= code 31) (= code 21)) (lw_at_zero (quote mod) a b a)
-  (lw_at_zero (quote tmod) a b a))))))
+    (LwIf (LwPrim (lw_pn (sym "<")) (list a b)) (LwInt 0) (LwPrim (lw_pn (sym "-")) (list a b)))
+  (if (bool_or (= code 30) (= code 18)) (lw_at_zero (sym "/") a b (LwInt 0))
+  (if (= code 20) (lw_at_zero (sym "ediv") a b (LwInt 0))
+  (if (bool_or (= code 31) (= code 21)) (lw_at_zero (sym "mod") a b a)
+  (lw_at_zero (sym "tmod") a b a))))))
 ;; (if (= B 0) AT_ZERO (OP A B))
 (fn lw_at_zero ((op Symbol) (a LwE) (b LwE) (z LwE)) LwE
-  (LwIf (LwPrim (lw_pn (quote =)) (list b (LwInt 0))) z (LwPrim (lw_pn op) (list a b))))
+  (LwIf (LwPrim (lw_pn (sym "=")) (list b (LwInt 0))) z (LwPrim (lw_pn op) (list a b))))
 
 ;; ---- pass JP: join-point lifting and nested-pattern compilation ------------------------------
 (type LwLifted (LwLifted Name (List Int) LwE))  ; identity, parameters, a body in tail form
@@ -288,7 +291,6 @@
      (if (mem_int v acc) acc
      (append acc (list v)))))
     ((LwInt _) acc)
-    ((LwSym _) acc)
     (LwAbsurd acc)
     ((LwIf c t f) (lw_fv f bound (lw_fv t bound (lw_fv c bound acc))))
     ((LwMatch s arms) (lw_fv_arms arms bound (lw_fv s bound acc)))
@@ -425,8 +427,6 @@
     ((LwPVar x) (LwJ (LwLet x (LwVar sv) body) nil k))
     ((LwPInt _)
      (LwJ (LwMatch (LwVar sv) (list (LwArm p body) (LwArm (LwPVar k) failc))) nil (+ k 1)))
-    ((LwPSym _)
-     (LwJ (LwMatch (LwVar sv) (list (LwArm p body) (LwArm (LwPVar k) failc))) nil (+ k 1)))
     ((LwPCtor c ps)
      (match (lw_fields ps k)
        ((Prod.mk fs k1)
@@ -479,7 +479,6 @@
   (match e
     ((LwVar _) (LwNOk nil e k))
     ((LwInt _) (LwNOk nil e k))
-    ((LwSym _) (LwNOk nil e k))
     (LwAbsurd (LwNOk (list (Prod.mk k LwAbsurd)) (LwVar k) (+ k 1)))
     ((LwLet n rhs body)
      (match (lw_anf_rhs rhs k)
@@ -488,11 +487,11 @@
         (match (lw_anf_name body k1)
           ((LwNErr m) (LwNErr m))
           ((LwNOk binds2 atom k2) (LwNOk (append binds1 (cons (Prod.mk n r) binds2)) atom k2))))))
-    ((LwIf _ _ _) (LwNErr "internal: an if in an operand's position was not lifted"))
-    ((LwMatch _ _) (LwNErr "internal: a match in an operand's position was not lifted"))
+    ((LwIf _ _ _) (LwNErr (utf8 "internal: an if in an operand's position was not lifted")))
+    ((LwMatch _ _) (LwNErr (utf8 "internal: a match in an operand's position was not lifted")))
     (_
       (match (lw_args e)
-        (none (LwNErr "internal: not an application"))
+        (none (LwNErr (utf8 "internal: not an application")))
         ((some as)
          (match (lw_anf_names as k)
            ((LwNsErr m) (LwNErr m))
@@ -566,7 +565,7 @@
           (match (lw_anf_arms r k1)
             ((LwTaErr m) (LwTaErr m))
             ((LwTaOk rr k2) (LwTaOk (cons (LwArm p rb) rr) k2)))))
-       (LwTaErr "internal: a nested pattern was not compiled")))))
+       (LwTaErr (utf8 "internal: a nested pattern was not compiled"))))))
 
 ;; ---- back to indices: env is innermost first -------------------------------------------------
 (fn lw_index ((v Int) (env (List Int)) (i Int)) Int
@@ -578,7 +577,6 @@
   (match e
     ((LwVar v) (EBVar (lw_index v env 0)))
     ((LwInt n) (ELit (if (< n 0) (LInt n) (LNat n))))
-    ((LwSym s) (ELit (LSym s)))
     ((LwCtor c as) (ECtor c (lw_terms as env)))
     ((LwCall f as) (ECall f (lw_terms as env)))
     ((LwPrim p as) (EPrim p (lw_terms as env)))
@@ -600,7 +598,6 @@
   (match p
     ((LwPVar _) PVar)
     ((LwPInt n) (PLit (if (< n 0) (LInt n) (LNat n))))
-    ((LwPSym s) (PLit (LSym s)))
     ((LwPCtor c ps) (PCtor c (lw_tpats ps)))))
 (fn lw_tpats ((ps (List LwP))) (List EPat)
   (match ps
@@ -610,7 +607,7 @@
 (fn lw_pat_order ((p LwP)) (List Int) (rev (lw_pat_vars p nil)))
 
 ;; ---- a function --------------------------------------------------------------------------
-(fn lw_jv () EType (ETCon (n1 (quote JV)) nil))
+(fn lw_jv () EType (ETCon (n1 (sym "JV")) nil))
 (fn lw_jvs ((k Int)) (List EType) (measure k) (if (< k 1) nil (cons (lw_jv) (lw_jvs (- k 1)))))
 ;; the parameters' numbers innermost first: n-1 … 0
 (fn lw_params ((n Int)) (List Int) (measure n) (if (< n 1) nil (cons (- n 1) (lw_params (- n 1)))))
@@ -657,19 +654,19 @@
        ((EFn n nt ps rt rec body)
         (match (lw_fn n nt ps rt rec body)
           ((LwFOk fs) (lw_decls r (rev_onto fs acc) errs))
-          ((LwFErr m) (lw_decls r acc (cons (append m (append " in " (show_name n))) errs)))))
+          ((LwFErr m) (lw_decls r acc (cons (append m (append (utf8 " in ") (show_name n))) errs)))))
        ((ESig n _ _ _)
         (lw_decls r acc
           (cons
-            (append "unlinked sig fn "
+            (append (utf8 "unlinked sig fn ")
               (append (show_name n)
-                ": the implementation's directory was not loaded (give it as a root)"))
+                (utf8 ": the implementation's directory was not loaded (give it as a root)")))
             errs)))
        ((ESigType n _)
         (lw_decls r acc
           (cons
-            (append "unlinked sig type "
+            (append (utf8 "unlinked sig type ")
               (append (show_name n)
-                ": the implementation's directory was not loaded (give it as a root)"))
+                (utf8 ": the implementation's directory was not loaded (give it as a root)")))
             errs)))
        (_ (lw_decls r (cons d acc) errs))))))

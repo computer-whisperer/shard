@@ -30,12 +30,10 @@ A case is one of two kinds by where its file lives, and a name marks a refusal:
 | `record_with` | a record built with `make`, read through its accessors, updated with `with`: the loader's expansion reaches the back end, never the record form |
 | `cap_local` | capitalised locals — a parameter, a let binding, a match variable — beside a type whose constructors share their spelling: every local printed by its depth |
 | `nested_shadow` | a let rebinding one name three times, a match variable shadowing a parameter, a let inside an arm: the sequential let and the de Bruijn depths |
-| `quoted_cap` | a capitalised symbol literal in a term and a pattern, a symbol with a quote character in it (`t'`) compared with `sym_eq`, operator-spelled symbols in patterns, the symbol primitives |
 | `dotted_last` | two records' accessors and updaters sharing a last component (`A.x`, `B.x`): distinct identities, distinct C names |
 | `sealed_client` | a consumer of a directory module's view, the implementation linked by the directory's check (`lib` as a second root): the linked program is what the back end receives |
 | `program_exit` | a nonzero exit after output: the status and the streams tied, never the output alone |
 | `string_escapes` | a quote, a backslash, a newline, a tab, a carriage return, UTF-8 bytes, an empty string, a string spelled like a form: each literal's bytes the same in the binary |
-| `symbol_pattern` | a symbol with a quote character in it, in a pattern: a static of the generated text, compared by identity |
 | `mangle_injective` | a record's accessor `A.x` beside a plain fn `A_x`: two identities, two C names |
 | `refused_numeral_pattern` | a numeral pattern past 2^62, under a constructor: no C case label for it, the emit refused with its message, nothing built — the refusal path |
 | `refused_main_params` | a `main` with a parameter before the World: a binary's start has the World alone to call it on, so the emit is refused, where the generated call would fail in the C compiler |

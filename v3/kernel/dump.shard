@@ -9,10 +9,10 @@
 ;;;                                 its type's and its own (Prod.mk, Tok.TPlus)
 ;;;   fn NAME n (T…) T BODY         n = the distinct type variables of the signature,
 ;;;   extern NAME n (T…) T            numbered ?i by first occurrence across the binders then the result
-;;;   T   ::= Int | Symbol | NAME | (NAME T…) | ?i
-;;;   E   ::= #i | INT | 'sym | (NAME E…)            a constructor (TYPE.CTOR), a call, an extern,
+;;;   T   ::= Int | NAME | (NAME T…) | ?i
+;;;   E   ::= #i | INT | (NAME E…)                   a constructor (TYPE.CTOR), a call, an extern,
 ;;;         | (match E (PAT E)…) | (let (E…) E) | (if E E E)   a primitive (its full spelling)
-;;;   PAT ::= _ | NAME | (NAME PAT…) | INT | 'sym
+;;;   PAT ::= _ | NAME | (NAME PAT…) | INT
 ;;; A string and a `(list …)` are the constructor chains both loaders build;
 ;;; `#i` is the sequential index (the bootstrap's dump converts its parallel
 ;;; `let`); the measure clause is outside the text.
@@ -36,6 +36,7 @@
 (use Init.Option none some)
 (use kernel.name)
 (use kernel.prog)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.name.Name)
 (use kernel.etable)
@@ -61,14 +62,19 @@
 (fn dm_decl ((es ESt) (d EDecl)) (List Int)
   (match d
     ((EInd n np ctors)
-     (append "type " (append (dm_short n) (append " " (append (show_int np) (dm_ctors ctors))))))
+     (append (utf8 "type ")
+       (append (dm_short n) (append (utf8 " ") (append (show_int np) (dm_ctors ctors))))))
     ((EFn n _ ps rt _ body)
      (let ((sig (dm_sig ps rt)))
-       (append "fn "
-         (append (dm_head es n) (append " " (append sig (append " " (dm_term es body))))))))
-    ((EExtern n _ ps rt) (append "extern " (append (dm_head es n) (append " " (dm_sig ps rt)))))
-    ((ESig n _ ps rt) (append "sig " (append (dm_head es n) (append " " (dm_sig ps rt)))))
-    ((ESigType n k) (append "sigtype " (append (dm_short n) (append " " (show_int k)))))))
+       (append (utf8 "fn ")
+         (append (dm_head es n)
+           (append (utf8 " ") (append sig (append (utf8 " ") (dm_term es body))))))))
+    ((EExtern n _ ps rt)
+     (append (utf8 "extern ") (append (dm_head es n) (append (utf8 " ") (dm_sig ps rt)))))
+    ((ESig n _ ps rt)
+     (append (utf8 "sig ") (append (dm_head es n) (append (utf8 " ") (dm_sig ps rt)))))
+    ((ESigType n k)
+     (append (utf8 "sigtype ") (append (dm_short n) (append (utf8 " ") (show_int k)))))))
 ;; a head prints as its identity beyond the module it was declared in — the declared
 ;; spelling: `hex_val`, or `Load.env` for a record's accessor — the components
 ;; past the longest prefix the identity shares with the module tag (a sealed file's identity
@@ -102,12 +108,14 @@
   (match cs
     (nil nil)
     ((cons (ECtorDef c fs) r)
-     (append " (" (append (dm_ctor c) (append (dm_types fs nil) (append ")" (dm_ctors r))))))))
+     (append (utf8 " (")
+       (append (dm_ctor c) (append (dm_types fs nil) (append (utf8 ")") (dm_ctors r))))))))
 ;; the signature: `n (T…) T` with the type variables renumbered by first occurrence
 (fn dm_sig ((ps (List EType)) (rt EType)) (List Int)
   (let ((order (dm_vars_of rt (dm_vars_all ps nil))))
     (append (show_int (len order))
-      (append " (" (append (dm_types_sp ps order true) (append ") " (dm_type rt order)))))))
+      (append (utf8 " (")
+        (append (dm_types_sp ps order true) (append (utf8 ") ") (dm_type rt order)))))))
 ;; type variables in order of first occurrence
 (fn dm_vars_all ((ts (List EType)) (acc (List Int))) (List Int)
   (measure (struct ts))
@@ -122,9 +130,10 @@
 (fn dm_type ((t EType) (order (List Int))) (List Int)
   (measure (struct t))
   (match t
-    ((ETVar i) (append "?" (show_int (dm_index i order 0))))
+    ((ETVar i) (append (utf8 "?") (show_int (dm_index i order 0))))
     ((ETCon n nil) (dm_short n))
-    ((ETCon n args) (append "(" (append (dm_short n) (append (dm_types args order) ")"))))))
+    ((ETCon n args)
+     (append (utf8 "(") (append (dm_short n) (append (dm_types args order) (utf8 ")")))))))
 (fn dm_index ((i Int) (order (List Int)) (k Int)) Int
   (measure (struct order))
   (match order
@@ -135,69 +144,74 @@
   (measure (struct ts))
   (match ts
     (nil nil)
-    ((cons t r) (append " " (append (dm_type t order) (dm_types r order))))))
+    ((cons t r) (append (utf8 " ") (append (dm_type t order) (dm_types r order))))))
 (fn dm_types_sp ((ts (List EType)) (order (List Int)) (first Bool)) (List Int)
   (measure (struct ts))
   (match ts
     (nil nil)
-    ((cons t r) (append (if first nil " ") (append (dm_type t order) (dm_types_sp r order false))))))
+    ((cons t r)
+     (append (if first nil (utf8 " ")) (append (dm_type t order) (dm_types_sp r order false))))))
 
 (fn dm_term ((es ESt) (t ETerm)) (List Int)
   (measure (struct t))
   (match t
-    ((EBVar i) (append "#" (show_int i)))
+    ((EBVar i) (append (utf8 "#") (show_int i)))
     ((ELit l) (dm_lit l))
     ((ECtor n args) (dm_app es (dm_ctor n) args))
     ((ECall n args) (dm_app es (dm_head es n) args))
     ((EPrim n args) (dm_app es (show_name n) args))
     ((EExt n args) (dm_app es (dm_head es n) args))
-    ((EMatch s arms) (append "(match " (append (dm_term es s) (append (dm_arms es arms) ")"))))
+    ((EMatch s arms)
+     (append (utf8 "(match ") (append (dm_term es s) (append (dm_arms es arms) (utf8 ")")))))
     ((ELet rs body)
-     (append "(let (" (append (dm_terms_sp es rs true) (append ") " (append (dm_term es body) ")")))))
+     (append (utf8 "(let (")
+       (append (dm_terms_sp es rs true) (append (utf8 ") ") (append (dm_term es body) (utf8 ")"))))))
     ((EIf c a b)
-     (append "(if "
+     (append (utf8 "(if ")
        (append (dm_term es c)
-         (append " " (append (dm_term es a) (append " " (append (dm_term es b) ")")))))))
+         (append (utf8 " ")
+           (append (dm_term es a) (append (utf8 " ") (append (dm_term es b) (utf8 ")"))))))))
     ((ELam ts _ b)
-     (append "(fun (" (append (dm_types_sp ts nil true) (append ") " (append (dm_term es b) ")")))))
-    (EAbsurd "(absurd)")))
+     (append (utf8 "(fun (")
+       (append (dm_types_sp ts nil true) (append (utf8 ") ") (append (dm_term es b) (utf8 ")"))))))
+    (EAbsurd (utf8 "(absurd)"))))
 (fn dm_app ((es ESt) (head (List Int)) (args (List ETerm))) (List Int)
-  (append "(" (append head (append (dm_terms es args) ")"))))
+  (append (utf8 "(") (append head (append (dm_terms es args) (utf8 ")")))))
 (fn dm_terms ((es ESt) (ts (List ETerm))) (List Int)
   (measure (struct ts))
   (match ts
     (nil nil)
-    ((cons t r) (append " " (append (dm_term es t) (dm_terms es r))))))
+    ((cons t r) (append (utf8 " ") (append (dm_term es t) (dm_terms es r))))))
 (fn dm_terms_sp ((es ESt) (ts (List ETerm)) (first Bool)) (List Int)
   (measure (struct ts))
   (match ts
     (nil nil)
-    ((cons t r) (append (if first nil " ") (append (dm_term es t) (dm_terms_sp es r false))))))
+    ((cons t r) (append (if first nil (utf8 " ")) (append (dm_term es t) (dm_terms_sp es r false))))))
 (fn dm_arms ((es ESt) (arms (List EArm))) (List Int)
   (measure (struct arms))
   (match arms
     (nil nil)
     ((cons (EArm p b) r)
-     (append " ("
-       (append (dm_pat p) (append " " (append (dm_term es b) (append ")" (dm_arms es r)))))))))
+     (append (utf8 " (")
+       (append (dm_pat p)
+         (append (utf8 " ") (append (dm_term es b) (append (utf8 ")") (dm_arms es r)))))))))
 (fn dm_pat ((p EPat)) (List Int)
   (measure (struct p))
   (match p
-    (PVar "_")
+    (PVar (utf8 "_"))
     ((PCtor n nil) (dm_ctor n))
-    ((PCtor n subs) (append "(" (append (dm_ctor n) (append (dm_pats subs) ")"))))
+    ((PCtor n subs) (append (utf8 "(") (append (dm_ctor n) (append (dm_pats subs) (utf8 ")")))))
     ((PLit l) (dm_lit l))))
 (fn dm_pats ((ps (List EPat))) (List Int)
   (measure (struct ps))
   (match ps
     (nil nil)
-    ((cons p r) (append " " (append (dm_pat p) (dm_pats r))))))
+    ((cons p r) (append (utf8 " ") (append (dm_pat p) (dm_pats r))))))
 ;; a literal: a string is the chain of Init's List cells over its bytes
 (fn dm_lit ((l ELit)) (List Int)
   (match l
     ((LNat k) (show_int k))
     ((LInt k) (show_int k))
-    ((LSym s) (cons 39 (chars_of_sym s)))
     ((LStr bs) (dm_bytes (dm_ctor (cell_nil)) (dm_ctor (cell_cons)) bs))))
 (fn dm_bytes ((nl (List Int)) (cs (List Int)) (bs (List Int))) (List Int)
   (measure (struct bs))
@@ -213,12 +227,12 @@
   (match n
     ((Str _ s) (chars_of_sym s))
     ((Num _ k) (show_int k))
-    (Anon "anon")))
+    (Anon (utf8 "anon"))))
 ;; a constructor: its type's last component and its own — Init has several named `mk`
 (fn dm_ctor ((n Name)) (List Int)
   (match n
     ((Str Anon _) (dm_short n))
-    ((Str p _) (append (dm_short p) (append "." (dm_short n))))
+    ((Str p _) (append (dm_short p) (append (utf8 ".") (dm_short n))))
     (_ (dm_short n))))
 
 ;; bytewise sort (merge)

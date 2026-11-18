@@ -185,7 +185,6 @@ enum Val {
     /// a `Big` is never zero). Rc keeps the clone O(1).
     Big(Rc<crate::ast::IntLit>),
     /// An interned name id (see `intern`): equal names are equal ids.
-    Sym(u32),
     FVar(u32),
     /// A constructor application behind one thin pointer (see `CtorRef`).
     Ctor(CtorRef),
@@ -327,7 +326,6 @@ fn int_val(n: crate::ast::IntLit) -> Val {
 
 enum IExpr {
     Int(Val),
-    Sym(u32),
     FVar(u32),
     BVar(u32),
     /// A zero-argument constructor, built once at lowering: evaluating it
@@ -356,15 +354,12 @@ enum PrimTag {
     Add,
     Sub,
     Mul,
-    SymEq,
     Band,
     Bor,
     Bxor,
     Bshl,
     Bshr,
     Mod,
-    SymOfChars,
-    CharsOfSym,
     Other,
 }
 
@@ -378,7 +373,6 @@ enum IPat {
     /// A literal pattern, prebuilt canonical (`int_val`), so the test is a
     /// word compare for an i64 and never confuses the two integer shapes.
     Int(Val),
-    Sym(u32),
     /// A constructor pattern; the flag says every sub-pattern is a variable
     /// (the common shape), so a match binds the fields with one slice copy.
     Ctor(u32, Box<[IPat]>, bool),
@@ -395,10 +389,10 @@ struct Prog {
 }
 
 // The CANONICAL name interner — process-wide (per thread). EVERY runtime
-// name is an id from here: the lowerer (ctor/sym names + patterns),
+// name is an id from here: the lowerer (constructor names + patterns),
 // `val_of_value_expr` (primitive + effect-handler results), and the cached
 // Bool values. Equal name strings are the same id, so every name test in
-// the machine is an integer compare. The four names the machine itself
+// the machine is an integer compare. The two names the machine itself
 // knows are interned first, at fixed ids.
 struct Names {
     ids: HashMap<Rc<str>, u32>,
@@ -407,13 +401,11 @@ struct Names {
 
 const TRUE_ID: u32 = 0;
 const FALSE_ID: u32 = 1;
-const CONS_ID: u32 = 2;
-const NIL_ID: u32 = 3;
 
 impl Names {
     fn new() -> Names {
         let mut n = Names { ids: HashMap::new(), strs: Vec::new() };
-        for (i, s) in ["True", "False", "Cons", "Nil"].iter().enumerate() {
+        for (i, s) in ["True", "False"].iter().enumerate() {
             assert_eq!(n.intern(s), i as u32);
         }
         n
@@ -484,7 +476,7 @@ fn count_pvars(p: &Pat) -> usize {
     match p {
         Pat::PVar => 1,
         Pat::PCtor(_, sub) => sub.iter().map(count_pvars).sum(),
-        Pat::PInt(_) | Pat::PSym(_) => 0,
+        Pat::PInt(_) => 0,
     }
 }
 
@@ -514,7 +506,6 @@ impl<'a> Lowerer<'a> {
     fn lower(&mut self, e: &'a Expr) -> IExpr {
         match e {
             Expr::IntLit(n) => IExpr::Int(int_val(n.clone())),
-            Expr::SymLit(s) => IExpr::Sym(self.intern(s)),
             Expr::FVar(s) => IExpr::FVar(self.intern(s)),
             Expr::BVar(k) => IExpr::BVar(self.slot(*k)),
             Expr::Ctor(n, args) if args.is_empty() => IExpr::Ctor0(ctor0(self.intern(n))),
@@ -531,15 +522,12 @@ impl<'a> Lowerer<'a> {
                             "+" => PrimTag::Add,
                             "-" => PrimTag::Sub,
                             "*" => PrimTag::Mul,
-                            "sym_eq" => PrimTag::SymEq,
                             "band" => PrimTag::Band,
                             "bor" => PrimTag::Bor,
                             "bxor" => PrimTag::Bxor,
                             "bshl" => PrimTag::Bshl,
                             "bshr" => PrimTag::Bshr,
                             "mod" => PrimTag::Mod,
-                            "sym_of_chars" => PrimTag::SymOfChars,
-                            "chars_of_sym" => PrimTag::CharsOfSym,
                             _ => PrimTag::Other,
                         };
                         IExpr::CallOther(tag, Rc::from(n.as_str()), largs)
@@ -553,7 +541,6 @@ impl<'a> Lowerer<'a> {
                             "=" => Some(PrimTag::IntEq),
                             "<" => Some(PrimTag::Lt),
                             "<=" => Some(PrimTag::Le),
-                            "sym_eq" => Some(PrimTag::SymEq),
                             _ => None,
                         };
                         if let Some(tag) = tag {
@@ -634,7 +621,6 @@ impl<'a> Lowerer<'a> {
         match p {
             Pat::PVar => IPat::Var,
             Pat::PInt(n) => IPat::Int(int_val(n.clone())),
-            Pat::PSym(s) => IPat::Sym(self.intern(s)),
             Pat::PCtor(n, sub) => {
                 let flat = sub.iter().all(|sp| matches!(sp, Pat::PVar));
                 IPat::Ctor(
@@ -726,7 +712,6 @@ fn eval_sub<'a>(prog: &'a Prog, st: &mut Stack, e: &'a IExpr) -> EResult<Val> {
             }
         }
         IExpr::Int(v) => Ok(v.clone()),
-        IExpr::Sym(s) => Ok(Val::Sym(s.clone())),
         IExpr::Ctor0(v) => Ok(v.clone()),
         _ => eval_ir(prog, st, e),
     }
@@ -749,7 +734,6 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
     loop {
         match e {
             IExpr::Int(v) => return Ok(v.clone()),
-            IExpr::Sym(s) => return Ok(Val::Sym(s.clone())),
             IExpr::FVar(s) => return Ok(Val::FVar(s.clone())),
             IExpr::Ctor0(v) => return Ok(v.clone()),
 
@@ -827,10 +811,6 @@ fn eval_loop<'a>(prog: &'a Prog, st: &mut Stack, base: usize, e0: &'a IExpr) -> 
                         prof_count_prim("<=");
                         x <= y
                     }
-                    (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
-                        prof_count_prim("sym_eq");
-                        a == b
-                    }
                     _ => match apply_other(*tag, name, &st[mark..])? {
                         Val::Ctor(ref c) if c.len() == 0 && c.name() == TRUE_ID => true,
                         Val::Ctor(ref c) if c.len() == 0 && c.name() == FALSE_ID => false,
@@ -903,40 +883,6 @@ fn shift_ok(k: i64) -> bool {
     (0..64).contains(&k)
 }
 
-/// The table's `decode_char_list` on a value: a Cons/Nil spine of bytes
-/// (each 0..256) that is valid UTF-8; None on any other shape (the call
-/// then takes the general path and stays stuck, as the table decides).
-fn decode_byte_list(v: &Val) -> Option<String> {
-    let mut bytes = Vec::new();
-    let mut cur = v;
-    loop {
-        match cur {
-            Val::Ctor(c) if c.name() == NIL_ID && c.len() == 0 => {
-                return String::from_utf8(bytes).ok();
-            }
-            Val::Ctor(c) if c.name() == CONS_ID && c.len() == 2 => {
-                let f = c.fields();
-                match &f[0] {
-                    Val::Int(b) if (0..256).contains(b) => bytes.push(*b as u8),
-                    _ => return None,
-                }
-                cur = &f[1];
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// The table's `encode_char_list`: the name's UTF-8 bytes as a Cons/Nil
-/// spine of ints, built back to front.
-fn encode_byte_list(s: &str) -> Val {
-    let mut acc = ctor0(NIL_ID);
-    for b in s.bytes().rev() {
-        acc = Val::Ctor(CtorRef::new(CONS_ID, [Val::Int(b as i64), acc].into_iter()));
-    }
-    acc
-}
-
 // A Call whose head is NOT a user fn: a primitive, a host call, or an
 // unknown. Leaf operation (no tail position), so the eval loop returns its
 // result directly. The user-fn case is handled inline in `eval_loop` so it
@@ -990,10 +936,6 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
                 None => int_val(Big::from(*x) * Big::from(*y)),
             });
         }
-        (PrimTag::SymEq, [Val::Sym(a), Val::Sym(b)]) => {
-            prof_count_prim("sym_eq");
-            return Ok(bool_val(a == b));
-        }
         (PrimTag::Band, [Val::Int(x), Val::Int(y)]) => {
             prof_count_prim("band");
             return Ok(Val::Int(x & y));
@@ -1029,18 +971,6 @@ fn apply_other(tag: PrimTag, name: &str, args: &[Val]) -> EResult<Val> {
                 Some(r) => Val::Int(r),
                 None => int_val(prim::rem_euclid(&Big::from(*x), &Big::from(*y))),
             });
-        }
-        // The symbol ↔ bytes bridge the reader lives on: the general path
-        // would rebuild the whole byte list as an Expr and back.
-        (PrimTag::SymOfChars, [v]) => {
-            if let Some(s) = decode_byte_list(v) {
-                prof_count_prim("sym_of_chars");
-                return Ok(Val::Sym(intern(&s)));
-            }
-        }
-        (PrimTag::CharsOfSym, [Val::Sym(id)]) => {
-            prof_count_prim("chars_of_sym");
-            return Ok(encode_byte_list(&name_str(*id)));
         }
         _ => {}
     }
@@ -1085,7 +1015,6 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vec<Val>) -> bool {
             (Val::Big(a), Val::Big(b)) => **a == **b,
             _ => false,
         },
-        IPat::Sym(s) => matches!(v, Val::Sym(t) if t == s),
         IPat::Ctor(cn, sub_pats, flat) => {
             if let Val::Ctor(c) = v {
                 if c.name() == *cn && sub_pats.len() == c.len() {
@@ -1114,7 +1043,6 @@ fn val_to_expr(v: &Val) -> Expr {
     match v {
         Val::Int(n) => Expr::IntLit(crate::ast::IntLit::from(*n)),
         Val::Big(n) => Expr::IntLit((**n).clone()),
-        Val::Sym(s) => Expr::SymLit(name_str(*s).to_string()),
         Val::FVar(s) => Expr::FVar(name_str(*s).to_string()),
         Val::Ctor(c) => {
             Expr::Ctor(name_str(c.name()).to_string(), c.fields().iter().map(val_to_expr).collect())
@@ -1129,7 +1057,6 @@ fn val_of_value_expr(e: &Expr) -> Val {
         Expr::IntLit(n) => int_val(n.clone()),
         // Names are INTERNED — pattern matching relies on every runtime name
         // being canonical (integer compares, no string fallback).
-        Expr::SymLit(s) => Val::Sym(intern(s)),
         Expr::FVar(s) => Val::FVar(intern(s)),
         Expr::Ctor(n, args) => Val::Ctor(CtorRef::new(intern(n), args.iter().map(val_of_value_expr))),
         // Primitives only ever return values; any other shape is a bug

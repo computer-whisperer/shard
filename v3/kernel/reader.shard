@@ -28,6 +28,7 @@
 (use kernel.intmap)
 (use kernel.intmap.IntMap)
 (use kernel.scope.Vis)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.decl.ConstantVal)
 (use kernel.decl.Constructor)
@@ -82,8 +83,8 @@
        ((some n)
         (match (univ_params ls nil)
           ((some ps) (Prod.mk (some (Head (qualify sc n) ps)) nil))
-          (none (Prod.mk none "universe parameters are names: NAME.{u v}"))))))
-    (_ (Prod.mk none "a declared name is NAME or NAME.{u…}"))))
+          (none (Prod.mk none (utf8 "universe parameters are names: NAME.{u v}")))))))
+    (_ (Prod.mk none (utf8 "a declared name is NAME or NAME.{u…}")))))
 
 ;; ---- closing over the binders ------------------------------------------------------------
 ;; the Pi over the declaration's binders, finished (no metavariable survives)
@@ -198,17 +199,18 @@
      (match k
        ((ReqFull s d p e)
         (match ek
-          ((ReqStmt es) (if (= es s) (AutoFits steps) (AutoStale (list "statement"))))
+          ((ReqStmt es) (if (= es s) (AutoFits steps) (AutoStale (list (utf8 "statement")))))
           ((ReqFull es ed ep ee)
            (let
              ((bad
-                (append (if (= es s) nil (list "statement"))
-                  (append (if (= ed d) nil (list "deps"))
-                    (append (if (= ep p) nil (list "policy")) (if (= ee e) nil (list "env")))))))
+                (append (if (= es s) nil (list (utf8 "statement")))
+                  (append (if (= ed d) nil (list (utf8 "deps")))
+                    (append (if (= ep p) nil (list (utf8 "policy")))
+                      (if (= ee e) nil (list (utf8 "env"))))))))
              (match bad
                (nil (AutoFits steps))
                (_ (AutoStale bad)))))))
-       ((ReqStmt s) (if (= (req_stmt ek) s) (AutoFits steps) (AutoStale (list "statement"))))))))
+       ((ReqStmt s) (if (= (req_stmt ek) s) (AutoFits steps) (AutoStale (list (utf8 "statement")))))))))
 (fn join_sp ((xs (List (List Int)))) (List Int)
   (measure (struct xs))
   (match xs
@@ -219,97 +221,109 @@
 ;; `auto` without a valid entry is the engine's, RDSolved; `measure` — every hand-written proof is
 ;; read as usual and the engine is also run on the statement, RDMeasured (the engine's count)
 (fn read_decl ((sc Scope) (env CheckedEnv) (s SExpr)) RDecl
-  (read_decl_autos sc env s (no_producers) (quote off)))
+  (read_decl_autos sc env s (no_producers) (sym "off")))
 (fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos Producers) (mode Symbol)) RDecl
   (match s
     ((SList (cons (SSym h) args))
-     (if (sym_eq h (quote def)) (read_def sc env args (quote def) nil mode)
-     (if (sym_eq h (quote abbrev)) (read_def sc env args (quote abbrev) nil mode)
-     (if (sym_eq h (quote opaque)) (read_def sc env args (quote opaque) nil mode)
-     (if (sym_eq h (quote theorem)) (read_def sc env args (quote theorem) autos mode)
-     (if (sym_eq h (quote axiom)) (read_axiom sc env args)
-     (if (sym_eq h (quote inductive)) (read_inductive sc env args)
-     (if (sym_eq h (quote type)) (read_type sc env args)
-     (if (sym_eq h (quote structure)) (read_structure sc env args)
+     (if (sym_eq h (sym "def")) (read_def sc env args (sym "def") nil mode)
+     (if (sym_eq h (sym "abbrev")) (read_def sc env args (sym "abbrev") nil mode)
+     (if (sym_eq h (sym "opaque")) (read_def sc env args (sym "opaque") nil mode)
+     (if (sym_eq h (sym "theorem")) (read_def sc env args (sym "theorem") autos mode)
+     (if (sym_eq h (sym "axiom")) (read_axiom sc env args)
+     (if (sym_eq h (sym "inductive")) (read_inductive sc env args)
+     (if (sym_eq h (sym "type")) (read_type sc env args)
+     (if (sym_eq h (sym "structure")) (read_structure sc env args)
      (if
-       (bool_or (sym_eq h (quote import)) (bool_or (sym_eq h (quote use)) (sym_eq h (quote trusts))))
+       (bool_or (sym_eq h (sym "import")) (bool_or (sym_eq h (sym "use")) (sym_eq h (sym "trusts"))))
        (RDDirective s)
-       (if (sym_eq h (quote sig)) (read_sig sc env args)
-       (if (sym_eq h (quote requirement)) (read_requirement sc env args)
+       (if (sym_eq h (sym "sig")) (read_sig sc env args)
+       (if (sym_eq h (sym "requirement")) (read_requirement sc env args)
        (if
-         (bool_or (sym_eq h (quote fn))
-           (bool_or (sym_eq h (quote extern))
-             (bool_or (sym_eq h (quote fulfills))
-               (bool_or (sym_eq h (quote realize)) (sym_eq h (quote bin))))))
+         (bool_or (sym_eq h (sym "fn"))
+           (bool_or (sym_eq h (sym "extern"))
+             (bool_or (sym_eq h (sym "fulfills"))
+               (bool_or (sym_eq h (sym "realize")) (sym_eq h (sym "bin"))))))
          (RDLater h)
          (match (reserved_why h)
-           ((some ph) (RDErr (quote reserved_form) (append (chars_of_sym h) (append ": " ph))))
+           ((some ph)
+            (RDErr (sym "reserved_form") (append (chars_of_sym h) (append (utf8 ": ") ph))))
            (none
              (match (lean_form h)
-               ((some p) (RDErr (quote lean_form) (append (chars_of_sym h) (append " — " p))))
-               (none (RDErr (quote unknown_form) (chars_of_sym h)))))))))))))))))))
-    (_ (RDErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
+               ((some p)
+                (RDErr (sym "lean_form") (append (chars_of_sym h) (append (utf8 " — ") p))))
+               (none (RDErr (sym "unknown_form") (chars_of_sym h)))))))))))))))))))
+    (_ (RDErr (sym "unknown_form") (utf8 "a top-level form is (KEYWORD …)")))))
 (fn reserved_why ((h Symbol)) (Option (List Int))
-  (if (bool_or (sym_eq h (quote instance)) (sym_eq h (quote class)))
+  (if (bool_or (sym_eq h (sym "instance")) (sym_eq h (sym "class")))
     (some
-      "there are no user classes and no instance declarations: an instance argument at Nat, Int, Bool or List is filled from a fixed table of Init's instances — pass a structure of functions as an argument, and for equality, ordering and printing write (derive TYPE CAPABILITY…)")
-  (if (sym_eq h (quote requires))
+      (utf8
+        "there are no user classes and no instance declarations: an instance argument at Nat, Int, Bool or List is filled from a fixed table of Init's instances — pass a structure of functions as an argument, and for equality, ordering and printing write (derive TYPE CAPABILITY…)"))
+  (if (sym_eq h (sym "requires"))
     (some
-      "a clause of the bin form, not a form of its own: write (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))")
-  (if (sym_eq h (quote app))
+      (utf8
+        "a clause of the bin form, not a form of its own: write (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))"))
+  (if (sym_eq h (sym "app"))
     (some
-      "there is no app form: write the loop in the entry function of a bin — (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))")
+      (utf8
+        "there is no app form: write the loop in the entry function of a bin — (bin NAME (entry F) (externs E…) (trusts A…) (requires R…))"))
   (if
-    (bool_or (sym_eq h (quote namespace))
-      (bool_or (sym_eq h (quote section)) (sym_eq h (quote variable))))
-    (some "there is no such block: declare the dotted name, with its binders on each declaration")
+    (bool_or (sym_eq h (sym "namespace"))
+      (bool_or (sym_eq h (sym "section")) (sym_eq h (sym "variable"))))
+    (some
+      (utf8 "there is no such block: declare the dotted name, with its binders on each declaration"))
     none)))))
 ;; a Lean keyword with no form here is refused `lean_form` with what to write or the reason
 ;; (docs/LEAN.md lists the rows) — `unknown_form` is for the rest
 (fn lean_form ((h Symbol)) (Option (List Int))
-  (if (sym_eq h (quote partial))
+  (if (sym_eq h (sym "partial"))
     (some
-      "there are no partial definitions: write (fn NAME BINDERS RET (measure M) BODY) — the measure is the totality obligation")
-  (if (sym_eq h (quote unsafe))
-    (some "there is no unsafe modifier: every declaration is checked by K")
+      (utf8
+        "there are no partial definitions: write (fn NAME BINDERS RET (measure M) BODY) — the measure is the totality obligation"))
+  (if (sym_eq h (sym "unsafe"))
+    (some (utf8 "there is no unsafe modifier: every declaration is checked by K"))
   (if
-    (bool_or (sym_eq h (quote notation))
-      (bool_or (sym_eq h (quote infix))
-        (bool_or (sym_eq h (quote infixl))
-          (bool_or (sym_eq h (quote infixr))
-            (bool_or (sym_eq h (quote prefix))
-              (bool_or (sym_eq h (quote postfix))
-                (bool_or (sym_eq h (quote syntax))
-                  (bool_or (sym_eq h (quote macro))
-                    (bool_or (sym_eq h (quote macro_rules))
-                      (bool_or (sym_eq h (quote elab))
-                        (bool_or (sym_eq h (quote elab_rules)) (sym_eq h (quote declare_syntax_cat)))))))))))))
+    (bool_or (sym_eq h (sym "notation"))
+      (bool_or (sym_eq h (sym "infix"))
+        (bool_or (sym_eq h (sym "infixl"))
+          (bool_or (sym_eq h (sym "infixr"))
+            (bool_or (sym_eq h (sym "prefix"))
+              (bool_or (sym_eq h (sym "postfix"))
+                (bool_or (sym_eq h (sym "syntax"))
+                  (bool_or (sym_eq h (sym "macro"))
+                    (bool_or (sym_eq h (sym "macro_rules"))
+                      (bool_or (sym_eq h (sym "elab"))
+                        (bool_or (sym_eq h (sym "elab_rules")) (sym_eq h (sym "declare_syntax_cat")))))))))))))
     (some
-      "there are no user-defined notation, macros or syntax extensions: define a fn or a def under an ordinary name; a proof procedure is a fn from the goal's text to a block of steps, named by (auto (tactic M.FN)) — the surface is fixed with the elaborator")
-    (if (sym_eq h (quote open))
-      (some "Lean's open is (use PREFIX) or (use PREFIX NAME…); import opens nothing")
-    (if (bool_or (sym_eq h (quote lemma)) (sym_eq h (quote example)))
-      (some "write (theorem NAME BINDERS PROP PROOF): every theorem is named")
-    (if (sym_eq h (quote mutual))
+      (utf8
+        "there are no user-defined notation, macros or syntax extensions: define a fn or a def under an ordinary name; a proof procedure is a fn from the goal's text to a block of steps, named by (auto (tactic M.FN)) — the surface is fixed with the elaborator"))
+    (if (sym_eq h (sym "open"))
+      (some (utf8 "Lean's open is (use PREFIX) or (use PREFIX NAME…); import opens nothing"))
+    (if (bool_or (sym_eq h (sym "lemma")) (sym_eq h (sym "example")))
+      (some (utf8 "write (theorem NAME BINDERS PROP PROOF): every theorem is named"))
+    (if (sym_eq h (sym "mutual"))
       (some
-        "there is no mutual block: write each fn on its own, with its (measure …) — functions that call each other are found and defined together as one group")
-    (if (bool_or (sym_eq h (quote termination_by)) (sym_eq h (quote decreasing_by)))
+        (utf8
+          "there is no mutual block: write each fn on its own, with its (measure …) — functions that call each other are found and defined together as one group"))
+    (if (bool_or (sym_eq h (sym "termination_by")) (sym_eq h (sym "decreasing_by")))
       (some
-        "the measure is written in the fn: (fn NAME BINDERS RET (measure M) BODY); a descent it leaves to prove is (fulfills NAME.dec_N PROOF)")
-    (if (sym_eq h (quote noncomputable))
-      (some "no modifier: a def is logical and never runs; a fn is a def with its realization")
-    (if (bool_or (sym_eq h (quote private)) (sym_eq h (quote protected)))
-      (some "no modifier: a directory module's public surface is its view, DIR/mod.req.shard")
-    (if (sym_eq h (quote universe))
-      (some "universe parameters are declared on the name: (def NAME.{u} …)")
-    (if (sym_eq h (quote deriving)) (some "write (derive TYPE CAPABILITY…) after the type")
-    (if (sym_eq h (quote implemented_by))
+        (utf8
+          "the measure is written in the fn: (fn NAME BINDERS RET (measure M) BODY); a descent it leaves to prove is (fulfills NAME.dec_N PROOF)"))
+    (if (sym_eq h (sym "noncomputable"))
       (some
-        "write (realize NAME BINDERS RET BODY): it attaches the executable body to a declared constant")
-    (if (sym_eq h (quote attribute))
-      (some "there are no attributes: simp_only and rw take their lemmas by name")
-    (if (sym_eq h (quote set_option))
-      (some "there are no options: the elaborator has one behavior, versioned with it")
+        (utf8 "no modifier: a def is logical and never runs; a fn is a def with its realization"))
+    (if (bool_or (sym_eq h (sym "private")) (sym_eq h (sym "protected")))
+      (some (utf8 "no modifier: a directory module's public surface is its view, DIR/mod.req.shard"))
+    (if (sym_eq h (sym "universe"))
+      (some (utf8 "universe parameters are declared on the name: (def NAME.{u} …)"))
+    (if (sym_eq h (sym "deriving")) (some (utf8 "write (derive TYPE CAPABILITY…) after the type"))
+    (if (sym_eq h (sym "implemented_by"))
+      (some
+        (utf8
+          "write (realize NAME BINDERS RET BODY): it attaches the executable body to a declared constant"))
+    (if (sym_eq h (sym "attribute"))
+      (some (utf8 "there are no attributes: simp_only and rw take their lemmas by name"))
+    (if (sym_eq h (sym "set_option"))
+      (some (utf8 "there are no options: the elaborator has one behavior, versioned with it"))
       none)))))))))))))))
 
 ;; (def NAME.{u…} BINDERS TYPE VALUE); abbrev, opaque; (theorem … PROP PROOF)
@@ -319,15 +333,15 @@
   (match args
     ((cons hd (cons (SList bs) (cons ty (cons val nil))))
      (match (read_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RDErr (quote bad_binder) m))
+          ((Prod.mk none m) (RDErr (sym "bad_binder") m))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 ty)
              ((EErr r m) (RDErr r m))
              ((EOk e2 t _)
-              (if (sym_eq kind (quote theorem))
+              (if (sym_eq kind (sym "theorem"))
                 (read_proof e2 n lps fvars t val (auto_entry sc (pr_autos autos) n) mode autos)
                 (match (elab e2 val (some t))
                   ((EErr r m) (RDErr r m))
@@ -339,18 +353,18 @@
                         ((Prod.mk _ (FinErr r m)) (RDErr r m))
                         ((Prod.mk e5 (FinOk value))
                          (let ((cv (ConstantVal n lps T)))
-                           (if (sym_eq kind (quote opaque))
+                           (if (sym_eq kind (sym "opaque"))
                              (rd_ok e5 (list (OpaqueDecl cv value false (list n))))
                              (rd_ok e5
                                (list
                                  (DefnDecl cv value
-                                   (if (sym_eq kind (quote abbrev)) HAbbrev
+                                   (if (sym_eq kind (sym "abbrev")) HAbbrev
                                    (HRegular (def_height (el_env e5) value)))
                                    Safe
                                    (list n))))))))))))))))))))
     (_
-      (RDErr (quote bad_shape)
-        (append "(" (append (chars_of_sym kind) " NAME ((x TYPE)…) TYPE VALUE)"))))))
+      (RDErr (sym "bad_shape")
+        (append (utf8 "(") (append (chars_of_sym kind) (utf8 " NAME ((x TYPE)…) TYPE VALUE)")))))))
 
 ;; (extern NAME BINDERS RET): in L an opaque constant of the declared type. K's opaque kind
 ;; checks a value and never unfolds it, so the value is the type's default witness
@@ -363,19 +377,20 @@
   (match args
     ((cons hd (cons (SList bs) (cons ty nil)))
      (match (read_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RDErr (quote bad_binder) m))
+          ((Prod.mk none m) (RDErr (sym "bad_binder") m))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 ty)
              ((EErr r m) (RDErr r m))
              ((EOk e2 t _)
               (match (inhabit (el_w e2) t 32)
                 ((Prod.mk _ none)
-                 (RDErr (quote extern_uninhabited)
+                 (RDErr (sym "extern_uninhabited")
                    (append (show_name n)
-                     ": no default value of the declared result type can be built (a sort, a proposition, or a type without a closing constructor)")))
+                     (utf8
+                       ": no default value of the declared result type can be built (a sort, a proposition, or a type without a closing constructor)"))))
                 ((Prod.mk w (some v))
                  (match (close_pis (el_set_w e2 w) fvars t)
                    ((Prod.mk _ (FinErr r m)) (RDErr r m))
@@ -384,7 +399,7 @@
                       ((Prod.mk _ (FinErr r m)) (RDErr r m))
                       ((Prod.mk e5 (FinOk value))
                        (rd_ok e5 (list (OpaqueDecl (ConstantVal n lps T) value false (list n)))))))))))))))))
-    (_ (RDErr (quote bad_shape) "(extern NAME ((x TYPE)…) TYPE)"))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(extern NAME ((x TYPE)…) TYPE)")))))
 
 ;; the sidecar's entry for the theorem n: its name as written, qualified as n was
 (fn auto_entry ((sc Scope) (autos (List Auto)) (n Name)) (Option (Prod Req (List SExpr)))
@@ -415,7 +430,7 @@
    (mode Symbol)
    (pr Producers))
   RDecl
-  (if (sym_eq mode (quote measure)) (read_measured e n lps fvars t p entry pr)
+  (if (sym_eq mode (sym "measure")) (read_measured e n lps fvars t p entry pr)
   (read_proof_go e n lps fvars t p entry mode pr)))
 (fn read_proof_go
   ((e El)
@@ -430,15 +445,15 @@
   RDecl
   (match p
     ((SSym s)
-     (if (sym_eq s (quote sorry)) (RDPending n (quote sorry))
-     (if (sym_eq s (quote auto)) (read_auto e n lps fvars t entry nil mode pr)
-     (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
+     (if (sym_eq s (sym "sorry")) (RDPending n (sym "sorry"))
+     (if (sym_eq s (sym "auto")) (read_auto e n lps fvars t entry nil mode pr)
+     (RDErr (sym "bad_proof") (utf8 "a proof is (exact TERM), (by STEP…), auto or sorry")))))
     ((SList (cons (SSym x) nil))
-     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry nil mode pr)
-     (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))
+     (if (sym_eq x (sym "auto")) (read_auto e n lps fvars t entry nil mode pr)
+     (RDErr (sym "bad_proof") (utf8 "a proof is (exact TERM), (by STEP…), auto or sorry"))))
     ((SList (cons (SSym x) (cons pt rest)))
-     (if (sym_eq x (quote auto)) (read_auto e n lps fvars t entry (cons pt rest) mode pr)
-     (if (bool_and (sym_eq x (quote exact)) (= (len rest) 0))
+     (if (sym_eq x (sym "auto")) (read_auto e n lps fvars t entry (cons pt rest) mode pr)
+     (if (bool_and (sym_eq x (sym "exact")) (= (len rest) 0))
        (match (elab e pt (some t))
          ((EErr r m) (RDErr r m))
          ((EOk e1 v _)
@@ -449,7 +464,7 @@
                ((Prod.mk _ (FinErr r m)) (RDErr r m))
                ((Prod.mk e3 (FinOk value))
                 (rd_ok e3 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))))
-     (if (sym_eq x (quote by))
+     (if (sym_eq x (sym "by"))
        (match (close_pis e fvars t)
          ((Prod.mk _ (FinErr r m)) (RDErr r m))
          ((Prod.mk e1 (FinOk T))
@@ -457,10 +472,11 @@
             ((ProveErr r m) (RDErr r m))
             ((ProvePending _ gs)
              (RDPending n
-               (sym_of_chars (append "sorry goals=" (append (show_nat (len gs)) (goals_bounded gs))))))
+               (sym_of_chars
+                 (append (utf8 "sorry goals=") (append (show_nat (len gs)) (goals_bracketed gs))))))
             ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n))))))))
-       (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry")))))
-    (_ (RDErr (quote bad_proof) "a proof is (exact TERM), (by STEP…), auto or sorry"))))
+       (RDErr (sym "bad_proof") (utf8 "a proof is (exact TERM), (by STEP…), auto or sorry"))))))
+    (_ (RDErr (sym "bad_proof") (utf8 "a proof is (exact TERM), (by STEP…), auto or sorry")))))
 (fn read_auto
   ((e El)
    (n Name)
@@ -482,46 +498,48 @@
             ;; a schema-2 entry fits by its statement; under solve it is re-keyed whole (the
             ;; restamp, no search)
             ((some (Prod.mk (ReqStmt _) _))
-             (if (sym_eq mode (quote solve))
+             (if (sym_eq mode (sym "solve"))
                (match (read_block_proof e1 n lps fvars T steps)
                  ((RDOk ds) (RDSolved n key steps ds))
                  (other other))
                (read_block_proof e1 n lps fvars T steps)))
             (_ (read_block_proof e1 n lps fvars T steps))))
          (fit
-           (if (sym_eq mode (quote solve))
+           (if (sym_eq mode (sym "solve"))
              (match (tactic_named hints)
                ((TacticErr m)
                 (RDPending n
                   (sym_of_chars
-                    (append "auto_unsolved fp=" (append (show_int (req_stmt key)) (append " " m))))))
+                    (append (utf8 "auto_unsolved fp=")
+                      (append (show_int (req_stmt key)) (append (utf8 " ") m))))))
                ((TacticNamed tfn rest)
                 ;; the library's block, replayed as an entry's would be before it is one
                 (match (run_tactic e1 T (len fvars) tfn rest pr)
                   ((TacNo m)
                    (RDPending n
                      (sym_of_chars
-                       (append "auto_unsolved fp="
+                       (append (utf8 "auto_unsolved fp=")
                          (append (show_int (req_stmt key))
-                           (append " tactic=" (append (show_name tfn) (append ": " m))))))))
+                           (append (utf8 " tactic=") (append (show_name tfn) (append (utf8 ": ") m))))))))
                   ((TacSteps steps)
                    (match (read_block_proof e1 n lps fvars T steps)
                      ((RDOk ds) (RDSolved n key steps ds))
                      ((RDErr r m)
                       (RDPending n
                         (sym_of_chars
-                          (append "auto_unsolved fp="
+                          (append (utf8 "auto_unsolved fp=")
                             (append (show_int (req_stmt key))
-                              (append " tactic="
+                              (append (utf8 " tactic=")
                                 (append (show_name tfn)
-                                  (append ": " (append (chars_of_sym r) (append ": " m))))))))))
+                                  (append (utf8 ": ")
+                                    (append (chars_of_sym r) (append (utf8 ": ") m))))))))))
                      ((RDPending _ why)
                       (RDPending n
                         (sym_of_chars
-                          (append "auto_unsolved fp="
+                          (append (utf8 "auto_unsolved fp=")
                             (append (show_int (req_stmt key))
-                              (append " tactic="
-                                (append (show_name tfn) (append ": " (chars_of_sym why)))))))))
+                              (append (utf8 " tactic=")
+                                (append (show_name tfn) (append (utf8 ": ") (chars_of_sym why)))))))))
                      (other other)))))
                (TacticNone
                  ;; the engine's block, replayed as an entry's would be before it is one
@@ -529,8 +547,8 @@
                    ((NotProduced m)
                     (RDPending n
                       (sym_of_chars
-                        (append "auto_unsolved fp="
-                          (append (show_int (req_stmt key)) (append " " m))))))
+                        (append (utf8 "auto_unsolved fp=")
+                          (append (show_int (req_stmt key)) (append (utf8 " ") m))))))
                    ((Produced nodes)
                     (let ((steps (nodes_sx nodes)))
                       (match (read_block_proof e1 n lps fvars T steps)
@@ -540,9 +558,9 @@
                (sym_of_chars
                  (match fit
                    ((AutoStale bad)
-                    (append "auto_stale "
-                      (append (join_sp bad) (append " fp=" (show_int (req_stmt key))))))
-                   (_ (append "auto_missing fp=" (show_int (req_stmt key))))))))))))))
+                    (append (utf8 "auto_stale ")
+                      (append (join_sp bad) (append (utf8 " fp=") (show_int (req_stmt key))))))
+                   (_ (append (utf8 "auto_missing fp=") (show_int (req_stmt key))))))))))))))
 ;; the producer a delegation names: `(tactic M.FN)` among the hints, once;
 ;; the hints after it are the library's
 (type TacticHint (TacticNamed Name (List SExpr)) (TacticNone) (TacticErr (List Int)))
@@ -555,18 +573,20 @@
         ((some f) (TacticNamed f (rev acc)))
         (none TacticNone)))
     ((cons (SList (cons (SSym h) args)) r)
-     (if (sym_eq h (quote tactic))
+     (if (sym_eq h (sym "tactic"))
        (match found
          ((some _)
           (TacticErr
-            "tactic: several tactics in one delegation — name one; a library composes its own"))
+            (utf8
+              "tactic: several tactics in one delegation — name one; a library composes its own")))
          (none
            (match args
              ((cons (SSym f) nil)
               (match (name_of_sym f)
                 ((some fn) (tactic_named_go r (some fn) acc))
-                (none (TacticErr (append "tactic: not a name: " (chars_of_sym f))))))
-             (_ (TacticErr "tactic: (tactic M.FN) names one fn of the load, module-qualified")))))
+                (none (TacticErr (append (utf8 "tactic: not a name: ") (chars_of_sym f))))))
+             (_
+               (TacticErr (utf8 "tactic: (tactic M.FN) names one fn of the load, module-qualified"))))))
        (tactic_named_go r found (cons (SList (cons (SSym h) args)) acc))))
     ((cons o r) (tactic_named_go r found (cons o acc)))))
 ;; the tactic run: M.FN a fn of the loaded programs taking the goal
@@ -584,49 +604,54 @@
               (bool_and (= ntp 0) (bool_and (text_type gt) (bool_and (text_type ht) (text_type rt)))))
             (TacNo
               (append (show_name tfn)
-                " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec ((List Nat) or (List Int), ByteArray)"))
-            (match (el_fresh e (n1 (quote goal)) T (quote goal))
+                (utf8
+                  " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec ((List Nat) or (List Int), ByteArray)")))
+            (match (el_fresh e (n1 (sym "goal")) T (sym "goal"))
               ((Prod.mk e1 (MVar _ i))
                (let ((g (Goal i T nctx)))
                  (match (val_of_text gt (goal_sx e1 g))
-                   (none (TacNo "the goal's text has no value of the parameter's type"))
+                   (none (TacNo (utf8 "the goal's text has no value of the parameter's type")))
                    ((some gv)
-                    (match (val_of_text ht (append "(" (append (show_sexprs hints) ")")))
-                      (none (TacNo "the hints' text has no value of the parameter's type"))
+                    (match
+                      (val_of_text ht (append (utf8 "(") (append (show_sexprs hints) (utf8 ")"))))
+                      (none (TacNo (utf8 "the hints' text has no value of the parameter's type")))
                       ((some hv)
                        (match (ev prog tfn (list gv hv) fuel)
                          ((EvOk v)
                           (match (text_of_val v)
-                            (none (TacNo "the answer is not text"))
-                            ((some nil) (TacNo "no answer"))
+                            (none (TacNo (utf8 "the answer is not text")))
+                            ((some nil) (TacNo (utf8 "no answer")))
                             ((some bs)
                              (match (read_all bs)
                                ((RAErr r off)
                                 (TacNo
-                                  (append "the answer does not read: "
+                                  (append (utf8 "the answer does not read: ")
                                     (append (chars_of_sym r)
-                                      (append " at byte " (append (show_nat off) (append " of " bs)))))))
+                                      (append (utf8 " at byte ")
+                                        (append (show_nat off) (append (utf8 " of ") bs)))))))
                                ((RAOk (cons (SList steps) nil)) (TacSteps steps))
                                ((RAOk _)
-                                (TacNo (append "the answer is not one block (STEP…): " bs)))))))
+                                (TacNo (append (utf8 "the answer is not one block (STEP…): ") bs)))))))
                          ((EvStuck r f)
                           (TacNo
-                            (append "ev: stuck "
-                              (append (chars_of_sym r) (append " in " (show_name f))))))
+                            (append (utf8 "ev: stuck ")
+                              (append (chars_of_sym r) (append (utf8 " in ") (show_name f))))))
                          ((EvExhausted r f)
                           (TacNo
-                            (append "ev: exhausted "
-                              (append (chars_of_sym r) (append " in " (show_name f))))))
-                         (EvOut (TacNo "ev: the tactic performed an effect")))))))))
-              ((Prod.mk _ _) (TacNo "no metavariable")))))
+                            (append (utf8 "ev: exhausted ")
+                              (append (chars_of_sym r) (append (utf8 " in ") (show_name f))))))
+                         (EvOut (TacNo (utf8 "ev: the tactic performed an effect"))))))))))
+              ((Prod.mk _ _) (TacNo (utf8 "no metavariable"))))))
          ((some _)
           (TacNo
             (append (show_name tfn)
-              " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT): a fn of two parameters, no type parameter")))
+              (utf8
+                " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT): a fn of two parameters, no type parameter"))))
          (none
            (TacNo
              (append (show_name tfn)
-               " is not a fn of the load (the library is imported as any module; the name is module-qualified)"))))))))
+               (utf8
+                 " is not a fn of the load (the library is imported as any module; the name is module-qualified)")))))))))
 ;; a block on the closed statement: the theorem, pending with its goals, or the refusal
 (fn read_block_proof
   ((e El) (n Name) (lps (List Name)) (fvars (List Expr)) (T Expr) (steps (List SExpr)))
@@ -635,7 +660,8 @@
     ((ProveErr r m) (RDErr r m))
     ((ProvePending _ gs)
      (RDPending n
-       (sym_of_chars (append "sorry goals=" (append (show_nat (len gs)) (goals_bounded gs))))))
+       (sym_of_chars
+         (append (utf8 "sorry goals=") (append (show_nat (len gs)) (goals_bracketed gs))))))
     ((ProveOk e2 value) (rd_ok e2 (list (ThmDecl (ConstantVal n lps T) value (list n)))))))
 ;; mode `measure`: the proof as written, and whether the engine closes the statement unaided —
 ;; the engine's count; an `auto` here is read as the build reads it
@@ -649,7 +675,7 @@
    (entry (Option (Prod Req (List SExpr))))
    (pr Producers))
   RDecl
-  (match (read_proof_go e n lps fvars t p entry (quote off) pr)
+  (match (read_proof_go e n lps fvars t p entry (sym "off") pr)
     ((RDOk ds)
      (match (close_pis e fvars t)
        ((Prod.mk _ (FinErr r m)) (RDOk ds))
@@ -668,7 +694,7 @@
   (Option (Prod Name Bool))
   (match p
     ((SList (cons (SSym x) hints))
-     (if (sym_eq x (quote auto))
+     (if (sym_eq x (sym "auto"))
        (match (tactic_named hints)
          ((TacticNamed tfn rest)
           (some
@@ -689,23 +715,23 @@
 (fn read_sig ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match args
     ((cons (SSym k) rest)
-     (if (sym_eq k (quote type))
+     (if (sym_eq k (sym "type"))
        (match rest
          ((cons hd nil)
           (match (type_head sc hd)
-            ((Prod.mk none m) (RDErr (quote bad_name) m))
+            ((Prod.mk none m) (RDErr (sym "bad_name") m))
             ((Prod.mk (some (Prod.mk n params)) _)
              (RDParam (AxiomDecl (ConstantVal n nil (type_former_type (len params))) false)
-               (quote type)
+               (sym "type")
                (len params)))))
-         (_ (RDErr (quote bad_shape) "(sig type NAME) or (sig type (NAME T…))")))
-     (if (sym_eq k (quote fn))
+         (_ (RDErr (sym "bad_shape") (utf8 "(sig type NAME) or (sig type (NAME T…))"))))
+     (if (sym_eq k (sym "fn"))
        (match (read_signature sc env rest)
          ((Prod.mk (some (Prod.mk n t)) _)
-          (RDParam (AxiomDecl (ConstantVal n nil t) false) (quote fn) 0))
-         ((Prod.mk none m) (RDErr (quote bad_shape) m)))
-       (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
-    (_ (RDErr (quote bad_shape) "(sig fn NAME BINDERS RET) or (sig type NAME)"))))
+          (RDParam (AxiomDecl (ConstantVal n nil t) false) (sym "fn") 0))
+         ((Prod.mk none m) (RDErr (sym "bad_shape") m)))
+       (RDErr (sym "bad_shape") (utf8 "(sig fn NAME BINDERS RET) or (sig type NAME)")))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(sig fn NAME BINDERS RET) or (sig type NAME)")))))
 ;; Type → … → Type with k arrows
 (fn type_former_type ((k Int)) Expr
   (measure k)
@@ -721,25 +747,27 @@
        (none (Prod.mk none (chars_of_sym x)))
        ((some short)
         (match (read_binders (el_with_etype (el0 sc env nil nil (qualify sc short)) true) bs nil)
-          ((Prod.mk none m) (Prod.mk none (append "bad binder: " m)))
+          ((Prod.mk none m) (Prod.mk none (append (utf8 "bad binder: ") m)))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 ret)
-             ((EErr r m) (Prod.mk none (append (chars_of_sym r) (append ": " m))))
+             ((EErr r m) (Prod.mk none (append (chars_of_sym r) (append (utf8 ": ") m))))
              ((EOk e2 t _)
               (match (close_pis e2 fvars t)
-                ((Prod.mk _ (FinErr r m)) (Prod.mk none (append (chars_of_sym r) (append ": " m))))
+                ((Prod.mk _ (FinErr r m))
+                 (Prod.mk none (append (chars_of_sym r) (append (utf8 ": ") m))))
                 ((Prod.mk _ (FinOk T)) (Prod.mk (some (Prod.mk (qualify sc short) T)) nil))))))))))
-    (_ (Prod.mk none "NAME ((x TYPE)…) RET"))))
+    (_ (Prod.mk none (utf8 "NAME ((x TYPE)…) RET")))))
 ;; (requirement NAME BINDERS PROP): the parameter NAME : ∀ BINDERS, PROP (L terms)
 (fn read_requirement ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
   (match (read_statement sc env args)
     ((RSOk e n lps _ _ T)
      (match (el_aux e)
-       (nil (RDParam (AxiomDecl (ConstantVal n lps T) false) (quote requirement) 0))
+       (nil (RDParam (AxiomDecl (ConstantVal n lps T) false) (sym "requirement") 0))
        (_
-         (RDErr (quote match_in_requirement)
-           "a requirement's statement with a match needs its matcher in the view: state it over a def"))))
-    ((RSErr m) (RDErr (quote bad_shape) m))))
+         (RDErr (sym "match_in_requirement")
+           (utf8
+             "a requirement's statement with a match needs its matcher in the view: state it over a def")))))
+    ((RSErr m) (RDErr (sym "bad_shape") m))))
 ;; a statement read: the state over the binders, the name, its universe
 ;; parameters, the fvars, the open proposition, the closed one
 (type RStmt (RSOk El Name (List Name) (List Expr) Expr Expr) (RSErr (List Int)))
@@ -750,15 +778,15 @@
        ((Prod.mk none m) (RSErr m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RSErr (append "bad binder: " m)))
+          ((Prod.mk none m) (RSErr (append (utf8 "bad binder: ") m)))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 prop)
-             ((EErr r m) (RSErr (append (chars_of_sym r) (append ": " m))))
+             ((EErr r m) (RSErr (append (chars_of_sym r) (append (utf8 ": ") m))))
              ((EOk e2 t _)
               (match (close_pis e2 fvars t)
-                ((Prod.mk _ (FinErr r m)) (RSErr (append (chars_of_sym r) (append ": " m))))
+                ((Prod.mk _ (FinErr r m)) (RSErr (append (chars_of_sym r) (append (utf8 ": ") m))))
                 ((Prod.mk e3 (FinOk T)) (RSOk e3 n lps fvars t T))))))))))
-    (_ (RSErr "(requirement NAME ((x TYPE)…) PROP)"))))
+    (_ (RSErr (utf8 "(requirement NAME ((x TYPE)…) PROP)")))))
 ;; (fulfills NAME PROOF) against the view's (requirement NAME BINDERS PROP), the
 ;; statement re-read in this environment: a theorem, or pending
 (fn read_fulfills
@@ -770,7 +798,7 @@
    (mode Symbol))
   RDecl
   (match (read_statement sc env req_args)
-    ((RSErr m) (RDErr (quote bad_shape) m))
+    ((RSErr m) (RDErr (sym "bad_shape") m))
     ((RSOk e n lps fvars t _)
      (read_proof e n lps fvars t proof (auto_entry sc (pr_autos autos) n) mode autos))))
 
@@ -780,7 +808,7 @@
   ((sc Scope) (env CheckedEnv) (thm Name) (stmt Expr) (proof SExpr) (autos Producers) (mode Symbol))
   RDecl
   (read_proof (el0 sc env nil nil thm) thm nil nil stmt proof
-    (auto_entry_as sc (pr_autos autos) thm (n1 (quote proof)))
+    (auto_entry_as sc (pr_autos autos) thm (n1 (sym "proof")))
     mode
     autos))
 
@@ -789,10 +817,10 @@
   (match args
     ((cons hd (cons (SList bs) (cons ty nil)))
      (match (read_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RDErr (quote bad_binder) m))
+          ((Prod.mk none m) (RDErr (sym "bad_binder") m))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 ty)
              ((EErr r m) (RDErr r m))
@@ -800,7 +828,7 @@
               (match (close_pis e2 fvars t)
                 ((Prod.mk _ (FinErr r m)) (RDErr r m))
                 ((Prod.mk e3 (FinOk T)) (rd_ok e3 (list (AxiomDecl (ConstantVal n lps T) false))))))))))))
-    (_ (RDErr (quote bad_shape) "(axiom NAME ((x TYPE)…) TYPE)"))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(axiom NAME ((x TYPE)…) TYPE)")))))
 
 ;; (inductive NAME.{u…} BINDERS TYPE (CTOR TYPE)…): one type, Lean's shapes; the
 ;; type's own name is citable in the constructors with the type it declares
@@ -808,10 +836,10 @@
   (match args
     ((cons hd (cons (SList bs) (cons ty ctors)))
      (match (read_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RDErr (quote bad_binder) m))
+          ((Prod.mk none m) (RDErr (sym "bad_binder") m))
           ((Prod.mk (some (Prod.mk e1 fvars)) _)
            (match (elab_type e1 ty)
              ((EErr r m) (RDErr r m))
@@ -821,10 +849,10 @@
                 ((Prod.mk e3 (FinOk IT))
                  (match
                    (read_ctors (el_with_defining e3 (list (Defd n (len lps) IT))) n fvars ctors nil)
-                   ((Prod.mk none m) (RDErr (quote bad_constructor) m))
+                   ((Prod.mk none m) (RDErr (sym "bad_constructor") m))
                    ((Prod.mk (some cs) _)
                     (RDOk (list (InductDecl lps (len fvars) (list (InductiveType n IT cs)) false))))))))))))))
-    (_ (RDErr (quote bad_shape) "(inductive NAME ((x TYPE)…) TYPE (CTOR TYPE)…)"))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(inductive NAME ((x TYPE)…) TYPE (CTOR TYPE)…)")))))
 ;; (CTOR TYPE): the constructor's type after the parameters, in the binder context
 (fn read_ctors ((e El) (ind Name) (fvars (List Expr)) (cs (List SExpr)) (acc (List Constructor)))
   (Prod (Option (List Constructor)) (List Int))
@@ -836,13 +864,14 @@
        (none (Prod.mk none (chars_of_sym cn)))
        ((some short)
         (match (elab_type e ty)
-          ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+          ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
           ((EOk e1 t _)
            (match (close_pis e1 fvars t)
-             ((Prod.mk _ (FinErr r2 m)) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+             ((Prod.mk _ (FinErr r2 m))
+              (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
              ((Prod.mk e2 (FinOk CT))
               (read_ctors e2 ind fvars r (cons (Constructor (name_append ind short) CT) acc)))))))))
-    (_ (Prod.mk none "a constructor is (CTOR TYPE)"))))
+    (_ (Prod.mk none (utf8 "a constructor is (CTOR TYPE)")))))
 
 ;; (type (NAME T…) (CTOR FIELD-TYPE…)…) / (type NAME (CTOR FIELD-TYPE…)…): the
 ;; E data form as an inductive with `(T Type)` parameters, result `Type`,
@@ -851,7 +880,7 @@
   (match args
     ((cons hd ctors)
      (match (type_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Prod.mk n params)) _)
         (let ((IT (type_former_type (len params))))
           (match
@@ -860,10 +889,10 @@
              (match (w_apps (el_w e1) (mk_const n nil) fvars)
                ((Prod.mk w2 result)
                 (match (read_fields_ctors (el_set_w e1 w2) n fvars result ctors nil)
-                  ((Prod.mk none m) (RDErr (quote bad_constructor) m))
+                  ((Prod.mk none m) (RDErr (sym "bad_constructor") m))
                   ((Prod.mk (some cs) _)
                    (RDOk (list (InductDecl nil (len params) (list (InductiveType n IT cs)) false)))))))))))))
-    (_ (RDErr (quote bad_shape) "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(type (NAME T…) (CTOR FIELD-TYPE…)…)")))))
 ;; the `(T Type)` parameters as locals — implicit in the constructors, as Lean's inductive
 ;; parameters are and as E cites them (`(Pair2.mk two green)` in L as in a body)
 (fn type_locals ((e El) (ps (List Name)) (acc (List Expr))) (Prod El (List Expr))
@@ -888,11 +917,12 @@
           ((Prod.mk none m) (Prod.mk none m))
           ((Prod.mk (some (Prod.mk e1 flocals)) _)
            (match (close_pis e1 (append fvars flocals) result)
-             ((Prod.mk _ (FinErr r2 m)) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+             ((Prod.mk _ (FinErr r2 m))
+              (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
              ((Prod.mk e2 (FinOk CT))
               (read_fields_ctors (el_restore e2 e) ind fvars result r
                 (cons (Constructor (name_append ind short) CT) acc)))))))))
-    (_ (Prod.mk none "a constructor is (CTOR FIELD-TYPE…)"))))
+    (_ (Prod.mk none (utf8 "a constructor is (CTOR FIELD-TYPE…)")))))
 ;; each field type in the parameter context, an anonymous local per field
 (fn field_locals ((e El) (fields (List SExpr)) (acc (List Expr)))
   (Prod (Option (Prod El (List Expr))) (List Int))
@@ -901,7 +931,7 @@
     (nil (Prod.mk (some (Prod.mk e (rev acc))) nil))
     ((cons f r)
      (match (elab_type e f)
-       ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+       ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
        ((EOk e1 t _)
         (match (el_local e1 Anon t BDefault)
           ((Prod.mk e2 fv) (field_locals e2 r (cons fv acc)))))))))
@@ -915,10 +945,10 @@
   (match args
     ((cons hd (cons (SList bs) fields))
      (match (read_head sc hd)
-       ((Prod.mk none m) (RDErr (quote bad_name) m))
+       ((Prod.mk none m) (RDErr (sym "bad_name") m))
        ((Prod.mk (some (Head n lps)) _)
         (match (read_binders (el0 sc env lps nil n) bs nil)
-          ((Prod.mk none m) (RDErr (quote bad_binder) m))
+          ((Prod.mk none m) (RDErr (sym "bad_binder") m))
           ((Prod.mk (some (Prod.mk e1 params)) _)
            (match (close_pis e1 params (mk_sort (LSucc LZero)))
              ((Prod.mk _ (FinErr r m)) (RDErr r m))
@@ -927,19 +957,19 @@
                 (match (w_apps (el_w e3) (mk_const n (lparam_levels lps)) params)
                   ((Prod.mk w4 self_ty)
                    (match (read_binders (el_set_w e3 w4) fields nil)
-                     ((Prod.mk none m) (RDErr (quote bad_field) m))
+                     ((Prod.mk none m) (RDErr (sym "bad_field") m))
                      ((Prod.mk (some (Prod.mk e5 fs)) _)
                       (match (close_pis e5 (append params fs) self_ty)
                         ((Prod.mk _ (FinErr r m)) (RDErr r m))
                         ((Prod.mk e6 (FinOk CT))
                          (let
                            ((ctor
-                              (Constructor (name_append n (Str Anon (quote mk)))
+                              (Constructor (name_append n (Str Anon (sym "mk")))
                                 (implicit_prefix CT (len params)))))
                            (match (el_local (el_restore e6 e3) (self_name) self_ty BDefault)
                              ((Prod.mk e7 self)
                               (match (projections e7 n lps params self fields 0 nil nil)
-                                ((Prod.mk none m) (RDErr (quote bad_field) m))
+                                ((Prod.mk none m) (RDErr (sym "bad_field") m))
                                 ((Prod.mk (some projs) _)
                                  (RDOk
                                    (cons
@@ -947,7 +977,7 @@
                                        (list (InductiveType n IT (list ctor)))
                                        false)
                                      projs)))))))))))))))))))))
-    (_ (RDErr (quote bad_shape) "(structure NAME ((x TYPE)…) (FIELD TYPE)…)"))))
+    (_ (RDErr (sym "bad_shape") (utf8 "(structure NAME ((x TYPE)…) (FIELD TYPE)…)")))))
 
 ;; NAME.f_i : forall BINDERS (self : NAME params), T_i[f_j := (proj NAME j self)]
 ;;   := fun BINDERS self => (proj NAME i self)
@@ -974,14 +1004,15 @@
        (none (Prod.mk none (chars_of_sym fx)))
        ((some f)
         (match (elab_type (el_with_aliases e aliases) fty)
-          ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+          ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
           ((EOk e2 t _)
            (match (close_pis e2 (append params (list self)) t)
-             ((Prod.mk _ (FinErr r2 m)) (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+             ((Prod.mk _ (FinErr r2 m))
+              (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
              ((Prod.mk e3 (FinOk PT))
               (match (close_lams e3 (append params (list self)) (mk_proj n i self))
                 ((Prod.mk _ (FinErr r2 m))
-                 (Prod.mk none (append (chars_of_sym r2) (append ": " m))))
+                 (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
                 ((Prod.mk e4 (FinOk value))
                  (projections (el_restore e4 e) n lps params self r (+ i 1)
                    (cons (Prod.mk f (Prod.mk i (el_zonk e4 t))) aliases)
@@ -992,7 +1023,7 @@
                        Safe
                        (list (name_append n f)))
                      acc)))))))))))
-    (_ (Prod.mk none "a field is (FIELD TYPE)"))))
+    (_ (Prod.mk none (utf8 "a field is (FIELD TYPE)")))))
 ;; the first k binders of a Pi or lambda chain made implicit: a structure's parameters in its
 ;; constructor and its projections, as Lean declares them — explicit in the type itself — so a
 ;; package's field is read as `(Monoid.op m x y)`

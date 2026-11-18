@@ -96,9 +96,7 @@ pub fn pat_types(t: &Tables, st: &Option<ETy>, p: &Pat) -> Vec<Option<ETy>> {
 /// A primitive's result type head (prog.shard prim_result).
 fn prim_result(code: u32) -> ETy {
     match code {
-        0 | 3 | 4 | 5 | 34 | 35 => con("Bool"),
-        16 => con("Symbol"),
-        17 => ETy::Con("List".into(), vec![con("Int")]),
+        0 | 3 | 4 | 34 | 35 => con("Bool"),
         36..=38 => con("Decidable"),
         22..=33 => con("Nat"),
         _ => con("Int"),
@@ -112,7 +110,6 @@ pub fn c_type(t: &Tables, tys: &[Option<ETy>], tm: &Tm) -> Option<ETy> {
         Tm::Lit(Lit::Nat(_)) => Some(con("Nat")),
         Tm::Lit(Lit::Int(_)) => Some(con("Int")),
         Tm::Lit(Lit::Str(_)) => Some(con("String")),
-        Tm::Lit(Lit::Sym(_)) => Some(con("Symbol")),
         Tm::Ctor(c, args) => {
             let Some(EInfo::Ctor { ind, .. }) = t.einfo(c) else { return None };
             match t.ctor_fields(c) {

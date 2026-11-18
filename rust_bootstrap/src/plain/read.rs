@@ -93,7 +93,6 @@ const PRIMS: &[(&str, u32, usize)] = &[
     ("-", 2, 2),
     ("<", 3, 2),
     ("<=", 4, 2),
-    ("sym_eq", 5, 2),
     ("band", 6, 2),
     ("bshr", 7, 2),
     ("*", 8, 2),
@@ -104,8 +103,6 @@ const PRIMS: &[(&str, u32, usize)] = &[
     ("bor", 13, 2),
     ("bxor", 14, 2),
     ("bshl", 15, 2),
-    ("sym_of_chars", 16, 1),
-    ("chars_of_sym", 17, 1),
     ("Int.tdiv", 18, 2),
     ("Int.tmod", 19, 2),
     ("Int.ediv", 20, 2),
@@ -637,10 +634,7 @@ fn read_et(cx: &Cx, r: &Rd, s: &Value) -> R<Tm> {
             }
         }
         "proj" => read_eproj(cx, r, args),
-        "quote" => match args {
-            [q] if q.as_symbol().is_some() => Ok(Tm::Lit(Lit::Sym(q.as_symbol().unwrap().to_string()))),
-            _ => unread("bad_shape", "(quote SYMBOL)"),
-        },
+        "quote" => unread("no_quote", "a symbol is written (sym \"x\"): there is no quote form"),
         "list" => {
             let (nl, cs) = list_in_scope(cx)?;
             let mut acc = Tm::Ctor(nl, vec![]);
@@ -1193,10 +1187,7 @@ fn read_epat(cx: &Cx, r: &Rd, st: &Option<ETy>, s: &Value) -> R<PRes> {
     };
     let subs = &items[1..];
     if h == "quote" {
-        return match subs {
-            [q] if q.as_symbol().is_some() => Ok((Pat::Lit(Lit::Sym(q.as_symbol().unwrap().to_string())), vec![], vec![])),
-            _ => unread("bad_shape", "(quote SYMBOL)"),
-        };
+        return unread("no_quote", "a symbol is written (sym \"x\"): there is no quote form");
     }
     let cs = cx.t.e_ctors(cx.sc, h);
     match cs.as_slice() {

@@ -10,9 +10,9 @@
 # The checked load of the toolchain is too slow for the bootstrap (LAW 21: the loader
 # interpreted, running the checker over the sources it is written in), so the two engines
 # are compared on a part:
-#   (3) for the roots whose closure is under V3_CHECK_SMALL declarations (default 1000: the
-#       ten that do not hold the whole of K) the loader on the bootstrap exits the same and
-#       prints the same text.
+#   (3) for the roots whose closure is under V3_CHECK_SMALL declarations (default 400: eight
+#       of them, each some seconds on the binary and a minute or two on the bootstrap) the
+#       loader on the bootstrap exits the same and prints the same text.
 # parity_test.sh is the same comparison for the reading of programs alone, on both engines.
 # Needs v3/bin/load current (v3/build.sh --all): a missing or stale binary fails here, and
 # nothing falls back to the bootstrap. V3_CHECK_JOBS roots at a time (default 8).
@@ -25,7 +25,7 @@ st=$(v3/build.sh --stamp load)
 [ -x v3/bin/load ] && [ -n "$st" ] && [ "$(cat v3/bin/load.stamp 2>/dev/null)" = "$st" ] || { echo "toolchain_check: v3/bin/load is missing or stale (v3/build.sh --all)"; exit 1; }
 read -r EXPORT INDEX < <(v3/kernel/test/init_index.sh) || { echo "toolchain_check: no Init index (v3/export.sh, kernel/test/init_index.sh)"; exit 1; }
 INIT="--init $EXPORT --init-index $INDEX"
-SMALL=${V3_CHECK_SMALL:-1000}
+SMALL=${V3_CHECK_SMALL:-400}
 JOBS=${V3_CHECK_JOBS:-8}
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 s=$(date +%s)

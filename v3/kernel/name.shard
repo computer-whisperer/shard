@@ -5,11 +5,17 @@
 ;;; The exporter numbers names in a table and refers to them by index;
 ;;; the import rebuilds this structure and interns components.
 
+(import "sym.shard")
+(import "sym.shard")
+(import "sym.shard")
+(use Init.Bool false true)
 (use Init.List cons nil)
+(use kernel.sym)
+(use kernel.util)
 
 (type Name
   (Anon)  ; Name.anonymous — the root; never the name of a declaration
-  (Str Name Symbol)  ; Name.str p s — `p.s`; s interned (`String` component)
+  (Str Name Symbol)  ; Name.str p s — `p.s`; s the component's bytes (Lean's `String`)
   (Num Name Int))  ; Name.num p n — `p.n`; n ≥ 0 (validated at raw admission)
 
 ;; RULES (environment.cpp `check_name`, inductive.cpp):
@@ -83,3 +89,81 @@
     ((cons c r) (hash_under (mix h c) r))))
 ;; the key of `p ++ n` from the hash of p and n's components
 (fn key_under ((h Int) (cs (List Int))) Int (band (hash_under h cs) 16777215))
+
+;; ---- names -----------------------------------------------------------------
+
+(fn name_eq ((a Name) (b Name)) Bool
+  (measure (struct a))
+  (match a
+    (Anon
+      (match b
+        (Anon true)
+        (_ false)))
+    ((Str ap as)
+     (match b
+       ((Str bp bs) (if (sym_eq as bs) (name_eq ap bp) false))
+       (_ false)))
+    ((Num ap an)
+     (match b
+       ((Num bp bn) (if (= an bn) (name_eq ap bp) false))
+       (_ false)))))
+
+;; Name.cmp's order (Lean `Name.cmp`; util/name.cpp `cmp`): compare the
+;; prefixes first, then the last component, numerals before strings.
+;; Only used to order universe levels in `normalize` (level.shard), where
+;; ANY fixed total order yields the same equivalence verdicts.
+(fn name_lt ((a Name) (b Name)) Bool
+  (measure (struct a))
+  (match a
+    (Anon
+      (match b
+        (Anon false)
+        (_ true)))
+    ((Str ap as)
+     (match b
+       (Anon false)
+       ((Num _ _) false)
+       ((Str bp bs)
+        (if (name_lt ap bp) true
+        (if (name_lt bp ap) false
+        (int_list_lt (chars_of_sym as) (chars_of_sym bs)))))))
+    ((Num ap an)
+     (match b
+       (Anon false)
+       ((Str _ _) true)
+       ((Num bp bn)
+        (if (name_lt ap bp) true
+        (if (name_lt bp ap) false
+        (< an bn))))))))
+
+(fn names_eq ((a (List Name)) (b (List Name))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x ar)
+     (match b
+       (nil false)
+       ((cons y br) (if (name_eq x y) (names_eq ar br) false))))))
+
+(fn mem_name ((x Name) (xs (List Name))) Bool
+  (measure (struct xs))
+  (match xs
+    (nil false)
+    ((cons y r) (if (name_eq x y) true (mem_name x r)))))
+
+;; `a.b.c` rendering; numeric components in decimal
+(fn show_name ((n Name)) (List Int)
+  (measure (struct n))
+  (match n
+    (Anon (utf8 "[anonymous]"))
+    ((Str Anon s) (chars_of_sym s))
+    ((Str p s) (append (show_name p) (cons 46 (chars_of_sym s))))
+    ((Num Anon k) (show_nat k))
+    ((Num p k) (append (show_name p) (cons 46 (show_nat k))))))
+
+;; convenience constructors
+(fn n1 ((a Symbol)) Name (Str Anon a))
+(fn n2 ((a Symbol) (b Symbol)) Name (Str (Str Anon a) b))

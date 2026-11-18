@@ -32,6 +32,7 @@
 (use Init.Option none some)
 (use kernel.sexpr)
 (use kernel.sexpr.SExpr)
+(use kernel.sym)
 (use kernel.util)
 
 ;; a record: its name, its type parameters, its constructor, its fields in order, its kind —
@@ -79,11 +80,11 @@
   (match forms
     (nil (RdOk (rev acc)))
     ((cons s r)
-     (if (is_head s (quote record))
+     (if (is_head s (sym "record"))
        (match (parse_record s)
          ((RdErr e m) (RdErr e m))
          ((RdOk rs) (collect_records r (append rs acc))))
-     (if (is_head s (quote structure))
+     (if (is_head s (sym "structure"))
        (match (parse_structure s)
          ((some rc) (collect_records r (cons rc acc)))
          (none (collect_records r acc)))
@@ -100,7 +101,7 @@
           (none none)
           ((some fs)
            (some
-             (RecDef n nil (sym_of_chars (append (chars_of_sym n) ".mk")) fs
+             (RecDef n nil (sym_of_chars (append (chars_of_sym n) (utf8 ".mk"))) fs
                (KStruct
                  (match bs
                    (nil false)
@@ -116,15 +117,15 @@
     ((SList (cons _ (cons hd entries)))
      (match (record_head hd)
        (none
-         (RdErr (quote record_form)
-           "(record NAME (ctor CTOR)? (FIELD TYPE)…) — NAME a symbol or (NAME P…)"))
+         (RdErr (sym "record_form")
+           (utf8 "(record NAME (ctor CTOR)? (FIELD TYPE)…) — NAME a symbol or (NAME P…)")))
        ((some (Prod.mk n ps))
         (match entries
           ((cons (SList (cons (SSym c) (cons (SSym ctor) nil))) rest)
-           (if (sym_eq c (quote ctor)) (record_fields n ps ctor rest)
+           (if (sym_eq c (sym "ctor")) (record_fields n ps ctor rest)
            (record_fields n ps (mk_ctor n) entries)))
           (_ (record_fields n ps (mk_ctor n) entries))))))
-    (_ (RdErr (quote record_form) "(record NAME (ctor CTOR)? (FIELD TYPE)…)"))))
+    (_ (RdErr (sym "record_form") (utf8 "(record NAME (ctor CTOR)? (FIELD TYPE)…)")))))
 (fn record_head ((hd SExpr)) (Option (Prod Symbol (List Symbol)))
   (match hd
     ((SSym n) (some (Prod.mk n nil)))
@@ -139,16 +140,17 @@
     (nil (some (rev acc)))
     ((cons (SSym p) r) (param_syms r (cons p acc)))
     (_ none)))
-(fn mk_ctor ((n Symbol)) Symbol (sym_of_chars (append "Mk" (chars_of_sym n))))
+(fn mk_ctor ((n Symbol)) Symbol (sym_of_chars (append (utf8 "Mk") (chars_of_sym n))))
 (fn record_fields ((n Symbol) (ps (List Symbol)) (ctor Symbol) (entries (List SExpr))) RdRes
   (match (rec_entries entries nil)
     (none
-      (RdErr (quote record_form)
+      (RdErr (sym "record_form")
         (append (chars_of_sym n)
-          ": a field is (FIELD TYPE), FIELD a symbol other than ctor, at least one")))
+          (utf8 ": a field is (FIELD TYPE), FIELD a symbol other than ctor, at least one"))))
     ((some fs)
-     (if (dup_field fs) (RdErr (quote record_form) (append (chars_of_sym n) ": a field twice"))
-     (RdOk (list (RecDef n ps ctor fs KRecord)))))))
+     (if (dup_field fs)
+       (RdErr (sym "record_form") (append (chars_of_sym n) (utf8 ": a field twice")))
+       (RdOk (list (RecDef n ps ctor fs KRecord)))))))
 (fn rec_entries ((entries (List SExpr)) (acc (List (Prod Symbol SExpr))))
   (Option (List (Prod Symbol SExpr)))
   (measure (struct entries))
@@ -158,7 +160,7 @@
         (nil none)
         (_ (some (rev acc)))))
     ((cons (SList (cons (SSym f) (cons t nil))) r)
-     (if (sym_eq f (quote ctor)) none (rec_entries r (cons (Prod.mk f t) acc))))
+     (if (sym_eq f (sym "ctor")) none (rec_entries r (cons (Prod.mk f t) acc))))
     (_ none)))
 (fn dup_field ((fs (List (Prod Symbol SExpr)))) Bool
   (measure (struct fs))
@@ -182,7 +184,7 @@
   (match forms
     (nil (RlOk (rev acc)))
     ((cons s r)
-     (if (is_head s (quote record))
+     (if (is_head s (sym "record"))
        (match (parse_record s)
          ((RdErr e m) (RlErr e m))
          ((RdOk (cons rc _)) (expand_go recs r (append (rev (generate rc)) acc)))
@@ -203,7 +205,7 @@
     ((cons p r) (cons (SSym p) (sym_forms r)))))
 (fn gen_type ((rc RecDef)) SExpr
   (SList
-    (list (SSym (quote type)) (head_form rc)
+    (list (SSym (sym "type")) (head_form rc)
       (SList (cons (SSym (rec_ctor rc)) (field_types (rec_fields rc)))))))
 (fn field_types ((fs (List (Prod Symbol SExpr)))) (List SExpr)
   (measure (struct fs))
@@ -215,17 +217,17 @@
   (measure (struct ps))
   (match ps
     (nil nil)
-    ((cons p r) (cons (SList (list (SSym p) (SSym (quote Type)))) (tparam_binders r)))))
+    ((cons p r) (cons (SList (list (SSym p) (SSym (sym "Type")))) (tparam_binders r)))))
 (fn gen_fields ((rc RecDef) (fs (List (Prod Symbol SExpr))) (acc (List SExpr))) (List SExpr)
   (measure (struct fs))
   (match fs
     (nil (rev acc))
     ((cons (Prod.mk f t) r)
      (gen_fields rc r (cons (gen_updater rc f t) (cons (gen_accessor rc f t) acc))))))
-(fn r_sym () SExpr (SSym (quote r)))
+(fn r_sym () SExpr (SSym (sym "r")))
 ;; the pattern binds the fields it uses as fld_FIELD (a field name itself would shadow the
 ;; accessor the record's namespace opens — pattern_name) and wildcards the rest
-(fn fld ((f Symbol)) SExpr (SSym (sym_of_chars (append "fld_" (chars_of_sym f)))))
+(fn fld ((f Symbol)) SExpr (SSym (sym_of_chars (append (utf8 "fld_") (chars_of_sym f)))))
 (fn pattern_one ((rc RecDef) (f Symbol)) SExpr
   (SList (cons (SSym (rec_ctor rc)) (pat_vars (rec_fields rc) f false))))
 (fn pattern_all ((rc RecDef) (f Symbol)) SExpr
@@ -235,27 +237,27 @@
   (match fs
     (nil nil)
     ((cons (Prod.mk g _) r)
-     (cons (if (bool_or all (sym_eq g f)) (fld g) (SSym (quote _))) (pat_vars r f all)))))
+     (cons (if (bool_or all (sym_eq g f)) (fld g) (SSym (sym "_"))) (pat_vars r f all)))))
 ;; (fn NAME.FIELD ((P Type)… (r NAME)) TYPE (match r ((CTOR f…) FIELD)))
 (fn dotted ((rc RecDef) (s (List Int))) SExpr
-  (SSym (sym_of_chars (append (chars_of_sym (rec_name rc)) (append "." s)))))
+  (SSym (sym_of_chars (append (chars_of_sym (rec_name rc)) (append (utf8 ".") s)))))
 (fn gen_accessor ((rc RecDef) (f Symbol) (t SExpr)) SExpr
   (SList
-    (list (SSym (quote fn)) (dotted rc (chars_of_sym f))
+    (list (SSym (sym "fn")) (dotted rc (chars_of_sym f))
       (SList (append (tparam_binders (rec_params rc)) (list (SList (list (r_sym) (head_form rc))))))
       t
-      (SList (list (SSym (quote match)) (r_sym) (SList (list (pattern_one rc f) (fld f))))))))
+      (SList (list (SSym (sym "match")) (r_sym) (SList (list (pattern_one rc f) (fld f))))))))
 ;; (fn NAME.with_FIELD ((P Type)… (new_FIELD TYPE) (r NAME)) NAME (match r ((CTOR f…) (CTOR … new_FIELD …))))
 (fn gen_updater ((rc RecDef) (f Symbol) (t SExpr)) SExpr
-  (let ((nv (SSym (sym_of_chars (append "new_" (chars_of_sym f))))))
+  (let ((nv (SSym (sym_of_chars (append (utf8 "new_") (chars_of_sym f))))))
     (SList
-      (list (SSym (quote fn)) (dotted rc (append "with_" (chars_of_sym f)))
+      (list (SSym (sym "fn")) (dotted rc (append (utf8 "with_") (chars_of_sym f)))
         (SList
           (append (tparam_binders (rec_params rc))
             (list (SList (list nv t)) (SList (list (r_sym) (head_form rc))))))
         (head_form rc)
         (SList
-          (list (SSym (quote match)) (r_sym)
+          (list (SSym (sym "match")) (r_sym)
             (SList
               (list (pattern_all rc f)
                 (SList (cons (SSym (rec_ctor rc)) (replaced (rec_fields rc) f nv)))))))))))
@@ -273,8 +275,8 @@
      (match (rewrite_all recs items nil)
        ((RlErr e m) (RwErr e m))
        ((RlOk items1)
-        (if (is_head s (quote make)) (rewrite_make recs items1)
-        (if (is_head s (quote with)) (rewrite_with recs items1)
+        (if (is_head s (sym "make")) (rewrite_make recs items1)
+        (if (is_head s (sym "with")) (rewrite_with recs items1)
         (RwOk (SList items1)))))))
     (_ (RwOk s))))
 (fn rewrite_all ((recs (List RecDef)) (items (List SExpr)) (acc (List SExpr))) RlRes
@@ -290,22 +292,26 @@
   (match items
     ((cons _ (cons (SSym n) entries))
      (match (find_record recs n)
-       (none (RwErr (quote record_make) (append (chars_of_sym n) ": no such record in this file")))
+       (none
+         (RwErr (sym "record_make") (append (chars_of_sym n) (utf8 ": no such record in this file"))))
        ((some (RecDef _ _ _ _ (KStruct true)))
-        (RwErr (quote record_make)
+        (RwErr (sym "record_make")
           (append (chars_of_sym n)
-            ": a structure with parameters — apply its constructor to them and the fields")))
+            (utf8 ": a structure with parameters — apply its constructor to them and the fields"))))
        ((some rc)
         (match (entry_pairs entries nil)
-          (none (RwErr (quote record_make) (append (chars_of_sym n) ": an entry is (FIELD V)")))
+          (none
+            (RwErr (sym "record_make") (append (chars_of_sym n) (utf8 ": an entry is (FIELD V)"))))
           ((some es)
            (if (bool_not (= (len es) (len (rec_fields rc))))
-             (RwErr (quote record_make) (append (chars_of_sym n) ": every field exactly once"))
+             (RwErr (sym "record_make")
+               (append (chars_of_sym n) (utf8 ": every field exactly once")))
              (match (ordered (rec_fields rc) es nil)
                (none
-                 (RwErr (quote record_make) (append (chars_of_sym n) ": every field exactly once")))
+                 (RwErr (sym "record_make")
+                   (append (chars_of_sym n) (utf8 ": every field exactly once"))))
                ((some vs) (RwOk (SList (cons (SSym (rec_ctor rc)) vs)))))))))))
-    (_ (RwErr (quote record_make) "(make NAME (FIELD V)…)"))))
+    (_ (RwErr (sym "record_make") (utf8 "(make NAME (FIELD V)…)")))))
 (fn entry_pairs ((es (List SExpr)) (acc (List (Prod Symbol SExpr))))
   (Option (List (Prod Symbol SExpr)))
   (measure (struct es))
@@ -336,36 +342,38 @@
   (match items
     ((cons _ (cons (SSym n) (cons e entries)))
      (match (find_record recs n)
-       (none (RwErr (quote record_with) (append (chars_of_sym n) ": no such record in this file")))
+       (none
+         (RwErr (sym "record_with") (append (chars_of_sym n) (utf8 ": no such record in this file"))))
        ((some (RecDef _ _ _ _ (KStruct true)))
-        (RwErr (quote record_with)
+        (RwErr (sym "record_with")
           (append (chars_of_sym n)
-            ": a structure with parameters — apply its constructor to them and the fields")))
+            (utf8 ": a structure with parameters — apply its constructor to them and the fields"))))
        ((some rc)
         (match (entry_pairs entries nil)
-          (none (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))
+          (none (RwErr (sym "record_with") (utf8 "(with NAME E (FIELD V)…)")))
           ((some es)
            (if (bool_not (all_fields rc es))
-             (RwErr (quote record_with) (append (chars_of_sym n) ": no such field"))
+             (RwErr (sym "record_with") (append (chars_of_sym n) (utf8 ": no such field")))
              (match (rec_kind rc)
                (KRecord (RwOk (chain rc es e)))
                ((KStruct _) (struct_with rc e es)))))))))
-    (_ (RwErr (quote record_with) "(with NAME E (FIELD V)…)"))))
+    (_ (RwErr (sym "record_with") (utf8 "(with NAME E (FIELD V)…)")))))
 ;; (with NAME E (FIELD V)…) over a structure → (NAME.mk A…): a field's entry, else its
 ;; projection of E — E bound once when it is not a name. A field kept whose type mentions an
 ;; updated one would need a cast, which the sugar never inserts: dependent_update
 (fn struct_with ((rc RecDef) (e SExpr) (es (List (Prod Symbol SExpr)))) RwRes
   (if (dup_field es)
-    (RwErr (quote record_with) (append (chars_of_sym (rec_name rc)) ": a field twice"))
+    (RwErr (sym "record_with") (append (chars_of_sym (rec_name rc)) (utf8 ": a field twice")))
     (match (stale_field (rec_fields rc) es)
       ((some (Prod.mk g f))
-       (RwErr (quote dependent_update)
+       (RwErr (sym "dependent_update")
          (append (chars_of_sym (rec_name rc))
-           (append ": the type of "
+           (append (utf8 ": the type of ")
              (append (chars_of_sym g)
-               (append " mentions the updated "
+               (append (utf8 " mentions the updated ")
                  (append (chars_of_sym f)
-                   (append " — supply " (append (chars_of_sym g) " too: no cast is inserted")))))))))
+                   (append (utf8 " — supply ")
+                     (append (chars_of_sym g) (utf8 " too: no cast is inserted"))))))))))
       (none
         (match e
           ((SSym _)
@@ -373,11 +381,11 @@
           (_
             (RwOk
               (SList
-                (list (SSym (quote let)) (SList (list (SList (list (with_subject) e))))
+                (list (SSym (sym "let")) (SList (list (SList (list (with_subject) e))))
                   (SList
                     (cons (SSym (rec_ctor rc)) (struct_args rc (rec_fields rc) es (with_subject)))))))))))))
 ;; the updated value's name where E is bound: no source symbol holds a space
-(fn with_subject () SExpr (SSym (sym_of_chars "with subject")))
+(fn with_subject () SExpr (SSym (sym_of_chars (utf8 "with subject"))))
 (fn struct_args
   ((rc RecDef) (fs (List (Prod Symbol SExpr))) (es (List (Prod Symbol SExpr))) (e SExpr))
   (List SExpr)
@@ -428,4 +436,4 @@
   (match es
     (nil acc)
     ((cons (Prod.mk f v) r)
-     (chain rc r (SList (list (dotted rc (append "with_" (chars_of_sym f))) v acc))))))
+     (chain rc r (SList (list (dotted rc (append (utf8 "with_") (chars_of_sym f))) v acc))))))

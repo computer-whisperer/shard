@@ -70,7 +70,6 @@ pub enum Lit {
     Int(crate::ast::IntLit),
     /// "…": nil, cons, the UTF-8 bytes
     Str(Vec<u8>),
-    Sym(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -589,7 +588,7 @@ pub fn rep_row(n: &str) -> bool {
 }
 
 pub fn builtin_type(n: &str) -> bool {
-    matches!(n, "Nat" | "Int" | "Symbol")
+    matches!(n, "Nat" | "Int")
 }
 
 // -----------------------------------------------------------------------------

@@ -63,7 +63,7 @@ the reason its name spells, less a leading `by_`.
 | `init`, `init_nested`; refused: `init_import_line` (`bad_import`) | Init's names are bare; two files of one load that cite Init; `(import Init)` is no form, and the refusal says to delete the line |
 | `init_step_lemma`, `impl_init_demand`, `init_late_file_import`, `init_use_late`, `init_fetch_second` | what a file is given of Init: the lemmas a proof step builds on, an implementation's own citations, a name cited after a late file import or under a late `use`, a constant the toolchain builds by name from a type (fetched for a second reading) |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
-| `type_in_logic`; refused: `type_e_only` (`unknown_constant`) | a type whose fields are types of the logic is a logical type; one with a `Symbol` field is a runtime-only type, and a `def` cannot cite it |
+| `type_in_logic`; refused: `type_e_only` (`unknown_constant`) | a type whose fields are types of the logic is a logical type; one with a field at a type declared after it is a runtime-only type, and a `def` cannot cite it |
 | `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
 | `policy_axiom` (`policy`), `policy_trusts` (`param axiom`), `policy_cross` (`policy`) | an axiom needs `(trusts …)`; the policy is per file |
 
@@ -85,7 +85,7 @@ the reason its name spells, less a leading `by_`.
 
 | cases | what they pin |
 |---|---|
-| `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_symbol`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, a symbol, `(list …)`, nested patterns, a string literal |
+| `ev_basic`, `runnable_fn`, `ev_type_param`, `ev_list_sugar`, `ev_nested_exhaustive`, `ev_string`, `str_e_first` | the forms of a program: a type, `match`, `let`, `if`, the primitives, a type parameter, `(list …)`, nested patterns, a string literal |
 | refused: `ev_unknown_head` (`unknown_head`), `ev_unsaturated`, `ev_fn_value` (`type_mismatch`), `ev_ambiguous` (`ambiguous_name`), `ev_nonexhaustive` (`match_not_exhaustive`), `ev_pattern_type` (`pattern_constructor`), `ev_no_l_meaning` (`unknown_constant`) | the refusals of a body |
 | refused: `match_dead_row`, `match_dead_row_def`, `ev_dead_row` (`unreachable_arm`) | a row that matches every value — `_`, or a name no constructor bears, such as a misspelt one — with rows after it: in a `fn`, in a `def`, in a function that is a program only; a capitalised variable in a last row stays a variable |
 | refused: `bool_bare` (`unknown_constant`), `shadowed_head` (`function_expected`), `lean_mutual` (`lean_form`), `reserved_instance` (`reserved_form`) | refusals that say what to write: a bare `true`, a bare constructor that is Init's class of the same name, `mutual`, `instance` |
@@ -97,6 +97,7 @@ the reason its name spells, less a leading `by_`.
 | refused: `str_bad_utf8` (`bad_string`) | a string literal is valid UTF-8 |
 | `row_types`, `struct_proj`, `refined_row`; `row_e_first` (`runnable no_l_identity`); refused: `row_e_match` (`pattern_type`) | Init's types that run as their one field (`Fin`, `UInt8`, `ByteArray`, `String`, `Subtype`); a projection; a row built in a body with no L reading |
 | refused: `lean_form`, `lean_notation` (`lean_form`), `lean_symbol`, `lean_by_term` (`lean_symbol`), `infix_form`; `inhabited_default`, `inhabited_default_by` (`inhabited_default`), `absurd_e_first` (`absurd_e_first`) | Lean spellings refused with a pointer: `partial`, `notation`, `==`, a `by` term, `(n + 1)`, `List.get!` |
+| refused: `quote_refused` (`no_quote`) | there is no quote form: `(quote x)` in a body is refused with the spelling to write, `(sym "x")` over the toolchain's ordinary `Symbol` (the mark `'x` is the reader's refusal: `sexpr_test.shard`) |
 | `zero_arity_bare` | a function of no parameters written bare is its call |
 
 ### Records, structures, elaboration and matchers

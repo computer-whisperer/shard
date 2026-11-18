@@ -28,10 +28,9 @@ file (`v3/kernel/sexpr.shard`). It works on bytes, knows no keyword and gives no
 | string | `"hi\n"` | the bytes between double quotes, escapes decoded |
 | symbol | `List.length`, `f'`, `<=`, `α` | any other run of bytes up to a delimiter |
 | universe list | `Prod.{u v}` | a symbol ending in `.`, followed at once by `{` … `}` |
-| quote | `'x` | reads as `(quote x)` |
 
-A delimiter ends a numeral or a symbol: whitespace, `(`, `)`, `"`, `;`, `{`, `}`. A `'` is the
-quote only at the start of a token; inside a symbol it is an ordinary character (`f'`).
+A delimiter ends a numeral or a symbol: whitespace, `(`, `)`, `"`, `;`, `{`, `}`. A `'` inside a
+symbol is an ordinary character (`f'`); at the start of a token it is refused (`no_quote`).
 
 **Numerals.** A token that starts with a digit, or with `-` and a digit, is a numeral and must be
 digits throughout (`7x` is refused). `-` alone and `-x` are symbols. There is no fraction, exponent
@@ -53,10 +52,12 @@ where the literal stands:
 **Characters.** There is no character literal. A byte is written as its number — the reader's own
 source tests `(= c 40)` for `(` — and text is a `String` or a list of bytes.
 
-**Quote.** `(quote NAME)` is a literal of the program type `Symbol`: `(fn g () Symbol (quote x))`
-(`v3/pins/loader/ev_symbol/main.shard`). It has no counterpart in the logic: a function whose body
-holds one is a program without a definition (`RUNNABLE … why=no_l_identity`), and as a pattern in a
-term it is refused `literal_pattern`. `'(a b)` reads, but no form accepts a quoted list.
+**Symbols.** There is no quote form and no built-in type of symbols. The toolchain's `Symbol` is
+an ordinary type, the bytes of a text (`v3/kernel/sym.shard`): `(sym "x")` is the symbol of a
+literal, `sym_eq` compares two, `chars_of_sym` and `sym_of_chars` go to bytes and back — four
+ordinary functions over `(type Symbol (MkSym (List Int)))`. `(quote x)` is refused `no_quote`
+with the spelling to write (pin `quote_refused`), and so is the mark `'x` by the reader
+(`sexpr_test.shard`).
 
 ### Names
 
@@ -86,7 +87,7 @@ offset where reading stopped — and none of its forms is loaded.
 | `stray_brace` | `{` or `}` at the start of a token |
 | `bad_universe_suffix` | a symbol ending in `.` with no `{` after it, or `{` after a symbol not ending in `.` |
 | `unterminated_universe_list` | the file ends inside `.{ …` |
-| `quote_at_end` | `'` with nothing after it |
+| `no_quote` | `'` at the start of a token: there is no quote form |
 | `reader_fuel` | more than 100,000,000 reading steps |
 
 ### Top-level forms
@@ -229,15 +230,23 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Most of their functions are programs without a definition.** The toolchain's data — names,
-  terms, declarations — is built on `Symbol`, which has no type in the logic, so a signature
-  over it cannot be read (`why=e_only_type`). Of about 9,600 functions some 370, over lists,
-  integers and bytes, are definitions the checker holds.
-- **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A function
-  the checker reads converts a literal it uses as bytes: `(utf8 "…")` (`kernel/util.shard`),
-  and without the conversion it is refused `type_mismatch: expected (List Int), found String`.
-  A program without a definition passes the literal as it stands: nothing checks the types of
-  such a function, and a `String` runs as the list of its bytes (`OPEN.md` §4).
+- **About a quarter of their functions are definitions.** The checker reads every one whose
+  signature reads: of the loader's closure, 9,170 declarations, it holds 2,440 as definitions.
+  The others are programs with the reason: a function they call is a program
+  (`callee_runnable`, some 4,000), a type in the signature names a type declared after it or
+  one that names it back (`e_only_type`, some 1,400), a measure that is an integer or a group
+  of functions that call each other (about 110), a bit-level primitive (about 40). A type
+  error in any of them is refused.
+- **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
+  used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
+  function the checker reads is refused `type_mismatch: expected (List Int), found String`.
+  The sources convert every such literal, also in a function that is a program only, where
+  nothing checks the types and the literal would run as it stands. A symbol is
+  `(sym "…")` (`kernel/sym.shard`).
+- **A value the position gives no type to states it.** A `match`, a list literal, a
+  comparison meant as a `Bool` or a negative numeral bound by a `let` takes its type from the
+  binding: `(let ((x TYPE e)) …)`. A constructor that has its type's name is written
+  qualified there (`(IxRow.IxRow …)`).
 
 An ordinary file may import a toolchain file and call it (`v3/tools/shardfmt/reads/reads.shard`
 imports `kernel/sexpr.shard`); the two share Init's types, and what it calls stays a program
@@ -375,8 +384,8 @@ there is `unknown_constant`. `inductive` is the general form (indices, dependent
 universe parameters). For either, beside the type and its recursor, the loader generates and has K
 check `T.casesOn`; for a type without parameters or indices also `T.noConfusionType`, `T.noConfusion` and `T.C.inj` per constructor with fields; and,
 the first time a function recurses structurally over it, `T.below` and `T.brecOn`. Each is an
-`ACCEPT` record. A `type` with a field that has no type in the logic (`Symbol`; another such
-type) exists in programs only: `RUNNABLE type
+`ACCEPT` record. A `type` with a field that has no type in the logic (a type declared after it
+in the file; another such type) exists in programs only: `RUNNABLE type
 NAME`, and a `def` or `theorem` naming it is `READ-ERROR … unknown_constant` (pin `type_e_only`).
 
 **`record`** is rewritten, before anything is read, into `(type NAME (CTOR TYPE…))` (CTOR defaults
@@ -532,7 +541,7 @@ that name is in scope. A misspelt constructor is such a name, and its row would 
 | `(CTOR PAT…)` | a constructor on patterns for all its fields, nested to any depth |
 | NUMERAL | at `Nat` or `Int`, as a whole row: the rows are read as a chain of `(if (= x K) …)` and must end in a `_` or NAME row |
 
-Not allowed in a `def` or a statement: a numeral under a constructor, a string, a `(quote X)` —
+Not allowed in a `def` or a statement: a numeral under a constructor, a string —
 `literal_pattern` (bind the field and compare with `if`). In a `fn` a numeral under a constructor
 is not refused: the function is a program without a definition (`RUNNABLE fn F why=no_l_identity
 route=e_first`); a string row there is `pattern_literal`. Numeral rows with no closing row —
@@ -739,8 +748,8 @@ to be left with: for them the reasons of the definer are refusals.
 | `function_value` | typed | the function's own name is not applied to all its arguments | apply the function fully |
 | `definition_refused`, `define_matrix`, `define_depth` | typed | the definer built something K refused, or met a shape it does not handle | a defect of the definer: report it; split a body too deep |
 | `no_l_meaning` | e_first | the body calls something whose signature the logic cannot read: an `e_only_type` function, an extern without a constant, such a `sig fn` | give the callee a signature the logic reads |
-| `no_l_identity` | e_first | the body uses something with no form in the logic: `(quote X)`, a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
-| `e_only_type` | e_first | the signature cannot be read: a binder is `Symbol`, a program-only `type`, or a `type` declared later in the file | declare the type first; the normal state of a function over `Symbol` |
+| `no_l_identity` | e_first | the body uses something with no form in the logic: a numeral under a constructor pattern, a bit-level primitive (`band`) | rewrite the construct |
+| `e_only_type` | e_first | the signature cannot be read: a binder is a program-only `type`, or a `type` declared later in the file | declare the type first |
 | `unchecked` | e_first | the load ran under `--unchecked`: no `fn` is checked or defined, and a type error is not refused | load without the flag; a build of the toolchain reads its sources so |
 
 **What is written and erased.** A call writes more than it passes: a proof, a type under `@`,

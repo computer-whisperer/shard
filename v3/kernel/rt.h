@@ -21,15 +21,14 @@
  * section) — arithmetic is exact like the interpreted engines, up to the
  * explicit guards (shift counts, RT_BIG_MAXLIMB), which trap: loud, never
  * wrong.
- * Symbols are cells with tag RT_TAG_SYM_ (runtime-reserved, not a ctor
- * tag) whose single field is the intern id (small int). Equality = id.
  *
  * Allocator: bump pointer over a big MAP_NORESERVE region, backed by a
  * CONSERVATIVE mark-sweep collector (rt_gc). GC runs only inside rt_alloc,
  * which is a function call, so the C ABI guarantees every value_t live
  * across it is on the C stack or in a callee-saved register — the registers
- * spilled into rt_gc's frame, then a word scan of [sp..stack_base] and of
- * the data segment (the units' globals) captures all roots. Marking is sound
+ * spilled into rt_gc's frame, then a word scan of [sp..stack_base] captures
+ * all roots: the generated text keeps no value outside its functions, and
+ * the runtime's own five cells are roots by name. Marking is sound
  * against false roots because a per-16B-slot START BITMAP (set on every
  * fresh bump allocation) validates that a candidate points at a real cell
  * head before any deref or mark; the mark itself is the top bit of the
@@ -49,8 +48,7 @@
 
 typedef intptr_t value_t;
 
-#define RT_TAG_SYM_ 0x7fffffffu
-#define RT_TAG_BIG_ 0x7ffffffeu  /* a bignum cell (the bignum section) */
+#define RT_TAG_BIG_ 0x7ffffffeu  /* a bignum cell (the bignum section): above every constructor's tag */
 
 __attribute__((noreturn)) void rt_trap(const char *msg);
 
@@ -95,7 +93,7 @@ extern value_t rt_true_, rt_false_, rt_nil_, rt_none_, rt_unit_world;
 /* an `if` takes its first branch on the second constructor of the condition's
    type, whatever the type: the generator gives that constructor an odd tag
    and every other one an even tag (the evaluator's rule, ev.shard). A number
-   or a symbol is no condition: stuck on the interpreted engines. */
+   is no condition: stuck on the interpreted engines. */
 static inline int rt_truthy(value_t v) {
   uint32_t t = rt_tag(v);
   if (t >= RT_TAG_BIG_) rt_trap("if on a value that is no constructor (stuck on the interpreted engines)");
@@ -109,15 +107,8 @@ static inline value_t rt_cons(value_t h, value_t t) {
   return c;
 }
 
-/* ---- symbols ------------------------------------------------------------ */
-uint32_t rt_intern(const char *s, uint32_t len);
-value_t rt_sym(uint32_t id);
-static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(v, 0)); }
-value_t rt_chars_of_sym(value_t s);
-value_t rt_sym_of_chars(value_t l);
-
 /* ---- bignum: out-of-i63 ints as heap cells ------------------------------- */
-/* Cell layout: tag RT_TAG_BIG_ (runtime-reserved, like SYM_), field 0 = sign
+/* Cell layout: tag RT_TAG_BIG_ (runtime-reserved), field 0 = sign
  * (tagged -1/+1), fields 1..arity-1 = 32-bit magnitude limbs little-endian,
  * each stored as a TAGGED SMALL INT so the conservative GC needs no changes.
  * CANONICAL: top limb nonzero, magnitude outside i63 (in-range values demote
@@ -230,7 +221,6 @@ static inline value_t rt_int_eq(value_t a, value_t b) {
   if (a & b & 1) return rt_bool(a == b);  /* canonical tagged words */
   return rt_bool(rt_icmp2(a, b) == 0);
 }
-static inline value_t rt_sym_eq(value_t a, value_t b) { return rt_bool(rt_symid(a) == rt_symid(b)); }
 /* small & | ^ stay in i63 (two's complement is closed under them) */
 static inline value_t rt_band(value_t a, value_t b) {
   if (a & b & 1) return rt_mk_small(rt_untag(a) & rt_untag(b));
@@ -309,7 +299,7 @@ void rt_init(int argc, char **argv);
 #include <sys/mman.h>
 #include <sys/resource.h>
 
-#define RT_MARK_ 0x80000000u  /* GC mark = top bit of tag (free; tags < SYM_) */
+#define RT_MARK_ 0x80000000u  /* GC mark = top bit of tag (free; tags <= BIG_) */
 
 void rt_trap(const char *msg) {
   fprintf(stderr, "rt trap: %s\n", msg);
@@ -417,14 +407,6 @@ static void rt_gc(void) {
   /* roots: the preallocated singletons, callee-saved registers, the stack */
   rt_mpush(rt_true_); rt_mpush(rt_false_); rt_mpush(rt_nil_);
   rt_mpush(rt_none_); rt_mpush(rt_unit_world);
-  /* The generated text has file-scope `value_t sl_N` globals for the symbol
-     literals (main.c) — roots not on any stack. Scan
-     the whole data+bss segment conservatively. Safe: rt_free[] was just
-     cleared (so the free lists can't keep dead cells alive), and rt.h's other
-     globals point to non-cell memory (mmap/malloc), which the start-bitmap
-     check in rt_try_mark rejects. */
-  { extern char __data_start[], _end[];
-    rt_scan_range(__data_start, _end); }
   /* Spill ALL callee-saved registers onto this frame's stack so the scan
      below catches roots the running computation keeps in registers. This is
      the GC idiom (cf. Boehm's GC_with_callee_saves_pushed) — more reliable
@@ -478,53 +460,6 @@ value_t rt_alloc(uint32_t tag, uint32_t arity) {
     rt_cell *nc = (rt_cell *)rt_heap; rt_heap += sz; rt_setstart((char *)nc);
     nc->tag = tag; nc->arity = arity; return (value_t)nc;
   }
-}
-
-/* ---- symbols: intern table --------------------------------------------- */
-/* A symbol's id is its place in rt_syms, in the order symbols are first made; rt_symidx finds
-   a text's id by hashing: open addressing, id + 1 in a slot, 0 an empty one, under half full. */
-typedef struct { char *s; uint32_t len; uint32_t h; } rt_symrec;
-static rt_symrec *rt_syms; static uint32_t rt_nsyms, rt_symcap;
-static uint32_t *rt_symidx; static uint32_t rt_symidxcap;
-
-static uint32_t rt_symhash(const char *s, uint32_t len) {
-  uint32_t h = 2166136261u;
-  for (uint32_t i = 0; i < len; i++) { h ^= (unsigned char)s[i]; h *= 16777619u; }
-  return h;
-}
-static void rt_symidx_put(uint32_t id) {
-  uint32_t m = rt_symidxcap - 1, i = rt_syms[id].h & m;
-  while (rt_symidx[i]) i = (i + 1) & m;
-  rt_symidx[i] = id + 1;
-}
-uint32_t rt_intern(const char *s, uint32_t len) {
-  uint32_t h = rt_symhash(s, len);
-  if (rt_symidxcap) {
-    uint32_t m = rt_symidxcap - 1;
-    for (uint32_t i = h & m; rt_symidx[i]; i = (i + 1) & m) {
-      rt_symrec *r = &rt_syms[rt_symidx[i] - 1];
-      if (r->h == h && r->len == len && !memcmp(r->s, s, len)) return rt_symidx[i] - 1;
-    }
-  }
-  if (rt_nsyms == rt_symcap) {
-    rt_symcap = rt_symcap ? rt_symcap * 2 : 4096;
-    rt_syms = realloc(rt_syms, rt_symcap * sizeof(rt_symrec));
-  }
-  if ((rt_nsyms + 1) * 2 > rt_symidxcap) {
-    rt_symidxcap = rt_symidxcap ? rt_symidxcap * 2 : 8192;
-    free(rt_symidx); rt_symidx = calloc(rt_symidxcap, sizeof(uint32_t));
-    for (uint32_t i = 0; i < rt_nsyms; i++) rt_symidx_put(i);
-  }
-  rt_syms[rt_nsyms].s = malloc(len + 1);
-  memcpy(rt_syms[rt_nsyms].s, s, len); rt_syms[rt_nsyms].s[len] = 0;
-  rt_syms[rt_nsyms].len = len; rt_syms[rt_nsyms].h = h;
-  rt_symidx_put(rt_nsyms);
-  return rt_nsyms++;
-}
-value_t rt_sym(uint32_t id) {
-  value_t c = rt_alloc(RT_TAG_SYM_, 1);
-  rt_cellof(c)->fields[0] = rt_tag_int((int64_t)id);
-  return c;
 }
 
 /* ---- bignum arithmetic (the cell layout: the first half) ----------------- */
@@ -856,22 +791,6 @@ static inline int rt_byte_of(value_t v) {
   if (v & 1) return (int)(rt_untag(v) & 0xFF);
   int b = (int)(rt_big_limb(v, 0) & 0xFF);
   return rt_big_sign(v) < 0 ? (256 - b) & 0xFF : b;
-}
-
-value_t rt_chars_of_sym(value_t s) {
-  rt_symrec *r = &rt_syms[rt_symid(s)];
-  value_t acc = rt_nil_;
-  for (int64_t i = (int64_t)r->len - 1; i >= 0; i--)
-    acc = rt_cons(rt_tag_int((unsigned char)r->s[i]), acc);
-  return acc;
-}
-value_t rt_sym_of_chars(value_t l) {
-  char buf[4096]; uint32_t n = 0;
-  for (value_t p = l; rt_tag(p) == RT_TAG_Cons; p = rt_field(p, 1)) {
-    if (n >= sizeof buf) rt_trap("sym_of_chars: name too long");
-    buf[n++] = (char)rt_untag(rt_field(p, 0));
-  }
-  return rt_sym(rt_intern(buf, n));
 }
 
 /* ---- externs (World = one cell, threaded for order; returned as given) --- */

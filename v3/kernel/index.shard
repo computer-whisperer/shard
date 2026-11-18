@@ -38,6 +38,7 @@
 (use kernel.json)
 (use kernel.intmap)
 (use kernel.name)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.host.World)
 (use kernel.json.JRes)
@@ -430,12 +431,12 @@
 (fn ix_scan ((path (List Int)) (off Int) (carry (List Int)) (st IxSt) (fuel Int) (w World))
   (Prod IxSt World)
   (measure fuel)
-  (if (<= fuel 0) (Prod.mk (ix_fail st "the window budget") w)
+  (if (<= fuel 0) (Prod.mk (ix_fail st (utf8 "the window budget")) w)
   (match (ixs_bad st)
     ((cons _ _) (Prod.mk st w))
     (nil
       (match (read_range path off (ix_window) w)
-        ((Prod.mk none w1) (Prod.mk (ix_fail st (append "cannot read " path)) w1))
+        ((Prod.mk none w1) (Prod.mk (ix_fail st (append (utf8 "cannot read ") path)) w1))
         ((Prod.mk (some nil) w1)
          (match carry
            (nil (Prod.mk (ixs_set_size st off) w1))
@@ -450,7 +451,7 @@
 (fn ix_lines ((st IxSt) (buf (List Int)) (pos Int) (fuel Int) (w World))
   (Prod (Prod IxSt (List Int)) World)
   (measure fuel)
-  (if (<= fuel 0) (Prod.mk (Prod.mk (ix_fail st "the line budget") nil) w)
+  (if (<= fuel 0) (Prod.mk (Prod.mk (ix_fail st (utf8 "the line budget")) nil) w)
   (match (ixs_bad st)
     ((cons _ _) (Prod.mk (Prod.mk st nil) w))
     (nil
@@ -470,19 +471,21 @@
 ;; meta line at the start, else a record
 (fn ix_line ((st IxSt) (pos Int) (line (List Int)) (w World)) (Prod IxSt World)
   (let ((n (len line)))
-    (match (ix_id_in line "in")
+    (match (ix_id_in line (utf8 "in"))
       ((some i) (Prod.mk (ix_name st line i) w))
       (none
-        (match (ix_id_in line "il")
+        (match (ix_id_in line (utf8 "il"))
           ((some i) (Prod.mk (ixs_level st i) w))
           (none
-            (match (ix_id_in line "ie")
+            (match (ix_id_in line (utf8 "ie"))
               ((some i) (Prod.mk (ixs_expr st i) w))
               (none
                 (if (= pos 0) (Prod.mk (ixs_meta_line st (+ n 1)) w)
                 (match (json_parse line)
                   (JErr
-                    (Prod.mk (ix_fail st (append "a record is not JSON at byte " (show_nat pos))) w))
+                    (Prod.mk
+                      (ix_fail st (append (utf8 "a record is not JSON at byte ") (show_nat pos)))
+                      w))
                   ((JRes j _) (ix_record st j pos n w))))))))))))
 ;; the id under KEY — `"in":N` at the line's start or after a comma — read without parsing
 (fn ix_id_in ((line (List Int)) (key (List Int))) (Option Int)
@@ -516,18 +519,18 @@
 ;; a name line: the name entered, the block's first name id
 (fn ix_name ((st IxSt) (line (List Int)) (i Int)) IxSt
   (match (json_parse line)
-    (JErr (ix_fail st (append "a name line is not JSON: id " (show_nat i))))
+    (JErr (ix_fail st (append (utf8 "a name line is not JSON: id ") (show_nat i))))
     ((JRes j _)
      (match (ix_name_of st j)
-       (none (ix_fail st (append "a malformed name line: id " (show_nat i))))
+       (none (ix_fail st (append (utf8 "a malformed name line: id ") (show_nat i))))
        ((some nm) (ixs_name_in st i nm))))))
 (fn ix_name_of ((st IxSt) (j Json)) (Option Name)
-  (match (jget j "str")
+  (match (jget j (utf8 "str"))
     ((some o)
-     (match (ix_int_field o "pre")
+     (match (ix_int_field o (utf8 "pre"))
        (none none)
        ((some pre)
-        (match (jget o "str")
+        (match (jget o (utf8 "str"))
           (none none)
           ((some sv)
            (match (jstr sv)
@@ -537,13 +540,13 @@
                 (none none)
                 ((some p) (some (Str p (sym_of_chars s))))))))))))
     (none
-      (match (jget j "num")
+      (match (jget j (utf8 "num"))
         (none none)
         ((some o)
-         (match (ix_int_field o "pre")
+         (match (ix_int_field o (utf8 "pre"))
            (none none)
            ((some pre)
-            (match (ix_int_field o "i")
+            (match (ix_int_field o (utf8 "i"))
               (none none)
               ((some k)
                (match (ix_name_at st pre)
@@ -560,15 +563,17 @@
 ;; block closed
 (fn ix_record ((st IxSt) (j Json) (pos Int) (n Int) (w World)) (Prod IxSt World)
   (match (jkind_of_record j)
-    (none (Prod.mk (ix_fail st (append "a record without a kind at byte " (show_nat pos))) w))
+    (none (Prod.mk (ix_fail st (append (utf8 "a record without a kind at byte ") (show_nat pos))) w))
     ((some kind)
      (match (ix_record_names st j kind)
-       (none (Prod.mk (ix_fail st (append "a record without its names at byte " (show_nat pos))) w))
+       (none
+         (Prod.mk (ix_fail st (append (utf8 "a record without its names at byte ") (show_nat pos)))
+           w))
        ((some ns)
         (let ((o (ixs_ord st)))
           (let
             ((row
-               (IxRow o (ix_kind_code kind) (ixs_boff st) (- (+ pos n) (ixs_boff st))
+               (IxRow.IxRow o (ix_kind_code kind) (ixs_boff st) (- (+ pos n) (ixs_boff st))
                  (ix_first (ixs_fin st) (ixs_lin st))
                  (ix_first (ixs_fil st) (ixs_lil st))
                  (ix_first (ixs_fie st) (ixs_lie st)))))
@@ -584,7 +589,8 @@
 (fn ix_record_build ((st IxSt) (row IxRow) (ns (List (Prod Int Name)))) IxSt
   (match (ix_name_rows ns (ix_row_ord row) nil)
     (none
-      (ix_fail st (append "a name past the row's width at ordinal " (show_nat (ix_row_ord row)))))
+      (ix_fail st
+        (append (utf8 "a name past the row's width at ordinal ") (show_nat (ix_row_ord row)))))
     ((some nrs)
      (match row
        ((IxRow o k off n a b c)
@@ -609,14 +615,15 @@
 (fn ix_record_check ((st IxSt) (row IxRow) (ns (List (Prod Int Name))) (w World)) (Prod IxSt World)
   (match (ix_read_row (ixs_vindex st) (ixs_vhdr st) (ix_row_ord row) w)
     ((Prod.mk none w1)
-     (Prod.mk (ix_fail st (append "no row at ordinal " (show_nat (ix_row_ord row)))) w1))
+     (Prod.mk (ix_fail st (append (utf8 "no row at ordinal ") (show_nat (ix_row_ord row)))) w1))
     ((Prod.mk (some have) w1)
      (if (bool_not (ix_row_eq have row))
        (Prod.mk
          (ix_fail st
-           (append "row differs at ordinal "
+           (append (utf8 "row differs at ordinal ")
              (append (show_nat (ix_row_ord row))
-               (append ": table " (append (ix_show_row have) (append ", export " (ix_show_row row)))))))
+               (append (utf8 ": table ")
+                 (append (ix_show_row have) (append (utf8 ", export ") (ix_show_row row)))))))
          w1)
        (ix_names_check st ns (ix_row_ord row) w1)))))
 (fn ix_row_eq ((a IxRow) (b IxRow)) Bool
@@ -642,8 +649,8 @@
           (Prod.mk
             (ix_fail st
               (append (show_name nm)
-                (append " is at ordinal "
-                  (append (show_nat found) (append ", the export says " (show_nat o))))))
+                (append (utf8 " is at ordinal ")
+                  (append (show_nat found) (append (utf8 ", the export says ") (show_nat o))))))
             w1)
           (match (ix_decl_of (ixs_vindex st) (ixs_vhdr st) i w1)
             ((Prod.mk (some d) w2)
@@ -651,28 +658,29 @@
              (Prod.mk
                (ix_fail st
                  (append (show_name nm)
-                   (append " declares ordinal "
-                     (append (show_nat d) (append " by its name id, the export says " (show_nat o))))))
+                   (append (utf8 " declares ordinal ")
+                     (append (show_nat d)
+                       (append (utf8 " by its name id, the export says ") (show_nat o))))))
                w2)))
             ((Prod.mk none w2)
-             (Prod.mk (ix_fail st (append (show_name nm) " has no declaration row")) w2)))))
+             (Prod.mk (ix_fail st (append (show_name nm) (utf8 " has no declaration row"))) w2)))))
        ((Prod.mk none w1)
-        (Prod.mk (ix_fail st (append (show_name nm) " is not in the name table")) w1))))))
+        (Prod.mk (ix_fail st (append (show_name nm) (utf8 " is not in the name table"))) w1))))))
 
 ;; the names a record declares, with their ids: an inductive block's types, constructors
 ;; and recursors; every other record its one name
 (fn ix_record_names ((st IxSt) (j Json) (kind (List Int))) (Option (List (Prod Int Name)))
-  (if (int_list_eq kind "inductive")
-    (match (jget j "inductive")
+  (if (int_list_eq kind (utf8 "inductive"))
+    (match (jget j (utf8 "inductive"))
       (none none)
       ((some o)
-       (match (ix_names_in st o "types")
+       (match (ix_names_in st o (utf8 "types"))
          (none none)
          ((some ts)
-          (match (ix_names_in st o "ctors")
+          (match (ix_names_in st o (utf8 "ctors"))
             (none none)
             ((some cs)
-             (match (ix_names_in st o "recs")
+             (match (ix_names_in st o (utf8 "recs"))
                (none none)
                ((some rs) (some (append ts (append cs rs)))))))))))
     (match (jget j kind)
@@ -698,7 +706,7 @@
        (none none)
        ((some p) (ix_names_of st r (cons p acc)))))))
 (fn ix_name_field ((st IxSt) (o Json)) (Option (Prod Int Name))
-  (match (ix_int_field o "name")
+  (match (ix_int_field o (utf8 "name"))
     (none none)
     ((some i)
      (match (ix_name_at st i)
@@ -805,7 +813,7 @@
        (nil
          (let ((sorted (ix_sort (ixs_nrows st))))
            (match (ix_dup sorted)
-             ((some k) (Prod.mk (IxBad (append "two names render alike: " (ix_trim k))) w1))
+             ((some k) (Prod.mk (IxBad (append (utf8 "two names render alike: ") (ix_trim k))) w1))
              (none
                (let ((decls (+ (ixs_lin st) 1)))
                  (Prod.mk

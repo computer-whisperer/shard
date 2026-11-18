@@ -24,7 +24,6 @@ pub enum Expr {
     Let(Vec<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     IntLit(IntLit),
-    SymLit(Symbol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,7 +37,6 @@ pub enum Pat {
     PVar,
     PCtor(Symbol, Vec<Pat>),
     PInt(IntLit),
-    PSym(Symbol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -29,6 +29,7 @@
 (use kernel.prog)
 (use kernel.scope)
 (use kernel.sexpr)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.decl.ConstantInfo)
 (use kernel.erase.BRole)
@@ -71,14 +72,14 @@
 (fn pre_one ((es ESt) (sc Scope) (s SExpr)) PreRes
   (match s
     ((SList (cons (SSym h) args))
-     (if (sym_eq h (quote fn)) (pre_head es sc args (quote fn))
-     (if (sym_eq h (quote extern)) (pre_head es sc args (quote extern))
-     (if (sym_eq h (quote type)) (pre_type es sc args)
-     (if (sym_eq h (quote sig))
+     (if (sym_eq h (sym "fn")) (pre_head es sc args (sym "fn"))
+     (if (sym_eq h (sym "extern")) (pre_head es sc args (sym "extern"))
+     (if (sym_eq h (sym "type")) (pre_type es sc args)
+     (if (sym_eq h (sym "sig"))
        (match args
          ((cons (SSym k) rest)
-          (if (sym_eq k (quote fn)) (pre_head es sc rest (quote sig))
-          (if (sym_eq k (quote type))
+          (if (sym_eq k (sym "fn")) (pre_head es sc rest (sym "sig"))
+          (if (sym_eq k (sym "type"))
             (match rest
               ((cons hd nil) (pre_sig_type es sc hd))
               (_ (PreOk es)))
@@ -95,7 +96,7 @@
     ((cons s r)
      (match s
        ((SList (cons (SSym h) args))
-        (if (sym_eq h (quote realize))
+        (if (sym_eq h (sym "realize"))
           (match (pre_realize es sc env args)
             ((PreErr e m) (PreErr e m))
             ((PreOk es1) (pre_register_realize es1 sc env r)))
@@ -107,11 +108,11 @@
   (match args
     ((cons (SSym x) rest)
      (match (name_of_sym x)
-       (none (PreErr (quote bad_name) (chars_of_sym x)))
+       (none (PreErr (sym "bad_name") (chars_of_sym x)))
        ((some n)
         (match (resolve (cx0 sc env nil nil) n)
           ((RName k _)
-           (if (bool_not (may_declare es k true)) (PreErr (quote duplicate_name) (show_name k))
+           (if (bool_not (may_declare es k true)) (PreErr (sym "duplicate_name") (show_name k))
            (match rest
              ((cons (SList bs) (cons _ _))
               (PreOk (es_register es k (sc_tag sc) (EIFn (value_binders bs)))))
@@ -137,15 +138,15 @@
   (match args
     ((cons hd (cons (SList bs) _))
      (match (head_name hd)
-       (none (PreErr (quote bad_name) "a declared name is NAME or (NAME T…)"))
+       (none (PreErr (sym "bad_name") (utf8 "a declared name is NAME or (NAME T…)")))
        ((some short)
         (let ((id (qualify sc short)) (k (value_binders bs)))
-          (if (bool_not (may_declare es id (sym_eq kind (quote fn))))
-            (PreErr (quote duplicate_name) (show_name id))
+          (if (bool_not (may_declare es id (sym_eq kind (sym "fn"))))
+            (PreErr (sym "duplicate_name") (show_name id))
             (PreOk
               (es_register es id (sc_tag sc)
-                (if (sym_eq kind (quote fn)) (EIFn k)
-                (if (sym_eq kind (quote extern)) (EIExt k)
+                (if (sym_eq kind (sym "fn")) (EIFn k)
+                (if (sym_eq kind (sym "extern")) (EIExt k)
                 (EISig k))))))))))
     (_ (PreOk es))))
 ;; an identity may be declared when it is new; a fn may take a sig fn's, a type a sig type's
@@ -176,11 +177,11 @@
   (match args
     ((cons hd ctors)
      (match (type_head sc hd)
-       ((Prod.mk none m) (PreErr (quote bad_name) m))
+       ((Prod.mk none m) (PreErr (sym "bad_name") m))
        ((Prod.mk (some (Prod.mk n params)) _)
-        (if (bool_not (may_declare_type es n)) (PreErr (quote duplicate_name) (show_name n))
+        (if (bool_not (may_declare_type es n)) (PreErr (sym "duplicate_name") (show_name n))
         (match (ctor_shapes n ctors 0 nil)
-          (none (PreErr (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)"))
+          (none (PreErr (sym "bad_constructor") (utf8 "a constructor is (CTOR FIELD-TYPE…)")))
           ((some shapes)
            (PreOk
              (es_register_all
@@ -207,9 +208,9 @@
     ((cons (Prod.mk n _) r) (cons n (shape_names r)))))
 (fn pre_sig_type ((es ESt) (sc Scope) (hd SExpr)) PreRes
   (match (type_head sc hd)
-    ((Prod.mk none m) (PreErr (quote bad_name) m))
+    ((Prod.mk none m) (PreErr (sym "bad_name") m))
     ((Prod.mk (some (Prod.mk n params)) _)
-     (if (es_has es n) (PreErr (quote duplicate_name) (show_name n))
+     (if (es_has es n) (PreErr (sym "duplicate_name") (show_name n))
      (PreOk (es_register es n (sc_tag sc) (EISigType (len params))))))))
 
 ;; ---- E-types ---------------------------------------------------------
@@ -219,7 +220,7 @@
   (match s
     ((SSym x)
      (match (name_of_sym x)
-       (none (TyErr (quote bad_type) (chars_of_sym x)))
+       (none (TyErr (sym "bad_type") (chars_of_sym x)))
        ((some n)
         (match (index_of n tps 0)
           ((some i) (TyOk (ETVar i) tps))
@@ -229,11 +230,12 @@
               ((TyOk t _) (TyOk t tps))
               ((TyErr e m) (TyErr e m))))))))
     ((SList (cons (SSym x) args))
-     (if (sym_eq x (quote ->))  ; a function-typed binder makes a template, on the typed route
-       (TyErr (quote function_value)
-         "(-> …): a function is no value of E — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading")
+     (if (sym_eq x (sym "->"))  ; a function-typed binder makes a template, on the typed route
+       (TyErr (sym "function_value")
+         (utf8
+           "(-> …): a function is no value of E — a function-typed binder is a static parameter and its fn a template, whose instances are taken on the typed route; this signature or body has no L reading"))
        (match (name_of_sym (sym_strip x))
-         (none (TyErr (quote bad_type) (chars_of_sym x)))
+         (none (TyErr (sym "bad_type") (chars_of_sym x)))
          ((some n)
           (match (type_ident es sc env n)
             ((TyErr e m) (TyErr e m))
@@ -241,20 +243,21 @@
              ;; `(Decidable P)`: the parameter is a proposition, nothing of it is in E — the type
              ;; is its two cells, as the erasure has it (a view's sig fn that exports
              ;; a decision states its result this way)
-             (if (name_eq id (n1 (quote Decidable))) (TyOk (ETCon id nil) tps)
+             (if (name_eq id (n1 (sym "Decidable"))) (TyOk (ETCon id nil) tps)
              (match (type_args env id (sym_explicit x) args)
                ((WrErr e m)
-                (if (sym_eq e (quote unwritten_argument))
+                (if (sym_eq e (sym "unwritten_argument"))
                   (TyErr e
                     (append (show_name id)
-                      ": a type argument that is implicit — the type it is at is not written here, and this reading fills nothing in; write the type with @ and every argument"))
+                      (utf8
+                        ": a type argument that is implicit — the type it is at is not written here, and this reading fills nothing in; write the type with @ and every argument")))
                   (TyErr e (append (show_name id) m))))
                ((WrOk targs)
                 (match (read_etys es sc env tps targs nil)
                   ((Prod.mk (TyErr e m) _) (TyErr e m))
                   ((Prod.mk (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))))
-            ((TyOk _ _) (TyErr (quote bad_type) "a type parameter takes no arguments")))))))
-    (_ (TyErr (quote bad_type) "a type is NAME or (NAME TYPE…)"))))
+            ((TyOk _ _) (TyErr (sym "bad_type") (utf8 "a type parameter takes no arguments"))))))))
+    (_ (TyErr (sym "bad_type") (utf8 "a type is NAME or (NAME TYPE…)")))))
 ;; a type's written arguments that are types. An inductive of K takes values and propositions
 ;; too — `(Fin n)`, `(Subtype P)`, `(Decidable P)` — which no E type keeps (erase.shard
 ;; l_to_etype): its parameters' roles select the type arguments among those written, by the
@@ -282,7 +285,7 @@
      (match ty
        ((Pi _ _ bi _ body)
         (zip_type_flags body rr
-          (cons (Prod.mk (bi_explicit bi) (if is_type (quote keep) (quote drop))) acc)))
+          (cons (Prod.mk (bi_explicit bi) (if is_type (sym "keep") (sym "drop"))) acc)))
        (_ none)))))
 ;; a name that is a definition of K standing for a type (`(def Sorted () Type …)`): the E type
 ;; its value is, as the typed route reads the binder (erase.shard l_to_etype unfolds it)
@@ -309,23 +312,23 @@
     ((SSym x) (prop_head r (sym_strip x)))
     ((SList (cons (SSym h) args))
      (if (prop_spelling h) true
-     (if (bool_or (sym_eq h (quote ->)) (sym_eq h (quote forall)))
+     (if (bool_or (sym_eq h (sym "->")) (sym_eq h (sym "forall")))
        (match (last_of args)
          ((some l) (prop_type r l))
          (none false))
        (prop_head r (sym_strip h)))))
     (_ false)))
 (fn prop_spelling ((h Symbol)) Bool
-  (bool_or (sym_eq h (quote =))
-    (bool_or (sym_eq h (quote !=))
-      (bool_or (sym_eq h (quote <))
-        (bool_or (sym_eq h (quote <=))
-          (bool_or (sym_eq h (quote >))
-            (bool_or (sym_eq h (quote >=))
-              (bool_or (sym_eq h (quote iff))
-                (bool_or (sym_eq h (quote and))
-                  (bool_or (sym_eq h (quote or))
-                    (bool_or (sym_eq h (quote not)) (sym_eq h (quote exists)))))))))))))
+  (bool_or (sym_eq h (sym "="))
+    (bool_or (sym_eq h (sym "!="))
+      (bool_or (sym_eq h (sym "<"))
+        (bool_or (sym_eq h (sym "<="))
+          (bool_or (sym_eq h (sym ">"))
+            (bool_or (sym_eq h (sym ">="))
+              (bool_or (sym_eq h (sym "iff"))
+                (bool_or (sym_eq h (sym "and"))
+                  (bool_or (sym_eq h (sym "or"))
+                    (bool_or (sym_eq h (sym "not")) (sym_eq h (sym "exists")))))))))))))
 (fn prop_head ((r Rd) (h Symbol)) Bool
   (match (name_of_sym h)
     (none false)
@@ -350,9 +353,9 @@
 (fn is_pred_sort ((s SExpr)) Bool
   (measure (struct s))
   (match s
-    ((SSym x) (sym_eq x (quote Prop)))
+    ((SSym x) (sym_eq x (sym "Prop")))
     ((SList (cons (SSym a) args))
-     (if (sym_eq a (quote ->))
+     (if (sym_eq a (sym "->"))
        (match (last_of args)
          ((some l) (is_pred_sort l))
          (none false))
@@ -369,8 +372,8 @@
      (match (read_ety es sc env tps s)
        ((TyErr e m) (Prod.mk (TyErr e m) nil))
        ((TyOk t tps1) (read_etys es sc env tps1 r (cons t acc)))))))
-;; a type name's identity: the built-in E types `Int`, `Nat`, `Symbol` (`Int` and `Nat` are
-;; Init's constants under the same bare name); then K's constants through the scope (a `type`
+;; a type name's identity: the built-in E types `Int` and `Nat` (Init's constants under the
+;; same bare name); then K's constants through the scope (a `type`
 ;; K holds, a `sig type`, Init's inductives) — a native type beside an imported one is an
 ;; ambiguity K reports — and after them the E-only types
 (fn type_ident ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
@@ -378,19 +381,19 @@
 (fn type_ident_k ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (match (resolve (cx_with_etype (cx0 sc env nil nil) true) n)
     ((RName k _) (TyOk (ETCon k nil) nil))
-    ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
-    ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
+    ((RAmbiguous a b) (TyErr (sym "ambiguous_type") (ambiguous_msg n a b)))
+    ((RPend k) (TyErr (sym "pending_obligation") (show_name k)))
     (RNone (type_ident_e es sc env n))))
 (fn type_ident_e ((es ESt) (sc Scope) (env CheckedEnv) (n Name)) TyRes
   (match (only_types (eresolve es sc n))
     ((cons (EHit id _ _) nil) (TyOk (ETCon id nil) nil))
-    ((cons (EHit a _ _) (cons (EHit b _ _) _)) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
+    ((cons (EHit a _ _) (cons (EHit b _ _) _)) (TyErr (sym "ambiguous_type") (ambiguous_msg n a b)))
     (nil
       (match (resolve (cx_with_etype (cx0 sc env nil nil) true) n)
         ((RName k _) (TyOk (ETCon k nil) nil))
-        ((RAmbiguous a b) (TyErr (quote ambiguous_type) (ambiguous_msg n a b)))
-        ((RPend k) (TyErr (quote pending_obligation) (show_name k)))
-        (RNone (TyErr (quote unknown_type) (show_name n)))))))
+        ((RAmbiguous a b) (TyErr (sym "ambiguous_type") (ambiguous_msg n a b)))
+        ((RPend k) (TyErr (sym "pending_obligation") (show_name k)))
+        (RNone (TyErr (sym "unknown_type") (show_name n)))))))
 
 ;; ---- terms ----------------------------------------------------------------------------
 ;; a bound name: a runtime variable with its static type as far as the declarations fix it,
@@ -461,7 +464,7 @@
 (fn rd_type ((r Rd) (t ETerm)) (Option EType) (c_type (rd_es r) (rd_tys r) t))
 (fn erased_msg ((n Name)) (List Int)
   (append (show_name n)
-    ": a proof or a type in a runtime position — both are erased from a program"))
+    (utf8 ": a proof or a type in a runtime position — both are erased from a program")))
 
 (type TRes (TOk ETerm) (TErr Symbol (List Int)))
 (fn read_et ((r Rd) (s SExpr)) TRes
@@ -469,31 +472,31 @@
   (match s
     ((SNum k) (TOk (ELit (if (< k 0) (LInt k) (LNat k)))))  ; the kind is the sign
     ((SStr bs) (read_estr bs))
-    ((SSymU _ _) (TErr (quote bad_universe_suffix) "an E term takes no universe arguments"))
+    ((SSymU _ _) (TErr (sym "bad_universe_suffix") (utf8 "an E term takes no universe arguments")))
     ((SSym x) (read_esym r x))
-    ((SList nil) (TErr (quote empty_application) "()"))
+    ((SList nil) (TErr (sym "empty_application") (utf8 "()")))
     ((SList (cons (SSym h) args))
-     (if (sym_eq h (quote match)) (read_ematch r args)
-     (if (sym_eq h (quote let)) (read_elet r args)
-     (if (sym_eq h (quote if)) (read_eif r args)
-     (if (sym_eq h (quote dif)) (read_edif r args)
-     (if (sym_eq h (quote absurd))
+     (if (sym_eq h (sym "match")) (read_ematch r args)
+     (if (sym_eq h (sym "let")) (read_elet r args)
+     (if (sym_eq h (sym "if")) (read_eif r args)
+     (if (sym_eq h (sym "dif")) (read_edif r args)
+     (if (sym_eq h (sym "absurd"))
        ;; a refuted row: Init's absurd applied to a proof and its negation, neither read here
-       (if (if (rd_checked r) (init_const r (n1 (quote absurd)) (n1 (quote absurd))) false)
+       (if (if (rd_checked r) (init_const r (n1 (sym "absurd")) (n1 (sym "absurd"))) false)
          (TOk EAbsurd)
-         (TErr (quote absurd_e_first)
-           "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first"))
-       (if (sym_eq h (quote proj)) (read_eproj r args)
-       (if (sym_eq h (quote quote))
-         (match args
-           ((cons (SSym q) nil) (TOk (ELit (LSym q))))
-           (_ (TErr (quote bad_shape) "(quote SYMBOL)")))
-       (if (sym_eq h (quote list)) (read_elist r args)
-       (if (sym_eq h (quote fun))
-         (TErr (quote function_value)
-           "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result")
+         (TErr (sym "absurd_e_first")
+           (utf8
+             "a refuted row is Init's absurd applied to a proof and its negation: it reads on the typed route, and this body is read E-first")))
+       (if (sym_eq h (sym "proj")) (read_eproj r args)
+       (if (sym_eq h (sym "quote"))
+         (TErr (sym "no_quote") (utf8 "a symbol is written (sym \"x\"): there is no quote form"))
+       (if (sym_eq h (sym "list")) (read_elist r args)
+       (if (sym_eq h (sym "fun"))
+         (TErr (sym "function_value")
+           (utf8
+             "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result"))
          (read_eapp r h args)))))))))))
-    ((SList (cons _ _)) (TErr (quote bad_head) "a head is a name"))))
+    ((SList (cons _ _)) (TErr (sym "bad_head") (utf8 "a head is a name")))))
 
 ;; a bare name: bound, else a constructor without fields, else a fn of no parameters as its
 ;; call — the typed route reads the constant as the value it is, and the two routes agree —,
@@ -502,47 +505,49 @@
 ;; its instance is taken where it is called (read_template_app)
 (fn template_e_first_msg ((id Name)) (List Int)
   (append (show_name id)
-    " is a template (a fn with a function-typed binder): it is called at its full arity, and its instance is taken where it is called — never a value"))
+    (utf8
+      " is a template (a fn with a function-typed binder): it is called at its full arity, and its instance is taken where it is called — never a value")))
 (fn fn_value_msg ((id Name) (k Int)) (List Int)
   (append (show_name id)
-    (append " in argument position: a function is no value — call it with its "
-      (append (show_nat k) " arguments"))))
+    (append (utf8 " in argument position: a function is no value — call it with its ")
+      (append (show_nat k) (utf8 " arguments")))))
 (fn read_esym ((r Rd) (x Symbol)) TRes
   (match (name_of_sym x)
-    (none (TErr (quote bad_name) (chars_of_sym x)))
+    (none (TErr (sym "bad_name") (chars_of_sym x)))
     ((some n)
      (match (rd_find r n)
        ((RdVar i) (TOk (EBVar i)))
-       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+       ((RdGhost _) (TErr (sym "erased_in_runtime") (erased_msg n)))
        (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((cons (EHit id _ (EICtor _ _ k)) nil)
             (if (= k 0) (TOk (ECtor id nil))
-            (TErr (quote unsaturated)
-              (append (show_name id) (append " takes " (append (show_nat k) " arguments"))))))
+            (TErr (sym "unsaturated")
+              (append (show_name id)
+                (append (utf8 " takes ") (append (show_nat k) (utf8 " arguments")))))))
            ((cons (EHit id _ (EIFn k)) nil)
-            (if (= k 0) (TOk (ECall id nil)) (TErr (quote function_value) (fn_value_msg id k))))
+            (if (= k 0) (TOk (ECall id nil)) (TErr (sym "function_value") (fn_value_msg id k))))
            ((cons (EHit id _ (EISig k)) nil)
-            (if (= k 0) (TOk (ECall id nil)) (TErr (quote function_value) (fn_value_msg id k))))
-           ((cons (EHit id _ (EIExt k)) nil) (TErr (quote function_value) (fn_value_msg id k)))
+            (if (= k 0) (TOk (ECall id nil)) (TErr (sym "function_value") (fn_value_msg id k))))
+           ((cons (EHit id _ (EIExt k)) nil) (TErr (sym "function_value") (fn_value_msg id k)))
            ((cons (EHit id _ (EITemplate _ _ _ _)) nil)
-            (TErr (quote function_value) (template_e_first_msg id)))
+            (TErr (sym "function_value") (template_e_first_msg id)))
            ((cons (EHit a _ _) (cons (EHit b _ _) _))
-            (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
+            (TErr (sym "ambiguous_head") (ambiguous_msg n a b)))
            (nil
              (match (prim_of (scope_candidates (rd_sc r) n))
                ((some (Prod.mk id _))
-                (TErr (quote function_value)
-                  (append (show_name id) " in argument position: a function is no value")))
+                (TErr (sym "function_value")
+                  (append (show_name id) (utf8 " in argument position: a function is no value"))))
                (none
                  (if (init_const r n (nm_nat_zero)) (TOk (ELit (LNat 0)))
                  (if (nat_ctor r n)
-                   (TErr (quote nat_constructor)
+                   (TErr (sym "nat_constructor")
                      (append (show_name n)
-                       ": Nat and Int are realized as the integer — write a numeral"))
-                   (TErr (quote unbound_name) (show_name n)))))))
+                       (utf8 ": Nat and Int are realized as the integer — write a numeral")))
+                   (TErr (sym "unbound_name") (show_name n)))))))
            ((cons (EHit id _ _) nil)
-            (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
+            (TErr (sym "unbound_name") (append (show_name id) (utf8 " is a type"))))))))))
 
 ;; in S, a name that resolves to a constructor of Nat or Int (never E constructors)
 (fn nat_ctor ((r Rd) (n Name)) Bool
@@ -556,24 +561,25 @@
 ;; `@HEAD` names every binder of a constant of K; `%` is `mod`'s other spelling
 (fn read_eapp ((r Rd) (h0 Symbol) (args (List SExpr))) TRes
   (let ((h (sym_strip h0)))
-    (read_eapp_at r (sym_explicit h0) (if (sym_eq h (quote %)) (quote mod) h) args)))
+    (read_eapp_at r (sym_explicit h0) (if (sym_eq h (sym "%")) (sym "mod") h) args)))
 (fn read_eapp_at ((r Rd) (ex Bool) (h Symbol) (args (List SExpr))) TRes
   (match (name_of_sym h)
-    (none (TErr (quote bad_name) (chars_of_sym h)))
+    (none (TErr (sym "bad_name") (chars_of_sym h)))
     ((some n)
      (match (rd_find r n)
        ((RdVar _)
-        (TErr (quote bad_head) (append (show_name n) " is a variable: there are no function values")))
-       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+        (TErr (sym "bad_head")
+          (append (show_name n) (utf8 " is a variable: there are no function values"))))
+       ((RdGhost _) (TErr (sym "erased_in_runtime") (erased_msg n)))
        (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
-           ((cons (EHit id _ (EICtor _ _ k)) nil) (read_known r id k ex args (quote ctor)))
-           ((cons (EHit id _ (EIFn k)) nil) (read_known r id k ex args (quote call)))
-           ((cons (EHit id _ (EISig k)) nil) (read_known r id k ex args (quote call)))
-           ((cons (EHit id _ (EIExt k)) nil) (read_known r id k ex args (quote ext)))
+           ((cons (EHit id _ (EICtor _ _ k)) nil) (read_known r id k ex args (sym "ctor")))
+           ((cons (EHit id _ (EIFn k)) nil) (read_known r id k ex args (sym "call")))
+           ((cons (EHit id _ (EISig k)) nil) (read_known r id k ex args (sym "call")))
+           ((cons (EHit id _ (EIExt k)) nil) (read_known r id k ex args (sym "ext")))
            ((cons (EHit id _ (EITemplate _ ebs _ _)) nil) (read_template_app r id ebs args))
            ((cons (EHit a _ _) (cons (EHit b _ _) _))
-            (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
+            (TErr (sym "ambiguous_head") (ambiguous_msg n a b)))
            (nil
              (match (prim_head (rd_sc r) n)
                ((some (Prod.mk id (Prim _ k))) (read_prim_head r id k args))
@@ -585,13 +591,15 @@
                        ((some res) res)
                        (none
                          (if (nat_ctor r n)
-                           (TErr (quote nat_constructor)
+                           (TErr (sym "nat_constructor")
                              (append (show_name n)
-                               ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub"))
+                               (utf8
+                                 ": Nat and Int are realized as the integer — write a numeral, Nat.add, Nat.sub")))
                            (match (renamed_prim h)
-                             ((some new) (TErr (quote renamed_primitive) (renamed_msg h new)))
-                             (none (TErr (quote unknown_head) (show_name n))))))))))))
-           ((cons (EHit id _ _) nil) (TErr (quote bad_head) (append (show_name id) " is a type")))))))))
+                             ((some new) (TErr (sym "renamed_primitive") (renamed_msg h new)))
+                             (none (TErr (sym "unknown_head") (show_name n))))))))))))
+           ((cons (EHit id _ _) nil)
+            (TErr (sym "bad_head") (append (show_name id) (utf8 " is a type"))))))))))
 
 ;; ---- the arguments written and the arguments that run ----------------------------------------
 ;; What a call writes is not what it passes: a type and a proof are written and erased, and
@@ -617,24 +625,27 @@
       (match args
         (nil (WrOk (rev acc)))
         (_
-          (WrErr (quote unsaturated)
-            (append " is given "
-              (append (show_nat (len args)) " more arguments than its signature has binders"))))))
+          (WrErr (sym "unsaturated")
+            (append (utf8 " is given ")
+              (append (show_nat (len args)) (utf8 " more arguments than its signature has binders")))))))
     ((cons (Prod.mk explicit role) fr)
      (if (bool_or ex explicit)
        (match args
          (nil
-           (WrErr (quote unsaturated)
-             " is given fewer arguments than its signature has binders: a function is no value"))
+           (WrErr (sym "unsaturated")
+             (utf8
+               " is given fewer arguments than its signature has binders: a function is no value")))
          ((cons a ar)
-          (if (sym_eq role (quote keep)) (written_data fr ex checked ar (cons a acc))
-          (if (bool_and (sym_eq role (quote proof)) (bool_not checked))
-            (WrErr (quote unchecked_proof)
-              ": a proof is written here, and this body has no L reading — the plain reading passes a proof over unread, and nothing else checks it")
+          (if (sym_eq role (sym "keep")) (written_data fr ex checked ar (cons a acc))
+          (if (bool_and (sym_eq role (sym "proof")) (bool_not checked))
+            (WrErr (sym "unchecked_proof")
+              (utf8
+                ": a proof is written here, and this body has no L reading — the plain reading passes a proof over unread, and nothing else checks it"))
             (written_data fr ex checked ar acc)))))
-     (if (sym_eq role (quote keep))
-       (WrErr (quote unwritten_argument)
-         ": a binder that is implicit and runtime data — its argument exists at run time and is not written; write the call with @ and every argument")
+     (if (sym_eq role (sym "keep"))
+       (WrErr (sym "unwritten_argument")
+         (utf8
+           ": a binder that is implicit and runtime data — its argument exists at run time and is not written; write the call with @ and every argument"))
        (written_data fr ex checked args acc))))))
 ;; a head's binders' flags: the fn being read by its own written binders, else K's constant
 (fn head_flags ((r Rd) (id Name)) (Option (List (Prod Bool Symbol)))
@@ -664,9 +675,9 @@
        ((Pi _ _ bi _ body)
         (match role
           ((BStatic _) none)
-          ((BData _) (zip_flags body br (cons (Prod.mk (bi_explicit bi) (quote keep)) acc)))
-          (BType (zip_flags body br (cons (Prod.mk (bi_explicit bi) (quote drop)) acc)))
-          (BErased (zip_flags body br (cons (Prod.mk (bi_explicit bi) (quote proof)) acc)))))
+          ((BData _) (zip_flags body br (cons (Prod.mk (bi_explicit bi) (sym "keep")) acc)))
+          (BType (zip_flags body br (cons (Prod.mk (bi_explicit bi) (sym "drop")) acc)))
+          (BErased (zip_flags body br (cons (Prod.mk (bi_explicit bi) (sym "proof")) acc)))))
        (_ none)))))
 (fn bi_explicit ((bi BinderInfo)) Bool
   (match bi
@@ -681,18 +692,19 @@
        ((WrOk ss) (read_head_args r id (len ss) ss kind))))
     (none
       (if ex
-        (TErr (quote bad_head)
+        (TErr (sym "bad_head")
           (append (show_name id)
-            ": @ names every binder of a constant of K, and this head's signature is not one K holds"))
+            (utf8
+              ": @ names every binder of a constant of K, and this head's signature is not one K holds")))
         (read_head_args r id k args kind)))))
 ;; a primitive written by name: the table's entry; a decision of the registry is a value here —
 ;; Decidable's cell by its test, as the erasure writes it (erasure.shard erase_dec_value)
 (fn read_prim_head ((r Rd) (id Name) (k Int) (args (List SExpr))) TRes
   (match (decision_test id)
     ((some p) (read_decision r p args))
-    (none (read_head_args r (table_entry id) k args (quote prim)))))
+    (none (read_head_args r (table_entry id) k args (sym "prim")))))
 (fn read_decision ((r Rd) (p Name) (args (List SExpr))) TRes
-  (match (read_head_args r p 2 args (quote prim))
+  (match (read_head_args r p 2 args (sym "prim"))
     ((TErr e m) (TErr e m))
     ((TOk test) (TOk (EIf test (dec_true) (dec_false))))))
 ;; the comparison a decision of the registry answers (`Nat.decEq` is `=`)
@@ -709,14 +721,15 @@
 (fn k_head ((r Rd) (ex Bool) (n Name) (args (List SExpr))) (Option TRes)
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
-     (if (name_eq k (n1 (quote dite))) (some (read_ite r ex true args))
-     (if (name_eq k (n1 (quote ite))) (some (read_ite r ex false args))
-     (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim))))
+     (if (name_eq k (n1 (sym "dite"))) (some (read_ite r ex true args))
+     (if (name_eq k (n1 (sym "ite"))) (some (read_ite r ex false args))
+     (if (bool_or (name_eq k (n1 (sym "absurd"))) (name_eq k (n2 (sym "False") (sym "elim"))))
        (some
          (if (rd_checked r) (TOk EAbsurd)
-         (TErr (quote absurd_e_first)
-           "a refuted row is a proof of False: it reads on the typed route, and this body is read E-first")))
-     (if (name_eq k (n1 (quote instDecidableEqBool)))
+         (TErr (sym "absurd_e_first")
+           (utf8
+             "a refuted row is a proof of False: it reads on the typed route, and this body is read E-first"))))
+     (if (name_eq k (n1 (sym "instDecidableEqBool")))
        (some
          (match (read_bool_eq r args)
            ((TErr e m) (TErr e m))
@@ -738,21 +751,21 @@
     (_ none)))
 ;; a constant K holds that no table gives a program: a definition and nothing more, a theorem
 (fn no_program ((k Name)) TRes
-  (TErr (quote no_realization)
+  (TErr (sym "no_realization")
     (append (show_name k)
-      ": no realization attached — realize it first, or import the file that does")))
+      (utf8 ": no realization attached — realize it first, or import the file that does"))))
 (fn read_row_ctor ((r Rd) (ex Bool) (k Name) (args (List SExpr))) TRes
   (match (k_flags r k)
     (none
-      (TErr (quote no_realization)
-        (append (show_name k) ": the registry's row does not describe this structure")))
+      (TErr (sym "no_realization")
+        (append (show_name k) (utf8 ": the registry's row does not describe this structure"))))
     ((some flags)
      (match (written_data flags ex (rd_checked r) args nil)
        ((WrErr e m) (TErr e (append (show_name k) m)))
        ((WrOk (cons a nil)) (read_et r a))
        ((WrOk _)
-        (TErr (quote no_realization)
-          (append (show_name k) ": a row's constructor has exactly one runtime field")))))))
+        (TErr (sym "no_realization")
+          (append (show_name k) (utf8 ": a row's constructor has exactly one runtime field"))))))))
 ;; a projection function — a constant whose value is λ params self. self.i: the structure, the
 ;; field and the number of its lambdas; which of them a call writes is its type's binder infos
 (fn proj_fn_of ((v Expr) (depth Int)) (Option (Prod (Prod Name Int) Int))
@@ -772,15 +785,17 @@
   ((r Rd) (ex Bool) (k Name) (sn Name) (i Int) (lams (List Bool)) (args (List SExpr)))
   TRes
   (if (< (if ex (len lams) (count_true lams)) (len args))
-    (TErr (quote function_value)
+    (TErr (sym "function_value")
       (append (show_name k)
-        ": a projection applied past its structure — a field that is a function is a package's, read off the package constant's value, which this reading does not unfold: call the function the field holds by its name, or pass the package to a template"))
+        (utf8
+          ": a projection applied past its structure — a field that is a function is a package's, read off the package constant's value, which this reading does not unfold: call the function the field holds by its name, or pass the package to a template")))
   (if (bool_not (= (len args) (if ex (len lams) (count_true lams))))
-    (TErr (quote unsaturated) (append (show_name k) ": a projection is applied to its structure"))
+    (TErr (sym "unsaturated")
+      (append (show_name k) (utf8 ": a projection is applied to its structure")))
     (match (last_of args)
       (none
-        (TErr (quote unsaturated)
-          (append (show_name k) ": a projection is applied to its structure")))
+        (TErr (sym "unsaturated")
+          (append (show_name k) (utf8 ": a projection is applied to its structure"))))
       ((some x) (read_proj r sn i x))))))
 (fn last_of ((T Type) (xs (List T))) (Option T)
   (measure (struct xs))
@@ -791,15 +806,15 @@
 ;; field i of the structure sn, of the subject x
 (fn read_proj ((r Rd) (sn Name) (i Int) (x SExpr)) TRes
   (match (struct_ctor r sn)
-    (none (TErr (quote no_realization) (append (show_name sn) " is not a structure")))
+    (none (TErr (sym "no_realization") (append (show_name sn) (utf8 " is not a structure"))))
     ((some c)
      (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) c)
-       (none (TErr (quote no_realization) (show_name c)))
+       (none (TErr (sym "no_realization") (show_name c)))
        ((some flags)
         (match (runtime_index flags i 0 0)
           (none
-            (TErr (quote erased_in_runtime)
-              (append (show_name sn) ": a projection of an erased field")))
+            (TErr (sym "erased_in_runtime")
+              (append (show_name sn) (utf8 ": a projection of an erased field"))))
           ((some (Prod.mk j nrt))
            (match (read_et r x)
              ((TErr e m) (TErr e m))
@@ -810,13 +825,15 @@
                     (match (row_field_proj sn)
                       ((some p) (EPrim p (list x1)))  ; kept by name while the body is typed
                       (none x1)))
-                  (TErr (quote no_realization)
+                  (TErr (sym "no_realization")
                     (append (show_name sn)
-                      ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+                      (utf8
+                        ": the registry's row does not describe this structure (one constructor, one runtime field)"))))
                 (match (es_info (rd_es r) c)
                   ((some (EICtor _ _ _))
                    (TOk (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))
-                  (_ (TErr (quote no_realization) (append (show_name sn) " is not an E type"))))))))))))))
+                  (_
+                    (TErr (sym "no_realization") (append (show_name sn) (utf8 " is not an E type")))))))))))))))
 (fn struct_ctor ((r Rd) (sn Name)) (Option Name)
   (match (env_find (rd_env r) sn)
     ((some (InductInfo _ _ _ _ (cons c nil) _ _ _ _)) (some c))
@@ -826,12 +843,12 @@
   (match args
     ((cons (SSym sx) (cons (SNum i) (cons x nil)))
      (match (name_of_sym sx)
-       (none (TErr (quote bad_name) (chars_of_sym sx)))
+       (none (TErr (sym "bad_name") (chars_of_sym sx)))
        ((some n)
         (match (resolve (cx_with_etype (cx0 (rd_sc r) (rd_env r) nil nil) true) n)
           ((RName sn _) (read_proj r sn i x))
-          (_ (TErr (quote unknown_head) (append (show_name n) " is not a structure of K")))))))
-    (_ (TErr (quote bad_shape) "(proj STRUCTURE INDEX E)"))))
+          (_ (TErr (sym "unknown_head") (append (show_name n) (utf8 " is not a structure of K"))))))))
+    (_ (TErr (sym "bad_shape") (utf8 "(proj STRUCTURE INDEX E)")))))
 
 ;; ---- decisions: a value and a condition ------------------------------------------------------
 ;; (@dite T C DEC (fun ((h C)) A) (fun ((h (Not C))) B)) and (@ite T C DEC A B): an `if` on the
@@ -840,8 +857,9 @@
 ;; written — so the plain forms are `if` and `dif`
 (fn read_ite ((r Rd) (ex Bool) (dep Bool) (args (List SExpr))) TRes
   (if (bool_not ex)
-    (TErr (quote unwritten_argument)
-      "ite and dite take their decision as an instance argument, which exists at run time and is not written: write (if C A B), (dif h C A B), or the @ form with its decision")
+    (TErr (sym "unwritten_argument")
+      (utf8
+        "ite and dite take their decision as an instance argument, which exists at run time and is not written: write (if C A B), (dif h C A B), or the @ form with its decision"))
     (match args
       ((cons _ (cons _ (cons d (cons a (cons b nil)))))
        (match (read_cond r d)
@@ -853,17 +871,17 @@
              (match (read_branch r dep b)
                ((TErr e m) (TErr e m))
                ((TOk tb) (TOk (EIf c ta tb)))))))))
-      (_ (TErr (quote unsaturated) "@ite and @dite take five arguments")))))
+      (_ (TErr (sym "unsaturated") (utf8 "@ite and @dite take five arguments"))))))
 (fn read_branch ((r Rd) (dep Bool) (s SExpr)) TRes
   (if (bool_not dep) (read_et r s)
   (match s
     ((SList (cons (SSym f) (cons (SList (cons (SList (cons (SSym x) _)) nil)) (cons body nil))))
-     (if (sym_eq f (quote fun))
+     (if (sym_eq f (sym "fun"))
        (match (name_of_sym x)
-         (none (TErr (quote bad_name) (chars_of_sym x)))
+         (none (TErr (sym "bad_name") (chars_of_sym x)))
          ((some n) (read_et (rd_ghost r n) body)))
-       (TErr (quote function_value) "a dite's branch is (fun ((h P)) E)")))
-    (_ (TErr (quote function_value) "a dite's branch is (fun ((h P)) E)")))))
+       (TErr (sym "function_value") (utf8 "a dite's branch is (fun ((h P)) E)"))))
+    (_ (TErr (sym "function_value") (utf8 "a dite's branch is (fun ((h P)) E)"))))))
 ;; a decision where an `if` reads it: a decision of the registry written by name is its bare
 ;; test, Bool's decidable equality the test over its operands; anything else — the call of a
 ;; derived decision, a variable — is its value, whose cell the `if` reads
@@ -875,7 +893,7 @@
        (none (read_et r s))
        ((some n)
         (match (cond_head r n)
-          ((CondPrim p) (read_head_args r p 2 args (quote prim)))
+          ((CondPrim p) (read_head_args r p 2 args (sym "prim")))
           (CondBoolEq (read_bool_eq r args))
           (CondNone (read_et r s))))))
     (_ (read_et r s))))
@@ -886,7 +904,7 @@
         (nil
           (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
             ((RName k _)
-             (if (name_eq k (n1 (quote instDecidableEqBool))) CondBoolEq
+             (if (name_eq k (n1 (sym "instDecidableEqBool"))) CondBoolEq
              (match (decision_test k)
                ((some p) (CondPrim p))
                (none CondNone))))
@@ -897,13 +915,13 @@
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons a (cons b nil))) (TOk (bool_eq_cond a b)))
-    ((Prod.mk none _) (TErr (quote unsaturated) "instDecidableEqBool takes 2 arguments"))))
+    ((Prod.mk none _) (TErr (sym "unsaturated") (utf8 "instDecidableEqBool takes 2 arguments")))))
 ;; (dif h C A B): the `if` on C, its hypothesis a proof in both branches
 (fn read_edif ((r Rd) (args (List SExpr))) TRes
   (match args
     ((cons (SSym hn) (cons c (cons a (cons b nil))))
      (match (name_of_sym hn)
-       (none (TErr (quote bad_name) (chars_of_sym hn)))
+       (none (TErr (sym "bad_name") (chars_of_sym hn)))
        ((some n)
         (match (read_et r c)
           ((TErr e m) (TErr e m))
@@ -914,7 +932,7 @@
               (match (read_et (rd_ghost r n) b)
                 ((TErr e m) (TErr e m))
                 ((TOk tb) (TOk (EIf tc ta tb)))))))))))
-    (_ (TErr (quote bad_shape) "(dif h C A B)"))))
+    (_ (TErr (sym "bad_shape") (utf8 "(dif h C A B)")))))
 ;; the entry an operation of Init written by name is run as: the registry's (prog.shard
 ;; realization_of — `Nat.add` is `+`), as the typed route's erasure writes it (a decision is
 ;; read before it comes here: read_decision)
@@ -934,55 +952,57 @@
 ;; with an expression (`Int.natAbs`) and the identity (`Int.ofNat`) keep their name as the
 ;; head until the body is typed (settle_ops) and are written out last (expand_rows)
 (fn init_row ((r Rd) (h Symbol) (n Name) (args (List SExpr))) (Option TRes)
-  (if (sym_eq h (quote and)) (some (read_bool_row r (quote and) args))
-  (if (sym_eq h (quote or)) (some (read_bool_row r (quote or) args))
-  (if (sym_eq h (quote not)) (some (read_bool_row r (quote not) args))
+  (if (sym_eq h (sym "and")) (some (read_bool_row r (sym "and") args))
+  (if (sym_eq h (sym "or")) (some (read_bool_row r (sym "or") args))
+  (if (sym_eq h (sym "not")) (some (read_bool_row r (sym "not") args))
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
-     (if (name_eq k (n2 (quote Bool) (quote and))) (some (read_bool_row r (quote and) args))
-     (if (name_eq k (n2 (quote Bool) (quote or))) (some (read_bool_row r (quote or) args))
-     (if (name_eq k (n2 (quote Bool) (quote not))) (some (read_bool_row r (quote not) args))
+     (if (name_eq k (n2 (sym "Bool") (sym "and"))) (some (read_bool_row r (sym "and") args))
+     (if (name_eq k (n2 (sym "Bool") (sym "or"))) (some (read_bool_row r (sym "or") args))
+     (if (name_eq k (n2 (sym "Bool") (sym "not"))) (some (read_bool_row r (sym "not") args))
      (if (name_eq k (nm_nat_succ)) (some (read_succ r args))
      (match (realization_of k)
        ((some p)
-        (some (if (cmp_prim p) (read_decision r p args) (read_head_args r p 2 args (quote prim)))))
+        (some (if (cmp_prim p) (read_decision r p args) (read_head_args r p 2 args (sym "prim")))))
        (none
          (match (realization_type k)
-           ((some _) (some (read_head_args r k 1 args (quote prim))))
+           ((some _) (some (read_head_args r k 1 args (sym "prim"))))
            (none none)))))))))
     (_ none))))))
 (fn read_succ ((r Rd) (args (List SExpr))) TRes
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons x nil))
-     (TOk (EPrim (n2 (quote Nat) (quote add)) (list x (ELit (LNat 1))))))
-    ((Prod.mk none _) (TErr (quote unsaturated) "Nat.succ takes 1 argument"))))
+     (TOk (EPrim (n2 (sym "Nat") (sym "add")) (list x (ELit (LNat 1))))))
+    ((Prod.mk none _) (TErr (sym "unsaturated") (utf8 "Nat.succ takes 1 argument")))))
 (fn read_bool_row ((r Rd) (op Symbol) (args (List SExpr))) TRes
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons a nil))
-     (if (sym_eq op (quote not)) (TOk (EIf a (bool_false) (bool_true)))
-     (TErr (quote unsaturated) (append (chars_of_sym op) " takes 2 arguments, given 1"))))
+     (if (sym_eq op (sym "not")) (TOk (EIf a (bool_false) (bool_true)))
+     (TErr (sym "unsaturated") (append (chars_of_sym op) (utf8 " takes 2 arguments, given 1")))))
     ((Prod.mk none (cons a (cons b nil)))
-     (if (sym_eq op (quote and)) (TOk (EIf a b (bool_false)))
-     (if (sym_eq op (quote or)) (TOk (EIf a (bool_true) b))
-     (TErr (quote unsaturated) "not takes 1 argument, given 2"))))
-    ((Prod.mk none _) (TErr (quote unsaturated) (append (chars_of_sym op) " takes 2 arguments")))))
+     (if (sym_eq op (sym "and")) (TOk (EIf a b (bool_false)))
+     (if (sym_eq op (sym "or")) (TOk (EIf a (bool_true) b))
+     (TErr (sym "unsaturated") (utf8 "not takes 1 argument, given 2")))))
+    ((Prod.mk none _)
+     (TErr (sym "unsaturated") (append (chars_of_sym op) (utf8 " takes 2 arguments"))))))
 ;; a primitive head: the table's entry among the scope's candidates (a renamed spelling
 ;; is refused by the caller, `renamed_primitive`)
 (fn prim_head ((sc Scope) (n Name)) (Option (Prod Name Prim)) (prim_of (scope_candidates sc n)))
 (fn read_head_args ((r Rd) (id Name) (k Int) (args (List SExpr)) (kind Symbol)) TRes
   (if (bool_not (= k (len args)))
-    (TErr (quote unsaturated)
+    (TErr (sym "unsaturated")
       (append (show_name id)
-        (append " takes " (append (show_nat k) (append " arguments, given " (show_nat (len args)))))))
+        (append (utf8 " takes ")
+          (append (show_nat k) (append (utf8 " arguments, given ") (show_nat (len args)))))))
     (match (read_ets_list r args nil)
       ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
       ((Prod.mk none ts)
        (TOk
-         (if (sym_eq kind (quote ctor)) (ECtor id ts)
-         (if (sym_eq kind (quote call)) (ECall id ts)
-         (if (sym_eq kind (quote ext)) (EExt id ts)
+         (if (sym_eq kind (sym "ctor")) (ECtor id ts)
+         (if (sym_eq kind (sym "call")) (ECall id ts)
+         (if (sym_eq kind (sym "ext")) (EExt id ts)
          (EPrim id ts)))))))))
 ;; the arguments in order, or the first error
 (fn read_ets_list ((r Rd) (ss (List SExpr)) (acc (List ETerm)))
@@ -1001,10 +1021,10 @@
 ;; is read and its types are known
 (fn read_template_app ((r Rd) (id Name) (ebs (List EBind)) (args (List SExpr))) TRes
   (if (bool_not (= (len ebs) (len args)))
-    (TErr (quote unsaturated)
+    (TErr (sym "unsaturated")
       (append (show_name id)
-        (append " takes "
-          (append (show_nat (len ebs)) (append " arguments, given " (show_nat (len args)))))))
+        (append (utf8 " takes ")
+          (append (show_nat (len ebs)) (append (utf8 " arguments, given ") (show_nat (len args)))))))
     (match (read_tm_args r id ebs args nil)
       ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
       ((Prod.mk none ts) (TOk (ECall id ts))))))
@@ -1032,63 +1052,68 @@
   (match s
     ((SSym x) (read_static_head r tm x nil))
     ((SList (cons (SSym h) gargs))
-     (if (sym_eq h (quote fun)) (read_elam r gargs) (read_static_head r tm h gargs)))
+     (if (sym_eq h (sym "fun")) (read_elam r gargs) (read_static_head r tm h gargs)))
     (_
-      (TErr (quote function_value)
+      (TErr (sym "function_value")
         (append (show_name tm)
-          ": a static argument is a name, or a name applied to its captured values")))))
+          (utf8 ": a static argument is a name, or a name applied to its captured values"))))))
 (fn read_static_head ((r Rd) (tm Name) (h Symbol) (gargs (List SExpr))) TRes
   (match (name_of_sym h)
-    (none (TErr (quote bad_name) (chars_of_sym h)))
+    (none (TErr (sym "bad_name") (chars_of_sym h)))
     ((some n)
      (match (rd_find r n)
        ((RdVar _)
-        (TErr (quote function_value)
+        (TErr (sym "function_value")
           (append (show_name n)
-            ": a variable as a static argument — there are no function values; a static argument names a fn")))
-       ((RdGhost _) (TErr (quote erased_in_runtime) (erased_msg n)))
+            (utf8
+              ": a variable as a static argument — there are no function values; a static argument names a fn"))))
+       ((RdGhost _) (TErr (sym "erased_in_runtime") (erased_msg n)))
        (RdNone
          (match (only_values (eresolve (rd_es r) (rd_sc r) n))
            ((cons (EHit id _ (EIFn k)) nil) (read_static_fn r id k gargs))
            ((cons (EHit id _ (EISig k)) nil) (read_static_fn r id k gargs))
            ((cons (EHit id _ (EIExt _)) nil)
-            (TErr (quote function_value)
+            (TErr (sym "function_value")
               (append (show_name id)
-                ": an extern as a static argument is not supported — it takes a World")))
+                (utf8 ": an extern as a static argument is not supported — it takes a World"))))
            ((cons (EHit id _ (EITemplate _ _ _ _)) nil)
-            (TErr (quote function_value)
+            (TErr (sym "function_value")
               (append (show_name id)
-                ": a template as a static argument — an instance is taken where the template is called")))
+                (utf8
+                  ": a template as a static argument — an instance is taken where the template is called"))))
            ((cons (EHit id _ (EICtor _ _ _)) nil)
-            (TErr (quote function_value)
+            (TErr (sym "function_value")
               (append (show_name id)
-                ": a constructor as a static argument — a static argument names a fn")))
+                (utf8 ": a constructor as a static argument — a static argument names a fn"))))
            ((cons (EHit a _ _) (cons (EHit b _ _) _))
-            (TErr (quote ambiguous_head) (ambiguous_msg n a b)))
+            (TErr (sym "ambiguous_head") (ambiguous_msg n a b)))
            (nil
              (match (registry_const r n)
                ((some k) (read_static_registry r k gargs))
                (none
                  (match (prim_of (scope_candidates (rd_sc r) n))
                    ((some (Prod.mk id _))
-                    (TErr (quote function_value)
+                    (TErr (sym "function_value")
                       (append (show_name id)
-                        ": an operator as a static argument — a static argument names a function: the constant the operator is at its type (Int.add, Nat.mul), or a fn")))
-                   (none (TErr (quote unbound_name) (show_name n)))))))
+                        (utf8
+                          ": an operator as a static argument — a static argument names a function: the constant the operator is at its type (Int.add, Nat.mul), or a fn"))))
+                   (none (TErr (sym "unbound_name") (show_name n)))))))
            ((cons (EHit id _ _) nil)
-            (TErr (quote unbound_name) (append (show_name id) " is a type")))))))))
+            (TErr (sym "unbound_name") (append (show_name id) (utf8 " is a type"))))))))))
 (fn read_static_fn ((r Rd) (id Name) (k Int) (gargs (List SExpr))) TRes
   (if (bool_not (= (e_tparams (rd_es r) id) 0))
-    (TErr (quote function_value)
+    (TErr (sym "function_value")
       (append (show_name id)
-        ": a polymorphic fn as a static argument in a body with no L reading — its type arguments are not written here; give the body an L reading"))
+        (utf8
+          ": a polymorphic fn as a static argument in a body with no L reading — its type arguments are not written here; give the body an L reading")))
   (if (<= k (len gargs))
-    (TErr (quote function_value)
+    (TErr (sym "function_value")
       (append (show_name id)
-        (append " applied to "
+        (append (utf8 " applied to ")
           (append (show_nat (len gargs))
-            (append " arguments leaves none of its "
-              (append (show_nat k) " for the static parameter — a static argument is a function"))))))
+            (append (utf8 " arguments leaves none of its ")
+              (append (show_nat k)
+                (utf8 " for the static parameter — a static argument is a function")))))))
     (match (read_ets_list r gargs nil)
       ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
       ((Prod.mk none ts) (TOk (ECall id ts)))))))
@@ -1109,11 +1134,12 @@
     (_ none)))
 (fn read_static_registry ((r Rd) (k Name) (gargs (List SExpr))) TRes
   (if (<= 2 (len gargs))
-    (TErr (quote function_value)
+    (TErr (sym "function_value")
       (append (show_name k)
-        (append " applied to "
+        (append (utf8 " applied to ")
           (append (show_nat (len gargs))
-            " arguments leaves none of its 2 for the static parameter — a static argument is a function"))))
+            (utf8
+              " arguments leaves none of its 2 for the static parameter — a static argument is a function")))))
     (match (read_ets_list r gargs nil)
       ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
       ((Prod.mk none ts) (TOk (ECall k ts))))))
@@ -1139,9 +1165,10 @@
       (_ none))
     ((some k) (TOk (ECall k nil)))
     (none
-      (TErr (quote function_value)
+      (TErr (sym "function_value")
         (append (show_name tm)
-          ": a package argument names a package constant — a def whose value is the structure's constructor applied")))))
+          (utf8
+            ": a package argument names a package constant — a def whose value is the structure's constructor applied"))))))
 ;; a lambda as a static argument: (fun ((x TYPE)…) E) — each binder states its type, a closed
 ;; E type, and the body is read under them. It stays a lambda in the body as read (ELam) and
 ;; is lifted to a fn where the instance is taken (take_lambda)
@@ -1151,12 +1178,12 @@
      (match (read_lam_binders r bs nil nil)
        ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
        ((Prod.mk none (Prod.mk nil _))
-        (TErr (quote bad_shape) "a lambda binds a variable: (fun ((x TYPE)…) E)"))
+        (TErr (sym "bad_shape") (utf8 "a lambda binds a variable: (fun ((x TYPE)…) E)")))
        ((Prod.mk none (Prod.mk names types))
         (match (read_et (rd_bind_all r names (some_all types)) body)
           ((TErr e m) (TErr e m))
           ((TOk b) (TOk (ELam types none b)))))))
-    (_ (TErr (quote bad_shape) "(fun ((x TYPE)…) E)"))))
+    (_ (TErr (sym "bad_shape") (utf8 "(fun ((x TYPE)…) E)")))))
 (fn read_lam_binders ((r Rd) (bs (List SExpr)) (names (List Name)) (types (List EType)))
   (Prod (Option (Prod Symbol (List Int))) (Prod (List Name) (List EType)))
   (measure (struct bs))
@@ -1164,7 +1191,7 @@
     (nil (Prod.mk none (Prod.mk (rev names) (rev types))))
     ((cons (SList (cons (SSym x) (cons ty nil))) rest)
      (match (name_of_sym x)
-       (none (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym x))) (Prod.mk nil nil)))
+       (none (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym x))) (Prod.mk nil nil)))
        ((some n)
         (match (read_ety (rd_es r) (rd_sc r) (rd_env r) nil ty)
           ((TyErr e m)
@@ -1172,12 +1199,14 @@
              (some
                (Prod.mk e
                  (append m
-                   " — a lambda's binder states a closed type; a lambda over a type parameter is not supported")))
+                   (utf8
+                     " — a lambda's binder states a closed type; a lambda over a type parameter is not supported"))))
              (Prod.mk nil nil)))
           ((TyOk t _) (read_lam_binders r rest (cons n names) (cons t types)))))))
     (_
       (Prod.mk
-        (some (Prod.mk (quote bad_shape) "a lambda's binder is (NAME TYPE): its type is written"))
+        (some
+          (Prod.mk (sym "bad_shape") (utf8 "a lambda's binder is (NAME TYPE): its type is written")))
         (Prod.mk nil nil)))))
 
 ;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its
@@ -1193,16 +1222,16 @@
           ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
           ((Prod.mk none as)
            (match (dead_row_in as arms)
-             ((some m) (TErr (quote unreachable_arm) m))
+             ((some m) (TErr (sym "unreachable_arm") m))
              (none (TOk (EMatch t as))))))))))
-    (_ (TErr (quote bad_shape) "(match E (PAT E)…)"))))
+    (_ (TErr (sym "bad_shape") (utf8 "(match E (PAT E)…)")))))
 ;; numeral rows: Lean's value patterns as the elaborator reads them
 ;; (elab.shard elab_match_lit) — the scrutinee once, a test per row in row order, the last row
 ;; `_` or a name for the scrutinee. A local scrutinee is itself in the tests; anything else
 ;; is bound once. At Nat and Int, where the scrutinee's type is fixed
 (fn read_ematch_lit ((r Rd) (t ETerm) (arms (List SExpr))) TRes
   (if (bool_not (numeral_typed (rd_type r t)))
-    (TErr (quote pattern_type) "a numeral row matches a value read at Nat or Int")
+    (TErr (sym "pattern_type") (utf8 "a numeral row matches a value read at Nat or Int"))
     (match t
       ((EBVar _) (read_lit_rows r t arms))
       (_
@@ -1217,8 +1246,8 @@
   (measure (struct arms))
   (match arms
     (nil
-      (TErr (quote match_not_exhaustive)
-        "numeral rows cover no type: close the match with a `_` row or a name"))
+      (TErr (sym "match_not_exhaustive")
+        (utf8 "numeral rows cover no type: close the match with a `_` row or a name")))
     ((cons (SList (cons (SNum k) (cons body nil))) rest)
      (match (read_et r body)
        ((TErr e m) (TErr e m))
@@ -1226,18 +1255,19 @@
         (match (read_lit_rows r x rest)
           ((TErr e m) (TErr e m))
           ((TOk e)
-           (TOk (EIf (EPrim (n1 (quote =)) (list x (ELit (if (< k 0) (LInt k) (LNat k))))) b e)))))))
+           (TOk (EIf (EPrim (n1 (sym "=")) (list x (ELit (if (< k 0) (LInt k) (LNat k))))) b e)))))))
     ((cons (SList (cons (SSym v) (cons body nil))) nil)
-     (if (sym_eq v (quote _)) (read_et r body)
+     (if (sym_eq v (sym "_")) (read_et r body)
      (match (name_of_sym v)
-       (none (TErr (quote bad_name) (chars_of_sym v)))
+       (none (TErr (sym "bad_name") (chars_of_sym v)))
        ((some n)
         (match (read_et (rd_bind r n (rd_type r x)) body)
           ((TErr e m) (TErr e m))
           ((TOk b) (TOk (ELet (list x) b))))))))
     (_
-      (TErr (quote literal_rows)
-        "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all"))))
+      (TErr (sym "literal_rows")
+        (utf8
+          "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all")))))
 (fn read_earms ((r Rd) (st (Option EType)) (arms (List SExpr)) (acc (List EArm)))
   (Prod (Option (Prod Symbol (List Int))) (List EArm))
   (measure (struct arms))
@@ -1250,7 +1280,7 @@
         (match (read_et (rd_bind_all (rd_ghost_all r ghosts) names (pat_types (rd_es r) st pat)) b)
           ((TErr e m) (Prod.mk (some (Prod.mk e m)) nil))
           ((TOk body) (read_earms r st rest (cons (EArm pat body) acc)))))))
-    (_ (Prod.mk (some (Prod.mk (quote bad_shape) "an arm is (PAT E)")) nil))))
+    (_ (Prod.mk (some (Prod.mk (sym "bad_shape") (utf8 "an arm is (PAT E)"))) nil))))
 
 ;; a match whose rows all read is refused where a row that matches every value has rows
 ;; after it: those can never be taken, and a constructor's name that resolved to nothing is
@@ -1273,19 +1303,20 @@
     (PVar
       (match p
         ((SSym x)
-         (if (sym_eq x (quote _))
+         (if (sym_eq x (sym "_"))
            (some
-             (append "the row _ matches every value, so the "
+             (append (utf8 "the row _ matches every value, so the ")
                (append (show_nat after)
-                 " row(s) after it can never be taken: a catch-all is the last row")))
+                 (utf8 " row(s) after it can never be taken: a catch-all is the last row"))))
            (some
-             (append "the row "
+             (append (utf8 "the row ")
                (append (chars_of_sym x)
-                 (append " binds a variable and matches every value, so the "
+                 (append (utf8 " binds a variable and matches every value, so the ")
                    (append (show_nat after)
-                     (append " row(s) after it can never be taken: no constructor named "
+                     (append (utf8 " row(s) after it can never be taken: no constructor named ")
                        (append (chars_of_sym x)
-                         " is in scope — write the constructor as its type spells it, or make a catch-all the last row")))))))))
+                         (utf8
+                           " is in scope — write the constructor as its type spells it, or make a catch-all the last row"))))))))))
         (_ none)))
     (_ none))))
 ;; ---- patterns: the variables in capture order (leftmost first) ------------------------------
@@ -1299,11 +1330,12 @@
   (measure (struct s))
   (match s
     ((SNum k) (POk (PLit (if (< k 0) (LInt k) (LNat k))) nil nil))
-    ((SStr _) (PErr (quote pattern_literal) "a string is not a pattern: match its Cons and Nil"))
-    ((SSymU _ _) (PErr (quote bad_universe_suffix) "a pattern takes no universe arguments"))
+    ((SStr _)
+     (PErr (sym "pattern_literal") (utf8 "a string is not a pattern: match its Cons and Nil")))
+    ((SSymU _ _) (PErr (sym "bad_universe_suffix") (utf8 "a pattern takes no universe arguments")))
     ((SSym x)
      (match (name_of_sym x)
-       (none (PErr (quote bad_name) (chars_of_sym x)))
+       (none (PErr (sym "bad_name") (chars_of_sym x)))
        ((some n)
         (match (only_ctors (eresolve (rd_es r) (rd_sc r) n))
           (nil
@@ -1316,23 +1348,22 @@
                 (match (only_values (eresolve (rd_es r) (rd_sc r) n))
                   (nil (POk PVar (list n) nil))
                   ((cons (EHit id _ _) _)
-                   (PErr (quote pattern_name)
+                   (PErr (sym "pattern_name")
                      (append (show_name id)
-                       " is a function: a pattern variable may not shadow one (it would match anything)")))))))
+                       (utf8
+                         " is a function: a pattern variable may not shadow one (it would match anything)"))))))))
           ((cons (EHit id _ (EICtor _ _ k)) nil)
            (if (= k 0) (POk (PCtor id nil) nil nil)
-           (PErr (quote pattern_arity)
-             (append (show_name id) (append " has " (append (show_nat k) " fields"))))))
+           (PErr (sym "pattern_arity")
+             (append (show_name id) (append (utf8 " has ") (append (show_nat k) (utf8 " fields")))))))
           ((cons (EHit a _ _) (cons (EHit b _ _) _))
-           (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
-          (_ (PErr (quote bad_pattern) (show_name n)))))))
+           (PErr (sym "ambiguous_head") (ambiguous_msg n a b)))
+          (_ (PErr (sym "bad_pattern") (show_name n)))))))
     ((SList (cons (SSym h) subs))
-     (if (sym_eq h (quote quote))
-       (match subs
-         ((cons (SSym q) nil) (POk (PLit (LSym q)) nil nil))
-         (_ (PErr (quote bad_shape) "(quote SYMBOL)")))
+     (if (sym_eq h (sym "quote"))
+       (PErr (sym "no_quote") (utf8 "a symbol is written (sym \"x\"): there is no quote form"))
        (match (name_of_sym h)
-         (none (PErr (quote bad_name) (chars_of_sym h)))
+         (none (PErr (sym "bad_name") (chars_of_sym h)))
          ((some n)
           (match (only_ctors (eresolve (rd_es r) (rd_sc r) n))
             (nil
@@ -1341,12 +1372,14 @@
                 (none
                   (match (row_ctor r n)
                     ((some k) (read_row_pat r k subs))
-                    (none (PErr (quote unknown_head) (append (show_name n) " is not a constructor")))))))
+                    (none
+                      (PErr (sym "unknown_head")
+                        (append (show_name n) (utf8 " is not a constructor"))))))))
             ((cons (EHit id _ (EICtor _ _ _)) nil) (read_ctor_pat r st id subs))
             ((cons (EHit a _ _) (cons (EHit b _ _) _))
-             (PErr (quote ambiguous_head) (ambiguous_msg n a b)))
-            (_ (PErr (quote bad_pattern) (show_name n))))))))
-    (_ (PErr (quote bad_pattern) "a pattern is _, NAME, NUMERAL or (CTOR PAT…)"))))
+             (PErr (sym "ambiguous_head") (ambiguous_msg n a b)))
+            (_ (PErr (sym "bad_pattern") (show_name n))))))))
+    (_ (PErr (sym "bad_pattern") (utf8 "a pattern is _, NAME, NUMERAL or (CTOR PAT…)")))))
 ;; a row's constructor: its pattern is its one runtime field's pattern, on the scrutinee itself
 ;; (erasure.shard mt_epat); the erased fields' names are proofs
 (fn row_ctor ((r Rd) (n Name)) (Option Name)
@@ -1358,19 +1391,20 @@
     (_ none)))
 (fn read_row_pat ((r Rd) (k Name) (subs (List SExpr))) PRes
   (match (ctor_data_flags (w0 (rd_env r)) (rd_es r) (rd_sc r) k)
-    (none (PErr (quote bad_pattern) (show_name k)))
+    (none (PErr (sym "bad_pattern") (show_name k)))
     ((some flags)
      (if (bool_not (= (len flags) (len subs)))
-       (PErr (quote pattern_arity)
+       (PErr (sym "pattern_arity")
          (append (show_name k)
-           (append " has "
-             (append (show_nat (len flags)) (append " fields, the pattern " (show_nat (len subs)))))))
+           (append (utf8 " has ")
+             (append (show_nat (len flags))
+               (append (utf8 " fields, the pattern ") (show_nat (len subs)))))))
        (match (read_epats r nil flags subs nil nil nil)
          ((Prod.mk (some (Prod.mk e m)) _) (PErr e m))
          ((Prod.mk none (Prod.mk (cons p nil) (Prod.mk names ghosts))) (POk p names ghosts))
          ((Prod.mk none _)
-          (PErr (quote bad_pattern)
-            (append (show_name k) ": a row's constructor has exactly one runtime field"))))))))
+          (PErr (sym "bad_pattern")
+            (append (show_name k) (utf8 ": a row's constructor has exactly one runtime field")))))))))
 ;; the constructor a name is under the scrutinee's inductive, with its written fields' number
 (fn ctor_at ((r Rd) (st (Option EType)) (n Name)) (Option (Prod Name Int))
   (match st
@@ -1393,10 +1427,11 @@
 (fn read_ctor_pat ((r Rd) (st (Option EType)) (id Name) (subs (List SExpr))) PRes
   (let ((flags (pat_fields r id)))
     (if (bool_not (= (len flags) (len subs)))
-      (PErr (quote pattern_arity)
+      (PErr (sym "pattern_arity")
         (append (show_name id)
-          (append " has "
-            (append (show_nat (len flags)) (append " fields, the pattern " (show_nat (len subs)))))))
+          (append (utf8 " has ")
+            (append (show_nat (len flags))
+              (append (utf8 " fields, the pattern ") (show_nat (len subs)))))))
       (match
         (read_epats r
           (match (ctor_field_types (rd_es r) st id)
@@ -1430,14 +1465,14 @@
           ((SSym x)
            (match (name_of_sym x)
              (none
-               (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym x)))
+               (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym x)))
                  (Prod.mk nil (Prod.mk nil nil))))
              ((some n) (read_epats r sts fr rest pacc nacc (append gacc (list n))))))
           (_
             (Prod.mk
               (some
-                (Prod.mk (quote bad_pattern)
-                  "an erased field's pattern is a name: a proof has no constructor to match"))
+                (Prod.mk (sym "bad_pattern")
+                  (utf8 "an erased field's pattern is a name: a proof has no constructor to match")))
               (Prod.mk nil (Prod.mk nil nil))))))
        (_
          (match
@@ -1475,7 +1510,7 @@
            (match rhss
              (nil (TOk b))
              (_ (TOk (let_chain rhss b)))))))))
-    (_ (TErr (quote bad_shape) "(let ((x E)…) E)"))))
+    (_ (TErr (sym "bad_shape") (utf8 "(let ((x E)…) E)")))))
 ;; a let of several bindings is a let in a let, one binding each: the
 ;; elaborator reads the form so, and the erasure writes K's lets one by one
 (fn let_chain ((rs (List ETerm)) (b ETerm)) ETerm
@@ -1494,18 +1529,18 @@
        (if (bool_not (rd_checked r))
          (Prod.mk
            (some
-             (Prod.mk (quote unchecked_proof)
-               "a let binds a proof, and this body has no L reading — nothing checks it"))
+             (Prod.mk (sym "unchecked_proof")
+               (utf8 "a let binds a proof, and this body has no L reading — nothing checks it")))
            (Prod.mk nil r))
          (match (name_of_sym x)
-           (none (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym x))) (Prod.mk nil r)))
+           (none (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym x))) (Prod.mk nil r)))
            ((some n) (read_ebinds (rd_ghost r n) rest acc))))
        (read_ebind r x e rest acc)))
-    (_ (Prod.mk (some (Prod.mk (quote bad_shape) "a binding is (NAME E)")) (Prod.mk nil r)))))
+    (_ (Prod.mk (some (Prod.mk (sym "bad_shape") (utf8 "a binding is (NAME E)"))) (Prod.mk nil r)))))
 (fn read_ebind ((r Rd) (x Symbol) (e SExpr) (rest (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod (List ETerm) Rd))
   (match (name_of_sym x)
-    (none (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym x))) (Prod.mk nil r)))
+    (none (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym x))) (Prod.mk nil r)))
     ((some n)
      (match (read_et r e)
        ((TErr e2 m) (Prod.mk (some (Prod.mk e2 m)) (Prod.mk nil r)))
@@ -1523,7 +1558,7 @@
            (match (read_et r b)
              ((TErr e m) (TErr e m))
              ((TOk tb) (TOk (EIf tc ta tb)))))))))
-    (_ (TErr (quote bad_shape) "(if E E E)"))))
+    (_ (TErr (sym "bad_shape") (utf8 "(if E E E)")))))
 
 ;; (list a b…): the constructor chain of the `List` in scope — the
 ;; two-constructor type `List` resolves to (Init's, or a file's own), its first
@@ -1532,16 +1567,16 @@
 ;; builds once (prog.shard LStr)
 (fn read_elist ((r Rd) (args (List SExpr))) TRes
   (match (list_in_scope r)
-    (none (TErr (quote no_list) "(list …) needs a two-constructor List in scope"))
+    (none (TErr (sym "no_list") (utf8 "(list …) needs a two-constructor List in scope")))
     ((some (Prod.mk nil_id cons_id))
      (match (read_ets_list r args nil)
        ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
        ((Prod.mk none ts) (TOk (cons_chain cons_id nil_id ts)))))))
 (fn read_estr ((bs (List Int))) TRes
   (if (utf8_ok bs) (TOk (ELit (LStr bs)))
-  (TErr (quote bad_string) "a string literal's bytes are not UTF-8")))
+  (TErr (sym "bad_string") (utf8 "a string literal's bytes are not UTF-8"))))
 (fn list_in_scope ((r Rd)) (Option (Prod Name Name))
-  (match (type_ident (rd_es r) (rd_sc r) (rd_env r) (n1 (quote List)))
+  (match (type_ident (rd_es r) (rd_sc r) (rd_env r) (n1 (sym "List")))
     ((TyOk (ETCon id _) _)
      (match (es_info (rd_es r) id)
        ((some (EIInd _ (cons nl (cons cs nil)))) (some (Prod.mk nl cs)))
@@ -1567,21 +1602,21 @@
 (fn classify_as ((es ESt) (sc Scope) (env CheckedEnv) (checked Bool) (s SExpr)) CRes
   (match s
     ((SList (cons (SSym h) args))
-     (if (sym_eq h (quote fn)) (read_efn es sc env checked args)
-     (if (sym_eq h (quote extern)) (read_eextern es sc env args)
-     (if (sym_eq h (quote type)) (read_etype_decl es sc env args)
-     (if (sym_eq h (quote sig))
+     (if (sym_eq h (sym "fn")) (read_efn es sc env checked args)
+     (if (sym_eq h (sym "extern")) (read_eextern es sc env args)
+     (if (sym_eq h (sym "type")) (read_etype_decl es sc env args)
+     (if (sym_eq h (sym "sig"))
        (match args
          ((cons (SSym k) rest)
-          (if (sym_eq k (quote fn)) (read_esig_fn es sc env rest)
-          (if (sym_eq k (quote type))
+          (if (sym_eq k (sym "fn")) (read_esig_fn es sc env rest)
+          (if (sym_eq k (sym "type"))
             (match rest
               ((cons hd nil) (read_esig_type es sc hd))
-              (_ (CErr (quote bad_shape) "(sig type NAME)")))
-            (CErr (quote bad_shape) "(sig fn …) or (sig type …)"))))
-         (_ (CErr (quote bad_shape) "(sig fn …) or (sig type …)")))
-       (CErr (quote unknown_form) (chars_of_sym h)))))))
-    (_ (CErr (quote unknown_form) "a top-level form is (KEYWORD …)"))))
+              (_ (CErr (sym "bad_shape") (utf8 "(sig type NAME)"))))
+            (CErr (sym "bad_shape") (utf8 "(sig fn …) or (sig type …)")))))
+         (_ (CErr (sym "bad_shape") (utf8 "(sig fn …) or (sig type …)"))))
+       (CErr (sym "unknown_form") (chars_of_sym h)))))))
+    (_ (CErr (sym "unknown_form") (utf8 "a top-level form is (KEYWORD …)")))))
 
 ;; a supplied realize — (realize NAME ((x TYPE)…) RET (measure M)? BODY (equations …)?) — read
 ;; as the fn it is: the realized constant's program under that constant's identity — a head
@@ -1605,7 +1640,7 @@
   (match rest
     (nil nil)
     ((cons (SList (cons (SSym h) more)) nil)
-     (if (sym_eq h (quote equations)) nil (list (SList (cons (SSym h) more)))))
+     (if (sym_eq h (sym "equations")) nil (list (SList (cons (SSym h) more)))))
     ((cons x r) (cons x (without_equations r)))))
 
 ;; HEAD: NAME (the type parameters are `(T Type)` binders; a parameterized head is refused)
@@ -1638,49 +1673,49 @@
     (nil (PmOk (rev names) (rev types) tps bds (rev flags)))
     ((cons (SList (cons (SSym x) (cons ty nil))) rest)
      (match (name_of_sym x)
-       (none (PmErr (quote bad_binder) (chars_of_sym x)))
+       (none (PmErr (sym "bad_binder") (chars_of_sym x)))
        ((some n)
         (if (is_type_sym ty)  ; `(T Type)` is a type parameter
           (read_params es sc env checked (append tps (list n)) rest names types
             (cons (BdGhost n false) bds)
-            (cons (Prod.mk false (quote drop)) flags))
+            (cons (Prod.mk false (sym "drop")) flags))
         (if (if checked (is_pred_sort ty) false)
           (read_params es sc env checked tps rest names types (cons (BdGhost n true) bds)
-            (cons (Prod.mk true (quote proof)) flags))
+            (cons (Prod.mk true (sym "proof")) flags))
           ;; an `if`, not bool_and: the test resolves the type's head, and is run only where asked
           (if (if checked (prop_type (Rd es sc env bds none checked) ty) false)
             (read_params es sc env checked tps rest names types (cons (BdGhost n false) bds)
-              (cons (Prod.mk true (quote proof)) flags))
+              (cons (Prod.mk true (sym "proof")) flags))
             (match (read_ety es sc env tps ty)
               ((TyErr e m) (PmErr e m))
               ((TyOk t tps1)
                (read_params es sc env checked tps1 rest (cons n names) (cons t types)
                  (cons (BdVar n (some t)) bds)
-                 (cons (Prod.mk true (quote keep)) flags))))))))))
-    (_ (PmErr (quote bad_binder) "a binder is (x TYPE)"))))
+                 (cons (Prod.mk true (sym "keep")) flags))))))))))
+    (_ (PmErr (sym "bad_binder") (utf8 "a binder is (x TYPE)")))))
 (fn is_type_sym ((s SExpr)) Bool
   (match s
-    ((SSym x) (sym_eq x (quote Type)))
+    ((SSym x) (sym_eq x (sym "Type")))
     (_ false)))
 ;; the forms after RET: BODY, or (measure M) BODY
 (fn measure_body ((rest (List SExpr))) (Prod (Option SExpr) (Option SExpr))
   (match rest
     ((cons b nil) (Prod.mk (some b) none))
     ((cons (SList (cons (SSym m) (cons e nil))) (cons b nil))
-     (if (sym_eq m (quote measure)) (Prod.mk (some b) (some e)) (Prod.mk none none)))
+     (if (sym_eq m (sym "measure")) (Prod.mk (some b) (some e)) (Prod.mk none none)))
     (_ (Prod.mk none none))))
 (type RcRes (RcOk ERec) (RcErr Symbol (List Int)))
 (fn read_rec ((r Rd) (pnames (List Name)) (meas (Option SExpr))) RcRes
   (match meas
     (none (RcOk RecNone))
     ((some (SList (cons (SSym s) (cons (SSym x) nil))))
-     (if (sym_eq s (quote struct))
+     (if (sym_eq s (sym "struct"))
        (match (name_of_sym x)
-         (none (RcErr (quote bad_measure) (chars_of_sym x)))
+         (none (RcErr (sym "bad_measure") (chars_of_sym x)))
          ((some n)
           (match (index_of n pnames 0)
             ((some i) (RcOk (RecStruct i)))
-            (none (RcErr (quote bad_measure) (append (show_name n) " is not a parameter"))))))
+            (none (RcErr (sym "bad_measure") (append (show_name n) (utf8 " is not a parameter")))))))
        (read_measure r (SList (cons (SSym s) (cons (SSym x) nil))))))
     ((some m) (read_measure r m))))
 ;; a measure term over the parameters. One that cites a function with no program — a
@@ -1688,7 +1723,7 @@
 ;; and holds no term (erasure.shard predef_rec)
 (fn read_measure ((r Rd) (m SExpr)) RcRes
   (match (read_et r m)
-    ((TErr e m2) (if (sym_eq e (quote no_realization)) (RcOk RecLogical) (RcErr e m2)))
+    ((TErr e m2) (if (sym_eq e (sym "no_realization")) (RcOk RecLogical) (RcErr e m2)))
     ((TOk t) (RcOk (RecMeasure t)))))
 
 ;; (fn HEAD BINDERS RET (measure M)? BODY)
@@ -1696,10 +1731,10 @@
   (match args
     ((cons hd (cons (SList bs) (cons ret rest)))
      (match (head_params hd)
-       ((Prod.mk none _) (CErr (quote bad_name) "a declared name is NAME"))
+       ((Prod.mk none _) (CErr (sym "bad_name") (utf8 "a declared name is NAME")))
        ((Prod.mk (some short) tps0)
         (read_fn_rest es sc env checked (qualify sc short) tps0 bs ret rest))))
-    (_ (CErr (quote bad_shape) "(fn NAME ((x TYPE)…) RET (measure M)? BODY)"))))
+    (_ (CErr (sym "bad_shape") (utf8 "(fn NAME ((x TYPE)…) RET (measure M)? BODY)")))))
 ;; BINDERS RET (measure M)? BODY under the identity id
 (fn read_fn_rest
   ((es ESt)
@@ -1720,7 +1755,8 @@
        ((TyOk rt tps2)
         (let ((r (Rd es sc env bds (some (Prod.mk id flags)) checked)))
           (match (measure_body rest)
-            ((Prod.mk none _) (CErr (quote bad_shape) "NAME ((x TYPE)…) RET (measure M)? BODY"))
+            ((Prod.mk none _)
+             (CErr (sym "bad_shape") (utf8 "NAME ((x TYPE)…) RET (measure M)? BODY")))
             ((Prod.mk (some body) meas)
              (match (read_et r body)
                ((TErr e m) (CErr e m))
@@ -1780,7 +1816,7 @@
   (match args
     ((cons hd (cons (SList bs) (cons ret nil)))
      (match (head_params hd)
-       ((Prod.mk none _) (SgErr (quote bad_name) "a declared name is NAME"))
+       ((Prod.mk none _) (SgErr (sym "bad_name") (utf8 "a declared name is NAME")))
        ((Prod.mk (some short) tps0)
         (match (read_params es sc env false tps0 bs nil nil nil nil)
           ((PmErr e m) (SgErr e m))
@@ -1788,10 +1824,10 @@
            (match (read_ety es sc env tps1 ret)
              ((TyErr e m) (SgErr e m))
              ((TyOk rt tps2) (SgOk (qualify sc short) (len tps2) ptypes rt))))))))
-    (_ (SgErr (quote bad_shape) "NAME ((x TYPE)…) RET"))))
+    (_ (SgErr (sym "bad_shape") (utf8 "NAME ((x TYPE)…) RET")))))
 (fn read_esig_type ((es ESt) (sc Scope) (hd SExpr)) CRes
   (match (type_head sc hd)
-    ((Prod.mk none m) (CErr (quote bad_name) m))
+    ((Prod.mk none m) (CErr (sym "bad_name") m))
     ((Prod.mk (some (Prod.mk n params)) _) (COk (ESigType n (len params))))))
 
 ;; (type HEAD (CTOR FIELD-TYPE…)…): the E inductive; field types over the declared parameters only
@@ -1799,12 +1835,12 @@
   (match args
     ((cons hd ctors)
      (match (type_head sc hd)
-       ((Prod.mk none m) (CErr (quote bad_name) m))
+       ((Prod.mk none m) (CErr (sym "bad_name") m))
        ((Prod.mk (some (Prod.mk n params)) _)
         (match (read_ectors es sc env params n ctors nil)
           ((Prod.mk (some (Prod.mk e m)) _) (CErr e m))
           ((Prod.mk none cs) (COk (EInd n (len params) cs)))))))
-    (_ (CErr (quote bad_shape) "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))
+    (_ (CErr (sym "bad_shape") (utf8 "(type (NAME T…) (CTOR FIELD-TYPE…)…)")))))
 (fn read_ectors
   ((es ESt)
    (sc Scope)
@@ -1819,7 +1855,7 @@
     (nil (Prod.mk none (rev acc)))
     ((cons (SList (cons (SSym cn) fields)) r)
      (match (name_of_sym cn)
-       (none (Prod.mk (some (Prod.mk (quote bad_name) (chars_of_sym cn))) nil))
+       (none (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym cn))) nil))
        ((some short)
         (match (read_etys es sc env params fields nil)
           ((Prod.mk (TyErr e m) _) (Prod.mk (some (Prod.mk e m)) nil))
@@ -1827,14 +1863,16 @@
            (if (bool_not (= (len tps1) (len params)))
              (Prod.mk
                (some
-                 (Prod.mk (quote unknown_type)
-                   (append "in "
+                 (Prod.mk (sym "unknown_type")
+                   (append (utf8 "in ")
                      (append (show_name (name_append ind short))
-                       ": a field names a type this file cannot see"))))
+                       (utf8 ": a field names a type this file cannot see")))))
                nil)
              (read_ectors es sc env params ind r (cons (ECtorDef (name_append ind short) fts) acc))))))))
     (_
-      (Prod.mk (some (Prod.mk (quote bad_constructor) "a constructor is (CTOR FIELD-TYPE…)")) nil))))
+      (Prod.mk
+        (some (Prod.mk (sym "bad_constructor") (utf8 "a constructor is (CTOR FIELD-TYPE…)")))
+        nil))))
 
 ;; ---- the operators of a body, by their operands' types ------------------------------------
 ;; An operator's meaning is its operands' type (LANGUAGE.md, Terms): `-` at Nat is Nat.sub;
@@ -1854,7 +1892,7 @@
 ;; the decisions of equality derived and visible here, each at the E type of the type it was
 ;; derived at (scope.shard's table keys them by the L type)
 (fn derived_eqs ((es ESt) (sc Scope) (env CheckedEnv)) (List (Prod EType Name))
-  (derived_etypes es sc env (derived_visible sc (quote eq))))
+  (derived_etypes es sc env (derived_visible sc (sym "eq"))))
 (fn derived_etypes ((es ESt) (sc Scope) (env CheckedEnv) (ds (List (Prod Expr Name))))
   (List (Prod EType Name))
   (measure (struct ds))
@@ -2040,10 +2078,10 @@
     (_ nil)))
 ;; the five operators written bare whose entry is their operands' type's
 (fn arith_op ((p Name)) Bool
-  (bool_or (name_eq p (n1 (quote +)))
-    (bool_or (name_eq p (n1 (quote -)))
-      (bool_or (name_eq p (n1 (quote *)))
-        (bool_or (name_eq p (n1 (quote /))) (name_eq p (n1 (quote mod))))))))
+  (bool_or (name_eq p (n1 (sym "+")))
+    (bool_or (name_eq p (n1 (sym "-")))
+      (bool_or (name_eq p (n1 (sym "*")))
+        (bool_or (name_eq p (n1 (sym "/"))) (name_eq p (n1 (sym "mod"))))))))
 ;; a numeral, or an operator over numerals: it has no type of its own
 (fn lit_only ((t ETerm)) Bool
   (measure (struct t))
@@ -2053,11 +2091,11 @@
     (_ false)))
 (fn is_int_type ((t (Option EType))) Bool
   (match t
-    ((some (ETCon n nil)) (name_eq n (n1 (quote Int))))
+    ((some (ETCon n nil)) (name_eq n (n1 (sym "Int"))))
     (_ false)))
 (fn is_init_bool ((t (Option EType))) Bool
   (match t
-    ((some (ETCon n nil)) (name_eq n (n1 (quote Bool))))
+    ((some (ETCon n nil)) (name_eq n (n1 (sym "Bool"))))
     (_ false)))
 (fn settle_prim
   ((es ESt)
@@ -2129,7 +2167,7 @@
 ;; test over its operands, at a type with one visible derived equality the call of that
 ;; decision, whose cell the `if` reads (elab.shard decision_of; erasure.shard erase_cond)
 (fn cmp_cond ((dv (List (Prod EType Name))) (p Name) (ty (Option EType)) (a ETerm) (b ETerm)) ETerm
-  (if (bool_not (name_eq p (n1 (quote =)))) (EPrim p (list a b))
+  (if (bool_not (name_eq p (n1 (sym "=")))) (EPrim p (list a b))
   (if (bool_or (is_nat_type ty) (is_int_type ty)) (EPrim p (list a b))
   (if (is_init_bool ty) (bool_eq_cond a b)
   (match ty
@@ -2140,13 +2178,13 @@
     (none (EPrim p (list a b))))))))
 (fn arith_entry ((p Name) (ty (Option EType))) Name
   (if (is_nat_type ty)
-    (if (name_eq p (n1 (quote -))) (n2 (quote Nat) (quote sub))
-    (if (name_eq p (n1 (quote /))) (n2 (quote Nat) (quote div))
-    (if (name_eq p (n1 (quote mod))) (n2 (quote Nat) (quote mod))
+    (if (name_eq p (n1 (sym "-"))) (n2 (sym "Nat") (sym "sub"))
+    (if (name_eq p (n1 (sym "/"))) (n2 (sym "Nat") (sym "div"))
+    (if (name_eq p (n1 (sym "mod"))) (n2 (sym "Nat") (sym "mod"))
     p)))
   (if (is_int_type ty)
-    (if (name_eq p (n1 (quote /))) (n2 (quote Int) (quote ediv))
-    (if (name_eq p (n1 (quote mod))) (n2 (quote Int) (quote emod))
+    (if (name_eq p (n1 (sym "/"))) (n2 (sym "Int") (sym "ediv"))
+    (if (name_eq p (n1 (sym "mod"))) (n2 (sym "Int") (sym "emod"))
     p))
     p)))
 ;; the operand type an entry written by name states: Nat for Init's Nat set, Int for its Int
@@ -2156,7 +2194,7 @@
     ((some (Prim code _))
      (if (bool_and (<= 22 code) (<= code 38)) (list (ETCon (nm_nat) nil) (ETCon (nm_nat) nil))
      (if (bool_and (<= 18 code) (<= code 21))
-       (list (ETCon (n1 (quote Int)) nil) (ETCon (n1 (quote Int)) nil))
+       (list (ETCon (n1 (sym "Int")) nil) (ETCon (n1 (sym "Int")) nil))
        nil)))
     (none nil)))
 ;; the rows kept by name while the body was typed, written out: `Int.ofNat x` and a row's
@@ -2202,48 +2240,50 @@
   (Option (Prod Symbol (List Int)))
   (if (bool_not (c_exh es t))
     (some
-      (Prod.mk (quote nonexhaustive)
-        (append (show_name id) ": a match does not cover its scrutinee's constructors")))
+      (Prod.mk (sym "nonexhaustive")
+        (append (show_name id) (utf8 ": a match does not cover its scrutinee's constructors"))))
     (match (c_leak es tys t)
       ((some (Leak st))
        (some
-         (Prod.mk (quote private_match)
+         (Prod.mk (sym "private_match")
            (append (show_name id)
-             (append " matches a value of the sig type "
+             (append (utf8 " matches a value of the sig type ")
                (append (show_name st)
-                 " against a constructor: a sig type has no constructor outside its implementation"))))))
+                 (utf8
+                   " against a constructor: a sig type has no constructor outside its implementation")))))))
       ((some (Mismatch st c))
        (some
-         (Prod.mk (quote pattern_type)
+         (Prod.mk (sym "pattern_type")
            (append (show_name id)
-             (append " matches a value of type "
-               (append (show_name st) (append " against the constructor " (show_name c))))))))
+             (append (utf8 " matches a value of type ")
+               (append (show_name st) (append (utf8 " against the constructor ") (show_name c))))))))
       ((some (IfPrivate st))
        (some
-         (Prod.mk (quote private_if)
+         (Prod.mk (sym "private_if")
            (append (show_name id)
-             (append " branches on a value of the sig type "
+             (append (utf8 " branches on a value of the sig type ")
                (append (show_name st)
-                 ": an if would read the implementation's constructor order through the view"))))))
+                 (utf8 ": an if would read the implementation's constructor order through the view")))))))
       ((some (PrimType st op))
        (some
-         (Prod.mk (quote prim_type)
+         (Prod.mk (sym "prim_type")
            (append (show_name id)
-             (append " compares a value of type "
+             (append (utf8 " compares a value of type ")
                (append (show_name st)
-                 (append " with "
+                 (append (utf8 " with ")
                    (append (show_name op)
-                     ": the comparison primitives are the integers', and `=` reads at a type only where exactly one derived equality at it is visible — a (derive TYPE eq) before this form, or the decision called by name, (T.decEq a b)"))))))))
+                     (utf8
+                       ": the comparison primitives are the integers', and `=` reads at a type only where exactly one derived equality at it is visible — a (derive TYPE eq) before this form, or the decision called by name, (T.decEq a b)")))))))))
       ((some (IfType st k))
        (some
-         (Prod.mk (quote if_type)
+         (Prod.mk (sym "if_type")
            (append (show_name id)
-             (append " branches on a value of type "
+             (append (utf8 " branches on a value of type ")
                (append (show_name st)
                  (if (= k 0)
-                   ", which is not an inductive type: an if takes a type of two constructors"
-                   (append ", which has "
-                     (append (show_nat k) " constructors: an if takes a type of two")))))))))
+                   (utf8 ", which is not an inductive type: an if takes a type of two constructors")
+                   (append (utf8 ", which has ")
+                     (append (show_nat k) (utf8 " constructors: an if takes a type of two"))))))))))
       (none none))))
 ;; ---- the instances a body takes, the lambdas it lifts ---------------------------------------
 ;; a static argument's shape as this reader takes it — its identity (a fn or a sig fn of the E
@@ -2300,7 +2340,7 @@
         (match (es_info es f)
           ((some (EITemplate _ ebs _ nt))
            (match (captured_bad es tys ebs as)
-             ((some m) (TkErr (quote type_mismatch) m))
+             ((some m) (TkErr (sym "type_mismatch") m))
              (none (take_instance es sc f ebs nt (tm_solve es nil tys ebs as) as1 acc1))))
           (_ (TkOk (ECall f as1) acc1))))))
     ((EPrim p as)
@@ -2404,19 +2444,22 @@
           (let ((free (rev (free_vars b (len ts) nil))))
             (match (closed_types tys free nil)
               (none
-                (TkErr (quote function_value)
-                  "a lambda over a local with no closed E type — one whose type the declarations do not fix, or one over a type parameter"))
+                (TkErr (sym "function_value")
+                  (utf8
+                    "a lambda over a local with no closed E type — one whose type the declarations do not fix, or one over a type parameter")))
               ((some ctys)
                (match (lam_result es tys ts rt b)
                  (none
-                   (TkErr (quote function_value)
-                     "a lambda whose result type the declarations do not fix: name it as a fn, whose result is written"))
+                   (TkErr (sym "function_value")
+                     (utf8
+                       "a lambda whose result type the declarations do not fix: name it as a fn, whose result is written")))
                  ((some rty)
                   (if (< 0 (tvar_count rty))
-                    (TkErr (quote function_value)
-                      "a lambda whose result is over a type parameter is not supported")
+                    (TkErr (sym "function_value")
+                      (utf8 "a lambda whose result is over a type parameter is not supported"))
                     (let
-                      ((name (name_append owner (n1 (sym_of_chars (append "lam_" (show_nat n)))))))
+                      ((name
+                         (name_append owner (n1 (sym_of_chars (append (utf8 "lam_") (show_nat n)))))))
                       (TkOk (ECall name (bvars_of free))
                         (tk_lift acc1
                           (EFn name 0 (append ctys ts) rty RecNone
@@ -2537,9 +2580,10 @@
     ((TaS shapes caps data)
      (let ((tye (params_from sub nt 0)))
        (if (< 0 (tvar_count_all tye))
-         (TkErr (quote function_value)
+         (TkErr (sym "function_value")
            (append (show_name c)
-             ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body; an instance is at closed types"))
+             (utf8
+               ": an instance at an open type — a type argument the arguments do not determine, or a type parameter of this body; an instance is at closed types")))
          (let ((name (instance_name_of sc c tye (eshape_keys shapes))))
            (TkOk (ECall name (append caps data)) (tk_demand acc (EDemand name c tye shapes)))))))))
 ;; the type arguments a template's call fixes, in the elaborator's order: its bare variables,
@@ -2639,30 +2683,31 @@
              ((ECall g cs)
               (match (shape_signature es ls g)
                 (none
-                  (TaE (quote function_value)
-                    (append (show_name g) ": a static argument with no program of the E table")))
+                  (TaE (sym "function_value")
+                    (append (show_name g)
+                      (utf8 ": a static argument with no program of the E table"))))
                 ((some (Prod.mk ps _))
                  (let ((n (len cs)))
                    (if (bool_not (= (len (drop n ps)) (len doms)))
-                     (TaE (quote function_value)
+                     (TaE (sym "function_value")
                        (append (show_name g)
-                         (append " leaves "
+                         (append (utf8 " leaves ")
                            (append (show_nat (len (drop n ps)))
-                             (append " parameters where the static parameter's arity is "
+                             (append (utf8 " parameters where the static parameter's arity is ")
                                (show_nat (len doms)))))))
                      (take_args es ls c br ar (cons (EShape g (len doms) (take n ps)) shapes)
                        (rev_onto cs caps)
                        data))))))
              (_
-               (TaE (quote function_value)
+               (TaE (sym "function_value")
                  (append (show_name c)
-                   ": a static argument is a lambda, a name or a named partial application")))))
+                   (utf8 ": a static argument is a lambda, a name or a named partial application"))))))
           (EBPackage
             (match a
               ((ECall g nil) (take_args es ls c br ar (cons (EShape g 0 nil) shapes) caps data))
               (_
-                (TaE (quote function_value)
-                  (append (show_name c) ": a package argument names a package constant")))))))))))
+                (TaE (sym "function_value")
+                  (append (show_name c) (utf8 ": a package argument names a package constant"))))))))))))
 ;; a static argument's parameter types and result: a fn's or a sig fn's of the table, a lambda
 ;; this body lifted, a constant of the realization registry (the erasure's shape_kind reads a
 ;; program of the table before the registry)
@@ -2727,7 +2772,7 @@
            ;; numerals alone under an Int parameter are the integer they are
            (if (bool_or (etype_eq at p) (bool_and (lit_only a) (is_int_type (some p))))
              (captured_ok es tys ar pr)
-             (some ": a captured value's type is not the parameter's")))))))))
+             (some (utf8 ": a captured value's type is not the parameter's"))))))))))
 (fn eshape_keys ((ss (List EShape))) (List (Prod Name Int))
   (measure (struct ss))
   (match ss
@@ -2887,7 +2932,7 @@
 ;; transparent two-constructor inductive — Bool, Init's Bool, Decidable, a type — whose second
 ;; constructor is the observation `if` makes. A sig type is the leak (`private_if`: the tag bit
 ;; would read the implementation's constructor order through the view); an inductive of another
-;; arity, or Int, Nat, Symbol, is `if_type`. A type the pass cannot fix (a type parameter) is
+;; arity, or Int, Nat, is `if_type`. A type the pass cannot fix (a type parameter) is
 ;; unchecked, as a match on one is.
 (fn if_bad ((es ESt) (st (Option EType))) (Option Bad)
   (match st
@@ -2903,8 +2948,8 @@
 ;; typed route the elaborator never produces one (it resolves `=` by the operand's type); an
 ;; E-first body that wrote one would be stuck at run
 (fn cmp_prim ((n Name)) Bool
-  (bool_or (name_eq n (n1 (quote =)))
-    (bool_or (name_eq n (n1 (quote <))) (name_eq n (n1 (quote <=))))))
+  (bool_or (name_eq n (n1 (sym "=")))
+    (bool_or (name_eq n (n1 (sym "<"))) (name_eq n (n1 (sym "<="))))))
 (fn cmp_bad ((es ESt) (tys (List (Option EType))) (as (List ETerm))) (Option Name)
   (measure (struct as))
   (match as
@@ -2948,8 +2993,8 @@
     (nil false)
     ((cons (EArm (PCtor _ _) _) _) true)
     ((cons _ r) (any_ctor_arm r))))
-;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int or
-;; Symbol, or a row of the registry's types — whose representation no E-first body takes apart:
+;; a constructor pattern whose inductive is not the scrutinee's known type (an E inductive, Int,
+;; or a row of the registry's types — whose representation no E-first body takes apart:
 ;; every constructor pattern on it is foreign)
 (fn foreign_ctor ((es ESt) (st (Option EType)) (arms (List EArm))) (Option Name)
   (measure (struct arms))
@@ -2966,9 +3011,7 @@
           (_ (foreign_ctor es st r))))
        (_ (foreign_ctor es st r))))
     ((cons _ r) (foreign_ctor es st r))))
-(fn builtin_type ((n Name)) Bool
-  (bool_or (name_eq n (nm_nat))
-    (bool_or (name_eq n (n1 (quote Int))) (name_eq n (n1 (quote Symbol))))))
+(fn builtin_type ((n Name)) Bool (bool_or (name_eq n (nm_nat)) (name_eq n (n1 (sym "Int")))))
 (fn is_ind ((es ESt) (n Name)) Bool
   (match (es_info es n)
     ((some (EIInd _ _)) true)
@@ -3023,9 +3066,8 @@
        ((some o) o)
        (none none)))
     ((ELit (LNat _)) (some (ETCon (nm_nat) nil)))
-    ((ELit (LInt _)) (some (ETCon (n1 (quote Int)) nil)))
+    ((ELit (LInt _)) (some (ETCon (n1 (sym "Int")) nil)))
     ((ELit (LStr _)) (some (ETCon (nm_string) nil)))
-    ((ELit (LSym _)) (some (ETCon (n1 (quote Symbol)) nil)))
     ((ECtor c args)
      (match (es_info es c)
        ((some (EICtor ind _ _))
@@ -3056,7 +3098,7 @@
        ((some (Prim code _)) (some (prim_static es tys code args)))
        ;; a row kept by name while the body is typed (settle_ops): a subtype's value is at its base
        (none
-         (if (name_eq n (n2 (quote Subtype) (quote val)))
+         (if (name_eq n (n2 (sym "Subtype") (sym "val")))
            (match args
              ((cons x nil)
               (match (c_type es tys x)

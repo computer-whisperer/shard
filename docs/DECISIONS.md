@@ -199,13 +199,13 @@ entries are explained under "Measured" at the end.
   reads a file by its module path; not a byte list under `kernel…`. The owner: "We need a
   path to dropping this, but we can defer the cutover if that makes more sense for
   ordering.", and then "Let's continue with the string-literal cutover."
-- The toolchain's text stays a list of bytes, `(List Int)`, and a function the checker reads
-  converts the literals it uses as bytes — `(utf8 "…")`, a definition in `kernel/util.shard`
-  that copies the list a `String` is represented by; 131 functions, eleven of them in K's
-  directory. Not a conversion at every literal: the other 4,300 stand in functions nothing
-  type-checks (`OPEN.md` §4), each use of a converted literal copies it, and a conversion
-  there would be checked by nothing. Not the toolchain's text made `String`: every function
-  over text would change.
+- The toolchain's text stays a list of bytes, `(List Int)`, and a literal used as bytes is
+  converted — `(utf8 "…")`, a definition in `kernel/util.shard` that copies the list a
+  `String` is represented by — at every such literal, 3,600 of them; not only in a function
+  the checker reads, as it was while the checker read 131: it now reads the types of five
+  functions in six, and "convert where checked" would follow each function's status as it
+  changes. The copies cost a fifth of the loader's emit on the bootstrap (Measured). Not the
+  toolchain's text made `String`: every function over text would change.
 - The table of Init's facts names the structure of every projection function it lists
   (`facts.shard`); not the projection's line alone — the Rust reader could not read
   `Array.toList` or `ByteArray.data` without the structure's line, the conversion's own body
@@ -258,20 +258,21 @@ entries are explained under "Measured" at the end.
 - The reader keeps no handle across a file's tactic steps: five links saved are ~6.5 ms of a
   1.7 s run, against a handle stale after every definition.
 
-- ★ `Symbol` is a type of its own, stored by the engines as an interned id; not `String` — a
-  `String` runs as the list of its bytes and a symbol as an id compared in one step, and one
-  type has one form at run time; not a `Name` literal in place of symbols — K's `Name` is
-  built of them. It has no type in the logic today. The direction for giving it one is an
-  ordinary declaration over its bytes that every engine stores as declared (`LAW.md` rule
-  26); not the interned id kept beside it as an engine's shortcut — rule 26 allows one, but
-  it saves nothing on a native load, 5% of the Init replay and 1 to 10% of a load on the
-  bootstrap (Measured), and it would need a test that the two forms agree. Assent: "Agreed
-  with removing the engine's form of a symbol." On a scratch loader that reads the ordinary
-  type, 6,682 of the toolchain's 9,570 functions are definitions with no source changed
-  (Measured). A symbol is then written as an ordinary call, `(sym "x")`; not `(quote x)` kept
-  as syntax — a form of the readers for one type is what rule 26 removes, and a call needs
-  nothing of them. Assent: "(sym "x") sounds reasonable". Neither is in the tree yet: the
-  sources write `(quote x)` at about 4,900 places.
+- ★ `Symbol` is an ordinary type, `(type Symbol (MkSym (List Int)))` in `kernel/sym.shard` —
+  the bytes of a text —, with ordinary operations (`sym`, `sym_eq`, `chars_of_sym`,
+  `sym_of_chars`), and no reader or engine knows it (`LAW.md` rule 26); not a built-in stored
+  as an interned id, which it was: it had no type in the logic, and nine tenths of the
+  toolchain's functions were out of the checker's reach for it. Not the interned id kept
+  beside the declaration as an engine's shortcut — rule 26 allows one, but it saved nothing on
+  a native load, 5% of the Init replay and 1 to 10% of a load on the bootstrap (Measured), and
+  it would need a test that the two forms agree. Assent: "Agreed with removing the engine's
+  form of a symbol." Not a `String` for its field — a `String` made from bytes needs a proof
+  that they are UTF-8; not a `Name` literal in place of symbols — K's `Name` is built of them.
+  A symbol is written as an ordinary call, `(sym "x")`; not `(quote x)` kept as syntax — a
+  form of the readers for one type is what rule 26 removes, and a call needs nothing of them.
+  Assent: "(sym "x") sounds reasonable". `(quote x)` and the mark `'x` are refused with the
+  spelling to write. The whole change, its four steps put together: "Good. Proceed with the
+  symbol change (full 1-4 scope)".
 - A function the checker cannot define is a program with its reason, and one whose types do
   not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
   checker cannot accept — a sketch would need its proofs before it ran; not a program for a
@@ -356,7 +357,7 @@ entries are explained under "Measured" at the end.
 - ★ The loader's binary emits every root but its own (`v3/build.sh --all`): the bootstrap
   builds the loader, the loader's binary the other 28; not the bootstrap for every emit — a
   rebuild after a toolchain edit waited on 29 interpreted emits, and on the dev box the
-  binary emits the loader's closure in 10 s where the bootstrap takes 108 (`LAW.md` ruling
+  binary emits the loader's closure in 10 s where the bootstrap takes 128 (`LAW.md` ruling
   14). Not the previous loader's binary as the seed of the next, which would make the loader's
   own rebuild 80 s for 177: a stale binary would be run on purpose, an edit of the compiler
   would need a second round, and a change of the language the toolchain is written in could
@@ -378,8 +379,9 @@ entries are explained under "Measured" at the end.
   41.6 minutes for the loader's closure alone (Measured). It was `parity_test.sh` on both
   engines; that test now compares the reading of programs alone, and so does every test
   that runs or dumps a toolchain root (`route2`, `lower`, `k_clients`, `state`, the native
-  tie's three). The two engines are compared on a part, the ten roots under 1,000
-  declarations (`LAW.md` rule 21, as for the replay). Step 1 of the `Symbol` change as put to
+  tie's three). The two engines are compared on a part, the eight roots under 400
+  declarations (`LAW.md` rule 21, as for the replay): two more, K's own tests of its checker,
+  are half a minute each on the binary and many times that on the bootstrap. Step 1 of the `Symbol` change as put to
   the owner, who answered the four steps together: "Good. Proceed with the symbol change
   (full 1-4 scope)".
 - The emit tie runs on every pipeline, in CI's `native` job; not a job started by hand, the
@@ -456,10 +458,11 @@ measurements; measure again before building on one.
   (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
-- Back end: the loader's own closure (9,182 declarations) loads, lowers and generates in
-  108 s on the bootstrap as a build reads it (144 s read checked), its C text compiles in 7 s
-  as 32 units side by side (the compile of the C text, below), binary 6.4 MB;
-  all 29 roots on the bootstrap 246 s at 24 jobs (the build's chain, below). It was 340 s
+- Back end: the loader's own closure (9,174 declarations) loads, lowers and generates in
+  128 s on the bootstrap as a build reads it, its C text compiles in 8 s
+  as 32 units side by side (the compile of the C text, below), binary 7.2 MB;
+  all 29 roots on the bootstrap were 246 s at 24 jobs before the literals were converted
+  (the build's chain, below; not measured since). It was 340 s
   and 460–550 s before resolution hashed a citation's bytes once (above), and
   34 s and 146–217 s while the toolchain stood on a prelude of its own: the loader checks
   some 290 of its own functions as definitions, and Init's fixed kit, on every load of a
@@ -573,6 +576,24 @@ measurements; measure again before building on one.
   jobs' logs): the build of the 29 binaries 428 s where it was 591 (#733) — the loader's emit
   383 s, its compile 40 s —, the `native` job 1,610 s for 1,766 and `replay` 1,737 s for
   1,781; the pipeline's longest job is `v3`, 1,864 s, which builds nothing of the inventory.
+- The ordinary `Symbol` as landed (2026-11-18, dev box). The loader's closure, 8,834
+  functions: the checker holds 2,438 as definitions where it held 320, reads the types of
+  4,963 more, and does not read 1,433. The first checked load of the rewritten sources
+  refused 24 functions at their own text and 854 as their callers: a `match`, a list
+  literal, a comparison or a negative numeral bound by a `let` that stated no type (17), a
+  constructor with its type's name in such a `let` (4), Expr's constructor `Sort` read as
+  the form, a helper of K's view used at another type, and one function with more
+  program-only callees than the loader read again for (the bound was 16; it is 1,024). The
+  checked load of that closure on the loader's binary: 63 s alone, 8 s before; 299 s while
+  K's 4,800 generated rows stood in an order where a row cited later ones. All 29 roots
+  loaded checked, 12 at a time, with the eight small ones on the bootstrap too
+  (`toolchain_check.sh`): 226 s, 73 s before. The loader's emit on the bootstrap 127 to
+  130 s for 107 to 110 — the 3,600 literal conversions —, `v3/build.sh --all` 238 s for 206.
+  The emit tie 184 s; the native tie 314 s for 216; the suite 255 s on the binaries for 230
+  and 982 s on the bootstrap for 905. The table of Init's facts the bootstrap reads the
+  toolchain by is 36 lines for 155: a quoted name was a symbol of the source and counted as
+  a citation of Init. The Init index built by the bootstrap from the rewritten driver is
+  byte for byte the one it replaced.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

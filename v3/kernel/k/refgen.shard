@@ -19,6 +19,7 @@
 (use kernel.intmap)
 (use kernel.level)
 (use kernel.name)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
@@ -36,10 +37,10 @@
 (fn wr ((s (List Int)) (w World)) World (write s w))
 (fn nat_s ((k Int)) (List Int) (show_nat k))
 
-;; a byte list as `(list b …)` or `Nil`
+;; a byte list as `(list b …)` or `nil`
 (fn ints_s ((bs (List Int))) (List Int)
   (match bs
-    (nil (utf8 "Nil"))
+    (nil (utf8 "nil"))
     (_ (append (utf8 "(list") (append (ints_go bs) (utf8 ")"))))))
 (fn ints_go ((bs (List Int))) (List Int)
   (measure (struct bs))
@@ -47,8 +48,8 @@
     (nil nil)
     ((cons b r) (append (utf8 " ") (append (nat_s b) (ints_go r))))))
 
-;; a symbol: `(sy "…")` when every byte is printable ASCII (`"` and `\` escaped),
-;; else `(sym_of_chars (list …))` — lexpr's symbols cannot spell every name
+;; a symbol: `(sym "…")` when every byte is printable ASCII (`"` and `\` escaped), else
+;; `(sym_of_chars (list …))` over its bytes
 (fn sym_plain ((bs (List Int))) Bool
   (measure (struct bs))
   (match bs
@@ -61,42 +62,42 @@
     ((cons b r) (if (bool_or (= b 34) (= b 92)) (cons 92 (cons b (esc r))) (cons b (esc r))))))
 (fn wr_sym ((s Symbol) (w World)) World
   (let ((bs (chars_of_sym s)))
-    (if (sym_plain bs) (wr (append "(sy \"" (append (esc bs) "\")")) w)
-    (wr (append "(sym_of_chars " (append (ints_s bs) ")")) w))))
+    (if (sym_plain bs) (wr (append (utf8 "(sym \"") (append (esc bs) (utf8 "\")"))) w)
+    (wr (append (utf8 "(sym_of_chars ") (append (ints_s bs) (utf8 ")"))) w))))
 
 ;; a name by reference: `(rn_H)` with H = hash_name; Anon literally
 (fn wr_nref ((n Name) (w World)) World
   (match n
-    (Anon (wr "Anon" w))
-    (_ (wr (append "(rn_" (append (nat_s (hash_name n)) ")")) w))))
+    (Anon (wr (utf8 "Anon") w))
+    (_ (wr (append (utf8 "(rn_") (append (nat_s (hash_name n)) (utf8 ")"))) w))))
 (fn wr_names ((ns (List Name)) (w World)) World
   (match ns
-    (nil (wr "Nil" w))
-    (_ (wr ")" (wr_names_go ns (wr "(list" w))))))
+    (nil (wr (utf8 "nil") w))
+    (_ (wr (utf8 ")") (wr_names_go ns (wr (utf8 "(list") w))))))
 (fn wr_names_go ((ns (List Name)) (w World)) World
   (measure (struct ns))
   (match ns
     (nil w)
-    ((cons n r) (wr_names_go r (wr_nref n (wr " " w))))))
+    ((cons n r) (wr_names_go r (wr_nref n (wr (utf8 " ") w))))))
 
 (fn wr_level ((l Level) (w World)) World
   (measure (struct l))
   (match l
-    (LZero (wr "LZero" w))
-    ((LSucc x) (wr ")" (wr_level x (wr "(LSucc " w))))
-    ((LMax a b) (wr ")" (wr_level b (wr " " (wr_level a (wr "(LMax " w))))))
-    ((LIMax a b) (wr ")" (wr_level b (wr " " (wr_level a (wr "(LIMax " w))))))
-    ((LParam n) (wr ")" (wr_nref n (wr "(LParam " w))))
-    ((LMVar i) (wr (append "(LMVar " (append (nat_s i) ")")) w))))
+    (LZero (wr (utf8 "LZero") w))
+    ((LSucc x) (wr (utf8 ")") (wr_level x (wr (utf8 "(LSucc ") w))))
+    ((LMax a b) (wr (utf8 ")") (wr_level b (wr (utf8 " ") (wr_level a (wr (utf8 "(LMax ") w))))))
+    ((LIMax a b) (wr (utf8 ")") (wr_level b (wr (utf8 " ") (wr_level a (wr (utf8 "(LIMax ") w))))))
+    ((LParam n) (wr (utf8 ")") (wr_nref n (wr (utf8 "(LParam ") w))))
+    ((LMVar i) (wr (append (utf8 "(LMVar ") (append (nat_s i) (utf8 ")"))) w))))
 (fn wr_levels ((ls (List Level)) (w World)) World
   (match ls
-    (nil (wr "Nil" w))
-    (_ (wr ")" (wr_levels_go ls (wr "(list" w))))))
+    (nil (wr (utf8 "nil") w))
+    (_ (wr (utf8 ")") (wr_levels_go ls (wr (utf8 "(list") w))))))
 (fn wr_levels_go ((ls (List Level)) (w World)) World
   (measure (struct ls))
   (match ls
     (nil w)
-    ((cons l r) (wr_levels_go r (wr_level l (wr " " w))))))
+    ((cons l r) (wr_levels_go r (wr_level l (wr (utf8 " ") w))))))
 
 (fn wr_bi ((b BinderInfo) (w World)) World
   (wr
@@ -144,34 +145,44 @@
 
 (fn wr_eref ((st RefSt) (e Expr) (w World)) World
   (match (ref_lookup st e)
-    ((some k) (wr (append "(re_" (append (nat_s k) ")")) w))
-    (none (write_line "REF-ERROR unnumbered node" w))))
+    ((some k) (wr (append (utf8 "(re_") (append (nat_s k) (utf8 ")"))) w))
+    (none (write_line (utf8 "REF-ERROR unnumbered node") w))))
 
 ;; one node with the anonymous constructor and its children by reference
 (fn wr_node ((st RefSt) (e Expr) (w World)) World
   (match e
-    ((BVar _ i) (wr (append "(mk_bvar " (append (nat_s i) ")")) w))
-    ((FVar _ i) (wr (append "(mk_fvar " (append (nat_s i) ")")) w))
-    ((Sort _ u) (wr ")" (wr_level u (wr "(mk_sort " w))))
-    ((Const _ n ls) (wr ")" (wr_levels ls (wr " " (wr_nref n (wr "(mk_const " w))))))
-    ((App _ f a) (wr ")" (wr_eref st a (wr " " (wr_eref st f (wr "(mk_app " w))))))
+    ((BVar _ i) (wr (append (utf8 "(mk_bvar ") (append (nat_s i) (utf8 ")"))) w))
+    ((FVar _ i) (wr (append (utf8 "(mk_fvar ") (append (nat_s i) (utf8 ")"))) w))
+    ((Sort _ u) (wr (utf8 ")") (wr_level u (wr (utf8 "(mk_sort ") w))))
+    ((Const _ n ls)
+     (wr (utf8 ")") (wr_levels ls (wr (utf8 " ") (wr_nref n (wr (utf8 "(mk_const ") w))))))
+    ((App _ f a)
+     (wr (utf8 ")") (wr_eref st a (wr (utf8 " ") (wr_eref st f (wr (utf8 "(mk_app ") w))))))
     ((Lam _ n bi d b)
-     (wr ")"
+     (wr (utf8 ")")
        (wr_eref st b
-         (wr " " (wr_eref st d (wr " " (wr_bi bi (wr " " (wr_nref n (wr "(mk_lam " w))))))))))
+         (wr (utf8 " ")
+           (wr_eref st d
+             (wr (utf8 " ") (wr_bi bi (wr (utf8 " ") (wr_nref n (wr (utf8 "(mk_lam ") w))))))))))
     ((Pi _ n bi d b)
-     (wr ")"
+     (wr (utf8 ")")
        (wr_eref st b
-         (wr " " (wr_eref st d (wr " " (wr_bi bi (wr " " (wr_nref n (wr "(mk_pi " w))))))))))
+         (wr (utf8 " ")
+           (wr_eref st d
+             (wr (utf8 " ") (wr_bi bi (wr (utf8 " ") (wr_nref n (wr (utf8 "(mk_pi ") w))))))))))
     ((Let _ n t v b)
-     (wr ")"
+     (wr (utf8 ")")
        (wr_eref st b
-         (wr " " (wr_eref st v (wr " " (wr_eref st t (wr " " (wr_nref n (wr "(mk_let " w))))))))))
-    ((Lit _ (LitNat k)) (wr (append "(mk_lit (LitNat " (append (nat_s k) "))")) w))
-    ((Lit _ (LitStr bs)) (wr (append "(mk_lit (LitStr " (append (ints_s bs) "))")) w))
-    ((MVar _ i) (wr (append "(mk_mvar " (append (nat_s i) ")")) w))
+         (wr (utf8 " ")
+           (wr_eref st v
+             (wr (utf8 " ") (wr_eref st t (wr (utf8 " ") (wr_nref n (wr (utf8 "(mk_let ") w))))))))))
+    ((Lit _ (LitNat k)) (wr (append (utf8 "(mk_lit (LitNat ") (append (nat_s k) (utf8 "))"))) w))
+    ((Lit _ (LitStr bs)) (wr (append (utf8 "(mk_lit (LitStr ") (append (ints_s bs) (utf8 "))"))) w))
+    ((MVar _ i) (wr (append (utf8 "(mk_mvar ") (append (nat_s i) (utf8 ")"))) w))
     ((Proj _ s i x)
-     (wr ")" (wr_eref st x (wr " " (wr (nat_s i) (wr " " (wr_nref s (wr "(mk_proj " w))))))))))
+     (wr (utf8 ")")
+       (wr_eref st x
+         (wr (utf8 " ") (wr (nat_s i) (wr (utf8 " ") (wr_nref s (wr (utf8 "(mk_proj ") w))))))))))
 
 ;; the node definitions of a term, children first, each distinct node once
 (fn wr_expr_defs ((e Expr) (st RefSt) (w World)) (Prod RefSt World)
@@ -184,8 +195,9 @@
          (match (ref_number st1 e)
            ((Prod.mk st2 k)
             (Prod.mk st2
-              (write_line ")"
-                (wr_node st2 e (wr (append "REF (fn re_" (append (nat_s k) " () Expr ")) w1)))))))))))
+              (write_line (utf8 ")")
+                (wr_node st2 e
+                  (wr (append (utf8 "REF (fn re_") (append (nat_s k) (utf8 " () Expr "))) w1)))))))))))
 (fn wr_expr_children ((e Expr) (st RefSt) (w World)) (Prod RefSt World)
   (measure (struct e))
   (match e
@@ -251,9 +263,11 @@
           ((Prod.mk s1 w1) (wr_rows_exprs env r s1 w1))))))))
 
 (fn wr_cval ((st RefSt) (cv ConstantVal) (w World)) World
-  (wr ")"
+  (wr (utf8 ")")
     (wr_eref st (cv_type cv)
-      (wr " " (wr_names (cv_lparams cv) (wr " " (wr_nref (cv_name cv) (wr "(ConstantVal " w))))))))
+      (wr (utf8 " ")
+        (wr_names (cv_lparams cv)
+          (wr (utf8 " ") (wr_nref (cv_name cv) (wr (utf8 "(ConstantVal ") w))))))))
 (fn wr_hints ((h ReducibilityHints) (w World)) World
   (match h
     (HOpaque (wr (utf8 "HOpaque") w))
@@ -263,8 +277,8 @@
 ;; the constructors of one inductive type, by name from the checked environment
 (fn wr_ctors ((env CheckedEnv) (st RefSt) (cs (List Name)) (w World)) World
   (match cs
-    (nil (wr "Nil" w))
-    (_ (wr ")" (wr_ctors_go env st cs (wr "(list" w))))))
+    (nil (wr (utf8 "nil") w))
+    (_ (wr (utf8 ")") (wr_ctors_go env st cs (wr (utf8 "(list") w))))))
 (fn wr_ctors_go ((env CheckedEnv) (st RefSt) (cs (List Name)) (w World)) World
   (measure (struct cs))
   (match cs
@@ -273,8 +287,9 @@
      (wr_ctors_go env st r
        (match (env_find env c)
          ((some info)
-          (wr ")" (wr_eref st (ci_type info) (wr " " (wr_nref c (wr " (Constructor " w))))))
-         (none (write_line "REF-ERROR constructor missing from the environment" w)))))))
+          (wr (utf8 ")")
+            (wr_eref st (ci_type info) (wr (utf8 " ") (wr_nref c (wr (utf8 " (Constructor ") w))))))
+         (none (write_line (utf8 "REF-ERROR constructor missing from the environment") w)))))))
 (fn wr_induct_types ((env CheckedEnv) (st RefSt) (all (List Name)) (w World)) World
   (measure (struct all))
   (match all
@@ -283,29 +298,38 @@
      (wr_induct_types env st r
        (match (env_find env t)
          ((some (InductInfo cv _ _ _ ctors _ _ _ _))
-          (wr ")"
+          (wr (utf8 ")")
             (wr_ctors env st ctors
-              (wr " " (wr_eref st (cv_type cv) (wr " " (wr_nref t (wr " (InductiveType " w))))))))
-         (_ (write_line "REF-ERROR inductive block member missing" w)))))))
+              (wr (utf8 " ")
+                (wr_eref st (cv_type cv)
+                  (wr (utf8 " ") (wr_nref t (wr (utf8 " (InductiveType ") w))))))))
+         (_ (write_line (utf8 "REF-ERROR inductive block member missing") w)))))))
 
 ;; one reference row: `(fn rd_H () Declaration …)`
 (fn wr_decl ((env CheckedEnv) (st RefSt) (c Name) (info ConstantInfo) (w World)) World
-  (let ((w1 (wr (append "REF (fn rd_" (append (nat_s (hash_name c)) " () Declaration ")) w)))
+  (let
+    ((w1
+       (wr (append (utf8 "REF (fn rd_") (append (nat_s (hash_name c)) (utf8 " () Declaration "))) w)))
     (match info
       ((DefnInfo cv v h _ all)
-       (write_line "))"
+       (write_line (utf8 "))")
          (wr_names all
-           (wr " Safe "
-             (wr_hints h (wr " " (wr_eref st v (wr " " (wr_cval st cv (wr "(DefnDecl " w1))))))))))
+           (wr (utf8 " Safe ")
+             (wr_hints h
+               (wr (utf8 " ")
+                 (wr_eref st v (wr (utf8 " ") (wr_cval st cv (wr (utf8 "(DefnDecl ") w1))))))))))
       ((OpaqueInfo cv v _ all)
-       (write_line "))"
-         (wr_names all (wr " False " (wr_eref st v (wr " " (wr_cval st cv (wr "(OpaqueDecl " w1))))))))
-      ((AxiomInfo cv _) (write_line " False))" (wr_cval st cv (wr "(AxiomDecl " w1))))
+       (write_line (utf8 "))")
+         (wr_names all
+           (wr (utf8 " false ")
+             (wr_eref st v (wr (utf8 " ") (wr_cval st cv (wr (utf8 "(OpaqueDecl ") w1))))))))
+      ((AxiomInfo cv _) (write_line (utf8 " false))") (wr_cval st cv (wr (utf8 "(AxiomDecl ") w1))))
       ((InductInfo cv np _ all _ _ _ _ _)
-       (write_line ") False))"
+       (write_line (utf8 ") false))")
          (wr_induct_types env st all
-           (wr " (list" (wr (nat_s np) (wr " " (wr_names (cv_lparams cv) (wr "(InductDecl " w1))))))))
-      (_ (write_line "REF-ERROR not a reference kind" w1)))))
+           (wr (utf8 " (list")
+             (wr (nat_s np) (wr (utf8 " ") (wr_names (cv_lparams cv) (wr (utf8 "(InductDecl ") w1))))))))
+      (_ (write_line (utf8 "REF-ERROR not a reference kind") w1)))))
 
 ;; ---- the names table ----------------------------------------------------------------
 ;; every name the rows cite, keyed by hash_name (a bucket of two = a collision,
@@ -398,32 +422,65 @@
   (match n
     (Anon w)
     ((Str p s)
-     (write_line "))"
+     (write_line (utf8 "))")
        (wr_sym s
-         (wr " "
-           (wr_nref p (wr (append "REF (fn rn_" (append (nat_s (hash_name n)) " () Name (Str ")) w))))))
+         (wr (utf8 " ")
+           (wr_nref p
+             (wr
+               (append (utf8 "REF (fn rn_") (append (nat_s (hash_name n)) (utf8 " () Name (Str ")))
+               w))))))
     ((Num p k)
-     (write_line "))"
+     (write_line (utf8 "))")
        (wr (nat_s k)
-         (wr " "
-           (wr_nref p (wr (append "REF (fn rn_" (append (nat_s (hash_name n)) " () Name (Num ")) w))))))))
-(fn wr_name_defs ((m (IntMap (List Name))) (w World)) World
+         (wr (utf8 " ")
+           (wr_nref p
+             (wr
+               (append (utf8 "REF (fn rn_") (append (nat_s (hash_name n)) (utf8 " () Name (Num ")))
+               w))))))))
+(fn name_depth ((n Name)) Int
+  (measure (struct n))
+  (match n
+    (Anon 0)
+    ((Str p _) (+ 1 (name_depth p)))
+    ((Num p _) (+ 1 (name_depth p)))))
+(fn bucket_depth ((b (List Name))) Int
+  (match b
+    ((cons n _) (name_depth n))
+    (nil 0)))
+(fn names_depth ((m (IntMap (List Name)))) Int
+  (measure (struct m))
+  (match m
+    (IMEmpty 0)
+    ((IMLeaf _ b) (bucket_depth b))
+    ((IMNode v c0 c1 c2 c3)
+     (max_int
+       (match v
+         ((some b) (bucket_depth b))
+         (none 0))
+       (max_int (max_int (names_depth c0) (names_depth c1))
+         (max_int (names_depth c2) (names_depth c3)))))))
+;; the names of d components and more, the shortest first: a name's row cites its prefix's,
+;; and no row of the table cites a later one
+(fn wr_name_defs ((m (IntMap (List Name))) (d Int) (top Int) (w World)) World
+  (measure (- top d))
+  (if (< top d) w (wr_name_defs m (+ d 1) top (wr_names_at m d w))))
+(fn wr_names_at ((m (IntMap (List Name))) (d Int) (w World)) World
   (measure (struct m))
   (match m
     (IMEmpty w)
-    ((IMLeaf _ b) (wr_name_bucket b w))
+    ((IMLeaf _ b) (wr_name_bucket b d w))
     ((IMNode v c0 c1 c2 c3)
-     (wr_name_defs c3
-       (wr_name_defs c2
-         (wr_name_defs c1
-           (wr_name_defs c0
+     (wr_names_at c3 d
+       (wr_names_at c2 d
+         (wr_names_at c1 d
+           (wr_names_at c0 d
              (match v
-               ((some b) (wr_name_bucket b w))
+               ((some b) (wr_name_bucket b d w))
                (none w)))))))))
-(fn wr_name_bucket ((b (List Name)) (w World)) World
+(fn wr_name_bucket ((b (List Name)) (d Int) (w World)) World
   (match b
-    ((cons n nil) (wr_name_def n w))
-    (_ (write_line "REF-ERROR name hash collision" w))))
+    ((cons n nil) (if (= (name_depth n) d) (wr_name_def n w) w))
+    (_ (if (= d 1) (write_line (utf8 "REF-ERROR name hash collision") w) w))))
 
 ;; ---- the closure in dependency order ------------------------------------------------
 ;; depth-first over `ref_edges`; `done` is the reverse post-order (a constant
@@ -485,18 +542,19 @@
 (fn close_parens ((k Int) (w World)) World
   (measure k)
   (if (< k 1) w (close_parens (- k 1) (wr (utf8 ")") w))))
-; the table, bucketed on the low four bits of hash_name: no generated `if`
+;; the table, bucketed on the low four bits of hash_name: no generated `if`
 ;; chain deeper than a bucket (the s-expression reader has a depth limit; a
-;; 206-row chain exceeds it), and a lookup costs a bucket, not the table
+;; 206-row chain exceeds it), and a lookup costs a bucket, not the table. The
+;; buckets stand before the function that reads them
 (fn wr_ref_table ((ns (List Name)) (w World)) World
-  (wr_ref_buckets ns 0
-    (write_line ""
-      (close_parens 18
-        (wr "REF   None"
-          (wr_ref_top 0
-            (write_line
-              "REF (fn accel_ref ((n Name)) (Option Declaration) (let ((b (band (hash_name n) 15)))"
-              w)))))))
+  (write_line (utf8 "")
+    (close_parens 18
+      (wr (utf8 "REF   none")
+        (wr_ref_top 0
+          (write_line
+            (utf8
+              "REF (fn accel_ref ((n Name)) (Option Declaration) (let ((b (band (hash_name n) 15)))")
+            (wr_ref_buckets ns 0 w)))))))
 (fn wr_ref_top ((k Int) (w World)) World
   (measure (- 16 k))
   (if (< 15 k) w
@@ -508,12 +566,13 @@
   (if (< 15 k) w
   (let ((b (bucket_of ns k)))
     (wr_ref_buckets ns (+ k 1)
-      (write_line ""
+      (write_line (utf8 "")
         (close_parens (+ (len b) 1)
-          (wr "REF   None"
+          (wr (utf8 "REF   none")
             (wr_ref_rows b
               (write_line
-                (append "REF (fn accel_ref_b" (append (nat_s k) " ((n Name)) (Option Declaration)"))
+                (append (utf8 "REF (fn accel_ref_b")
+                  (append (nat_s k) (utf8 " ((n Name)) (Option Declaration)")))
                 w)))))))))
 (fn bucket_of ((ns (List Name)) (k Int)) (List Name)
   (measure (struct ns))
@@ -527,12 +586,14 @@
     ((cons n r)
      (let ((h (nat_s (hash_name n))))
        (wr_ref_rows r
-         (write_line "))" (wr h (wr ")) (Some (rd_" (wr h (wr "REF   (if (name_eq n (rn_" w))))))))))
+         (write_line (utf8 "))")
+           (wr h (wr (utf8 ")) (some (rd_") (wr h (wr (utf8 "REF   (if (name_eq n (rn_") w))))))))))
 (fn wr_closure_table ((env CheckedEnv) (cs (List Name)) (w World)) World
-  (write_line ""
+  (write_line (utf8 "")
     (close_parens (+ (len cs) 1)
-      (wr "REF   Nil"
-        (wr_closure_rows env cs (write_line "REF (fn accel_ref_closure ((n Name)) (List Name)" w))))))
+      (wr (utf8 "REF   nil")
+        (wr_closure_rows env cs
+          (write_line (utf8 "REF (fn accel_ref_closure ((n Name)) (List Name)") w))))))
 (fn wr_closure_rows ((env CheckedEnv) (cs (List Name)) (w World)) World
   (measure (struct cs))
   (match cs
@@ -542,21 +603,27 @@
        (match (env_find env c)
          (none w)
          ((some _)
-          (write_line ""
+          (write_line (utf8 "")
             (wr_names (candidate_closure env c)
-              (wr (append "REF   (if (name_eq n (rn_" (append (nat_s (hash_name c)) ")) ")) w)))))))))
+              (wr
+                (append (utf8 "REF   (if (name_eq n (rn_")
+                  (append (nat_s (hash_name c)) (utf8 ")) ")))
+                w)))))))))
 
-;; the entry point: the generated section of accel_pins.shard
+;; the entry point: the generated section of accel_pins.shard. What a row cites stands above
+;; it: the names, then the term nodes, the reference rows, the table's buckets and the table,
+;; the candidates' closures
 (fn show_refs ((env CheckedEnv) (cands (List Name)) (w World)) World
   (let ((rows (ref_rows env (rev (candidates_closure env cands nil)))))
     (let ((names (seen_decls env IMEmpty rows)))
-      (wr_closure_table env (present env cands)
-        (wr_ref_table rows
-          (wr_name_defs names
-            (match
-              (wr_rows_exprs env rows (ref_st0)
-                (write_line (append "REF ;; " (append (nat_s (len rows)) " reference rows")) w))
-              ((Prod.mk st w1) (wr_rows env st rows w1)))))))))
+      (match
+        (wr_rows_exprs env rows (ref_st0)
+          (wr_name_defs names 1 (names_depth names)
+            (write_line
+              (append (utf8 "REF ;; ") (append (nat_s (len rows)) (utf8 " reference rows")))
+              w)))
+        ((Prod.mk st w1)
+         (wr_closure_table env (present env cands) (wr_ref_table rows (wr_rows env st rows w1))))))))
 (fn present ((env CheckedEnv) (ns (List Name))) (List Name)
   (measure (struct ns))
   (match ns

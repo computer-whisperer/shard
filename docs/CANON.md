@@ -27,7 +27,7 @@ its expected text `NAME.out` in `v3/tools/shardfmt/test/scenarios/`.
 | 9 | Closing parentheses pack onto the form's last line. A `)` has a line of its own only after a comment. | `inner` |
 | 10 | Blank lines: at most two between top-level forms and one inside a form; none first or last in a form, none right after a head line. | `blanks`, `inner` |
 | 11 | A comment keeps its bytes and is never rewrapped. On its own line it is indented like the items around it; after code it stays on that line, two spaces after the code. A form that holds a comment or a blank line breaks. | `comments`, `inner` |
-| 12 | Atoms and strings print with the bytes they were written with: escapes, numerals, `'x` and `(quote x)` stay as written. A universe list `NAME.{u v}` prints on one line. | `primes`, `sugar`, `levels` |
+| 12 | Atoms and strings print with the bytes they were written with: escapes and numerals stay as written. A universe list `NAME.{u v}` prints on one line. | `primes`, `strings`, `levels` |
 
 Rules 4 and 5 (`keep.out`): `fn` keeps its name, binders and result; `append_all` has no row and
 keeps three arguments; the fourth does not fit, so it and the fifth take a line each.
@@ -94,8 +94,8 @@ closing parentheses of enclosing forms, which pack after it; a comment; an atom,
 universe list too long by itself, which prints as it is. Non-ASCII text counts a column per byte.
 
 The formatter splits text as the loader's reader does. A token ends at whitespace, a parenthesis,
-`"`, `;` or a brace. `'` starts a quoted form only at the start of a token; elsewhere it is a name
-character (`f'`: `primes.out`). An atom ending in `.` and followed by `{` opens a universe list,
+`"`, `;` or a brace. `'` is a name character (`f'`: `primes.out`); at the start of a token the
+reader refuses it and the source gets no layout (`refuse_quote`, exit 2). An atom ending in `.` and followed by `{` opens a universe list,
 closed by `}`; a comment inside one leaves the source without a layout (§2, exit 2).
 
 ## 2. The formatter

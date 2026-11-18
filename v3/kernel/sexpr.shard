@@ -2,15 +2,18 @@
 ;;; Pure syntax: no name has a meaning here. One reader serves every
 ;;; file: a leading `-` makes a numeral, whose sign the L
 ;;; reader refuses in an L position (K's literals are naturals).
-;;; `'X` reads as `(quote X)`. A symbol ending in `.{` opens a level
+;;; A `'` at a token's start is refused (`no_quote`: there is no quote form;
+;;; a symbol is written `(sym "x")`). A symbol ending in `.{` opens a level
 ;;; list closed by `}` — `List.{0}`, `Prod.{u v}` — kept on the symbol as
 ;;; its universe arguments (SSymU); the level terms are ordinary tokens.
 ;;; Strings decode `\n \t \r \\ \" \xHH \u{HHHH}` to UTF-8 bytes. Errors
 ;;; carry a reason and the unconsumed input (its length is the offset).
 
 (import "util.shard")
+(import "sym.shard")
 (use Init.Bool false true)
 (use Init.List cons nil)
+(use kernel.sym)
 (use kernel.util)
 
 (type SExpr
@@ -31,7 +34,7 @@
 ;; a delimiter ends an atom: whitespace, parens, the string quote, the comment
 ;; mark, and both braces (`{` after `.` opens a level list, `}` closes one; a
 ;; brace anywhere else is an error). `'` is an identifier character inside an
-;; atom (`f'`, Lean's primes); the quote macro is `'` at a token's start only.
+;; atom (`f'`, Lean's primes); at a token's start it is refused.
 (fn is_delim ((c Int)) Bool
   (bool_or (is_ws c)
     (bool_or (= c 40)
@@ -88,34 +91,30 @@
 ;; one tree from the input (whitespace and comments skipped first)
 (fn read_expr ((cs0 (List Int)) (fuel Int)) SRes
   (measure fuel)
-  (if (< fuel 0) (SErr (quote reader_fuel) cs0)
+  (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
       (nil SEnd)
       ((cons c r)
        (if (= c 40) (read_list r nil (- fuel 1))
-       (if (= c 41) (SErr (quote unexpected_close) cs)
+       (if (= c 41) (SErr (sym "unexpected_close") cs)
        (if (= c 34) (read_string r nil cs)
-       (if (= c 39)
-         (match (read_expr r (- fuel 1))
-           ((SOk x rest) (SOk (SList (list (SSym (quote quote)) x)) rest))
-           (SEnd (SErr (quote quote_at_end) cs))
-           ((SErr e at) (SErr e at)))
-       (if (bool_or (= c 123) (= c 125)) (SErr (quote stray_brace) cs)
+       (if (= c 39) (SErr (sym "no_quote") cs)
+       (if (bool_or (= c 123) (= c 125)) (SErr (sym "stray_brace") cs)
        (read_atom cs (- fuel 1))))))))))))
 
 ;; after `(`: the items to the matching `)`
 (fn read_list ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) SRes
   (measure fuel)
-  (if (< fuel 0) (SErr (quote reader_fuel) cs0)
+  (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
-      (nil (SErr (quote unterminated_list) cs))
+      (nil (SErr (sym "unterminated_list") cs))
       ((cons c r)
        (if (= c 41) (SOk (SList (rev acc)) r)
        (match (read_expr cs (- fuel 1))
          ((SOk x rest) (read_list rest (cons x acc) (- fuel 1)))
-         (SEnd (SErr (quote unterminated_list) cs))
+         (SEnd (SErr (sym "unterminated_list") cs))
          ((SErr e at) (SErr e at)))))))))
 
 ;; a numeral or a symbol, with its universe list when the atom ends in `.` and `{` follows
@@ -123,10 +122,10 @@
   (match (take_atom cs nil)
     ((Prod.mk a rest)
      (match a
-       (nil (SErr (quote empty_atom) cs))
+       (nil (SErr (sym "empty_atom") cs))
        ((cons c0 _)
         (if (is_digit c0)
-          (if (all_digits a) (SOk (SNum (digits_val a 0)) rest) (SErr (quote bad_numeral) cs))
+          (if (all_digits a) (SOk (SNum (digits_val a 0)) rest) (SErr (sym "bad_numeral") cs))
         (if
           (bool_and (= c0 45)
             (match a
@@ -134,13 +133,13 @@
               (_ false)))
           ;; `-7`: a numeral (the L reader refuses the sign in an L position)
           (if (all_digits (drop_first a)) (SOk (SNum (- 0 (digits_val (drop_first a) 0))) rest)
-          (SErr (quote bad_numeral) cs))
+          (SErr (sym "bad_numeral") cs))
           (if (ends_with_dot a)
             (match rest
               ((cons 123 r2) (read_levels r2 nil (sym_of_chars (drop_last a)) fuel))
-              (_ (SErr (quote bad_universe_suffix) cs)))
+              (_ (SErr (sym "bad_universe_suffix") cs)))
             (match rest
-              ((cons 123 _) (SErr (quote bad_universe_suffix) cs))
+              ((cons 123 _) (SErr (sym "bad_universe_suffix") cs))
               (_ (SOk (SSym (sym_of_chars a)) rest)))))))))))
 (fn drop_first ((cs (List Int))) (List Int)
   (match cs
@@ -150,27 +149,27 @@
 ;; after `NAME.{`: the level terms to `}`
 (fn read_levels ((cs0 (List Int)) (acc (List SExpr)) (s Symbol) (fuel Int)) SRes
   (measure fuel)
-  (if (< fuel 0) (SErr (quote reader_fuel) cs0)
+  (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
-      (nil (SErr (quote unterminated_universe_list) cs))
+      (nil (SErr (sym "unterminated_universe_list") cs))
       ((cons c r)
        (if (= c 125) (SOk (SSymU s (rev acc)) r)
        (match (read_expr cs (- fuel 1))
          ((SOk x rest) (read_levels rest (cons x acc) s (- fuel 1)))
-         (SEnd (SErr (quote unterminated_universe_list) cs))
+         (SEnd (SErr (sym "unterminated_universe_list") cs))
          ((SErr e at) (SErr e at)))))))))
 
 ;; after the opening quote: the bytes to the closing quote, escapes decoded
 (fn read_string ((cs (List Int)) (acc (List Int)) (start (List Int))) SRes
   (measure (struct cs))
   (match cs
-    (nil (SErr (quote unterminated_string) start))
+    (nil (SErr (sym "unterminated_string") start))
     ((cons c r)
      (if (= c 34) (SOk (SStr (rev acc)) r)
      (if (= c 92)
        (match r
-         (nil (SErr (quote unterminated_string) start))
+         (nil (SErr (sym "unterminated_string") start))
          ((cons e r2)
           (if (= e 110) (read_string r2 (cons 10 acc) start)
           (if (= e 116) (read_string r2 (cons 9 acc) start)
@@ -182,8 +181,8 @@
               ((cons h1 (cons h2 r3))
                (if (bool_and (is_hex h1) (is_hex h2))
                  (read_string r3 (cons (+ (* 16 (hex_val h1)) (hex_val h2)) acc) start)
-                 (SErr (quote bad_escape) cs)))
-              (_ (SErr (quote bad_escape) cs)))
+                 (SErr (sym "bad_escape") cs)))
+              (_ (SErr (sym "bad_escape") cs)))
           (if (= e 117)
             (match r2
               ((cons 123 r3)
@@ -193,10 +192,10 @@
                     ((cons 125 r5)
                      (if (bool_and (< 0 k) (<= k 6))
                        (read_string r5 (rev_onto (utf8_of cp) acc) start)
-                       (SErr (quote bad_escape) cs)))
-                    (_ (SErr (quote bad_escape) cs))))))
-              (_ (SErr (quote bad_escape) cs)))
-            (SErr (quote bad_escape) cs))))))))))
+                       (SErr (sym "bad_escape") cs)))
+                    (_ (SErr (sym "bad_escape") cs))))))
+              (_ (SErr (sym "bad_escape") cs)))
+            (SErr (sym "bad_escape") cs))))))))))
        (read_string r (cons c acc) start))))))
 
 (fn is_hex ((c Int)) Bool
@@ -220,7 +219,7 @@
 (fn read_all ((src (List Int))) RAll (read_all_go src (len src) nil (read_budget)))
 (fn read_all_go ((cs (List Int)) (total Int) (acc (List SExpr)) (fuel Int)) RAll
   (measure fuel)
-  (if (< fuel 0) (RAErr (quote reader_fuel) (- total (len cs)))
+  (if (< fuel 0) (RAErr (sym "reader_fuel") (- total (len cs)))
   (match (read_expr cs fuel)
     (SEnd (RAOk (rev acc)))
     ((SOk x rest) (read_all_go rest total (cons x acc) (- fuel 1)))
@@ -232,9 +231,10 @@
   (match s
     ((SNum k) (show_int k))
     ((SSym x) (chars_of_sym x))
-    ((SSymU x ls) (append (chars_of_sym x) (append ".{" (append (show_sexprs ls) "}"))))
-    ((SStr bs) (append "\"" (append (escape_str bs) "\"")))
-    ((SList xs) (append "(" (append (show_sexprs xs) ")")))))
+    ((SSymU x ls)
+     (append (chars_of_sym x) (append (utf8 ".{") (append (show_sexprs ls) (utf8 "}")))))
+    ((SStr bs) (append (utf8 "\"") (append (escape_str bs) (utf8 "\""))))
+    ((SList xs) (append (utf8 "(") (append (show_sexprs xs) (utf8 ")"))))))
 (fn show_sexprs ((xs (List SExpr))) (List Int)
   (measure (struct xs))
   (match xs

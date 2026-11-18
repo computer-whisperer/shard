@@ -458,24 +458,6 @@ mod tests {
                 }
             }
         }
-        // The symbol bridge: names round-trip, and the out-of-domain byte
-        // lists (a non-byte, a bare continuation byte, an encoded surrogate,
-        // a truncated lead, a negative) stay stuck through the evaluator too.
-        let syms = ["x", "y", "wadd", "_fresh0", "λ→"];
-        for a in syms {
-            for b in syms {
-                fast_path_point(&m, "sym_eq", &[ast::Expr::SymLit(a.into()), ast::Expr::SymLit(b.into())]);
-            }
-            fast_path_point(&m, "chars_of_sym", &[ast::Expr::SymLit(a.into())]);
-            let bs: Vec<ast::Expr> = a.bytes().map(|b| ast::Expr::IntLit(b.into())).collect();
-            fast_path_point(&m, "sym_of_chars", &[expr_spine(bs)]);
-        }
-        fast_path_point(&m, "sym_of_chars", &[expr_spine(vec![])]);
-        for bad in [vec![955], vec![0xFF], vec![0xED, 0xA0, 0x80], vec![0xC2], vec![-1]] {
-            let es: Vec<ast::Expr> =
-                bad.into_iter().map(|b: i64| ast::Expr::IntLit(b.into())).collect();
-            fast_path_point(&m, "sym_of_chars", &[expr_spine(es)]);
-        }
     }
 
     // ------------------------------------------------------------------
@@ -542,7 +524,7 @@ mod tests {
     }
 
     /// Init's `Bool`, `List`, `Option` and `Prod` are the runtime's cells, by identity:
-    /// a comparison's result is a `Bool`, a symbol's bytes a `List`, read by the tree's own
+    /// a comparison's result is a `Bool`, a literal's bytes a `List`, read by the tree's own
     /// table of Init's facts.
     #[test]
     fn cells_are_inits_constructors() {
@@ -558,7 +540,7 @@ mod tests {
 (fn go () Int
   (+ (* 10 (pick (less 1 2)))
     (+ (pick (less 2 1))
-      (+ (* 100 (count (chars_of_sym 'abc))) (* 1000 (+ (first (Prod.mk 4 5)) (get (some 3))))))))
+      (+ (* 100 (count (list 97 98 99))) (* 1000 (+ (first (Prod.mk 4 5)) (get (some 3))))))))
 "#;
         let (root, l) = closure(&[("kernel/main.shard", src)], FACTS);
         let _ = std::fs::remove_dir_all(root);

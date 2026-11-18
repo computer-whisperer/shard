@@ -40,8 +40,8 @@
 # THE EMIT'S ENGINE. An emit is a run of the loader, and the loader runs on the bootstrap
 # (`eval direct v3/kernel/load.shard …`) or as its own binary (`v3/bin/load …`). `--all` builds
 # the loader's binary on the bootstrap and every other root by that binary: on the dev box 29
-# binaries in 206 s, at 8 roots at a time as at 24 — the loader's emit 107 s and its compile
-# 7 s, then the other 28, whose compiles fill the machine. One root is emitted on the
+# binaries in 238 s, at 8 roots at a time as at 24 — the loader's emit 128 s and its compile
+# 8 s, then the other 28, whose compiles fill the machine. One root is emitted on the
 # bootstrap unless --native names the binary. The binary must then be current: a missing or
 # stale v3/bin/load fails the build, and nothing falls back to the bootstrap. The loader's own
 # root is built on the bootstrap alone, so the chain has one link and no binary builds its

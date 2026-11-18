@@ -27,6 +27,7 @@
 (use kernel.scope)
 (use kernel.sexpr)
 (use kernel.spelling)
+(use kernel.sym)
 (use kernel.tactic)
 (use kernel.unify)
 (use kernel.util)
@@ -66,18 +67,19 @@
   (match ss
     (nil (HintsOk h))
     ((cons (SList (cons (SSym k) args)) r)
-     (if (sym_eq k (quote induct))
+     (if (sym_eq k (sym "induct"))
        (match args
          ((cons x nil) (read_hints r (Hints (some x) (hints_lemmas h) (hints_budget h))))
-         (_ (HintsErr "(induct X)")))
-     (if (sym_eq k (quote lemmas))
+         (_ (HintsErr (utf8 "(induct X)"))))
+     (if (sym_eq k (sym "lemmas"))
        (read_hints r (Hints (hints_induct h) (append (hints_lemmas h) args) (hints_budget h)))
-     (if (sym_eq k (quote budget))
+     (if (sym_eq k (sym "budget"))
        (match args
          ((cons (SNum n) nil) (read_hints r (Hints (hints_induct h) (hints_lemmas h) n)))
-         (_ (HintsErr "(budget N)")))
-       (HintsErr (append (chars_of_sym k) ": a hint is (induct X), (lemmas NAME…) or (budget N)"))))))
-    ((cons _ _) (HintsErr "a hint is (induct X), (lemmas NAME…) or (budget N)"))))
+         (_ (HintsErr (utf8 "(budget N)"))))
+       (HintsErr
+         (append (chars_of_sym k) (utf8 ": a hint is (induct X), (lemmas NAME…) or (budget N)")))))))
+    ((cons _ _) (HintsErr (utf8 "a hint is (induct X), (lemmas NAME…) or (budget N)")))))
 
 ;; ---- the result --------------------------------------------------------------------------------
 ;; solved: the state and the block; or not, with the budget left and the last goal tried
@@ -90,18 +92,19 @@
   (match (read_hints hints (Hints none nil (default_budget)))
     ((HintsErr m) (NotProduced m))
     ((HintsOk h)
-     (match (el_fresh e (n1 (quote goal)) stmt (quote goal))
+     (match (el_fresh e (n1 (sym "goal")) stmt (sym "goal"))
        ((Prod.mk e1 (MVar _ i))
         (match (eng_solve e1 (Goal i stmt nctx) h (hints_budget h) 3)
           ((EngOk _ nodes _) (Produced nodes))
           ((EngNo _ m) (NotProduced m))))
-       ((Prod.mk _ _) (NotProduced "no metavariable"))))))
+       ((Prod.mk _ _) (NotProduced (utf8 "no metavariable")))))))
 
 ;; ---- the ladder ------------------------------------------------------------------------------
 (fn eng_solve ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
   (measure depth)
-  (if (< depth 1) (EngNo budget (append "the search is deeper than its limit at " (goal_of g)))
-  (if (< budget 1) (EngNo budget (append "the budget is spent at " (goal_of g)))
+  (if (< depth 1)
+    (EngNo budget (append (utf8 "the search is deeper than its limit at ") (goal_of g)))
+  (if (< budget 1) (EngNo budget (append (utf8 "the budget is spent at ") (goal_of g)))
   (match (eng_intro e g)
     ((some (Prod.mk (Prod.mk e1 g1) nd))
      (match (eng_solve e1 g1 h (- budget 1) depth)
@@ -135,8 +138,8 @@
 (fn binder_name ((n Name) (k Int)) Name
   (match n
     ((Str Anon s)
-     (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append "h" (show_nat (+ k 1))))) n))
-    (_ (n1 (sym_of_chars (append "h" (show_nat (+ k 1))))))))
+     (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append (utf8 "h") (show_nat (+ k 1))))) n))
+    (_ (n1 (sym_of_chars (append (utf8 "h") (show_nat (+ k 1))))))))
 
 ;; the closing steps, cheapest first: rfl; (reduce) rfl; decide; arith only over the context's
 ;; comparisons and the lemmas
@@ -144,7 +147,7 @@
   (match (eng_try_close e g (NRfl) budget)
     ((EngOk e1 ns b) (EngOk e1 ns b))
     ((EngNo b1 _)
-     (match (eng_try_then e g (NReduce (quote both) nil) (NRfl) b1)
+     (match (eng_try_then e g (NReduce (sym "both") nil) (NRfl) b1)
        ((EngOk e1 ns b) (EngOk e1 ns b))
        ((EngNo b2 _)
         (match (eng_try_close e g (NDecide) b2)
@@ -152,36 +155,36 @@
           ((EngNo b3 _) (eng_arith e g h b3))))))))
 ;; one closing node tried
 (fn eng_try_close ((e El) (g Goal) (nd Node) (budget Int)) EngRes
-  (if (< budget 1) (EngNo budget "budget")
+  (if (< budget 1) (EngNo budget (utf8 "budget"))
   (match (tac_step e g nd)
     ((StepOk e1 filling nil nil none)
      (EngOk (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) (list nd) (- budget 1)))
-    ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+    ((StepOk _ _ _ _ _) (EngNo (- budget 1) (utf8 "the step left goals")))
     ((StepErr _ m) (EngNo (- budget 1) m)))))
 ;; a sequential node, then a closing one on its continuation
 (fn eng_try_then ((e El) (g Goal) (nd Node) (closer Node) (budget Int)) EngRes
-  (if (< budget 1) (EngNo budget "budget")
+  (if (< budget 1) (EngNo budget (utf8 "budget"))
   (match (tac_step e g nd)
     ((StepOk e1 filling nil nil (some g1))
      (match
        (eng_try_close (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) g1 closer (- budget 1))
        ((EngOk e2 ns b) (EngOk e2 (cons nd ns) b))
        ((EngNo b m) (EngNo b m))))
-    ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+    ((StepOk _ _ _ _ _) (EngNo (- budget 1) (utf8 "the step left goals")))
     ((StepErr _ m) (EngNo (- budget 1) m)))))
 
 ;; arith only: the facts are the context's comparisons by name and the lemmas; the certificate
 ;; `arith` finds is written into the node, and the node is confirmed by the step
 (fn eng_arith ((e El) (g Goal) (h Hints) (budget Int)) EngRes
-  (if (< budget 1) (EngNo budget "budget")
+  (if (< budget 1) (EngNo budget (utf8 "budget"))
   (match (tac_open e g)
     ((Opened e1 ctx target)
      (if
        (match (ar_rel (sp_canon (el_zonk e1 target)))
          ((ARNone) true)
          (_ false))
-       (EngNo budget "not a comparison")
-       (let ((facts (append (ctx_facts e1 ctx (quote cmp) nil) (hints_lemmas h))))
+       (EngNo budget (utf8 "not a comparison"))
+       (let ((facts (append (ctx_facts e1 ctx (sym "cmp") nil) (hints_lemmas h))))
          (match (arith_facts e1 facts nil)
            ((FactsErr _ m) (EngNo (- budget 1) m))
            ((FactsOk e2 fs)
@@ -190,11 +193,11 @@
               ((AROk _ _ certs) (eng_try_close e g (NArith true facts certs) (- budget 1))))))))))))
 ;; a local's type under a test: a comparison, an equation, an inductive type
 (fn ctx_test ((e El) (kind Symbol) (ty Expr)) Bool
-  (if (sym_eq kind (quote cmp))
+  (if (sym_eq kind (sym "cmp"))
     (match (ar_rel (sp_canon ty))
       ((ARNone) false)
       (_ true))
-  (if (sym_eq kind (quote eq))
+  (if (sym_eq kind (sym "eq"))
     (match (eq_sides (pi_result ty))
       ((some _) true)
       (none false))  ; a quantified equation (an induction hypothesis over a generalized binder) is a rule too
@@ -218,15 +221,15 @@
 ;; simp_only over the equations of the functions in the target, the context's equations and
 ;; the lemmas, then rfl or arith on what is left; nothing to rewrite with is nothing tried
 (fn eng_simp_close ((e El) (g Goal) (h Hints) (budget Int)) EngRes
-  (if (< budget 1) (EngNo budget "budget")
+  (if (< budget 1) (EngNo budget (utf8 "budget"))
   (match (tac_open e g)
     ((Opened e1 ctx target)
      (let
        ((rules
           (append (fn_equations e1 (names_dedup (expr_consts (el_zonk e1 target)) nil) nil)
-            (append (ctx_facts e1 ctx (quote eq) nil) (hints_lemmas h)))))
+            (append (ctx_facts e1 ctx (sym "eq") nil) (hints_lemmas h)))))
        (match rules
-         (nil (EngNo budget "no rule"))
+         (nil (EngNo budget (utf8 "no rule")))
          (_
            (let ((nd (NSimp (as_rules rules nil))))
              (match (tac_step e g nd)
@@ -238,7 +241,7 @@
                      (match (eng_arith e3 g1 h b1)
                        ((EngOk e4 ns b) (EngOk e4 (cons nd ns) b))
                        ((EngNo b2 m) (EngNo b2 m)))))))
-               ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the step left goals"))
+               ((StepOk _ _ _ _ _) (EngNo (- budget 1) (utf8 "the step left goals")))
                ((StepErr _ m) (EngNo (- budget 1) m)))))))))))
 (fn as_rules ((ss (List SExpr)) (acc (List (Prod Bool SExpr)))) (List (Prod Bool SExpr))
   (measure (struct ss))
@@ -289,7 +292,7 @@
     ((cons n r) (cite_all e r (cons (SSym (sym_of_chars (cite e n))) acc)))))
 ;; a constant's citation: its name without the module's prefix where the module's is one
 (fn cite ((e El) (n Name)) (List Int)
-  (let ((full (show_name n)) (pre (append (show_name (sc_module (cx_scope (el_cx e)))) ".")))
+  (let ((full (show_name n)) (pre (append (show_name (sc_module (cx_scope (el_cx e)))) (utf8 "."))))
     (if (bool_and (< (len pre) (+ (len full) 1)) (int_list_eq (take (len pre) full) pre))
       (drop (len pre) full)
       full)))
@@ -298,7 +301,7 @@
 ;; order; the arms named after the constructors' fields with `ih_FIELD` for a recursive one,
 ;; each arm's goal by the ladder one level down
 (fn eng_induct ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
-  (if (< budget 1) (EngNo budget "budget")
+  (if (< budget 1) (EngNo budget (utf8 "budget"))
   (match (tac_open e g)
     ((Opened e1 ctx target)
      (let
@@ -308,7 +311,7 @@
               ((some x) (list x))
               (none nil))
             (ctx_facts e1 (in_target e1 ctx (expr_fvars (el_zonk e1 target) nil) nil)
-              (quote inductive)
+              (sym "inductive")
               nil))))
        (eng_induct_each e g h budget depth cands))))))
 ;; the locals the target mentions: an induction on another changes nothing
@@ -321,7 +324,7 @@
 (fn eng_induct_each ((e El) (g Goal) (h Hints) (budget Int) (depth Int) (cands (List SExpr))) EngRes
   (measure (struct cands))
   (match cands
-    (nil (EngNo budget (append "nothing closes " (goal_of g))))
+    (nil (EngNo budget (append (utf8 "nothing closes ") (goal_of g))))
     ((cons x r)
      (match (eng_induct_on e g h budget depth x)
        ((EngOk e1 ns b) (EngOk e1 ns b))
@@ -348,8 +351,9 @@
                    (EngOk e5 (list (NInduction x none (arms_with arms blocks nil))) b))
                   ((Prod.mk none b)
                    (EngNo b
-                     (append "an arm of the induction on " (append (show_sexpr x) " does not close"))))))
-               ((StepOk _ _ _ _ _) (EngNo (- budget 1) "the induction left a continuation")))))))))))
+                     (append (utf8 "an arm of the induction on ")
+                       (append (show_sexpr x) (utf8 " does not close")))))))
+               ((StepOk _ _ _ _ _) (EngNo (- budget 1) (utf8 "the induction left a continuation"))))))))))))
 ;; the arms with empty blocks: the names a constructor's minor premise binds
 (fn arm_shells ((e El) (iname Name) (nparams Int) (ctors (List Name)) (acc (List Node))) (List Node)
   (measure (struct ctors))
@@ -379,7 +383,7 @@
      (let ((fname (field_name n (len fields))))
        (minor_names body iname (cons fname fields)
          (if (is_const_named (get_app_fn (pi_result dom)) iname)
-           (cons (n1 (sym_of_chars (append "ih_" (show_name fname)))) ihs)
+           (cons (n1 (sym_of_chars (append (utf8 "ih_") (show_name fname)))) ihs)
            ihs))))
     (_ (append (rev fields) (rev ihs)))))
 (fn pi_result ((t Expr)) Expr
@@ -390,8 +394,8 @@
 (fn field_name ((n Name) (k Int)) Name
   (match n
     ((Str Anon s)
-     (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append "f" (show_nat (+ k 1))))) n))
-    (_ (n1 (sym_of_chars (append "f" (show_nat (+ k 1))))))))
+     (if (all_digits (chars_of_sym s)) (n1 (sym_of_chars (append (utf8 "f") (show_nat (+ k 1))))) n))
+    (_ (n1 (sym_of_chars (append (utf8 "f") (show_nat (+ k 1))))))))
 ;; the children solved in order; the blocks, or none
 (fn eng_children
   ((e El) (gs (List Goal)) (h Hints) (budget Int) (depth Int) (acc (List (List Node))))
@@ -422,50 +426,50 @@
 (fn node_sx ((n Node)) SExpr
   (measure (struct n))
   (match n
-    ((NIntro ns) (SList (cons (SSym (quote intro)) (names_sx ns))))
-    ((NExact t) (SList (list (SSym (quote exact)) t)))
-    ((NRfl) (SSym (quote rfl)))
-    ((NHave nm p b) (SList (cons (SSym (quote have)) (cons (name_sx nm) (cons p (nodes_sx b))))))
-    ((NShow p) (SList (list (SSym (quote show)) p)))
-    ((NApply t bs) (SList (cons (SSym (quote apply)) (cons t (nodes_sx bs)))))
+    ((NIntro ns) (SList (cons (SSym (sym "intro")) (names_sx ns))))
+    ((NExact t) (SList (list (SSym (sym "exact")) t)))
+    ((NRfl) (SSym (sym "rfl")))
+    ((NHave nm p b) (SList (cons (SSym (sym "have")) (cons (name_sx nm) (cons p (nodes_sx b))))))
+    ((NShow p) (SList (list (SSym (sym "show")) p)))
+    ((NApply t bs) (SList (cons (SSym (sym "apply")) (cons t (nodes_sx bs)))))
     ((NCases t hn arms)
      (SList
-       (cons (SSym (quote cases)) (cons t (append (opt_name_sx hn) (list (SList (nodes_sx arms))))))))
+       (cons (SSym (sym "cases")) (cons t (append (opt_name_sx hn) (list (SList (nodes_sx arms))))))))
     ((NInduction t hn arms)
      (SList
-       (cons (SSym (quote induction))
+       (cons (SSym (sym "induction"))
          (cons t (append (opt_name_sx hn) (list (SList (nodes_sx arms))))))))
     ((NWf x m ih b)
-     (SList (cons (SSym (quote wf)) (cons x (cons m (cons (name_sx ih) (nodes_sx b)))))))
-    ((NDecide) (SSym (quote decide)))
-    ((NUnfold ns) (SList (cons (SSym (quote unfold)) (names_sx ns))))
+     (SList (cons (SSym (sym "wf")) (cons x (cons m (cons (name_sx ih) (nodes_sx b)))))))
+    ((NDecide) (SSym (sym "decide")))
+    ((NUnfold ns) (SList (cons (SSym (sym "unfold")) (names_sx ns))))
     ((NReduce side rules)
      (SList
-       (cons (SSym (quote reduce))
-         (append (if (sym_eq side (quote both)) nil (list (SSym side)))
+       (cons (SSym (sym "reduce"))
+         (append (if (sym_eq side (sym "both")) nil (list (SSym side)))
            (match rules
              (nil nil)
-             (_ (list (SList (cons (SSym (quote using)) (rules_sx rules))))))))))
+             (_ (list (SList (cons (SSym (sym "using")) (rules_sx rules))))))))))
     ((NRw rv t k ex bs)
      (SList
-       (cons (SSym (quote rw))
-         (cons (if rv (SList (list (SSym (quote <-)) t)) t)
+       (cons (SSym (sym "rw"))
+         (cons (if rv (SList (list (SSym (sym "<-")) t)) t)
            (append
              (if (= k 0) nil
              (list
                (SList
-                 (cons (SSym (quote occ))
+                 (cons (SSym (sym "occ"))
                    (cons (SNum k)
                      (match ex
                        ((some s) (list s))
                        (none nil)))))))
              (nodes_sx bs))))))
-    ((NSorry) (SSym (quote sorry)))
+    ((NSorry) (SSym (sym "sorry")))
     ((NArith only facts certs)
      (SList
-       (cons (SSym (quote arith))
-         (append (if only (list (SSym (quote only))) nil) (append facts (certs_sx certs))))))
-    ((NSimp rules) (SList (cons (SSym (quote simp_only)) (rules_sx rules))))
+       (cons (SSym (sym "arith"))
+         (append (if only (list (SSym (sym "only"))) nil) (append facts (certs_sx certs))))))
+    ((NSimp rules) (SList (cons (SSym (sym "simp_only")) (rules_sx rules))))
     ((NBlock b) (SList (nodes_sx b)))
     ((NArm c ns b) (SList (cons (name_sx c) (cons (SList (names_sx ns)) (nodes_sx b)))))))
 (fn names_sx ((ns (List Name))) (List SExpr)
@@ -482,7 +486,7 @@
   (measure (struct cs))
   (match cs
     (nil nil)
-    ((cons ks r) (cons (SList (cons (SSym (quote farkas)) (ints_sx ks))) (certs_sx r)))))
+    ((cons ks r) (cons (SList (cons (SSym (sym "farkas")) (ints_sx ks))) (certs_sx r)))))
 (fn ints_sx ((ks (List Int))) (List SExpr)
   (measure (struct ks))
   (match ks
@@ -492,4 +496,4 @@
   (measure (struct rs))
   (match rs
     (nil nil)
-    ((cons (Prod.mk rv s) r) (cons (if rv (SList (list (SSym (quote <-)) s)) s) (rules_sx r)))))
+    ((cons (Prod.mk rv s) r) (cons (if rv (SList (list (SSym (sym "<-")) s)) s) (rules_sx r)))))

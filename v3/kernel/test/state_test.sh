@@ -11,7 +11,8 @@
 #     k/import.shard) exactly check_into's three and process_record's one; the sources (a
 #     state answered where none was taken) are called by `empty_run` and `run_on`, once
 #     each, and by no one else. A new primitive, resumption or source is an edit of this file.
-# (2) The controls, v3/pins/state/main.shard: each spelling that uses a version twice is
+# (2) The controls, v3/pins/state/main.shard, loaded --unchecked as K is (one of them states a
+#     type its body does not have, and the walk is over programs): each spelling that uses a version twice is
 #     `reused`, each linear spelling beside it `ok`; what the walk cannot follow is
 #     `unsupported`; a source is counted; and every one of them is judged. One limit is
 #     pinned as it stands (`lim_lie_out`): a declared type is believed.
@@ -52,7 +53,7 @@ checks=$((checks+1)); [ "$got_src" = "$want_src" ] || { bad "a state is made fro
 echo "state_test: K — $n functions judged: $nok ok, $nprim primitive, $((n-nok-nprim)) other"
 
 # ---- (2) the controls
-"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --state v3/pins/state/main.shard > "$OUT/c.txt" 2>&1; rc=$?
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT --unchecked --state v3/pins/state/main.shard > "$OUT/c.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the controls' load failed (exit $rc)"; grep -E '^(READ-ERROR|LOAD-ERROR|REFUSE|LOAD:)' "$OUT/c.txt" | head -5 | cut -c1-300; }
 sed -n 's/^STATE pins\.state\.main\.//p' "$OUT/c.txt" > "$OUT/c.state"
 for f in box_st box_set_st box_app ok_chain ok_drop ok_record ok_beside ok_beside_out ok_join; do

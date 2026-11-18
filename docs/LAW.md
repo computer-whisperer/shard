@@ -115,9 +115,9 @@ The detail, file by file, is in `KERNEL.md`.
 - K (`v3/kernel/k/`, about 5,800 lines, and the data types it is written over). It is reviewed
   source, not proven. The evidence is the replay of all of `Init` against Lean's own verdicts and a
   battery of hostile declarations that must be refused.
-- The engine that runs K: the Rust bootstrap (about 5,400 lines and the Rust compiler; 3,600
+- The engine that runs K: the Rust bootstrap (about 5,200 lines and the Rust compiler; 3,600
   of them are the reader, which reads K's sources as it reads any program's), and the table of
-  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 155 lines, printed by
+  facts about Init's constants it reads them by (`v3/kernel/init.facts`, 36 lines, printed by
   the loader from K and compared with K's by a test). When K runs
   as a native binary, also the unproven compiler, its runtime and the C compiler; the binaries are
   compared with the bootstrap, not proven equal to it.
@@ -201,7 +201,8 @@ admitted that the logic does not derive.
 12. *No type special by its name.* "I want to avoid types that gain special treatment in the
     language overall by their name" … "The kernel's builtin evaluator taking an optimization
     shortcut on Symbol that preserves all behavior an unprivileged version would seems fair to
-    me." (Rule 26. `Symbol` does not meet it yet: `OPEN.md` §2.)
+    me." (Rule 26. `Symbol` is an ordinary declaration, `v3/kernel/sym.shard`, and no engine
+    stores it in a form of its own: `DECISIONS.md`.)
 13. *A program before its proofs.* "I lean towards keeping an unaccepted function as a program
     with a reason. I am thinking of what prototyping or rough sketch workflows may want here --
     where we may want to run or test shard programs before the full due diligence for proof

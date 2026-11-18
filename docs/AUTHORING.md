@@ -4,8 +4,8 @@ An ordinary program is a `.shard` file under a package root (`v3` here), written
 Init — Lean's base library, read from a pinned export, which every file sees. Its functions run, and
 most of them are also definitions in the logic, so theorems can be stated about them. The forms
 below are copied from files of the tree; where a table names no file, the form was run as written.
-The system's own code under `v3/kernel` is written the same way, but nearly all of it has no
-meaning in the logic: its data is built on `Symbol`. Section 8 shows how to call it.
+The system's own code under `v3/kernel` is written the same way; about a quarter of its
+functions are definitions in the logic. Section 8 shows how to call it.
 
 ## 1. A file
 

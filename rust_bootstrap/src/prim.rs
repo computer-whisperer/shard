@@ -3,10 +3,9 @@
 //! `apply_other`: its fast arms first, then this table. A name or an
 //! argument shape the table does not cover leaves the call stuck.
 //!
-//! The comparisons (`=`, `sym_eq`, `<`, `<=`) return the cells `True` /
-//! `False`, and the symbol bridge speaks `Cons` / `Nil` cells — the names
-//! the runtime gives its cells, under which the reader hands the evaluator
-//! the constructors of Init's `Bool` and `List` (`plain/out.rs`).
+//! The comparisons (`=`, `<`, `<=`) return the cells `True` / `False` — the
+//! names the runtime gives its cells, under which the reader hands the
+//! evaluator the constructors of Init's `Bool` (`plain/out.rs`).
 
 use num_traits::{Signed, ToPrimitive, Zero};
 
@@ -21,7 +20,7 @@ use crate::ast::{Expr, IntLit as Int};
 /// sweeps this table against the evaluator's fast arms over a value matrix —
 /// when adding or removing a name here, update its SHARED_INT2.
 pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
-    use Expr::{IntLit, SymLit};
+    use Expr::IntLit;
 
     match (name, args) {
         // Integer arithmetic, arbitrary precision. `/` truncates toward
@@ -52,7 +51,6 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
 
         // Equality and comparison: `True` / `False` (the module header).
         ("=", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
-        ("sym_eq", [SymLit(a), SymLit(b)]) => Some(bool_ctor(a == b)),
         ("<",   [IntLit(a), IntLit(b)]) => Some(bool_ctor(a < b)),
         ("<=",  [IntLit(a), IntLit(b)]) => Some(bool_ctor(a <= b)),
 
@@ -70,16 +68,6 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         // call stuck), total where Lean's are, and stuck where K's resource limits stop the
         // work — a result past 2^27 bytes, a count past 32 bits.
         (n, [IntLit(a), IntLit(b)]) if n.starts_with("Nat.") && !a.is_negative() && !b.is_negative() => nat_prim(n, a, b),
-
-        // Symbol ↔ bytes, the bridge the V3 reader is written on: a
-        // `Symbol` is otherwise opaque (`quote` literals and `sym_eq` only).
-        // The list is the name's UTF-8 BYTES — the representation of a
-        // string literal, of the host calls and of the compiled bridge in
-        // v3/kernel/rt.h.
-        //   sym_of_chars : (List Int) -> Symbol     stuck unless the list is valid UTF-8
-        //   chars_of_sym : Symbol     -> (List Int) its inverse
-        ("sym_of_chars", [list])     => decode_char_list(list).map(SymLit),
-        ("chars_of_sym", [SymLit(s)]) => Some(encode_char_list(s)),
 
         _ => None,
     }
@@ -165,40 +153,6 @@ pub(crate) fn rem_euclid(a: &Int, b: &Int) -> Int {
 /// None outside that range (the call stays stuck).
 fn shift_amount(b: &Int) -> Option<u64> {
     b.to_u64().filter(|k| *k < 64)
-}
-
-/// Decode a `(List Int)` value — a `Cons`/`Nil` spine of
-/// `IntLit` UTF-8 bytes — into a String. None if the spine is malformed,
-/// an element is outside 0..256, or the bytes are not valid UTF-8
-/// (symbol names stay valid host strings; the call stays stuck).
-fn decode_char_list(e: &Expr) -> Option<String> {
-    let mut bytes = Vec::new();
-    let mut cur = e;
-    loop {
-        match cur {
-            Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => {
-                return String::from_utf8(bytes).ok();
-            }
-            Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
-                match &a[0] {
-                    Expr::IntLit(cp) => bytes.push(cp.to_u8()?),
-                    _ => return None,
-                }
-                cur = &a[1];
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// Encode a symbol name as the `(List Int)` of its UTF-8 bytes — what a
-/// `"…"` string literal loads as.
-fn encode_char_list(s: &str) -> Expr {
-    let mut acc = Expr::Ctor("Nil".into(), Vec::new());
-    for b in s.bytes().rev() {
-        acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(b.into()), acc]);
-    }
-    acc
 }
 
 fn bool_ctor(b: bool) -> Expr {

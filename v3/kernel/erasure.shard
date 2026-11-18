@@ -35,6 +35,7 @@
 (use kernel.predef)
 (use kernel.prog)
 (use kernel.scope)
+(use kernel.sym)
 (use kernel.util)
 (use kernel.decl.ConstantInfo)
 (use kernel.decl.ConstantVal)
@@ -384,44 +385,46 @@
 ;; the erasure of an L term in a runtime position
 (fn erase ((t Tr) (env (List ErEnt)) (e Expr) (fuel Int)) ErRes
   (measure fuel)
-  (if (< fuel 0) (ErErr (quote erased_in_runtime) "the body is too deep")
+  (if (< fuel 0) (ErErr (sym "erased_in_runtime") (utf8 "the body is too deep"))
   (match e
     ((FVar _ id)
      (match (er_index env id 0)
        ((some (Prod.mk EKVar i)) (ErOk t (EBVar i)))
        ((some (Prod.mk EKIH _))
-        (ErErr (quote recursion_structure)
-          "a recursive definition's executable structure is not readable off the recursor: supply the body"))
+        (ErErr (sym "recursion_structure")
+          (utf8
+            "a recursive definition's executable structure is not readable off the recursor: supply the body")))
        ((some (Prod.mk (EKCall c roles) _))
         (match roles
           (nil (ErOk t (ECall c nil)))
           (_
-            (ErErr (quote function_value)
-              (append (show_name c) " unapplied: a function is no value")))))
+            (ErErr (sym "function_value")
+              (append (show_name c) (utf8 " unapplied: a function is no value"))))))
        ((some (Prod.mk (EKShape sh _) _))
-        (ErErr (quote function_value)
-          (append "a static parameter (at "
+        (ErErr (sym "function_value")
+          (append (utf8 "a static parameter (at ")
             (append (show_name (shape_id sh))
-              ") unapplied: it is called at its arity, or passed on as a static argument"))))
+              (utf8 ") unapplied: it is called at its arity, or passed on as a static argument")))))
        ((some (Prod.mk (EKTemplate c) _))
-        (ErErr (quote function_value)
-          (append (show_name c) " unapplied: a template is called at its full arity")))
+        (ErErr (sym "function_value")
+          (append (show_name c) (utf8 " unapplied: a template is called at its full arity"))))
        ((some (Prod.mk _ _))
-        (ErErr (quote erased_in_runtime)
-          "a type or a proof in a runtime position: both are erased from a program"))
-       (none (ErErr (quote erased_in_runtime) "a variable the erasure does not know"))))
+        (ErErr (sym "erased_in_runtime")
+          (utf8 "a type or a proof in a runtime position: both are erased from a program")))
+       (none (ErErr (sym "erased_in_runtime") (utf8 "a variable the erasure does not know")))))
     ((Lit _ (LitNat n)) (ErOk t (ELit (LNat n))))
     ((Lit _ (LitStr bs))  ; a String is its bytes: Init's List cells, built once at link
      (if (utf8_ok bs) (ErOk t (ELit (LStr bs)))
-     (ErErr (quote bad_string)
-       "a string literal's bytes are not UTF-8: K reads the literal by decoding it")))
+     (ErErr (sym "bad_string")
+       (utf8 "a string literal's bytes are not UTF-8: K reads the literal by decoding it"))))
     ((Let _ n ty v b) (erase_let t env n ty v b fuel))
     ((Lam _ _ _ _ _)
-     (ErErr (quote function_value)
-       "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result"))
-    ((Pi _ _ _ _ _) (ErErr (quote erased_in_runtime) "a type in a runtime position"))
-    ((Sort _ _) (ErErr (quote erased_in_runtime) "a sort in a runtime position"))
-    ((BVar _ _) (ErErr (quote erased_in_runtime) "a loose variable"))
+     (ErErr (sym "function_value")
+       (utf8
+         "a lambda in a runtime position: a lambda is a static argument of a template, lifted to a fn — never a value, a field, a let or a result")))
+    ((Pi _ _ _ _ _) (ErErr (sym "erased_in_runtime") (utf8 "a type in a runtime position")))
+    ((Sort _ _) (ErErr (sym "erased_in_runtime") (utf8 "a sort in a runtime position")))
+    ((BVar _ _) (ErErr (sym "erased_in_runtime") (utf8 "a loose variable")))
     ((Proj _ sn i x) (erase_proj t env sn i x fuel))
     (_ (erase_app t env (get_app_fn e) (get_app_args e) fuel)))))
 (fn erase_all ((t Tr) (env (List ErEnt)) (es (List Expr)) (fuel Int) (acc (List ETerm)))
@@ -472,33 +475,34 @@
      (if (rep_row sn)
        (match (row_field t1 sn)
          ((Prod.mk t2 none)
-          (ErErr (quote no_realization)
+          (ErErr (sym "no_realization")
             (append (show_name sn)
-              ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+              (utf8
+                ": the registry's row does not describe this structure (one constructor, one runtime field)"))))
          ((Prod.mk t2 (some (Prod.mk _ roles)))
           (match (runtime_index roles i 0 0)
             (none
-              (ErErr (quote erased_in_runtime)
-                (append (show_name sn) ": a projection of an erased field")))
+              (ErErr (sym "erased_in_runtime")
+                (append (show_name sn) (utf8 ": a projection of an erased field"))))
             ((some _) (ErOk t2 x1)))))
        (match (ind_eligible (Tr.w t1) (Tr.es t1) (Tr.sc t1) sn nil)
          ((Prod.mk (Prod.mk w2 es2) false)
-          (ErErr (quote no_realization) (append (show_name sn) " is not an E type")))
+          (ErErr (sym "no_realization") (append (show_name sn) (utf8 " is not an E type"))))
          ((Prod.mk (Prod.mk w2 es2) true)
           (let ((t2 (tr_set_es (tr_set_w t1 w2) es2)))
             (match (ind_ctor_names t2 sn)
               ((cons c nil)
                (match (field_roles t2 c)
-                 ((Prod.mk t3 none) (ErErr (quote no_realization) (show_name c)))
+                 ((Prod.mk t3 none) (ErErr (sym "no_realization") (show_name c)))
                  ((Prod.mk t3 (some roles))
                   (match (runtime_index roles i 0 0)
                     (none
-                      (ErErr (quote erased_in_runtime)
-                        (append (show_name sn) ": a projection of an erased field")))
+                      (ErErr (sym "erased_in_runtime")
+                        (append (show_name sn) (utf8 ": a projection of an erased field"))))
                     ((some (Prod.mk j nrt))
                      (ErOk t3
                        (EMatch x1 (list (EArm (PCtor c (pvars nrt)) (EBVar (- (- nrt 1) j)))))))))))
-              (_ (ErErr (quote no_realization) (append (show_name sn) " is not a structure")))))))))))
+              (_ (ErErr (sym "no_realization") (append (show_name sn) (utf8 " is not a structure"))))))))))))
 ;; a row's constructor and its fields' roles, when the structure is what the row says: one
 ;; constructor, exactly one runtime field
 (fn row_field ((t Tr) (ind Name)) (Prod Tr (Option (Prod Name (List Bool))))
@@ -554,20 +558,22 @@
      (match (er_index env id 0)
        ((some (Prod.mk (EKShape sh _) _))
         (if (bool_not (= (shape_arity sh) 0))
-          (Prod.mk t (PkErr (quote function_value) "a static parameter projected as a package"))
+          (Prod.mk t
+            (PkErr (sym "function_value") (utf8 "a static parameter projected as a package")))
           (match (env_find (tr_env t) (shape_id sh))
             (none (Prod.mk t (PkPlaceholder (shape_id sh))))
             ((some _)
              (package_fields_of t (mk_app_n (shape_head sh) (fill_somes (shape_leading sh))))))))
        (_
          (Prod.mk t
-           (PkErr (quote function_value)
-             "a package in a runtime position: a package is a static parameter, its fields read at the instance")))))
+           (PkErr (sym "function_value")
+             (utf8
+               "a package in a runtime position: a package is a static parameter, its fields read at the instance"))))))
     (_
       (if (has_fvar x)
         (Prod.mk t
-          (PkErr (quote function_value)
-            "a package built from locals of the caller: a package constant is closed"))
+          (PkErr (sym "function_value")
+            (utf8 "a package built from locals of the caller: a package constant is closed")))
         (package_fields_of t x)))))
 (fn fill_somes ((ls (List (Option Expr)))) (List Expr)
   (measure (struct ls))
@@ -579,7 +585,8 @@
   (match (tr_whnf t x)
     ((Prod.mk t1 none)
      (Prod.mk t1
-       (PkErr (quote no_realization) "a package constant K could not reduce to its constructor")))
+       (PkErr (sym "no_realization")
+         (utf8 "a package constant K could not reduce to its constructor"))))
     ((Prod.mk t1 (some v))
      (match (get_app_fn v)
        ((Const _ mk _)
@@ -588,12 +595,12 @@
            (Prod.mk t1 (PkFields x (drop nparams (get_app_args v)))))
           (_
             (Prod.mk t1
-              (PkErr (quote no_realization)
-                "a package constant whose value is not its constructor applied")))))
+              (PkErr (sym "no_realization")
+                (utf8 "a package constant whose value is not its constructor applied"))))))
        (_
          (Prod.mk t1
-           (PkErr (quote no_realization)
-             "a package constant whose value is not its constructor applied")))))))
+           (PkErr (sym "no_realization")
+             (utf8 "a package constant whose value is not its constructor applied"))))))))
 ;; a package's field i applied to `args`: the field's term applied and erased — a function field
 ;; a call head (a name, a partial application, a lambda the erasure beta-reduces or lifts), a value
 ;; field its closed E term, a law field never in a runtime position. At the declaration's check
@@ -607,25 +614,25 @@
      (match (nth fields i)
        ((some fi) (erase t1 env (mk_app_n fi args) (- fuel 1)))
        (none
-         (ErErr (quote no_realization)
-           (append (show_name sn) ": a projection past the constructor's fields")))))
+         (ErErr (sym "no_realization")
+           (append (show_name sn) (utf8 ": a projection past the constructor's fields"))))))
     ((Prod.mk t1 (PkPlaceholder pn))
      (match (tr_package t1 sn)
        ((Prod.mk t2 none)
-        (ErErr (quote no_realization) (append (show_name sn) " is not a package type")))
+        (ErErr (sym "no_realization") (append (show_name sn) (utf8 " is not a package type"))))
        ((Prod.mk t2 (some (Prod.mk _ roles)))
         (match (nth roles i)
           ((some BErased)
-           (ErErr (quote erased_in_runtime)
-             (append (show_name sn) ": a package's law in a runtime position")))
+           (ErErr (sym "erased_in_runtime")
+             (append (show_name sn) (utf8 ": a package's law in a runtime position"))))
           ((some (BStatic k))
            (if (bool_not (= (len args) k))
-             (ErErr (quote function_value)
+             (ErErr (sym "function_value")
                (append (show_name sn)
-                 (append ": a package's function field applied to "
+                 (append (utf8 ": a package's function field applied to ")
                    (append (show_nat (len args))
-                     (append " arguments, its arity "
-                       (append (show_nat k) ": it is called at its arity"))))))
+                     (append (utf8 " arguments, its arity ")
+                       (append (show_nat k) (utf8 ": it is called at its arity")))))))
              (match (erase_all t2 env args fuel nil)
                ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
                ((Prod.mk none (Prod.mk t3 as)) (ErOk t3 (ECall (package_field_name pn i) as))))))
@@ -633,14 +640,14 @@
            (match args
              (nil (ErOk t2 (ECall (package_field_name pn i) nil)))
              (_
-               (ErErr (quote function_value)
+               (ErErr (sym "function_value")
                  (append (show_name sn)
-                   ": a package's value field applied: it is a value, not a function")))))
+                   (utf8 ": a package's value field applied: it is a value, not a function"))))))
           (_
-            (ErErr (quote no_realization)
-              (append (show_name sn) ": a projection past the constructor's fields")))))))))
+            (ErErr (sym "no_realization")
+              (append (show_name sn) (utf8 ": a projection past the constructor's fields"))))))))))
 (fn package_field_name ((pn Name) (i Int)) Name
-  (name_append pn (n1 (sym_of_chars (append "field_" (show_nat i))))))
+  (name_append pn (n1 (sym_of_chars (append (utf8 "field_") (show_nat i))))))
 ;; the field roles of a constructor: True for a runtime field, False for an erased one
 (fn field_roles ((t Tr) (c Name)) (Prod Tr (Option (List Bool)))
   (match (env_find (tr_env t) c)
@@ -661,20 +668,21 @@
      (match (er_index env id 0)
        ((some (Prod.mk EKVar i)) (erase_erased_args t env (EBVar i) args fuel))
        ((some (Prod.mk EKIH _))
-        (ErErr (quote recursion_structure)
-          "a recursive definition's executable structure is not readable off the recursor: supply the body"))
+        (ErErr (sym "recursion_structure")
+          (utf8
+            "a recursive definition's executable structure is not readable off the recursor: supply the body")))
        ((some (Prod.mk (EKCall c roles) _))
         (if (bool_not (= (len args) (len roles)))
-          (ErErr (quote function_value)
-            (append (show_name c) " partially applied: a function is no value"))
+          (ErErr (sym "function_value")
+            (append (show_name c) (utf8 " partially applied: a function is no value")))
           (match (erase_roles t env roles args fuel nil)
             ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
             ((Prod.mk none (Prod.mk t1 as)) (ErOk t1 (ECall c as))))))
        ((some (Prod.mk (EKShape sh ids) _)) (erase_shape_call t env sh ids args fuel))
        ((some (Prod.mk (EKTemplate c) _)) (erase_template_call t env c args fuel))
        (_
-         (ErErr (quote function_value)
-           "an application whose head is not a constant: a function is no value"))))
+         (ErErr (sym "function_value")
+           (utf8 "an application whose head is not a constant: a function is no value")))))
     ((Lam _ _ _ _ _)
      (match (beta_head (w_st (Tr.w t)) head args)
        ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1)))))
@@ -682,11 +690,11 @@
      (match (tr_package t sn)
        ((Prod.mk t1 (some _)) (erase_package_proj t1 env sn i x args fuel))
        ((Prod.mk t1 none)
-        (ErErr (quote function_value)
-          "an application whose head is a projection: a function is no value"))))
+        (ErErr (sym "function_value")
+          (utf8 "an application whose head is a projection: a function is no value")))))
     (_
-      (ErErr (quote function_value)
-        "an application whose head is not a constant: a function is no value"))))
+      (ErErr (sym "function_value")
+        (utf8 "an application whose head is not a constant: a function is no value")))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
 (fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
   (measure (struct args))
@@ -698,14 +706,15 @@
         (match (w_is_prop (Tr.w t1) aty)
           ((Prod.mk w2 (some true)) (erase_erased_args (tr_set_w t1 w2) env v r fuel))
           ((Prod.mk w2 _)
-           (ErErr (quote function_value)
-             "a variable applied to a runtime value: a function is no value — a function-typed binder is a static parameter of a template"))))
+           (ErErr (sym "function_value")
+             (utf8
+               "a variable applied to a runtime value: a function is no value — a function-typed binder is a static parameter of a template")))))
        ((Prod.mk t1 none)
-        (ErErr (quote function_value) "a variable applied to an argument K could not type"))))))
+        (ErErr (sym "function_value") (utf8 "a variable applied to an argument K could not type")))))))
 (fn last_component ((n Name)) Symbol
   (match n
     ((Str _ s) s)
-    (_ (quote anon))))
+    (_ (sym "anon"))))
 ;; a constant generated for a recursion, whose executable structure no kernel term shows:
 ;; `T.below`, `T.brecOn` and `T.binductionOn` of an inductive T, and Init's fixpoints. A
 ;; declaration that only bears such a last component — a fn named `below` — is none
@@ -713,12 +722,12 @@
   (match c
     ((Str _ lc)
      (if
-       (bool_or (sym_eq lc (quote brecOn))
-         (bool_or (sym_eq lc (quote below)) (sym_eq lc (quote binductionOn))))
+       (bool_or (sym_eq lc (sym "brecOn"))
+         (bool_or (sym_eq lc (sym "below")) (sym_eq lc (sym "binductionOn"))))
        (of_inductive env c)
-       (bool_or (name_eq c (n2 (quote WellFounded) (quote fix)))
-         (bool_or (name_eq c (Str (n2 (quote WellFounded) (quote Nat)) (quote fix)))
-           (name_eq c (Str (n2 (quote Lean) (quote Order)) (quote fix)))))))
+       (bool_or (name_eq c (n2 (sym "WellFounded") (sym "fix")))
+         (bool_or (name_eq c (Str (n2 (sym "WellFounded") (sym "Nat")) (sym "fix")))
+           (name_eq c (Str (n2 (sym "Lean") (sym "Order")) (sym "fix")))))))
     (_ false)))
 ;; a name directly under an inductive type's: where a generated constant of the type stands
 (fn of_inductive ((env CheckedEnv) (c Name)) Bool
@@ -735,26 +744,26 @@
   (erase_const_at t env c (if (native_decl (Tr.sc t) c) Anon c) args fuel))
 (fn erase_const_at ((t Tr) (env (List ErEnt)) (c Name) (k Name) (args (List Expr)) (fuel Int)) ErRes
   (let ((lc (last_component c)))
-    (if (bool_or (name_eq k (n1 (quote absurd))) (name_eq k (n2 (quote False) (quote elim))))
+    (if (bool_or (name_eq k (n1 (sym "absurd"))) (name_eq k (n2 (sym "False") (sym "elim"))))
       (ErOk t EAbsurd)  ; a refuted row
-    (if (name_eq k (n2 (quote OfNat) (quote ofNat)))
+    (if (name_eq k (n2 (sym "OfNat") (sym "ofNat")))
       (match args
         ((cons (Const _ nn _) (cons (Lit _ (LitNat n)) _))
          (if (name_eq nn (nm_nat)) (ErOk t (ELit (LNat n)))
-         (ErErr (quote no_realization) "OfNat.ofNat off Nat")))
-        (_ (ErErr (quote no_realization) "OfNat.ofNat")))
+         (ErErr (sym "no_realization") (utf8 "OfNat.ofNat off Nat"))))
+        (_ (ErErr (sym "no_realization") (utf8 "OfNat.ofNat"))))
     (if (name_eq k (nm_nat_zero)) (ErOk t (ELit (LNat 0)))
     (if (name_eq k (nm_nat_succ))
       (match args
         ((cons x nil)
          (match (erase t env x (- fuel 1))
            ((ErErr e m) (ErErr e m))
-           ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (quote Nat) (quote add)) (list x1 (ELit (LNat 1))))))))
-        (_ (ErErr (quote function_value) "Nat.succ unapplied")))
+           ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (sym "Nat") (sym "add")) (list x1 (ELit (LNat 1))))))))
+        (_ (ErErr (sym "function_value") (utf8 "Nat.succ unapplied"))))
     (if (name_eq k (nm_int_of_nat))  ; Nat and Int share the integer: the coercion is the identity
       (match args
         ((cons x nil) (erase t env x (- fuel 1)))
-        (_ (ErErr (quote function_value) "Int.ofNat unapplied")))
+        (_ (ErErr (sym "function_value") (utf8 "Int.ofNat unapplied"))))
     (if (name_eq k (nm_int_neg_succ))
       (match args
         ((cons (Lit _ (LitNat n)) nil) (ErOk t (ELit (LInt (- (- 0 n) 1)))))
@@ -763,10 +772,10 @@
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 x1)
             (ErOk t1
-              (EPrim (n1 (quote -))
-                (list (EPrim (n1 (quote -)) (list (ELit (LNat 0)) x1)) (ELit (LNat 1))))))))
-        (_ (ErErr (quote function_value) "Int.negSucc unapplied")))
-    (if (name_eq k (n2 (quote Decidable) (quote decide)))
+              (EPrim (n1 (sym "-"))
+                (list (EPrim (n1 (sym "-")) (list (ELit (LNat 0)) x1)) (ELit (LNat 1))))))))
+        (_ (ErErr (sym "function_value") (utf8 "Int.negSucc unapplied"))))
+    (if (name_eq k (n2 (sym "Decidable") (sym "decide")))
       ;; decide p inst: Bool and Decidable have different cells (ev.shard), so the conversion is
       ;; explicit — (if ⟦inst⟧ true false) over Init's Bool
       (match args
@@ -774,48 +783,49 @@
          (match (erase_cond t env inst (- fuel 1))
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 i1)
-            (match (erase t1 env (mk_const (n2 (quote Bool) (quote true)) nil) (- fuel 1))
+            (match (erase t1 env (mk_const (n2 (sym "Bool") (sym "true")) nil) (- fuel 1))
               ((ErErr e m) (ErErr e m))
               ((ErOk t2 tt)
-               (match (erase t2 env (mk_const (n2 (quote Bool) (quote false)) nil) (- fuel 1))
+               (match (erase t2 env (mk_const (n2 (sym "Bool") (sym "false")) nil) (- fuel 1))
                  ((ErErr e m) (ErErr e m))
                  ((ErOk t3 ff) (ErOk t3 (EIf i1 tt ff)))))))))
-        (_ (ErErr (quote function_value) "Decidable.decide unapplied")))
-      (if (name_eq k (n1 (quote instDecidableEqBool)))
+        (_ (ErErr (sym "function_value") (utf8 "Decidable.decide unapplied"))))
+      (if (name_eq k (n1 (sym "instDecidableEqBool")))
         ;; a value here: Decidable's cells (where an `if` reads it, erase_cond gives the test)
         (match args
           ((cons a (cons b nil)) (erase_bool_eq t env a b fuel))
-          (_ (ErErr (quote function_value) "instDecidableEqBool unapplied")))
-        (if (bool_or (name_eq k (n1 (quote ite))) (name_eq k (n1 (quote dite))))
+          (_ (ErErr (sym "function_value") (utf8 "instDecidableEqBool unapplied"))))
+        (if (bool_or (name_eq k (n1 (sym "ite"))) (name_eq k (n1 (sym "dite"))))
           (match args
             ((cons _ (cons _ (cons h (cons a (cons b nil)))))
-             (erase_ite t env h a b (name_eq k (n1 (quote dite))) fuel))
-            (_ (ErErr (quote function_value) "ite unapplied")))
+             (erase_ite t env h a b (name_eq k (n1 (sym "dite"))) fuel))
+            (_ (ErErr (sym "function_value") (utf8 "ite unapplied"))))
         (if
-          (bool_or (name_eq k (n2 (quote Bool) (quote and)))
-            (bool_or (name_eq k (n2 (quote Bool) (quote or)))
-              (name_eq k (n2 (quote Bool) (quote not)))))
+          (bool_or (name_eq k (n2 (sym "Bool") (sym "and")))
+            (bool_or (name_eq k (n2 (sym "Bool") (sym "or")))
+              (name_eq k (n2 (sym "Bool") (sym "not")))))
           (erase_bool_op t env c args fuel)
           (if (rec_generated (tr_env t) c)
-            (ErErr (quote recursion_structure)
+            (ErErr (sym "recursion_structure")
               (append (show_name c)
-                ": a recursive definition's executable structure is not readable off the kernel term — supply the body"))
+                (utf8
+                  ": a recursive definition's executable structure is not readable off the kernel term — supply the body")))
           (if
-            (bool_or (name_eq k (n2 (quote Classical) (quote choice)))
-              (bool_or (name_eq k (n2 (quote Acc) (quote rec)))
+            (bool_or (name_eq k (n2 (sym "Classical") (sym "choice")))
+              (bool_or (name_eq k (n2 (sym "Acc") (sym "rec")))
                 (bool_or (name_eq k (nm_quot_lift))
                   (bool_or (name_eq k (nm_quot_mk)) (name_eq k (nm_quot_ind))))))
-            (ErErr (quote noncomputable)
-              (append (show_name c) " in a runtime position: it has no program"))
+            (ErErr (sym "noncomputable")
+              (append (show_name c) (utf8 " in a runtime position: it has no program")))
             (match (env_find (tr_env t) c)
-              (none (ErErr (quote unknown_constant) (show_name c)))
+              (none (ErErr (sym "unknown_constant") (show_name c)))
               ((some info)
                (match info
                  ((CtorInfo _ ind _ nparams _ _) (erase_ctor t env c ind nparams args fuel))
                  ((RecInfo _ _ nparams _ nmotives nminors _ _ _)
                   (erase_rec t env c nparams nmotives nminors args fuel))
                  (_
-                   (if (bool_and (sym_eq lc (quote casesOn)) (of_inductive (tr_env t) c))
+                   (if (bool_and (sym_eq lc (sym "casesOn")) (of_inductive (tr_env t) c))
                      (erase_cases t env c args fuel)
                    (if (bool_or (is_template (Tr.es t) c) (owner_is t c))
                      ;; a template's call is a call of its instance; a realize template's
@@ -843,9 +853,9 @@
                                   ((Prod.mk none (Prod.mk t1 (cons a nil)))
                                    (ErOk t1 (ELet (list a) body)))
                                   ((Prod.mk none _)
-                                   (ErErr (quote function_value)
+                                   (ErErr (sym "function_value")
                                      (append (show_name c)
-                                       " partially applied: a function is no value")))))
+                                       (utf8 " partially applied: a function is no value"))))))
                                (none
                                  (match (prim_l_identity k)
                                    ((some _)
@@ -864,9 +874,10 @@
                                               ((Prod.mk t1 (some _))
                                                (erase_package_proj t1 env sn i x rest fuel))
                                               ((Prod.mk t1 none)
-                                               (ErErr (quote function_value)
+                                               (ErErr (sym "function_value")
                                                  (append (show_name c)
-                                                   ": a projection applied past its structure — a function is no value")))))
+                                                   (utf8
+                                                     ": a projection applied past its structure — a function is no value"))))))
                                            (none (erase_unfold_matcher t env c info args fuel)))))))))))))))))))))))))))))))))
 ;; a definition without a realization: Lean's own matcher (`NAME.match_N`, no descriptor of this
 ;; run) is a definition over `casesOn` — unfolded at its arguments and erased as any definition's
@@ -879,13 +890,13 @@
      (if (is_match_name c)
        (match (beta_head (w_st (Tr.w t)) v args)
          ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1))))
-       (ErErr (quote no_realization)
+       (ErErr (sym "no_realization")
          (append (show_name c)
-           ": no realization attached — realize it first, or import the file that does"))))
+           (utf8 ": no realization attached — realize it first, or import the file that does")))))
     (_
-      (ErErr (quote no_realization)
+      (ErErr (sym "no_realization")
         (append (show_name c)
-          ": no realization attached — realize it first, or import the file that does")))))
+          (utf8 ": no realization attached — realize it first, or import the file that does"))))))
 (fn is_match_name ((c Name)) Bool
   (match c
     ((Str _ s) (is_match_prefix (chars_of_sym s)))
@@ -907,26 +918,26 @@
 ;; (if TEST isTrue isFalse): with the bare test in every position, a
 ;; match on `(Nat.decEq a b)` by constructor would take the wrong row
 (fn erase_dec_value ((t Tr) (env (List ErEnt)) (test ETerm) (fuel Int)) ErRes
-  (let ((tt (mk_const (n1 (quote True)) nil)) (pf (mk_const (n2 (quote True) (quote intro)) nil)))
+  (let ((tt (mk_const (n1 (sym "True")) nil)) (pf (mk_const (n2 (sym "True") (sym "intro")) nil)))
     (match
       (erase_all t env
-        (list (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote isTrue)) nil) tt) pf)
-          (mk_app (mk_app (mk_const (n2 (quote Decidable) (quote isFalse)) nil) tt) pf))
+        (list (mk_app (mk_app (mk_const (n2 (sym "Decidable") (sym "isTrue")) nil) tt) pf)
+          (mk_app (mk_app (mk_const (n2 (sym "Decidable") (sym "isFalse")) nil) tt) pf))
         fuel
         nil)  ; the proofs are erased unread: only the cells are wanted
       ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
       ((Prod.mk none (Prod.mk t1 (cons yes (cons no nil)))) (ErOk t1 (EIf test yes no)))
-      ((Prod.mk none _) (ErErr (quote no_realization) "Decidable's cells")))))
+      ((Prod.mk none _) (ErErr (sym "no_realization") (utf8 "Decidable's cells"))))))
 (fn is_decision ((c Name)) Bool
   (let ((lc (last_component c)))
-    (bool_or (sym_eq lc (quote decEq)) (bool_or (sym_eq lc (quote decLt)) (sym_eq lc (quote decLe))))))
+    (bool_or (sym_eq lc (sym "decEq")) (bool_or (sym_eq lc (sym "decLt")) (sym_eq lc (sym "decLe"))))))
 ;; `a = b` at Bool: the test over the erased operands (prog.shard bool_eq_cond) — `a` where b
 ;; is `true` (and symmetrically), else (if a b (if b false true)) over Init's Bool cells
 (fn bool_eq_test ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
   (match (erase_all t env (list a b) fuel nil)
     ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
     ((Prod.mk none (Prod.mk t1 (cons a1 (cons b1 nil)))) (ErOk t1 (bool_eq_cond a1 b1)))
-    ((Prod.mk none _) (ErErr (quote no_realization) "Bool's decidable equality"))))
+    ((Prod.mk none _) (ErErr (sym "no_realization") (utf8 "Bool's decidable equality")))))
 (fn erase_bool_eq ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
   (match (bool_eq_test t env a b fuel)
     ((ErErr e m) (ErErr e m))
@@ -937,7 +948,7 @@
     ((Const _ c _)
      (if (native_decl (Tr.sc t) c) (erase t env h fuel)
      (let ((args (get_app_args h)))
-       (if (name_eq c (n1 (quote instDecidableEqBool)))
+       (if (name_eq c (n1 (sym "instDecidableEqBool")))
          (match args
            ((cons a (cons b nil)) (bool_eq_test t env a b fuel))
            (_ (erase t env h fuel)))
@@ -961,22 +972,22 @@
   (match
     (erase_all t env
       (append args
-        (list (mk_const (n2 (quote Bool) (quote true)) nil)
-          (mk_const (n2 (quote Bool) (quote false)) nil)))
+        (list (mk_const (n2 (sym "Bool") (sym "true")) nil)
+          (mk_const (n2 (sym "Bool") (sym "false")) nil)))
       fuel
       nil)
     ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
     ((Prod.mk none (Prod.mk t1 (cons a (cons tt (cons ff nil)))))
-     (if (name_eq c (n2 (quote Bool) (quote not))) (ErOk t1 (EIf a ff tt))
-     (ErErr (quote function_value)
-       (append (show_name c) " partially applied: a function is no value"))))
+     (if (name_eq c (n2 (sym "Bool") (sym "not"))) (ErOk t1 (EIf a ff tt))
+     (ErErr (sym "function_value")
+       (append (show_name c) (utf8 " partially applied: a function is no value")))))
     ((Prod.mk none (Prod.mk t1 (cons a (cons b (cons tt (cons ff nil))))))
-     (if (name_eq c (n2 (quote Bool) (quote and))) (ErOk t1 (EIf a b ff))
-     (if (name_eq c (n2 (quote Bool) (quote or))) (ErOk t1 (EIf a tt b))
-     (ErErr (quote function_value) (append (show_name c) " over-applied")))))
+     (if (name_eq c (n2 (sym "Bool") (sym "and"))) (ErOk t1 (EIf a b ff))
+     (if (name_eq c (n2 (sym "Bool") (sym "or"))) (ErOk t1 (EIf a tt b))
+     (ErErr (sym "function_value") (append (show_name c) (utf8 " over-applied"))))))
     ((Prod.mk none _)
-     (ErErr (quote function_value)
-       (append (show_name c) " partially applied: a function is no value")))))
+     (ErErr (sym "function_value")
+       (append (show_name c) (utf8 " partially applied: a function is no value"))))))
 ;; ---- a matcher application ------------------------------------------------
 ;; OWNER.match_N params motive scrutinee alternatives: the E match of the rows read back off
 ;; the matcher's own type (mt_is_matcher has regenerated and compared it), each alternative's
@@ -987,13 +998,13 @@
   (match desc
     ((MtDesc np nd rows)
      (if (bool_not (= nd 1))
-       (ErErr (quote no_realization)
-         (append (show_name c) ": a match on several scrutinees has no E form"))
+       (ErErr (sym "no_realization")
+         (append (show_name c) (utf8 ": a match on several scrutinees has no E form")))
      (if (< (len args) (+ np (+ 2 (len rows))))
-       (ErErr (quote function_value)
-         (append (show_name c) " partially applied: a function is no value"))
+       (ErErr (sym "function_value")
+         (append (show_name c) (utf8 " partially applied: a function is no value")))
        (match (nth args (+ np 1))
-         (none (ErErr (quote function_value) (show_name c)))
+         (none (ErErr (sym "function_value") (show_name c)))
          ((some scrut)
           (match (erase t env scrut (- fuel 1))
             ((ErErr e m) (ErErr e m))
@@ -1018,15 +1029,15 @@
     ((cons (cons p nil) r)
      (match alts
        (nil
-         (Prod.mk (some (Prod.mk (quote function_value) "a match with too few alternatives"))
+         (Prod.mk (some (Prod.mk (sym "function_value") (utf8 "a match with too few alternatives")))
            (Prod.mk t nil)))
        ((cons a ar)
         (match (mt_epat t p true 64)
           ((Prod.mk t1 none)
            (Prod.mk
              (some
-               (Prod.mk (quote no_realization)
-                 "a pattern on an erased field, or on a type that is not an E type"))
+               (Prod.mk (sym "no_realization")
+                 (utf8 "a pattern on an erased field, or on a type that is not an E type")))
              (Prod.mk t1 nil)))
           ((Prod.mk t1 (some (Prod.mk ep roles)))
            (match (alt_with_extra t1 a (len roles) extra nil)
@@ -1043,7 +1054,8 @@
                        body)
                      acc)))))))))))
     (_
-      (Prod.mk (some (Prod.mk (quote no_realization) "a match on several scrutinees has no E form"))
+      (Prod.mk
+        (some (Prod.mk (sym "no_realization") (utf8 "a match on several scrutinees has no E form")))
         (Prod.mk t nil)))))
 ;; an alternative under a matcher applied past its alternatives (the dependent match):
 ;; its field lambdas opened, the lambdas after them instantiated at the extra arguments
@@ -1137,8 +1149,8 @@
        ((Prod.mk t1 none)
         (Prod.mk
           (some
-            (Prod.mk (quote no_realization)
-              "a match alternative K could not open as a function of its variables"))
+            (Prod.mk (sym "no_realization")
+              (utf8 "a match alternative K could not open as a function of its variables")))
           (Prod.mk t1 (EBVar 0))))
        ((Prod.mk t1 (some (Prod.mk fv body)))
         (erase_alt t1 (cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r fuel))))))
@@ -1157,12 +1169,12 @@
 (fn erase_predef ((es ESt) (sc Scope) (pd PreDef)) PdErase
   (match (predef_binds (el_w (pd_state pd)) es sc (pd_binders pd) nil nil)
     ((Prod.mk (Prod.mk w1 es1) none)
-     (PdEraseErr (quote no_l_identity) "a binder whose type is not an E type"))
+     (PdEraseErr (sym "no_l_identity") (utf8 "a binder whose type is not an E type")))
     ((Prod.mk (Prod.mk w1 es1) (some binds))
      (match (predef_ret w1 es1 sc pd binds)
        ((Prod.mk (Prod.mk w2 es2) none)
-        (PdEraseErr (quote no_l_identity)
-          "a result type that is not an E type (a function returned is no value)"))
+        (PdEraseErr (sym "no_l_identity")
+          (utf8 "a result type that is not an E type (a function returned is no value)")))
        ((Prod.mk (Prod.mk w2 es2) (some rt))
         (if (has_static binds) (PdEraseTemplate es2 binds rt)
         (let
@@ -1210,14 +1222,15 @@
      (match (fvar_index (fvar_id_of x) (data_fvars binds) 0)
        ((some i) (Prod.mk t (Right5r (RecStruct i))))
        (none
-         (Prod.mk t (Left5r (quote bad_measure) "the structural parameter is not a data parameter")))))
+         (Prod.mk t
+           (Left5r (sym "bad_measure") (utf8 "the structural parameter is not a data parameter"))))))
     ;; a measure that cites a function with no program — a definition and nothing more, a
     ;; derived size — is K's alone: the program's clause says so and holds
     ;; no term. Any other obstacle of the measure's erasure is the function's
     ((PdMeasure m)
      (match (erase t env m (budget_depth))
        ((ErErr e msg)
-        (if (sym_eq e (quote no_realization)) (Prod.mk t (Right5r RecLogical))
+        (if (sym_eq e (sym "no_realization")) (Prod.mk t (Right5r RecLogical))
         (Prod.mk t (Left5r e msg))))
        ((ErOk t1 em) (Prod.mk t1 (Right5r (RecMeasure em))))))))
 (fn data_fvars ((binds (List TBind))) (List Expr)
@@ -1258,28 +1271,29 @@
   (if (rep_row ind)  ; a row's constructor is its one runtime argument
     (match (row_field t ind)
       ((Prod.mk t1 none)
-       (ErErr (quote no_realization)
+       (ErErr (sym "no_realization")
          (append (show_name ind)
-           ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+           (utf8
+             ": the registry's row does not describe this structure (one constructor, one runtime field)"))))
       ((Prod.mk t1 (some (Prod.mk _ roles)))
        (if (bool_not (= (len args) (+ nparams (len roles))))
-         (ErErr (quote function_value)
-           (append (show_name c) " partially applied: a function is no value"))
+         (ErErr (sym "function_value")
+           (append (show_name c) (utf8 " partially applied: a function is no value")))
          (match (erase_roles t1 env roles (drop nparams args) fuel nil)
            ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
            ((Prod.mk none (Prod.mk t2 (cons a nil))) (ErOk t2 a))
-           ((Prod.mk none _) (ErErr (quote no_realization) (show_name c)))))))
+           ((Prod.mk none _) (ErErr (sym "no_realization") (show_name c)))))))
     (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
       ((Prod.mk (Prod.mk w1 es1) false)
-       (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
+       (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
       ((Prod.mk (Prod.mk w1 es1) true)
        (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
          (match (field_roles t1 c)
-           ((Prod.mk t2 none) (ErErr (quote no_realization) (show_name c)))
+           ((Prod.mk t2 none) (ErErr (sym "no_realization") (show_name c)))
            ((Prod.mk t2 (some roles))
             (if (bool_not (= (len args) (+ nparams (len roles))))
-              (ErErr (quote function_value)
-                (append (show_name c) " partially applied: a function is no value"))
+              (ErErr (sym "function_value")
+                (append (show_name c) (utf8 " partially applied: a function is no value")))
               (match (erase_roles t2 env roles (drop nparams args) fuel nil)
                 ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
                 ((Prod.mk none (Prod.mk t3 as)) (ErOk t3 (ECtor c as))))))))))))
@@ -1291,7 +1305,8 @@
     (nil (Prod.mk none (Prod.mk t (rev acc))))
     ((cons rt r)
      (match args
-       (nil (Prod.mk (some (Prod.mk (quote function_value) "partially applied")) (Prod.mk t nil)))
+       (nil
+         (Prod.mk (some (Prod.mk (sym "function_value") (utf8 "partially applied"))) (Prod.mk t nil)))
        ((cons a ar)
         (if rt
           (match (erase t env a (- fuel 1))
@@ -1309,12 +1324,12 @@
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int) (ext Bool))
   ErRes
   (match (tr_tele t info)
-    ((Prod.mk t1 none) (ErErr (quote no_realization) (show_name c)))
+    ((Prod.mk t1 none) (ErErr (sym "no_realization") (show_name c)))
     ((Prod.mk t1 (some (Tele _ binds _ _)))
      (let ((roles (data_flags binds)))
        (if (bool_not (= (len args) (len roles)))
-         (ErErr (quote function_value)
-           (append (show_name c) " partially applied: a function is no value"))
+         (ErErr (sym "function_value")
+           (append (show_name c) (utf8 " partially applied: a function is no value")))
          (match (erase_roles t1 env roles args fuel nil)
            ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
            ((Prod.mk none (Prod.mk t2 as)) (ErOk t2 (if ext (EExt c as) (ECall c as))))))))))
@@ -1351,13 +1366,13 @@
             fuel)
           (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
             ((Prod.mk (Prod.mk w1 es1) false)
-             (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
+             (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
             ((Prod.mk (Prod.mk w1 es1) true)
              (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
                (if (bool_not (= (len args) (+ nparams (+ 2 (len ctors)))))
-                 (ErErr (quote function_value) (append (show_name c) " partially applied"))
+                 (ErErr (sym "function_value") (append (show_name c) (utf8 " partially applied")))
                  (match (nth args (+ nparams 1))
-                   (none (ErErr (quote function_value) (show_name c)))
+                   (none (ErErr (sym "function_value") (show_name c)))
                    ((some major)
                     (match (if_branches t1 ctors (drop (+ nparams 2) args))
                       ((some (Prod.mk else_b then_b))
@@ -1372,8 +1387,8 @@
                              (erase_minors t2 env ctors (drop (+ nparams 2) args) false fuel nil)
                              ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
                              ((Prod.mk none (Prod.mk t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))))
-       (_ (ErErr (quote no_realization) (show_name c)))))
-    (_ (ErErr (quote no_realization) (show_name c)))))
+       (_ (ErErr (sym "no_realization") (show_name c)))))
+    (_ (ErErr (sym "no_realization") (show_name c)))))
 ;; a case analysis of a row of the registry's types: its one alternative with the runtime
 ;; field bound to the scrutinee, a let
 (fn erase_row_cases
@@ -1389,12 +1404,13 @@
   (match (Prod.mk major minor)
     ((Prod.mk (some mj) (some mn))
      (if (bool_not saturated)
-       (ErErr (quote function_value) (append (show_name c) " partially applied"))
+       (ErErr (sym "function_value") (append (show_name c) (utf8 " partially applied")))
        (match (row_field t ind)
          ((Prod.mk t1 none)
-          (ErErr (quote no_realization)
+          (ErErr (sym "no_realization")
             (append (show_name ind)
-              ": the registry's row does not describe this structure (one constructor, one runtime field)")))
+              (utf8
+                ": the registry's row does not describe this structure (one constructor, one runtime field)"))))
          ((Prod.mk t1 (some (Prod.mk _ roles)))
           (match (erase t1 env mj (- fuel 1))
             ((ErErr e m) (ErErr e m))
@@ -1402,7 +1418,7 @@
              (match (erase_minor t2 env mn roles 0 fuel)
                ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
                ((Prod.mk none (Prod.mk t3 body)) (ErOk t3 (ELet (list mj1) body))))))))))
-    (_ (ErErr (quote function_value) (append (show_name c) " partially applied")))))
+    (_ (ErErr (sym "function_value") (append (show_name c) (utf8 " partially applied"))))))
 ;; a case analysis over a two-constructor inductive whose alternatives ignore their fields is
 ;; the `if` it was written as (the second constructor takes the then-branch;
 ;; elab.shard's elab_if_cases): the two bodies, first constructor's first
@@ -1451,7 +1467,8 @@
   (match c
     ((Str ind _)
      (if (bool_not (= nmotives 1))
-       (ErErr (quote recursion_structure) (append (show_name c) ": a nested inductive's recursor"))
+       (ErErr (sym "recursion_structure")
+         (append (show_name c) (utf8 ": a nested inductive's recursor")))
        (match (env_find (tr_env t) ind)
          ((some (InductInfo _ _ _ _ ctors _ _ _ _))
           (if (rep_row ind)
@@ -1460,13 +1477,13 @@
               fuel)
             (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
               ((Prod.mk (Prod.mk w1 es1) false)
-               (ErErr (quote no_realization) (append (show_name ind) " is not an E type")))
+               (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
               ((Prod.mk (Prod.mk w1 es1) true)
                (let ((t1 (tr_set_es (tr_set_w t w1) es1)))
                  (if (bool_not (= (len args) (+ nparams (+ 2 nminors))))
-                   (ErErr (quote function_value) (append (show_name c) " partially applied"))
+                   (ErErr (sym "function_value") (append (show_name c) (utf8 " partially applied")))
                    (match (nth args (+ nparams (+ 1 nminors)))
-                     (none (ErErr (quote function_value) (show_name c)))
+                     (none (ErErr (sym "function_value") (show_name c)))
                      ((some major)
                       (match (erase t1 env major (- fuel 1))
                         ((ErErr e m) (ErErr e m))
@@ -1477,8 +1494,8 @@
                              nil)
                            ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
                            ((Prod.mk none (Prod.mk t3 arms)) (ErOk t3 (EMatch major1 arms))))))))))))))
-         (_ (ErErr (quote no_realization) (show_name c))))))
-    (_ (ErErr (quote no_realization) (show_name c)))))
+         (_ (ErErr (sym "no_realization") (show_name c))))))
+    (_ (ErErr (sym "no_realization") (show_name c)))))
 ;; the minors in constructor order: each a lambda over the fields (and, for a recursor, the hypotheses)
 (fn erase_minors
   ((t Tr)
@@ -1496,12 +1513,12 @@
      (match minors
        (nil
          (Prod.mk
-           (some (Prod.mk (quote function_value) "a case analysis with too few alternatives"))
+           (some (Prod.mk (sym "function_value") (utf8 "a case analysis with too few alternatives")))
            (Prod.mk t nil)))
        ((cons m mr)
         (match (field_roles t c)
           ((Prod.mk t1 none)
-           (Prod.mk (some (Prod.mk (quote no_realization) (show_name c))) (Prod.mk t1 nil)))
+           (Prod.mk (some (Prod.mk (sym "no_realization") (show_name c))) (Prod.mk t1 nil)))
           ((Prod.mk t1 (some roles))
            (match (erase_minor t1 env m roles (if with_ihs (ih_count t1 c) 0) fuel)
              ((Prod.mk (some (Prod.mk e msg)) _) (Prod.mk (some (Prod.mk e msg)) (Prod.mk t1 nil)))
@@ -1539,8 +1556,8 @@
         ((Prod.mk t1 none)
          (Prod.mk
            (some
-             (Prod.mk (quote no_realization)
-               "a case alternative K could not open as a function of its hypotheses"))
+             (Prod.mk (sym "no_realization")
+               (utf8 "a case alternative K could not open as a function of its hypotheses")))
            (Prod.mk t1 (EBVar 0))))
         ((Prod.mk t1 (some (Prod.mk env1 body)))
          (match (erase t1 env1 body (- fuel 1))
@@ -1551,8 +1568,8 @@
        ((Prod.mk t1 none)
         (Prod.mk
           (some
-            (Prod.mk (quote no_realization)
-              "a case alternative K could not open as a function of its fields"))
+            (Prod.mk (sym "no_realization")
+              (utf8 "a case alternative K could not open as a function of its fields")))
           (Prod.mk t1 (EBVar 0))))
        ((Prod.mk t1 (some (Prod.mk fv body)))
         (erase_minor t1 (cons (ErEnt (fvar_id_of fv) (if rt EKVar EKErased)) env) body r nihs fuel))))))
@@ -1600,31 +1617,32 @@
     ((some binds) (erase_template_at t env c binds args fuel))
     (none
       (match (env_find (tr_env t) c)
-        (none (ErErr (quote unknown_constant) (show_name c)))
+        (none (ErErr (sym "unknown_constant") (show_name c)))
         ((some info)
          (match (tr_tele t info)
            ((Prod.mk t1 none)
-            (ErErr (quote no_realization)
-              (append (show_name c) ": a template whose telescope K could not read")))
+            (ErErr (sym "no_realization")
+              (append (show_name c) (utf8 ": a template whose telescope K could not read"))))
            ((Prod.mk t1 (some (Tele _ binds _ _))) (erase_template_at t1 env c binds args fuel))))))))
 (fn erase_template_at
   ((t Tr) (env (List ErEnt)) (c Name) (binds (List TBind)) (args (List Expr)) (fuel Int))
   ErRes
   (if (bool_not (= (len args) (len binds)))
-    (ErErr (quote function_value)
+    (ErErr (sym "function_value")
       (append (show_name c)
-        (append " applied to "
+        (append (utf8 " applied to ")
           (append (show_nat (len args))
-            (append " arguments: a template is called at its full arity of "
-              (append (show_nat (len binds)) " arguments"))))))
+            (append (utf8 " arguments: a template is called at its full arity of ")
+              (append (show_nat (len binds)) (utf8 " arguments")))))))
     (match (template_args t env c binds args fuel nil nil nil nil nil)
       ((Prod.mk t2 (TaErr e m)) (ErErr e m))
       ((Prod.mk t2 (TaOk tyl tye shapes caps data))
        (let ((name (instance_name (Tr.sc t2) c tye shapes)))
          (if (other_shape (Tr.owner t2) c name)
-           (ErErr (quote realize_descent)
+           (ErErr (sym "realize_descent")
              (append (show_name c)
-               ": a recursive call at other static arguments or type arguments — a template calls itself at its own shapes"))
+               (utf8
+                 ": a recursive call at other static arguments or type arguments — a template calls itself at its own shapes")))
            (ErOk (tr_demand t2 (Demand name c tyl tye shapes)) (ECall name (append caps data)))))))))
 (fn other_shape ((owner (Option (Prod Name Name))) (c Name) (name Name)) Bool
   (match owner
@@ -1653,8 +1671,8 @@
      (match args
        (nil
          (Prod.mk t
-           (TaErr (quote function_value)
-             (append (show_name c) " partially applied: a function is no value"))))
+           (TaErr (sym "function_value")
+             (append (show_name c) (utf8 " partially applied: a function is no value")))))
        ((cons a ar)
         (match role
           (BType
@@ -1669,17 +1687,19 @@
                   (bool_and (owner_is t c) (bool_not (own_tparam t a)))))
               (Prod.mk t
                 (if (in_template t)
-                  (TaErr (quote realize_descent)
+                  (TaErr (sym "realize_descent")
                     (append (show_name c)
-                      ": a recursive call at a type built from a type parameter — a template calls itself at its own types, or the shape set grows"))
-                  (TaErr (quote function_value)
+                      (utf8
+                        ": a recursive call at a type built from a type parameter — a template calls itself at its own types, or the shape set grows")))
+                  (TaErr (sym "function_value")
                     (append (show_name c)
-                      ": a template taken at an open type — a type parameter of the caller; an instance is at closed types"))))
+                      (utf8
+                        ": a template taken at an open type — a type parameter of the caller; an instance is at closed types")))))
               (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a (Tr.tps t) nil)
                 ((Prod.mk (Prod.mk w1 es1) none)
                  (Prod.mk (tr_set_es (tr_set_w t w1) es1)
-                   (TaErr (quote no_realization)
-                     (append (show_name c) ": a type argument that is no E type"))))
+                   (TaErr (sym "no_realization")
+                     (append (show_name c) (utf8 ": a type argument that is no E type")))))
                 ((Prod.mk (Prod.mk w1 es1) (some ety))
                  (template_args (tr_set_es (tr_set_w t w1) es1) env c br ar fuel (cons a tyl)
                    (cons ety tye)
@@ -1701,13 +1721,13 @@
   ((t Tr) (env (List ErEnt)) (sh Shape) (ids (List Int)) (args (List Expr)) (fuel Int))
   ErRes
   (if (bool_not (= (len args) (shape_arity sh)))
-    (ErErr (quote function_value)
-      (append "a static parameter (at "
+    (ErErr (sym "function_value")
+      (append (utf8 "a static parameter (at ")
         (append (show_name (shape_id sh))
-          (append ") applied to "
+          (append (utf8 ") applied to ")
             (append (show_nat (len args))
-              (append " arguments, its arity "
-                (append (show_nat (shape_arity sh)) ": it is called at its arity")))))))
+              (append (utf8 " arguments, its arity ")
+                (append (show_nat (shape_arity sh)) (utf8 ": it is called at its arity"))))))))
     (match (erase_all t env args fuel nil)
       ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
       ((Prod.mk none (Prod.mk t1 as))
@@ -1756,33 +1776,35 @@
          (match (er_index env id 0)
            ((some (Prod.mk (EKShape sh _) _))
             (Prod.mk t
-              (SsErr (quote function_value)
-                (append "a static parameter (at "
+              (SsErr (sym "function_value")
+                (append (utf8 "a static parameter (at ")
                   (append (show_name (shape_id sh))
-                    ") applied as a static argument: a static parameter is passed on, never transformed")))))
-           (_ (Prod.mk t (SsErr (quote function_value) (static_pointer))))))
+                    (utf8
+                      ") applied as a static argument: a static parameter is passed on, never transformed"))))))
+           (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer))))))
         ((Proj _ sn i x) (package_field_shape t env sn i x (get_app_args a) k fuel))
         ((Lam _ _ _ _ _)  ; a lambda applied (a package's lambda field at its captured values): reduced, then read as any static argument
          (match (beta_head (w_st (Tr.w t)) (get_app_fn a) (get_app_args a))
            ((Prod.mk st r) (static_shape (tr_set_w t (w_set_st (Tr.w t) st)) env r k (- fuel 1)))))
-        (_ (Prod.mk t (SsErr (quote function_value) (static_pointer))))))))
+        (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer))))))))
 ;; (e) a package constant: a closed term whose value whnf reads as a package type's
 ;; constructor applied — the shape its identity with its arguments, nothing captured
 (fn package_shape ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)))
   (Prod Tr SsRes)
   (if (has_fvar (mk_app_n head gargs))
     (Prod.mk t
-      (SsErr (quote function_value)
+      (SsErr (sym "function_value")
         (append (show_name g)
-          ": a package constant applied to a local of the caller — a package is closed")))
+          (utf8 ": a package constant applied to a local of the caller — a package is closed"))))
     (match (package_fields_of t (mk_app_n head gargs))
       ((Prod.mk t1 (PkFields _ _)) (Prod.mk t1 (SsOk (Shape head none 0 (somes_of gargs) nil) nil)))
-      ((Prod.mk t1 (PkPlaceholder _)) (Prod.mk t1 (SsErr (quote no_realization) (show_name g))))
+      ((Prod.mk t1 (PkPlaceholder _)) (Prod.mk t1 (SsErr (sym "no_realization") (show_name g))))
       ((Prod.mk t1 (PkErr _ _))
        (Prod.mk t1
-         (SsErr (quote no_realization)
+         (SsErr (sym "no_realization")
            (append (show_name g)
-             ": a static argument of a package type names a package constant — a def whose value is the structure's constructor applied")))))))
+             (utf8
+               ": a static argument of a package type names a package constant — a def whose value is the structure's constructor applied"))))))))
 (fn somes_of ((es (List Expr))) (List (Option Expr))
   (measure (struct es))
   (match es
@@ -1808,8 +1830,8 @@
           ((Prod.mk t2 term) (static_shape t2 env term k fuel))))
        (none
          (Prod.mk t1
-           (SsErr (quote no_realization)
-             (append (show_name sn) ": a projection past the constructor's fields"))))))
+           (SsErr (sym "no_realization")
+             (append (show_name sn) (utf8 ": a projection past the constructor's fields")))))))
     ((Prod.mk t1 (PkPlaceholder pn))
      (Prod.mk t1 (SsOk (Shape (mk_const (package_field_name pn i) nil) none k nil nil) nil)))))
 (fn passed_shape ((t Tr) (env (List ErEnt)) (id Int) (k Int)) (Prod Tr SsRes)
@@ -1817,46 +1839,50 @@
     ((some (Prod.mk (EKShape sh ids) _))
      (if (= (shape_arity sh) k) (Prod.mk t (SsOk sh (captured_bvars env ids)))
      (Prod.mk t
-       (SsErr (quote function_value)
-         (append "a static parameter (at "
+       (SsErr (sym "function_value")
+         (append (utf8 "a static parameter (at ")
            (append (show_name (shape_id sh))
-             (append ") of arity "
+             (append (utf8 ") of arity ")
                (append (show_nat (shape_arity sh))
-                 (append " passed where the arity is " (show_nat k))))))))))
+                 (append (utf8 " passed where the arity is ") (show_nat k))))))))))
     ((some (Prod.mk (EKCall g _) _))
      (Prod.mk t
-       (SsErr (quote no_l_meaning)
+       (SsErr (sym "no_l_meaning")
          (append (show_name g)
-           ": a function with a program and no K constant, or the enclosing function itself, as a static argument — its instance would have no L reading"))))
+           (utf8
+             ": a function with a program and no K constant, or the enclosing function itself, as a static argument — its instance would have no L reading")))))
     ((some (Prod.mk (EKTemplate g) _))
      (Prod.mk t
-       (SsErr (quote function_value)
+       (SsErr (sym "function_value")
          (append (show_name g)
-           ": a template as a static argument — an instance is taken where the template is called"))))
-    (_ (Prod.mk t (SsErr (quote function_value) (static_pointer))))))
+           (utf8
+             ": a template as a static argument — an instance is taken where the template is called")))))
+    (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer))))))
 (fn named_shape
   ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)) (k Int) (fuel Int))
   (Prod Tr SsRes)
   (if (is_template (Tr.es t) g)
     (Prod.mk t
-      (SsErr (quote function_value)
+      (SsErr (sym "function_value")
         (append (show_name g)
-          ": a template as a static argument — an instance is taken where the template is called")))
+          (utf8
+            ": a template as a static argument — an instance is taken where the template is called"))))
     (match (shape_kind t g)
       (none
         (Prod.mk t
-          (SsErr (quote no_realization)
+          (SsErr (sym "no_realization")
             (append (show_name g)
-              ": no program — a static argument names a fn with a program, a realized constant or an instance"))))
+              (utf8
+                ": no program — a static argument names a fn with a program, a realized constant or an instance")))))
       ((some prim)
        (match (env_find (tr_env t) g)
-         (none (Prod.mk t (SsErr (quote unknown_constant) (show_name g))))
+         (none (Prod.mk t (SsErr (sym "unknown_constant") (show_name g))))
          ((some info)
           (match (tr_tele t info)
             ((Prod.mk t1 none)
              (Prod.mk t1
-               (SsErr (quote no_realization)
-                 (append (show_name g) ": a static argument whose telescope K could not read"))))
+               (SsErr (sym "no_realization")
+                 (append (show_name g) (utf8 ": a static argument whose telescope K could not read")))))
             ((Prod.mk t1 (some (Tele _ binds _ _)))
              (shape_args t1 env head g binds gargs k fuel nil nil nil prim)))))))))
 ;; a static argument's identity has a program — a fn, a realized constant or an instance of the
@@ -1888,43 +1914,46 @@
       (if (trailing_data binds k)
         (Prod.mk t (SsOk (Shape head prim k (rev leading) (rev ctys)) (rev cvals)))
         (Prod.mk t
-          (SsErr (quote function_value)
+          (SsErr (sym "function_value")
             (append (show_name g)
-              (append " applied to "
+              (append (utf8 " applied to ")
                 (append (show_nat (len leading))
-                  (append " arguments does not leave "
-                    (append (show_nat k) " runtime binders, the static parameter's arity")))))))))
+                  (append (utf8 " arguments does not leave ")
+                    (append (show_nat k) (utf8 " runtime binders, the static parameter's arity"))))))))))
     ((cons a ar)
      (match binds
-       (nil (Prod.mk t (SsErr (quote function_value) (append (show_name g) " over-applied"))))
+       (nil (Prod.mk t (SsErr (sym "function_value") (append (show_name g) (utf8 " over-applied")))))
        ((cons (TBind _ role _) br)
         (match role
           (BType
             (if (has_fvar a)
               (Prod.mk t
-                (SsErr (quote function_value)
+                (SsErr (sym "function_value")
                   (append (show_name g)
-                    ": a type argument of a static argument mentions a local of the caller — it must be closed")))
+                    (utf8
+                      ": a type argument of a static argument mentions a local of the caller — it must be closed"))))
               (shape_args t env head g br ar k fuel (cons (some a) leading) ctys cvals prim)))
           (BErased
             (if (has_fvar a)
               (Prod.mk t
-                (SsErr (quote function_value)
+                (SsErr (sym "function_value")
                   (append (show_name g)
-                    ": an erased argument of a static argument mentions a local of the caller — it must be closed")))
+                    (utf8
+                      ": an erased argument of a static argument mentions a local of the caller — it must be closed"))))
               (shape_args t env head g br ar k fuel (cons (some a) leading) ctys cvals prim)))
           ((BData _)
            (match (tr_infer t a)
              ((Prod.mk t1 none)
               (Prod.mk t1
-                (SsErr (quote function_value)
-                  (append (show_name g) ": a captured value K could not type"))))
+                (SsErr (sym "function_value")
+                  (append (show_name g) (utf8 ": a captured value K could not type")))))
              ((Prod.mk t1 (some ty))
               (if (has_fvar ty)
                 (Prod.mk t1
-                  (SsErr (quote function_value)
+                  (SsErr (sym "function_value")
                     (append (show_name g)
-                      ": a captured value whose type mentions a local of the caller — its type must be closed")))
+                      (utf8
+                        ": a captured value whose type mentions a local of the caller — its type must be closed"))))
                 (match (erase t1 env a (- fuel 1))
                   ((ErErr e m) (Prod.mk t1 (SsErr e m)))
                   ((ErOk t2 a1)
@@ -1933,9 +1962,10 @@
                      prim)))))))
           ((BStatic _)
            (Prod.mk t
-             (SsErr (quote function_value)
+             (SsErr (sym "function_value")
                (append (show_name g)
-                 ": a template as a static argument — an instance is taken where the template is called"))))))))))
+                 (utf8
+                   ": a template as a static argument — an instance is taken where the template is called")))))))))))
 (fn trailing_data ((binds (List TBind)) (k Int)) Bool
   (measure (struct binds))
   (match binds
@@ -1952,28 +1982,31 @@
     ((Left6 e m) (Prod.mk t (SsErr e m)))
     ((Right6 captured)
      (let ((n (+ (Tr.lams t) 1)))
-       (let ((name (name_append (Tr.id t) (n1 (sym_of_chars (append "lam_" (show_nat n)))))))
+       (let ((name (name_append (Tr.id t) (n1 (sym_of_chars (append (utf8 "lam_") (show_nat n)))))))
          (match (open_lams (with Tr t (lams n)) lam k nil)
            ((Prod.mk t1 none)
             (Prod.mk t1
-              (SsErr (quote function_value)
-                "a lambda K could not open at the static parameter's arity")))
+              (SsErr (sym "function_value")
+                (utf8 "a lambda K could not open at the static parameter's arity"))))
            ((Prod.mk t1 (some (Prod.mk bfvs body)))
             (match (local_etypes t1 (append captured bfvs) nil)
               ((Prod.mk t2 none)
                (Prod.mk t2
-                 (SsErr (quote function_value)
-                   "a lambda whose binder or captured local has no closed E type — over a type parameter, a proof or a dependent type")))
+                 (SsErr (sym "function_value")
+                   (utf8
+                     "a lambda whose binder or captured local has no closed E type — over a type parameter, a proof or a dependent type"))))
               ((Prod.mk t2 (some ptys))
                (match (tr_infer t2 body)
                  ((Prod.mk t3 none)
-                  (Prod.mk t3 (SsErr (quote function_value) "a lambda whose body K could not type")))
+                  (Prod.mk t3
+                    (SsErr (sym "function_value") (utf8 "a lambda whose body K could not type"))))
                  ((Prod.mk t3 (some bty))
                   (match (l_to_etype (Tr.w t3) (Tr.es t3) (Tr.sc t3) bty nil nil)
                     ((Prod.mk (Prod.mk w4 es4) none)
                      (Prod.mk (tr_set_es (tr_set_w t3 w4) es4)
-                       (SsErr (quote function_value)
-                         "a lambda whose result is no E type (a function returned is no value)")))
+                       (SsErr (sym "function_value")
+                         (utf8
+                           "a lambda whose result is no E type (a function returned is no value)"))))
                     ((Prod.mk (Prod.mk w4 es4) (some rty))
                      (match
                        (erase (tr_set_es (tr_set_w t3 w4) es4) (lifted_env env captured bfvs) body
@@ -1986,8 +2019,9 @@
                              ((Prod.mk t7 ty)
                               (if (has_fvar ty)
                                 (Prod.mk t7
-                                  (SsErr (quote function_value)
-                                    "a lambda whose type mentions a local of the caller — its type must be closed"))
+                                  (SsErr (sym "function_value")
+                                    (utf8
+                                      "a lambda whose type mentions a local of the caller — its type must be closed")))
                                 (match (local_ltypes t7 captured nil)
                                   ((Prod.mk t8 ctys)
                                    (Prod.mk
@@ -2010,26 +2044,28 @@
      (match (er_index env (fvar_id_of fv) 0)
        ((some (Prod.mk EKVar _)) (captured_of env r (cons fv acc)))
        ((some (Prod.mk EKStatic _))
-        (Left6 (quote function_value)
-          "a lambda over a type parameter of the caller — a polymorphic lambda is not supported"))
+        (Left6 (sym "function_value")
+          (utf8
+            "a lambda over a type parameter of the caller — a polymorphic lambda is not supported")))
        ((some (Prod.mk EKErased _))
-        (Left6 (quote function_value)
-          "a lambda mentioning a proof or a type of the caller is not supported"))
+        (Left6 (sym "function_value")
+          (utf8 "a lambda mentioning a proof or a type of the caller is not supported")))
        ((some (Prod.mk EKIH _))
-        (Left6 (quote recursion_structure) "a lambda over an induction hypothesis"))
+        (Left6 (sym "recursion_structure") (utf8 "a lambda over an induction hypothesis")))
        ((some (Prod.mk (EKCall g _) _))
-        (Left6 (quote function_value)
+        (Left6 (sym "function_value")
           (append (show_name g)
-            ": a lambda calling a function with a program and no K constant, or its enclosing function — the lifted fn would have no L definition")))
+            (utf8
+              ": a lambda calling a function with a program and no K constant, or its enclosing function — the lifted fn would have no L definition"))))
        ((some (Prod.mk (EKShape sh _) _))
-        (Left6 (quote function_value)
-          (append "a lambda over a static parameter (at "
+        (Left6 (sym "function_value")
+          (append (utf8 "a lambda over a static parameter (at ")
             (append (show_name (shape_id sh))
-              "): a static parameter is passed on, never transformed"))))
+              (utf8 "): a static parameter is passed on, never transformed")))))
        ((some (Prod.mk (EKTemplate g) _))
-        (Left6 (quote function_value)
-          (append (show_name g) ": a lambda calling the template it stands in")))
-       (none (Left6 (quote erased_in_runtime) "a variable the erasure does not know"))))))
+        (Left6 (sym "function_value")
+          (append (show_name g) (utf8 ": a lambda calling the template it stands in"))))
+       (none (Left6 (sym "erased_in_runtime") (utf8 "a variable the erasure does not know")))))))
 ;; the free locals of a term, first occurrence first
 (fn fvars_of ((e Expr)) (List Expr) (rev (fvars_acc e nil)))
 (fn fvars_acc ((e Expr) (acc (List Expr))) (List Expr)

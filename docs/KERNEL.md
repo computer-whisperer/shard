@@ -32,8 +32,9 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | File | What it does | Rests on | Called by |
 |---|---|---|---|
 | `sexpr.shard` | The s-expression reader: bytes → `SExpr` (numeral, symbol, symbol with universe list, string, list); `read_all` for a whole file with the error's byte offset; `show_sexpr` printer; `size_sexpr`. No name has a meaning here. | `util.shard` | `scope.shard`, `record.shard` (imports); `loader.shard` and `reader.shard` (`read_all`), `derive.shard`, `engine.shard`, `prove.shard`; `v3/tools/shardfmt/reads` (the formatter's judge) |
-| `name.shard` | Hierarchical names (`Anon`/`Str`/`Num`, Lean's `Name`) and the structural hash (`mix`, `hash_name`, `name_key`) every table is keyed by; a name's hash under a prefix from the prefix's hash and the name's components (`comp_hashes`, `hash_under`, `key_under`). | — | `util.shard`, `level.shard`, `expr.shard`, `verdict.shard`, `index.shard`, `initload.shard`, … — the base of everything |
-| `util.shard` | List, byte, decimal and name utilities: `len append rev nth take drop`, `is_ws is_digit`, `show_nat show_int`, `name_eq name_lt show_name`, `hex_val`, `utf8_ok`; `utf8`, a literal's bytes (text here is `(List Int)`, a literal a `String`), and `utf8_all` for a list of them. | `name.shard` | nearly every kernel file (`sexpr`, `json`, `record`, `index`, `initload`, …) |
+| `util.shard` | List, byte and decimal utilities: `len append rev nth take drop`, `is_ws is_digit`, `show_nat show_int`, `hex_val`, `utf8_ok`; `utf8`, a literal's bytes (text here is `(List Int)`, a literal a `String`), and `utf8_all` for a list of them. The lowest file. | — | `sym.shard`; nearly every kernel file (`sexpr`, `json`, `record`, `index`, `initload`, …) |
+| `sym.shard` | `Symbol`, an ordinary type: the bytes of a text (`MkSym`). `sym` (the symbol of a literal), `sym_eq`, `chars_of_sym`, `sym_of_chars`: ordinary functions; no reader knows the name and no engine stores a symbol in a form of its own. | `util.shard` | `name.shard`, `sexpr.shard`; every file that names a symbol |
+| `name.shard` | Hierarchical names (`Anon`/`Str`/`Num`, Lean's `Name`) and the structural hash (`mix`, `hash_name`, `name_key`) every table is keyed by; a name's hash under a prefix from the prefix's hash and the name's components (`comp_hashes`, `hash_under`, `key_under`); `name_eq name_lt names_eq mem_name show_name`, `n1`, `n2`. | `sym.shard`, `util.shard` | `level.shard`, `expr.shard`, `verdict.shard`, `index.shard`, `initload.shard`, … — the base of everything that names |
 | `intmap.shard` | Persistent map keyed by a non-negative Int (4-ary trie): `im_find im_insert im_has`. | — | `expr.shard`, `prog.shard`, `ev.shard`, `index.shard`, `initload.shard`; through them `scope`, `loader`, K's tables |
 | `scope.shard` | What a citation means in a file: `Scope` (declaration prefix, module tag, opened prefixes, visible set; each prefix held with its hash, built by `scope_of`, `open_of`, `open_some`), the elaboration context `Cx`, `resolve` / `scope_candidates` / `resolve_ctor`, `scope_keyed` (the candidates of a citation, each with its key in the environment: the citation's bytes are hashed once), `visible`, `init_cited` (`Init.NAME`), the renamed-primitive table, `type_head`. | `sexpr.shard`, K's view (`k`: `CheckedEnv`, `env_find`, `env_find_at`), `expr`, `intmap`, `name`, `util` | `etable.shard`, `matcher.shard`, `elab.shard` (imports); used by `reader`, `classify`, `erase`, `predef`, `loader` |
 | `spelling.shard` | Two fixed tables over Init's names: `sp_canon` (a class method under Init's instance read as its function, e.g. `HAdd.hAdd Nat …` → `Nat.add`), `sp_instance` (the instance term for an instance-implicit binder at Nat/Int/Bool/List), and `sp_kit` (every constant the tables can write, for the Init demand). | `kw.shard` (K's view, `expr`, `level`, `name`) | `unify.shard` (import); `elab`, `tactic`, `arith`, `engine`; `loader.shard` (`sp_kit` in `init_kit`) |
@@ -52,20 +53,20 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | file | lines | what it does | rests on | called by |
 |---|---|---|---|---|
 | `decl.shard` | 186 | The data of K's declarations: `Declaration` (raw input: axiom, definition, theorem, opaque, inductive block, quotient) and `ConstantInfo` (a checked environment entry), reducibility hints, safety. Shapes follow Lean's export format field for field. | `expr.shard` | K (`k/`), `reader`, `elab`, `define`, `realize`, `derive`, `loader` — everything that builds or inspects a declaration |
-| `prog.shard` | 438 | The program representation: `EType`, `ELit`, `EPat`, `ETerm` (ten forms of a program, and the lambda of a body as read), `ERec` (recursion clause), `EDecl` (inductive, function, extern, sig fn, sig type), `Prog`, values `Val`, results `EvRes`; the primitive table (identity → operation code, arity); the registry both readers write by (`realization_of`: an operation of Init → its entry; `realization_expr`, `realization_type`: an expression row and its type); the identities of the runtime's cells. | `util`, `intmap`, `name` | `etable`, `classify`, `erase`, `erasure`, `thread`, `ev`, `lower`, `dump`, `loader` |
-| `etable.shard` | 329 | The program table `ESt`: every program-side identity findable by any suffix of its spelling, registered per file before any body is read (forward references); a re-registered identity overrides (how a view's signature is linked to its implementation). `EInfo` kinds incl. `EITemplate`. | `scope`, `prog` | `erase`, `classify`, `erasure`, `realize`, `define`, `template`, `thread`, `loader` |
-| `erase.shard` | 703 | Roles over the checked environment: which inductives may appear in programs (`ind_eligible`), an L type as a program type (`l_to_etype`), the role of each binder of a constant (`BType`, `BErased`, `BData`, `BStatic`), level solving, the registry's one-field structures (`rep_row`), package types. | `etable`, `kw` (the walk over K) | `classify`, `erasure`, `realize`, `define`, `template`, `loader` |
-| `classify.shard` | 3166 | The program-first reader (`route=e_first`): `fn`, `extern`, `type`, `sig` forms read straight into `prog.shard` data with every head resolved and saturated; a call's written arguments sorted by the head's declared signature (`written_data`: runtime data kept, a type or a proof passed over, a proof only where the typed route read the form — `classify_checked`); Init's constants with a fixed program (`init_row`), the registry's rows, projections, `dite` and decisions (`k_head`, `read_cond`); binders that are proofs, types that name values (`read_params`, `type_args`); numeral rows as tests and a `let` of several bindings as lets (`read_ematch_lit`, `let_chain`); the operators' entries from the types the binders state (`settle_ops`: the type expected, else the operands'; `=` at Bool and at a derived equality; a template's call in the elaborator's order, `settle_tm`), a row's expression written last (`expand_rows`); exhaustiveness, private-match and comparison-type checks; pre-registration of a file's heads; static types of program terms (`c_type`); the instances a body takes and the lambdas it lifts (`take_instances`, `take_lambda`: a lambda, a name, a registry constant, a package as shapes); a supplied `realize` read as the fn it is (`classify_realize`). | `etable`, `erase` | `loader` (`load_e_first`, twins of `type`/`sig`), `realize`, `thread`, `template` |
-| `elab.shard` | 2058 | The elaborator: source terms → K's `Expr`, bidirectional, with metavariables for implicit arguments and levels solved by first-order unification; operators by operand type; `if`/`dif`; `match` (generates and admits a matcher); numerals, strings, `list`, `let`, binders; the three coercions; instance table lookup. | `scope`, `unify`, `matcher`, `spelling`, `kw` | `reader` (every L form), `predef`, `realize`, `derive`, `tactic`, `loader` |
-| `predef.shard` | 230 | Reads a `fn` form once into a *pre-definition*: declared type, binder locals, a local for the function's own name, the elaborated body, the recursion clause, callee-locals for program-only callees. `PdSkip` = signature has no L reading; `PdErr` = refusal. | `reader`, `elab` | `erasure` (`erase_predef`), `define`, `template`, `loader` (`load_fn_with`, `probe_fn`, `read_group`, `load_ldef`) |
-| `erasure.shard` | 2106 | The erasure of an L term to a program term by `erase.shard`'s roles; the walk state `Tr` and its K procedures; `erase_predef` (a `fn`'s program, or the verdict "template"); template calls → instance demands, lambda lifting (`CALLER.lam_N`), shapes and instance names. | `predef`, `erase`, `prog`, `matcher` | `realize`, `define`, `template`, `loader` |
-| `realize.shard` | 1058 | `(realize NAME …)`: the supplied form (signature against the erased type, body elaborated at the constant's telescope, descent and callee-order checks) and the derived view; the equation generator `pj_equations` (leaves of the leading matchers, `eq_N` / `realize_N`, `fix_eq` proofs) shared with `define`. | `erasure`, `classify` | `define`, `template`, `loader` (`load_realize`) |
-| `define.shard` | 2587 | The K projection of a pre-definition: non-recursive value; structural recursion by `T.brecOn` (`pj_struct`, generating `T.below`/`T.brecOn` for a program's type); measure by `WellFounded.fix` with obligations `f.dec_N` (`pj_wf`, `pj_self`); a group as one fixpoint over a generated `f.args` type (`define_group`); `casesOn`, `noConfusion`, `inj` bundle for a new inductive. Verdicts `DfOk`/`DfSkip` (RUNNABLE)/`DfErr` (REFUSE)/`DfAux`. | `realize`, `erasure`, `predef`, `matcher`, `kw` | `loader` (`load_fn_with`, `load_ldef`, `load_template`, `load_group`, `bundle_after`) |
-| `template.shard` | 766 | Templates (a `fn` or supplied `realize` with a function-typed binder): checks the declaration at placeholder shapes (`check_template`), builds an instance — program, L definition (the template applied), equations — for a demand (`build_instance`), or the program alone for a program-first taker (`build_instance_e`). | `erasure`, `realize`, `classify` | `loader` (`load_template`, `build_demands`, `build_e_demands`, `register_template`) |
-| `derive.shard` | 1242 | `(derive TYPE CAPABILITY…)`: reads the type's constructors from K's environment and writes source forms — `ctorIdx`, `decEq`, `compare`, `renderOnto`/`render` as `fn`s; `size` as `def`s over the recursor with `eq_K` theorems — which the loader then loads as the file's own; checks a `(CAP by NAME)` procedure's type. | `elab`, `matcher`, `unify`, `scope` (`derived_for`) | `loader` (`load_derive`) |
-| `record.shard` | 431 | `(record …)` expanded at the s-expression level before anything is read: the `type`, accessor and updater `fn`s; `(make …)` and `(with …)` rewritten in every form of the file, also over a parameterless `structure`. | `sexpr`, `util` | `loader` (`expand_records`, per file) |
+| `prog.shard` | 434 | The program representation: `EType`, `ELit`, `EPat`, `ETerm` (ten forms of a program, and the lambda of a body as read), `ERec` (recursion clause), `EDecl` (inductive, function, extern, sig fn, sig type), `Prog`, values `Val`, results `EvRes`; the primitive table (identity → operation code, arity); the registry both readers write by (`realization_of`: an operation of Init → its entry; `realization_expr`, `realization_type`: an expression row and its type); the identities of the runtime's cells. | `util`, `intmap`, `name` | `etable`, `classify`, `erase`, `erasure`, `thread`, `ev`, `lower`, `dump`, `loader` |
+| `etable.shard` | 331 | The program table `ESt`: every program-side identity findable by any suffix of its spelling, registered per file before any body is read (forward references); a re-registered identity overrides (how a view's signature is linked to its implementation). `EInfo` kinds incl. `EITemplate`. | `scope`, `prog` | `erase`, `classify`, `erasure`, `realize`, `define`, `template`, `thread`, `loader` |
+| `erase.shard` | 704 | Roles over the checked environment: which inductives may appear in programs (`ind_eligible`), an L type as a program type (`l_to_etype`), the role of each binder of a constant (`BType`, `BErased`, `BData`, `BStatic`), level solving, the registry's one-field structures (`rep_row`), package types. | `etable`, `kw` (the walk over K) | `classify`, `erasure`, `realize`, `define`, `template`, `loader` |
+| `classify.shard` | 3208 | The program-first reader (`route=e_first`): `fn`, `extern`, `type`, `sig` forms read straight into `prog.shard` data with every head resolved and saturated; a call's written arguments sorted by the head's declared signature (`written_data`: runtime data kept, a type or a proof passed over, a proof only where the typed route read the form — `classify_checked`); Init's constants with a fixed program (`init_row`), the registry's rows, projections, `dite` and decisions (`k_head`, `read_cond`); binders that are proofs, types that name values (`read_params`, `type_args`); numeral rows as tests and a `let` of several bindings as lets (`read_ematch_lit`, `let_chain`); the operators' entries from the types the binders state (`settle_ops`: the type expected, else the operands'; `=` at Bool and at a derived equality; a template's call in the elaborator's order, `settle_tm`), a row's expression written last (`expand_rows`); exhaustiveness, private-match and comparison-type checks; pre-registration of a file's heads; static types of program terms (`c_type`); the instances a body takes and the lambdas it lifts (`take_instances`, `take_lambda`: a lambda, a name, a registry constant, a package as shapes); a supplied `realize` read as the fn it is (`classify_realize`). | `etable`, `erase` | `loader` (`load_e_first`, twins of `type`/`sig`), `realize`, `thread`, `template` |
+| `elab.shard` | 2091 | The elaborator: source terms → K's `Expr`, bidirectional, with metavariables for implicit arguments and levels solved by first-order unification; operators by operand type; `if`/`dif`; `match` (generates and admits a matcher); numerals, strings, `list`, `let`, binders; the three coercions; instance table lookup. | `scope`, `unify`, `matcher`, `spelling`, `kw` | `reader` (every L form), `predef`, `realize`, `derive`, `tactic`, `loader` |
+| `predef.shard` | 221 | Reads a `fn` form once into a *pre-definition*: declared type, binder locals, a local for the function's own name, the elaborated body, the recursion clause, callee-locals for program-only callees. `PdSkip` = signature has no L reading; `PdErr` = refusal. | `reader`, `elab` | `erasure` (`erase_predef`), `define`, `template`, `loader` (`load_fn_with`, `probe_fn`, `read_group`, `load_ldef`) |
+| `erasure.shard` | 2142 | The erasure of an L term to a program term by `erase.shard`'s roles; the walk state `Tr` and its K procedures; `erase_predef` (a `fn`'s program, or the verdict "template"); template calls → instance demands, lambda lifting (`CALLER.lam_N`), shapes and instance names. | `predef`, `erase`, `prog`, `matcher` | `realize`, `define`, `template`, `loader` |
+| `realize.shard` | 1076 | `(realize NAME …)`: the supplied form (signature against the erased type, body elaborated at the constant's telescope, descent and callee-order checks) and the derived view; the equation generator `pj_equations` (leaves of the leading matchers, `eq_N` / `realize_N`, `fix_eq` proofs) shared with `define`. | `erasure`, `classify` | `define`, `template`, `loader` (`load_realize`) |
+| `define.shard` | 2627 | The K projection of a pre-definition: non-recursive value; structural recursion by `T.brecOn` (`pj_struct`, generating `T.below`/`T.brecOn` for a program's type); measure by `WellFounded.fix` with obligations `f.dec_N` (`pj_wf`, `pj_self`); a group as one fixpoint over a generated `f.args` type (`define_group`); `casesOn`, `noConfusion`, `inj` bundle for a new inductive. Verdicts `DfOk`/`DfSkip` (RUNNABLE)/`DfErr` (REFUSE)/`DfAux`. | `realize`, `erasure`, `predef`, `matcher`, `kw` | `loader` (`load_fn_with`, `load_ldef`, `load_template`, `load_group`, `bundle_after`) |
+| `template.shard` | 772 | Templates (a `fn` or supplied `realize` with a function-typed binder): checks the declaration at placeholder shapes (`check_template`), builds an instance — program, L definition (the template applied), equations — for a demand (`build_instance`), or the program alone for a program-first taker (`build_instance_e`). | `erasure`, `realize`, `classify` | `loader` (`load_template`, `build_demands`, `build_e_demands`, `register_template`) |
+| `derive.shard` | 1296 | `(derive TYPE CAPABILITY…)`: reads the type's constructors from K's environment and writes source forms — `ctorIdx`, `decEq`, `compare`, `renderOnto`/`render` as `fn`s; `size` as `def`s over the recursor with `eq_K` theorems — which the loader then loads as the file's own; checks a `(CAP by NAME)` procedure's type. | `elab`, `matcher`, `unify`, `scope` (`derived_for`) | `loader` (`load_derive`) |
+| `record.shard` | 439 | `(record …)` expanded at the s-expression level before anything is read: the `type`, accessor and updater `fn`s; `(make …)` and `(with …)` rewritten in every form of the file, also over a parameterless `structure`. | `sexpr`, `util` | `loader` (`expand_records`, per file) |
 | `inhabit.shard` | 102 | Builds a default value of a K type structurally (a lambda for a function type; the first constructor whose fields all close) — the value an `extern`'s opaque constant is declared with. | `kw` | `reader` (`read_extern`) |
-| `thread.shard` | 1153 | The use check over programs: World types and carriers, abstract tokens and boxes, the walk (`th_term`), a function's verdict (`th_fn`: `ok`, `world_twice`, `world_unsupported`, `world_forged`); second half: the same walk over the checker's own state, on request (`--state`). | `classify` (static types), `etable`, `prog` | `loader` (`rec_threads` at each file's end, `bin_threads`, `rec_states`) |
+| `thread.shard` | 1173 | The use check over programs: World types and carriers, abstract tokens and boxes, the walk (`th_term`), a function's verdict (`th_fn`: `ok`, `world_twice`, `world_unsupported`, `world_forged`); second half: the same walk over the checker's own state, on request (`--state`). | `classify` (static types), `etable`, `prog` | `loader` (`rec_threads` at each file's end, `bin_threads`, `rec_states`) |
 | `loader.shard` (declaration parts) | 4779 | `load_decl_go` dispatches each form; `load_e_form`/`load_fn_with` (the `fn` pipeline: pre-definition → erasure → definition; parking on a forward reference), `settle_groups`/`find_group`/`load_group` (groups), `load_ldef` (a recursive `def`), `load_extern`, `load_realize`, `load_derive`, `load_discharge` (obligations), `load_template`/`build_demands` (instances), `admit_core`/`policy_pass` (K admission and the axiom policy), `check_bin`, `rec_threads`, `show_rec` (the printed records). | `reader`, `k`, `realize`, `define`, `template`, `record`, `derive`, `elab`, `tactic`, `thread`, `initload` | `load.shard` (the driver), `run.shard`, `prove.shard`, tests |
 
 Related files outside the list that the area depends on: `reader.shard` (the L declaration forms
@@ -79,23 +80,23 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 
 | File | What it does | Rests on | Called by |
 |---|---|---|---|
-| `tactic.shard` (2,935) | The step elaborator. Reads a `(by STEP…)` block into `Node` data (`read_block`, `read_node`), runs each step on a goal (`tac_step`, one `step_*` function per form), threads the block depth-first (`tac_block`) and returns the closed proof term, the sorried goals, or a refusal (`tac_prove`). Also renders goals (`goal_of`, `goal_sx`), lists the steps a goal admits (`applicable`), and declares `reconstruction_version` (2). | `elab.shard` (terms, metavariables), `arith.shard`, `unify.shard` (`assign`, levels), `matcher.shard` (`mt_is_matcher`, for case steps in `reduce`), `spelling.shard` (`sp_canon`), `kw.shard`, K through its view. | `reader.shard` (`read_proof`, `read_block_proof`, `run_tactic`), `engine.shard`, `loader.shard` (`reconstruction_version`, `tc_kit`), `prove.shard`. |
-| `arith.shard` (1,063) | `arith`'s back end. Reads a statement as a comparison (`ar_rel`), linearizes terms over atoms (`ar_lin`), builds the rows, finds weights by Fourier–Motzkin elimination (`fm_find`) or checks the given ones, and builds the proof from `Lean.Omega`'s lemmas (`ar_prove`). | `elab.shard` (locals, visibility of the kit), `spelling.shard`, `kw.shard`. | `tactic.shard` (`step_arith`, `applicable`), `engine.shard` (`eng_arith`), `loader.shard` (`ar_all_kit`). |
-| `engine.shard` (495) | The default producer for `auto`: a fixed ladder of steps, each confirmed through `tac_step`, under a step budget and hints; renders `Node` data back to source text for the sidecar (`nodes_sx`). Declares `engine_version` (1). | `tactic.shard`, `arith.shard`, `elab.shard`. | `reader.shard` (`read_auto`, `read_measured`), `prove.shard` (the version, in the header and the sidecar comment). |
-| `prove.shard` (319) | The `prove` program: loads the files under mode `solve` or `measure`, prints the records and counts, rewrites the sidecars of the files that gained a block — an implementation's beside the implementation file — or were read at an older schema or reconstruction version. | `loader.shard` (the whole load), `reader.shard` (`Auto`, `Req`), `engine.shard`, `tactic.shard`. | A root program: `eval direct v3/kernel/prove.shard`, `v3/bin/prove`; tests `engine_test.sh`, `tactic_lib_test.sh` (`parity_test.sh` lists it among the drivers). |
-| `unify.shard` (722) | Metavariables and first-order unification: the metavariable context (`MCtx`), assignment with occurs and scope checks (`assign`), `unify` with four outcomes (yes, no, stuck, exhausted), level unification, instantiation (`inst_mvars`). A closed mismatch is decided by K's `is_def_eq`. | `kw.shard`, `spelling.shard`, K's view. | `elab.shard` (every term), `tactic.shard` (`tac_match`, `rfl`, `apply`), `engine.shard`, `derive.shard`. |
-| `matcher.shard` (567) | Generates the auxiliary definition a `match` elaborates to (`mt_generate`) and recognizes one by regenerating it from its type (`mt_is_matcher`). | `kw.shard`, `scope.shard`, K's view. | `elab.shard` (`elab_match`), `tactic.shard` (the case step of `reduce`), `define.shard`, `realize.shard`, `erasure.shard`, `derive.shard`, `template.shard`. |
-| `kw.shard` (178) | The walk over K's terms from outside K: an environment, a local context and checker state (`W`), with K's `whnf`, `infer`, `is_def_eq`, `is_prop`, local creation and binder closing wrapped so that a failure is a value. | K's view only. | Every elaborating file: `unify`, `elab`, `tactic`, `arith`, `spelling`, `matcher`, `reader`, `loader`, `define`, `realize`, `derive`, `erase`, `erasure`, `template`, `classify`, `inhabit`, `run`, `predef`. |
-| `elab.shard` (2,058), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (can the module cite this constant); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
-| `loader.shard` (4,779), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
+| `tactic.shard` (2,972) | The step elaborator. Reads a `(by STEP…)` block into `Node` data (`read_block`, `read_node`), runs each step on a goal (`tac_step`, one `step_*` function per form), threads the block depth-first (`tac_block`) and returns the closed proof term, the sorried goals, or a refusal (`tac_prove`). Also renders goals (`goal_of`, `goal_sx`), lists the steps a goal admits (`applicable`), and declares `reconstruction_version` (2). | `elab.shard` (terms, metavariables), `arith.shard`, `unify.shard` (`assign`, levels), `matcher.shard` (`mt_is_matcher`, for case steps in `reduce`), `spelling.shard` (`sp_canon`), `kw.shard`, K through its view. | `reader.shard` (`read_proof`, `read_block_proof`, `run_tactic`), `engine.shard`, `loader.shard` (`reconstruction_version`, `tc_kit`), `prove.shard`. |
+| `arith.shard` (1,070) | `arith`'s back end. Reads a statement as a comparison (`ar_rel`), linearizes terms over atoms (`ar_lin`), builds the rows, finds weights by Fourier–Motzkin elimination (`fm_find`) or checks the given ones, and builds the proof from `Lean.Omega`'s lemmas (`ar_prove`). | `elab.shard` (locals, visibility of the kit), `spelling.shard`, `kw.shard`. | `tactic.shard` (`step_arith`, `applicable`), `engine.shard` (`eng_arith`), `loader.shard` (`ar_all_kit`). |
+| `engine.shard` (499) | The default producer for `auto`: a fixed ladder of steps, each confirmed through `tac_step`, under a step budget and hints; renders `Node` data back to source text for the sidecar (`nodes_sx`). Declares `engine_version` (1). | `tactic.shard`, `arith.shard`, `elab.shard`. | `reader.shard` (`read_auto`, `read_measured`), `prove.shard` (the version, in the header and the sidecar comment). |
+| `prove.shard` (325) | The `prove` program: loads the files under mode `solve` or `measure`, prints the records and counts, rewrites the sidecars of the files that gained a block — an implementation's beside the implementation file — or were read at an older schema or reconstruction version. | `loader.shard` (the whole load), `reader.shard` (`Auto`, `Req`), `engine.shard`, `tactic.shard`. | A root program: `eval direct v3/kernel/prove.shard`, `v3/bin/prove`; tests `engine_test.sh`, `tactic_lib_test.sh` (`parity_test.sh` lists it among the drivers). |
+| `unify.shard` (723) | Metavariables and first-order unification: the metavariable context (`MCtx`), assignment with occurs and scope checks (`assign`), `unify` with four outcomes (yes, no, stuck, exhausted), level unification, instantiation (`inst_mvars`). A closed mismatch is decided by K's `is_def_eq`. | `kw.shard`, `spelling.shard`, K's view. | `elab.shard` (every term), `tactic.shard` (`tac_match`, `rfl`, `apply`), `engine.shard`, `derive.shard`. |
+| `matcher.shard` (576) | Generates the auxiliary definition a `match` elaborates to (`mt_generate`) and recognizes one by regenerating it from its type (`mt_is_matcher`). | `kw.shard`, `scope.shard`, K's view. | `elab.shard` (`elab_match`), `tactic.shard` (the case step of `reduce`), `define.shard`, `realize.shard`, `erasure.shard`, `derive.shard`, `template.shard`. |
+| `kw.shard` (179) | The walk over K's terms from outside K: an environment, a local context and checker state (`W`), with K's `whnf`, `infer`, `is_def_eq`, `is_prop`, local creation and binder closing wrapped so that a failure is a value. | K's view only. | Every elaborating file: `unify`, `elab`, `tactic`, `arith`, `spelling`, `matcher`, `reader`, `loader`, `define`, `realize`, `derive`, `erase`, `erasure`, `template`, `classify`, `inhabit`, `run`, `predef`. |
+| `elab.shard` (2,091), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (can the module cite this constant); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
+| `loader.shard` (4,847), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
 
 #### Other files on the path of a proof
 
 | File | Why it matters here |
 |---|---|
-| `reader.shard` (1,005) | The entry for every proof: `read_proof` and `read_proof_go` choose among `(exact …)`, `(by …)`, `sorry`, `auto` (the `bad_proof` refusal is here); `read_auto` computes the key (`req_key`, `req_deps`), fits the sidecar entry (`auto_fit`) and, under mode `solve`, calls the engine or a named tactic (`run_tactic`); `read_fulfills` and `read_discharge` do the same for `fulfills`. |
+| `reader.shard` (1,036) | The entry for every proof: `read_proof` and `read_proof_go` choose among `(exact …)`, `(by …)`, `sorry`, `auto` (the `bad_proof` refusal is here); `read_auto` computes the key (`req_key`, `req_deps`), fits the sidecar entry (`auto_fit`) and, under mode `solve`, calls the engine or a named tactic (`run_tactic`); `read_fulfills` and `read_discharge` do the same for `fulfills`. |
 | `spelling.shard` | `sp_canon`: Lean's class-method spellings read as this language's function spellings in goals, lemmas and `arith` rows; `sp_instance`: the fixed instance table behind `instance_needed`. |
-| `load.shard` (363) | The `load` program: the records printed, the exit code (refusals plus errors). |
+| `load.shard` (376) | The `load` program: the records printed, the exit code (refusals plus errors). |
 | `k/add.shard` | `identity_hash`, the content fingerprint. |
 
 ### K, the Init import, the replay gate
@@ -111,21 +112,21 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 - `env.shard` (39) — `CheckedEnv` (constants by 24-bit name key with buckets, quotInitialized,
   pinned names, node-id watermark) and `env_empty`; states the one-environment invariant.
   Rests on decl, intmap, verdict. Used by every other K file.
-- `tc.shard` (1,944) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
+- `tc.shard` (1,951) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
   `whnf`, `is_def_eq` in Lean's order (quick check, proof irrelevance, lazy delta, eta, structure
   eta, string literal expansion, unit-like); memo tables; `guard` (depth and heartbeat budgets);
   literal typing gated on pins; `reduce_nat` / `nat_apply` (the 14 accelerators); `reduce_native`
   (Unsupported). Also `Ctx`, `LDecl`, `Loc`, `env_find`, `env_add`, `st_for`, `st_seed`.
   Rests on env, expr, level, name, intmap, util, verdict. Called by inductive, nested, add,
   axioms; through the view by kw (hence elaborator, unifier, tactics, definer, erasure).
-- `inductive.shard` (1,210) — `add_inductive_core`: check the types, declare them, check and
+- `inductive.shard` (1,212) — `add_inductive_core`: check the types, declare them, check and
   declare constructors (positivity, universes), elimination level, K-target, recursor types and
   rules, then `check_recursors` (each rule type-preserving). Budgets `budget_depth` 8192,
   `budget_ticks` 100,000,000. Rests on tc. Called by nested.
-- `nested.shard` (1,008) — nested inductives: uniform-occurrence check, translation to auxiliary
+- `nested.shard` (1,009) — nested inductives: uniform-occurrence check, translation to auxiliary
   mutual types (`_nested` prefix reserved), admission through inductive.shard, translation back;
   `add_inductive` is the entry. Rests on inductive. Called by add.
-- `add.shard` (510) — admission: `check_decl_core` per kind, `add_quot` (checks `Eq`'s shape,
+- `add.shard` (513) — admission: `check_decl_core` per kind, `add_quot` (checks `Eq`'s shape,
   builds the four constants), `identity_hash` (a report fingerprint), the pin match
   (`pin_if_matches`, `ref_closure_ok`, `ref_matches`), the raw entry `check` / `check_with`
   (ingest, then check, then pin), `Limits`. Rests on nested, accel_pins. Called by import
@@ -135,42 +136,43 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   "cites in type or value", inductive blocks resolved as a unit, memo (`AxMemo`) kept outside the
   environment; `ci_used`, `induct_ctors`, `names_union`. Rests on tc. Called by import (`-a`),
   loader (`policy_pass`, `check_bin`), reader (`ci_used` for requirement keys).
-- `import.shard` (842) — the lean4export NDJSON import: table records (names, levels, terms,
+- `import.shard` (849) — the lean4export NDJSON import: table records (names, levels, terms,
   each compound term minted from the run's state), declaration records → `Declaration` →
   `check_decl_pinning`; an inductive record's exported types, constructors and recursors compared
   field by field with what K generated (`MISMATCH`); `Run` (tables, environment, state, five
   counts, axiom mode); `empty_run`, `run_on`, `run_resume`, `process_record`, `process_lines`,
   `show_verdict`, `show_counts`, `record_constants`. Rests on add, axioms, json, host.
   Called by t0, initload (`od_feed`), hostile_test.
-- `accel_pins.shard` (5,127, generated below its marker) — `pin_candidates` (20 names),
+- `accel_pins.shard` (5,136, generated below its marker) — `pin_candidates` (20 names),
   `is_pin_candidate`, then 206 reference declarations `rd_H` over shared term nodes `re_K` and
   names `rn_H`, the lookup `accel_ref` and `accel_ref_closure`. Produced by `gen_pins.sh`;
   checked by `t0_full.sh` (all 20 pinned on the export) and `k/test/accel_test.shard`.
   Rests on decl. Called by add (the match), t0 (`pin_candidates`), loader (`k_kit`).
-- `refgen.shard` (567) — `show_refs`: prints each candidate's identity closure as `REF ` lines
-  (the generated section of accel_pins). Generation only. Rests on add, host. Called by t0 under
+- `refgen.shard` (634) — `show_refs`: prints each candidate's identity closure as `REF ` lines
+  (the generated section of accel_pins), what a row cites above it: the names, the term nodes,
+  the rows, the table's buckets and the table, the closures. Generation only. Rests on add, host. Called by t0 under
   `--pins`.
 - `test/tc_test.shard` (101 cases), `test/inductive_test.shard` (29), `test/nested_test.shard`
-  (11), `test/add_test.shard` (315, with the one-counter census), `test/accel_test.shard` (98) —
+  (11), `test/add_test.shard` (321, with the one-counter census), `test/accel_test.shard` (98) —
   tests inside the seal; run by `v3/test.sh` on the bootstrap and by `k_clients_test.sh` through
   the V3 loader.
 
 #### The vocabulary K is written over (`v3/kernel/`, public)
 
-- `expr.shard` (1,141) — `Expr` (11 node kinds, each with node data `D`: id, hash, loose-bvar
+- `expr.shard` (1,147) — `Expr` (11 node kinds, each with node data `D`: id, hash, loose-bvar
   range, three flags), `Literal`, `BinderInfo`, `Memo`, `St` (fvar counter, heartbeats, node
   counter, memo); `mk_*` (anonymous) and `new_*` (identified) constructors; `ingest_expr` (the
   raw entry's rebuild); `expr_eq`, `same_node`, `used_consts`/`expr_consts`; instantiate, abstract,
   lift/lower, level instantiation, beta; `show_expr`. The header comments carry the typing,
   reduction and definitional-equality rules. Rests on level, intmap, name. Used by everything
   that builds or reads terms.
-- `level.shard` (463) — `Level` (zero succ max imax param, and the elaborator's `LMVar`),
+- `level.shard` (471) — `Level` (zero succ max imax param, and the elaborator's `LMVar`),
   `normalize`, `is_equivalent`, `is_geq`, `undef_param`. Rests on util. Used by expr, tc, elab.
 - `decl.shard` (186) — `Declaration` (raw) and `ConstantInfo` (checked entries), hints, safety,
-  recursor rules; the admission rules as comments. `verdict.shard` (65) — `Outcome`, `Reason`,
-  `Resource`, `Verdict`, `Failure`, `KRes`. `name.shard` (85) — `Name`, `hash_name`, `name_key`,
+  recursor rules; the admission rules as comments. `verdict.shard` (66) — `Outcome`, `Reason`,
+  `Resource`, `Verdict`, `Failure`, `KRes`. `name.shard` (169) — `Name`, `hash_name`, `name_key`,
   `mix`, `hash_under`. Also `intmap` (79), `util` (226), `json` (217), `host` (25).
-- `kw.shard` (178) — the walk over K from outside the seal: `W` = environment + local context +
+- `kw.shard` (179) — the walk over K from outside the seal: `W` = environment + local context +
   state; `w_infer`, `w_whnf`, `w_is_def_eq` (and `_r` forms that keep K's failure), `w_local`,
   `w_pis`/`w_lams` (K's `mk_binding`), `w_admit` (K's `check` into the walk's environment),
   `reason_of`. Rests on the view. Called by elab, unify, tactic, arith, define, derive, erase,
@@ -182,13 +184,13 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   `process_lines`, prints non-ACCEPT verdicts and counts; `-a` axiom closures, `-p` the pins
   line, `--pins` the reference table; exit = rejected + exhausted + mismatched. Rests on the
   view, host. Called by `t0_full.sh`, `gen_pins.sh`, t0_fixture_test, route2_test, native_tie.
-- `index.shard` (896) — the Init index: header, record table (62-byte rows), sorted name table
+- `index.shard` (904) — the Init index: header, record table (62-byte rows), sorted name table
   (218-byte rows), declaration table (9-byte rows); `ix_build` (one pass), range readers
   (`ix_read_row`, `ix_lookup`, `ix_names_under`, `ix_decl_of`), `ix_verify`. Rests on host, json,
   name, util. Called by initindex, initload.
 - `initindex.shard` (60) — driver: build an index, or `--verify` one. Called by
   `kernel/test/init_index.sh` (keeps `v3/.cache/init.index` current) and index_test.
-- `initload.shard` (821) — the load on demand: `od_open` (meta line against the pin, index
+- `initload.shard` (830) — the load on demand: `od_open` (meta line against the pin, index
   header, export size), `od_lookup` (name → ordinal), `od_walk` (the closure of the demanded
   records by range reads), `od_feed` (lines through K's `process_record` on `run_on env`),
   `od_load`. Rests on index, the view, json, host. Called by loader (`init_through`,
@@ -201,7 +203,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   pin marker `init.ndjson.pin`.
 - `v3/axioms.lean` (79) — the oracle: Lean computes each `Init` constant's axiom closure as a
   least fixpoint; one `AX name: axioms` line each.
-- `v3/t0_full.sh` (103) — the replay gate. `v3/t0_expected.txt` (1) — the pinned verdict line.
+- `v3/t0_full.sh` (102) — the replay gate. `v3/t0_expected.txt` (1) — the pinned verdict line.
   `v3/t0_axioms_cmp.sh` (26) — K's `AX` lines against the oracle's.
 - `v3/kernel/gen_pins.sh` (25) — regenerates accel_pins.shard below its marker.
 - Tests: `state_test.sh` (the state discipline + `v3/pins/state/main.shard`, 28 controls),
@@ -216,17 +218,17 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 
 | file | lines | what it does | rests on | called by |
 |---|---|---|---|---|
-| `prog.shard` | 438 | Programs as data: `EType`, `ELit`, `EPat`, `ETerm`, `ERec`, `EDecl`, `Prog`, `Val`, `EvRes`; the primitive table (39 entries, code and arity by identity); the identities of the runtime's cells. | `name`, `util`, `intmap` | the classifier and loader (build a `Prog`), `ev`, `lower`, `cgen`, `emit`, `dump`, `run` |
-| `ev.shard` | 1,520 | `ev`, the definition of "run": links a `Prog` into a private form (constructors as tags, functions as indices) and runs it as a machine with an explicit continuation, fuel spent per function entry. Also `prepare`/`invoke`/`invoke_run` (the handle and its two doors), the argument validation, the text codec for command-line arguments, `run_prog`, the extern wire by declared type (six host calls), the effect trace. | `host`, `prog`, `intmap`, `util` | `run.shard` (the door on a load), `load.shard` (through `run.shard`), `reader.shard`/`loader.shard` (a tactic library's run), tests `ev_test`, `prims_test`, `entry_test`, `handle_test`, `rows_test`, `project_test`, `loader_test`, `calc_harness` |
-| `run.shard` | 167 | A load's program run from an entry, the command line's `--run`: `run_load`/`run_load_as` prepare the entry at `ev`'s checked door with effects, refuse it `preconditioned` for what the load's environment shows of it that the program does not state (an evidence binder, a proposition field of a parameter's constructor), read the arguments by the text codec and invoke once. | `loader`, `ev`, K's view (`kernel.k`), `kw`, `etable`, `prog` | `load.shard` (`--run`, `--lowered`), `test/entry_test.shard` |
-| `lower.shard` | 675 | Back end stage 1, `lw_prog : Prog → Prog`: to a named form, the seven expression rows for Init's primitives whose runtime operation differs (`Nat.sub div mod`, `Int.tdiv tmod ediv emod`), lifting of `if`/`match` in operand position, nested patterns to flat chains, every operand an atom, back to indices. `lw_role` gives the eight wire roles. Refuses unlinked `sig`s, primitives with no runtime operation, string patterns. | `prog`, `name`, `util` | `emit.shard`, `cgen.shard` (`lw_role`), `load.shard` (`--lowered`) |
-| `cgen.shard` | 815 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–908 by role, others from 1000, odd for a type's second constructor), the symbols' variables, per-function text, the files (`prog.h` with what every unit reads, `main.c` with the tables and `main`, parts of 400 functions), each `.c` a translation unit of its own. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main` or one with parameters before the World, a constructor of more than 125 fields, a constructor named as a cell of the runtime at another place in its type. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
-| `emit.shard` | 104 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`) |
-| `rt.h` | 1,041 (C) | The runtime under the generated C, in two halves. Every unit's: tagged small integers, cells, the primitives' inline paths, declarations of the rest. `main.c`'s alone (`RT_MAIN`), once in a program: the allocator, the conservative mark–sweep collector, the intern table, bignum arithmetic, seven extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`) |
+| `prog.shard` | 434 | Programs as data: `EType`, `ELit`, `EPat`, `ETerm`, `ERec`, `EDecl`, `Prog`, `Val`, `EvRes`; the primitive table (36 entries, code and arity by identity); the identities of the runtime's cells. | `name`, `util`, `intmap` | the classifier and loader (build a `Prog`), `ev`, `lower`, `cgen`, `emit`, `dump`, `run` |
+| `ev.shard` | 1,507 | `ev`, the definition of "run": links a `Prog` into a private form (constructors as tags, functions as indices) and runs it as a machine with an explicit continuation, fuel spent per function entry. Also `prepare`/`invoke`/`invoke_run` (the handle and its two doors), the argument validation, the text codec for command-line arguments, `run_prog`, the extern wire by declared type (six host calls), the effect trace. | `host`, `prog`, `intmap`, `util` | `run.shard` (the door on a load), `load.shard` (through `run.shard`), `reader.shard`/`loader.shard` (a tactic library's run), tests `ev_test`, `prims_test`, `entry_test`, `handle_test`, `rows_test`, `project_test`, `loader_test`, `calc_harness` |
+| `run.shard` | 169 | A load's program run from an entry, the command line's `--run`: `run_load`/`run_load_as` prepare the entry at `ev`'s checked door with effects, refuse it `preconditioned` for what the load's environment shows of it that the program does not state (an evidence binder, a proposition field of a parameter's constructor), read the arguments by the text codec and invoke once. | `loader`, `ev`, K's view (`kernel.k`), `kw`, `etable`, `prog` | `load.shard` (`--run`, `--lowered`), `test/entry_test.shard` |
+| `lower.shard` | 672 | Back end stage 1, `lw_prog : Prog → Prog`: to a named form, the seven expression rows for Init's primitives whose runtime operation differs (`Nat.sub div mod`, `Int.tdiv tmod ediv emod`), lifting of `if`/`match` in operand position, nested patterns to flat chains, every operand an atom, back to indices. `lw_role` gives the eight wire roles. Refuses unlinked `sig`s, primitives with no runtime operation, string patterns. | `prog`, `name`, `util` | `emit.shard`, `cgen.shard` (`lw_role`), `load.shard` (`--lowered`) |
+| `cgen.shard` | 757 | Back end stage 2, `cg_prog`: the restricted form transcribed to C over `rt.h` — name mangling, tags (900–908 by role, others from 1000, odd for a type's second constructor), per-function text, the files (`prog.h` with what every unit reads, `main.c` with the tables and `main`, parts of 400 functions), each `.c` a translation unit of its own. Refuses anything outside the restricted form, a numeral pattern past the small integers, an extern with no shim, a missing `main` or one with parameters before the World, a constructor of more than 125 fields, a constructor named as a cell of the runtime at another place in its type. | `lower`, `prog`, `intmap`, `name`, `util` | `emit.shard` |
+| `emit.shard` | 105 | The back end's driver `emit_prog`: lowering, generation, the `map` lines (C name, kind, identity, source file), the module count. | `prog`, `etable`, `lower`, `cgen` | `load.shard` (`--emit`) |
+| `rt.h` | 960 (C) | The runtime under the generated C, in two halves. Every unit's: tagged small integers, cells, the primitives' inline paths, declarations of the rest. `main.c`'s alone (`RT_MAIN`), once in a program: the allocator, the conservative mark–sweep collector, bignum arithmetic, seven extern shims, traps, `SHARD_STATS` counters, `rt_init`. | libc, GNU C extensions, Linux `mmap`/`setrlimit` | generated C (`cc … -I v3/kernel`: `v3/build.sh`) |
 | `host.shard` | 21 | The toolchain's World type and seven extern declarations, text as `(List Int)` (`get_args read_file read_range write write_line write_file exit`). | — | every toolchain entrypoint; `ev.shard` (its driver performs six of them through these) |
-| `load.shard` | 363 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
-| `dump.shard` | 247 | A `Prog` as the canonical text that the bootstrap's `eval dump` also prints: one line per declaration, sorted; a stated projection (last name components). | `prog`, `etable` | `load.shard --dump`; `test/parity_test.sh`, `test/plain_test.sh`, `test/template_test.sh` |
-| `facts.shard` | 240 | What the program-first reading asks K about Init's constants, as a table (`facts_lines`): for each constant a token of the closure's files can resolve to — with an inductive's constructors, a constructor's inductive, the types its fields are at and a projection function's structure — its kind, its binders' flags (written or not; runtime data, a type, a proof), an inductive's parameters, constructors and E view, a projection function's structure and field, whether its type ends in Prop. The driver prints the load's table joined with that of each implementation it linked, whose fork fetched what the main line did not (`facts_join`). The Rust bootstrap reads what a closure cites of Init by it. | `classify`, `erase`, `dump` | `load.shard --facts OUT`; `test/plain_test.sh` |
+| `load.shard` | 376 | The loader's command line. In this area: `--run MODULE.FN … -- ARG…` with `--fuel`, `--trace`, `--lowered` (`main_run`, the exit codes 2–6), `--emit DIR` (`main_emit`: writes the C parts, `map`, `sources`; the `EMIT:` line), `--dump` (`main_dump`), `--facts OUT` (`write_facts`). | `loader`, `ev`, `dump`, `facts`, `emit`, `lower`, `run` | `eval direct v3/kernel/load.shard …`, `v3/bin/load …`; `v3/build.sh` (the emit); most shell tests |
+| `dump.shard` | 261 | A `Prog` as the canonical text that the bootstrap's `eval dump` also prints: one line per declaration, sorted; a stated projection (last name components). | `prog`, `etable` | `load.shard --dump`; `test/parity_test.sh`, `test/plain_test.sh`, `test/template_test.sh` |
+| `facts.shard` | 245 | What the program-first reading asks K about Init's constants, as a table (`facts_lines`): for each constant a token of the closure's files can resolve to — with an inductive's constructors, a constructor's inductive, the types its fields are at and a projection function's structure — its kind, its binders' flags (written or not; runtime data, a type, a proof), an inductive's parameters, constructors and E view, a projection function's structure and field, whether its type ends in Prop. The driver prints the load's table joined with that of each implementation it linked, whose fork fetched what the main line did not (`facts_join`). The Rust bootstrap reads what a closure cites of Init by it. | `classify`, `erase`, `dump` | `load.shard --facts OUT`; `test/plain_test.sh` |
 | `intmap.shard` | 77 | A persistent map keyed by non-negative integers (a 4-ary trie). | — | `ev` (function and tag tables), `cgen` (tags), K and the loader |
 
 The other three roots of the build's inventory are drivers of other areas: `t0.shard` (K over the
@@ -237,16 +239,16 @@ export's chunks), `prove.shard` (the producers), `initindex.shard` (the Init ind
 | file | lines | what it does |
 |---|---|---|
 | `bin/eval.rs` | 287 | The `eval` executable: `direct [--root DIR] [--facts F] FILE ARGS…` and `dump [--root DIR] [--facts F] FILE…` (DIR is `v3` where none is named); runs on a thread with a 4 GiB stack (`SHARD_STACK_MIB`); the host handler for seven extern names, answering an extern declared over Init's types in Init's cells and any other in the runtime's. |
-| `plain/mod.rs` | 1009 | The reader's data and tables: programs as `prog.shard` has them, names as identities, a file's scope (`use`, its own types, the visible modules), the E table and its resolution (`etable.shard`), resolution over K's constants (`scope.shard`), the closure's files as modules (`loader.shard`: paths, imports, views, the seal's prefix), every view linked to its implementation (`link_views`), Init's inductives registered on citation. |
-| `plain/read.rs` | 1,436 | `classify.shard`'s reading, function by function: types, terms, patterns, the written arguments that run, decisions, rows, numeral rows, `let` chains, signatures and bodies. It refuses nothing; a form with no reading is recorded and left out (a template's call, a derivation, a derived view). |
-| `plain/settle.rs` | 391 | `classify.shard`'s `c_type`, `settle_ops`, `expand_rows`: static types, the operators by their operands' types, the rows written out. |
+| `plain/mod.rs` | 1008 | The reader's data and tables: programs as `prog.shard` has them, names as identities, a file's scope (`use`, its own types, the visible modules), the E table and its resolution (`etable.shard`), resolution over K's constants (`scope.shard`), the closure's files as modules (`loader.shard`: paths, imports, views, the seal's prefix), every view linked to its implementation (`link_views`), Init's inductives registered on citation. |
+| `plain/read.rs` | 1,427 | `classify.shard`'s reading, function by function: types, terms, patterns, the written arguments that run, decisions, rows, numeral rows, `let` chains, signatures and bodies. It refuses nothing; a form with no reading is recorded and left out (a template's call, a derivation, a derived view). |
+| `plain/settle.rs` | 388 | `classify.shard`'s `c_type`, `settle_ops`, `expand_rows`: static types, the operators by their operands' types, the rows written out. |
 | `plain/record.rs` | 246 | The host parser's entry and `record` expansion (`record.shard`'s twin). |
 | `plain/facts.rs` | 216 | The table `load.shard --facts` prints, parsed: what the reader has in K's place. |
-| `plain/out.rs` | 283 | The canonical text for a closure read (`dump.shard`'s format), the evaluator's module — the runtime's cells under the runtime's names —, the entry of a run. |
+| `plain/out.rs` | 279 | The canonical text for a closure read (`dump.shard`'s format), the evaluator's module — the runtime's cells under the runtime's names —, the entry of a run. |
 | `eval.rs` | 1,139 | The evaluator: an environment machine over one value stack, reference-counted values; `if` by the constructor's position; `SHARD_PROF` call counts. |
-| `prim.rs` | 209 | The primitives over arbitrary-precision integers: the eighteen bare-named ones and Init's twenty-one (`Int.tdiv` … `Nat.decLe`). |
-| `ast.rs` | 83 | The AST. |
-| `lib.rs` | 748 | The crate root, the allocator (mimalloc), 28 unit tests. |
+| `prim.rs` | 163 | The primitives over arbitrary-precision integers: the eighteen bare-named ones and Init's twenty-one (`Int.tdiv` … `Nat.decLe`). |
+| `ast.rs` | 81 | The AST. |
+| `lib.rs` | 730 | The crate root, the allocator (mimalloc), 28 unit tests. |
 
 #### Scripts
 
@@ -274,12 +276,12 @@ is public and outside its directory: `name`, `level`, `expr` (terms, node data, 
 | file (`v3/kernel/k/`) | lines | holds |
 |---|---|---|
 | `env.shard` | 39 | `CheckedEnv`: constants by name hash, whether `Quot` is declared, the pinned names, the node-id watermark |
-| `tc.shard` | 1,944 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators |
-| `inductive.shard` | 1,210 | inductive blocks: the checks, the constructors, the recursors and their rules |
-| `nested.shard` | 1,008 | nested inductives through auxiliary mutual types |
-| `add.shard` | 510 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
+| `tc.shard` | 1,951 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators |
+| `inductive.shard` | 1,212 | inductive blocks: the checks, the constructors, the recursors and their rules |
+| `nested.shard` | 1,009 | nested inductives through auxiliary mutual types |
+| `add.shard` | 513 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
 | `axioms.shard` | 235 | axiom closures |
-| `import.shard` | 842 | export records → tables → declarations → checks; generated constants against exported ones |
+| `import.shard` | 849 | export records → tables → declarations → checks; generated constants against exported ones |
 | `accel_pins.shard`, `refgen.shard` | 5,127, 569 | the generated reference rows for the pins; their generator, on no checking path |
 | `mod.req.shard`, `k.shard` | 109, 13 | the view; the implementation's import list |
 
@@ -434,7 +436,7 @@ of `T` is derivable in Lean 4's type theory from the axioms `A` (the parameters 
 1. **The logic.** Lean 4's type theory as its kernel at v4.33.1 implements it, and the consistency
    of the axioms in `A` over it. K adds no rule.
 2. **K implements the logic.** `v3/kernel/k/`: `env tc add inductive nested import axioms`
-   (5,792 lines) and the generated table `accel_pins.shard`; the data they are written over,
+   (5,821 lines) and the generated table `accel_pins.shard`; the data they are written over,
    `v3/kernel/`: `name level expr decl verdict intmap util`, and `json` for the record
    import. K is reviewed source, written function for function after Lean's kernel. It is not
    proved; its sources are programs whose declared types and termination clauses nothing checks.
@@ -558,8 +560,8 @@ an `if` or `match` in operand position to a new function over its free variables
 numeric component no source name has), compiling a nested pattern to a chain of flat matches, and
 binding every operand. The restricted form is still a `Prog`, so `ev` runs it (`--lowered`).
 
-**Primitives.** The eighteen bare-named ones (`= + - < <= sym_eq band bshr * mod / tmod ediv bor
-bxor bshl sym_of_chars chars_of_sym`) and `Nat.land lor xor shiftLeft shiftRight beq ble` map to
+**Primitives.** The fifteen bare-named ones (`= + - < <= band bshr * mod / tmod ediv bor
+bxor bshl`) and `Nat.land lor xor shiftLeft shiftRight beq ble` map to
 runtime operations. `Nat.sub`, `Nat.div`, `Nat.mod`, `Int.tdiv`, `Int.tmod`, `Int.ediv`,
 `Int.emod` become an expression that tests for the underflow or the zero divisor first. Any other
 primitive of the table is refused: `Nat.gcd`, `Nat.pow`, and `Nat.add`, `Nat.mul` and the three
@@ -581,13 +583,14 @@ evaluator's tags do, so a binary takes the branch `ev` takes on a value of any t
 | a constructor | a pointer to a 16-byte-aligned cell: a 32-bit tag, a 32-bit field count, the fields. `true`, `false`, `nil`, `none` are one shared cell each |
 | tags | odd for the second constructor of a type, even for every other. 900–908 for the constructors the runtime itself builds and reads (false 900, true 901, nil 902, cons 903, none 904, some 905, pair 906, the World 908) — Init's `Bool`, `List`, `Option` and `Prod`, `Decidable`'s two as `Bool`'s, and a constructor so named in a file's own type; every other constructor two tags from 1000 in program order, of which it carries the odd one where it is its type's second |
 | a list; `ByteArray`, `String`, `Array`; a string literal | cons cells ending in nil, one per element; a byte is a small integer in a 32-byte cons cell. A literal is rebuilt each time its code runs |
-| a symbol | a cell holding an index into an intern table, in the order symbols are first made; a text's index is found by a hash of its bytes; equality compares indices |
+| a symbol | an ordinary constructor cell, `MkSym` over the list of its bytes (`kernel/sym.shard`): the runtime has no form of its own for it, and equality compares the bytes |
 | a closure | none exists: every call is saturated and names a top-level function |
 | the World | one cell; the host operations return the cell they were given |
 
 **Memory.** Cells are bump-allocated in a 64 GB reserved region and reclaimed by a conservative,
 non-moving mark–sweep collector that runs only inside an allocation. Its roots are the C stack,
-the callee-saved registers and the data segment; a per-slot bitmap of cell starts rejects words
+the callee-saved registers and the five cells the runtime keeps (the generated text holds no
+value outside its functions); a per-slot bitmap of cell starts rejects words
 that only look like pointers. Freed cells go to free lists by size. A collection follows every
 64 MiB to 2 GiB of fresh allocation, in proportion to what the last one found live.
 
@@ -596,10 +599,9 @@ that only look like pointers. Freed cells go to free lists by size. A collection
 | a `match` no arm takes; a refuted branch reached | `rt trap: inexhaustive match in F`, exit 3 |
 | `/ mod tmod ediv` by zero — the toolchain's bare-named primitives; Init's `Nat.div`, `Int.ediv` and their kin are total | `rt trap: div by zero (stuck on the interpreted engines)` and its like, exit 3 (under `ev`: exit 4) |
 | `bshl` or `bshr` by a count outside 0–63 — the toolchain's bare-named shifts | `rt trap: bshl shift out of range (stuck on engines)`, `bshr` likewise, exit 3. `Nat.shiftLeft` and `Nat.shiftRight` take a count of any size, as under `ev`: `Nat.shiftLeft 1 64` is 18446744073709551616, `Nat.shiftRight 5 64` is 0 (`v3/pins/emit/init_prim`) |
-| an `if` on a number or a symbol | `rt trap: if on a value that is no constructor (stuck on the interpreted engines)`, exit 3 |
+| an `if` on a number | `rt trap: if on a value that is no constructor (stuck on the interpreted engines)`, exit 3 |
 | an integer of 2^3840 or more | `rt trap: bignum too large (exceeds 2^3840)`, exit 3: a sum, a product, a `Nat.shiftLeft` whose result is that large (any count past 3840 on a nonzero number), where `ev` computes it. The toolchain's own binaries too: `v3/bin/load` ends so on a `--run` that reaches such a number and on a theorem K evaluates past it, where the loader on the bootstrap accepts both |
 | the heap past 64 GB | `rt trap: heap exhausted` |
-| `sym_of_chars` over 4,096 bytes | `rt trap: sym_of_chars: name too long` |
 | recursion depth | a call that is not a self tail call uses the C stack; the limit is raised to 2 GB at start, best effort |
 
 A program stuck at a primitive ends differently on each engine: the Rust bootstrap run directly
@@ -696,7 +698,7 @@ loader does not detect its engine, and its records do not name one.
 | check of their agreement | compares |
 |---|---|
 | `parity_test.sh` | the bootstrap's reader and the V3 loader over every toolchain root: the two programs printed as one canonical text, byte for byte. The loader reads each root `--unchecked`, the reading a build compiles and a test runs |
-| `toolchain_check.sh` | the same roots loaded checked by the loader's binary: nothing refused, and the program again the bootstrap reader's text; the ten roots under 1,000 declarations loaded so on the bootstrap too, with the same text |
+| `toolchain_check.sh` | the same roots loaded checked by the loader's binary: nothing refused, and the program again the bootstrap reader's text; the eight roots under 400 declarations loaded so on the bootstrap too, with the same text |
 | `plain_test.sh` | the same over ordinary closures: byte for byte where the reader reads the whole closure, line for line where it does not; calc's `main` run on what it read against the loader's run |
 | `route2_test.sh` | K run directly by the engine against K loaded by the V3 loader and run under `ev` (`k_clients_test.sh` runs K's tests the second way) |
 | `lower_test.sh` | a program under `ev` as loaded and in its restricted form |
@@ -725,9 +727,9 @@ The formatter is built on demand by `v3/fmt.sh`. A root of the inventory is load
 *The engine of an emit.* The loader's own root is emitted on the bootstrap and never by a
 binary, so no binary builds its successor. A missing or stale `v3/bin/load` fails a build that
 names it (`--native`, or a root of `--all` after the loader's); nothing falls back to the
-bootstrap. On the dev box `--all` builds the 29 binaries in 206 s, at 8 roots at a time as at
-24: the loader's emit 107 s and its compile 7 s, then the other 28, whose compiles fill the
-machine. The tie of that build, the bootstrap emitting 28 roots again, is 174 s.
+bootstrap. On the dev box `--all` builds the 29 binaries in 238 s, at 8 roots at a time as at
+24: the loader's emit 128 s and its compile 8 s, then the other 28, whose compiles fill the
+machine. The tie of that build, the bootstrap emitting 28 roots again, is 184 s.
 
 *The readings of a toolchain root.* A build compiles the reading of programs alone, and so
 does every test that runs or dumps a toolchain root: `--unchecked`. `parity_test.sh` holds
@@ -736,7 +738,7 @@ The load without the flag is the check of the toolchain's sources, and it runs o
 loader's binary: `kernel/test/toolchain_check.sh` loads every root checked, requires that
 nothing is refused and compares the program with the same text. On the bootstrap that load
 is the loader interpreted, running the checker over the sources it is written in; the script
-runs it there for the ten roots under 1,000 declarations and compares the two engines
+runs it there for the eight roots under 400 declarations and compares the two engines
 (`LAW.md` rule 21).
 
 *Extra roots.* A root that uses a directory module through its view needs the directory as a
@@ -872,8 +874,8 @@ the push that carried the code.
 The whole push is examined, so code pushed with its documents is gated, and any doubt (a new
 branch, a manual run) runs the gates. `glab ci run -b main` forces a full run.
 
-*Durations:* the loader's own closure (9,182 declarations) emits in about 108 s on the
-bootstrap as a build reads it, and in 10 s by the loader's binary, on the dev box, and its C text — 32 units — compiles in 7 s side by side; the export takes 77 s and its axiom oracle 15 s; the full
+*Durations:* the loader's own closure (9,174 declarations) emits in about 128 s on the
+bootstrap as a build reads it, and in 10 s by the loader's binary, on the dev box, and its C text — 32 units — compiles in 8 s side by side; the checked load of that closure, the toolchain's check, is 63 s on the binary; the export takes 77 s and its axiom oracle 15 s; the full
 replay 420 s on the dev box and 1,260 s on the CI runner, at 29 GB; the index about 1,950 s on
 the bootstrap on the CI runner, 14 times the binary's. The runner takes 2 to 3 times the dev
 box's time for a step (`DECISIONS.md`, Measured, has a pipeline's minutes). CI's timeouts

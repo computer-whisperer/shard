@@ -66,7 +66,6 @@ fn signature(ps: &[ETy], rt: &ETy) -> String {
 fn lit(l: &Lit) -> String {
     match l {
         Lit::Nat(k) | Lit::Int(k) => k.to_string(),
-        Lit::Sym(s) => format!("'{s}"),
         Lit::Str(bs) => {
             let (nl, cs) = (ctor_name("List.nil"), ctor_name("List.cons"));
             let mut s = format!("({nl})");
@@ -164,8 +163,8 @@ pub fn dump(t: &Tables) -> String {
 /// The runtime's cells go to the evaluator by the names the runtime gives them: `True`,
 /// `False`, `Nil`, `Cons`, `None`, `Some`, `Pair`. They are the constructors of Init's `Bool`,
 /// `List`, `Option` and `Prod`, by identity (lower.shard's wire roles are the same rule). The
-/// evaluator's comparisons return `True` and `False`, its symbol bridge and the host speak
-/// `Cons` and `Nil` cells. Every other constructor goes by its identity.
+/// evaluator's comparisons return `True` and `False`, and the host speaks `Cons` and `Nil`
+/// cells. Every other constructor goes by its identity.
 fn cell(id: &str) -> String {
     match id {
         "Bool.true" => "True".into(),
@@ -189,7 +188,6 @@ fn ast_ty(t: &ETy) -> ast::Type {
 fn ast_lit(l: &Lit) -> ast::Expr {
     match l {
         Lit::Nat(k) | Lit::Int(k) => ast::Expr::IntLit(k.clone()),
-        Lit::Sym(s) => ast::Expr::SymLit(s.clone()),
         Lit::Str(bs) => {
             let mut acc = ast::Expr::Ctor(cell("List.nil"), Vec::new());
             for b in bs.iter().rev() {
@@ -205,9 +203,7 @@ fn ast_pat(p: &Pat) -> ast::Pat {
         Pat::Var => ast::Pat::PVar,
         Pat::Ctor(n, subs) => ast::Pat::PCtor(cell(n), subs.iter().map(ast_pat).collect()),
         Pat::Lit(Lit::Nat(k)) | Pat::Lit(Lit::Int(k)) => ast::Pat::PInt(k.clone()),
-        Pat::Lit(Lit::Sym(s)) => ast::Pat::PSym(s.clone()),
-        // the reader gives a pattern no string
-        Pat::Lit(Lit::Str(..)) => ast::Pat::PSym(String::new()),
+        Pat::Lit(Lit::Str(..)) => unreachable!("the reader gives a pattern no string"),
     }
 }
 
