@@ -610,6 +610,27 @@ measurements; measure again before building on one.
   `byte_ints`, a literal's conversion, 153; `chars_of_sym` 121; `sym_eq` 48; `utf8` 27;
   `sym` 16 — a symbol is compared byte by byte, and a `(sym "x")` is built at every
   evaluation.
+- What stands between the toolchain's functions and a definition (2026-11-18, the checked
+  load of the loader's closure, each function without one followed through the callee its
+  record names to the function the chain starts at). Of the 8,834 functions 4,792 are the
+  generated rows of `k/accel_pins.shard` and 4,041 are written. Written: 1,450 definitions,
+  1,203 type-checked without one, 1,388 not read; K's own 630 are 259, 371 and none, the
+  3,411 outside K 1,191, 832 and 1,388. K's `whnf`, `infer`, `is_def_eq`, `env_find` and
+  every constructor of a term (`mk_app`, `mk_const`, …) are among those without one; what K
+  has as definitions is accessors, small predicates and the names of constants. Where the
+  2,591 written ones without a definition start: 1,388 at a signature that names one of 95
+  types the checker does not read (52 `bad_binder`, 43 `bad_shape`; on the scratch loader of
+  2026-11-16 all of them stood behind two types declared below their first use, `Gen` in
+  `elab.shard` and `Req` in `reader.shard`); 905 at one of 41 functions that use a
+  primitive with no form in the logic (`band`, `bshr`, `ediv` on an `Int`) — `name.mix`,
+  the hash of a name, 276; `intmap.im_find` 270; `util.show_nat_go` 206; `json.parse_int`
+  37 —; 280 at a recursion the checker does not take as written (`group_measure` 138,
+  `measure_type` 120, the `realize_` reasons 21). All 3,804 generated rows without a
+  definition start at `name.mix`. A chain names the first callee without a definition, so a
+  function counted at one start may meet another behind it. With each function judged on
+  its own — a stand-in constant for every callee without a definition, the two types moved
+  and the literals converted — the scratch loader gave 3,283 of 4,778 written functions a
+  definition, 69%.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

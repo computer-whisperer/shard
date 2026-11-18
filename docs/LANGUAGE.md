@@ -233,7 +233,7 @@ file; two things about how they are written set them apart.
 - **About a quarter of their functions are definitions.** The checker reads every one whose
   signature reads: of the loader's closure, 9,170 declarations, it holds 2,440 as definitions.
   The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 4,000), a type in the signature names a type declared after it or
+  (`callee_runnable`, some 4,800), a type in the signature names a type declared after it or
   one that names it back (`e_only_type`, some 1,400), a measure that is an integer or a group
   of functions that call each other (about 110), a bit-level primitive (about 40). A type
   error in any of them is refused.

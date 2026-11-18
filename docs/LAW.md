@@ -236,7 +236,8 @@ The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look
 Rule 21's text is written from ruling 15, which the owner gave as "One minor adjustment to Rule
 21" on reading the rule; its second slow check is written from their go-ahead for the ordinary
 `Symbol`, whose first step, as put to them, moved the toolchain's check onto the binaries: "Good.
-Proceed with the symbol change (full 1-4 scope)". The text as adjusted is not yet read by them.
+Proceed with the symbol change (full 1-4 scope)". The text as adjusted: "That matches my intent,
+and we can consider it ratified."
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.
