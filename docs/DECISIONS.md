@@ -813,7 +813,13 @@ measurements; measure again before building on one.
   proofs alone, sends the Init index to be made again by its stamp: 11 minutes on the
   bootstrap here. All 29 roots loaded checked, 12 at a time: 235 s for 258; the suite 225 s
   on the binaries and 920 s on the bootstrap. On CI for the pilot (#747): `native` 2,447 s —
-  the toolchain's check 363 s for 508 —, `v3` 2,199 s, `replay` 1,868 s.
+  the toolchain's check 363 s for 508 —, `v3` 2,199 s, `replay` 1,868 s. On CI for the bulk
+  (#748): `native` 4,068 s, `v3` 3,770 s, `replay` 3,456 s, each with the Init index made
+  again first, 1,582 s on the runner; `native` without it 2,486 s — the build 533 s, the
+  toolchain's check 335 s, the byte-tie 967 s for 897 and for 789 before the pilot. The
+  byte-tie waits for the loader pins' harness on the bootstrap: 899 s there for 833, and
+  343 s for 333 on the dev box, where it did not grow. So a pipeline is as long as it was:
+  what the toolchain's check gave back the byte-tie took on the runner.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
