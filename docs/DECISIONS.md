@@ -593,7 +593,22 @@ measurements; measure again before building on one.
   and 982 s on the bootstrap for 905. The table of Init's facts the bootstrap reads the
   toolchain by is 36 lines for 155: a quoted name was a symbol of the source and counted as
   a citation of Init. The Init index built by the bootstrap from the rewritten driver is
-  byte for byte the one it replaced.
+  byte for byte the one it replaced. On CI (#739 against #738, read from the jobs' logs):
+  each of the three long jobs built the Init index again on the bootstrap, the driver's
+  text having changed, 1,548 s in `native` and within 15 s of that in the other two; that
+  set aside, `native` 2,255 s for 1,707, `v3` about 2,180 s for 1,830 and `replay` about
+  1,850 s for 1,786, so the pipeline's longest job is `native` and a pipeline is 38 minutes
+  for 31. In `native`: the build 521 s for 439 (the loader's emit
+  469 s for 395), the emit tie 51 s for 43, the toolchain's check 329 s for 146 at 24 roots
+  at a time, the native tie 758 s for 485, the suite on the binaries 445 s for 441. The
+  native tie is as long as its longest workload, the loader pins' harness on the bootstrap:
+  700 s for 446, and 56 s for 37 on its binary; the tie's other workloads are within 10%
+  of what they were. In `v3` the suite's longest entrypoint, the load of the imp model, is
+  2,017 s for 1,680. Where the harness spends it, by the runtime's counters on its binary
+  (dev box, 17 s, 3,231 million calls): `int_list_eq` 209 million, the first of all;
+  `byte_ints`, a literal's conversion, 153; `chars_of_sym` 121; `sym_eq` 48; `utf8` 27;
+  `sym` 16 — a symbol is compared byte by byte, and a `(sym "x")` is built at every
+  evaluation.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

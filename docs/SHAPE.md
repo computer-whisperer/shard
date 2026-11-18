@@ -81,27 +81,31 @@ a native binary through C. The compiler is unproven: its output is compared with
 every test, and nothing more. Numbers are big integers (a native binary stops at 2^3840); bytes
 and strings are lists.
 
-**Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are written in a restricted
-first-order dialect that has no meaning in the logic: nothing can be proven about them, and nothing
-checks that their functions terminate. Ordinary files (everything else) use Init's types and can
-carry theorems. This split is the largest irregularity in the system.
+**Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
+Init's types, and the checker reads them: of the 8,834 functions the loader is made of, 2,438 are
+definitions in the logic, 4,963 more are type-checked and run as programs, and 1,433 are not read,
+their signatures naming types the logic does not take (types that name each other, or one declared
+later in its file). No theorem is stated about a toolchain function. One check loads the
+toolchain's sources this way (`toolchain_check.sh`); a build and every test read them as programs
+alone. The files elsewhere carry the theorems. This split is the largest irregularity in the
+system.
 
-**Build and gates.** 51 test scripts run on both engines and their outputs are compared byte for
-byte. With the full replay of Init and the layout check, the whole gate takes about 35 minutes on
-the development machine and about 65 in CI.
+**Build and gates.** 52 test scripts run on both engines and their outputs are compared byte for
+byte. With the full replay of Init and the layout check, the whole gate takes about 45 minutes on
+the development machine, one step after another, and about 38 in CI, its jobs side by side.
 
 ## 3. What is in the tree
 
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 59 files | the test scripts and drivers |
-| `v3/pins/` | 507 files | small sources, each stating the outcome it expects; 337 cases for the loader |
+| `v3/kernel/test/` | 58 files | the test scripts and drivers |
+| `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
-| `rust_bootstrap/` | 6,100 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,800), its tests (700) |
+| `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
 | `tools/zed-shard/` | | an editor grammar |
 
 Two programs are carried all the way: `calc` and `shardfmt` each have a native binary and a
@@ -120,7 +124,7 @@ host calls.
 - **Proofs do not rot silently.** A stored proof is keyed by the statement and everything it cites;
   when any of those changes it is reported stale, not reused.
 - **Views hold.** A consumer cannot see through an interface, by construction and not by a check.
-- **The toolchain builds itself** to 29 native binaries in about three minutes, and the binaries
+- **The toolchain builds itself** to 29 native binaries in about four minutes, and the binaries
   agree with the bootstrap on every test.
 
 ### Weak or missing
@@ -136,9 +140,9 @@ host calls.
   nothing in the repository fixes its bytes.
 
 *The language.*
-- The toolchain's own code has no meaning in the logic (§2, "Two kinds of source"), so a tool's
-  contract cannot reach into the reader or the loader. The formatter's contract stops at "the
-  reader is some function".
+- Most of the toolchain's own code is a program with no definition in the logic, and nothing is
+  proven of the rest (§2, "Two kinds of source"), so a tool's contract does not reach into the
+  reader or the loader. The formatter's contract stops at "the reader is some function".
 - Bytes and strings are lists. There are no packed buffers and no machine-word types that run as
   machine words.
 - No instance search and no user notation: an operation at a type outside a fixed table must be
@@ -157,7 +161,8 @@ host calls.
 *Cost.*
 - Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
   replay of Init takes 7 minutes natively and 76 on the bootstrap.
-- The full gate is 35 minutes, so each change to the toolchain costs that much before it lands.
+- The full gate is 38 minutes in CI and about 45 on the development machine, so each change to
+  the toolchain costs that much before it lands.
 
 ## 5. Decisions most likely to be proposed again
 
