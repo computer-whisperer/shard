@@ -32,7 +32,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | File | What it does | Rests on | Called by |
 |---|---|---|---|
 | `sexpr.shard` | The s-expression reader: bytes → `SExpr` (numeral, symbol, symbol with universe list, string, list); `read_all` for a whole file with the error's byte offset; `show_sexpr` printer; `size_sexpr`. No name has a meaning here. | `util.shard` | `scope.shard`, `record.shard` (imports); `loader.shard` and `reader.shard` (`read_all`), `derive.shard`, `engine.shard`, `prove.shard`; `v3/tools/shardfmt/reads` (the formatter's judge) |
-| `descent.shard` | The descent facts of the toolchain's integer measures, theorems alone: `natAbs_lt`; `natAbs_pred`, a counter stepping down past a test that it is at least 1; `natAbs_div10`, a number losing a decimal digit; `natAbs_shr2_le` and `natAbs_shr2_lt`, an integer losing its two low bits. A function that recurses on an `Int` states `(measure (Int.natAbs n))` and each `fulfills` beside it cites one (105 functions in 31 files, K's directory among them; the forms: `LANGUAGE.md`, "Toolchain files and ordinary files"). No program is made of this file, and a build passes it over. | — | `util.shard`, `intmap.shard` (imports); every file with such a function (`(use kernel.descent)`) |
+| `descent.shard` | The descent facts of the toolchain's integer measures, theorems alone: `natAbs_lt`; `natAbs_pred`, a counter stepping down past a test that it is at least 1; `natAbs_div10`, a number losing a decimal digit; `natAbs_shr2_le` and `natAbs_shr2_lt`, an integer losing its two low bits. A function that recurses on an `Int` states `(measure (Int.natAbs n))` and each `fulfills` beside it cites one (109 functions in 33 files, K's directory among them; the forms: `LANGUAGE.md`, "Toolchain files and ordinary files"). No program is made of this file, and a build passes it over. | — | `util.shard`, `intmap.shard` (imports); every file with such a function (`(use kernel.descent)`) |
 | `util.shard` | List, byte and decimal utilities: `len append rev nth take drop`, `is_ws is_digit`, `show_nat show_int`, `hex_val`, `utf8_ok`; `utf8`, a literal's bytes (text here is `(List Int)`, a literal a `String`), and `utf8_all` for a list of them. The lowest file a program is made of. | `descent.shard` | `sym.shard`; nearly every kernel file (`sexpr`, `json`, `record`, `index`, `initload`, …) |
 | `base.shard` | The base: the definitions every file sees beside Init's, as text the loader reads as the module `shard.int` when a file's forms first use one of its operators — `land`, `lor`, `xor` on `Int`, by cases on an integer's two constructors over Init's `Nat.land`, `Nat.lor`, `Nat.xor`. `base_decl` (a declaration of the base: the one native declaration a row of the registry speaks for), `uses_base`, `base_reserved` (no file's module is `shard`). | `util.shard`, `sym.shard`, `name.shard`, `sexpr.shard` | `elab.shard` (the operators at `Int`), `prog.shard` (the rows), `erasure.shard`, `loader.shard` |
 | `sym.shard` | `Symbol`, an ordinary type: the bytes of a text (`MkSym`). `sym` (the symbol of a literal), `sym_eq`, `chars_of_sym`, `sym_of_chars`: ordinary functions; no reader knows the name and no engine stores a symbol in a form of its own. | `util.shard` | `name.shard`, `sexpr.shard`; every file that names a symbol |
@@ -82,8 +82,8 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 
 | File | What it does | Rests on | Called by |
 |---|---|---|---|
-| `tactic.shard` (2,988) | The step elaborator. Reads a `(by STEP…)` block into `Node` data (`read_block`, `read_node`), runs each step on a goal (`tac_step`, one `step_*` function per form), threads the block depth-first (`tac_block`) and returns the closed proof term, the sorried goals, or a refusal (`tac_prove`). Also renders goals (`goal_of`, `goal_sx`), lists the steps a goal admits (`applicable`), and declares `reconstruction_version` (2). | `elab.shard` (terms, metavariables), `arith.shard`, `unify.shard` (`assign`, levels), `matcher.shard` (`mt_is_matcher`, for case steps in `reduce`), `spelling.shard` (`sp_canon`), `kw.shard`, K through its view. | `reader.shard` (`read_proof`, `read_block_proof`, `run_tactic`), `engine.shard`, `loader.shard` (`reconstruction_version`, `tc_kit`), `prove.shard`. |
-| `arith.shard` (1,101) | `arith`'s back end. Reads a statement as a comparison (`ar_rel`), linearizes terms over atoms (`ar_lin`), builds the rows, finds weights by Fourier–Motzkin elimination (`fm_find`) or checks the given ones, and builds the proof from `Lean.Omega`'s lemmas (`ar_prove`). | `elab.shard` (locals, visibility of the kit), `spelling.shard`, `kw.shard`. | `tactic.shard` (`step_arith`, `applicable`), `engine.shard` (`eng_arith`), `loader.shard` (`ar_all_kit`). |
+| `tactic.shard` (2,989) | The step elaborator. Reads a `(by STEP…)` block into `Node` data (`read_block`, `read_node`), runs each step on a goal (`tac_step`, one `step_*` function per form), threads the block depth-first (`tac_block`) and returns the closed proof term, the sorried goals, or a refusal (`tac_prove`). Also renders goals (`goal_of`, `goal_sx`), lists the steps a goal admits (`applicable`), and declares `reconstruction_version` (2). | `elab.shard` (terms, metavariables), `arith.shard`, `unify.shard` (`assign`, levels), `matcher.shard` (`mt_is_matcher`, for case steps in `reduce`), `spelling.shard` (`sp_canon`), `kw.shard`, K through its view. | `reader.shard` (`read_proof`, `read_block_proof`, `run_tactic`), `engine.shard`, `loader.shard` (`reconstruction_version`, `tc_kit`), `prove.shard`. |
+| `arith.shard` (1,102) | `arith`'s back end. Reads a statement as a comparison (`ar_rel`), linearizes terms over atoms (`ar_lin`), builds the rows, finds weights by Fourier–Motzkin elimination (`fm_find`) or checks the given ones, and builds the proof from `Lean.Omega`'s lemmas (`ar_prove`). | `elab.shard` (locals, visibility of the kit), `spelling.shard`, `kw.shard`. | `tactic.shard` (`step_arith`, `applicable`), `engine.shard` (`eng_arith`), `loader.shard` (`ar_all_kit`). |
 | `engine.shard` (504) | The default producer for `auto`: a fixed ladder of steps, each confirmed through `tac_step`, under a step budget and hints; renders `Node` data back to source text for the sidecar (`nodes_sx`). Declares `engine_version` (1). | `tactic.shard`, `arith.shard`, `elab.shard`. | `reader.shard` (`read_auto`, `read_measured`), `prove.shard` (the version, in the header and the sidecar comment). |
 | `prove.shard` (325) | The `prove` program: loads the files under mode `solve` or `measure`, prints the records and counts, rewrites the sidecars of the files that gained a block — an implementation's beside the implementation file — or were read at an older schema or reconstruction version. | `loader.shard` (the whole load), `reader.shard` (`Auto`, `Req`), `engine.shard`, `tactic.shard`. | A root program: `eval direct v3/kernel/prove.shard`, `v3/bin/prove`; tests `engine_test.sh`, `tactic_lib_test.sh` (`parity_test.sh` lists it among the drivers). |
 | `unify.shard` (739) | Metavariables and first-order unification: the metavariable context (`MCtx`), assignment with occurs and scope checks (`assign`), `unify` with four outcomes (yes, no, stuck, exhausted), level unification, instantiation (`inst_mvars`). A closed mismatch is decided by K's `is_def_eq`. | `kw.shard`, `spelling.shard`, K's view. | `elab.shard` (every term), `tactic.shard` (`tac_match`, `rfl`, `apply`), `engine.shard`, `derive.shard`. |
@@ -114,21 +114,21 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 - `env.shard` (39) — `CheckedEnv` (constants by 24-bit name key with buckets, quotInitialized,
   pinned names, node-id watermark) and `env_empty`; states the one-environment invariant.
   Rests on decl, intmap, verdict. Used by every other K file.
-- `tc.shard` (1,961) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
+- `tc.shard` (1,969) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
   `whnf`, `is_def_eq` in Lean's order (quick check, proof irrelevance, lazy delta, eta, structure
   eta, string literal expansion, unit-like); memo tables; `guard` (depth and heartbeat budgets);
   literal typing gated on pins; `reduce_nat` / `nat_apply` (the 14 accelerators); `reduce_native`
   (Unsupported). Also `Ctx`, `LDecl`, `Loc`, `env_find`, `env_add`, `st_for`, `st_seed`.
   Rests on env, expr, level, name, intmap, util, verdict. Called by inductive, nested, add,
   axioms; through the view by kw (hence elaborator, unifier, tactics, definer, erasure).
-- `inductive.shard` (1,212) — `add_inductive_core`: check the types, declare them, check and
+- `inductive.shard` (1,214) — `add_inductive_core`: check the types, declare them, check and
   declare constructors (positivity, universes), elimination level, K-target, recursor types and
   rules, then `check_recursors` (each rule type-preserving). Budgets `budget_depth` 8192,
   `budget_ticks` 100,000,000. Rests on tc. Called by nested.
 - `nested.shard` (1,017) — nested inductives: uniform-occurrence check, translation to auxiliary
   mutual types (`_nested` prefix reserved), admission through inductive.shard, translation back;
   `add_inductive` is the entry. Rests on inductive. Called by add.
-- `add.shard` (513) — admission: `check_decl_core` per kind, `add_quot` (checks `Eq`'s shape,
+- `add.shard` (519) — admission: `check_decl_core` per kind, `add_quot` (checks `Eq`'s shape,
   builds the four constants), `identity_hash` (a report fingerprint), the pin match
   (`pin_if_matches`, `ref_closure_ok`, `ref_matches`), the raw entry `check` / `check_with`
   (ingest, then check, then pin), `Limits`. Rests on nested, accel_pins. Called by import
@@ -154,7 +154,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   (the generated section of accel_pins), what a row cites above it: the names, the term nodes,
   the rows, the table's buckets and the table, the closures. Generation only. Rests on add, host. Called by t0 under
   `--pins`.
-- Four of these files (`tc`, `nested`, `axioms`, `refgen`) hold the proofs that their counters'
+- Six of these files (`tc`, `add`, `inductive`, `nested`, `axioms`, `refgen`) hold the proofs that their counters'
   recursion ends, beside the functions (`fulfills`), over the facts of `../descent.shard`, which
   reaches the directory through `../intmap.shard`. They are no part of K's program: a build
   passes them over, and `toolchain_check.sh` checks them.
@@ -165,10 +165,12 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 
 #### The vocabulary K is written over (`v3/kernel/`, public)
 
-- `expr.shard` (1,147) — `Expr` (11 node kinds, each with node data `D`: id, hash, loose-bvar
+- `expr.shard` (1,176) — `Expr` (11 node kinds, each with node data `D`: id, hash, loose-bvar
   range, three flags), `Literal`, `BinderInfo`, `Memo`, `St` (fvar counter, heartbeats, node
   counter, memo); `mk_*` (anonymous) and `new_*` (identified) constructors; `ingest_expr` (the
-  raw entry's rebuild); `expr_eq`, `same_node`, `used_consts`/`expr_consts`; instantiate, abstract,
+  raw entry's rebuild); `Expr.size`, a term's derived size, by which `expr_eq` and
+  `expr_eq_core`, which call each other, are measured, their descent proven beside them;
+  `same_node`, `used_consts`/`expr_consts`; instantiate, abstract,
   lift/lower, level instantiation, beta; `show_expr`. The header comments carry the typing,
   reduction and definitional-equality rules. Rests on level, intmap, name. Used by everything
   that builds or reads terms.
@@ -247,7 +249,7 @@ export's chunks), `prove.shard` (the producers), `initindex.shard` (the Init ind
 |---|---|---|
 | `bin/eval.rs` | 287 | The `eval` executable: `direct [--root DIR] [--facts F] FILE ARGS…` and `dump [--root DIR] [--facts F] FILE…` (DIR is `v3` where none is named); runs on a thread with a 4 GiB stack (`SHARD_STACK_MIB`); the host handler for seven extern names, answering an extern declared over Init's types in Init's cells and any other in the runtime's. |
 | `plain/mod.rs` | 1008 | The reader's data and tables: programs as `prog.shard` has them, names as identities, a file's scope (`use`, its own types, the visible modules), the E table and its resolution (`etable.shard`), resolution over K's constants (`scope.shard`), the closure's files as modules (`loader.shard`: paths, imports, views, the seal's prefix), every view linked to its implementation (`link_views`), Init's inductives registered on citation. |
-| `plain/read.rs` | 1,442 | `classify.shard`'s reading, function by function: types, terms, patterns, the written arguments that run, decisions, rows, numeral rows, `let` chains, signatures and bodies. It refuses nothing; a form with no reading is recorded and left out (a template's call, a derivation, a derived view). |
+| `plain/read.rs` | 1,446 | `classify.shard`'s reading, function by function: types, terms, patterns, the written arguments that run, decisions, rows, numeral rows, `let` chains, signatures and bodies. It refuses nothing; a form with no reading is recorded and left out (a template's call, a derivation that writes functions, a derived view). A derivation of `size` alone writes definitions with no program: it is passed over. |
 | `plain/settle.rs` | 410 | `classify.shard`'s `c_type`, `settle_ops`, `expand_rows`: static types, the operators by their operands' types, the rows written out. |
 | `plain/record.rs` | 246 | The host parser's entry and `record` expansion (`record.shard`'s twin). |
 | `plain/facts.rs` | 216 | The table `load.shard --facts` prints, parsed: what the reader has in K's place. |
@@ -283,10 +285,10 @@ is public and outside its directory: `name`, `level`, `expr` (terms, node data, 
 | file (`v3/kernel/k/`) | lines | holds |
 |---|---|---|
 | `env.shard` | 39 | `CheckedEnv`: constants by name hash, whether `Quot` is declared, the pinned names, the node-id watermark |
-| `tc.shard` | 1,961 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators |
-| `inductive.shard` | 1,212 | inductive blocks: the checks, the constructors, the recursors and their rules |
+| `tc.shard` | 1,969 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators |
+| `inductive.shard` | 1,214 | inductive blocks: the checks, the constructors, the recursors and their rules |
 | `nested.shard` | 1,017 | nested inductives through auxiliary mutual types |
-| `add.shard` | 513 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
+| `add.shard` | 519 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
 | `axioms.shard` | 238 | axiom closures |
 | `import.shard` | 849 | export records → tables → declarations → checks; generated constants against exported ones |
 | `accel_pins.shard`, `refgen.shard` | 5,127, 569 | the generated reference rows for the pins; their generator, on no checking path |
@@ -443,12 +445,12 @@ of `T` is derivable in Lean 4's type theory from the axioms `A` (the parameters 
 1. **The logic.** Lean 4's type theory as its kernel at v4.33.1 implements it, and the consistency
    of the axioms in `A` over it. K adds no rule.
 2. **K implements the logic.** `v3/kernel/k/`: `env tc add inductive nested import axioms`
-   (5,821 lines) and the generated table `accel_pins.shard`; the data they are written over,
+   (5,845 lines) and the generated table `accel_pins.shard`; the data they are written over,
    `v3/kernel/`: `name level expr decl verdict intmap util`, and `json` for the record
    import. K is reviewed source, written function for function after Lean's kernel. It is not
    proved. `toolchain_check.sh` checks the declared types of its functions, and of the
-   directory's own 630 the logic holds 403 as definitions; nothing is stated about them but
-   that their recursion ends, and the termination clauses of the other 227 nothing checks.
+   directory's own 630 the logic holds 460 as definitions; nothing is stated about them but
+   that their recursion ends, and the termination clauses of the other 170 nothing checks.
    Evidence: the replay gate; the hostile battery (`v3/kernel/test/hostile_test.shard`,
    76 cases of declarations that must be refused); the tests in `k/test/`.
    Two beliefs inside this item are easy to miss:
@@ -671,7 +673,9 @@ and `type`s take the places of the view's `sig`s — the loader links a director
 a root, and checks it there. The reader refuses nothing — no seal, no view's privacy, no
 mismatch between a view and its implementation: the loader is where a closure is refused — and
 names on standard error each form it has no reading for, leaving its program out: a call of a
-template (so a lifted lambda and an instance), a `derive`, a `(realize NAME (view))`.
+template (so a lifted lambda and an instance), a `derive` that writes functions, a `(realize NAME
+(view))`. A `(derive T size)` writes definitions with no program, and the reader passes it over
+as it passes a `theorem`.
 
 *The runtime's cells.* A comparison answers `True` or `False`, the symbol bridge and the host
 speak `Cons`, `Nil`, `Some`, `None` and `Pair` cells. Those seven are the constructors of
@@ -830,7 +834,7 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `lower_test.sh` | seven programs as loaded and under `--lowered`: same streams, same exit |
 | `messages_test.sh` | what a refusal says after its reason: the counts of an arm's names, what to do with an `(import Init)` line, the file a refusal inside an implementation names, the row that makes rows unreachable, what to write for `mutual`, `instance`, a bare `true` |
 | `parity_test.sh` | the Rust reader and the loader agree on every toolchain root, and the table of Init's facts in the tree is what the loader prints from K over those roots (above) |
-| `plain_test.sh` | the Rust reader reads calc's closure, two with records and one with a directory module to the loader's program, byte for byte; on the two readings' fixture every line it prints is the loader's (55 of 99, 20 forms named unread), and on the formatter's sources with their two directory modules all 149 (one derivation named); calc's `main` run on it prints what the loader's run prints |
+| `plain_test.sh` | the Rust reader reads five closures to the loader's program, byte for byte: calc's, two with records, one with a directory module, and the formatter's sources with their two directory modules (140 declarations; their derivation of a size passed over); on the two readings' fixture every line it prints is the loader's (61 of 105, 20 forms named unread); calc's `main` run on it prints what the loader's run prints |
 | `path_test.sh` | one example end to end — load, run — and three breaks that must fail |
 | `readings_test.sh` | a `fn`, a lambda it lifts and a supplied `realize` read as programs alone are the programs their elaborated bodies erase to, on one fixture; three controls reported; that reading run; a written proof refused where that reading is the only one; a build's reading over a theorem and a fulfills, passed over |
 | `route2_test.sh` | K under `ev` prints what K run directly prints, on 3,000 lines of the export |

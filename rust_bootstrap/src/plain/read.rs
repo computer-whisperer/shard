@@ -434,9 +434,13 @@ fn realize_supplied<'a>(items: &[&'a Value]) -> Option<Vec<&'a Value>> {
 pub fn pre_realize(t: &mut Tables, sc: &Rc<Scope>, f: &Value) {
     match head_sym(f) {
         Some("realize") => {}
-        // a derivation writes functions this reader does not generate
+        // a derivation writes functions this reader does not generate; `size`, written alone,
+        // writes definitions of the logic, which have no program: nothing to read
         Some("derive") => {
-            t.unread.push((sc.tag.clone(), Unread("derive", format!("{f}"))));
+            let items = list_of(f);
+            if !(items.len() == 3 && items[2].as_symbol() == Some("size")) {
+                t.unread.push((sc.tag.clone(), Unread("derive", format!("{f}"))));
+            }
             return;
         }
         _ => return,

@@ -168,6 +168,30 @@ entries are explained under "Measured" at the end.
   comparison's decision now, and no declaration of the closure lists more than `propext`.
   `init.facts` takes one line, `List.length`: a measure is a part of its `fn`, and the
   table holds what the sources' forms name.
+- Two functions that call each other over a term are measured by the term's derived size:
+  `(derive Expr size)` beside the type, `expr.shard` `expr_eq` at one above twice its term's
+  size and `expr_eq_core` at twice, the 12 descents proven beside them; not the two written
+  as one structural function — no body changes, and the program of the loader's closure is
+  byte for byte what it was. Assent, of the two ways put to them (this group as a pilot, or
+  the types that name each other first): "Good. Let's continue with the expr_eq group of
+  functions."
+- Chosen in building it, not put to the owner one by one. The Rust reader passes over a
+  derivation of `size` written alone: its functions are definitions with no program, and the
+  reader named the form unread, which failed its reading of every toolchain root once
+  `expr.shard` held one — the first derivation in a toolchain file; one that writes
+  functions is unread as before. The loader's reading of a build still makes the size's
+  definitions; not passed over there as a `theorem` is — under a second, and no table takes
+  a line for it. Four counters the checker came to behind `expr_eq` are restated by the
+  forms of the integer measures (`k/tc.shard` `mk_binding_fold`, `k/add.shard`
+  `ref_closure_ok`, `k/inductive.shard` `ivia_go`, `tactic.shard` `pat_fits`). Fourteen
+  more it came to are left programs: eight in groups whose descent is by a counter and then
+  by a list's length, as six were before (`inhabit.shard` `inhabit`, `matcher.shard`
+  `mt_compile` and `mt_pat_term`), and the six of `spelling.shard` `sp_instance_go`, a
+  group that hands its counter round, which ranks in the measures would pay for. The
+  loader's search for a group is left as it is, and the checked load is slower by it
+  (Measured; `OPEN.md` §1): ending a walk at the first function read that calls a program
+  outside the waiting ones was tried on a scratch loader, gave the same records and took 4 s
+  of 107 off, and is not in.
 
 ## Programs and the back end
 
@@ -820,6 +844,27 @@ measurements; measure again before building on one.
   byte-tie waits for the loader pins' harness on the bootstrap: 899 s there for 833, and
   343 s for 333 on the dev box, where it did not grow. So a pipeline is as long as it was:
   what the toolchain's check gave back the byte-tie took on the runner.
+- `expr_eq`'s group a definition (2026-11-18), on the binaries: of the loader's 8,855
+  functions 7,122 are definitions for 7,011; of the 4,063 written, 2,330 for 2,219; of K's
+  own 630, 460 for 403. A first count had 349 functions at or behind the group; 111 took a
+  definition, 93 by the group alone and 18 more by four counters it uncovered. 165
+  obligations of 111 functions, none pending; 10,297 accepted declarations list `propext`,
+  none `Classical.choice`. What the 1,733 without a definition start at: 1,061 the types
+  that name each other; 247 a group of functions that call each other with a structural
+  clause or none, 95 functions in 43 groups; 195 six groups the loader reports as each
+  member waiting on the next, five of them over an integer depth or fuel — the unifier's
+  `assign` 83, K's `infer` 50, `whnf_core` 38 and `is_def_eq` 15, `sexpr.shard` `read_expr`
+  5, `record.shard` `rewrite` 4; 89 a numeral under a constructor pattern; 83 a recursion
+  the checker does not take; 53 an integer measure, 21 functions. The checked load of the
+  loader's closure is slower by it, 107 s for 71: K's directory 78 s for 31, `k/tc.shard`
+  alone 63 s for 18 — every count of the reader and the elaborator there some 3.5 times
+  what it was, 53,122 readings of a function for 17,754, nearly all of them the group
+  search's (`probe_fn`, 51,366 calls for 15,824); a build's reading of the same closure, 8 s,
+  is not changed. All 29 roots loaded checked, 12 at a time: 467 s for 235. The byte-tie
+  563 s for 363: it waits for the loader pins' harness on the bootstrap, 537 s for 343 (on
+  the binary 25 s for 19) — three of its pins load K's view, and with it `expr.shard`,
+  checked; how much of the 194 s is theirs is not measured. The suite 237 s on the binaries
+  and 974 s on the bootstrap, for 225 and 920.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

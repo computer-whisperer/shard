@@ -232,17 +232,17 @@ file; two things about how they are written set them apart.
 
 - **Four fifths of their functions are definitions; of those written by hand, more than
   half.** The checker reads every one whose signature reads: of the loader's closure, 8,850
-  functions — 4,790 of them the rows of a generated table —, it holds 7,010 as definitions.
+  functions — 4,790 of them the rows of a generated table —, it holds 7,120 as definitions.
   The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 640), a type in the signature is one of a group of types that name
+  (`callee_runnable`, some 510), a type in the signature is one of a group of types that name
   each other (`e_only_type`, some 1,060), a group of functions that call each other (about
-  90), a numeral under a constructor pattern (18), an integer measure (7). A type error in
+  95), a numeral under a constructor pattern (18), an integer measure (21). A type error in
   any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 105 functions in 31 files:
+  `kernel/descent.shard`. The forms the sources use, 109 functions in 33 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -257,12 +257,26 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. Seven functions still state an
-  integer and are programs (`measure_type`): one whose counter nothing in it bounds
-  (`k/inductive.shard` `fresh_univ_name`), and two groups whose descent is by a counter
+  over (`--unchecked`); `toolchain_check.sh` checks them. Twenty-one functions still state
+  an integer and are programs (`measure_type`): one whose counter nothing in it bounds
+  (`k/inductive.shard` `fresh_univ_name`); fourteen in groups whose descent is by a counter
   and then by a list's length, for which there is no measure (`kw.shard` `w_norm_ty`,
-  `k/axioms.shard` `closure_of`). Some 110 more state one where the checker does not get to
-  it — behind a callee that is a program, or a signature it does not read.
+  `k/axioms.shard` `closure_of`, `inhabit.shard` `inhabit`, `matcher.shard` `mt_compile` and
+  `mt_pat_term`); and the six of `spelling.shard` `sp_instance_go`, a group that hands its
+  counter round, which ranks in the measures would pay for. Some 100 more state one where
+  the checker does not get to it — behind a callee that is a program, or a signature it
+  does not read.
+- **Functions that call each other over a term are measured by the term's derived size.**
+  `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The
+  member that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one
+  that takes it apart `(measure (* 2 (Expr.size a)))`; the first's obligations close by
+  `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
+  Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
+  type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
+  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 43
+  groups more state a structural clause or none and are programs (`group_measure`). A size
+  is the one derivation a build reads: its functions are definitions with no program, the
+  loader makes them under `--unchecked` too, and the Rust reader passes the form over.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.

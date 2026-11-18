@@ -13,14 +13,14 @@
 #               accessors and the updaters, `make` and `with` rewritten)
 #             — v3/pins/loader/view_basic (a directory module: the view's sigs under the
 #               implementation's type and fns; a dotted constructor citation)
-#   partial   a closure with forms the reader has no reading for (a template's call, a
-#             derivation, a derived view; it exits 3 and names each on standard error):
-#             every line it prints is a line of the loader's dump, and their number is the
-#             one stated here
-#             — v3/pins/readings/main.shard, the two readings' fixture
 #             — v3/tools/shardfmt/fmt.shard with its two directory modules (print, reads),
-#               their private files and what those cite of Init: every line read; the one
-#               form named is a derivation that writes no program
+#               their private files and what those cite of Init; its `(derive CNode size)`
+#               writes definitions with no program, and the reader passes it
+#   partial   a closure with forms the reader has no reading for (a template's call, a
+#             derivation that writes functions, a derived view; it exits 3 and names each on
+#             standard error): every line it prints is a line of the loader's dump, and their
+#             number is the one stated here
+#             — v3/pins/readings/main.shard, the two readings' fixture
 #   run       calc's `main` run by the Rust evaluator directly on the closure it read prints
 #             what the loader's run of the same program prints, over the differential's inputs
 #
@@ -72,8 +72,8 @@ cp "$d/facts" "$d/calc.facts"
 complete v3 v3/std/mem.shard
 complete v3/pins/loader/record_basic v3/pins/loader/record_basic/main.shard
 complete v3/pins/loader/view_basic v3/pins/loader/view_basic/main.shard v3/pins/loader/view_basic/lib
+complete v3 v3/tools/shardfmt/fmt.shard v3/tools/shardfmt/print v3/tools/shardfmt/reads
 partial 61 105 20 v3 v3/pins/readings/main.shard
-partial 140 140 1 v3 v3/tools/shardfmt/fmt.shard v3/tools/shardfmt/print v3/tools/shardfmt/reads
 
 # the run: one line of the differential's inputs per argument
 checks=$((checks+1))
