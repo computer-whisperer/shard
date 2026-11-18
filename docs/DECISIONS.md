@@ -120,6 +120,12 @@ entries are explained under "Measured" at the end.
   effects are bolt axioms over observables that a `bin` trusts; not an IO monad.
 - Deriving writes ordinary `fn` source the loader reads, found at use through a table keyed on
   the closed type; not trusted generated terms and not instance search.
+- The int map's lookup and insert (`intmap.shard` `im_find`, `im_insert`) state the recursion
+  they have, `(measure (struct m))` — a child of the map at each call; not `(measure k)`, the
+  key: an `Int` measure gives a function no definition (`measure_type`), and the key is not
+  what ends the walk. Assent: "Good. Let's change the two measure lines and see where that
+  gets us." The lookup is a definition by it; the insert is not yet — it calls `im_split`,
+  whose recursion is on the two keys alone.
 
 ## Programs and the back end
 
@@ -710,7 +716,18 @@ measurements; measure again before building on one.
   native tie 321 s, the suite 234 s on the binaries and 1,021 s on the bootstrap. On CI
   for the type move before it (#743 against #739): `native` 2,419 s for 2,255 — the
   toolchain's check 505 s for 329 —, `v3` 2,203 s, `replay` 1,851 s: a pipeline is 40
-  minutes.
+  minutes. For this landing (#745): `native` 2,469 s — the build 529 s, the toolchain's
+  check 508 s, the native tie 789 s —, `v3` 2,231 s, `replay` 1,860 s.
+- The int map's lookup and insert on the map's structure (2026-11-18, dev box, a loader built
+  from the tree). The checked load of the loader's closure: 6,578 definitions for 6,512 — of
+  the written functions 1,786 for 1,720 (K's own 335 for 306) —, 1,195 type-checked without
+  one for 1,261, the same 1,080 not read; in 116 s, as before. The lookup was the first
+  function without a definition under 490 functions, and 66 gained one: the others call a
+  second such function. What the functions without a definition start at now: 1,059 the
+  groups of types that name each other; 733 an integer measure — `util.show_nat_go` 273,
+  `unify.inst_level_go` 169, `intmap.im_split` 101 —; 347 a group of functions that call
+  each other (`expr.expr_eq` 227); 78 a numeral under a constructor pattern
+  (`json.parse_int` 38). The three readings of every toolchain root are one text.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
