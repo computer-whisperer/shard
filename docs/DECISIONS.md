@@ -900,7 +900,10 @@ measurements; measure again before building on one.
   it was: it waits for the loader pins' harness on the bootstrap, 510 s for 537 (343 before
   the group), which this does not touch; a checked load of `expr.shard` on the binary is
   4.6 s for 3.4 by the group's definition and its proofs, and three pins load it. The
-  suite 225 s on the binaries, 946 s on the bootstrap.
+  suite 225 s on the binaries, 946 s on the bootstrap. On CI (#752): `native` 2,840 s for
+  3,107 (2,486 before the group) — the toolchain's check 280 s for 524 (335), the byte-tie
+  1,362 s for 1,386 (967), its harness on the bootstrap 1,274 s for 1,296 (899) —, `v3`
+  2,114 s, `replay` 1,866 s: a pipeline is 48 minutes for 52, and 41 before the group.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
