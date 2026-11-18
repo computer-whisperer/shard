@@ -5,8 +5,8 @@ streams) that `v3/kernel/test/native_tie_test.sh` builds into a binary (`v3/buil
 `load.shard --emit` — `kernel/lower.shard`, `kernel/cgen.shard` — then `cc`) and runs under both
 engines — the Rust bootstrap's `eval direct` and the binary — tying standard output, standard
 error and the exit status byte for byte. A case is what the back end must get right, or what its
-runtime must agree with the bootstrap on. No case carries an expected text: the bootstrap is the
-authority and the comparison is the verdict.
+runtime must agree with the bootstrap on. No case carries an expected text: the comparison is
+the verdict.
 
 A case is one of two kinds by where its file lives, and a name marks a refusal:
 

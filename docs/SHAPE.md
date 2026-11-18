@@ -33,8 +33,10 @@ Three things carry the design:
 - **Programs are definitions.** There is no second language for specifications. A function's
   meaning in the logic and the program that runs are derived from one source text.
 
-The toolchain is written in shard and runs two ways: on a small Rust evaluator (the bootstrap, the
-authority) and as native binaries it compiles from itself.
+The toolchain is written in shard and runs two ways: on a small Rust evaluator (the bootstrap) and
+as native binaries it compiles from itself. What a program computes is defined by a third, the
+evaluator the toolchain contains (`ev.shard`); the two engines stand in for it and must agree
+with it and with each other.
 
 ## 2. The parts
 

@@ -95,11 +95,17 @@ with a proof. Today's compiler is unproven and is to be replaced by it.
 
 **Engines and gates**
 
-21. The Rust bootstrap evaluator is the authority. A compiled engine is confirmed against it by
-    comparing the two byte for byte on every test. Two checks are too slow for the bootstrap: the
-    full replay of Lean's library (76 minutes against 7), and the checked load of the toolchain's
-    own sources, where the bootstrap interprets the loader checking the sources it is written
-    in. In each the two are compared on a part and the binary runs the rest alone.
+21. The evaluator written in shard (`v3/kernel/ev.shard`, rule 11's) is the canonical authority
+    on what a program computes. The Rust bootstrap evaluator and a binary from the C compile
+    chain stand in for it in almost every case, and development relies on them for their speed.
+    All three agree: a difference between any two is a defect (the known ones: `OPEN.md` §1),
+    and the written evaluator's answer is the one that stands. It is itself a shard program, and
+    runs on one of the other two. The gates compare the Rust evaluator and the binaries byte for
+    byte on every test, and the written evaluator with both on the programs the tests run under
+    it. Two checks are too slow for the bootstrap: the full replay of Lean's library (76 minutes
+    against 7), and the checked load of the toolchain's own sources, where the bootstrap
+    interprets the loader checking the sources it is written in. In each the two are compared on
+    a part and the binary runs the rest alone.
 22. A missing or stale binary fails loudly. It never falls back silently to another engine.
 23. Every source file an author writes is kept in the canonical layout by a gate that refuses and
     does not rewrite. The layout serves agents reading and editing, not a human in an editor.
@@ -216,13 +222,21 @@ admitted that the logic does not derive.
     with a lot less." … "I am willing to completely remove the standing 'no binary builds
     another' guideline so long as we have an alternate trust path that can be run on CI
     occasionally, and we otherwise trust our compile and rust eval processes to be at least
-    roughly correct." (Rule 21 stands as written. The build: `DECISIONS.md`, Build and gates.)
+    roughly correct." (The build: `DECISIONS.md`, Build and gates.)
+
+15. *The canonical evaluator.* "I would say that the written-in-shard evaluator is the canonical
+    authority here. Alternatively, the rust evaluator and the result of running the c compile
+    chain should also be acceptable in almost all cases, and we are speeding up development by
+    relying on them. All three paths should agree, but the written-in-shard kernel evaluator
+    should be considered the canonical focus." (Rule 21, which named the Rust bootstrap
+    evaluator the authority until this ruling.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 
-Rule 21's second check is written from the owner's go-ahead for the ordinary `Symbol`, whose
-first step, as put to them, moved the toolchain's check onto the binaries: "Good. Proceed with
-the symbol change (full 1-4 scope)". The rule's wording is not yet ratified.
+Rule 21's text is written from ruling 15, which the owner gave as "One minor adjustment to Rule
+21" on reading the rule; its second slow check is written from their go-ahead for the ordinary
+`Symbol`, whose first step, as put to them, moved the toolchain's check onto the binaries: "Good.
+Proceed with the symbol change (full 1-4 scope)". The text as adjusted is not yet read by them.
 
 Design choices the owner approved by bare assent, and the alternatives they were chosen over, are in
 `DECISIONS.md`.

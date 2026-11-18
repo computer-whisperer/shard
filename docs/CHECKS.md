@@ -138,7 +138,7 @@ Tests are under `v3/kernel/test/` and pins under `v3/pins/loader/` unless a path
 | A reducer bound a multi-binding `let` in the wrong order. | `let` is sequential in both readers: `parity_test.sh`; `v3/pins/emit/nested_shadow` |
 | The gate did not read one failure line shape, so must-fail tests gated nothing. | each pin's header is compared; `loader_pins_list_test.sh` compares the list of cases with the directory |
 | A stamp written at the end of a build marked old code as fresh. | `build_test.sh`: a source edited while its build runs fails the build and no stamp is written; a stale stamp is refused by `v3/bin/eval` |
-| A fast engine's verdict taken without the authority; agreement on a shared failure. | `native_tie_test.sh`, `suite_tie.sh`, `t0_gate_test.sh` |
+| A fast engine's verdict taken with no other engine's beside it; agreement on a shared failure. | `native_tie_test.sh`, `suite_tie.sh`, `t0_gate_test.sh` |
 | The evaluator's integers wrapped silently at 64 bits. | `prims_test.shard`; `v3/pins/emit/prims`, `refused_numeral_pattern` |
 | A shortcut authorised by a hash: a forged `Nat.add` gave `Nat.add 2 3 = 5`. | `hostile_test.shard` case 7b; `k/test/accel_test.shard` |
 | A theorem under a primitive's name was authorised (no false theorem). | `hostile_test.shard` case 7e |

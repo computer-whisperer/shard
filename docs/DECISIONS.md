@@ -126,9 +126,9 @@ entries are explained under "Measured" at the end.
 - A program is read from the source and the types its binders state (`LAW.md` rule 24), so the
   Rust evaluator can come to read every program and the toolchain's own files can become ordinary
   ones; not type inference in the Rust evaluator — the elaborator, the erasure and K's type
-  checker, about 19,400 of the toolchain's lines, inside the engine that is the authority; not
+  checker, about 19,400 of the toolchain's lines, inside the bootstrap; not
   a seed — the Rust evaluator running the erased form a previous toolchain wrote, so that the
-  authority no longer runs the sources. Assent: "Let's adopt it and begin."; and once every
+  bootstrap no longer runs the sources. Assent: "Let's adopt it and begin."; and once every
   program the tree writes read the same both ways, "ratify it".
 - The classifier writes the entries the erasure writes by sharing its tables (`prog.shard`:
   `realization_of`, `realization_expr`), and types a body before it writes a row's expression;
@@ -247,8 +247,9 @@ entries are explained under "Measured" at the end.
   names — two identities never collide and no word is reserved.
 - The lowering keeps `Nat.beq`, `Nat.ble` and the bitwise five under their own names; not the
   kernel's primitives — they answer Init's `Bool`, and `ev` sticks (`no_arm`) where C does not.
-- The lowering reads no measure; the binaries are engines, not proven artifacts — the bootstrap
-  evaluator is the authority and no verdict stands on a binary's word.
+- The lowering reads no measure; the binaries are engines, not proven artifacts — each is
+  compared with the Rust evaluator on every test, and the evaluator written in shard is the
+  canonical one (`LAW.md` rule 21).
 - ★ World threading is checked on the erased program (`thread.shard`), through boxes and helper
   summaries; not read off variable names — a World boxed once and unwrapped twice is used twice.
 - An unmet requirement, an unthreaded function, an extern off the roster or an untrusted axiom

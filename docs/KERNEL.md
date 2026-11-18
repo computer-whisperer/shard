@@ -450,14 +450,14 @@ of `T` is derivable in Lean 4's type theory from the axioms `A` (the parameters 
    - *Accelerated primitives.* K computes fourteen `Nat` operations on literals, types literals
      and expands string literals itself. One believes each computes what the pinned definition
      defines (`k/test/tc_test.shard`: results, large operands, a wrong result for each).
-3. **The engine that runs K.** The authority is the Rust bootstrap, `rust_bootstrap/src/`
-   (6,047 lines, 720 of them its unit tests; the crates `lexpr`, `num-bigint`, `num-traits`,
-   `mimalloc`; the Rust compiler): its reader (`plain/`, 3,581 lines) reads K's sources — every
+3. **The engine that runs K.** The Rust bootstrap, `rust_bootstrap/src/`
+   (5,891 lines, 730 of them its unit tests; the crates `lexpr`, `num-bigint`, `num-traits`,
+   `mimalloc`; the Rust compiler): its reader (`plain/`, 3,564 lines) reads K's sources — every
    name to an identity through the file's scope, K's view linked to its implementation — and the
    evaluator runs them and supplies integer arithmetic and the host calls. What the reader reads
    is compared with the V3 loader's program on every toolchain root (`parity_test.sh`). It reads
    them by a table of facts about Init's constants kept in the tree (`v3/kernel/init.facts`,
-   155 lines: which arguments of `List.cons` or `Prod.mk` exist at run time, and the like). The
+   36 lines: which arguments of `List.cons` or `Prod.mk` exist at run time, and the like). The
    table is believed; the same test has the loader print it again from K. A checker
    run as a native binary (`v3/bin/load`, `v3/bin/t0`, …) adds the back end (`lower.shard`,
    `cgen.shard`, `emit.shard`), the runtime `rt.h`, `cc -O2`, and the bootstrap run that wrote the
@@ -681,8 +681,9 @@ binary being a right compile of the loader, and `v3/build.sh --tie` is the check
 text produced again by the other engine and compared byte for byte. CI builds every root on the
 bootstrap and runs the tie on every pipeline. A build loads a toolchain root `--unchecked`:
 each `fn` is read as a program alone, and the check of the toolchain's sources is a load
-without the flag. The binaries are faster and unproven, so the bootstrap is the authority
-wherever the two differ.
+without the flag. The binaries are faster and unproven, and must agree with the bootstrap: a
+difference fails a gate, one of the two is wrong, and what a program computes is what the
+evaluator written in shard computes (`ev.shard`; `LAW.md` rule 21).
 
 `eval direct` is the one spelling for "run this toolchain program". The test scripts call
 `$EVAL direct FILE ARGS…`; `EVAL` is the bootstrap by default, or the shim `v3/bin/eval`, which
