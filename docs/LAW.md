@@ -231,6 +231,15 @@ admitted that the logic does not derive.
     should be considered the canonical focus." (Rule 21, which named the Rust bootstrap
     evaluator the authority until this ruling.)
 
+16. *Operators beyond Init.* Of the bit-level primitives the engines run and the logic has
+    no form for: "The main point is that these bitwise operations will be things we want to
+    use in normal shard code, beyond what types and functions Lean's Init happens to have. I
+    don't mean that we should cheat and axiomize everything, but we will need to expand our
+    operator and logical proof base over time beyond what Lean happened to implement for
+    us." (An operator's meaning is a definition K checks and its facts are proven from it;
+    what is believed is that an engine's operation computes that definition. Nothing is
+    built yet: `DECISIONS.md`, Programs and the back end.)
+
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 
 Rule 21's text is written from ruling 15, which the owner gave as "One minor adjustment to Rule

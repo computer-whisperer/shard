@@ -231,12 +231,12 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **About a quarter of their functions are definitions.** The checker reads every one whose
-  signature reads: of the loader's closure, 9,170 declarations, it holds 2,440 as definitions.
+  signature reads: of the loader's closure, 9,170 declarations, it holds 2,510 as definitions.
   The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 4,800), a type in the signature names a type declared after it or
-  one that names it back (`e_only_type`, some 1,400), a measure that is an integer or a group
-  of functions that call each other (about 110), a bit-level primitive (about 40). A type
-  error in any of them is refused.
+  (`callee_runnable`, some 5,100), a type in the signature is one of a group of types that
+  name each other (`e_only_type`, some 1,060), a measure that is an integer or a group of
+  functions that call each other (about 110), a bit-level primitive or a numeral under a
+  constructor pattern (45). A type error in any of them is refused.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.

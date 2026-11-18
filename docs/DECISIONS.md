@@ -278,6 +278,17 @@ entries are explained under "Measured" at the end.
   not check is refused (`LAW.md` rule 25, ruling 13); not a refusal of every function the
   checker cannot accept — a sketch would need its proofs before it ran; not a program for a
   function with a type error — nothing would then check a program's types.
+- NOT BUILT, chosen: the bit-level primitives (`band bor bxor bshl bshr`, and `ediv`) get a
+  meaning in the logic (`LAW.md` ruling 16) as operators that take it from an operand's
+  type, as `+` does — Init's `Nat.land` and its kin at `Nat`, `Int.shiftRight`,
+  `Int.shiftLeft` and `Int.ediv` at `Int`, and for `and`, `or`, `xor` at `Int`, which Init
+  lacks, three definitions of the system's own that every file sees — and run as the
+  engine operations they are today by rows of the engines' fixed table; not a rewrite of
+  the toolchain's functions over division or over Init's `Nat` operations — the operations
+  are wanted in ordinary code; not functions a file imports — two spellings; not a form in
+  source that declares a definition's engine operation — no second consumer yet. Assent:
+  "Yes, operators by type with the fixed table, measure first". Measured on a scratch
+  loader before anything is built (`Measured`).
 
 ## Proofs and automation
 
@@ -619,9 +630,9 @@ measurements; measure again before building on one.
   every constructor of a term (`mk_app`, `mk_const`, …) are among those without one; what K
   has as definitions is accessors, small predicates and the names of constants. Where the
   2,591 written ones without a definition start: 1,388 at a signature that names one of 95
-  types the checker does not read (52 `bad_binder`, 43 `bad_shape`; on the scratch loader of
-  2026-11-16 all of them stood behind two types declared below their first use, `Gen` in
-  `elab.shard` and `Req` in `reader.shard`); 905 at one of 41 functions that use a
+  types the checker does not read (52 `bad_binder`, 43 `bad_shape`: two types declared below
+  their first use, `Gen` in `elab.shard` and `Req` in `reader.shard`, and four groups of
+  types that name each other); 905 at one of 41 functions that use a
   primitive with no form in the logic (`band`, `bshr`, `ediv` on an `Int`) — `name.mix`,
   the hash of a name, 276; `intmap.im_find` 270; `util.show_nat_go` 206; `json.parse_int`
   37 —; 280 at a recursion the checker does not take as written (`group_measure` 138,
@@ -631,6 +642,16 @@ measurements; measure again before building on one.
   its own — a stand-in constant for every callee without a definition, the two types moved
   and the literals converted — the scratch loader gave 3,283 of 4,778 written functions a
   definition, 69%.
+- The two types moved above their first use (2026-11-18, the same load): 331 functions more
+  are read — written, 1,525 definitions, 1,459 type-checked without one, 1,057 not read; 64
+  types are programs only. The checker refused eleven of the functions it then read, ten
+  for a `match` in a place that gives it no type (bound by a `let` with no type stated, a
+  scrutinee, a condition, an argument of `append`) and one for a constructor that has its
+  type's name; they state the type now. The 64 types stand behind four groups that name
+  each other, which no order of declarations reads: `prog.shard` `ETerm` and `EArm` (43
+  types behind them), `lower.shard` `LwE` and `LwArm` (13), `ev.shard` `LTerm` and `LArm`
+  (10), and the loader's `Load`, `Module` and `ForkPt`. The checked load of the loader's
+  closure is 116 s for 68, and all 29 roots, 12 at a time, 380 s for 226.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

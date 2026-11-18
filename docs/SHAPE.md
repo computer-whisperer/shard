@@ -84,10 +84,10 @@ every test, and nothing more. Numbers are big integers (a native binary stops at
 and strings are lists.
 
 **Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
-Init's types, and the checker reads them: of the 8,834 functions the loader is made of, 2,438 are
-definitions in the logic, 4,963 more are type-checked and run as programs, and 1,433 are not read,
-their signatures naming types the logic does not take (types that name each other, or one declared
-later in its file). No theorem is stated about a toolchain function. One check loads the
+Init's types, and the checker reads them: of the 8,833 functions the loader is made of, 2,513 are
+definitions in the logic, 5,215 more are type-checked and run as programs, and 1,105 are not read,
+nearly all for a signature over types that name each other, which the logic's reading of a `type`
+does not take. No theorem is stated about a toolchain function. One check loads the
 toolchain's sources this way (`toolchain_check.sh`); a build and every test read them as programs
 alone. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.

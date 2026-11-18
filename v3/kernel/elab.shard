@@ -65,13 +65,13 @@
 (use kernel.unify.MCtx)
 (use kernel.unify.URes)
 
-;; the elaboration state: K's world (environment, locals, checker state), the
-;; metavariable context, the scope context, the generated declarations
-(type El (El W MCtx Cx Gen))
 ;; what elaboration generates beside the term: the owner the names hang under, the next
 ;; matcher's number, the declarations made so far in admission order (already checked into
 ;; the walk's environment; the reader hands them to the loader before the owner)
 (type Gen (Gen Name Int (List Declaration)))
+;; the elaboration state: K's world (environment, locals, checker state), the
+;; metavariable context, the scope context, the generated declarations
+(type El (El W MCtx Cx Gen))
 (fn el_w ((e El)) W
   (match e
     ((El w _ _ _) w)))
@@ -749,7 +749,7 @@
        ((EErr r m) (EErr r m))
        ((EOk e1b _ _)
         (let
-          ((e2
+          ((e2 El
              (match expected
                ((some x)
                 (match (el_unify e1b rty x)
@@ -794,23 +794,25 @@
 ;; definitional check
 (fn elab_slot ((e El) (a EArg) (m Expr)) ERes
   (let
-    ((dom
+    ((dom Expr
        (match (mvar_type e m)
          ((some t) (el_zonk e t))
          (none (mk_sort LZero)))))
-    (match
-      (match a
-        ((ASrc s) (elab e s (some dom)))
-        ((AVal v vty) (check_expected e v vty (some dom))))
-      ((EErr r msg) (EErr r msg))
-      ((EOk e1 v vty)
-       (match (el_unify_r e1 m v)
-         ((EUOk e2) (EOk e2 v vty))
-         (u
-           (eu_refusal e1 u
-             (EErr (sym "argument_mismatch")
-               (append (utf8 "the expected type fixes this argument to ")
-                 (append (show_expr (el_zonk e1 m)) (append (utf8 ", found ") (show_expr v))))))))))))
+    (let
+      ((r ERes
+         (match a
+           ((ASrc s) (elab e s (some dom)))
+           ((AVal v vty) (check_expected e v vty (some dom))))))
+      (match r
+        ((EErr r1 msg) (EErr r1 msg))
+        ((EOk e1 v vty)
+         (match (el_unify_r e1 m v)
+           ((EUOk e2) (EOk e2 v vty))
+           (u
+             (eu_refusal e1 u
+               (EErr (sym "argument_mismatch")
+                 (append (utf8 "the expected type fixes this argument to ")
+                   (append (show_expr (el_zonk e1 m)) (append (utf8 ", found ") (show_expr v)))))))))))))
 (fn mvar_type ((e El) (m Expr)) (Option Expr)
   (match m
     ((MVar _ i)
@@ -1317,13 +1319,15 @@
         (match (el_lams e2 (list h) v)
           ((Prod.mk e3 lam)
            (let ((ret (el_zonk e3 vty)))
-             (if
-               (match h
-                 ((FVar _ hid) (mem_int hid (expr_fvars ret nil)))
-                 (_ false))
-               (EErr (sym "dif_type")
-                 (append (utf8 "the branch's type mentions the hypothesis ") (chars_of_sym hn)))
-               (EOk (el_restore e3 e) lam ret))))))))))
+             (let
+               ((mentions Bool
+                  (match h
+                    ((FVar _ hid) (mem_int hid (expr_fvars ret nil)))
+                    (_ false))))
+               (if mentions
+                 (EErr (sym "dif_type")
+                   (append (utf8 "the branch's type mentions the hypothesis ") (chars_of_sym hn)))
+                 (EOk (el_restore e3 e) lam ret)))))))))))
 (fn mk_pi_anon ((dom Expr) (cod Expr)) Expr (mk_pi Anon BDefault dom cod))
 
 ;; a condition that is a value, not a proposition, and not of a Bool or a two-constructor
@@ -1602,39 +1606,41 @@
                     (let ((sv1 (el_zonk e3 sv)))
                       (let
                         ((gen (match_gen sv1 ret))
-                         (svid
+                         (svid (Option Int)
                            (match sv1
                              ((FVar _ id) (some id))
                              (_ none))))
                         (let
-                          ((deps
+                          ((deps (List (Prod Name Expr))
                              (match svid
                                ((some id) (match_deps e3 id))
                                (none nil))))  ; (name, local) pairs, outermost first
                           ;; the dependent reading first, then the expected type's, then the
                           ;; constant motive; the first reading's error
-                          (match_live e3 dty arms
-                            (match
-                              (match deps
-                                (nil (EErr (sym "none") nil))
-                                (_ (match_try e3 dty ret l sv1 deps svid arms expected)))
-                              ((EOk e4 v vt) (EOk e4 v vt))
-                              ((EErr r0 m0)
-                               (match (match_try e3 dty ret l sv1 nil gen arms expected)
-                                 ((EOk e4 v vt) (EOk e4 v vt))
-                                 ((EErr r m)
-                                  (match gen
-                                    (none
-                                      (match deps
-                                        (nil (EErr r m))
-                                        (_ (EErr r0 m0))))
-                                    ((some _)
-                                     (match (match_try e3 dty ret l sv1 nil none arms expected)
-                                       ((EOk e4 v vt) (EOk e4 v vt))
-                                       ((EErr _ _)
+                          (let
+                            ((first ERes
+                               (match deps
+                                 (nil (EErr (sym "none") nil))
+                                 (_ (match_try e3 dty ret l sv1 deps svid arms expected)))))
+                            (match_live e3 dty arms
+                              (match first
+                                ((EOk e4 v vt) (EOk e4 v vt))
+                                ((EErr r0 m0)
+                                 (match (match_try e3 dty ret l sv1 nil gen arms expected)
+                                   ((EOk e4 v vt) (EOk e4 v vt))
+                                   ((EErr r m)
+                                    (match gen
+                                      (none
                                         (match deps
                                           (nil (EErr r m))
-                                          (_ (EErr r0 m0))))))))))))))))
+                                          (_ (EErr r0 m0))))
+                                      ((some _)
+                                       (match (match_try e3 dty ret l sv1 nil none arms expected)
+                                         ((EOk e4 v vt) (EOk e4 v vt))
+                                         ((EErr _ _)
+                                          (match deps
+                                            (nil (EErr r m))
+                                            (_ (EErr r0 m0)))))))))))))))))
                    ((Prod.mk _ other)
                     (EErr (sym "not_a_type")
                       (append (show_expr ret) (append (utf8 " : ") (show_expr other))))))))))))))))
@@ -1760,12 +1766,13 @@
     (nil nil)
     ((cons (Prod.mk n fv) r)
      (if (mem_int (fvar_id_of fv) ids) (deps_among e r ids)
-     (if
-       (match (w_local_type (el_w e) (fvar_id_of fv))
-         ((some t) (ids_meet ids (expr_fvars (el_zonk e t) nil)))
-         (none false))
-       (cons (Prod.mk n fv) (deps_among e r (cons (fvar_id_of fv) ids)))
-       (deps_among e r ids))))))
+     (let
+       ((dep Bool
+          (match (w_local_type (el_w e) (fvar_id_of fv))
+            ((some t) (ids_meet ids (expr_fvars (el_zonk e t) nil)))
+            (none false))))
+       (if dep (cons (Prod.mk n fv) (deps_among e r (cons (fvar_id_of fv) ids)))
+       (deps_among e r ids)))))))
 (fn bound_names ((bs (List (Prod Name Expr)))) (List Name)
   (measure (struct bs))
   (match bs
