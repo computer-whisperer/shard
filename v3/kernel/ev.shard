@@ -42,6 +42,7 @@
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
+(use kernel.descent)
 (use kernel.host)
 (use kernel.intmap)
 (use kernel.name)
@@ -375,7 +376,7 @@
   (cells_out (wire_nil (lk_wire lk)) (wire_cons (lk_wire lk)) v acc fuel))
 ;; a chain of integer cells under the tags nl and cs
 (fn cells_out ((nl Int) (cs Int) (v IVal) (acc (List Int)) (fuel Int)) (Option (List Int))
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) none
   (match v
     ((IVCtor tag fields)
@@ -386,6 +387,8 @@
          (_ none))
        none)))
     (_ none))))
+(fulfills cells_out.dec_1
+  (by (intro p h tag fields hv hn hc b rest hf) (apply natAbs_lt (arith) (arith))))
 (fn bool_cell ((lk Linked) (b Bool)) IVal
   (IVCtor (if b (wire_true (lk_wire lk)) (wire_false (lk_wire lk))) nil))
 ;; Decidable's cells: what the table's Nat decisions return
@@ -598,23 +601,35 @@
   (if (= code 38) (PrimVal (dec_cell lk (<= x y)))
   PrimGuard))))))))))))
 (fn ev_nat_bytes_go ((n Int) (acc Int)) Int
-  (measure n)
+  (measure (Int.natAbs n))
   (if (<= n 0) acc (ev_nat_bytes_go (/ n 256) (+ acc 1))))
+(fulfills ev_nat_bytes_go.dec_1 (by (intro p h) (apply natAbs_lt (arith) (arith))))
 (fn ev_nat_bytes ((n Int)) Int (ev_nat_bytes_go n 0))
 (fn nat_sized ((r Int)) PrimRes
   (if (< (ev_nat_max_size) (ev_nat_bytes r)) (PrimOut (sym "nat_size")) (PrimVal (IVInt r))))
-(fn nat_gcd_ev ((a Int) (b Int)) Int (measure b) (if (<= b 0) a (nat_gcd_ev b (mod a b))))
+(fn nat_gcd_ev ((a Int) (b Int)) Int
+  (measure (Int.natAbs b))
+  (if (<= b 0) a (nat_gcd_ev b (mod a b))))
+(fulfills nat_gcd_ev.dec_1
+  (by
+    (intro p h)
+    (have hb (< 0 (proj PProd 1 p)) (arith))
+    (have hn (Not (= (proj PProd 1 p) 0)) (intro z) (arith))
+    (apply natAbs_lt (exact (Int.emod_nonneg (proj PProd 0 p) hn))
+      (exact (Int.emod_lt_of_pos (proj PProd 0 p) hb)))))
 (fn nat_pow_ev ((b Int) (e Int)) Int
-  (measure e)
+  (measure (Int.natAbs e))
   (if (<= e 0) 1 (let ((h (nat_pow_ev b (/ e 2)))) (if (= (mod e 2) 0) (* h h) (* (* h h) b)))))
+(fulfills nat_pow_ev.dec_1 (by (intro p h) (apply natAbs_lt (arith) (arith))))
 ;; Nat.shiftLeft n k = n · 2^k (K's form, after the guards above) and Nat.shiftRight n k =
 ;; n / 2^k, total (Lean's), the right shift in steps of 62 bits over the host's guarded
 ;; shift, stopping at zero — so its work is bounded by n's size, never by k
 (fn nat_shr ((n Int) (k Int)) Int
-  (measure k)
+  (measure (Int.natAbs k))
   (if (= n 0) 0
   (if (< k 62) (bshr n (Int.natAbs k))
   (nat_shr (bshr n 62) (- k 62)))))
+(fulfills nat_shr.dec_1 (by (intro p hn h) (apply natAbs_lt (arith) (arith))))
 
 ;; `bshl` and `bshr` (codes 15 and 7) by any count that is a natural number, the engine's side of
 ;; Int.shiftLeft m n = m · 2^n and Int.shiftRight m n = ⌊m / 2^n⌋ (prog.shard realization_of):
@@ -628,11 +643,12 @@
     (PrimOut (sym "nat_size"))
     (PrimVal (IVInt (* x (nat_pow_ev 2 y)))))))))
 (fn int_shr ((x Int) (y Int)) Int
-  (measure y)
+  (measure (Int.natAbs y))
   (if (< y 62) (bshr x (Int.natAbs y))
   (if (= x 0) 0
   (if (= x -1) -1
   (int_shr (bshr x 62) (- y 62))))))
+(fulfills int_shr.dec_1 (by (intro p h hx hm) (apply natAbs_lt (arith) (arith))))
 
 ;; ---- `ev` -----------------------------------------------------------------------------------
 (fn val_in ((lk Linked) (v Val)) (Option IVal)
@@ -824,7 +840,10 @@
     ((cons (ETCon n _) nil) (some (Prod.mk (rev acc) n)))
     ((cons _ nil) none)
     ((cons t r) (split_last r (cons t acc)))))
-(fn zeros_iv ((k Int)) (List IVal) (measure k) (if (< k 1) nil (cons (IVInt 0) (zeros_iv (- k 1)))))
+(fn zeros_iv ((k Int)) (List IVal)
+  (measure (Int.natAbs k))
+  (if (< k 1) nil (cons (IVInt 0) (zeros_iv (- k 1)))))
+(fulfills zeros_iv.dec_1 (by (intro k h) (apply natAbs_pred (arith))))
 
 ;; the checked door's condition, decided once at `prepare`: every parameter states a closed
 ;; type, and every type a value of it reaches is one the validation below reads in full — an

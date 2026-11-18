@@ -149,6 +149,25 @@ entries are explained under "Measured" at the end.
   One committed sidecar is made again with it (`examples/tactic/use_split.auto.shard`): a
   sidecar's key takes in the descent obligations of every module in its file's closure,
   proven or not, and that file imports `kernel/sexpr.shard` (`OPEN.md` §1).
+- The other integer measures the checker gets to were restated the same way, by three
+  agents on disjoint files under one rule — no function's body changes, and the program
+  text of the loader's closure stays byte for byte what it was, which it did —: 102
+  functions more, 105 in all with 146 obligations, none pending. Assent to that plan: "Good.
+  Proceed with the bulk when the pilot lands." Where the plain form did not fit, the measure
+  was chosen so that the obligation is true of the function as written; not the function
+  changed to fit a measure. A counter tested against 0 is measured one higher. A walk down
+  lists is measured by Init's `List.length`, a `Nat`; not by the sources' own `len` — a fact
+  about it cannot stand in `descent.shard`, which `util.shard` imports. Two functions that
+  call each other, one passing the counter on, take measures weighted so that the pass is
+  paid for (`level.shard` `is_geq_core`, `is_geq_offsets`). Seven are left programs:
+  `k/inductive.shard` `fresh_univ_name`, whose counter nothing in it bounds, so what it
+  would owe is false; `kw.shard` `w_norm_ty` and `w_norm_tys` and four of `k/axioms.shard`,
+  whose descent is by a counter and then by a list's length (`OPEN.md` §3). One proof of the
+  146 as delivered cited `Classical.byContradiction` to turn a `Bool` test into its
+  comparison, and two functions listed `Classical.choice` by it; it is a case split on the
+  comparison's decision now, and no declaration of the closure lists more than `propext`.
+  `init.facts` takes one line, `List.length`: a measure is a part of its `fn`, and the
+  table holds what the sources' forms name.
 
 ## Programs and the back end
 
@@ -778,6 +797,23 @@ measurements; measure again before building on one.
   declarations list `propext`. All 29 roots loaded checked, 12 at a time: 258 s for 402; the
   suite 229 s on the binaries and 983 s on the bootstrap, for 234 and 1,021. On CI for the
   int map's two lines before it (#746): `native` 2,469 s, `v3` 2,192 s, `replay` 1,871 s.
+- The bulk of the integer measures (2026-11-18, dev box, the pilot's loader). The checked
+  load of the loader's closure, 8,855 functions: 7,011 definitions for 6,786 — of the
+  written functions 2,219 for 1,994 (K's own 403 for 376) —, 762 type-checked without one,
+  1,082 not read, no obligation pending; in 66 s for 77. The 96 functions restated were the
+  first without a definition under 425 others, and 225 functions gained one: most of the
+  others stand under `expr.expr_eq` now, with 349. What the functions without a definition
+  start at: 1,061 the groups of types that name each other; 569 a group of functions that
+  call each other, 93 functions; 88 a numeral under a constructor pattern; 74 a recursion
+  the checker does not take — on no part of the structural argument, or with no measure —;
+  16 an integer measure, the seven left. 116 functions more state an integer measure where
+  the checker does not get to it: 57 behind a callee that is a program, 52 behind a
+  signature it does not read. 9,756 accepted declarations list `propext`. The three agents
+  took 17, 21 and 29 minutes and 152, 104 and 202 tool calls. An edit of `index.shard`,
+  proofs alone, sends the Init index to be made again by its stamp: 11 minutes on the
+  bootstrap here. All 29 roots loaded checked, 12 at a time: 235 s for 258; the suite 225 s
+  on the binaries and 920 s on the bootstrap. On CI for the pilot (#747): `native` 2,447 s —
+  the toolchain's check 363 s for 508 —, `v3` 2,199 s, `replay` 1,868 s.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

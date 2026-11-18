@@ -20,6 +20,7 @@
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.k)
+(use kernel.descent)
 (use kernel.elab)
 (use kernel.expr)
 (use kernel.kw)
@@ -91,7 +92,7 @@
   (match l
     ((Lin _ ks) ks)))
 (fn lin_zip ((xs (List Int)) (ys (List Int)) (ka Int) (kb Int)) (List Int)
-  (measure (+ (len xs) (len ys)))
+  (measure (+ (List.length xs) (List.length ys)))
   (match xs
     (nil
       (match ys
@@ -101,6 +102,10 @@
      (match ys
        (nil (cons (* ka x) (lin_zip xr nil ka kb)))
        ((cons y yr) (cons (+ (* ka x) (* kb y)) (lin_zip xr yr ka kb)))))))
+(fulfills lin_zip.dec_1 (by (intro p hx y yr hy) (rw hx) (rw hy) (rw List.length_cons) (arith)))
+(fulfills lin_zip.dec_2 (by (intro p x xr hx hy) (rw hx) (rw hy) (rw List.length_cons) (arith)))
+(fulfills lin_zip.dec_3
+  (by (intro p x xr hx y yr hy) (rw hx) (rw hy) (rw List.length_cons) (rw List.length_cons) (arith)))
 (fn lin_add ((a Lin) (b Lin)) Lin
   (Lin (+ (lin_const a) (lin_const b)) (lin_zip (lin_coeffs a) (lin_coeffs b) 1 1)))
 (fn lin_sub ((a Lin) (b Lin)) Lin
@@ -111,7 +116,10 @@
   (Lin (* (lin_const a) (lin_const b))
     (lin_zip (lin_coeffs a) (lin_coeffs b) (lin_const b) (lin_const a))))
 (fn lin_coord ((i Int)) Lin (Lin 0 (lin_unit i)))
-(fn lin_unit ((i Int)) (List Int) (measure i) (if (< i 1) (list 1) (cons 0 (lin_unit (- i 1)))))
+(fn lin_unit ((i Int)) (List Int)
+  (measure (Int.natAbs i))
+  (if (< i 1) (list 1) (cons 0 (lin_unit (- i 1)))))
+(fulfills lin_unit.dec_1 (by (intro i h) (apply natAbs_pred (arith))))
 (fn lin_all_zero ((xs (List Int))) Bool
   (measure (struct xs))
   (match xs
@@ -622,8 +630,23 @@
 (type FmOut (FmFound (List Int)) (FmNone) (FmBudget))
 (fn ar_abs ((x Int)) Int (if (< x 0) (- 0 x) x))
 (fn ar_gcd ((a Int) (b Int)) Int
-  (measure (ar_abs b))
+  (measure (Int.natAbs b))
   (if (= b 0) (ar_abs a) (ar_gcd b (mod (ar_abs a) (ar_abs b)))))
+(fulfills ar_gcd.dec_1
+  (by
+    (intro p h)
+    (unfold ar_abs)
+    (cases (Int.decLt (proj PProd 1 p) 0)
+      ((isFalse (hl) (simp_only (if_neg hl))
+         (cases (Int.decLt 0 (proj PProd 1 p))
+           ((isFalse (hz) (have he (= (proj PProd 1 p) 0) (arith)) (exact (absurd he h)))
+            (isTrue (hz)
+              (apply natAbs_lt (apply Int.emod_nonneg (exact h))
+                (apply Int.emod_lt_of_pos (exact hz)))))))
+       (isTrue (hl) (simp_only (if_pos hl)) (rw (<- (Int.natAbs_neg (proj PProd 1 p))))
+         (rw (<- (Int.zero_sub (proj PProd 1 p))))
+         (apply natAbs_lt (apply Int.emod_nonneg ((intro z) arith))
+           (apply Int.emod_lt_of_pos (arith))))))))
 (fn ar_gcd_list ((xs (List Int)) (g Int)) Int
   (measure (struct xs))
   (match xs
@@ -695,11 +718,12 @@
        (if (= rj 0) (fm_subst e j rest (cons r acc))
        (fm_subst e j rest (cons (fm_comb (ar_abs ej) r (if (< 0 ej) (- 0 rj) rj) e) acc)))))))
 (fn fm_eqs ((rows (List FmRow)) (fuel Int)) (List FmRow)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) rows
   (match (fm_pick_eq rows nil)
     (none rows)
     ((some (Prod.mk e (Prod.mk j others))) (fm_eqs (fm_subst e j others nil) (- fuel 1))))))
+(fulfills fm_eqs.dec_1 (by (intro p h e j others hm) (apply natAbs_pred (arith))))
 ;; the inequalities, an equation dropped (those left have no coefficient)
 (fn fm_ineqs_of ((rows (List FmRow)) (acc (List FmRow))) (List FmRow)
   (measure (struct rows))
@@ -735,7 +759,7 @@
     (nil acc)
     ((cons p r) (fm_cross r j negs (fm_cross1 p j negs acc)))))
 (fn fm_elim ((rows (List FmRow)) (j Int) (natoms Int)) FmOut
-  (measure (- natoms j))
+  (measure (Int.natAbs (- natoms j)))
   (match (fm_contra rows)
     ((some ms) (FmFound ms))
     (none
@@ -744,6 +768,14 @@
         ((FmParts pos neg zero)
          (let ((next (append zero (rev (fm_cross pos j neg nil)))))
            (if (< 512 (len next)) (FmBudget) (fm_elim next (+ j 1) natoms)))))))))
+(fulfills fm_elim.dec_1
+  (by
+    (intro p hm hb pos neg zero hs hl)
+    (have hj (< (proj PProd 0 (proj PProd 1 p)) (proj PProd 1 (proj PProd 1 p)))
+      (cases (Int.decLt (proj PProd 0 (proj PProd 1 p)) (proj PProd 1 (proj PProd 1 p)))
+        ((isTrue (ht) (exact ht))
+         (isFalse (hn) (apply False.elim ((apply hb ((rw (Init.decide_eq_false hn)) (reduce) rfl))))))))
+    (apply natAbs_lt (arith) (arith))))
 (fn fm_find ((rows (List ArRow)) (natoms Int)) FmOut
   (let ((solved (fm_eqs (fm_init rows 0 nil) 256)))
     (match (fm_contra solved)

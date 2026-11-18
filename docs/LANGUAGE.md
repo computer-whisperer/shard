@@ -230,24 +230,39 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Three quarters of their functions are definitions; of those written by hand, half.** The
-  checker reads every one whose signature reads: of the loader's closure, 8,850 functions —
-  4,790 of them the rows of a generated table —, it holds 6,790 as definitions. The others
-  are programs with the reason: a function they call is a program (`callee_runnable`, some
-  780), a type in the signature is one of a group of types that name each other
-  (`e_only_type`, some 1,060), a measure that is an integer or a group of functions that
-  call each other (about 190), a numeral under a constructor pattern (18). A type error in
+- **Four fifths of their functions are definitions; of those written by hand, more than
+  half.** The checker reads every one whose signature reads: of the loader's closure, 8,850
+  functions — 4,790 of them the rows of a generated table —, it holds 7,010 as definitions.
+  The others are programs with the reason: a function they call is a program
+  (`callee_runnable`, some 640), a type in the signature is one of a group of types that name
+  each other (`e_only_type`, some 1,060), a group of functions that call each other (about
+  90), a numeral under a constructor pattern (18), an integer measure (7). A type error in
   any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
-  beside it.** `(measure (Int.natAbs n))`, then a `(fulfills F.dec_N …)` for each obligation
-  (below, "By measure"): it introduces what stands before the comparison and cites a fact of
-  `kernel/descent.shard` — a counter stepping down (`natAbs_pred`), a number losing a decimal
-  digit (`natAbs_div10`), an integer losing two bits (`natAbs_shr2_le`, `natAbs_shr2_lt`). A
-  `fulfills` follows a function that is defined by then, so what the function calls stands
-  above it. A build passes these proofs over (`--unchecked`); `toolchain_check.sh` checks
-  them. Three functions are written so (`util.shard` `show_nat_go`, `unify.shard`
-  `inst_level_go`, `intmap.shard` `im_split`); the others that recurse on an integer state
-  the integer and are programs (`measure_type`).
+  beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
+  (below, "By measure"), which introduces what stands before the comparison — one name for
+  each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
+  `kernel/descent.shard`. The forms the sources use, 105 functions in 31 files:
+
+  | the recursion | the measure | the proof after the introductions |
+  |---|---|---|
+  | a counter stepping down past a test that it is at least 1 (`(< k 1)`, `(<= k 0)`) | `(Int.natAbs k)` | `(apply natAbs_pred (arith))` |
+  | the same past `(< k 0)`, which lets the counter reach 0 | `(Int.natAbs (+ k 1))` | `(apply natAbs_lt (arith) (arith))` |
+  | a counter going up to a bound, `(< i n)`; a halving, `(/ e 2)` | `(Int.natAbs (- n i))`; `(Int.natAbs e)` | `(apply natAbs_lt (arith) (arith))` |
+  | a remainder, `(mod a b)` past `(<= b 0)` | `(Int.natAbs b)` | `natAbs_lt` over Init's `Int.emod_nonneg` and `Int.emod_lt_of_pos` |
+  | a walk down one or two lists by their rows | `(+ (List.length a) (List.length b))` — Init's length, a `Nat`; not the sources' own `len`, an `Int` | `(rw hA) (rw List.length_cons) (arith)`, `hA` the row's equation; each list a row names is rewritten |
+  | two functions that call each other, one passing the counter on unchanged | `(* 2 (Int.natAbs k))` and `(+ (* 2 (Int.natAbs k)) 1)` | a `have` of the counter's fact, then `(arith)` |
+
+  A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
+  equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
+  A `fulfills` follows a function that is defined by then: what the function calls stands
+  above it, or the `fulfills` stands below the last of them. A build passes these proofs
+  over (`--unchecked`); `toolchain_check.sh` checks them. Seven functions still state an
+  integer and are programs (`measure_type`): one whose counter nothing in it bounds
+  (`k/inductive.shard` `fresh_univ_name`), and two groups whose descent is by a counter
+  and then by a list's length, for which there is no measure (`kw.shard` `w_norm_ty`,
+  `k/axioms.shard` `closure_of`). Some 110 more state one where the checker does not get to
+  it — behind a callee that is a program, or a signature it does not read.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.

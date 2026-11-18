@@ -44,6 +44,7 @@
 (use kernel.unify)
 (use kernel.util)
 (use kernel.decl)
+(use kernel.descent)
 (use kernel.matcher)
 (use kernel.arith.ARel)
 (use kernel.arith.ARes)
@@ -401,7 +402,7 @@
 ;; zonked: a witness assigned by an earlier block shows
 (fn tac_open ((e El) (g Goal)) Opened (tac_open_go e (el_zonk e (goal_stmt g)) (goal_nctx g) nil))
 (fn tac_open_go ((e El) (t Expr) (k Int) (acc (List Expr))) Opened
-  (measure k)
+  (measure (Int.natAbs k))
   (if (< k 1) (Opened e (rev acc) t)
   (match t
     ((Pi _ n bi dom body)
@@ -410,6 +411,8 @@
         (match (w_inst1 (el_w e1) body fv)
           ((Prod.mk w2 body1) (tac_open_go (el_set_w e1 w2) body1 (- k 1) (cons fv acc)))))))
     (_ (Opened e (rev acc) t)))))
+(fulfills tac_open_go.dec_1
+  (by (intro p h a n bi dom body hm e1 fv hm1 w2 body1 hm2) (apply natAbs_pred (arith))))
 ;; a new goal over the locals `ctx` with the target: its metavariable has the closed statement
 ;; as its type and no telescope; its occurrence is the metavariable applied to `ctx`. The
 ;; statement enters in the one spelling (a hypothesis or a premise that came from one of
@@ -862,18 +865,19 @@
 ;; ---- apply, cases, induction, wf, decide ------------------------------------------------------
 ;; the number of binders of a type, whnf at each
 (fn tac_arity ((e El) (t Expr) (fuel Int)) (Prod El Int)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) (Prod.mk e 0)
   (match (el_whnf e t)
     ((Prod.mk e1 (Pi _ _ _ _ body))
      (match (tac_arity e1 body (- fuel 1))
        ((Prod.mk e2 k) (Prod.mk e2 (+ k 1)))))
     ((Prod.mk e1 _) (Prod.mk e1 0)))))
+(fulfills tac_arity.dec_1 (by (intro p h e1 a n bi d body hm) (apply natAbs_pred (arith))))
 ;; a type's first k binders opened with fresh metavariables: the term applied, the type left,
 ;; the metavariables; the whnf is taken only where the type is not a Pi already
 (type OpenedM (OpenedM El Expr Expr (List Expr)))
 (fn open_mvars ((e El) (v Expr) (t Expr) (k Int) (acc (List Expr))) OpenedM
-  (measure k)
+  (measure (Int.natAbs k))
   (if (< k 1) (OpenedM e v t (rev acc))
   (match (if (is_pi t) (Prod.mk e t) (el_whnf e t))
     ((Prod.mk e1 (Pi _ n bi dom body))
@@ -886,6 +890,8 @@
         (match (w_inst1 (el_w e2) body m)
           ((Prod.mk w3 body1) (open_mvars (el_set_w e2 w3) (mk_app v m) body1 (- k 1) (cons m acc)))))))
     ((Prod.mk e1 t1) (OpenedM e1 v t1 (rev acc))))))
+(fulfills open_mvars.dec_1
+  (by (intro p h e1 a n bi dom body hm e2 m hm2 w3 body1 hm3) (apply natAbs_pred (arith))))
 ;; the metavariables of an opening left unassigned: each a proposition is a child goal over ctx,
 ;; assigned its occurrence; a datum is a witness — closed over ctx as a goal
 ;; is, its occurrence the closed metavariable applied to ctx, so a block that opens the context
@@ -1263,11 +1269,12 @@
 ;; the binders of a minor premise's type: its own, before the equation's (the type is a Pi
 ;; telescope ending in the motive applied)
 (fn minor_binders ((t Expr) (fuel Int)) Int
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) 0
   (match t
     ((Pi _ _ _ _ body) (+ 1 (minor_binders body (- fuel 1))))
     (_ 0))))
+(fulfills minor_binders.dec_1 (by (intro p h a n bi d body hm) (apply natAbs_pred (arith))))
 ;; the equation hypothesis after the fields: the minor's result is `(= x (C fields)) -> target`
 (fn open_eq_hyp ((e El) (hn (Option Name)) (fields (List Expr)) (res Expr)) Opened
   (match hn
@@ -1309,7 +1316,7 @@
                          (append (utf8 " —") (binders_list e1 ctx fields)))))))))))))))
 ;; a name for every binder of a minor premise: the arm's, then the binder's own
 (fn case_names ((t Expr) (names (List Name)) (fuel Int)) (List Name)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) nil
   (match t
     ((Pi _ n _ _ body)
@@ -1317,6 +1324,8 @@
        ((cons x r) (cons x (case_names body r (- fuel 1))))
        (nil (cons n (case_names body nil (- fuel 1))))))
     (_ nil))))
+(fulfills case_names.dec_1 (by (intro p h a n bi d body hm x r hn) (apply natAbs_pred (arith))))
+(fulfills case_names.dec_2 (by (intro p h a n bi d body hm hn) (apply natAbs_pred (arith))))
 ;; the locals as ` (NAME : TYPE)…`, their types read under the context
 (fn binders_list ((e El) (ctx (List Expr)) (fields (List Expr))) (List Int)
   (match (el_pis e (append ctx fields) (mk_sort LZero))
@@ -1797,10 +1806,11 @@
        (nil (realize_equations e f r))
        (eqs eqs)))))
 (fn equations_go ((e El) (f Name) (kind (List Int)) (k Int) (acc (List Name))) (List Name)
-  (measure (- 64 k))
+  (measure (Int.natAbs (- 65 k)))
   (if (< 64 k) (rev acc)
   (let ((n (name_append f (n1 (sym_of_chars (append kind (show_nat k)))))))
     (if (el_sees e n) (equations_go e f kind (+ k 1) (cons n acc)) (rev acc)))))
+(fulfills equations_go.dec_1 (by (intro p h hs) (apply natAbs_lt (arith) (arith))))
 ;; an equation applied to a subterm: its instantiated right side and proof, and whether that
 ;; proof is Eq.refl (then the replacement is also K-convertible: redex_apply's fallback under a binder)
 (fn try_equation ((e El) (s Expr) (eqn Name)) Found
@@ -1862,11 +1872,12 @@
     (none false)
     ((some info) (lhs_has_ctor (el_env e) (pi_body (ci_type info) 64)))))
 (fn pi_body ((t Expr) (fuel Int)) Expr
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) t
   (match t
     ((Pi _ _ _ _ b) (pi_body b (- fuel 1)))
     (_ t))))
+(fulfills pi_body.dec_1 (by (intro p h a n bi d b hm) (apply natAbs_pred (arith))))
 (fn lhs_has_ctor ((env CheckedEnv) (stmt Expr)) Bool
   (match (eq_sides stmt)
     ((some (Prod.mk _ (Prod.mk _ (Prod.mk l _)))) (args_have_ctor env (get_app_args l)))
@@ -2312,8 +2323,9 @@
        (if (< (+ np (+ 1 (len rows))) nargs) (range_from (+ np 2) (len rows)) nil))
       (_ nil))))
 (fn range_from ((a Int) (n Int)) (List Int)
-  (measure n)
+  (measure (Int.natAbs n))
   (if (< n 1) nil (cons a (range_from (+ a 1) (- n 1)))))
+(fulfills range_from.dec_1 (by (intro p h) (apply natAbs_pred (arith))))
 (fn alt_mask
   ((e El)
    (args (List Expr))
@@ -2423,7 +2435,7 @@
 ;; (exhausted_rec_depth_at_infer on a run of a few statements). Where a conversion step stood
 ;; between two legs the left one's end and the right one's start differ and K converts there
 (fn legs_join ((legs (List Leg)) (fuel Int)) (Option Leg)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) none
   (match legs
     (nil none)
@@ -2441,6 +2453,7 @@
            (mk_app_n (mk_const (n2 (sym "Eq") (sym "trans")) (list (LSucc LZero)))
              (list (mk_sort LZero) a b c h1 h2)))
          acc)))))
+(fulfills legs_join.dec_1 (by (intro p h x hx) (apply natAbs_pred (arith))))
 ;; the term at the loop's start for the continuation's occurrence at its end: Eq.mpr of the
 ;; composed equation, or the occurrence itself where every step was by conversion
 (fn legs_term ((start Expr) (target Expr) (legs (List Leg)) (occ Expr)) Expr
