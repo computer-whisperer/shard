@@ -652,6 +652,27 @@ measurements; measure again before building on one.
   types behind them), `lower.shard` `LwE` and `LwArm` (13), `ev.shard` `LTerm` and `LArm`
   (10), and the loader's `Load`, `Module` and `ForkPt`. The checked load of the loader's
   closure is 116 s for 68, and all 29 roots, 12 at a time, 380 s for 226.
+- The bit-level operators with a meaning, on a scratch loader (2026-11-18; nothing of it is
+  in the tree). The scratch: `and`, `or`, `xor` on `Int` as three definitions over
+  `Nat.land`, `Nat.lor`, `Nat.xor` by the operands' signs; `band bor bxor bshl bshr ediv`
+  read by the elaborator as operators — those three at `Int`, `Int.shiftRight`,
+  `Int.shiftLeft`, `Int.ediv` —; five rows that run them as the engine operations they are.
+  The checked load of the loader's closure: 6,498 definitions for 2,513 — all 4,792
+  generated rows for 988, and of the written functions 1,706 for 1,525 (K's own 306 for
+  259); the name hash and every constructor of a term are definitions. The load takes 114.9
+  s for 114.7: no longer. The program it yields is the Rust reader's text at every use of
+  the five bit operators; the bare `ediv` comes out as `Int.ediv`, in nine functions. What
+  the scratch met: a row of the registry speaks for a constant of Init alone
+  (`erasure.shard`, `erase_const`), so the three definitions were first accepted and still
+  left `band` a program; Init's shifts take a `Nat` count, and three functions pass an
+  `Int` they computed; the definitions as written rest on `propext`, by their `if` on a
+  comparison of integers, and 8,187 accepted declarations with them. With the int map's
+  lookup and insert stating the measure they have — the map, a child at each call — 6,568
+  definitions, written 1,776 (K's 335). What the rest then starts at: 1,057 the groups of
+  types that name each other; 731 an integer measure (`util.show_nat_go` 273,
+  `unify.inst_level_go` 169, `intmap.im_split` 101 — which does not end on a negative key
+  as written); 344 a group of functions that call each other (`expr.expr_eq` 227); 78 a
+  numeral under a constructor pattern.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
