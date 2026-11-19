@@ -256,15 +256,17 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. Twenty-one functions still state
+  over (`--unchecked`); `toolchain_check.sh` checks them. Thirty-eight functions still state
   an integer and are programs (`measure_type`): one whose counter nothing in it bounds
-  (`k/inductive.shard` `fresh_univ_name`); fourteen in groups whose descent is by a counter
+  (`k/inductive.shard` `fresh_univ_name`); sixteen in groups whose descent is by a counter
   and then by a list's length, for which there is no measure (`kw.shard` `w_norm_ty`,
   `k/axioms.shard` `closure_of`, `inhabit.shard` `inhabit`, `matcher.shard` `mt_compile` and
-  `mt_pat_term`); and the six of `spelling.shard` `sp_instance_go`, a group that hands its
-  counter round, which ranks in the measures would pay for. Some 100 more state one where
-  the checker does not get to it — behind a callee that is a program, or a signature it
-  does not read.
+  `mt_pat_term`, `classify.shard` `matrix_exh`); the six of `spelling.shard`
+  `sp_instance_go`, a group that hands its counter round, which ranks in the measures would
+  pay for; and fifteen plain counters the forms above fit, not yet restated (`define.shard`
+  seven, `erasure.shard` three, `loader.shard` two, `run.shard` two, `template.shard` one).
+  Some 70 more state one where the checker does not get to it, behind a callee that is a
+  program.
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The
   member that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one
@@ -272,7 +274,7 @@ file; two things about how they are written set them apart.
   `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
   Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
   type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 44
+  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 54
   groups more state a structural clause or none and are programs (`group_measure`). A size
   is the one derivation a build reads: its functions are definitions with no program, the
   loader makes them under `--unchecked` too, and the Rust reader passes the form over.
