@@ -374,20 +374,109 @@
 (fulfills pj_search.dec_2
   (by (intro p h t1 ty1 hw w1 c w2 hf hn a b ha t2) (apply natAbs_pred (arith))))
 
+;; ---- the order of a measure ----------------------------------------------------------------------
+;; The order a measure descends in. A measure is a Nat, or several: a pair of a Nat and a
+;; measure — `(Prod.mk a (Prod.mk b c))`, which `(measure a b c)` writes —, compared part by
+;; part, the first part that differs deciding: Init's `Prod.Lex` over `Nat.lt`, well-founded by
+;; `Prod.lex`. An order is the measure's type T, the `WellFoundedRelation T` and the relation
+;; on T as the term an obligation states: `Nat.lt`, or `Prod.Lex Nat T' Nat.lt R'`.
+(type MOrder (MOrder Expr Expr Expr))
+(fn mo_type ((o MOrder)) Expr
+  (match o
+    ((MOrder ty _ _) ty)))
+(fn mo_rel ((o MOrder)) Expr
+  (match o
+    ((MOrder _ _ r) r)))
+(fn nat_order () MOrder
+  (MOrder (mk_const (nm_nat) nil) (mk_const (n2 (sym "Nat") (sym "lt_wfRel")) nil)
+    (mk_const (n2 (sym "Nat") (sym "lt")) nil)))
+(fn measure_parts_max () Int 8)
+(fn measure_type_msg () (List Int)
+  (utf8
+    "the measure must be a Nat, or several Nats — (measure A B …), compared part by part — (an Int measure: write a Nat one, such as (Int.natAbs n); no conversion is inserted)"))
+;; `Prod Nat T'`, `Prod.lex Nat T' Nat.lt_wfRel inst'`, `Prod.Lex Nat T' Nat.lt R'`
+(fn pair_order ((t Tr) (tb Expr) (ib Expr) (rb Expr)) (Prod Tr (Option MOrder))
+  (let
+    ((nat (mk_const (nm_nat) nil))
+     (zz (List Level) (list LZero LZero))
+     (nlt (mk_const (n2 (sym "Nat") (sym "lt")) nil)))
+    (match (tr_apps t (mk_const (n1 (sym "Prod")) zz) (list nat tb))
+      ((Prod.mk t1 ty)
+       (match
+         (tr_apps t1 (mk_const (n2 (sym "Prod") (sym "lex")) zz)
+           (list nat tb (mk_const (n2 (sym "Nat") (sym "lt_wfRel")) nil) ib))
+         ((Prod.mk t2 inst)
+          (match (tr_apps t2 (mk_const (n2 (sym "Prod") (sym "Lex")) zz) (list nat tb nlt rb))
+            ((Prod.mk t3 rel) (Prod.mk t3 (some (MOrder ty inst rel)))))))))))
+(fn measure_order ((t Tr) (ml Expr)) (Prod Tr (Option MOrder))
+  (match (tr_infer t ml)
+    ((Prod.mk t1 none) (Prod.mk t1 none))
+    ((Prod.mk t1 (some ty)) (order_of_type t1 ty (measure_parts_max)))))
+;; the order of a measure's type, read to at most `left` parts
+(fn order_of_type ((t Tr) (ty Expr) (left Int)) (Prod Tr (Option MOrder))
+  (measure (Int.natAbs left))
+  (if (<= left 0) (Prod.mk t none)
+  (match (tr_whnf t ty)
+    ((Prod.mk t1 (some (Const _ n _)))
+     (Prod.mk t1 (if (name_eq n (nm_nat)) (some (nat_order)) none)))
+    ((Prod.mk t1 (some (App _ (App _ (Const _ p _) a) b)))
+     (if (bool_not (name_eq p (n1 (sym "Prod")))) (Prod.mk t1 none)
+     (match (tr_whnf t1 a)
+       ((Prod.mk t2 (some (Const _ n _)))
+        (if (bool_not (name_eq n (nm_nat))) (Prod.mk t2 none)
+        (match (order_of_type t2 b (- left 1))
+          ((Prod.mk t3 (some (MOrder tb ib rb))) (pair_order t3 tb ib rb))
+          ((Prod.mk t3 none) (Prod.mk t3 none)))))
+       ((Prod.mk t2 _) (Prod.mk t2 none)))))
+    ((Prod.mk t1 _) (Prod.mk t1 none)))))
+(fulfills order_of_type.dec_1
+  (by (intro p h t1 w1 w2 w3 pn w4 a b hw hp t2 w5 n w6 ha hn) (apply natAbs_pred (arith))))
+;; the descent fact as the comparison it is: the order's relation at the callee's measure and
+;; the caller's — `Nat.lt ma m`, or `Prod.Lex … ma m`
+(fn wf_goal ((t Tr) (m Expr) (ma Expr) (mp Expr)) (Prod Tr Expr)
+  (match (measure_order t m)
+    ((Prod.mk t1 (some o)) (tr_apps t1 (mo_rel o) (list ma mp)))
+    ((Prod.mk t1 none) (tr_apps t1 (mo_rel (nat_order)) (list ma mp)))))
+;; the relation `InvImage inst.rel m` and its well-foundedness `InvImage.wf m inst.wf`, inst the
+;; order's `WellFoundedRelation` — `Nat.lt_wfRel` for a measure of one part
+(fn wf_relation ((t Tr) (alpha Expr) (mfn Expr) (ord MOrder)) (Prod Tr (Prod Expr Expr))
+  (match ord
+    ((MOrder mty wfrel _)
+     (match
+       (tr_apps t (mk_const (n2 (sym "WellFoundedRelation") (sym "rel")) (list (level_one)))
+         (list mty wfrel))
+       ((Prod.mk t1 rnat)
+        (match
+          (tr_apps t1 (mk_const (n1 (sym "InvImage")) (list (level_one) (level_one)))
+            (list alpha mty rnat mfn))
+          ((Prod.mk t2 rel)
+           (match
+             (tr_apps t2 (mk_const (n2 (sym "WellFoundedRelation") (sym "wf")) (list (level_one)))
+               (list mty wfrel))
+             ((Prod.mk t3 hnat)
+              (match
+                (tr_apps t3
+                  (mk_const (n2 (sym "InvImage") (sym "wf")) (list (level_one) (level_one)))
+                  (list alpha mty rnat mfn hnat))
+                ((Prod.mk t4 hwf) (Prod.mk t4 (Prod.mk rel hwf)))))))))))))
 ;; ---- a measure: WellFounded.fix -----------------------------------------------------------------
 ;; `λ binders . WellFounded.fix α (λ _ . RET) (InvImage rel m) (InvImage.wf m Nat.lt_wfRel.wf)
 ;; (λ p rec . body') (tuple data)` — the body with each data binder the tuple's component, a
 ;; self-call `rec (tuple args) (f.dec_N locals…)`, the decreasing fact an obligation
 (fn pj_wf ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr))
   TrAux
-  (match (measure_is_nat t m)
-    ((Prod.mk t0 false)
-     (AuxErr t0 (sym "measure_type")
-       (utf8
-         "the measure must be a Nat (an Int measure: write a Nat one, such as (Int.natAbs n); no conversion is inserted)")))
-    ((Prod.mk t0 true) (pj_wf_go t0 pd tps data rl selfid m))))
+  (match (measure_order t m)
+    ((Prod.mk t0 none) (AuxErr t0 (sym "measure_type") (measure_type_msg)))
+    ((Prod.mk t0 (some ord)) (pj_wf_go t0 pd tps data rl selfid m ord))))
 (fn pj_wf_go
-  ((t Tr) (pd PreDef) (tps (List Expr)) (data (List Expr)) (rl Expr) (selfid Int) (m Expr))
+  ((t Tr)
+   (pd PreDef)
+   (tps (List Expr))
+   (data (List Expr))
+   (rl Expr)
+   (selfid Int)
+   (m Expr)
+   (ord MOrder))
   TrAux
   (match (local_types t data nil)
     ((Prod.mk t1 ltys)
@@ -399,7 +488,7 @@
              ((Prod.mk t5 ml)
               (match (tr_lams t5 (list pm) ml)
                 ((Prod.mk t6 mfn)
-                 (match (wf_relation t6 alpha mfn)
+                 (match (wf_relation t6 alpha mfn ord)
                    ((Prod.mk t7 (Prod.mk rel hwf))
                     (match (tr_local t7 (pj_tuple_name pd data) alpha)
                       ((Prod.mk t8 p)
@@ -454,33 +543,6 @@
        ((some ty) (local_types t r (cons ty acc)))
        (none (local_types t r acc))))))
 ;; the measure's L type is Nat
-(fn measure_is_nat ((t Tr) (ml Expr)) (Prod Tr Bool)
-  (match (tr_infer t ml)
-    ((Prod.mk t1 none) (Prod.mk t1 false))
-    ((Prod.mk t1 (some ty))
-     (match (tr_whnf t1 ty)
-       ((Prod.mk t2 (some (Const _ n _))) (Prod.mk t2 (name_eq n (nm_nat))))
-       ((Prod.mk t2 _) (Prod.mk t2 false))))))
-;; the relation `InvImage Nat.lt_wfRel.rel m` and its well-foundedness `InvImage.wf m Nat.lt_wfRel.wf`
-(fn wf_relation ((t Tr) (alpha Expr) (mfn Expr)) (Prod Tr (Prod Expr Expr))
-  (let ((nat (mk_const (nm_nat) nil)) (wfrel (mk_const (n2 (sym "Nat") (sym "lt_wfRel")) nil)))
-    (match
-      (tr_apps t (mk_const (n2 (sym "WellFoundedRelation") (sym "rel")) (list (level_one)))
-        (list nat wfrel))
-      ((Prod.mk t1 rnat)
-       (match
-         (tr_apps t1 (mk_const (n1 (sym "InvImage")) (list (level_one) (level_one)))
-           (list alpha nat rnat mfn))
-         ((Prod.mk t2 rel)
-          (match
-            (tr_apps t2 (mk_const (n2 (sym "WellFoundedRelation") (sym "wf")) (list (level_one)))
-              (list nat wfrel))
-            ((Prod.mk t3 hnat)
-             (match
-               (tr_apps t3
-                 (mk_const (n2 (sym "InvImage") (sym "wf")) (list (level_one) (level_one)))
-                 (list alpha nat rnat mfn hnat))
-               ((Prod.mk t4 hwf) (Prod.mk t4 (Prod.mk rel hwf))))))))))))
 ;; ∀ (q : α), rel q p → RET
 (fn wf_rec_type ((t Tr) (alpha Expr) (rel Expr) (p Expr) (rl Expr)) (Prod Tr Expr)
   (match (tr_local t (n1 (sym "q")) alpha)
@@ -951,17 +1013,16 @@
                                               (tr_add_obl t6
                                                 (AxiomDecl (ConstantVal name nil stmt) false))))
                                           r))))))))))))))))))))))))))
-;; the descent fact as the comparison it is, `measure[arguments] < measure[parameters]` at
-;; Nat: K converts the relation's instance `InvImage … (tuple arguments) p` to it, and an
-;; author — and arith — reads a comparison. The body's arguments are over the tuple's
+;; the descent fact as the comparison it is, `measure[arguments] < measure[parameters]` in
+;; the measure's order (wf_goal): K converts the relation's instance `InvImage … (tuple
+;; arguments) p` to it, and an author — and arith — reads a comparison. The body's arguments are over the tuple's
 ;; components already, so the data binders are substituted one after the other
 (fn pj_descent ((t Tr) (m Expr) (data (List Expr)) (args (List Expr)) (p Expr) (n Int))
   (Prod Tr Expr)
   (match (pj_subst_list t m data args)
     ((Prod.mk t1 ma)
      (match (pj_subst_projs t1 m data p n 0)
-       ((Prod.mk t2 mp)
-        (Prod.mk t2 (mk_app (mk_app (mk_const (n2 (sym "Nat") (sym "lt")) nil) ma) mp)))))))
+       ((Prod.mk t2 mp) (wf_goal t2 m ma mp))))))
 (fn pj_subst_list ((t Tr) (e Expr) (olds (List Expr)) (news (List Expr))) (Prod Tr Expr)
   (measure (struct olds))
   (match olds
@@ -1405,37 +1466,38 @@
             (match (tr_apps t (mk_const ctor nil) (take n dargs))
               ((Prod.mk t2 tagged)
                (match (pj_subst_list t2 cm cdata (take n dargs))
-                 ((Prod.mk t3 ma)
-                  (let ((goal (mk_app (mk_app (mk_const (n2 (sym "Nat") (sym "lt")) nil) ma) m)))
-                    (match (pj_obl_scope t3 cx)
-                      ((Prod.mk over out)
-                       (if (mentions_any goal out)
-                         (TrErr (sym "nested_recursion") (pj_nested t3 cx goal))
-                         (match (tr_pis t3 (scope_fvars over) goal)
-                           ((Prod.mk t4 stmt)
-                            (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
-                              (let
-                                ((name Name
-                                   (match had
-                                     ((some k) k)
-                                     (none
-                                       (name_append (Tr.id t4)
-                                         (n1
-                                           (sym_of_chars
-                                             (append (utf8 "dec_")
-                                               (show_nat (+ 1 (obls_under (Tr.obls t4) (Tr.id t4))))))))))))
-                                (match (tr_apps t4 (mk_const name nil) (scope_lambda_fvars over))
-                                  ((Prod.mk t5 proof)
-                                   (match
-                                     (tr_apps t5 recl (cons tagged (cons proof (drop n dargs))))
-                                     ((Prod.mk t6 r)
-                                      (TrOk
-                                        (match had
-                                          ((some _) t6)
-                                          (none
-                                            (tr_add_obl t6
-                                              (AxiomDecl (ConstantVal name nil stmt) false))))
-                                        r))))))))))))))))))))))
+                 ((Prod.mk t30 ma)
+                  (match (wf_goal t30 m ma m)
+                    ((Prod.mk t3 goal)
+                     (match (pj_obl_scope t3 cx)
+                       ((Prod.mk over out)
+                        (if (mentions_any goal out)
+                          (TrErr (sym "nested_recursion") (pj_nested t3 cx goal))
+                          (match (tr_pis t3 (scope_fvars over) goal)
+                            ((Prod.mk t4 stmt)
+                             (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
+                               (let
+                                 ((name Name
+                                    (match had
+                                      ((some k) k)
+                                      (none
+                                        (name_append (Tr.id t4)
+                                          (n1
+                                            (sym_of_chars
+                                              (append (utf8 "dec_")
+                                                (show_nat (+ 1 (obls_under (Tr.obls t4) (Tr.id t4))))))))))))
+                                 (match (tr_apps t4 (mk_const name nil) (scope_lambda_fvars over))
+                                   ((Prod.mk t5 proof)
+                                    (match
+                                      (tr_apps t5 recl (cons tagged (cons proof (drop n dargs))))
+                                      ((Prod.mk t6 r)
+                                       (TrOk
+                                         (match had
+                                           ((some _) t6)
+                                           (none
+                                             (tr_add_obl t6
+                                               (AxiomDecl (ConstantVal name nil stmt) false))))
+                                         r)))))))))))))))))))))))
     (_ (TrErr (sym "define_matrix") (utf8 "a group call outside a group")))))
 ;; the obligations named under one owner: their count, and the one stating a fact already
 (fn obl_owner_is ((k Name) (owner Name)) Bool
@@ -1460,7 +1522,7 @@
 
 ;; a member as the projection holds it: the pre-definition, its data binders, the result
 ;; type, the measure, its constructor of the group's argument type
-(record GrpM (pd PreDef) (data (List Expr)) (rl Expr) (m Expr) (con Name))
+(record GrpM (pd PreDef) (data (List Expr)) (rl Expr) (m Expr) (con Name) (ord MOrder))
 ;; a member defined: its name, its definition, its equations
 (type GrpDef (GrpDef Name Declaration (List Declaration)))
 ;; GrpSkip: no definition for the group — every member its program with the reason; GrpOk: the
@@ -1532,21 +1594,33 @@
                       (append (show_name (pd_name pd))
                         (utf8
                           ": a member of a group of functions that call each other has a result type over its parameters — not compiled: give the member a result type that does not mention them")))
-                    (match (measure_is_nat (tr_set_w t w1) m)
-                      ((Prod.mk _ false)
-                       (GpSkip (sym "measure_type")
-                         (utf8
-                           "the measure must be a Nat (an Int measure: write a Nat one, such as (Int.natAbs n); no conversion is inserted)")))
-                      ((Prod.mk t1 true)
-                       (grp_prepare t1 k1 r names (+ i 1)
-                         (cons
-                           (make GrpM (pd pd) (data data) (rl rl) (m m) (con (grp_ctor_name k1 i)))
-                           acc)))))))))))
+                    (match (measure_order (tr_set_w t w1) m)
+                      ((Prod.mk _ none) (GpSkip (sym "measure_type") (measure_type_msg)))
+                      ((Prod.mk t1 (some ord))
+                       (if (bool_not (grp_same_order acc ord))
+                         (GpSkip (sym "measure_type")
+                           (append (show_name (pd_name pd))
+                             (utf8
+                               ": the members of a group of functions that call each other state measures of as many parts each")))
+                         (grp_prepare t1 k1 r names (+ i 1)
+                           (cons
+                             (make GrpM (pd pd) (data data) (rl rl) (m m) (con (grp_ctor_name k1 i))
+                               (ord ord))
+                             acc))))))))))))
          (_
            (GpSkip (sym "group_measure")
              (append (show_name (pd_name pd))
                (utf8
                  ": a member of a group of functions that call each other needs (measure N) with N a Nat over its parameters — a structural clause is not read as a size")))))))))
+;; the members' measures are compared with each other: one order for the group
+(fn grp_same_order ((acc (List GrpM)) (ord MOrder)) Bool
+  (match acc
+    (nil true)
+    ((cons g _) (expr_eq (mo_type (GrpM.ord g)) (mo_type ord)))))
+(fn grp_order ((ms (List GrpM))) MOrder
+  (match ms
+    (nil (nat_order))
+    ((cons g _) (GrpM.ord g))))
 ;; the group's argument type: `f_1.args : Type`, a constructor per member over its data binders
 (fn grp_ctors ((t Tr) (ms (List GrpM)) (argc Expr) (acc (List Constructor)))
   (Prod Tr (List Constructor))
@@ -1669,13 +1743,13 @@
                       ((Prod.mk t5 cmins)
                        (match (grp_rec t5 k1 (LSucc (level_one)) cmotive cmins)
                          ((Prod.mk t6 cfn)
-                          (match (tr_lams t6 (list x0) (mk_const (nm_nat) nil))
+                          (match (tr_lams t6 (list x0) (mo_type (grp_order ms)))
                             ((Prod.mk t7 mmotive)
                              (match (grp_measure_minors t7 ms nil)
                                ((Prod.mk t8 mmins)
                                 (match (grp_rec t8 k1 (level_one) mmotive mmins)
                                   ((Prod.mk t9 mfn)
-                                   (match (wf_relation t9 argc mfn)
+                                   (match (wf_relation t9 argc mfn (grp_order ms))
                                      ((Prod.mk t10 (Prod.mk rel hwf))
                                       (match (grp_minors t10 ms ms argc rel cfn nil)
                                         ((Prod.mk _ (Left2 e m)) (GrpSkip e m))
@@ -2708,5 +2782,8 @@
     (n2 (sym "InvImage") (sym "wf"))
     (n2 (sym "Nat") (sym "lt"))
     (n2 (sym "Nat") (sym "lt_wfRel"))
+    (n1 (sym "Prod"))
+    (n2 (sym "Prod") (sym "lex"))
+    (n2 (sym "Prod") (sym "Lex"))
     (n2 (sym "WellFoundedRelation") (sym "rel"))
     (n2 (sym "WellFoundedRelation") (sym "wf"))))
