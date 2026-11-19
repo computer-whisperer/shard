@@ -29,6 +29,7 @@
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.classify)
+(use kernel.descent)
 (use kernel.etable)
 (use kernel.etable.EInfo)
 (use kernel.etable.ESt)
@@ -86,7 +87,7 @@
     ((cons t nil) (some t))
     ((cons _ r) (last_ty r))))
 (fn carriers_fix ((ds (List EDecl)) (ws (List Name)) (cs (List Name)) (fuel Int)) (List Name)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) cs
   (let ((cs2 (carriers_pass ds ws cs)))
     (if (= (len cs2) (len cs)) cs (carriers_fix ds ws cs2 (- fuel 1))))))
@@ -106,19 +107,24 @@
     (nil false)
     ((cons (ECtorDef _ fts) r) (if (tys_name fts ws cs) true (ctors_name r ws cs)))))
 (fn tys_name ((ts (List EType)) (ws (List Name)) (cs (List Name))) Bool
-  (measure (struct ts))
+  (measure (List_EType.size ts))
   (match ts
     (nil false)
     ((cons t r) (if (ty_names t ws cs) true (tys_name r ws cs)))))
 ;; a type naming a World or a carrier at any head
 (fn ty_names ((t EType) (ws (List Name)) (cs (List Name))) Bool
-  (measure (struct t))
+  (measure (EType.size t))
   (match t
     ((ETVar _) false)
     ((ETCon n args)
      (if (mem_name n ws) true
      (if (mem_name n cs) true
      (tys_name args ws cs))))))
+(fulfills tys_name.dec_1 (by (intro ts ws cs t r h) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills tys_name.dec_2 (by (intro ts ws cs t r h) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills ty_names.dec_1 (by (intro t ws cs n args h hw hc) (rw h) (rw EType.size.eq_1) (arith)))
+;; here, not after `carriers_fix`: it stands once its callees down to `ty_names` are read
+(fulfills carriers_fix.dec_1 (by (intro p h hl) (apply natAbs_pred (arith))))
 (fn is_world ((wk Wk) (t EType)) Bool
   (match t
     ((ETCon n _) (mem_name n (wk_worlds wk)))
@@ -243,7 +249,7 @@
     ((cons (Prod.mk t _) r) (cons t (env_tys r)))))
 (fn th_term ((es ESt) (wk Wk) (env (List (Prod (Option EType) Abs))) (t ETerm) (st Th))
   (Prod Abs Th)
-  (measure (struct t))
+  (measure (* 4 (ETerm.size t)))
   (match t
     ((EBVar i)
      (match (nth env i)
@@ -317,7 +323,7 @@
    (st Th)
    (acc (List Abs)))
   (Prod (List Abs) Th)
-  (measure (struct args))
+  (measure (* 4 (List_ETerm.size args)))
   (match args
     (nil (Prod.mk (rev acc) st))
     ((cons a r)
@@ -327,6 +333,7 @@
 (fn th_ctor
   ((es ESt) (wk Wk) (env (List (Prod (Option EType) Abs))) (c Name) (args (List ETerm)) (st Th))
   (Prod Abs Th)
+  (measure (+ (* 4 (List_ETerm.size args)) 1))
   (match (th_args es wk env args st nil)
     ((Prod.mk as st1)
      (if (any_tok as)
@@ -383,6 +390,7 @@
 (fn th_match
   ((es ESt) (wk Wk) (env (List (Prod (Option EType) Abs))) (s ETerm) (arms (List EArm)) (st Th))
   (Prod Abs Th)
+  (measure (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1))
   (let ((sty (c_type es (env_tys env) s)))
     (match (th_term es wk env s st)
       ((Prod.mk sa st1)
@@ -416,7 +424,7 @@
    (st2 Th)
    (acc (Option (Prod Abs Th))))
   (Prod Abs Th)
-  (measure (struct arms))
+  (measure (* 4 (List_EArm.size arms)))
   (match arms
     (nil
       (match acc
@@ -462,7 +470,7 @@
 (fn th_let
   ((es ESt) (wk Wk) (env (List (Prod (Option EType) Abs))) (rs (List ETerm)) (b ETerm) (st Th))
   (Prod Abs Th)
-  (measure (struct rs))
+  (measure (+ (* 4 (+ (List_ETerm.size rs) (ETerm.size b))) 1))
   (match rs
     (nil (th_term es wk env b st))
     ((cons r more)
@@ -482,10 +490,69 @@
          (_
            (match (th_term es wk env r st)
              ((Prod.mk a st1) (th_let es wk (cons (Prod.mk ty a) env) more b st1)))))))))
+(fulfills th_term.dec_1
+  (by (intro es wk env t st c args h ind w1 w2 hi hm) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills th_term.dec_2
+  (by (intro es wk env t st c args h w hw) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills th_term.dec_3 (by (intro es wk env t st f args h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills th_term.dec_4 (by (intro es wk env t st f args h) (rw h) (rw ETerm.size.eq_6) (arith)))
+(fulfills th_term.dec_5 (by (intro es wk env t st n args h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills th_term.dec_6 (by (intro es wk env t st a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills th_term.dec_7
+  (by
+    (intro es wk env t st a b c h aa st1)
+    (show (< (* 4 (ETerm.size b)) (* 4 (ETerm.size t))))
+    (rw h)
+    (rw ETerm.size.eq_9)
+    (arith)))
+(fulfills th_term.dec_8
+  (by
+    (intro es wk env t st a b c h aa st1 ab stb)
+    (show (< (* 4 (ETerm.size c)) (* 4 (ETerm.size t))))
+    (rw h)
+    (rw ETerm.size.eq_9)
+    (arith)))
+(fulfills th_term.dec_9 (by (intro es wk env t st s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills th_term.dec_10 (by (intro es wk env t st rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills th_args.dec_1
+  (by (intro es wk env args st acc a r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills th_args.dec_2
+  (by (intro es wk env args st acc a r h x st1) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills th_ctor.dec_1 (by (intro es wk env c args st) (arith)))
+(fulfills th_match.dec_1
+  (by
+    (intro es wk env s arms st)
+    (show (< (* 4 (ETerm.size s)) (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1)))
+    (arith)))
+(fulfills th_match.dec_2
+  (by
+    (intro es wk env s arms st sa st1)
+    (show (< (* 4 (List_EArm.size arms)) (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1)))
+    (arith)))
+(fulfills th_arms.dec_1
+  (by
+    (intro es wk env sty sa alias arms st2 acc p b r h binds st3 hb)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (rw EArm.size.eq_1)
+    (arith)))
+(fulfills th_arms.dec_2
+  (by
+    (intro es wk env sty sa alias arms st2 acc p b r h binds st3 hb x y)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (arith)))
+(fulfills th_let.dec_1 (by (intro es wk env rs b st h) (rw h) (rw List_ETerm.size.eq_1) (arith)))
+(fulfills th_let.dec_2
+  (by (intro es wk env rs b st r more h i hr) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills th_let.dec_3
+  (by (intro es wk env rs b st r more h w hw) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills th_let.dec_4
+  (by (intro es wk env rs b st r more h w hw x y) (rw h) (rw List_ETerm.size.eq_2) (arith)))
 
 ;; ---- a function's verdict --------------------------------------------------------------------
 (fn has_ext ((t ETerm)) Bool
-  (measure (struct t))
+  (measure (ETerm.size t))
   (match t
     ((EBVar _) false)
     ((ELit _) false)
@@ -502,15 +569,30 @@
      (if (has_ext b) true
      (has_ext c))))))
 (fn has_ext_all ((ts (List ETerm))) Bool
-  (measure (struct ts))
+  (measure (List_ETerm.size ts))
   (match ts
     (nil false)
     ((cons t r) (if (has_ext t) true (has_ext_all r)))))
 (fn has_ext_arms ((arms (List EArm))) Bool
-  (measure (struct arms))
+  (measure (List_EArm.size arms))
   (match arms
     (nil false)
     ((cons (EArm _ b) r) (if (has_ext b) true (has_ext_arms r)))))
+(fulfills has_ext.dec_1 (by (intro t w as h) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills has_ext.dec_2 (by (intro t w as h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills has_ext.dec_3 (by (intro t w as h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills has_ext.dec_4 (by (intro t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills has_ext.dec_5 (by (intro t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills has_ext.dec_6 (by (intro t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills has_ext.dec_7 (by (intro t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills has_ext.dec_8 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills has_ext.dec_9 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills has_ext.dec_10 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills has_ext_all.dec_1 (by (intro ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills has_ext_all.dec_2 (by (intro ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills has_ext_arms.dec_1
+  (by (intro arms p b r h) (rw h) (rw List_EArm.size.eq_2) (rw EArm.size.eq_1) (arith)))
+(fulfills has_ext_arms.dec_2 (by (intro arms p b r h) (rw h) (rw List_EArm.size.eq_2) (arith)))
 ;; the parameters as the stack's base: in order, the last at index 0
 (fn th_params_abs
   ((es ESt) (wk Wk) (ps (List EType)) (i Int) (st Th) (acc (List (Prod (Option EType) Abs))))
@@ -643,7 +725,7 @@
    (t ETerm)
    (st Th))
   (Prod Abs Th)
-  (measure (struct t))
+  (measure (* 4 (ETerm.size t)))
   (match t
     ((EBVar i)
      (match (nth env i)
@@ -712,7 +794,7 @@
    (st Th)
    (acc (List Abs)))
   (Prod (List Abs) Th)
-  (measure (struct args))
+  (measure (* 4 (List_ETerm.size args)))
   (match args
     (nil (Prod.mk (rev acc) st))
     ((cons a r)
@@ -788,6 +870,7 @@
    (arms (List EArm))
    (st Th))
   (Prod Abs Th)
+  (measure (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1))
   (let ((sty (sv_ty es (env_tys env) s)))
     (match (sv_term es wk md env s st)
       ((Prod.mk sa st1)
@@ -802,7 +885,7 @@
            (sv_arms es wk md env sty sa alias arms st2 none)))))))
 ;; a pattern that names a constructor of the state, at any depth: the state opened
 (fn sv_opens ((es ESt) (wk Wk) (p EPat)) Bool
-  (measure (struct p))
+  (measure (EPat.size p))
   (match p
     (PVar false)
     ((PLit _) false)
@@ -813,10 +896,13 @@
     ((some (EICtor ind _ _)) (mem_name ind (wk_worlds wk)))
     (_ false)))
 (fn sv_opens_all ((es ESt) (wk Wk) (ps (List EPat))) Bool
-  (measure (struct ps))
+  (measure (List_EPat.size ps))
   (match ps
     (nil false)
     ((cons p r) (if (sv_opens es wk p) true (sv_opens_all es wk r)))))
+(fulfills sv_opens.dec_1 (by (intro es wk p c subs h hc) (rw h) (rw EPat.size.eq_2) (arith)))
+(fulfills sv_opens_all.dec_1 (by (intro es wk ps p r h) (rw h) (rw List_EPat.size.eq_2) (arith)))
+(fulfills sv_opens_all.dec_2 (by (intro es wk ps p r h) (rw h) (rw List_EPat.size.eq_2) (arith)))
 (fn sv_opens_arms ((es ESt) (wk Wk) (arms (List EArm))) Bool
   (measure (struct arms))
   (match arms
@@ -838,7 +924,7 @@
    (st2 Th)
    (acc (Option (Prod Abs (Prod Bool (Prod Th Th))))))
   (Prod Abs Th)
-  (measure (struct arms))
+  (measure (* 4 (List_EArm.size arms)))
   (match arms
     (nil
       (match acc
@@ -892,15 +978,18 @@
     (_ (th_bind es wk tys none st nil)))))
 ;; a type the declarations do not determine: none, or one that names a type variable
 (fn sv_tvars ((t EType)) Int
-  (measure (struct t))
+  (measure (EType.size t))
   (match t
     ((ETVar _) 1)
     ((ETCon _ ts) (sv_tvars_all ts))))
 (fn sv_tvars_all ((ts (List EType))) Int
-  (measure (struct ts))
+  (measure (List_EType.size ts))
   (match ts
     (nil 0)
     ((cons t r) (+ (sv_tvars t) (sv_tvars_all r)))))
+(fulfills sv_tvars.dec_1 (by (intro t n ts h) (rw h) (rw EType.size.eq_1) (arith)))
+(fulfills sv_tvars_all.dec_1 (by (intro ts t r h) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills sv_tvars_all.dec_2 (by (intro ts t r h) (rw h) (rw List_EType.size.eq_2) (arith)))
 (fn sv_loose_any ((tys (List (Option EType)))) Bool
   (measure (struct tys))
   (match tys
@@ -920,7 +1009,7 @@
        (none a)
        ((some tb) (if (< (sv_tvars tb) (sv_tvars ta)) b a))))))
 (fn sv_ty ((es ESt) (tys (List (Option EType))) (t ETerm)) (Option EType)
-  (measure (struct t))
+  (measure (* 4 (ETerm.size t)))
   (match t
     ((EIf _ b c) (sv_firm (sv_ty es tys b) (sv_ty es tys c)))
     ((EMatch s arms) (sv_ty_arms es tys (sv_ty es tys s) arms none))
@@ -933,7 +1022,7 @@
    (arms (List EArm))
    (acc (Option EType)))
   (Option EType)
-  (measure (struct arms))
+  (measure (* 4 (List_EArm.size arms)))
   (match arms
     (nil acc)
     ((cons (EArm p b) r)
@@ -942,10 +1031,27 @@
          (EAbsurd acc)
          (_ (sv_firm acc (sv_ty es (rev_onto (pat_types es sty p) tys) b))))))))
 (fn sv_ty_let ((es ESt) (tys (List (Option EType))) (rs (List ETerm)) (b ETerm)) (Option EType)
-  (measure (struct rs))
+  (measure (+ (* 4 (+ (List_ETerm.size rs) (ETerm.size b))) 1))
   (match rs
     (nil (sv_ty es tys b))
     ((cons t r) (sv_ty_let es (cons (sv_ty es tys t) tys) r b))))
+(fulfills sv_ty.dec_1 (by (intro es tys t w b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_ty.dec_2 (by (intro es tys t w b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_ty.dec_3 (by (intro es tys t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_ty.dec_4 (by (intro es tys t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_ty.dec_5 (by (intro es tys t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_ty_arms.dec_1
+  (by
+    (intro es tys sty arms acc p b r h w hw)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (rw EArm.size.eq_1)
+    (arith)))
+(fulfills sv_ty_arms.dec_2
+  (by (intro es tys sty arms acc p b r h) (rw h) (rw List_EArm.size.eq_2) (arith)))
+(fulfills sv_ty_let.dec_1 (by (intro es tys rs b h) (rw h) (rw List_ETerm.size.eq_1) (arith)))
+(fulfills sv_ty_let.dec_2 (by (intro es tys rs b t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_ty_let.dec_3 (by (intro es tys rs b t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
 (fn sv_let
   ((es ESt)
    (wk Wk)
@@ -955,7 +1061,7 @@
    (b ETerm)
    (st Th))
   (Prod Abs Th)
-  (measure (struct rs))
+  (measure (+ (* 4 (+ (List_ETerm.size rs) (ETerm.size b))) 1))
   (match rs
     (nil (sv_term es wk md env b st))
     ((cons r more)
@@ -975,9 +1081,64 @@
          (_
            (match (sv_term es wk md env r st)
              ((Prod.mk a st1) (sv_let es wk md (cons (Prod.mk ty a) env) more b st1)))))))))
+(fulfills sv_term.dec_1 (by (intro es wk md env t st c args h) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills sv_term.dec_2 (by (intro es wk md env t st f args h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills sv_term.dec_3 (by (intro es wk md env t st f args h) (rw h) (rw ETerm.size.eq_6) (arith)))
+(fulfills sv_term.dec_4 (by (intro es wk md env t st n args h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills sv_term.dec_5 (by (intro es wk md env t st a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_term.dec_6
+  (by
+    (intro es wk md env t st a b c h aa st1)
+    (show (< (* 4 (ETerm.size b)) (* 4 (ETerm.size t))))
+    (rw h)
+    (rw ETerm.size.eq_9)
+    (arith)))
+(fulfills sv_term.dec_7
+  (by
+    (intro es wk md env t st a b c h aa st1 ab stb)
+    (show (< (* 4 (ETerm.size c)) (* 4 (ETerm.size t))))
+    (rw h)
+    (rw ETerm.size.eq_9)
+    (arith)))
+(fulfills sv_term.dec_8 (by (intro es wk md env t st s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_term.dec_9 (by (intro es wk md env t st rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_args.dec_1
+  (by (intro es wk md env args st acc a r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_args.dec_2
+  (by (intro es wk md env args st acc a r h x st1) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_match.dec_1
+  (by
+    (intro es wk md env s arms st)
+    (show (< (* 4 (ETerm.size s)) (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1)))
+    (arith)))
+(fulfills sv_match.dec_2
+  (by
+    (intro es wk md env s arms st sa st1)
+    (show (< (* 4 (List_EArm.size arms)) (+ (* 4 (+ (ETerm.size s) (List_EArm.size arms))) 1)))
+    (arith)))
+(fulfills sv_arms.dec_1
+  (by
+    (intro es wk md env sty sa alias arms st2 acc p b r h binds st3 hb)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (rw EArm.size.eq_1)
+    (arith)))
+(fulfills sv_arms.dec_2
+  (by
+    (intro es wk md env sty sa alias arms st2 acc p b r h binds st3 hb x y)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (arith)))
+(fulfills sv_let.dec_1 (by (intro es wk md env rs b st h) (rw h) (rw List_ETerm.size.eq_1) (arith)))
+(fulfills sv_let.dec_2
+  (by (intro es wk md env rs b st r more h i hr) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_let.dec_3
+  (by (intro es wk md env rs b st r more h w hw) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_let.dec_4
+  (by (intro es wk md env rs b st r more h w hw x y) (rw h) (rw List_ETerm.size.eq_2) (arith)))
 ;; the resumptions a body writes
 (fn sv_resumes ((t ETerm)) Int
-  (measure (struct t))
+  (measure (ETerm.size t))
   (match t
     ((EBVar _) 0)
     ((ELit _) 0)
@@ -991,15 +1152,31 @@
     ((ELet rs b) (+ (sv_resumes_all rs) (sv_resumes b)))
     ((EIf a b c) (+ (sv_resumes a) (+ (sv_resumes b) (sv_resumes c))))))
 (fn sv_resumes_all ((ts (List ETerm))) Int
-  (measure (struct ts))
+  (measure (List_ETerm.size ts))
   (match ts
     (nil 0)
     ((cons t r) (+ (sv_resumes t) (sv_resumes_all r)))))
 (fn sv_resumes_arms ((arms (List EArm))) Int
-  (measure (struct arms))
+  (measure (List_EArm.size arms))
   (match arms
     (nil 0)
     ((cons (EArm _ b) r) (+ (sv_resumes b) (sv_resumes_arms r)))))
+(fulfills sv_resumes.dec_1 (by (intro t w as h) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills sv_resumes.dec_2 (by (intro t f as h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills sv_resumes.dec_3 (by (intro t w as h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills sv_resumes.dec_4 (by (intro t w as h) (rw h) (rw ETerm.size.eq_6) (arith)))
+(fulfills sv_resumes.dec_5 (by (intro t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_resumes.dec_6 (by (intro t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_resumes.dec_7 (by (intro t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_resumes.dec_8 (by (intro t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_resumes.dec_9 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_resumes.dec_10 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_resumes.dec_11 (by (intro t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_resumes_all.dec_1 (by (intro ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_resumes_all.dec_2 (by (intro ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_resumes_arms.dec_1
+  (by (intro arms p b r h) (rw h) (rw List_EArm.size.eq_2) (rw EArm.size.eq_1) (arith)))
+(fulfills sv_resumes_arms.dec_2 (by (intro arms p b r h) (rw h) (rw List_EArm.size.eq_2) (arith)))
 ;; a SOURCE answers a state and takes none (`st_init`, `st_for`, a run made): the calls of one
 ;; a body writes — two states from sources are two versions and one counter's start twice
 (fn sv_source ((es ESt) (wk Wk) (f Name)) Bool
@@ -1008,7 +1185,7 @@
     ((some (ESig _ _ ps rt)) (if (carries wk rt) (bool_not (tys_carry wk ps)) false))
     (_ false)))
 (fn sv_sources ((es ESt) (wk Wk) (t ETerm)) Int
-  (measure (struct t))
+  (measure (ETerm.size t))
   (match t
     ((EBVar _) 0)
     ((ELit _) 0)
@@ -1022,15 +1199,32 @@
     ((ELet rs b) (+ (sv_sources_all es wk rs) (sv_sources es wk b)))
     ((EIf a b c) (+ (sv_sources es wk a) (+ (sv_sources es wk b) (sv_sources es wk c))))))
 (fn sv_sources_all ((es ESt) (wk Wk) (ts (List ETerm))) Int
-  (measure (struct ts))
+  (measure (List_ETerm.size ts))
   (match ts
     (nil 0)
     ((cons t r) (+ (sv_sources es wk t) (sv_sources_all es wk r)))))
 (fn sv_sources_arms ((es ESt) (wk Wk) (arms (List EArm))) Int
-  (measure (struct arms))
+  (measure (List_EArm.size arms))
   (match arms
     (nil 0)
     ((cons (EArm _ b) r) (+ (sv_sources es wk b) (sv_sources_arms es wk r)))))
+(fulfills sv_sources.dec_1 (by (intro es wk t w as h) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills sv_sources.dec_2 (by (intro es wk t f as h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills sv_sources.dec_3 (by (intro es wk t w as h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills sv_sources.dec_4 (by (intro es wk t w as h) (rw h) (rw ETerm.size.eq_6) (arith)))
+(fulfills sv_sources.dec_5 (by (intro es wk t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_sources.dec_6 (by (intro es wk t s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills sv_sources.dec_7 (by (intro es wk t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_sources.dec_8 (by (intro es wk t rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills sv_sources.dec_9 (by (intro es wk t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_sources.dec_10 (by (intro es wk t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_sources.dec_11 (by (intro es wk t a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills sv_sources_all.dec_1 (by (intro es wk ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_sources_all.dec_2 (by (intro es wk ts t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills sv_sources_arms.dec_1
+  (by (intro es wk arms p b r h) (rw h) (rw List_EArm.size.eq_2) (rw EArm.size.eq_1) (arith)))
+(fulfills sv_sources_arms.dec_2
+  (by (intro es wk arms p b r h) (rw h) (rw List_EArm.size.eq_2) (arith)))
 ;; a verdict's note: the resumptions and the sources its body writes
 (fn sv_note ((res Int) (src Int)) (List Int)
   (let ((a (if (< 0 res) (append (utf8 "resumes ") (show_nat res)) nil)))
@@ -1149,7 +1343,7 @@
               (cons (Prod.mk n (Prod.mk k msg)) acc)))))))))
 (fn sv_settle ((es ESt) (wk Wk) (md (IntMap (List (Prod Name Int)))) (ds (List EDecl)) (fuel Int))
   (Prod (IntMap (List (Prod Name Int))) (List (Prod Name (Prod Symbol (List Int)))))
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (match (sv_pass es wk md ds false nil)
     ((Prod.mk (Prod.mk md1 changed) vs)
      (if changed
@@ -1167,6 +1361,8 @@
        (cons
          (Prod.mk n (Prod.mk (sym "unsupported") (utf8 "the modes of this file did not settle")))
          acc)))))
+;; here, not after `sv_settle`: it stands once its callee `sv_unsettled` is read
+(fulfills sv_settle.dec_1 (by (intro p md1 changed vs h hc hf) (apply natAbs_pred (arith))))
 (fn sv_file ((es ESt) (md (IntMap (List (Prod Name Int)))) (ds (List EDecl)))
   (Prod (IntMap (List (Prod Name Int))) (List (Prod Name (Prod Symbol (List Int)))))
   (sv_settle es (sv_kinds es) (sv_seed md ds) ds 64))
