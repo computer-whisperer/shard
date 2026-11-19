@@ -1025,7 +1025,10 @@ measurements; measure again before building on one.
   roots loaded checked, 12 at a time, 166 s for 128; the emit tie 320 s for 290; the
   byte-tie 402 s for 383, its harness of the loader's pins 380 s on the bootstrap for 362
   and 22 s on the binary for 20; the suite 241 s on the binaries and 1,048 s on the
-  bootstrap, for 231 and 979.
+  bootstrap, for 231 and 979. On CI (#757): `native` 2,463 s for 2,426 — the build of the 29
+  binaries 553 s for 523, the toolchain's check 261 s for 218, the byte-tie 990 s for 1,016,
+  its harness on the bootstrap 916 s for 944 —, `v3` 2,160 s, `replay` 1,835 s: a pipeline is
+  42 minutes for 41.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
