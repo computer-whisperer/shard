@@ -22,6 +22,8 @@
   (LIMax Level Level)  ; imax u v — 0 when v is 0, else max u v
   (LParam Name)  ; a declared universe parameter
   (LMVar Int))  ; ?u — an elaboration metavariable (never in K's terms)
+;; the size the level functions recurse by: a constructor counts one over its levels' sizes
+(derive Level size)
 
 ;; RULES (level.cpp):
 ;;   normalize (l. 454): write l as (base, k) with k the succ-offset;
@@ -152,6 +154,41 @@
     ((LSucc x) (to_offset_go x (+ k 1)))
     (_ (Prod.mk l k))))
 (fn to_offset ((l Level)) (Prod Level Int) (to_offset_go l 0))
+;; the base `to_offset` returns is the level less its successors: never the larger
+(theorem to_offset_go_le ((l Level))
+  (forall ((k Int) (b Level) (j Int))
+    (-> (= (to_offset_go l k) (Prod.mk b j)) (<= (Level.size b) (Level.size l))))
+  (by
+    (induction l
+      ((LZero () (intro k b j h) (have e (= (Prod.mk LZero k) (Prod.mk b j)) (exact h))
+         (have eb (= LZero b) (exact (congrArg Prod.fst e)))
+         (rw (<- eb))
+         (arith))
+       (LSucc (x ih) (intro k b j h)
+         (have h2 (<= (Level.size b) (Level.size x)) (exact (ih (+ k 1) b j h)))
+         (rw Level.size.eq_2)
+         (arith))
+       (LMax (x y ihx ihy) (intro k b j h)
+         (have e (= (Prod.mk (LMax x y) k) (Prod.mk b j)) (exact h))
+         (have eb (= (LMax x y) b) (exact (congrArg Prod.fst e)))
+         (rw (<- eb))
+         (arith))
+       (LIMax (x y ihx ihy) (intro k b j h)
+         (have e (= (Prod.mk (LIMax x y) k) (Prod.mk b j)) (exact h))
+         (have eb (= (LIMax x y) b) (exact (congrArg Prod.fst e)))
+         (rw (<- eb))
+         (arith))
+       (LParam (n) (intro k b j h) (have e (= (Prod.mk (LParam n) k) (Prod.mk b j)) (exact h))
+         (have eb (= (LParam n) b) (exact (congrArg Prod.fst e)))
+         (rw (<- eb))
+         (arith))
+       (LMVar (i) (intro k b j h) (have e (= (Prod.mk (LMVar i) k) (Prod.mk b j)) (exact h))
+         (have eb (= (LMVar i) b) (exact (congrArg Prod.fst e)))
+         (rw (<- eb))
+         (arith))))))
+(theorem to_offset_le ((l Level) (b Level) (j Int) (h (= (to_offset l) (Prod.mk b j))))
+  (<= (Level.size b) (Level.size l))
+  (by (exact (to_offset_go_le l 0 b j h))))
 (fn offset_base ((l Level)) Level
   (match (to_offset l)
     ((Prod.mk b _) b)))
@@ -228,7 +265,7 @@
 
 ;; is_norm_lt (l. 397): the order `normalize` sorts max-arguments by
 (fn is_norm_lt ((a Level) (b Level)) Bool
-  (measure (struct a))
+  (measure (Level.size a))
   (match (to_offset a)
     ((Prod.mk l1 k1)
      (match (to_offset b)
@@ -254,12 +291,84 @@
              (_ false)))
           (_ false)))))))))
 
+;; a level under the base is under the level: `to_offset_le`, then the base's size opened
+(fulfills is_norm_lt.dec_1
+  (by
+    (intro p l1 k1 h1 l2 k2 h2 hne hk x1 y1 hx x2 y2 hy hc)
+    (have hl (<= (Level.size l1) (Level.size (proj PProd 0 p)))
+      (exact (to_offset_le (proj PProd 0 p) l1 k1 h1)))
+    (have hs (= (Level.size l1) (+ 1 (+ (Level.size x1) (Level.size y1))))
+      (rw hx)
+      (rw Level.size.eq_3)
+      (arith))
+    (arith)))
+(fulfills is_norm_lt.dec_2
+  (by
+    (intro p l1 k1 h1 l2 k2 h2 hne hk x1 y1 hx x2 y2 hy hc)
+    (have hl (<= (Level.size l1) (Level.size (proj PProd 0 p)))
+      (exact (to_offset_le (proj PProd 0 p) l1 k1 h1)))
+    (have hs (= (Level.size l1) (+ 1 (+ (Level.size x1) (Level.size y1))))
+      (rw hx)
+      (rw Level.size.eq_3)
+      (arith))
+    (arith)))
+(fulfills is_norm_lt.dec_3
+  (by
+    (intro p l1 k1 h1 l2 k2 h2 hne hk x1 y1 hx x2 y2 hy hc)
+    (have hl (<= (Level.size l1) (Level.size (proj PProd 0 p)))
+      (exact (to_offset_le (proj PProd 0 p) l1 k1 h1)))
+    (have hs (= (Level.size l1) (+ 1 (+ (Level.size x1) (Level.size y1))))
+      (rw hx)
+      (rw Level.size.eq_4)
+      (arith))
+    (arith)))
+(fulfills is_norm_lt.dec_4
+  (by
+    (intro p l1 k1 h1 l2 k2 h2 hne hk x1 y1 hx x2 y2 hy hc)
+    (have hl (<= (Level.size l1) (Level.size (proj PProd 0 p)))
+      (exact (to_offset_le (proj PProd 0 p) l1 k1 h1)))
+    (have hs (= (Level.size l1) (+ 1 (+ (Level.size x1) (Level.size y1))))
+      (rw hx)
+      (rw Level.size.eq_4)
+      (arith))
+    (arith)))
+
 ;; push_max_args (l. 421): flatten nested max into a list, left to right
 (fn push_max_args ((l Level) (acc (List Level))) (List Level)
   (measure (struct l))
   (match l
     ((LMax a b) (push_max_args a (push_max_args b acc)))
     (_ (cons l acc))))
+
+;; what `push_max_args_norm` is measured by: each level of a list at six times its size and
+;; four — more than `normalize` owes for one level, less than it has for the `max` over two
+(def levels_weight ((xs (List Level))) Nat
+  (measure (struct xs))
+  (match xs
+    (nil 0)
+    ((cons x r) (+ (+ (* 6 (Level.size x)) 4) (levels_weight r)))))
+(theorem push_max_args_weight ((l Level))
+  (forall ((acc (List Level)))
+    (<= (levels_weight (push_max_args l acc)) (+ (+ (* 6 (Level.size l)) 4) (levels_weight acc))))
+  (by
+    (induction l
+      ((LZero () (intro acc) (rw push_max_args.eq_1) (rw levels_weight.eq_2) (arith))
+       (LSucc (x ih) (intro acc) (rw push_max_args.eq_2) (rw levels_weight.eq_2) (arith))
+       (LMax (a b iha ihb) (intro acc)
+         (have h1
+           (<= (levels_weight (push_max_args a (push_max_args b acc)))
+             (+ (+ (* 6 (Level.size a)) 4) (levels_weight (push_max_args b acc))))
+           (exact (iha (push_max_args b acc))))
+         (have h2
+           (<= (levels_weight (push_max_args b acc))
+             (+ (+ (* 6 (Level.size b)) 4) (levels_weight acc)))
+           (exact (ihb acc)))
+         (rw push_max_args.eq_3)
+         (rw Level.size.eq_3)
+         (arith))
+       (LIMax (a b iha ihb) (intro acc) (rw push_max_args.eq_4) (rw levels_weight.eq_2) (arith))
+       (LParam (n) (intro acc) (rw push_max_args.eq_5) (rw levels_weight.eq_2) (arith))
+       (LMVar (i) (intro acc) (rw push_max_args.eq_6) (rw levels_weight.eq_2) (arith))))))
 
 ;; stable insertion sort by is_norm_lt (std::sort is unstable, but the
 ;; order among equal elements cannot affect the result of `normalize`:
@@ -286,7 +395,7 @@
 
 ;; normalize (l. 454)
 (fn normalize ((l Level)) Level
-  (measure (struct l))
+  (measure (+ (* 6 (Level.size l)) 3))
   (match (to_offset l)
     ((Prod.mk r k)
      (match r
@@ -301,7 +410,7 @@
 
 ;; normalize each flattened argument and flatten again (l. 466)
 (fn push_max_args_norm ((xs (List Level)) (acc (List Level))) (List Level)
-  (measure (struct xs))
+  (measure (levels_weight xs))
   (match xs
     (nil acc)
     ((cons x r) (push_max_args (normalize x) (push_max_args_norm r acc)))))
@@ -359,6 +468,48 @@
   (match args
     (nil nil)
     ((cons a r) (cons (mk_succ_n a k) (add_offsets r k)))))
+
+;; `normalize`'s descent: a side of the base's `imax` is under the level (`to_offset_le`); the
+;; flattened `max` weighs less than the level (`push_max_args_weight`, twice: its two sides)
+(fulfills normalize.dec_1
+  (by
+    (intro l r k h a b hr)
+    (have hl (<= (Level.size r) (Level.size l)) (exact (to_offset_le l r k h)))
+    (have hs (= (Level.size r) (+ 1 (+ (Level.size a) (Level.size b))))
+      (rw hr)
+      (rw Level.size.eq_4)
+      (arith))
+    (arith)))
+(fulfills normalize.dec_2
+  (by
+    (intro l r k h a b hr)
+    (have hl (<= (Level.size r) (Level.size l)) (exact (to_offset_le l r k h)))
+    (have hs (= (Level.size r) (+ 1 (+ (Level.size a) (Level.size b))))
+      (rw hr)
+      (rw Level.size.eq_4)
+      (arith))
+    (arith)))
+(fulfills normalize.dec_3
+  (by
+    (intro l r k h c d hr)
+    (have hl (<= (Level.size r) (Level.size l)) (exact (to_offset_le l r k h)))
+    (have hs (= (Level.size r) (+ 1 (+ (Level.size c) (Level.size d))))
+      (rw hr)
+      (rw Level.size.eq_3)
+      (arith))
+    (have h1
+      (<= (levels_weight (push_max_args c (push_max_args d nil)))
+        (+ (+ (* 6 (Level.size c)) 4) (levels_weight (push_max_args d nil))))
+      (exact (push_max_args_weight c (push_max_args d nil))))
+    (have h2
+      (<= (levels_weight (push_max_args d nil)) (+ (+ (* 6 (Level.size d)) 4) (levels_weight nil)))
+      (exact (push_max_args_weight d nil)))
+    (have h0 (= (levels_weight nil) 0) (exact levels_weight.eq_1))
+    (rw hr)
+    (rw push_max_args.eq_3)
+    (arith)))
+(fulfills push_max_args_norm.dec_1 (by (intro xs acc x r h) (rw h) (rw levels_weight.eq_2) (arith)))
+(fulfills push_max_args_norm.dec_2 (by (intro xs acc x r h) (rw h) (rw levels_weight.eq_2) (arith)))
 
 ;; is_equivalent (l. 518) — the definitional equality of universe levels
 (fn is_equivalent ((a Level) (b Level)) Bool
