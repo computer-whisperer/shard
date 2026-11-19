@@ -232,16 +232,17 @@ file; two things about how they are written set them apart.
 
 - **Nine tenths of their functions are definitions; of those written by hand, four
   fifths.** The checker reads every one whose signature reads, and nearly every one's does:
-  of the loader's closure, 8,960 functions — 4,792 of them the rows of a generated table —,
-  it holds 8,218 as definitions. The others are programs with the reason: a function they
-  call is a program (`callee_runnable`, 658), a group of functions that call each other
-  (28), a call the definer takes for no descent (16), a numeral under a constructor pattern
-  (21). A type error in any of them is refused.
+  of the loader's closure, 8,962 functions — 4,792 of them the rows of a generated table —,
+  it holds 8,290 as definitions. The others are programs with the reason: a function they
+  call is a program (`callee_runnable`, 605), a group of functions that call each other
+  (33), a call the definer takes for no descent (19). A type error in any of them is
+  refused. None matches a numeral under a constructor (below, "Terms"): such a row has no
+  form in the logic, so the sources bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 133 functions in 33 files:
+  `kernel/descent.shard`. The forms the sources use, 138 functions in 33 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -256,20 +257,19 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. Five functions still state an
-  integer and are programs (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
-  counter nothing in it bounds, and four whose descent is one of the forms above
-  (`unify.shard` `unify_level`; `erase.shard` `ind_params`, `param_roles`, `row_roles`).
-  Some 60 more state one where the checker does not get to it, behind a callee that is a
-  program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. One function still states an
+  integer and is a program (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
+  counter nothing in it bounds. Some 58 more state one where the checker does not get to it,
+  behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Seven groups are written so, 76 functions: that one, `matcher.shard`'s
+  parts"). Eight groups are written so, 78 functions: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
-  `matrix_exh`, K's axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
+  `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
+  axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
   `closure_of`) —, and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
@@ -302,7 +302,7 @@ file; two things about how they are written set them apart.
   left side must compute first is restated by a `have`, and so is an equation of pairs
   before `(congrArg Prod.fst …)` is taken of it (`OPEN.md` §1). A `fulfills`
   of a group stands below the last function its members reach, which may be far below the
-  group. 28 functions in 10 groups still state a structural clause or none and are programs
+  group. 33 functions in 11 groups still state a structural clause or none and are programs
   (`group_measure`). A size
   is the one derivation a build reads: its functions are definitions with no program, the
   loader makes them under `--unchecked` too, and the Rust reader passes the form over.

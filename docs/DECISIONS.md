@@ -286,9 +286,8 @@ entries are explained under "Measured" at the end.
   the work was held to. Not the proofs left to the engine in sidecars beside toolchain
   sources: a toolchain module that gains an obligation stales the stored proofs of every
   file above it (`OPEN.md` §1), and the engine does not find a share of these (`OPEN.md`
-  §3). Not a function whose descent only a change of its body gives — a numeral under a
-  constructor pattern (`index.shard` `ix_trim_sp`, `elab.shard` `el_pat`): it stays a
-  program with its reason. A fact about a helper that returns a part of its argument is
+  §3). A function behind a numeral under a constructor pattern takes a change of its body
+  first (below). A fact about a helper that returns a part of its argument is
   proven beside the `fulfills` that cites it, by induction where the helper recurses
   (`classify.shard` `live_arm_lt`). Two stated measures did not descend at their guard and
   are corrected: `template.shard` `inst_equations` and `define.shard` `ctor_locals`. Assent,
@@ -338,6 +337,17 @@ entries are explained under "Measured" at the end.
   The walks of the inductive-type checker and K's three searches are programs still
   (`OPEN.md` §4). Assent as for the measure above; then, asked what stood in the way next:
   "Let's continue with the next chunk. What do you see as the next blocker?"
+- No toolchain function matches a numeral under a constructor. The 21 that did — 29 rows: a
+  byte at the head of a list, a constructor's field count, a de Bruijn index, a matcher's
+  count of scrutinees — bind the field and compare it with `if`, or ask `starts_with_lit`
+  where the row was the whole of a test off the hot path. The logic has no form for such a
+  row, each of the 21 was a program nothing read (`no_l_identity`), and 425 programs stood
+  above them. Not the definer taught to read the row: a change of the language for every
+  file, made in the elaborator, whose own group already elaborates forms it built and is the
+  furthest from a definition; and the rewrite is the one the reference gives for a `def` or
+  a statement. Two helpers came of it, each for a branch the rewrite would have written
+  twice (`elab.shard` `el_pat_var`, `list_mismatch`). The owner, of the two ways: "We can
+  restate the 21 patterns. Proceed with that when practical".
 
 ## Programs and the back end
 
@@ -1181,6 +1191,15 @@ measurements; measure again before building on one.
   200; the byte-tie 484 s; the suite 250 s on the binaries and 1,138 s on the bootstrap.
   One step failed and was mended: the table of Init's facts lacked `Nat` and its two
   constructors, which the weight's `def` cites (`parity_test.sh`, 399 s on the bootstrap).
+  On CI (#763): 47.9 minutes, the `native` job 47.9, `v3` 35.9, `replay` 31.2.
+- The numeral rows restated (2026-11-19). 742 programs before; 686 with the 21 functions'
+  bodies changed — 56 out, the 21 and those that waited on them alone —, and no function
+  refused for the row any more; 672 with the six units that opened to the forms already in
+  use (14 obligations, no body changed). Now 8,962 functions, 8,290 definitions, 1,134
+  obligations of 464 functions. Checked on the dev box before the push, by ruling 17: the
+  29 binaries built in 279 s, all roots loaded checked in 422 s beside the suite on the
+  binaries, 386 s, 52 entrypoints; then for the six units the loader's program text against
+  that build's, byte for byte.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
