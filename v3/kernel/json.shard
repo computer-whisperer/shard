@@ -80,13 +80,15 @@
                (if (bool_and (<= 55296 cp) (<= cp 56319))
                  ;; high surrogate: expect \uDCxx
                  (match r3
-                   ((cons 92 (cons 117 r4))
-                    (match (parse_hex4 r4)
-                      ((some (Prod.mk lo r5))
-                       (parse_string r5
-                         (rev_onto (utf8_encode (+ 65536 (+ (* (- cp 55296) 1024) (- lo 56320))))
-                           acc)))
-                      (none none)))
+                   ((cons b1 (cons b2 r4))
+                    (if (bool_and (= b1 92) (= b2 117))
+                      (match (parse_hex4 r4)
+                        ((some (Prod.mk lo r5))
+                         (parse_string r5
+                           (rev_onto (utf8_encode (+ 65536 (+ (* (- cp 55296) 1024) (- lo 56320))))
+                             acc)))
+                        (none none))
+                      none))
                    (_ none))
                  (parse_string r3 (rev_onto (utf8_encode cp) acc)))))
             (parse_string r2 (cons (unescape e) acc)))))
@@ -117,37 +119,45 @@
 (fn parse_array ((bs0 (List Int)) (acc (List Json))) JRes
   (measure (struct bs0))
   (let ((bs (skip_ws bs0)))
-    (match bs
-      ((cons 93 r) (JRes (JArr (rev acc)) r))
-      (_
+    (match (starts_with_lit (utf8 "]") bs)
+      ((some r) (JRes (JArr (rev acc)) r))
+      (none
         (match (json_parse bs)
           (JErr JErr)
           ((JRes v rest)
            (match (skip_ws rest)
-             ((cons 44 r2) (parse_array r2 (cons v acc)))
-             ((cons 93 r2) (JRes (JArr (rev (cons v acc))) r2))
-             (_ JErr))))))))
+             ((cons c r2)
+              (if (= c 44) (parse_array r2 (cons v acc))
+              (if (= c 93) (JRes (JArr (rev (cons v acc))) r2)
+              JErr)))
+             (nil JErr))))))))
 
 (fn parse_object ((bs0 (List Int)) (acc (List (Prod (List Int) Json)))) JRes
   (measure (struct bs0))
   (let ((bs (skip_ws bs0)))
     (match bs
-      ((cons 125 r) (JRes (JObj (rev acc)) r))
-      ((cons 34 r)
-       (match (parse_string r nil)
-         (none JErr)
-         ((some (Prod.mk key rest))
-          (match (skip_ws rest)
-            ((cons 58 r2)
-             (match (json_parse r2)
-               (JErr JErr)
-               ((JRes v rest2)
-                (match (skip_ws rest2)
-                  ((cons 44 r3) (parse_object r3 (cons (Prod.mk key v) acc)))
-                  ((cons 125 r3) (JRes (JObj (rev (cons (Prod.mk key v) acc))) r3))
-                  (_ JErr)))))
-            (_ JErr)))))
-      (_ JErr))))
+      ((cons c r)
+       (if (= c 125) (JRes (JObj (rev acc)) r)
+       (if (= c 34)
+         (match (parse_string r nil)
+           (none JErr)
+           ((some (Prod.mk key rest))
+            (match (skip_ws rest)
+              ((cons c2 r2)
+               (if (= c2 58)
+                 (match (json_parse r2)
+                   (JErr JErr)
+                   ((JRes v rest2)
+                    (match (skip_ws rest2)
+                      ((cons c3 r3)
+                       (if (= c3 44) (parse_object r3 (cons (Prod.mk key v) acc))
+                       (if (= c3 125) (JRes (JObj (rev (cons (Prod.mk key v) acc))) r3)
+                       JErr)))
+                      (nil JErr))))
+                 JErr))
+              (nil JErr))))
+         JErr)))
+      (nil JErr))))
 
 ;; ---- accessors --------------------------------------------------------------
 
@@ -167,12 +177,12 @@
     (_ none)))
 
 (fn parse_int ((cs (List Int))) (Option Int)
-  (match cs
-    ((cons 45 r)
+  (match (starts_with_lit (utf8 "-") cs)
+    ((some r)
      (match (parse_nat r 0)
        ((some n) (some (- 0 n)))
        (none none)))
-    (_ (parse_nat cs 0))))
+    (none (parse_nat cs 0))))
 (fn parse_nat ((cs (List Int)) (acc Int)) (Option Int)
   (measure (struct cs))
   (match cs
@@ -213,5 +223,4 @@
   (measure (struct bs))
   (match bs
     (nil (Prod.mk (rev acc) nil))
-    ((cons 10 r) (Prod.mk (rev acc) r))
-    ((cons c r) (take_line r (cons c acc)))))
+    ((cons c r) (if (= c 10) (Prod.mk (rev acc) r) (take_line r (cons c acc))))))

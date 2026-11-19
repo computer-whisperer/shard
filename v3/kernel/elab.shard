@@ -1530,6 +1530,9 @@
 ;; (list a b …): the constructor chain of the expected type's list — an inductive with a
 ;; field-less constructor and a two-field one. No expected type, no
 ;; literal: the element type is never defaulted
+(fn list_mismatch ((xw Expr)) ERes
+  (EErr (sym "type_mismatch")
+    (append (utf8 "a list literal where ") (append (show_expr xw) (utf8 " is expected")))))
 (fn elab_list ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
   (match expected
     (none
@@ -1539,12 +1542,12 @@
      (match (el_whnf e x)
        ((Prod.mk e1 xw)
         (match (two_ctors e1 xw)
-          ((some (Prod.mk (Prod.mk nl 0) (Prod.mk cs 2)))
-           (elab e1 (list_chain args (sym_of_chars (show_name nl)) (sym_of_chars (show_name cs)))
-             expected))
-          (_
-            (EErr (sym "type_mismatch")
-              (append (utf8 "a list literal where ") (append (show_expr xw) (utf8 " is expected")))))))))))
+          ((some (Prod.mk (Prod.mk nl kn) (Prod.mk cs kc)))
+           (if (bool_and (= kn 0) (= kc 2))
+             (elab e1 (list_chain args (sym_of_chars (show_name nl)) (sym_of_chars (show_name cs)))
+               expected)
+             (list_mismatch xw)))
+          (none (list_mismatch xw))))))))
 (fn list_chain ((args (List SExpr)) (nl Symbol) (cs Symbol)) SExpr
   (measure (struct args))
   (match args
@@ -2019,8 +2022,8 @@
          (none none)
          ((some n)
           (match (pat_ctor e n ty)
-            ((some (Prod.mk _ (Prod.mk 0 _))) none)
             ((some (Prod.mk c (Prod.mk k _)))
+             (if (= k 0) none
              (some
                (append (utf8 "the row ")
                  (append (chars_of_sym x)
@@ -2031,7 +2034,7 @@
                            (append (utf8 " has ")
                              (append (show_nat k)
                                (append (utf8 " field(s) — write (")
-                                 (append (chars_of_sym x) (utf8 " NAME…)")))))))))))))
+                                 (append (chars_of_sym x) (utf8 " NAME…)"))))))))))))))
             (none
               (some
                 (append (utf8 "the row ")
@@ -2050,24 +2053,25 @@
 ;; its fields' patterns. The state with the variables bound, the pattern, its term, the next
 ;; slot, the variables' locals in slot order
 (type PtRes (PtOk El MtPat Expr Int (List Expr)) (PtErr Symbol (List Int)))
+(fn el_pat_var ((e El) (n Name) (ty Expr) (slot Int) (vars (List Expr))) PtRes
+  (match (el_local e n ty BDefault)
+    ((Prod.mk e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv))))))
 (fn el_pat ((e El) (s SExpr) (ty Expr) (slot Int) (vars (List Expr)) (fuel Int)) PtRes
-  (measure fuel)
+  (measure (Int.natAbs fuel) 0)
   (if (< fuel 1) (PtErr (sym "match_depth") (utf8 "a pattern too deep"))
   (match s
     ((SSym x)
      (if (sym_eq x (sym "_"))
        ;; bound under a name no source spells: a term a later metavariable takes may mention it
        ;; (a refined row's type does: `(TNum _)` at a type that mentions the scrutinee)
-       (match (el_local e (n1 (sym_of_chars (utf8 "_ wildcard"))) ty BDefault)
-         ((Prod.mk e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv)))))
+       (el_pat_var e (n1 (sym_of_chars (utf8 "_ wildcard"))) ty slot vars)
        (match (name_of_sym x)
          (none (PtErr (sym "bad_name") (chars_of_sym x)))
          ((some n)
           (match (pat_ctor e n ty)
-            ((some (Prod.mk c (Prod.mk 0 head))) (PtOk e (MtCtor c nil) head slot vars))
-            (_
-              (match (el_local e n ty BDefault)
-                ((Prod.mk e1 fv) (PtOk e1 (MtVar slot) fv (+ slot 1) (append vars (list fv)))))))))))
+            ((some (Prod.mk c (Prod.mk k head)))
+             (if (= k 0) (PtOk e (MtCtor c nil) head slot vars) (el_pat_var e n ty slot vars)))
+            (none (el_pat_var e n ty slot vars)))))))
     ((SList (cons (SSym h) subs))
      (if (sym_eq h (sym "quote"))
        (PtErr (sym "no_quote") (utf8 "a symbol is written (sym \"x\"): there is no quote form"))
@@ -2101,7 +2105,7 @@
    (vars (List Expr))
    (fuel Int))
   PtRes
-  (measure (struct subs))
+  (measure (Int.natAbs fuel) (+ (List.length subs) 1))
   (match subs
     (nil (PtOk e (MtCtor c (rev ps)) acc slot vars))
     ((cons p r)
@@ -2131,6 +2135,22 @@
     ((some (Prod.mk c (Prod.mk (Prod.mk _ nfields) head)))
      (some (Prod.mk c (Prod.mk nfields head))))
     (none none)))
+;; a pattern descends by its fuel, and a constructor's fields at one fuel by their list
+(fulfills el_pat.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills el_pat_fields.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.right (arith))))
+(fulfills el_pat_fields.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 hs x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25
+      x26)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (arith))))
 
 ;; (exists ((x TYPE)) P): Exists (fun (x : TYPE) => P)
 (fn elab_exists ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
