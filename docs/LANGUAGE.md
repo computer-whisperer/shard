@@ -232,10 +232,10 @@ file; two things about how they are written set them apart.
 
 - **Nine tenths of their functions are definitions; of those written by hand, four
   fifths.** The checker reads every one whose signature reads, and nearly every one's does:
-  of the loader's closure, 8,958 functions — 4,792 of them the rows of a generated table —,
-  it holds 8,133 as definitions. The others are programs with the reason: a function they
-  call is a program (`callee_runnable`, 750), a group of functions that call each other
-  (28), a call the definer takes for no descent (11), a numeral under a constructor pattern
+  of the loader's closure, 8,960 functions — 4,792 of them the rows of a generated table —,
+  it holds 8,218 as definitions. The others are programs with the reason: a function they
+  call is a program (`callee_runnable`, 658), a group of functions that call each other
+  (28), a call the definer takes for no descent (16), a numeral under a constructor pattern
   (21). A type error in any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
@@ -256,20 +256,29 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. One function still states an
-  integer and is a program (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
-  counter nothing in it bounds. Some 75 more state one where the checker does not get to it,
-  behind a callee that is a program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. Five functions still state an
+  integer and are programs (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
+  counter nothing in it bounds, and four whose descent is one of the forms above
+  (`unify.shard` `unify_level`; `erase.shard` `ind_params`, `param_roles`, `row_roles`).
+  Some 60 more state one where the checker does not get to it, behind a callee that is a
+  program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Six groups are written so, 16 functions: that one, `matcher.shard`'s `mt_compile`
-  and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard` `matrix_exh`,
-  and K's axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
-  `closure_of`). A member that steps the fuel without testing it states the stepped fuel as
-  its part, `(Int.natAbs (+ (- d 1) 1))`, so that the first parts are one term.
+  parts"). Seven groups are written so, 76 functions: that one, `matcher.shard`'s
+  `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
+  `matrix_exh`, K's axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
+  `closure_of`) —, and K's checker, 60 functions in three parts (`k/tc.shard`, "the
+  checker's descent"): the depth; a rank, the longest chain of calls below the function that
+  stay at its depth; and what a walk or a loop of its own descends by. There a call at the
+  caller's depth to a function of lower rank owes `(apply Prod.Lex.right (apply
+  Prod.Lex.left (arith)))` whatever stands before it, 169 of the 189. A member that steps
+  the fuel without testing it states the stepped fuel as its part, `(Int.natAbs (+ (- d 1)
+  1))`, so that the first parts are one term; a step past a test made by another function
+  cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
+  given a depth of at least 1).
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The
   member that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one
@@ -277,16 +286,21 @@ file; two things about how they are written set them apart.
   `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
   Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
   type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  The sources' walkers are written so, 205 functions in 23 files over thirteen sizes
-  (`Expr`, `Name`, `SExpr`, `ETerm` with its arms, `EType`, `EPat`, `Val`, `IVal`, `LPat`,
-  `LwE` with its arms, `LwP`, `MtPat`, `Node`): the typing of a term (`classify.shard`
+  The sources' walkers are written so, 208 functions in 24 files over fourteen sizes
+  (`Expr`, `Level`, `Name`, `SExpr`, `ETerm` with its arms, `EType`, `EPat`, `Val`, `IVal`,
+  `LPat`, `LwE` with its arms, `LwP`, `MtPat`, `Node`): the typing of a term (`classify.shard`
   `c_type`), the threading pass, the lowering, the C generator's walk, the dump — each
   member measured by the size of what it walks (`ETerm.size`, `List_ETerm.size`,
   `List_EArm.size`: `ETerm` and `EArm` name each other, and `(derive ETerm size)` gives
   every one), a `let`'s member by the sum of its bindings' and its body's. A rank is a
   scaled size, `(+ (* 4 (ETerm.size t)) 1)`. A descent through a helper that returns a part
   of its argument is proven by cases on the argument (`lower.shard` `lw_fv`), or from a fact
-  proven beside the `fulfills` by induction (`classify.shard` `live_arm_lt`). A `fulfills`
+  proven beside the function by induction (`classify.shard` `live_arm_lt`; `level.shard`
+  `to_offset_le`, the base under a level's successors). A list the function walks that has
+  no derived size is weighed by a `def` of the file, which has no program (`level.shard`
+  `levels_weight` and its fact `push_max_args_weight`). In such a proof a hypothesis whose
+  left side must compute first is restated by a `have`, and so is an equation of pairs
+  before `(congrArg Prod.fst …)` is taken of it (`OPEN.md` §1). A `fulfills`
   of a group stands below the last function its members reach, which may be far below the
   group. 28 functions in 10 groups still state a structural clause or none and are programs
   (`group_measure`). A size

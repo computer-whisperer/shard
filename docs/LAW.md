@@ -169,8 +169,9 @@ admitted that the logic does not derive.
   put to the owner in plain language with its options and a recommendation. A ruling is recorded in
   §6 in the owner's words. One given as bare assent is a checkpoint and cheap to reopen; one given
   with reasons stands until the owner reopens it.
-- **One line of work on `main`**, the full gate behind each change to the system, generated files
-  never patched by hand.
+- **One line of work on `main`.** Before a push the dev box runs the checks the change can
+  move; the full gate runs on the pipeline behind every push, and what it finds is mended next
+  (ruling 17). Generated files are never patched by hand.
 
 ## 6. The owner's rulings
 
@@ -243,6 +244,10 @@ admitted that the logic does not derive.
     us." (An operator's meaning is a definition K checks and its facts are proven from it;
     what is believed is that an engine's operation computes that definition: §4. Built for
     the bit-level five: `DECISIONS.md`, Programs and the back end.)
+17. *The dev box checks what a change can move; the pipeline checks all of it.* "let's try to
+    speed things up by limiting local gate sweeps to areas relevant with the changes made. CI
+    can run async and tell us when low-rate mistakes are made." (§5. What is run for which
+    change: `DECISIONS.md`, Build and gates.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

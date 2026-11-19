@@ -314,6 +314,30 @@ entries are explained under "Measured" at the end.
   checker once its 60 functions were read call by call (this, with the checker restated in
   five places; the checker restated alone, its walks spending depth; the checker left a
   program): "For K's checker, option 1 sounds reasonable for now."
+- K's checker is a definition of the logic. Its 60 functions that call each other
+  (`k/tc.shard`, `infer` to `defeq_step7`) are one group, each measured in three parts: the
+  depth, `(Int.natAbs d)`; a rank, the longest chain of calls below the function that stay
+  at its depth (0 to 12); and what a walk or a loop of its own descends by — a term's size,
+  a list's length, the fields left up to an index, the heartbeats left. The 189 descents
+  stand at the end of the file, 169 of them by the rank alone. The code is restated in four
+  places for it. The step of the depth stands where the depth is tested (`infer`,
+  `whnf_core_c`), so that the guard's result is the step's ground (`rec_guard_ok`); every
+  call sees the depth it saw. `reduce_nat` normalizes an argument one level deeper, past a
+  test of the depth: not the argument at the depth it has with a fourth part for the
+  heartbeat — a nested accelerator is a nesting like any other, the kernel written in Lean
+  counts it so, and the term's own nesting was what bounded it. A loop goes round only when
+  the heartbeat count advanced, under the limit, since it was entered (`loop_advanced`), and
+  is out of heartbeats otherwise: not a count of rounds handed down, that kernel's form — a
+  round that spent no heartbeat can only repeat itself, so the test refuses nothing that
+  ended, and no signature changes. And `proj_walk_fields` answers `invalid_projection` at an
+  index it has passed: it tested the index by equality alone, a negative one walked the
+  constructor's type to its end for the same answer, and its obligation was false as it
+  stood — the reading of the checker had taken the counter for a descent. Under the checker,
+  `level.shard`'s `normalize` and the order it sorts by are definitions with no body
+  changed: two facts about the helpers they recurse through and a weight written as a `def`.
+  The walks of the inductive-type checker and K's three searches are programs still
+  (`OPEN.md` §4). Assent as for the measure above; then, asked what stood in the way next:
+  "Let's continue with the next chunk. What do you see as the next blocker?"
 
 ## Programs and the back end
 
@@ -649,6 +673,14 @@ entries are explained under "Measured" at the end.
   its own; not one after another — the tie was 59 of a pipeline's 88 minutes with one core of
   64 busy. What is compared is unchanged, and a log's order does not depend on the count. The
   owner: "go ahead with the two CI changes".
+- Before a push the dev box runs the checks a change can move, and the pipeline runs the
+  whole gate after it; not the whole gate on the dev box first — 40 minutes before every
+  push, most of it over what the change cannot reach. For a measure or a proof beside a
+  toolchain function, the loader's program text against the last build's and the checked
+  load; with a `def`, a `derive` or a new citation of Init, the table of Init's facts
+  (`parity_test.sh`); for a changed body, the build and the tests of its area, and for K the
+  Init replay (`LAW.md` ruling 17; which checks count for which change is this file's reading
+  of it).
 
 ## Layout
 
@@ -1130,7 +1162,25 @@ measurements; measure again before building on one.
   beside them and 320 and 402 before that; the suite 242 s on the binaries and 993 s on the
   bootstrap, for 269 and 1,027. The batches' workers: nine, each 139 to 219 thousand tokens
   and 9 to 23 minutes, none restarted for its work; the first six were started twice, their
-  worktrees having been made at the pushed commit and not at the one their brief named.
+  worktrees having been made at the pushed commit and not at the one their brief named. On
+  CI (#762): 44.8 minutes, the `native` job 44.1, `v3` 35.4, `replay` 31.1.
+- The level functions and K's checker restated (2026-11-19). Read off the call graph, 588 of
+  the 825 programs stood above `level.shard`'s three; defined, they took 10 functions out of
+  the programs, and K's 60 then stated a reason of their own (an integer measure). By what
+  the rest lacked, the programs standing above each kind and those it alone kept: a numeral
+  under a constructor pattern 425 and 72 (21 functions); a fact about a helper 414 and 148
+  (64); a walk of the environment with no bound 316 and 79 (13); K's checker 149 and 73
+  (60); K's other walks and searches 84 and 8 (13); the elaborator's group 182 and none; the
+  erasure's 114 and none. With the checker: 8,960 functions, 8,218 definitions for 8,133,
+  742 programs for 825, 1,120 obligations of 457 functions for 922 of 394; in K's own
+  directory 78 programs for 151. The checker's 189 obligations were stated by the loader at
+  the first load with the measures on, and its proofs checked at the first load with them
+  written; K's directory loads checked in 26 s for 18 on the development loader. The gate on
+  the dev box: the 29 binaries built in 281 s; the Init replay 413 s, 57,977 accepted and
+  none exhausted under the checker's new tests; all 29 roots loaded checked in 255 s for
+  200; the byte-tie 484 s; the suite 250 s on the binaries and 1,138 s on the bootstrap.
+  One step failed and was mended: the table of Init's facts lacked `Nat` and its two
+  constructors, which the weight's `def` cites (`parity_test.sh`, 399 s on the bootstrap).
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

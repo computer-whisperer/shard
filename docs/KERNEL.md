@@ -114,11 +114,17 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 - `env.shard` (39) — `CheckedEnv` (constants by 24-bit name key with buckets, quotInitialized,
   pinned names, node-id watermark) and `env_empty`; states the one-environment invariant.
   Rests on decl, intmap, verdict. Used by every other K file.
-- `tc.shard` (1,975) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
+- `tc.shard` (2,761) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
   `whnf`, `is_def_eq` in Lean's order (quick check, proof irrelevance, lazy delta, eta, structure
   eta, string literal expansion, unit-like); memo tables; `guard` (depth and heartbeat budgets);
   literal typing gated on pins; `reduce_nat` / `nat_apply` (the 14 accelerators); `reduce_native`
-  (Unsupported). Also `Ctx`, `LDecl`, `Loc`, `env_find`, `env_add`, `st_for`, `st_seed`.
+  (Unsupported). Its 60 functions that call each other, `infer` to `defeq_step7`, are one
+  definition of the logic, each measured by the depth, then its rank among the calls that stay
+  at one depth, then what a walk or a loop of its own descends by; the 189 descents are proven
+  at the end of the file. The depth steps at the three guard sites (`infer`, `whnf_core_c`,
+  `is_def_eq_core`) and where `reduce_nat` normalizes an argument; a loop (`whnf_loop`, the two
+  lazy-delta loops) goes round only when the heartbeat count advanced (`loop_advanced`), and
+  is out of heartbeats otherwise; the walk to a projection's field ends at its index. Also `Ctx`, `LDecl`, `Loc`, `env_find`, `env_add`, `st_for`, `st_seed`.
   Rests on env, expr, level, name, intmap, util, verdict. Called by inductive, nested, add,
   axioms; through the view by kw (hence elaborator, unifier, tactics, definer, erasure).
 - `inductive.shard` (1,214) — `add_inductive_core`: check the types, declare them, check and
@@ -174,8 +180,10 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   lift/lower, level instantiation, beta; `show_expr`. The header comments carry the typing,
   reduction and definitional-equality rules. Rests on level, intmap, name. Used by everything
   that builds or reads terms.
-- `level.shard` (502) — `Level` (zero succ max imax param, and the elaborator's `LMVar`),
-  `normalize`, `is_equivalent`, `is_geq`, `undef_param`. Rests on util. Used by expr, tc, elab.
+- `level.shard` (653) — `Level` (zero succ max imax param, and the elaborator's `LMVar`),
+  `normalize`, `is_equivalent`, `is_geq`, `undef_param`; every function a definition, `normalize`
+  and the order it sorts by through two facts about their helpers (`to_offset_le`,
+  `push_max_args_weight`). Rests on util. Used by expr, tc, elab.
 - `decl.shard` (186) — `Declaration` (raw) and `ConstantInfo` (checked entries), hints, safety,
   recursor rules; the admission rules as comments. `verdict.shard` (66) — `Outcome`, `Reason`,
   `Resource`, `Verdict`, `Failure`, `KRes`. `name.shard` (180) — `Name`, `hash_name`, `name_key`,
@@ -285,7 +293,7 @@ is public and outside its directory: `name`, `level`, `expr` (terms, node data, 
 | file (`v3/kernel/k/`) | lines | holds |
 |---|---|---|
 | `env.shard` | 39 | `CheckedEnv`: constants by name hash, whether `Quot` is declared, the pinned names, the node-id watermark |
-| `tc.shard` | 1,975 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators |
+| `tc.shard` | 2,761 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators; the descent of its 60 functions |
 | `inductive.shard` | 1,214 | inductive blocks: the checks, the constructors, the recursors and their rules |
 | `nested.shard` | 1,038 | nested inductives through auxiliary mutual types |
 | `add.shard` | 519 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |

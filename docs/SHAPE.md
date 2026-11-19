@@ -84,11 +84,12 @@ every test, and nothing more. Numbers are big integers (a native binary stops at
 and strings are lists.
 
 **Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
-Init's types, and the checker reads them: of the 8,958 functions the loader is made of, 8,133 are
-definitions in the logic — 4,792 of them the rows of one generated table, 3,341 written —, 791
+Init's types, and the checker reads them: of the 8,960 functions the loader is made of, 8,218 are
+definitions in the logic — 4,792 of them the rows of one generated table, 3,426 written, the 60
+of K's checker among them —, 708
 more are type-checked and run as programs, nearly all for their recursion or that of a function
 they call, and 34 are not read. The one thing proven about a toolchain function is that the
-recursion of 394 of them ends (922 proofs
+recursion of 457 of them ends (1,120 proofs
 beside them, over the facts of `kernel/descent.shard`, a term's derived size and a list's length); nothing else is stated. One check loads the
 toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a build and every
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
@@ -165,8 +166,9 @@ host calls.
 *Cost.*
 - Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
   replay of Init takes 7 minutes natively and 76 on the bootstrap.
-- The full gate is 38 minutes in CI and about 45 on the development machine, so each change to
-  the toolchain costs that much before it lands.
+- The full gate is 45 minutes in CI and about as long on the development machine. A change to
+  the toolchain is pushed after the checks it can move, minutes there, and the pipeline's verdict
+  on the whole follows it.
 
 ## 5. Decisions most likely to be proposed again
 
