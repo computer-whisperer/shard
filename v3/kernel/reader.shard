@@ -272,9 +272,9 @@
 (fn read_decl_autos ((sc Scope) (env CheckedEnv) (s SExpr) (autos Producers) (mode Symbol)) RDecl
   (match s
     ((SList (cons (SSym h) args))
-     (if (sym_eq h (sym "def")) (read_def sc env args (sym "def") nil mode)
-     (if (sym_eq h (sym "abbrev")) (read_def sc env args (sym "abbrev") nil mode)
-     (if (sym_eq h (sym "opaque")) (read_def sc env args (sym "opaque") nil mode)
+     (if (sym_eq h (sym "def")) (read_def sc env args (sym "def") (no_producers) mode)
+     (if (sym_eq h (sym "abbrev")) (read_def sc env args (sym "abbrev") (no_producers) mode)
+     (if (sym_eq h (sym "opaque")) (read_def sc env args (sym "opaque") (no_producers) mode)
      (if (sym_eq h (sym "theorem")) (read_def sc env args (sym "theorem") autos mode)
      (if (sym_eq h (sym "axiom")) (read_axiom sc env args)
      (if (sym_eq h (sym "inductive")) (read_inductive sc env args)
@@ -399,7 +399,7 @@
                       (match (close_lams e4 fvars v)
                         ((Prod.mk _ (FinErr r m)) (RDErr r m))
                         ((Prod.mk e5 (FinOk value))
-                         (let ((cv (ConstantVal n lps T)))
+                         (let ((cv (ConstantVal.ConstantVal n lps T)))
                            (if (sym_eq kind (sym "opaque"))
                              (rd_ok e5 (list (OpaqueDecl cv value false (list n))))
                              (rd_ok e5
@@ -655,7 +655,7 @@
                   " is not (fn NAME ((goal TEXT) (hints TEXT)) TEXT), TEXT a byte type of the entry codec ((List Nat) or (List Int), ByteArray)")))
             (match (el_fresh e (n1 (sym "goal")) T (sym "goal"))
               ((Prod.mk e1 (MVar _ i))
-               (let ((g (Goal i T nctx)))
+               (let ((g (Goal.Goal i T nctx)))
                  (match (val_of_text gt (goal_sx e1 g))
                    (none (TacNo (utf8 "the goal's text has no value of the parameter's type")))
                    ((some gv)
@@ -925,22 +925,64 @@
 ;; E data form as an inductive with `(T Type)` parameters, result `Type`,
 ;; non-dependent fields in E-type position (level 0 by rule)
 (fn read_type ((sc Scope) (env CheckedEnv) (args (List SExpr))) RDecl
-  (match args
-    ((cons hd ctors)
+  (read_types sc env (list args)))
+;; a type form's head and constructors: its name, its parameters, the constructor forms
+(type TypeHead (TypeHead Name (List Name) (List SExpr)))
+;; the forms of types that name each other, read as the one block K takes them as: the name
+;; of each is citable in the constructors of all, and all take the same number of parameters
+;; (a block's types share their parameters). One form is a block of one
+(fn read_types ((sc Scope) (env CheckedEnv) (forms (List (List SExpr)))) RDecl
+  (match (type_heads sc forms nil)
+    ((Prod.mk none (Prod.mk r m)) (RDErr r m))
+    ((Prod.mk (some hs) _)
+     (match hs
+       (nil (RDErr (sym "bad_shape") (utf8 "(type (NAME T…) (CTOR FIELD-TYPE…)…)")))
+       ((cons (TypeHead _ ps0 _) _)
+        (if (bool_not (heads_take hs (len ps0)))
+          (RDErr (sym "block_parameters")
+            (utf8 "types that name each other take the same number of parameters"))
+          (match (read_block_types sc env (heads_defd hs) hs nil)
+            ((Prod.mk none m) (RDErr (sym "bad_constructor") m))
+            ((Prod.mk (some ts) _) (RDOk (list (InductDecl nil (len ps0) ts false)))))))))))
+(fn type_heads ((sc Scope) (forms (List (List SExpr))) (acc (List TypeHead)))
+  (Prod (Option (List TypeHead)) (Prod Symbol (List Int)))
+  (measure (struct forms))
+  (match forms
+    (nil (Prod.mk (some (rev acc)) (Prod.mk (sym "none") nil)))
+    ((cons (cons hd ctors) r)
      (match (type_head sc hd)
-       ((Prod.mk none m) (RDErr (sym "bad_name") m))
+       ((Prod.mk none m) (Prod.mk none (Prod.mk (sym "bad_name") m)))
        ((Prod.mk (some (Prod.mk n params)) _)
-        (let ((IT (type_former_type (len params))))
-          (match
-            (type_locals (el_with_etype (el0 sc env nil (list (Defd n 0 IT)) n) true) params nil)
-            ((Prod.mk e1 fvars)
-             (match (w_apps (el_w e1) (mk_const n nil) fvars)
-               ((Prod.mk w2 result)
-                (match (read_fields_ctors (el_set_w e1 w2) n fvars result ctors nil)
-                  ((Prod.mk none m) (RDErr (sym "bad_constructor") m))
-                  ((Prod.mk (some cs) _)
-                   (RDOk (list (InductDecl nil (len params) (list (InductiveType n IT cs)) false)))))))))))))
-    (_ (RDErr (sym "bad_shape") (utf8 "(type (NAME T…) (CTOR FIELD-TYPE…)…)")))))
+        (type_heads sc r (cons (TypeHead n params ctors) acc)))))
+    ((cons nil _)
+     (Prod.mk none (Prod.mk (sym "bad_shape") (utf8 "(type (NAME T…) (CTOR FIELD-TYPE…)…)"))))))
+(fn heads_take ((hs (List TypeHead)) (k Int)) Bool
+  (measure (struct hs))
+  (match hs
+    (nil true)
+    ((cons (TypeHead _ ps _) r) (if (= (len ps) k) (heads_take r k) false))))
+(fn heads_defd ((hs (List TypeHead))) (List Defd)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (TypeHead n ps _) r) (cons (Defd n 0 (type_former_type (len ps))) (heads_defd r)))))
+;; each type of the block: its constructors read with every type of the block being defined
+(fn read_block_types
+  ((sc Scope) (env CheckedEnv) (ds (List Defd)) (hs (List TypeHead)) (acc (List InductiveType)))
+  (Prod (Option (List InductiveType)) (List Int))
+  (measure (struct hs))
+  (match hs
+    (nil (Prod.mk (some (rev acc)) nil))
+    ((cons (TypeHead n params ctors) r)
+     (match (type_locals (el_with_etype (el0 sc env nil ds n) true) params nil)
+       ((Prod.mk e1 fvars)
+        (match (w_apps (el_w e1) (mk_const n nil) fvars)
+          ((Prod.mk w2 result)
+           (match (read_fields_ctors (el_set_w e1 w2) n fvars result ctors nil)
+             ((Prod.mk none m) (Prod.mk none m))
+             ((Prod.mk (some cs) _)
+              (read_block_types sc env ds r
+                (cons (InductiveType n (type_former_type (len params)) cs) acc)))))))))))
 ;; the `(T Type)` parameters as locals — implicit in the constructors, as Lean's inductive
 ;; parameters are and as E cites them (`(Pair2.mk two green)` in L as in a body)
 (fn type_locals ((e El) (ps (List Name)) (acc (List Expr))) (Prod El (List Expr))

@@ -6,7 +6,8 @@
 # to do with an `(import Init)` line, the file a refusal inside an implementation names,
 # the row that makes later rows unreachable, the let a nested recursion cites, and what to
 # write where Lean's `mutual`, `instance`, a bare `true` or a head shadowed by Init's was
-# written.
+# written. And what a `type` record says: each type of a group its acceptance, a program-only
+# type the reason.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -49,11 +50,24 @@ printf '%s\n' '(class Foo () Nat 1)' > "$SCRATCH/class.shard"
   $P/define_nested/main.shard \
   $P/match_dead_row/main.shard $P/match_dead_row_def/main.shard $P/ev_dead_row/kernel/main.shard \
   $P/lean_mutual/main.shard $P/reserved_instance/main.shard "$SCRATCH/class.shard" $P/bool_bare/main.shard \
-  "$SCRATCH/parked.shard" > "$OUT/load.txt" 2>&1 &
+  "$SCRATCH/parked.shard" \
+  $P/type_group/main.shard $P/type_group_arity/main.shard $P/type_e_only/main.shard > "$OUT/load.txt" 2>&1 &
 # a case whose `use` names its own module is loaded under its own root
 "$EVAL" direct v3/kernel/load.shard --root $P/shadowed_head $INIT $P/shadowed_head/main.shard > "$OUT/shadowed.txt" 2>&1 &
 wait
 checks=$((checks+1)); grep -q '^LOAD: ' "$OUT/load.txt" || { bad "the load did not end"; tail -3 "$OUT/load.txt" | cut -c1-300; }
+
+# ---- a type's record
+has "a group of types: the first has no acceptance of its own" "type_group" \
+  "^ACCEPT pins\.loader\.type_group\.main\.T module="
+has "a group of types: the second has no acceptance of its own" "type_group" \
+  "^ACCEPT pins\.loader\.type_group\.main\.A module="
+has "types that name each other at different parameters: the first is not told why it is a program only" "type_group_arity" \
+  "^RUNNABLE type pins\.loader\.type_group_arity\.main\.T why=block_parameters: the types that name each other take different numbers of parameters, and the types of a block share theirs$"
+has "types that name each other at different parameters: the second does not follow the first" "type_group_arity" \
+  "^RUNNABLE type pins\.loader\.type_group_arity\.main\.U why=e_only_type$"
+has "a type naming one below a use: its record does not say e_only_type" "type_e_only" \
+  "^RUNNABLE type pins\.loader\.type_e_only\.main\.Foo why=e_only_type$"
 
 # ---- the arm's names against its case
 has "cases: an arm naming one of two fields is not told both counts" "by_cases_arm_fields" \

@@ -230,14 +230,13 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Four fifths of their functions are definitions; of those written by hand, more than
-  half.** The checker reads every one whose signature reads: of the loader's closure, 8,880
-  functions — 4,790 of them the rows of a generated table —, it holds 7,130 as definitions.
-  The others are programs with the reason: a function they call is a program
-  (`callee_runnable`, some 510), a type in the signature is one of a group of types that name
-  each other (`e_only_type`, some 1,070), a group of functions that call each other (about
-  95), a numeral under a constructor pattern (18), an integer measure (21). A type error in
-  any of them is refused.
+- **Six sevenths of their functions are definitions; of those written by hand, more than
+  two thirds.** The checker reads every one whose signature reads, and nearly every one's
+  does: of the loader's closure, 8,940 functions — 4,790 of them the rows of a generated
+  table —, it holds 7,640 as definitions. The others are programs with the reason: a function
+  they call is a program (`callee_runnable`, some 1,070), a group of functions that call each
+  other (about 120), an integer measure (38), a call the definer takes for no descent (30), a
+  numeral under a constructor pattern (21). A type error in any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
@@ -420,13 +419,24 @@ no parameters, `(fn sorted_nil () Sorted …)` (`v3/std/list.shard`), is cited b
 not depend on each other. The loader opens a `type`'s constructors for the whole file, so `(Num
 3)` is written bare. The type itself is declared where its form stands: a `fn` above it that names
 it is a program without a definition (`RUNNABLE fn F why=e_only_type route=e_first`), and a `def`
-there is `unknown_constant`. `inductive` is the general form (indices, dependent constructor types,
-universe parameters). For either, beside the type and its recursor, the loader generates and has K
-check `T.casesOn`; for a type without parameters or indices also `T.noConfusionType`, `T.noConfusion` and `T.C.inj` per constructor with fields; and,
-the first time a function recurses structurally over it, `T.below` and `T.brecOn`. Each is an
-`ACCEPT` record. A `type` with a field that has no type in the logic (a type declared after it
-in the file; another such type) exists in programs only: `RUNNABLE type
-NAME`, and a `def` or `theorem` naming it is `READ-ERROR … unknown_constant` (pin `type_e_only`).
+there is `unknown_constant`. A `type` may name types declared below it: it is declared with
+them, where it stands — a type named above its form (pin `type_forward`), and types that name
+each other, which are one declaration in K, a block (`type_group`; records among them,
+`type_group_records`; a type naming such a pair, `type_chain`). The types of a block take the
+same number of parameters (`type_group_params`). `inductive` is the general form (indices,
+dependent constructor types, universe parameters) and declares one type. For either, beside the
+type and its recursor, the loader generates and has K check `T.casesOn`; for a type without
+parameters or indices also `T.noConfusionType`, `T.noConfusion` and `T.C.inj` per constructor
+with fields; and, the first time a function recurses structurally over it, `T.below` and
+`T.brecOn`. Each is an `ACCEPT` record, and each type of a block has its own. A type that names
+itself under `List` or another type, or is one of a block, has a recursor with a motive for each
+type: a function recursing over it states a `Nat` measure (below, "By measure"), and no
+derivation reads a block (`derive_shape`). A `type` exists in programs only — `RUNNABLE type NAME
+why=REASON`, and a `def` or `theorem` naming it is `READ-ERROR … unknown_constant` — when a
+field names a type that is one, or one that stands below a `use`, a `trusts` or an import, where
+what is declared with a type ends (`e_only_type`; pin `type_e_only`); and when the types that
+name each other take different numbers of parameters (`block_parameters`; pin
+`type_group_arity`).
 
 **`record`** is rewritten, before anything is read, into `(type NAME (CTOR TYPE…))` (CTOR defaults
 to `MkNAME`), `(fn NAME.FIELD …)` and `(fn NAME.with_FIELD …)` (the new value first). Two term
@@ -846,8 +856,9 @@ A lambda whose proof or type argument names a local that its program does not is
 and differently: the typed route captures the local, this reading does not see it (`OPEN.md`
 §1).
 
-`RUNNABLE extern NAME` and `RUNNABLE type NAME` are the ordinary records of an extern and of a
-program-only type; `RUNNABLE extern NAME why=REASON` is an extern that got no constant.
+`RUNNABLE extern NAME` is the ordinary record of an extern; `RUNNABLE extern NAME why=REASON` is
+an extern that got no constant, and `RUNNABLE type NAME why=REASON` a program-only type
+(`e_only_type`, `block_parameters`: above, "`type` and `inductive`").
 
 `REFUSE NAME REASON: MESSAGE` — nothing is declared. The definer's reasons, with the sentence each
 carries. On a `fn` they are the reason of a program (`RUNNABLE fn NAME why=REASON route=typed:

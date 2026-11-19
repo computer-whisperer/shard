@@ -329,6 +329,8 @@
   (params (List Name))
   (etab ESt)
   (parked (List Parked))
+  (later (List SExpr))  ; the forms of the file being read that stand below the declaration being read: a type whose field cites a type declared below it is admitted with it (load_unheld_type)
+  (tahead (List Name))  ; the types admitted ahead of their form, with a type above that cites them: at its form such a type has its program's declaration and nothing more
   (reads Reads)  ; how the readings of the parked fns ended, kept by the search for a group while they hold (settle_groups)
   (pm (List (Prod Name (List Name))))
   (forms (IntMap (List (Prod Name (Prod Scope SExpr)))))
@@ -359,6 +361,8 @@
     (pm nil)
     (forms IMEmpty)
     (parked nil)
+    (later nil)
+    (tahead nil)
     (reads (Reads nil nil))
     (typed nil)
     (discharged nil)
@@ -605,7 +609,7 @@
 ;; fetched
 (fn ld_rec ((l Load) (x Rec)) Load
   (let
-    ((l1
+    ((l1 Load
        (match (rec_refusal x)
          ((some (Prod.mk e m)) (ld_miss l e m))
          (none l))))
@@ -668,6 +672,11 @@
     (nil 0)
     ((cons d r) (+ (if (name_eq (demand_template d) c) 1 0) (instances_of c r)))))
 (fn ld_with_parked ((l Load) (p (List Parked))) Load (with Load l (parked p)))
+(fn ld_with_later ((l Load) (forms (List SExpr))) Load (with Load l (later forms)))
+(fn ld_with_tahead ((l Load) (ns (List Name))) Load (with Load l (tahead ns)))
+;; a type to admit with others: its name, its form, and the types its fields cite that K does
+;; not hold
+(type TWait (TWait Name SExpr (List Name)))
 ;; a fn whose definition waits on a callee not yet defined (a forward reference, or a
 ;; callee itself parked): the fn, its form, the obstacle and the callee named
 (type Parked (Parked Name SExpr Symbol (List Int)))
@@ -1051,32 +1060,42 @@
 (fn policy_pass
   ((l Load) (f Fx) (env CheckedEnv) (memo Memos) (ds (List Declaration)) (acc (List Rec)))
   Pol
+  (policy_names l f env memo (decls_subjects ds) acc))
+;; what the declarations are accepted under: a declaration's name, and each type of a block of
+;; types — every one has its closure checked and its record
+(fn decls_subjects ((ds (List Declaration))) (List Name)
   (measure (struct ds))
   (match ds
+    (nil nil)
+    ((cons (InductDecl _ _ ts _) r) (append (all_names ts) (decls_subjects r)))
+    ((cons d r) (cons (decl_name d) (decls_subjects r)))))
+(fn policy_names ((l Load) (f Fx) (env CheckedEnv) (memo Memos) (ns (List Name)) (acc (List Rec)))
+  Pol
+  (measure (struct ns))
+  (match ns
     (nil (PolOk memo (rev acc)))
-    ((cons d r)
+    ((cons n r)
      (match memo
        ((Memos ax rq)
-        (let ((n (decl_name d)))
-          (match (axioms_of env ax n)
-            ((Prod.mk _ none) (PolBound n))
-            ((Prod.mk ax1 (some axs0))
-             (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
-               (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
-                 (nil
-                   (match (accept_key l f env rq n)
-                     ((Prod.mk q rq1)
-                      (policy_pass l f env (Memos ax1 rq1) r
-                        (cons
-                          (RAccept n (Fx.module f)
-                            (match (identity_hash env n)
-                              ((some h) h)
-                              (none 0))
-                            axs
-                            (params_of (Load.params l) axs)
-                            q)
-                          acc)))))
-                 (out (PolOut n out))))))))))))
+        (match (axioms_of env ax n)
+          ((Prod.mk _ none) (PolBound n))
+          ((Prod.mk ax1 (some axs0))
+           (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
+             (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
+               (nil
+                 (match (accept_key l f env rq n)
+                   ((Prod.mk q rq1)
+                    (policy_names l f env (Memos ax1 rq1) r
+                      (cons
+                        (RAccept n (Fx.module f)
+                          (match (identity_hash env n)
+                            ((some h) h)
+                            (none 0))
+                          axs
+                          (params_of (Load.params l) axs)
+                          q)
+                        acc)))))
+               (out (PolOut n out)))))))))))
 ;; a closure with each discharged obligation replaced by what its proof rests on (to a
 ;; fixpoint: a proof may rest on another discharged obligation)
 (fn discharge_axs ((ds (List (Prod Name (List Name)))) (axs (List Name)) (fuel Int)) (List Name)
@@ -1221,41 +1240,46 @@
         (if (passed_over l h) (Prod.mk l f)
         (if (sym_eq h (sym "bin")) (Prod.mk l (fx_add_bin f s))  ; stashed; checked at the file's end, after every fn settled (rec_bins)
         (if (bool_or (sym_eq h (sym "fn")) (sym_eq h (sym "extern"))) (load_e_form l f s)
-        (if (bool_and (sym_eq h (sym "type")) (type_is_e_only (Load.etab l) sc (Load.env l) s))
-          (load_e_form l f s)  ; E only (its namespace was opened at pre-registration, as every type's)
-        (if (sym_eq h (sym "realize")) (Prod.mk (load_realize l f s) f)
-        (if (sym_eq h (sym "derive")) (load_derive l f s)
-        (if (sym_eq h (sym "fulfills"))
-          (match (obligation_named l sc s)
-            ((some (Prod.mk k proof)) (Prod.mk (load_discharge l f k proof) f))
-            (none (Prod.mk (fulfills_misnamed l f sc s) f)))
-        (if (program_named l (form_name sc s))
+        (if (bool_and (sym_eq h (sym "type")) (mem_name (type_name sc s) (Load.tahead l)))
+          ;; admitted with a type above it that cites it: the program's declaration, here
           (Prod.mk
-            (ld_rec l
-              (RClassify (form_name sc s) (sym "name_taken")
-                (append (show_name (form_name sc s))
-                  (utf8
-                    " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have — declare another name"))))
+            (add_e_twin_now (ld_with_tahead l (names_without (Load.tahead l) (type_name sc s))) f s)
             f)
-        (if (bool_and (sym_eq h (sym "def")) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half
-        (match
-          (rd_plain l sc (fx_file f) Anon
-            (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
-          ((Prod.mk l rd)
-           (match rd
-             ((RDErr e m)
-              (if (bool_and (sym_eq h (sym "sig")) (Fx.view f)) (sig_e_only l f s e m)
-              (Prod.mk (ld_rec l (read_refusal f e m)) f)))
-             ((RDPending n r) (Prod.mk (ld_rec (ld_add_pending l n) (RPending n r)) f))
-             ((RDParam d kind arity)
-              (match (admit_param l f d kind arity)
-                ((Prod.mk l1 f1) (Prod.mk (add_e_twin l1 f1 s) f1))))
-             ((RDOk ds) (admit_read l f s ds))
-             (_
-               (Prod.mk
-                 (ld_rec l
-                   (RLoadErr (fx_file f) (sym "bad_directive") (utf8 "an unhandled reading")))
-                 f))))))))))))))))))
+          (if (bool_and (sym_eq h (sym "type")) (type_is_e_only (Load.etab l) sc (Load.env l) s))
+            (load_e_form l f s)  ; E only (its namespace was opened at pre-registration, as every type's)
+          (if (sym_eq h (sym "realize")) (Prod.mk (load_realize l f s) f)
+          (if (sym_eq h (sym "derive")) (load_derive l f s)
+          (if (sym_eq h (sym "fulfills"))
+            (match (obligation_named l sc s)
+              ((some (Prod.mk k proof)) (Prod.mk (load_discharge l f k proof) f))
+              (none (Prod.mk (fulfills_misnamed l f sc s) f)))
+          (if (program_named l (form_name sc s))
+            (Prod.mk
+              (ld_rec l
+                (RClassify (form_name sc s) (sym "name_taken")
+                  (append (show_name (form_name sc s))
+                    (utf8
+                      " is a fn or an extern of the program with no constant of K behind it: a declaration under its name would give the name a meaning its program does not have — declare another name"))))
+              f)
+          (if (bool_and (sym_eq h (sym "def")) (def_measured s)) (load_ldef l f s 2)  ; a def that recurses: the fn pipeline's K half
+          (match
+            (rd_plain l sc (fx_file f) Anon
+              (read_decl_autos sc (Load.env l) s (producers_of l f) (Load.mode l)))
+            ((Prod.mk l rd)
+             (match rd
+               ((RDErr e m)
+                (if (bool_and (sym_eq h (sym "sig")) (Fx.view f)) (sig_e_only l f s e m)
+                (Prod.mk (ld_rec l (read_refusal f e m)) f)))
+               ((RDPending n r) (Prod.mk (ld_rec (ld_add_pending l n) (RPending n r)) f))
+               ((RDParam d kind arity)
+                (match (admit_param l f d kind arity)
+                  ((Prod.mk l1 f1) (Prod.mk (add_e_twin l1 f1 s) f1))))
+               ((RDOk ds) (admit_read l f s ds))
+               (_
+                 (Prod.mk
+                   (ld_rec l
+                     (RLoadErr (fx_file f) (sym "bad_directive") (utf8 "an unhandled reading")))
+                   f)))))))))))))))))))
 ;; a name the E table holds a program for — a fn, an extern — while K holds no constant of it:
 ;; a fn with no L meaning. The other direction is name_taken's: a fn or an extern may not take
 ;; an admitted constant's name. Were a `def` after such a fn to take its name, a typed fn
@@ -1518,22 +1542,27 @@
           (some recs)))))))
 ;; a native inductive just admitted gets its constructor-structure bundle (define.shard's
 ;; confusion_bundle): casesOn, and with Init's Eq in scope noConfusionType,
-;; noConfusion and the c.inj theorems — ACCEPT records of their own, checked by K
+;; noConfusion and the c.inj theorems — ACCEPT records of their own, checked by K; each type
+;; of a block has its own
 (fn bundle_after ((l Load) (f Fx) (ds (List Declaration))) (Prod Load Fx)
-  (match (inducts_in ds)
+  (bundle_each l f (inducts_in ds)))
+(fn bundle_each ((l Load) (f Fx) (inds (List Name))) (Prod Load Fx)
+  (measure (struct inds))
+  (match inds
     (nil (Prod.mk l f))
-    ((cons ind _)
+    ((cons ind r)
      (match (confusion_bundle (Load.etab l) (fx_scope l f) (Load.env l) ind)
-       (nil (Prod.mk l f))
+       (nil (bundle_each l f r))
        (bs
          (match (admit_core l f bs)
-           ((Prod.mk l1 none) (Prod.mk l1 f))
-           ((Prod.mk l1 (some recs)) (Prod.mk l1 (mix_recs f recs)))))))))
+           ((Prod.mk l1 none) (bundle_each l1 f r))
+           ((Prod.mk l1 (some recs)) (bundle_each l1 (mix_recs f recs) r))))))))
+;; the types of the blocks among the declarations, in order
 (fn inducts_in ((ds (List Declaration))) (List Name)
   (measure (struct ds))
   (match ds
     (nil nil)
-    ((cons (InductDecl _ _ (cons (InductiveType n _ _) nil) _) r) (cons n (inducts_in r)))
+    ((cons (InductDecl _ _ ts _) r) (append (all_names ts) (inducts_in r)))
     ((cons _ r) (inducts_in r))))
 ;; a realization: the E body under an admitted constant's identity; its equations admitted
 ;; as theorems through the same path as any declaration — one refused, nothing attached
@@ -1700,7 +1729,202 @@
            (match (retry_parked (ld_forget l2 (form_name sc s)) f2 (+ 1 (len (Load.parked l2))))
              ((Prod.mk l3 f3) (settle_groups l3 f3 (+ 1 (len (Load.parked l3))))))
            (settle_groups l2 f2 (+ 1 (len (Load.parked l2))))))))
-      (load_extern l1 f s)))))
+    (if (sym_eq (form_head s) (sym "type")) (load_unheld_type l1 f s)
+    (load_extern l1 f s))))))
+;; a type with a field over a type K does not hold. When each such type stands below in the
+;; file, with the types it needs in turn — types that name each other, or a type cited above
+;; its form — they are admitted here, where the first of them stands: of those not yet
+;; admitted, the one that needs the fewest with those it needs, as one block, again and again
+;; (types that name each other are a block; a type that cites them without being named back
+;; follows, alone). Their records stand here; the program's declaration of each stands where
+;; its form does (load_decl_go). Otherwise one of the types is a program only, and so is this
+;; one: the classifier's declaration, RUNNABLE `why=e_only_type`
+(fn load_unheld_type ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
+  (match
+    (gather_types l (fx_scope l f) (type_unheld (Load.etab l) (fx_scope l f) (Load.env l) s)
+      (list (Prod.mk (type_name (fx_scope l f) s) s))
+      (wait_fuel))
+    (none (load_e_first l f s (sym "e_only_type") (sym "none")))
+    ((some have)
+     (match (classify_form (Load.etab l) (fx_scope l f) (Load.env l) s)
+       ((CErr e m) (Prod.mk (ld_rec l (RClassify (form_name (fx_scope l f) s) e m)) f))
+       ((COk d)
+        (admit_gathered (ld_with_e l (es_add_decl (Load.etab l) d)) f (edecl_name d)
+          (cons (Prod.mk (edecl_name d) s) (types_in_order (fx_scope l f) (Load.later l) have))
+          (+ 1 (len have))))
+       ((COkT _ _ _)
+        (Prod.mk
+          (ld_rec l (RLoadErr (fx_file f) (sym "bad_shape") (utf8 "a type takes no instance")))
+          f))))))
+(fn wait_fuel () Int 100000)
+;; the types named and the types below that they need, each with its form: None when one of
+;; them does not stand below — it is a program only, or no type
+(fn gather_types ((l Load) (sc Scope) (todo (List Name)) (have (List (Prod Name SExpr))) (fuel Int))
+  (Option (List (Prod Name SExpr)))
+  (measure fuel)
+  (if (< fuel 1) none
+  (match todo
+    (nil (some have))
+    ((cons n r)
+     (if (waits_has have n) (gather_types l sc r have (- fuel 1))
+     (match (below_type sc (Load.later l) n)
+       (none none)
+       ((some s)
+        (gather_types l sc (append (type_unheld (Load.etab l) sc (Load.env l) s) r)
+          (cons (Prod.mk n s) have)
+          (- fuel 1)))))))))
+;; the form of a type among those below the declaration being read, as far as the scope they
+;; are read in is this one's: up to the next `use`, `trusts` or import
+(fn below_type ((sc Scope) (forms (List SExpr)) (n Name)) (Option SExpr)
+  (measure (struct forms))
+  (match forms
+    (nil none)
+    ((cons s r)
+     (match (form_of s)
+       (FDecl
+         (if (bool_and (sym_eq (form_head s) (sym "type")) (name_eq (type_name sc s) n)) (some s)
+         (below_type sc r n)))
+       (_ none)))))
+;; those of the forms below that are among the gathered types, in the file's order
+(fn types_in_order ((sc Scope) (forms (List SExpr)) (have (List (Prod Name SExpr))))
+  (List (Prod Name SExpr))
+  (measure (struct forms))
+  (match forms
+    (nil nil)
+    ((cons s r)
+     (match (form_of s)
+       (FDecl
+         (if (bool_and (sym_eq (form_head s) (sym "type")) (waits_has have (type_name sc s)))
+           (cons (Prod.mk (type_name sc s) s) (types_in_order sc r have))
+           (types_in_order sc r have)))
+       (_ nil)))))
+(fn waits_has ((ws (List (Prod Name SExpr))) (n Name)) Bool
+  (measure (struct ws))
+  (match ws
+    (nil false)
+    ((cons (Prod.mk m _) r) (if (name_eq m n) true (waits_has r n)))))
+;; the gathered types admitted block by block. K's refusal of a block, or a block that does
+;; not read, ends it: the types left are read where their forms stand
+(fn admit_gathered ((l Load) (f Fx) (self Name) (ws (List (Prod Name SExpr))) (fuel Int))
+  (Prod Load Fx)
+  (measure fuel)
+  (if (< fuel 1) (Prod.mk l f)
+  (match (twaits_cited l (fx_scope l f) ws)
+    (nil (Prod.mk l f))
+    (c
+      (match (admit_types l f self (wait_group c c (wait_fuel) nil))
+        ((Prod.mk (Prod.mk l1 f1) none) (Prod.mk l1 f1))
+        ((Prod.mk (Prod.mk l1 f1) (some done))
+         (admit_gathered l1 f1 self (waits_without ws done) (- fuel 1))))))))
+;; each type with what its fields cite that K does not hold, as things stand
+(fn twaits_cited ((l Load) (sc Scope) (ws (List (Prod Name SExpr)))) (List TWait)
+  (measure (struct ws))
+  (match ws
+    (nil nil)
+    ((cons (Prod.mk n s) r)
+     (cons (TWait n s (type_unheld (Load.etab l) sc (Load.env l) s)) (twaits_cited l sc r)))))
+(fn waits_without ((ws (List (Prod Name SExpr))) (ns (List Name))) (List (Prod Name SExpr))
+  (measure (struct ws))
+  (match ws
+    (nil nil)
+    ((cons (Prod.mk n s) r)
+     (if (mem_name n ns) (waits_without r ns) (cons (Prod.mk n s) (waits_without r ns))))))
+(fn twait_names ((ws (List TWait))) (List Name)
+  (measure (struct ws))
+  (match ws
+    (nil nil)
+    ((cons (TWait n _ _) r) (cons n (twait_names r)))))
+;; of the types, the one that needs the fewest with those it needs, in the file's order
+(fn wait_group ((c (List TWait)) (left (List TWait)) (fuel Int) (best (List Name))) (List TWait)
+  (measure (struct left))
+  (match left
+    (nil (waits_named c best))
+    ((cons (TWait n _ _) r) (wait_group c r fuel (fewer best (wait_reach c (list n) nil fuel))))))
+(fn fewer ((best (List Name)) (g (List Name))) (List Name)
+  (match best
+    (nil g)
+    (_ (if (< (len g) (len best)) g best))))
+;; a type and the types it needs among them, through what each cites
+(fn wait_reach ((c (List TWait)) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
+  (measure fuel)
+  (if (< fuel 1) seen
+  (match todo
+    (nil seen)
+    ((cons n r)
+     (if (mem_name n seen) (wait_reach c r seen (- fuel 1))
+     (wait_reach c (append (twait_cites c n) r) (cons n seen) (- fuel 1)))))))
+(fn twait_cites ((c (List TWait)) (n Name)) (List Name)
+  (measure (struct c))
+  (match c
+    (nil nil)
+    ((cons (TWait m _ cites) r) (if (name_eq m n) cites (twait_cites r n)))))
+(fn waits_named ((c (List TWait)) (ns (List Name))) (List TWait)
+  (measure (struct c))
+  (match c
+    (nil nil)
+    ((cons (TWait n s cites) r)
+     (if (mem_name n ns) (cons (TWait n s cites) (waits_named r ns)) (waits_named r ns)))))
+(fn twait_forms ((g (List TWait))) (List (List SExpr))
+  (measure (struct g))
+  (match g
+    (nil nil)
+    ((cons (TWait _ s _) r) (cons (form_args s) (twait_forms r)))))
+;; a block read and admitted, each of its types with its bundle; those that are not the type
+;; being read are admitted ahead of their forms. The names admitted, or None: a block that
+;; does not read is refused as a type that does not read is, and K's refusal is the block's
+(fn admit_types ((l Load) (f Fx) (self Name) (g (List TWait)))
+  (Prod (Prod Load Fx) (Option (List Name)))
+  (if (bool_not (one_arity (fx_scope l f) g))
+    ;; a block's types share their parameters: types that name each other at different
+    ;; numbers of them are no block, and the type being read is a program only — for that, or
+    ;; for citing them
+    (Prod.mk
+      (Prod.mk
+        (ld_rec l
+          (if (mem_name self (twait_names g))
+            (RRun (sym "type") self (sym "block_parameters") (sym "none")
+              (utf8
+                "the types that name each other take different numbers of parameters, and the types of a block share theirs"))
+            (RRun (sym "type") self (sym "e_only_type") (sym "none") nil)))
+        f)
+      none)
+    (match (read_types (fx_scope l f) (Load.env l) (twait_forms g))
+      ((RDOk ds)
+       (match (admit_core l f ds)
+         ((Prod.mk l1 none) (Prod.mk (Prod.mk l1 f) none))
+         ((Prod.mk l1 (some recs))
+          (match
+            (bundle_after
+              (ld_with_tahead l1 (append (names_without (twait_names g) self) (Load.tahead l1)))
+              (mix_recs f recs)
+              ds)
+            ((Prod.mk l2 f2) (Prod.mk (Prod.mk l2 f2) (some (twait_names g))))))))
+      ((RDErr e m) (Prod.mk (Prod.mk (ld_rec l (read_refusal f e m)) f) none))
+      (_
+        (Prod.mk
+          (Prod.mk
+            (ld_rec l (RLoadErr (fx_file f) (sym "bad_directive") (utf8 "an unhandled reading")))
+            f)
+          none)))))
+;; the types take one number of parameters
+(fn one_arity ((sc Scope) (g (List TWait))) Bool
+  (match g
+    (nil true)
+    ((cons (TWait _ s _) r) (arity_all sc r (type_arity sc s)))))
+(fn arity_all ((sc Scope) (g (List TWait)) (k Int)) Bool
+  (measure (struct g))
+  (match g
+    (nil true)
+    ((cons (TWait _ s _) r) (if (= (type_arity sc s) k) (arity_all sc r k) false))))
+;; a `type` form's number of parameters
+(fn type_arity ((sc Scope) (s SExpr)) Int
+  (match s
+    ((SList (cons _ (cons hd _)))
+     (match (type_head sc hd)
+       ((Prod.mk (some (Prod.mk _ ps)) _) (len ps))
+       (_ 0)))
+    (_ 0)))
+
 ;; an extern: its L constant first — an opaque of the declared type with the type's default
 ;; witness (reader.shard read_extern), an ACCEPT — then the classifier's EExtern, RUNNABLE.
 ;; The L reading refused — a
@@ -2311,10 +2535,20 @@
   (measure (struct ps))
   (match ps
     (nil (Prod.mk (Prod.mk l f) progressed))
-    ((cons (Parked _ s _ _) r)
-     (match (load_fn l f s 2)
-       ((Prod.mk l1 f1)
-        (retry_each l1 f1 r (bool_or progressed (= (len (Load.parked l1)) (len (Load.parked l))))))))))
+    ((cons (Parked k s why m) r)
+     ;; a fn parked on a callee that still has no declaration is not read again: its reading
+     ;; would end at that callee as it did
+     (if (bool_and (sym_eq why (sym "callee_undeclared")) (callee_awaited l (fx_scope l f) m))
+       (retry_each (ld_with_parked l (append (Load.parked l) (list (Parked k s why m)))) f r
+         progressed)
+       (match (load_fn l f s 2)
+         ((Prod.mk l1 f1)
+          (retry_each l1 f1 r (bool_or progressed (= (len (Load.parked l1)) (len (Load.parked l)))))))))))
+;; the name a fn was parked on names a function with no declaration yet
+(fn callee_awaited ((l Load) (sc Scope) (m (List Int))) Bool
+  (match (callee_state l sc m)
+    (CsPark true)
+    (_ false)))
 ;; the fns still parked at a file's end — a forward reference that never settled. Each is
 ;; read with every other one a callee-local. One that parks even so calls a function of the
 ;; file that got no declaration, because that one was refused: it does not read, and is
@@ -2813,13 +3047,20 @@
 ;; an S form's citations of the environment's E-eligible inductives enter the E table first
 (fn scan_form ((l Load) (f Fx) (s SExpr)) Load
   (ld_with_e l (es_scan_init (Load.etab l) (fx_scope l f) (Load.env l) s)))
-;; a `type` enters K when its field types are L types; it is E only when a field cites a type
-;; K does not hold — one declared after it, or another E-only type, transitively. Never the directory and never the file's imports: K checks any
-;; L form in any file.
+;; a `type` enters K when its field types are L types; a field that cites a type K does not
+;; hold keeps it out, unless that type stands below it in the file and is admitted with it
+;; (load_unheld_type). Never the directory and never the file's imports: K checks any L form
+;; in any file.
 (fn type_is_e_only ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) Bool
+  (match (type_unheld es sc env s)
+    (nil false)
+    ((cons _ _) true)))
+;; the types a `type` form's fields cite that K does not hold, each once, the type being
+;; declared excepted; Anon for an `Int` or a `Nat` the scope makes another's too
+(fn type_unheld ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) (List Name)
   (match s
-    ((SList (cons _ (cons hd ctors))) (ctors_e_only es sc env (type_name sc s) ctors))
-    (_ false)))
+    ((SList (cons _ (cons hd ctors))) (ctors_unheld es sc env (type_name sc s) ctors nil))
+    (_ nil)))
 ;; a `type` form's qualified name: (type NAME …) or (type (NAME T…) …)
 (fn type_name ((sc Scope) (s SExpr)) Name
   (match s
@@ -2828,41 +3069,47 @@
        ((Prod.mk (some (Prod.mk n _)) _) n)
        (_ Anon)))
     (_ Anon)))
-(fn ctors_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (cs (List SExpr))) Bool
+(fn ctors_unheld
+  ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (cs (List SExpr)) (acc (List Name)))
+  (List Name)
   (measure (struct cs))
   (match cs
-    (nil false)
+    (nil acc)
     ((cons (SList (cons _ fields)) r)
-     (if (fields_e_only es sc env self fields) true (ctors_e_only es sc env self r)))
-    ((cons _ r) (ctors_e_only es sc env self r))))
-(fn fields_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (fs (List SExpr))) Bool
+     (ctors_unheld es sc env self r (fields_unheld es sc env self fields acc)))
+    ((cons _ r) (ctors_unheld es sc env self r acc))))
+(fn fields_unheld
+  ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (fs (List SExpr)) (acc (List Name)))
+  (List Name)
   (measure (struct fs))
   (match fs
-    (nil false)
-    ((cons t r) (if (etype_e_only es sc env self t) true (fields_e_only es sc env self r)))))
-(fn etype_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (t SExpr)) Bool
+    (nil acc)
+    ((cons t r) (fields_unheld es sc env self r (etype_unheld es sc env self t acc)))))
+(fn etype_unheld ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (t SExpr) (acc (List Name)))
+  (List Name)
   (match t
-    ((SSym x) (head_e_only es sc env self x))
+    ((SSym x) (head_unheld es sc env self x acc))
     ((SList (cons (SSym x) args))
-     (if (head_e_only es sc env self x) true (fields_e_only es sc env self args)))
-    (_ false)))
+     (fields_unheld es sc env self args (head_unheld es sc env self x acc)))
+    (_ acc)))
 ;; a field type's head: Int and Nat are Init's unless the scope makes the name another's too;
-;; a type of the E table is E-only iff K does not hold it — the type being declared excepted
-(fn head_e_only ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (x Symbol)) Bool
+;; a type of the E table is unheld iff K does not hold it — the type being declared excepted
+(fn head_unheld ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (x Symbol) (acc (List Name)))
+  (List Name)
   (match (name_of_sym x)
-    (none false)
+    (none acc)
     ((some n)
      (if (bool_or (name_eq n (n1 (sym "Int"))) (name_eq n (n1 (sym "Nat"))))
        (match (resolve (cx0 sc env nil nil) n)
-         ((RName _ _) false)
-         (_ true))
+         ((RName _ _) acc)
+         (_ (cons Anon acc)))
        (match (only_types (eresolve es sc n))
          ((cons (EHit id _ _) nil)
-          (if (name_eq id self) false
+          (if (name_eq id self) acc
           (match (env_find env id)
-            (none true)
-            (_ false))))
-         (_ false))))))
+            (none (if (mem_name id acc) acc (cons id acc)))
+            (_ acc))))
+         (_ acc))))))
 ;; the E twin of an admitted type / sig fn / sig type
 (fn add_e_twin ((l Load) (f Fx) (s SExpr)) Load
   (let ((h (form_head s)))
@@ -3406,15 +3653,17 @@
 ;; the base (base.shard) before a file whose forms use one of its operators: read once in a
 ;; load, as the module `shard.int`, and seen by the file that asked; then the file's demand
 ;; of Init. The E count is taken after both: the file's own declarations from here (rec_threads)
+;; the base module in the load: as it stands, or loaded now
+(fn base_loaded ((l Load) (fuel Int) (w World)) (Prod (Prod Load (Option ForkPt)) World)
+  (match (ld_find_mod (Load.mods l) (base_module))
+    ((some _) (Prod.mk (Prod.mk l none) w))
+    (none (load_source_module l (base_rel) (base_module) false (- fuel 1) (base_source) w))))
 (fn init_prepare_base ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World))
   (Prod (Prod Load (Option Fx)) World)
   (measure fuel)
   (if (bool_not (uses_base (Load.unchecked l) forms))
     (init_prepare l (with Fx f (ecount (es_count (Load.etab l)))) forms w)
-    (match
-      (match (ld_find_mod (Load.mods l) (base_module))
-        ((some _) (Prod.mk (Prod.mk l none) w))
-        (none (load_source_module l (base_rel) (base_module) false (- fuel 1) (base_source) w)))
+    (match (base_loaded l fuel w)
       ((Prod.mk (Prod.mk l1 _) w1)
        (init_prepare l1 (with Fx (fx_see f (list (base_module))) (ecount (es_count (Load.etab l1))))
          forms
@@ -3515,7 +3764,8 @@
                                 (let
                                   ((fp
                                      (if view
-                                       (some (ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest))
+                                       (some
+                                         (ForkPt.ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest))
                                        none)))
                                   (Prod.mk
                                     (Prod.mk
@@ -4426,7 +4676,7 @@
   (match (Im.impl im)
     (nil (Prod.mk (Prod.mk l im) w))
     ((cons s r)
-     (match (impl_form_fetching l (im_with_impl im r) s fuel (refetches) w)
+     (match (impl_form_fetching (ld_with_later l r) (im_with_impl im r) s fuel (refetches) w)
        ((Prod.mk (Prod.mk l1 im1) w1)
         (if (im_marked im1 k n) (Prod.mk (Prod.mk l1 im1) w1)
         (match (ld_recs_head l1)
@@ -4444,7 +4694,8 @@
   (match (Im.impl im)
     (nil (Prod.mk (Prod.mk l im) w))
     ((cons s r)
-     (match (impl_form_fetching (ld_settled l) (im_with_impl im r) s fuel (refetches) w)
+     (match
+       (impl_form_fetching (ld_settled (ld_with_later l r)) (im_with_impl im r) s fuel (refetches) w)
        ((Prod.mk (Prod.mk l1 im1) w1)
         (match (ld_recs_head l1)
           ((some (RReadErr _ _ _)) (Prod.mk (Prod.mk l1 im1) w1))
@@ -4549,7 +4800,7 @@
   (match sig
     ((SList (cons _ (cons _ (cons hd _))))
      (let
-       ((want
+       ((want Int
           (match hd
             ((SList (cons _ ps)) (len ps))
             (_ 0))))
@@ -4661,7 +4912,7 @@
           ((Prod.mk (Prod.mk l1 (some f1)) w1) (load_forms (ld_forget_all l1) f1 r fuel w1))
           ((Prod.mk (Prod.mk l1 none) w1) (Prod.mk (Prod.mk l1 none) w1))))
        (FDecl
-         (match (load_decl_fetching (ld_settled l) f s (refetches) w)
+         (match (load_decl_fetching (ld_settled (ld_with_later l r)) f s (refetches) w)
            ((Prod.mk (Prod.mk l1 f1) w1)
             (match (ld_recs_head l1)
               ((some (RReadErr _ _ _)) (Prod.mk (Prod.mk l1 none) w1))

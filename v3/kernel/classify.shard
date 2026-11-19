@@ -660,13 +660,15 @@
   (match (env_find (rd_env r) id)
     (none none)
     ((some info)
-     (match
-       (match info
-         ((CtorInfo _ _ _ nparams _ _)
-          (tele_of_fields (w0 (rd_env r)) (rd_es r) (rd_sc r) info nparams))
-         (_ (tele_of (w0 (rd_env r)) (rd_es r) (rd_sc r) info)))
-       ((TeleOk _ _ (Tele _ binds _ _)) (zip_flags (ci_type info) binds nil))
-       ((TeleErr _ _) none)))))
+     (let
+       ((inner TeleRes
+          (match info
+            ((CtorInfo _ _ _ nparams _ _)
+             (tele_of_fields (w0 (rd_env r)) (rd_es r) (rd_sc r) info nparams))
+            (_ (tele_of (w0 (rd_env r)) (rd_es r) (rd_sc r) info)))))
+       (match inner
+         ((TeleOk _ _ (Tele _ binds _ _)) (zip_flags (ci_type info) binds nil))
+         ((TeleErr _ _) none))))))
 ;; the binders' roles beside the binder infos of the type's own Pi chain; a function-typed
 ;; binder is a template's (never read here), and a type that is no Pi chain gives nothing
 (fn zip_flags ((ty Expr) (binds (List TBind)) (acc (List (Prod Bool Symbol))))
@@ -1042,13 +1044,15 @@
      (match args
        (nil (Prod.mk none (rev acc)))
        ((cons a ar)
-        (match
-          (match b
-            ((EBData _) (read_et r a))
-            ((EBStatic _ _) (read_static_arg r id a))
-            (EBPackage (read_package_arg r id a)))
-          ((TErr e m) (Prod.mk (some (Prod.mk e m)) nil))
-          ((TOk t) (read_tm_args r id br ar (cons t acc)))))))))
+        (let
+          ((inner TRes
+             (match b
+               ((EBData _) (read_et r a))
+               ((EBStatic _ _) (read_static_arg r id a))
+               (EBPackage (read_package_arg r id a)))))
+          (match inner
+            ((TErr e m) (Prod.mk (some (Prod.mk e m)) nil))
+            ((TOk t) (read_tm_args r id br ar (cons t acc))))))))))
 ;; a static argument: a lambda (read_elam); a name with a program and no type parameters — a fn
 ;; or a sig fn of the E table, a constant of the realization registry —, bare or applied to
 ;; runtime terms (its captured values) short of its arity. Anything else written is refused
@@ -1151,23 +1155,25 @@
 ;; a package argument: the name of a package constant — a def of K, closed, nothing of it
 ;; captured; its shape is its identity. That its value is the structure's constructor applied
 ;; is read where the instance is built (erasure.shard package_fields_of)
+;; the package constant an argument names: a def, no local
+(fn package_const ((r Rd) (s SExpr)) (Option Name)
+  (match s
+    ((SSym x)
+     (match (name_of_sym x)
+       ((some n)
+        (match (rd_find r n)
+          (RdNone
+            (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
+              ((RName k _)
+               (match (env_find (rd_env r) k)
+                 ((some (DefnInfo _ _ _ _ _)) (some k))
+                 (_ none)))
+              (_ none)))
+          (_ none)))
+       (none none)))
+    (_ none)))
 (fn read_package_arg ((r Rd) (tm Name) (s SExpr)) TRes
-  (match
-    (match s
-      ((SSym x)
-       (match (name_of_sym x)
-         ((some n)
-          (match (rd_find r n)
-            (RdNone
-              (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
-                ((RName k _)
-                 (match (env_find (rd_env r) k)
-                   ((some (DefnInfo _ _ _ _ _)) (some k))
-                   (_ none)))
-                (_ none)))
-            (_ none)))
-         (none none)))
-      (_ none))
+  (match (package_const r s)
     ((some k) (TOk (ECall k nil)))
     (none
       (TErr (sym "function_value")
@@ -1758,7 +1764,7 @@
      (match (read_ety es sc env tps1 ret)
        ((TyErr e m) (CErr e m))
        ((TyOk rt tps2)
-        (let ((r (Rd es sc env bds (some (Prod.mk id flags)) checked)))
+        (let ((r (Rd.Rd es sc env bds (some (Prod.mk id flags)) checked)))
           (match (measure_body rest)
             ((Prod.mk none _)
              (CErr (sym "bad_shape") (utf8 "NAME ((x TYPE)…) RET (measure M)? BODY")))
@@ -1781,10 +1787,7 @@
                      ((RcErr e m) (CErr e m))
                      ((RcOk rec0)
                       (let ((rec (settle_rec es sc env (some_all (rev ptypes)) rec0)))
-                        (match
-                          (match (classify_both es id (some_all (rev ptypes)) t rec)
-                            ((some x) (some x))
-                            (none (classify_lifted es (tk_lifted tk))))
+                        (match (classify_whole es id (some_all (rev ptypes)) t rec (tk_lifted tk))
                           ((some (Prod.mk e m)) (CErr e m))
                           (none
                             (let
@@ -1793,6 +1796,13 @@
                                 (nil (COk d))
                                 (eds (COkT d (tk_lifted tk) eds)))))))))))))))))))))
 ;; the body, then a measure term, each over the parameters
+;; the body with its measure, then the lambdas it lifted: the first refusal
+(fn classify_whole
+  ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec) (lifted (List EDecl)))
+  (Option (Prod Symbol (List Int)))
+  (match (classify_both es id tys t rec)
+    ((some x) (some x))
+    (none (classify_lifted es lifted))))
 (fn classify_both ((es ESt) (id Name) (tys (List (Option EType))) (t ETerm) (rec ERec))
   (Option (Prod Symbol (List Int)))
   (match (classify_body es id tys t)
@@ -2764,21 +2774,23 @@
      (match args
        (nil none)
        ((cons a ar)
-        (match
-          (match b
-            ((EBStatic _ _)
-             (match a
-               ((ECall g cs)
-                (match (shape_signature es nil g)
-                  ((some (Prod.mk ps _))
-                   (match (captured_ok es tys cs (take (len cs) ps))
-                     ((some m) (some (append (show_name g) m)))
+        (let
+          ((inner (Option (List Int))
+             (match b
+               ((EBStatic _ _)
+                (match a
+                  ((ECall g cs)
+                   (match (shape_signature es nil g)
+                     ((some (Prod.mk ps _))
+                      (match (captured_ok es tys cs (take (len cs) ps))
+                        ((some m) (some (append (show_name g) m)))
+                        (none none)))
                      (none none)))
-                  (none none)))
-               (_ none)))
-            (_ none))
-          ((some m) (some m))
-          (none (captured_bad es tys br ar))))))))
+                  (_ none)))
+               (_ none))))
+          (match inner
+            ((some m) (some m))
+            (none (captured_bad es tys br ar)))))))))
 (fn captured_ok ((es ESt) (tys (List (Option EType))) (cs (List ETerm)) (ps (List EType)))
   (Option (List Int))
   (measure (struct cs))

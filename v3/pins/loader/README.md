@@ -14,7 +14,8 @@ loaded program run). Some shell tests read the records of a case: `define_test.s
 (`wire_*`), `template_test.sh` (`template_e_first`), `messages_test.sh` (the text after the reason:
 `by_cases_arm_fields`, `by_cases_fields`,
 `impl_read_error`, `impl_load_error`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`,
-`define_nested`, `lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`),
+`define_nested`, `lean_mutual`, `reserved_instance`, `bool_bare`, `shadowed_head`; a type's record:
+`type_group`, `type_group_arity`, `type_e_only`),
 `parity_test.sh` (`view_basic`, `record_basic`), `native_tie_test.sh`
 and `lower_test.sh` (`basic`, `refused`, `read_error`, `view_basic`). Some harnesses run a case's
 program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape`, `handle_door`),
@@ -63,7 +64,7 @@ the reason its name spells, less a leading `by_`.
 | `init`, `init_nested`; refused: `init_import_line` (`bad_import`) | Init's names are bare; two files of one load that cite Init; `(import Init)` is no form, and the refusal says to delete the line |
 | `init_step_lemma`, `impl_init_demand`, `init_late_file_import`, `init_use_late`, `init_fetch_second` | what a file is given of Init: the lemmas a proof step builds on, an implementation's own citations, a name cited after a late file import or under a late `use`, a constant the toolchain builds by name from a type (fetched for a second reading) |
 | refused: `init_name_taken_l`, `registry_native`, `def_takes_fn`, `realize_name_taken`, `derive_name_taken` (`name_taken`) | a declaration may not take the name of one of Init's, of a function that is a program only, or of a generated declaration |
-| `type_in_logic`; refused: `type_e_only` (`unknown_constant`) | a type whose fields are types of the logic is a logical type; one with a field at a type declared after it is a runtime-only type, and a `def` cannot cite it |
+| `type_in_logic`, `type_forward`, `type_group`, `type_group_records`, `type_chain`, `type_group_params`; `type_group_arity` (`runnable block_parameters`); refused: `type_e_only` (`unknown_constant`) | a type whose fields are types of the logic is a logical type, and so is one that names types declared below it, with them: a type named above its form, two types that name each other, a group of records with their accessors, a type naming such a pair, a group with a parameter; types that name each other at different parameters are runtime-only types, and so is one that names a type below a `use`, which a `def` cannot cite |
 | `sorry` (`pending sorry`); refused: `refused` (`type_mismatch`) | a `sorry` admits nothing; a false theorem is refused |
 | `policy_axiom` (`policy`), `policy_trusts` (`param axiom`), `policy_cross` (`policy`) | an axiom needs `(trusts …)`; the policy is per file |
 
@@ -135,7 +136,7 @@ the reason its name spells, less a leading `by_`.
 |---|---|
 | `derive_eq`, `derive_containers` | equality derived and used by an `if`; Init's `List`, `Option`, `Prod` at closed arguments |
 | refused: `derive_field`, `derive_needs`, `derive_policy`, `derive_duplicate`, `derive_by`; `derive_nested`, `derive_refusals` (`derive_shape`), `derive_params` (`derive_needs`), `derive_e_first` (`prim_type`), `derive_visible` (`no_decision`) | the derivation's refusals; a derivation is visible where its module is |
-| `derive_size`, `derive_size_plain`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`) | a size derived for a type nested through `List` and for a plain type, used as a measure |
+| `derive_size`, `derive_size_plain`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`), `derive_size_group` (`derive_shape`) | a size derived for a type nested through `List` and for a plain type, used as a measure; none for types that name each other |
 | `template_lift`, `template_named`, `template_partial`, `template_passed`, `template_package` | a function-typed binder: a lambda lifted, a named function, a partial application, a parameter passed on, a structure of functions |
 | `template_e_first` (`runnable no_l_identity`); refused: `template_escape`, `template_transform` (`function_value`), `template_growth` (`realize_descent`), `template_budget` (`specialization_budget`) | a lambda elsewhere; a template calling itself at a growing type; the instance budget; an instance taken by a body with no logical reading |
 

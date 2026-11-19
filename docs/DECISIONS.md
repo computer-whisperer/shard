@@ -224,6 +224,40 @@ entries are explained under "Measured" at the end.
   file's parts of the key, made again for each theorem, and the repeats among the constants
   a declaration cites. Assent, of the three ways put to them once the keys were measured
   (this, the equations' keys left out, nothing): "Let's proceed with 1".
+- A `type` is declared with the types below it that it names. At a `type` whose field names a
+  type K does not hold, the loader gathers the types below it in the file that it needs, as
+  far as they are read in the scope it is read in — up to the next `use`, `trusts` or import
+  — and admits them where it stands: of those not yet admitted, the one that needs the
+  fewest with those it needs, as one declaration, again and again. Types that name each other
+  are so a block of K's, and a type named above its form is admitted before the one naming
+  it. Their records stand there; the program's declaration of each stands where its form
+  does, so a program's text is what it was. Each type of a block has its acceptance, its
+  `casesOn` — the other types' motives constant, as a nested type's auxiliary ones are — and
+  its constructors' injectivity. Not a form written around the types of a group: functions
+  that call each other are found without one, and the bootstrap's reader, the formatter and
+  the classifier would each have to learn it. Not the sources rewritten to avoid the cycles,
+  an arm as a pair inside its term: the language would still not take such types, and the
+  loader's state would be a cycle still. Not admitted when the last type of a group is read,
+  as functions that call each other are defined: a record's accessors stand between it and
+  the next type, and would have no type to be read over. Types that name each other at
+  different numbers of parameters are no block and stay programs with the reason
+  (`block_parameters`), as does a type naming one below a `use` (`e_only_type`): neither
+  loaded as a type of the logic before, and a refusal would take the program away. A
+  derivation over a type of a block is refused (`derive_shape`), a size too. Assent, of the
+  three ways put to them (this, a form around the group, the sources rewritten): "Agreed
+  with updating the loader to handle this (option 1). Proceed."; and after it was measured,
+  with the next entry's change in it: "Good, we can land this as built. Proceed with the
+  remaining todo items."
+- A function waiting for one declared below it is read again once that one has a
+  declaration, and not before. After every function that loads the waiting ones are gone
+  through as they were; one whose callee still has no declaration is left without a reading,
+  on the ground that the reading would end at that callee as it did (`OPEN.md` §4). A
+  refusal such a function would have met sooner is met when its callee comes, or at the
+  file's end, where every waiting function is read. Not asked for, and put to them with its
+  measurements: with the toolchain's types in the logic the checker reads a thousand
+  functions more, in files that call forward throughout, and the loader's closure loaded in
+  76 s for 36; with this, 49 s. Assent: "Good, we can land this as built. Proceed with the
+  remaining todo items."
 
 ## Programs and the back end
 
@@ -960,6 +994,38 @@ measurements; measure again before building on one.
   group) — the toolchain's check 218 s for 280 (335), the byte-tie 1,016 s for 1,362 (967),
   its harness on the bootstrap 944 s for 1,274 (899) —, `v3` 2,189 s, `replay` 1,846 s: a
   pipeline is 41 minutes for 48, as it was before the group.
+- The toolchain's types that name each other, in the logic (2026-11-18). Of the 64 types of
+  the loader's closure that were programs only, four groups name each other — `prog.shard`
+  `ETerm` and `EArm`, `ev.shard` `LTerm` and `LArm`, `lower.shard` `LwE` and `LwArm`,
+  `loader.shard` `Module`, `Load` and `ForkPt` — and the other 55 only name one of them; of
+  the 1,070 functions unread for such a type, 996 rest on the first group. K took the shape
+  before anything was built: a block of two with one under `List`, declared by hand (now a
+  case of `nested_test`). With the groups admitted where their first type stands, no source
+  form of a type moved, and the closure is 8,940 functions for 8,892: 7,641 definitions for
+  7,147 (written, 2,849 for 2,355), 1,265 type-checked programs for 654, 34 unread for
+  1,091, no type a program only. Of the 1,070: 460 definitions, 599 type-checked programs —
+  540 for a callee that is a program, 26 in a group without a measure, 16 at an integer
+  measure —, 6 unread still, each a function above the type its signature names, 5 replaced.
+  Their first reading met 16 matches with no type from their position and 7 constructors
+  written as their type's name in a `let`, each rewritten, and one error: `reader.shard`
+  `read_decl_autos` gave an empty list for the producers of a `def`, an `abbrev` and an
+  `opaque`. One comparison bound at `Bool` read as another program than the bootstrap's
+  until written `(if c true false)`; the toolchain's check found it, in ten roots. The
+  checked load of the loader's closure on its binary: 76 s with every waiting function read
+  again after each function that loads, where it was 36 s before the types — the definer's
+  reading of a function called 68,484 times for 24,249, the loading of one 45,017 for 16,932
+  —, and 49 s with a waiting function left unread while its callee has no declaration; 5 s
+  of the 49 are the keys, 12,628 of them. The loader with that and the loader without, on
+  the tree as it is, record for record and exit for exit: the 29 toolchain roots and each of
+  the 557 other source files. The loader before the types and the loader with them, on the
+  tree before: 551 of the 557 other files alike; the 6 others are pins that made a
+  program-only type by naming a type declared below it (`type_e_only`, `impl_e_only`,
+  `route_sig_callee`'s view and root, the readings' two fixtures), which now name one below a
+  `use`. Each of the seven new pins fails on the loader before the types. The gate: all 29
+  roots loaded checked, 12 at a time, 166 s for 128; the emit tie 320 s for 290; the
+  byte-tie 402 s for 383, its harness of the loader's pins 380 s on the bootstrap for 362
+  and 22 s on the binary for 20; the suite 241 s on the binaries and 1,048 s on the
+  bootstrap, for 231 and 979.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

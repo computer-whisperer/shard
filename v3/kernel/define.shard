@@ -559,12 +559,17 @@
        ((Prod.mk t3 mv)
         (match (tr_lams t3 (list mv) rty)
           ((Prod.mk t4 motive) (rec_app_dep t4 (level_one) ind ls largs motive minors major))))))))
+;; what the recursor of a type of a block takes besides the type's own: the other types'
+;; motives before and after its motive, their constructors' minors before and after its minors
+(type RecFill (RecFill (List Expr) (List Expr) (List Expr) (List Expr)))
 ;; the recursor applied with a given motive at the motive's universe (a table generalized in
-;; the motive; below's motive into Sort 1 at universe 2). A nested inductive's recursor takes
-;; a motive per auxiliary type after the type's own and the auxiliary constructors' minors
-;; after the type's: those motives are `λ x. PUnit.{u}` and those minors
-;; `λ binders. PUnit.unit.{u}`, read off the recursor's own telescope — K's `casesOn` shape
-;; for a nested type; the type's own minors carry a `PUnit` hypothesis per nested field.
+;; the motive; below's motive into Sort 1 at universe 2). The recursor of a type of a block —
+;; types that name each other, a nested inductive's auxiliary types — takes a motive per type
+;; of the block, in the block's order with the auxiliary ones last, and the minors of every
+;; type's constructors in that order: the other types' motives are `λ x. PUnit.{u}` and their
+;; minors `λ binders. PUnit.unit.{u}`, read off the recursor's own telescope — K's `casesOn`
+;; shape; the type's own minors carry a `PUnit` hypothesis per field over another type of
+;; the block.
 (fn rec_app_dep
   ((t Tr)
    (u Level)
@@ -591,41 +596,81 @@
                 (TrErr (sym "equation_form")
                   (append (show_name ind) (utf8 ": the recursor's parameters could not be opened"))))
                ((Prod.mk w2 (some ty1))
-                (match
-                  (nested_tail (tr_set_w t w2) ty1 u motive (- nmotives 1) minors
-                    (- nminors (len minors)))
-                  ((Prod.mk t2 none)
-                   (TrErr (sym "equation_form")
-                     (append (show_name ind)
-                       (utf8 ": the recursor's telescope is not the nested shape"))))
-                  ((Prod.mk t2 (some (Prod.mk auxm auxmin)))
+                (match (block_place (tr_env t) ind)
+                  ((Prod.mk k c)
                    (match
-                     (tr_apps t2 (mk_const (Str ind (sym "rec")) (cons u ls))
-                       (append largs
-                         (cons motive (append auxm (append minors (append auxmin (list major)))))))
-                     ((Prod.mk t5 e) (TrOk t5 e))))))))))
+                     (block_tail (tr_set_w t w2) ty1 u motive k (- (- nmotives 1) k) minors c
+                       (- (- nminors c) (len minors)))
+                     ((Prod.mk t2 none)
+                      (TrErr (sym "equation_form")
+                        (append (show_name ind)
+                          (utf8 ": the recursor's telescope is not a block's shape"))))
+                     ((Prod.mk t2 (some (RecFill mb ma nb na)))
+                      (match
+                        (tr_apps t2 (mk_const (Str ind (sym "rec")) (cons u ls))
+                          (append largs
+                            (append mb
+                              (cons motive
+                                (append ma (append nb (append minors (append na (list major)))))))))
+                        ((Prod.mk t5 e) (TrOk t5 e))))))))))))
          (none (TrErr (sym "equation_form") (append (show_name ind) (utf8 " has no recursor")))))))
     (_ (TrErr (sym "equation_form") (append (show_name ind) (utf8 " has no recursor"))))))
-;; the recursor's telescope after the parameters: the motive, then the auxiliary motives, then the
-;; type's own minors, then the auxiliary minors — the auxiliary ones built and the rest instantiated
-(fn nested_tail
-  ((t Tr) (ty Expr) (u Level) (motive Expr) (naux Int) (minors (List Expr)) (nauxmin Int))
-  (Prod Tr (Option (Prod (List Expr) (List Expr))))
-  (match ty
-    ((Pi _ _ _ _ body)
-     (match (tr_inst1 t body motive)
-       ((Prod.mk t1 ty1)
-        (match (aux_motives t1 ty1 u naux nil)
-          ((Prod.mk t2 none) (Prod.mk t2 none))
-          ((Prod.mk t2 (some (Prod.mk ty2 auxm)))
-           (match (inst_minors t2 ty2 minors)
-             ((Prod.mk t3 none) (Prod.mk t3 none))
-             ((Prod.mk t3 (some ty3))
-              (match (aux_minors t3 ty3 u nauxmin nil)
-                ((Prod.mk t4 none) (Prod.mk t4 none))
-                ((Prod.mk t4 (some auxmin)) (Prod.mk t4 (some (Prod.mk auxm auxmin))))))))))))
-    (_ (Prod.mk t none))))
-;; an auxiliary motive: the binder's type is `(x : Aux) → Sort u`; the motive is `λ (x : Aux). PUnit.{u}`
+;; where a type stands in its block: the count of the block's types before it, and of their
+;; constructors
+(fn block_place ((env CheckedEnv) (ind Name)) (Prod Int Int)
+  (match (env_find env ind)
+    ((some (InductInfo _ _ _ all _ _ _ _ _)) (place_in env all ind 0 0))
+    (_ (Prod.mk 0 0))))
+(fn place_in ((env CheckedEnv) (all (List Name)) (ind Name) (k Int) (c Int)) (Prod Int Int)
+  (measure (struct all))
+  (match all
+    (nil (Prod.mk 0 0))
+    ((cons n r)
+     (if (name_eq n ind) (Prod.mk k c) (place_in env r ind (+ k 1) (+ c (ctor_count env n)))))))
+(fn ctor_count ((env CheckedEnv) (n Name)) Int
+  (match (env_find env n)
+    ((some (InductInfo _ _ _ _ ctors _ _ _ _)) (len ctors))
+    (_ 0)))
+;; the types of a type's block, itself among them
+(fn block_types ((env CheckedEnv) (ind Name)) (List Name)
+  (match (env_find env ind)
+    ((some (InductInfo _ _ _ all _ _ _ _ _)) all)
+    (_ (list ind))))
+;; the recursor's telescope after the parameters: the motives of the block's types before the
+;; type's own, its own, those after it; then the minors before the type's own, its own, those
+;; after — the others built and the type's own instantiated
+(fn block_tail
+  ((t Tr)
+   (ty Expr)
+   (u Level)
+   (motive Expr)
+   (nbefore Int)
+   (nafter Int)
+   (minors (List Expr))
+   (minbefore Int)
+   (minafter Int))
+  (Prod Tr (Option RecFill))
+  (match (aux_motives t ty u nbefore nil)
+    ((Prod.mk t0 none) (Prod.mk t0 none))
+    ((Prod.mk t0 (some (Prod.mk ty0 mb)))
+     (match ty0
+       ((Pi _ _ _ _ body)
+        (match (tr_inst1 t0 body motive)
+          ((Prod.mk t1 ty1)
+           (match (aux_motives t1 ty1 u nafter nil)
+             ((Prod.mk t2 none) (Prod.mk t2 none))
+             ((Prod.mk t2 (some (Prod.mk ty2 ma)))
+              (match (aux_minors t2 ty2 u minbefore nil)
+                ((Prod.mk t3 none) (Prod.mk t3 none))
+                ((Prod.mk t3 (some (Prod.mk ty3 nb)))
+                 (match (inst_minors t3 ty3 minors)
+                   ((Prod.mk t4 none) (Prod.mk t4 none))
+                   ((Prod.mk t4 (some ty4))
+                    (match (aux_minors t4 ty4 u minafter nil)
+                      ((Prod.mk t5 none) (Prod.mk t5 none))
+                      ((Prod.mk t5 (some (Prod.mk _ na))) (Prod.mk t5 (some (RecFill mb ma nb na))))))))))))))
+       (_ (Prod.mk t0 none))))))
+;; another type's motive: the binder's type is `(x : Aux) → Sort u`; the motive is `λ (x : Aux). PUnit.{u}`
 (fn aux_motives ((t Tr) (ty Expr) (u Level) (n Int) (acc (List Expr)))
   (Prod Tr (Option (Prod Expr (List Expr))))
   (measure n)
@@ -653,10 +698,11 @@
         (match (tr_inst1 t body m)
           ((Prod.mk t1 body1) (inst_minors t1 body1 r))))
        (_ (Prod.mk t none))))))
-;; an auxiliary minor: a lambda over the binder's whole telescope returning PUnit.unit.{u}
-(fn aux_minors ((t Tr) (ty Expr) (u Level) (n Int) (acc (List Expr))) (Prod Tr (Option (List Expr)))
+;; another type's constructor's minor: `λ binders. PUnit.unit.{u}`, and the telescope after it
+(fn aux_minors ((t Tr) (ty Expr) (u Level) (n Int) (acc (List Expr)))
+  (Prod Tr (Option (Prod Expr (List Expr))))
   (measure n)
-  (if (< n 1) (Prod.mk t (some (rev acc)))
+  (if (< n 1) (Prod.mk t (some (Prod.mk ty (rev acc))))
   (match ty
     ((Pi _ _ _ dom body)
      (match (open_pi_locals t dom nil (budget_depth))
@@ -677,6 +723,17 @@
         (match (tr_inst1 t1 body fv)
           ((Prod.mk t2 body1) (open_pi_locals t2 body1 (cons fv acc) (- fuel 1)))))))
     (_ (Prod.mk t (rev acc))))))
+;; a field's type cites one of the types
+(fn field_over ((t Tr) (fv Expr) (inds (List Name))) Bool
+  (match (tr_type_of_local t fv)
+    ((some fty) (mentions_one_of fty inds))
+    (none false)))
+;; one of the constants occurs in a term
+(fn mentions_one_of ((e Expr) (ns (List Name))) Bool
+  (measure (struct ns))
+  (match ns
+    (nil false)
+    ((cons n r) (if (mentions_const e n) true (mentions_one_of e r)))))
 ;; a constant occurs in a term
 (fn mentions_const ((e Expr) (n Name)) Bool
   (measure (struct e))
@@ -860,7 +917,7 @@
                              ((Prod.mk t4 stmt)
                               (let ((had (obl_stating (Tr.obls t4) stmt)))
                                 (let
-                                  ((name
+                                  ((name Name
                                      (match had
                                        ((some k) k)
                                        (none
@@ -1344,7 +1401,7 @@
                            ((Prod.mk t4 stmt)
                             (let ((had (obl_stating_under (Tr.obls t4) (Tr.id t4) stmt)))
                               (let
-                                ((name
+                                ((name Name
                                    (match had
                                      ((some k) k)
                                      (none
@@ -2125,9 +2182,9 @@
                              ((Prod.mk t6 ety) (Prod.mk t6 (Prod.mk e ety)))))))))))))))))))))
 ;; ---- the constructor-structure bundle -----------------------------------------------------------
 ;; After a native inductive is admitted: T.casesOn (its recursor with the hypotheses unused,
-;; universe polymorphic as Lean's; a nested inductive's — a constructor carrying the type under
-;; List or another inductive — with the auxiliary motives constant PUnit and their minors
-;; PUnit.unit, Lean's own shape), and for a type without parameters and indices whose recursor
+;; universe polymorphic as Lean's; the recursor of a type of a block — a constructor carrying
+;; the type under List or another inductive, types that name each other — with the other
+;; types' motives constant PUnit and their minors PUnit.unit, Lean's own shape), and for a type without parameters and indices whose recursor
 ;; eliminates into every universe, T.noConfusionType, T.noConfusion and T.c.inj per constructor
 ;; with fields — Lean 4.33's shapes read off the export (Nat's; a parametric type's shape
 ;; generalizes the parameters twice with HEq on the fields and eq_of_heq, and is not
@@ -2136,8 +2193,8 @@
 ;; the type.
 (fn confusion_bundle ((es ESt) (sc Scope) (env CheckedEnv) (ind Name)) (List Declaration)
   (match (env_find env ind)
-    ((some (InductInfo _ nparams nindices all ctors nnested _ _ _))
-     (if (bool_or (< 0 nindices) (bool_not (= (len all) 1))) nil
+    ((some (InductInfo _ nparams nindices _ ctors _ _ _ _))
+     (if (< 0 nindices) nil
      (match (rec_level env ind)
        (none nil)
        ((some u)
@@ -2194,7 +2251,11 @@
                           (AuxErr t7 (sym "equation_form")
                             (utf8 "a constructor could not be opened")))
                          ((Prod.mk t7 (some minors))
-                          (match (cases_rec_minors t7 motive (LParam u) ind ps ctors minors nil)
+                          (match
+                            (cases_rec_minors t7 motive (LParam u) (block_types (tr_env t7) ind) ps
+                              ctors
+                              minors
+                              nil)
                             ((Prod.mk t8 none)
                              (AuxErr t8 (sym "equation_form")
                                (utf8 "a constructor could not be opened")))
@@ -2239,12 +2300,13 @@
            (match (tr_local t2 (ctor_short c) mty)
              ((Prod.mk t3 m) (cases_minor_locals t3 motive ps r (cons m acc)))))))))))
 ;; the recursor's minors: λ fields ihs. minor_c fields, each hypothesis at the motive of its field —
-;; a nested field's (the type under another inductive) at PUnit.{u}, the auxiliary motive's value
+;; that of a field over another type of the block (the type under another inductive, a type
+;; that names it back) at PUnit.{u}, the other motives' value
 (fn cases_rec_minors
   ((t Tr)
    (motive Expr)
    (u Level)
-   (ind Name)
+   (inds (List Name))
    (ps (List Expr))
    (ctors (List Name))
    (minors (List Expr))
@@ -2260,28 +2322,26 @@
         (match (rz_open_ctor t c nil ps)
           ((Prod.mk t1 none) (Prod.mk t1 none))
           ((Prod.mk t1 (some (Prod.mk fields _)))
-           (match (open_ihs_dep t1 fields motive u ind nil)
+           (match (open_ihs_dep t1 fields motive u inds nil)
              ((Prod.mk t2 ihs)
               (match (tr_apps t2 m (field_fvars fields))
                 ((Prod.mk t3 body)
                  (match (tr_lams t3 (append (field_fvars fields) ihs) body)
-                   ((Prod.mk t4 minor) (cases_rec_minors t4 motive u ind ps r mr (cons minor acc)))))))))))))))
-(fn open_ihs_dep ((t Tr) (fields (List Field)) (motive Expr) (u Level) (ind Name) (acc (List Expr)))
+                   ((Prod.mk t4 minor) (cases_rec_minors t4 motive u inds ps r mr (cons minor acc)))))))))))))))
+(fn open_ihs_dep
+  ((t Tr) (fields (List Field)) (motive Expr) (u Level) (inds (List Name)) (acc (List Expr)))
   (Prod Tr (List Expr))
   (measure (struct fields))
   (match fields
     (nil (Prod.mk t (rev acc)))
     ((cons (Field fv _ true) r)
      (match (tr_local t (n1 (sym "ih")) (mk_app motive fv))
-       ((Prod.mk t1 ih) (open_ihs_dep t1 r motive u ind (cons ih acc)))))
+       ((Prod.mk t1 ih) (open_ihs_dep t1 r motive u inds (cons ih acc)))))
     ((cons (Field fv _ false) r)
-     (if
-       (match (tr_type_of_local t fv)
-         ((some fty) (mentions_const fty ind))
-         (none false))
+     (if (field_over t fv inds)
        (match (tr_local t (n1 (sym "ih")) (mk_const (n1 (sym "PUnit")) (list u)))
-         ((Prod.mk t1 ih) (open_ihs_dep t1 r motive u ind (cons ih acc))))
-       (open_ihs_dep t r motive u ind acc)))))
+         ((Prod.mk t1 ih) (open_ihs_dep t1 r motive u inds (cons ih acc))))
+       (open_ihs_dep t r motive u inds acc)))))
 
 ;; a constructor's fields as locals of a binder info, and the constructor applied to them
 ;; (a type without parameters: the fields' types are closed)
