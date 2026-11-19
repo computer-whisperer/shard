@@ -230,18 +230,18 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Six sevenths of their functions are definitions; of those written by hand, more than
-  two thirds.** The checker reads every one whose signature reads, and nearly every one's
-  does: of the loader's closure, 8,944 functions — 4,792 of them the rows of a generated
-  table —, it holds 7,653 as definitions. The others are programs with the reason: a function
-  they call is a program (`callee_runnable`, some 1,070), a group of functions that call each
-  other (about 120), an integer measure (38), a call the definer takes for no descent (30), a
-  numeral under a constructor pattern (21). A type error in any of them is refused.
+- **Nine tenths of their functions are definitions; of those written by hand, four
+  fifths.** The checker reads every one whose signature reads, and nearly every one's does:
+  of the loader's closure, 8,958 functions — 4,792 of them the rows of a generated table —,
+  it holds 8,133 as definitions. The others are programs with the reason: a function they
+  call is a program (`callee_runnable`, 750), a group of functions that call each other
+  (28), a call the definer takes for no descent (11), a numeral under a constructor pattern
+  (21). A type error in any of them is refused.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 109 functions in 33 files:
+  `kernel/descent.shard`. The forms the sources use, 133 functions in 33 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -256,17 +256,20 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. Thirty-eight functions still state
-  an integer and are programs (`measure_type`): one whose counter nothing in it bounds
-  (`k/inductive.shard` `fresh_univ_name`); sixteen in groups whose descent is by a counter
-  and then by a list's length, for which there is no measure (`kw.shard` `w_norm_ty`,
-  `k/axioms.shard` `closure_of`, `inhabit.shard` `inhabit`, `matcher.shard` `mt_compile` and
-  `mt_pat_term`, `classify.shard` `matrix_exh`); the six of `spelling.shard`
-  `sp_instance_go`, a group that hands its counter round, which ranks in the measures would
-  pay for; and fifteen plain counters the forms above fit, not yet restated (`define.shard`
-  seven, `erasure.shard` three, `loader.shard` two, `run.shard` two, `template.shard` one).
-  Some 70 more state one where the checker does not get to it, behind a callee that is a
-  program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. One function still states an
+  integer and is a program (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
+  counter nothing in it bounds. Some 75 more state one where the checker does not get to it,
+  behind a callee that is a program.
+- **A group that descends by a fuel and then by a list states both parts.** The member
+  that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
+  that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
+  `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
+  (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
+  parts"). Six groups are written so, 16 functions: that one, `matcher.shard`'s `mt_compile`
+  and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard` `matrix_exh`,
+  and K's axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
+  `closure_of`). A member that steps the fuel without testing it states the stepped fuel as
+  its part, `(Int.natAbs (+ (- d 1) 1))`, so that the first parts are one term.
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The
   member that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one
@@ -274,12 +277,19 @@ file; two things about how they are written set them apart.
   `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
   Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
   type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  Two groups are written so: `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs,
-  and `prog.shard`'s `calls_acc`, `calls_all` and `calls_arms`, with 16 — walkers over a
-  program's term, its arms and their lists, each measured by the size of what it walks
-  (`ETerm.size`, `List_ETerm.size`, `List_EArm.size`; the two types name each other, and
-  `(derive ETerm size)` gives every one). 53 groups more state a structural clause or none
-  and are programs (`group_measure`). A size
+  The sources' walkers are written so, 205 functions in 23 files over thirteen sizes
+  (`Expr`, `Name`, `SExpr`, `ETerm` with its arms, `EType`, `EPat`, `Val`, `IVal`, `LPat`,
+  `LwE` with its arms, `LwP`, `MtPat`, `Node`): the typing of a term (`classify.shard`
+  `c_type`), the threading pass, the lowering, the C generator's walk, the dump — each
+  member measured by the size of what it walks (`ETerm.size`, `List_ETerm.size`,
+  `List_EArm.size`: `ETerm` and `EArm` name each other, and `(derive ETerm size)` gives
+  every one), a `let`'s member by the sum of its bindings' and its body's. A rank is a
+  scaled size, `(+ (* 4 (ETerm.size t)) 1)`. A descent through a helper that returns a part
+  of its argument is proven by cases on the argument (`lower.shard` `lw_fv`), or from a fact
+  proven beside the `fulfills` by induction (`classify.shard` `live_arm_lt`). A `fulfills`
+  of a group stands below the last function its members reach, which may be far below the
+  group. 28 functions in 10 groups still state a structural clause or none and are programs
+  (`group_measure`). A size
   is the one derivation a build reads: its functions are definitions with no program, the
   loader makes them under `--unchecked` too, and the Rust reader passes the form over.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
@@ -661,6 +671,36 @@ which gets no definition (`equation_form`, below): use a measure and `(derive Tr
 derived size. The definition is built on `WellFounded.fix`. Every self-call states an
 **obligation** `NAME.dec_N`: the measure at the call's arguments is less than at the parameters.
 
+**In several parts: `(measure A B …)`**, each a `Nat`, at most eight. The parts are compared in
+order and the first that differs decides: a call may raise a later part when an earlier one
+falls. It is the pair `(Prod.mk A (Prod.mk B …))`, which may be written out, ordered by Init's
+`Prod.Lex` over `Nat.lt`; an obligation is then a `Prod.Lex` statement and its proof ends in one
+of three steps (pins `measure_parts`, `measure_parts_group`):
+
+```
+(fn drain ((k Nat) (xs (List Nat))) Nat
+  (measure k (List.length xs))
+  (match xs
+    (nil (if (< 0 k) (drain (Nat.sub k 1) (cons 1 (cons 2 nil))) 0))   ; k falls, the list grows
+    ((cons x r) (+ x (drain k r)))))                                   ; k stays, the list falls
+;; drain.dec_2: … (Prod.Lex Nat Nat Nat.lt Nat.lt (Prod.mk Nat Nat k (List.length r))
+;;                                                 (Prod.mk Nat Nat k (List.length xs)))
+(fulfills drain.dec_1
+  (by (intro p hx hk) (apply Prod.Lex.left (exact (Nat.sub_lt hk (Nat.lt_succ_self 0))))))
+(fulfills drain.dec_2
+  (by (intro p x r h) (rw h) (rw List.length_cons) (apply Prod.Lex.right' (arith) (arith))))
+```
+
+| the call | the step | what is left to prove |
+|---|---|---|
+| the first part falls | `(apply Prod.Lex.left P)` | P: the first parts compared, `a' < a` |
+| the first part is the same term on both sides | `(apply Prod.Lex.right P)` | P: the rest compared |
+| the first part is equal, or no greater, by arithmetic | `(apply Prod.Lex.right' (arith) P)` | `a' ≤ a` by `arith`; P: the rest compared |
+
+With three parts the rest is such a statement again and the steps nest. K does not evaluate
+through a recursive call of a function measured in several parts — `(by rfl)` on a closed call
+that recurses fails —: a proof about one cites its equations (`(rw drain.eq_2)`).
+
 ```
 (fn count ((n Nat) (acc Nat)) Nat (measure n) (if (= n 0) acc (count (Nat.sub n 1) (+ acc 1))))
 ;; count.dec_1, writing p0 for (proj PProd 0 p): for all p and h : (Not (= p0 0)), (< (- p0 1) p0)
@@ -712,8 +752,10 @@ names among them, a type, a `use` (pins `mutual_forward_after`, `mutual_callee_s
 `mutual_type_between`, `mutual_use_between`).
 
 A group is compiled into **one** definition by well-founded recursion, on three conditions: every
-member has `(measure M)` with `M` a `Nat` over its own binders (`(measure (struct x))` does not
-count); no member has a type parameter; no member's result type mentions its parameters.
+member has `(measure M)` with `M` a `Nat` over its own binders, or `(measure A B …)` with as many
+parts as every other member (pin `measure_parts_group`; a different number is `measure_type`, pin
+`measure_parts_uneven`) — `(measure (struct x))` does not count —; no member has a type
+parameter; no member's result type mentions its parameters.
 
 ```
 (fn ping ((n Nat)) Nat (measure n) (if (= n 0) 0 (pong (Nat.sub n 1))))
@@ -815,7 +857,7 @@ to be left with: for them the reasons of the definer are refusals.
 | `why=` | route | cause | what to do |
 |---|---|---|---|
 | `callee_runnable` | typed | the body calls a function that is itself only a program | give the callee a definition; this one follows |
-| `measure_type` | typed | `(measure M)` and `M` is not a `Nat` | write a `Nat` measure, e.g. `(Int.natAbs n)` |
+| `measure_type` | typed | `(measure M)` and `M` is not a `Nat`, nor a part of `(measure A B …)`; or the members of a group state different numbers of parts | write a `Nat` measure, e.g. `(Int.natAbs n)`; give every member as many parts |
 | `group_measure` | typed | a member of a group has no measure, or `(measure (struct x))` | `(measure M)` on every member |
 | `group_shape` | typed | a member of a group has a type parameter, or a result type over its parameters | make the members monomorphic and non-dependent |
 | `realize_recursion` | typed | the function calls itself and states no measure | add `(measure (struct x))` or `(measure M)` |
@@ -1268,7 +1310,8 @@ written bare or in parentheses. Examples: v3/pins/loader/by_core unless a pin or
   `(cons (x r ih) (intro acc) (reduce) (rw (ih (+ (* 10 acc) x))) rfl)` (calc_show.shard).
 - `wf` restates no hypothesis. A hypothesis about X that the induction needs is written as an
   implication in the statement and introduced inside the `wf`. The measure is a `Nat`; an `Int` is
-  measured through `Int.natAbs`; there is no lexicographic measure.
+  measured through `Int.natAbs`; `wf` takes no measure of several parts (a function's may have
+  them: "In several parts").
 
 ### Rewriting: `rw`, `simp_only`, `unfold`, `reduce`
 

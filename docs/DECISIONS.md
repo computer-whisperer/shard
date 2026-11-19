@@ -85,8 +85,10 @@ entries are explained under "Measured" at the end.
   bare recursor — a self-call at any depth, under a nested `match` or a `let`, is found by type.
 - ★ Other recursion needs `(measure E)`, `E : Nat`, and is `WellFounded.fix`; each call's decrease
   is an obligation `f.dec_N` closed by `(fulfills f.dec_N …)`; not discharged by a default tactic.
-- No `Int` measure (`measure_type`) and no lexicographic tuple; a rank is added into the measure
-  (`(+ (+ s s) 1)` against `(+ s s)`) — kept until the arithmetic is the burden.
+- No `Int` measure (`measure_type`); a rank is added into the measure (`(+ (+ s s) 1)` against
+  `(+ s s)`). A lexicographic tuple was held off "until the arithmetic is the burden"; it came
+  when groups had no single number at all — a fuel at one call, a list at another (below, "A
+  measure may have several parts").
 - ★ An equation says nothing about termination: `f n = f (n+1)` holds of a constant function and
   proves by `rfl` while the body loops — so a body under an open measure is `PENDING`, not complete.
 - ★ Functions that call each other are found as a group when the last is read; no `mutual` form —
@@ -268,13 +270,50 @@ entries are explained under "Measured" at the end.
   `calls_all` and `calls_arms`, each measured by the size of what it walks, with the 16
   proofs beside them in the fixed lines the toolchain's other descents use (`(rw h) (rw
   SIZE.eq_K) (arith)`). Not structural recursion for a group: of the 113 groups among the
-  programs, 46 descend on one parameter per member. Whether a bulk of such groups leaves
-  its proofs to the engine, in sidecars beside toolchain sources, is not decided: the
-  pilot's are written. Assent, of the three ways put to them once the recursion the
+  programs, 46 descend on one parameter per member. Assent, of the three ways put to them once the recursion the
   programs lack was read off the call graph (the groups whose descent is plain restated in
   bulk with the proofs left to the engine; the recursion no measure fits read first, with
   nothing built; this — a block's size and one group, then that reading): "Let's proceed
   with C".
+- The toolchain's plainly recursive functions state a measure, and their descents are proven
+  in the sources, beside the functions. Where every recursive call is on a part of a
+  parameter or a counter less one, and the function was a program because it is a member of
+  a group, walks a type that holds lists of itself, matches two constructors deep or counts
+  on an integer, it states a `Nat` — a derived size, a list's length, `Int.natAbs` of a
+  counter, a rank where a member hands its argument on whole — and each obligation has its
+  `fulfills` in the fixed lines (`LANGUAGE.md`, the toolchain's own sources). No body
+  changes: the loader's program text is byte for byte the one before, which each batch of
+  the work was held to. Not the proofs left to the engine in sidecars beside toolchain
+  sources: a toolchain module that gains an obligation stales the stored proofs of every
+  file above it (`OPEN.md` §1), and the engine does not find a share of these (`OPEN.md`
+  §3). Not a function whose descent only a change of its body gives — a numeral under a
+  constructor pattern (`index.shard` `ix_trim_sp`, `elab.shard` `el_pat`): it stays a
+  program with its reason. A fact about a helper that returns a part of its argument is
+  proven beside the `fulfills` that cites it, by induction where the helper recurses
+  (`classify.shard` `live_arm_lt`). Two stated measures did not descend at their guard and
+  are corrected: `template.shard` `inst_equations` and `define.shard` `ctor_locals`. Assent,
+  of the three ways put to them (this; the kinds not yet tried piloted first; K's checker
+  discussed first) and to the question where the proofs live: "The bulk's proofs can live
+  in the sources, and the budget parameter in the eraser's environment walks sound
+  reasonable. For K's checker, option 1 sounds reasonable for now. Let's proceed."
+- A measure may have several parts, compared part by part. `(measure A B …)` is the pair
+  `(Prod.mk A (Prod.mk B …))`, each part a `Nat`; the definer reads the measure's type and
+  builds the order from it — Init's `Prod.Lex` over `Nat.lt`, well-founded by `Prod.lex`
+  (`define.shard` `measure_order`) —, an obligation is a `Prod.Lex` statement, and a measure
+  of one part is built and stated as before. Not one number per function with ranks: a
+  descent by a fuel at one call and by a list at another, at the same fuel, has no single
+  number — what is met at a lower fuel is computed and can be any size (K's checker's nine
+  walks at one depth; `kw.shard` `w_norm_ty`, the first group written so). Not every walk
+  spending the fuel: K's checker would give up on a long telescope or argument list that
+  the C++ kernel it follows accepts. Not the checker's entry points handed to the walks as
+  function values, the form of the Lean kernel written in Lean (`Lean4Lean`, where each
+  entry is a field of a record indexed by the fuel): these sources pass no functions. Not
+  an order of the author's choosing: `Nat` parts in sequence are what the sources' descents
+  are. The cost: K does not evaluate through a recursive call of such a function, and a
+  proof cites its equations (`OPEN.md` §3). Assent, of the three ways put to them for K's
+  checker once its 60 functions were read call by call (this, with the checker restated in
+  five places; the checker restated alone, its walks spending depth; the checker left a
+  program): "For K's checker, option 1 sounds reasonable for now."
 
 ## Programs and the back end
 
