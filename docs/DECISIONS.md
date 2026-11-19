@@ -1070,7 +1070,9 @@ measurements; measure again before building on one.
   about `live_arm`. The gate: all 29 roots loaded checked, 12 at a time, 154 s for 166; the
   emit tie 361 s for 320 and the byte-tie 430 s for 402, both with scratch loads running
   beside them; the suite 269 s on the binaries and 1,027 s on the bootstrap, for 241 and
-  1,048.
+  1,048. On CI (#760): `native` 2,487 s for 2,463 — the build of the 29 binaries 548 s for
+  553, the toolchain's check 269 s for 261, the byte-tie 1,007 s for 990, its harness on the
+  bootstrap 934 s for 916 —, `v3` 2,149 s, `replay` 1,850 s: a pipeline is 42 minutes for 42.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
