@@ -161,10 +161,10 @@ entries are explained under "Measured" at the end.
   lists is measured by Init's `List.length`, a `Nat`; not by the sources' own `len` — a fact
   about it cannot stand in `descent.shard`, which `util.shard` imports. Two functions that
   call each other, one passing the counter on, take measures weighted so that the pass is
-  paid for (`level.shard` `is_geq_core`, `is_geq_offsets`). Seven are left programs:
-  `k/inductive.shard` `fresh_univ_name`, whose counter nothing in it bounds, so what it
-  would owe is false; `kw.shard` `w_norm_ty` and `w_norm_tys` and four of `k/axioms.shard`,
-  whose descent is by a counter and then by a list's length (`OPEN.md` §3). One proof of the
+  paid for (`level.shard` `is_geq_core`, `is_geq_offsets`). Seven were left for the entries
+  below: `k/inductive.shard` `fresh_univ_name`, whose counter nothing in it bounded, so what
+  it would have owed was false; `kw.shard` `w_norm_ty` and `w_norm_tys` and four of
+  `k/axioms.shard`, whose descent is by a counter and then by a list's length. One proof of the
   146 as delivered cited `Classical.byContradiction` to turn a `Bool` test into its
   comparison, and two functions listed `Classical.choice` by it; it is a case split on the
   comparison's decision now, and no declaration of the closure lists more than `propext`.
@@ -334,8 +334,7 @@ entries are explained under "Measured" at the end.
   stood — the reading of the checker had taken the counter for a descent. Under the checker,
   `level.shard`'s `normalize` and the order it sorts by are definitions with no body
   changed: two facts about the helpers they recurse through and a weight written as a `def`.
-  The walks of the inductive-type checker and K's three searches are programs still
-  (`OPEN.md` §4). Assent as for the measure above; then, asked what stood in the way next:
+  Assent as for the measure above; then, asked what stood in the way next:
   "Let's continue with the next chunk. What do you see as the next blocker?"
 - No toolchain function matches a numeral under a constructor. The 21 that did — 29 rows: a
   byte at the head of a list, a constructor's field count, a de Bruijn index, a matcher's
@@ -348,6 +347,29 @@ entries are explained under "Measured" at the end.
   a statement. Two helpers came of it, each for a branch the rewrite would have written
   twice (`elab.shard` `el_pat_var`, `list_mismatch`). The owner, of the two ways: "We can
   restate the 21 patterns. Proceed with that when practical".
+- K's walks down a telescope and its three searches are definitions, and with them all of
+  K's directory but the reader of an export's lines, which stands on the JSON parser. Each
+  of the nine walks of the inductive-type checker (`k/inductive.shard`) spends a heartbeat
+  at every binder it takes and calls itself only under a test that the count advanced, below
+  the limit, since the walk was entered; the heartbeats left are the measure, and each of
+  the 16 obligations is the test's own hypothesis (`a_advanced_lt`). The term gives none: a
+  walk goes on with a body it substituted into, or with what `whnf` made of that, and seven
+  of the nine had stated a structural descent on it. The heartbeat is the guard of the
+  checker's three sites taken at a depth that passes (`a_step` over `rec_guard`): not a
+  count of the walks' own, so the state's check has no new primitive and a walk draws on
+  the budget the block's other checks draw on. The test refuses nothing that ended — every pass adds a heartbeat and
+  no step takes one back —, and a block spends one more heartbeat for each binder walked.
+  Not a count of binders handed down: `whnf` can unfold a result into more of them, and
+  nothing in the declaration states how many. The searches got bounds their code tests. The
+  fresh universe name is looked for among one more candidate than there are names taken,
+  which always holds a free one; past them it answers nothing and the block is out of
+  heartbeats, not a taken name. The auxiliary name of a nested occurrence and the worklist
+  of auxiliary types stop at 100,000 (`nested_max`), out of heartbeats: the pin's two loops
+  have no bound, and the worklist's measure had named that number without the code testing
+  it. `k/refgen.shard`'s table of names recurses on the prefix a row binds, not on a
+  helper's answer. One branch of `cit_binders` that tested the parameter count twice for one
+  answer tests it once. The design was put with the checker's; then: "Good work. Let's
+  continue with K's other walks while CI runs."
 
 ## Programs and the back end
 
@@ -1195,11 +1217,23 @@ measurements; measure again before building on one.
 - The numeral rows restated (2026-11-19). 742 programs before; 686 with the 21 functions'
   bodies changed — 56 out, the 21 and those that waited on them alone —, and no function
   refused for the row any more; 672 with the six units that opened to the forms already in
-  use (14 obligations, no body changed). Now 8,962 functions, 8,290 definitions, 1,134
+  use (14 obligations, no body changed). With them 8,962 functions, 8,290 definitions, 1,134
   obligations of 464 functions. Checked on the dev box before the push, by ruling 17: the
   29 binaries built in 279 s, all roots loaded checked in 422 s beside the suite on the
   binaries, 386 s, 52 entrypoints; then for the six units the loader's program text against
   that build's, byte for byte.
+- K's walks and searches (2026-11-19). 672 programs before, 616 after: the 13 functions and
+  those that waited on them alone. Now 8,965 functions, 8,349 definitions, 1,153 obligations
+  of 476 functions; of the functions of K's directory one is a program, for 57. Checked on
+  the dev box before the push, by ruling 17: the 29 binaries built in 296 s; then side by
+  side the Init replay, 661 s for 413 alone — 57,977 accepted and none exhausted with a
+  heartbeat spent at each binder, the bootstrap and the binary byte for byte on its first
+  100,000 lines —, all 29 roots loaded checked in 477 s, and the suite on the binaries, 354
+  s, 52 entrypoints. The state's check judges 322 functions of K with the twelve primitives
+  it had, and the generator of the reference rows prints the committed table byte for byte
+  (`t0 --pins` over the export's first 36 chunks, 105 s on the binary). The first build
+  failed 11 of the 29 binaries on the user's quota of `/tmp`, where the compiler writes its
+  temporary files; with `TMPDIR` on the home disk it built.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

@@ -232,17 +232,17 @@ file; two things about how they are written set them apart.
 
 - **Nine tenths of their functions are definitions; of those written by hand, four
   fifths.** The checker reads every one whose signature reads, and nearly every one's does:
-  of the loader's closure, 8,962 functions — 4,792 of them the rows of a generated table —,
-  it holds 8,290 as definitions. The others are programs with the reason: a function they
-  call is a program (`callee_runnable`, 605), a group of functions that call each other
-  (33), a call the definer takes for no descent (19). A type error in any of them is
+  of the loader's closure, 8,965 functions — 4,792 of them the rows of a generated table —,
+  it holds 8,349 as definitions. The others are programs with the reason: a function they
+  call is a program (`callee_runnable`, 559), a group of functions that call each other
+  (33), a call the definer takes for no descent (10). A type error in any of them is
   refused. None matches a numeral under a constructor (below, "Terms"): such a row has no
   form in the logic, so the sources bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 138 functions in 33 files:
+  `kernel/descent.shard`. The forms the sources use, 150 functions in 33 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -252,15 +252,15 @@ file; two things about how they are written set them apart.
   | a remainder, `(mod a b)` past `(<= b 0)` | `(Int.natAbs b)` | `natAbs_lt` over Init's `Int.emod_nonneg` and `Int.emod_lt_of_pos` |
   | a walk down one or two lists by their rows | `(+ (List.length a) (List.length b))` — Init's length, a `Nat`; not the sources' own `len`, an `Int` | `(rw hA) (rw List.length_cons) (arith)`, `hA` the row's equation; each list a row names is rewritten |
   | two functions that call each other, one passing the counter on unchanged | `(* 2 (Int.natAbs k))` and `(+ (* 2 (Int.natAbs k)) 1)` | a `have` of the counter's fact, then `(arith)` |
+  | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
 
   A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. One function still states an
-  integer and is a program (`measure_type`): `k/inductive.shard` `fresh_univ_name`, whose
-  counter nothing in it bounds. Some 58 more state one where the checker does not get to it,
-  behind a callee that is a program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
+  measure it states (`measure_type`); some 57 state an integer or a term where the checker
+  does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and

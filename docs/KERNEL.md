@@ -127,13 +127,22 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   is out of heartbeats otherwise; the walk to a projection's field ends at its index. Also `Ctx`, `LDecl`, `Loc`, `env_find`, `env_add`, `st_for`, `st_seed`.
   Rests on env, expr, level, name, intmap, util, verdict. Called by inductive, nested, add,
   axioms; through the view by kw (hence elaborator, unifier, tactics, definer, erasure).
-- `inductive.shard` (1,214) — `add_inductive_core`: check the types, declare them, check and
+- `inductive.shard` (1,366) — `add_inductive_core`: check the types, declare them, check and
   declare constructors (positivity, universes), elimination level, K-target, recursor types and
   rules, then `check_recursors` (each rule type-preserving). Budgets `budget_depth` 8192,
-  `budget_ticks` 100,000,000. Rests on tc. Called by nested.
-- `nested.shard` (1,038) — nested inductives: uniform-occurrence check, translation to auxiliary
+  `budget_ticks` 100,000,000. Its nine walks down a telescope (`cit_binders`, `is_rec_argument`,
+  `check_positivity`, `cc_binders`, `eoz_single`, `mri_open_type`, `open_ctor`, `open_pis`,
+  `open_ctor_plain`) go on with a body they substituted into, or with what `whnf` made of it,
+  so no term measures them: each spends a heartbeat at every binder (`a_step`, the checker's
+  guard) and calls itself only when the count advanced below the limit since it was entered
+  (`a_advanced`), out of heartbeats otherwise; the heartbeats left are the measure, and the 16
+  descents are proven beside the walks. The fresh universe name is looked for among one more
+  candidate than there are names taken. Rests on tc. Called by nested.
+- `nested.shard` (1,050) — nested inductives: uniform-occurrence check, translation to auxiliary
   mutual types (`_nested` prefix reserved), admission through inductive.shard, translation back;
-  `add_inductive` is the entry. Rests on inductive. Called by add.
+  `add_inductive` is the entry. The worklist of auxiliary types and the search for an unused
+  auxiliary name stop at 100,000 (`nested_max`), out of heartbeats: the pin's two loops have no
+  bound. Rests on inductive. Called by add.
 - `add.shard` (519) — admission: `check_decl_core` per kind, `add_quot` (checks `Eq`'s shape,
   builds the four constants), `identity_hash` (a report fingerprint), the pin match
   (`pin_if_matches`, `ref_closure_ok`, `ref_matches`), the raw entry `check` / `check_with`
@@ -156,7 +165,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   names `rn_H`, the lookup `accel_ref` and `accel_ref_closure`. Produced by `gen_pins.sh`;
   checked by `t0_full.sh` (all 20 pinned on the export) and `k/test/accel_test.shard`.
   Rests on decl. Called by add (the match), t0 (`pin_candidates`), loader (`k_kit`).
-- `refgen.shard` (663) — `show_refs`: prints each candidate's identity closure as `REF ` lines
+- `refgen.shard` (665) — `show_refs`: prints each candidate's identity closure as `REF ` lines
   (the generated section of accel_pins), what a row cites above it: the names, the term nodes,
   the rows, the table's buckets and the table, the closures. Generation only. Rests on add, host. Called by t0 under
   `--pins`.
@@ -294,12 +303,12 @@ is public and outside its directory: `name`, `level`, `expr` (terms, node data, 
 |---|---|---|
 | `env.shard` | 39 | `CheckedEnv`: constants by name hash, whether `Quot` is declared, the pinned names, the node-id watermark |
 | `tc.shard` | 2,761 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators; the descent of its 60 functions |
-| `inductive.shard` | 1,214 | inductive blocks: the checks, the constructors, the recursors and their rules |
-| `nested.shard` | 1,038 | nested inductives through auxiliary mutual types |
+| `inductive.shard` | 1,366 | inductive blocks: the checks, the constructors, the recursors and their rules; the descent of its walks |
+| `nested.shard` | 1,050 | nested inductives through auxiliary mutual types |
 | `add.shard` | 519 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
 | `axioms.shard` | 277 | axiom closures |
 | `import.shard` | 849 | export records → tables → declarations → checks; generated constants against exported ones |
-| `accel_pins.shard`, `refgen.shard` | 5,127, 569 | the generated reference rows for the pins; their generator, on no checking path |
+| `accel_pins.shard`, `refgen.shard` | 5,136, 665 | the generated reference rows for the pins; their generator, on no checking path |
 | `mod.req.shard`, `k.shard` | 109, 13 | the view; the implementation's import list |
 
 ### What `check` does
