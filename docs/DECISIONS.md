@@ -1112,6 +1112,25 @@ measurements; measure again before building on one.
   1,048. On CI (#760): `native` 2,487 s for 2,463 — the build of the 29 binaries 548 s for
   553, the toolchain's check 269 s for 261, the byte-tie 1,007 s for 990, its harness on the
   bootstrap 934 s for 916 —, `v3` 2,149 s, `replay` 1,850 s: a pipeline is 42 minutes for 42.
+- The plain recursion restated, and a measure in several parts (2026-11-19). Read off the
+  call graph at the commit before (8,944 functions, 1,291 of them programs): 120 units (257
+  functions) where every recursive call is plain and nothing under the unit lacks anything,
+  and 49 more that stand above a unit of another kind. Restated bottom-up by file in nine
+  batches, each a set of files in a worktree of its own, held to the loader's program text
+  byte for byte and to a checked load with nothing pending: 281 functions and 741
+  obligations in 36 files, 16 of the functions in the six groups measured in several parts.
+  Now 8,958 functions — 14 the definer's change adds —, 8,133 definitions for 7,653, 825
+  programs for 1,291, 922 obligations of 394 functions for 181 of 114; in K's own directory
+  151 programs for 170. The definer's change alone, over the loader's closure on one
+  development loader: no record of another module differs but the wording of one refusal,
+  in 38 records. One stored proof file stood on modules that gained obligations and was
+  written again (`v3/examples/tactic/use_split.auto.shard`: the policy part of six keys).
+  The gate: the 29 binaries built in 258 s; all 29 roots loaded checked, 12 at a time, 200 s
+  for 154; the emit tie 317 s and the byte-tie 419 s, for 361 and 430 with scratch loads
+  beside them and 320 and 402 before that; the suite 242 s on the binaries and 993 s on the
+  bootstrap, for 269 and 1,027. The batches' workers: nine, each 139 to 219 thousand tokens
+  and 9 to 23 minutes, none restarted for its work; the first six were started twice, their
+  worktrees having been made at the pushed commit and not at the one their brief named.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
