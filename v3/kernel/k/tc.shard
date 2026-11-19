@@ -8,10 +8,12 @@
 ;;; checker state `St` (fresh-variable counter, heartbeats, node-id
 ;;; counter — expr.shard) is threaded through every procedure and every
 ;;; procedure returns a `KRes`. The recursion-depth budget is the explicit
-;;; `d` (the pin's max_rec_depth; the measure of every mutually recursive
-;;; procedure); the heartbeat budget is counted in St (the pin's
-;;; max_heartbeat). Both exhaust into `Exhausted`, never into a
-;;; verdict. The pin's memo tables (infer, whnf_core, whnf, unfold, defeq
+;;; `d` (the pin's max_rec_depth), stepped at the three guard sites and
+;;; where `reduce_nat` normalizes an argument; the heartbeat budget is
+;;; counted in St (the pin's max_heartbeat). Both exhaust into
+;;; `Exhausted`, never into a verdict. The mutually recursive procedures
+;;; are one definition of the logic, measured by the depth first ("the
+;;; checker's descent", at the end of the file). The pin's memo tables (infer, whnf_core, whnf, unfold, defeq
 ;;; success/failure; below, "the memo tables") change cost, never verdicts.
 
 (import "env.shard")
@@ -314,6 +316,56 @@
     ((St g t k m)
      (if (< (ctx_max_ticks c) (+ t 1)) (KFail (FOut RHeartbeats site)) (KOk (St g (+ t 1) k m) 0))))))
 
+;; a guard that passed was given a depth of at least 1: what the step of the depth at a guard's
+;; site descends by
+(def kres_passed ((r (KRes Int))) Bool
+  (match r
+    ((KOk _ _) true)
+    ((KFail _) false)))
+(theorem rec_guard_ok
+  ((c Ctx)
+   (st St)
+   (d Int)
+   (site Symbol)
+   (st1 St)
+   (x Int)
+   (h (= (rec_guard c st d site) (KOk st1 x))))
+  (Not (< d 1))
+  (by
+    (cases (Int.decLe d 0)
+      ((isFalse (hn) (arith))
+       (isTrue (hle)
+         (have e1 (= (rec_guard c st d site) (KFail (FOut RRecDepth site)))
+           (unfold rec_guard)
+           (rw (if_pos hle))
+           rfl)
+         (have e2 (= (KFail (FOut RRecDepth site)) (KOk st1 x)) (rw (<- e1)) (exact h))
+         (exact (absurd (congrArg kres_passed e2) (ne_true_of_eq_false (Eq.refl false)))))))))
+
+;; a loop of the checker goes round only when the heartbeat count advanced, under the limit,
+;; since the loop was entered — every pass through a guard gives that —, and the heartbeats
+;; left are what it descends by
+(fn loop_advanced ((c Ctx) (st St) (st2 St)) Bool
+  (if (< (st_ticks st) (st_ticks st2)) (if (<= (st_ticks st2) (ctx_max_ticks c)) true false) false))
+(theorem loop_advanced_lt ((c Ctx) (st St) (st2 St) (h (= (loop_advanced c st st2) true)))
+  (< (Int.natAbs (- (ctx_max_ticks c) (st_ticks st2)))
+    (Int.natAbs (- (ctx_max_ticks c) (st_ticks st))))
+  (by
+    (cases (Int.decLt (st_ticks st) (st_ticks st2))
+      ((isFalse (hn)
+         (have e (= (loop_advanced c st st2) false) (unfold loop_advanced) (rw (if_neg hn)) rfl)
+         (exact (absurd h (ne_true_of_eq_false e))))
+       (isTrue (h1)
+         (cases (Int.decLe (st_ticks st2) (ctx_max_ticks c))
+           ((isFalse (hn)
+              (have e (= (loop_advanced c st st2) false)
+                (unfold loop_advanced)
+                (rw (if_pos h1))
+                (rw (if_neg hn))
+                rfl)
+              (exact (absurd h (ne_true_of_eq_false e))))
+            (isTrue (h2) (apply natAbs_lt (arith) (arith))))))))))
+
 ;; local_ctx::mk_local_decl with a fresh id from the name generator
 (fn mk_local ((c Ctx) (st St) (n Name) (ty Expr) (v (Option Expr)) (bi BinderInfo)) Loc
   (match st
@@ -610,22 +662,22 @@
 ;; infer(e, infer_only): with io = False every rule also CHECKS; memoized
 ;; per mode (l. 332, 356)
 (fn infer ((c Ctx) (st St) (d Int) (e Expr) (io Bool)) (KRes Expr)
-  (measure d)
+  (measure (Int.natAbs d) 0 0)
   (match (rec_guard c st d (sym "infer"))
     ((KFail f) (KFail f))
     ((KOk st1 _)
      (match (tab_find (memo_infer (st_memo st1) io) e)
        ((some r) (KOk st1 r))
        (none
-         (match (infer_core c st1 d e io)
+         (match (infer_core c st1 (- d 1) e io)
            ((KFail f) (KFail f))
            ((KOk st2 r) (KOk (st_add_infer st2 io e r) r))))))))
 
 (fn infer_core ((c Ctx) (st1 St) (d Int) (e Expr) (io Bool)) (KRes Expr)
-  (measure d)
+  (measure (Int.natAbs d) 10 0)
   (match e
     ((Lit _ l) (infer_lit_gated c st1 l))
-    ((Proj _ s i x) (infer_proj c st1 (- d 1) s i x io))
+    ((Proj _ s i x) (infer_proj c st1 d s i x io))
     ((FVar _ id)
      (match (lctx_find (ctx_lctx c) id)
        ((some dcl) (KOk st1 (ldecl_type dcl)))
@@ -638,10 +690,10 @@
        ((some _) (KFail (FRej (RuleViolation (sym "undefined_universe")))))
        (none (KOk st1 (mk_sort (LSucc u)))))))
     ((Const _ n ls) (infer_constant c st1 n ls io))
-    ((Lam _ _ _ _ _) (infer_lambda c st1 (- d 1) e nil io))
-    ((Pi _ _ _ _ _) (infer_pi c st1 (- d 1) e nil nil io))
-    ((App _ f a) (if io (infer_app_only c st1 (- d 1) e) (infer_app_check c st1 (- d 1) f a)))
-    ((Let _ _ _ _ _) (infer_let c st1 (- d 1) e nil io))))
+    ((Lam _ _ _ _ _) (infer_lambda c st1 d e nil io))
+    ((Pi _ _ _ _ _) (infer_pi c st1 d e nil nil io))
+    ((App _ f a) (if io (infer_app_only c st1 d e) (infer_app_check c st1 d f a)))
+    ((Let _ _ _ _ _) (infer_let c st1 d e nil io))))
 
 ;; infer_constant (l. 101)
 (fn infer_constant ((c Ctx) (st St) (n Name) (ls (List Level)) (io Bool)) (KRes Expr)
@@ -665,6 +717,7 @@
 
 ;; ensure_sort_core (l. 62) / ensure_pi_core (l. 74)
 (fn ensure_sort ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 5 0)
   (if (is_sort e) (KOk st e)
   (match (whnf c st d e)
     ((KFail f) (KFail f))
@@ -672,6 +725,7 @@
      (if (is_sort e1) (KOk st1 e1) (KFail (FRej (RuleViolation (sym "type_expected")))))))))
 
 (fn ensure_pi ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 5 0)
   (if (is_pi e) (KOk st e)
   (match (whnf c st d e)
     ((KFail f) (KFail f))
@@ -680,6 +734,7 @@
 
 ;; the Sort of the type of e (ensure_sort_core(infer_type_core(e)))
 (fn infer_sort ((c Ctx) (st St) (d Int) (e Expr) (io Bool)) (KRes Expr)
+  (measure (Int.natAbs d) 6 0)
   (match (infer c st d e io)
     ((KFail f) (KFail f))
     ((KOk st1 t) (ensure_sort c st1 d t))))
@@ -691,6 +746,7 @@
 
 ;; is_prop (l. 383): up to level normalization
 (fn is_prop ((c Ctx) (st St) (d Int) (e Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 7 0)
   (match (infer_sort c st d e true)
     ((KFail f) (KFail f))
     ((KOk st1 s) (KOk st1 (normalizes_to_zero (sort_level s))))))
@@ -698,7 +754,7 @@
 ;; infer_lambda (l. 125): walk the telescope, opening each binder as an
 ;; fvar after its domain is checked; rebuild a Pi over the fvars
 (fn infer_lambda ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (io Bool)) (KRes Expr)
-  (measure (struct e))
+  (measure (Int.natAbs d) 7 (Expr.size e))
   (match e
     ((Lam _ n bi dom body)
      (match (instantiate_rev st dom fvars)
@@ -722,7 +778,7 @@
 ;; infer_pi (l. 144): Sort (imax u_1 (imax … (imax u_n v)))
 (fn infer_pi ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (us (List Level)) (io Bool))
   (KRes Expr)
-  (measure (struct e))
+  (measure (Int.natAbs d) 7 (Expr.size e))
   (match e
     ((Pi _ n bi dom body)
      (match (instantiate_rev st dom fvars)
@@ -753,6 +809,7 @@
 
 ;; infer_app, checking mode (l. 174–187)
 (fn infer_app_check ((c Ctx) (st St) (d Int) (f Expr) (a Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 6 0)
   (match (infer c st d f false)
     ((KFail x) (KFail x))
     ((KOk st1 fty)
@@ -775,6 +832,7 @@
 
 ;; infer_app, inference-only mode (l. 188–206)
 (fn infer_app_only ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 7 0)
   (match (infer c st d (get_app_fn e) true)
     ((KFail x) (KFail x))
     ((KOk st1 fty) (infer_app_walk c st1 d fty (get_app_args e) nil))))
@@ -782,7 +840,7 @@
 ;; `pending` = the arguments consumed since the last instantiation
 (fn infer_app_walk ((c Ctx) (st St) (d Int) (fty Expr) (args (List Expr)) (pending (List Expr)))
   (KRes Expr)
-  (measure (struct args))
+  (measure (Int.natAbs d) 6 (List.length args))
   (match args
     (nil
       (match (instantiate_rev st fty pending)
@@ -802,7 +860,7 @@
 
 ;; infer_let (l. 208)
 (fn infer_let ((c Ctx) (st St) (d Int) (e Expr) (fvars (List Expr)) (io Bool)) (KRes Expr)
-  (measure (struct e))
+  (measure (Int.natAbs d) 8 (Expr.size e))
   (match e
     ((Let _ n ty v body)
      (match (instantiate_rev st ty fvars)
@@ -826,6 +884,7 @@
                  ((Prod.mk st3 r2) (KOk st3 r2))))))))))))
 
 (fn check_let_value ((c Ctx) (st St) (d Int) (ty Expr) (v Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 7 0)
   (match (infer_sort c st d ty false)
     ((KFail f) (KFail f))
     ((KOk st1 _)
@@ -839,6 +898,7 @@
 
 ;; infer_proj (l. 247)
 (fn infer_proj ((c Ctx) (st St) (d Int) (sname Name) (idx Int) (x Expr) (io Bool)) (KRes Expr)
+  (measure (Int.natAbs d) 9 0)
   (if (< idx 0) (KFail (FRej (RuleViolation (sym "invalid_projection"))))
   (match (infer c st d x io)
     ((KFail f) (KFail f))
@@ -870,7 +930,7 @@
           (_ (KFail (FRej (RuleViolation (sym "invalid_projection"))))))))))))
 
 (fn proj_skip_params ((c Ctx) (st St) (d Int) (r Expr) (params (List Expr))) (KRes Expr)
-  (measure (struct params))
+  (measure (Int.natAbs d) 5 (List.length params))
   (match params
     (nil (KOk st r))
     ((cons p rest)
@@ -883,10 +943,12 @@
              ((Prod.mk st2 b1) (proj_skip_params c st2 d b1 rest))))
           (_ (KFail (FRej (RuleViolation (sym "invalid_projection")))))))))))
 
+;; the walk counts the fields up to the index, and a field past it — a negative index — is an
+;; invalid projection: the fields left are what it descends by
 (fn proj_walk_fields
   ((c Ctx) (st St) (d Int) (r Expr) (iname Name) (idx Int) (i Int) (x Expr) (isp Bool))
   (KRes Expr)
-  (measure (- idx i))
+  (measure (Int.natAbs d) 8 (Int.natAbs (- idx i)))
   (match (whnf c st d r)
     ((KFail f) (KFail f))
     ((KOk st1 r1)
@@ -899,6 +961,7 @@
               ((KOk st2 dp)
                (if dp (KOk st2 dom) (KFail (FRej (RuleViolation (sym "invalid_projection")))))))
             (KOk st1 dom))
+        (if (<= idx i) (KFail (FRej (RuleViolation (sym "invalid_projection"))))
         (if (has_loose_bvars body)
           (match (if isp (is_prop c st1 d dom) (KOk st1 true))
             ((KFail f) (KFail f))
@@ -909,12 +972,13 @@
                   (match (instantiate1 st3 body pj)
                     ((Prod.mk st4 b1) (proj_walk_fields c st4 d b1 iname idx (+ i 1) x isp)))))
                (KFail (FRej (RuleViolation (sym "invalid_projection")))))))
-          (proj_walk_fields c st1 d body iname idx (+ i 1) x isp))))
+          (proj_walk_fields c st1 d body iname idx (+ i 1) x isp)))))
        (_ (KFail (FRej (RuleViolation (sym "invalid_projection")))))))))
 
 ;; ---- weak-head normalization (whnf_core l. 468, whnf l. 736) ------------------
 
 (fn whnf_core ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes Expr)
+  (measure (Int.natAbs d) 1 0)
   (match (whnf_core_c c st d e cr cp)
     ((KFail f) (KFail f))
     ((KOk st1 (Prod.mk _ r)) (KOk st1 r))))
@@ -925,22 +989,22 @@
 ;; App/Let/Proj/let-bound FVar go through the cache (l. 491), which is
 ;; filled only when neither cheap flag is set (l. 547)
 (fn whnf_core_c ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Prod Bool Expr))
-  (measure d)
+  (measure (Int.natAbs d) 0 0)
   (match (rec_guard c st d (sym "whnf_core"))
     ((KFail f) (KFail f))
     ((KOk st1 _)
      (match e
        ((FVar _ id)
         (match (lctx_find (ctx_lctx c) id)
-          ((some (LDecl _ _ _ (some _) _)) (whnf_core_cached c st1 d e cr cp))
+          ((some (LDecl _ _ _ (some _) _)) (whnf_core_cached c st1 (- d 1) e cr cp))
           (_ (KOk st1 (Prod.mk false e)))))
-       ((Proj _ _ _ _) (whnf_core_cached c st1 d e cr cp))
-       ((App _ _ _) (whnf_core_cached c st1 d e cr cp))
-       ((Let _ _ _ _ _) (whnf_core_cached c st1 d e cr cp))
+       ((Proj _ _ _ _) (whnf_core_cached c st1 (- d 1) e cr cp))
+       ((App _ _ _) (whnf_core_cached c st1 (- d 1) e cr cp))
+       ((Let _ _ _ _ _) (whnf_core_cached c st1 (- d 1) e cr cp))
        (_ (KOk st1 (Prod.mk false e)))))))
 
 (fn whnf_core_cached ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Prod Bool Expr))
-  (measure d)
+  (measure (Int.natAbs d) 12 0)
   ;; a hit's "changed" is structural: the cached key may be a distinct node equal to e
   (match (tab_find (memo_whnf_core (st_memo st)) e)
     ((some r) (KOk st (Prod.mk (bool_not (expr_eq e r)) r)))
@@ -956,57 +1020,58 @@
 
 ;; the reductions of whnf_core after the cache (l. 500–546)
 (fn whnf_core_work ((c Ctx) (st1 St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Prod Bool Expr))
-  (measure d)
+  (measure (Int.natAbs d) 11 0)
   (match e
     ((FVar _ id)
      (match (lctx_find (ctx_lctx c) id)
        ((some (LDecl _ _ _ (some v) _))
-        (match (whnf_core_c c st1 (- d 1) v cr cp)
+        (match (whnf_core_c c st1 d v cr cp)
           ((KFail f) (KFail f))
           ((KOk st2 (Prod.mk _ r)) (KOk st2 (Prod.mk true r)))))
        (_ (KOk st1 (Prod.mk false e)))))
     ((Proj _ _ _ _)
-     (match (reduce_proj c st1 (- d 1) e cr cp)
+     (match (reduce_proj c st1 d e cr cp)
        ((KFail f) (KFail f))
        ((KOk st2 (some m))
-        (match (whnf_core_c c st2 (- d 1) m cr cp)
+        (match (whnf_core_c c st2 d m cr cp)
           ((KFail f) (KFail f))
           ((KOk st3 (Prod.mk _ r)) (KOk st3 (Prod.mk true r)))))
        ((KOk st2 none) (KOk st2 (Prod.mk false e)))))
     ((App _ _ _)
      (let ((f0 (get_app_fn e)) (args (get_app_args e)))
-       (match (whnf_core_c c st1 (- d 1) f0 cr cp)
+       (match (whnf_core_c c st1 d f0 cr cp)
          ((KFail f) (KFail f))
          ((KOk st2 (Prod.mk head_changed f))
           (if (is_lambda f)
             (match (beta_head st2 f args)
               ((Prod.mk st20 red)
-               (match (whnf_core_c c st20 (- d 1) red cr cp)
+               (match (whnf_core_c c st20 d red cr cp)
                  ((KFail x) (KFail x))
                  ((KOk st3 (Prod.mk _ r)) (KOk st3 (Prod.mk true r))))))
           (if (bool_not head_changed)
-            (match (reduce_recursor c st2 (- d 1) e cr cp)
+            (match (reduce_recursor c st2 d e cr cp)
               ((KFail x) (KFail x))
               ((KOk st3 (some r))
-               (match (whnf_core_c c st3 (- d 1) r cr cp)
+               (match (whnf_core_c c st3 d r cr cp)
                  ((KFail x) (KFail x))
                  ((KOk st4 (Prod.mk _ r2)) (KOk st4 (Prod.mk true r2)))))
               ((KOk st3 none) (KOk st3 (Prod.mk false e))))
             (match (mk_app_list st2 f args)
               ((Prod.mk st20 e1)
-               (match (whnf_core_c c st20 (- d 1) e1 cr cp)
+               (match (whnf_core_c c st20 d e1 cr cp)
                  ((KFail x) (KFail x))
                  ((KOk st3 (Prod.mk _ r)) (KOk st3 (Prod.mk true r))))))))))))
     ((Let _ _ _ v b)
      (match (instantiate1 st1 b v)
        ((Prod.mk st10 b1)
-        (match (whnf_core_c c st10 (- d 1) b1 cr cp)
+        (match (whnf_core_c c st10 d b1 cr cp)
           ((KFail f) (KFail f))
           ((KOk st2 (Prod.mk _ r)) (KOk st2 (Prod.mk true r)))))))
     (_ (KOk st1 (Prod.mk false e)))))
 
 ;; reduce_proj (l. 444) / reduce_proj_core (l. 420)
 (fn reduce_proj ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 6 0)
   (match e
     ((Proj _ sname idx x)
      (if (< idx 0) (KOk st none)
@@ -1016,6 +1081,7 @@
     (_ (KOk st none))))
 
 (fn reduce_proj_core ((c Ctx) (st St) (d Int) (x0 Expr) (sname Name) (idx Int)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 5 0)
   (let
     ((major (KRes Expr)
        (match x0
@@ -1038,6 +1104,7 @@
 
 ;; reduce_recursor (l. 393): quotient rules first, then iota
 (fn reduce_recursor ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 10 0)
   (match (if (env_quot_init (ctx_env c)) (quot_reduce_rec c st d e) (KOk st none))
     ((KFail f) (KFail f))
     ((KOk st1 (some r)) (KOk st1 (some r)))
@@ -1045,6 +1112,7 @@
 
 ;; quot_reduce_rec (quot.h l. 44)
 (fn quot_reduce_rec ((c Ctx) (st St) (d Int) (e Expr)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 5 0)
   (match (get_app_fn e)
     ((Const _ fnn _)
      (let
@@ -1138,6 +1206,7 @@
 
 ;; to_cnstr_when_K (inductive.h l. 20)
 (fn to_cnstr_when_K ((c Ctx) (st St) (d Int) (induct Name) (nparams Int) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 5 0)
   (match (infer c st d e true)
     ((KFail f) (KFail f))
     ((KOk st1 ty0)
@@ -1157,6 +1226,7 @@
 
 ;; to_cnstr_when_structure (inductive.h l. 57)
 (fn to_cnstr_when_structure ((c Ctx) (st St) (d Int) (induct Name) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 8 0)
   (if
     (bool_or (bool_not (is_non_rec_structure (ctx_env c) induct)) (is_constructor_app (ctx_env c) e))
     (KOk st e)
@@ -1176,6 +1246,7 @@
 
 ;; inductive_reduce_rec (inductive.h l. 77)
 (fn inductive_reduce_rec ((c Ctx) (st St) (d Int) (e Expr) (cr Bool) (cp Bool)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 9 0)
   (match (get_app_fn e)
     ((Const _ rn rls)
      (match (env_find (ctx_env c) rn)
@@ -1280,7 +1351,7 @@
 
 ;; whnf (l. 736): the easy kinds uncached; the rest through the cache (l. 755, 763–772)
 (fn whnf ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
-  (measure d)
+  (measure (Int.natAbs d) 4 0)
   (match e
     ((BVar _ _) (KOk st e))
     ((Sort _ _) (KOk st e))
@@ -1293,7 +1364,7 @@
     (_ (whnf_cached c st d e))))
 
 (fn whnf_cached ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
-  (measure d)
+  (measure (Int.natAbs d) 3 0)
   (match (tab_find (memo_whnf (st_memo st)) e)
     ((some r) (KOk st r))
     (none
@@ -1301,11 +1372,11 @@
         ((KFail f) (KFail f))
         ((KOk st1 r) (KOk (st_add_whnf st1 e r) r))))))
 
-;; the pin's `while (true)` (l. 757): no recursion-depth scope per
-;; iteration — whnf_core's guard consumes a heartbeat each time, which is
-;; the loop's measure
+;; the pin's `while (true)` (l. 757): no recursion-depth scope per iteration — whnf_core's guard
+;; consumes a heartbeat each time, and the heartbeats left are the loop's measure: it goes round
+;; only when the count advanced (`loop_advanced`), which every pass through a guard gives
 (fn whnf_loop ((c Ctx) (st St) (d Int) (t Expr)) (KRes Expr)
-  (measure (- (ctx_max_ticks c) (st_ticks st)))
+  (measure (Int.natAbs d) 2 (Int.natAbs (- (ctx_max_ticks c) (st_ticks st))))
   (match (whnf_core c st d t false false)
     ((KFail f) (KFail f))
     ((KOk st1 t1)
@@ -1318,7 +1389,9 @@
           ((KOk st3 (some v)) (KOk st3 v))
           ((KOk st3 none)
            (match (unfold_definition c st3 t1)
-             ((Prod.mk st4 (some t2)) (whnf_loop c st4 d t2))
+             ((Prod.mk st4 (some t2))
+              (if (loop_advanced c st st4) (whnf_loop c st4 d t2)
+              (KFail (FOut RHeartbeats (sym "whnf_loop")))))
              ((Prod.mk st4 none) (KOk st4 t1))))))))))
 
 ;; ---- Nat literal accelerators (reduce_nat, l. 702) ------------------------------
@@ -1395,13 +1468,17 @@
   (if (< (nat_max_size) (nat_bytes n)) (KFail (FOut RNatSize (sym "reduce_nat")))
   (KOk st (nat_lit n))))
 
+;; an argument is normalized one level deeper: the accelerators nest as the term does, and
+;; each level is a step of the depth (reached only past a guard: the test never fails there)
 (fn reduce_nat ((c Ctx) (st St) (d Int) (e Expr)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 0 0)
+  (if (< d 1) (KFail (FOut RRecDepth (sym "reduce_nat")))
   (let ((nargs (get_app_num_args e)))
     (if (= nargs 1)
       (match e
         ((App _ f a)
          (if (bool_and (is_const_named f (nm_nat_succ)) (env_pinned (ctx_env c) (nm_nat)))
-           (match (whnf c st d a)
+           (match (whnf c st (- d 1) a)
              ((KFail x) (KFail x))
              ((KOk st1 a1)
               (if (is_nat_lit_ext a1)
@@ -1418,11 +1495,11 @@
            ((Const _ fnn _)
             (let ((op (nat_op_of fnn)))
               (if (bool_or (= op 0) (bool_not (env_pinned (ctx_env c) fnn))) (KOk st none)
-              (match (whnf c st d a)
+              (match (whnf c st (- d 1) a)
                 ((KFail x) (KFail x))
                 ((KOk st1 a1)
                  (if (bool_not (is_nat_lit_ext a1)) (KOk st1 none)
-                 (match (whnf c st1 d b)
+                 (match (whnf c st1 (- d 1) b)
                    ((KFail x) (KFail x))
                    ((KOk st2 b1)
                     (if (bool_not (is_nat_lit_ext b1)) (KOk st2 none)
@@ -1431,13 +1508,13 @@
                       ((KOk st3 v) (KOk st3 (some v)))))))))))))
            (_ (KOk st none))))
         (_ (KOk st none)))
-      (KOk st none)))))
+      (KOk st none))))))
 
 ;; ---- definitional equality (is_def_eq_core, l. 1171) --------------------------
 
 ;; the public is_def_eq (l. 1247): successes are cached
 (fn is_def_eq ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
-  (measure d)
+  (measure (Int.natAbs d) 1 0)
   (match (is_def_eq_core c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 ok) (KOk (if ok (cache_success st1 t s) st1) ok))))
@@ -1446,7 +1523,7 @@
 
 ;; quick_is_def_eq (l. 835): structural equality or a cached success first
 (fn quick_is_def_eq ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
-  (measure d)
+  (measure (Int.natAbs d) 5 0)
   (if (expr_eq t s) (KOk st LTrue)
   (if (succeeded_before st t s) (KOk st LTrue)
   (match t
@@ -1476,12 +1553,12 @@
 ;; is_def_eq_binding (l. 785): same-kind telescopes; domains compared
 ;; where they differ syntactically; bodies under shared fvars
 (fn is_def_eq_binding ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
-  (measure d)
+  (measure (Int.natAbs d) 4 0)
   (is_def_eq_binding_go c st d t s nil (is_lambda t)))
 
 (fn is_def_eq_binding_go ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (subst (List Expr)) (lam Bool))
   (KRes Bool)
-  (measure (struct t))
+  (measure (Int.natAbs d) 3 (Expr.size t))
   (match (binding_parts t lam)
     (none (defeq_under c st d t s subst))
     ((some (Prod.mk td tb))
@@ -1504,6 +1581,7 @@
 
 ;; is_def_eq of two terms instantiated with the shared locals
 (fn defeq_under ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (subst (List Expr))) (KRes Bool)
+  (measure (Int.natAbs d) 2 0)
   (match (instantiate_rev st t subst)
     ((Prod.mk st1 t1)
      (match (instantiate_rev st1 s subst)
@@ -1514,6 +1592,46 @@
     ((Lam _ _ _ dm b) (if lam (some (Prod.mk dm b)) none))
     ((Pi _ _ _ dm b) (if lam none (some (Prod.mk dm b))))
     (_ none)))
+;; the body `binding_parts` returns is under the binder: what the walk down two binders
+;; (`is_def_eq_binding_go`) descends by
+(theorem binding_parts_lt
+  ((e Expr) (lam Bool) (dm Expr) (b Expr) (h (= (binding_parts e lam) (some (Prod.mk dm b)))))
+  (< (Expr.size b) (Expr.size e))
+  (by
+    (cases e
+      ((BVar (a i) (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (FVar (a i) (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (Sort (a u) (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (Const (a n ls)
+         (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (App (a f x)
+         (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (Lam (a n bi dm0 b0)
+         (cases lam
+           ((false ()
+              (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+            (true () (have e2 (= (some (Prod.mk dm0 b0)) (some (Prod.mk dm b))) (exact h))
+              (have e3 (= (Prod.mk dm0 b0) (Prod.mk dm b)) (exact (Option.some.inj e2)))
+              (have eb (= b0 b) (exact (congrArg Prod.snd e3)))
+              (rw (<- eb))
+              (rw Expr.size.eq_6)
+              (arith)))))
+       (Pi (a n bi dm0 b0)
+         (cases lam
+           ((false () (have e2 (= (some (Prod.mk dm0 b0)) (some (Prod.mk dm b))) (exact h))
+              (have e3 (= (Prod.mk dm0 b0) (Prod.mk dm b)) (exact (Option.some.inj e2)))
+              (have eb (= b0 b) (exact (congrArg Prod.snd e3)))
+              (rw (<- eb))
+              (rw Expr.size.eq_7)
+              (arith))
+            (true ()
+              (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false))))))))
+       (Let (a n ty v b0)
+         (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (Lit (a l) (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (Proj (a n i x)
+         (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (MVar (a i) (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))))))
 (fn binding_name ((e Expr)) Name
   (match e
     ((Lam _ n _ _ _) n)
@@ -1527,7 +1645,7 @@
 
 ;; is_def_eq_args (l. 863)
 (fn is_def_eq_args ((c Ctx) (st St) (d Int) (ts (List Expr)) (ss (List Expr))) (KRes Bool)
-  (measure (struct ts))
+  (measure (Int.natAbs d) 2 (List.length ts))
   (match ts
     (nil
       (KOk st
@@ -1544,6 +1662,7 @@
 
 ;; try_eta_expansion_core (l. 874), both directions (l. 1229)
 (fn try_eta_expansion_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 5 0)
   (if (bool_and (is_lambda t) (bool_not (is_lambda s)))
     (match (infer c st d s true)
       ((KFail f) (KFail f))
@@ -1563,12 +1682,14 @@
     (KOk st false)))
 
 (fn try_eta_expansion ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 6 0)
   (match (try_eta_expansion_core c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 ok) (if ok (KOk st1 true) (try_eta_expansion_core c st1 d s t)))))
 
 ;; try_eta_struct_core (l. 889), both directions
 (fn try_eta_struct_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 3 0)
   (match (get_app_fn s)
     ((Const _ cn _)
      (match (env_find (ctx_env c) cn)
@@ -1591,7 +1712,7 @@
 
 (fn eta_struct_fields ((c Ctx) (st St) (d Int) (induct Name) (t Expr) (fields (List Expr)) (i Int))
   (KRes Bool)
-  (measure (struct fields))
+  (measure (Int.natAbs d) 2 (List.length fields))
   (match fields
     (nil (KOk st true))
     ((cons a r)
@@ -1602,12 +1723,14 @@
           ((KOk st1 ok) (if ok (eta_struct_fields c st1 d induct t r (+ i 1)) (KOk st1 false)))))))))
 
 (fn try_eta_struct ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 4 0)
   (match (try_eta_struct_core c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 ok) (if ok (KOk st1 true) (try_eta_struct_core c st1 d s t)))))
 
 ;; is_def_eq_app (l. 911)
 (fn is_def_eq_app ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 3 0)
   (if (bool_and (is_app t) (is_app s))
     (let ((targs (get_app_args t)) (sargs (get_app_args s)))
       (if (bool_not (= (len targs) (len sargs))) (KOk st false)
@@ -1618,6 +1741,7 @@
 
 ;; is_def_eq_proof_irrel (l. 932)
 (fn is_def_eq_proof_irrel ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
+  (measure (Int.natAbs d) 8 0)
   (match (infer c st d t true)
     ((KFail f) (KFail f))
     ((KOk st1 tty)
@@ -1631,6 +1755,7 @@
 
 ;; try_unfold_proj_app (l. 983)
 (fn try_unfold_proj_app ((c Ctx) (st St) (d Int) (e Expr)) (KRes (Option Expr))
+  (measure (Int.natAbs d) 1 0)
   (if (is_proj (get_app_fn e))
     (match (whnf_core_c c st d e false false)
       ((KFail f) (KFail f))
@@ -1658,12 +1783,14 @@
         (_ -1)))))
 
 (fn unfold_core ((c Ctx) (st St) (d Int) (e Expr)) (KRes Expr)
+  (measure (Int.natAbs d) 2 0)
   (match (unfold_definition c st e)
     ((Prod.mk st1 (some e1)) (whnf_core c st1 d e1 false true))
     ((Prod.mk st1 none) (KOk st1 e))))
 
 ;; lazy_delta_reduction_step (l. 999)
 (fn lazy_delta_step ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes StepRes)
+  (measure (Int.natAbs d) 7 0)
   (match (is_delta c t)
     (none
       (match (is_delta c s)
@@ -1711,6 +1838,7 @@
 ;; skipped after a cached failure, and a failure is cached
 (fn lazy_delta_same ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (dt ConstantInfo) (ds ConstantInfo))
   (KRes Bool)
+  (measure (Int.natAbs d) 3 0)
   (if
     (bool_and (is_app t)
       (bool_and (is_app s)
@@ -1734,6 +1862,7 @@
     (_ false)))
 
 (fn lazy_delta_finish ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes StepRes)
+  (measure (Int.natAbs d) 6 0)
   (match (quick_is_def_eq c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 LTrue) (KOk st1 (StepRes REqual t s)))
@@ -1754,6 +1883,7 @@
     (_ none)))
 
 (fn is_def_eq_offset ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
+  (measure (Int.natAbs d) 1 0)
   (if (bool_and (is_nat_zero_e t) (is_nat_zero_e s)) (KOk st LTrue)
   (match (is_nat_succ_e t)
     (none (KOk st LUndef))
@@ -1764,10 +1894,10 @@
 
 ;; lazy_delta_reduction (l. 1088): the pin's `while (true)` — no
 ;; recursion-depth scope per iteration; every Continue went through a
-;; guarded whnf_core (unfold_core / try_unfold_proj_app), whose heartbeat
-;; is the loop's measure
+;; guarded whnf_core (unfold_core / try_unfold_proj_app), and the loop goes
+;; round only when the heartbeat count advanced (`loop_advanced`)
 (fn lazy_delta_reduction ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes DeltaRes)
-  (measure (- (ctx_max_ticks c) (st_ticks st)))
+  (measure (Int.natAbs d) 8 (Int.natAbs (- (ctx_max_ticks c) (st_ticks st))))
   (match (is_def_eq_offset c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 LTrue) (KOk st1 (DeltaRes LTrue t s)))
@@ -1788,13 +1918,16 @@
              ((KOk st4 _)
               (match (lazy_delta_step c st4 d t s)
                 ((KFail f) (KFail f))
-                ((KOk st5 (StepRes RContinue t1 s1)) (lazy_delta_reduction c st5 d t1 s1))
+                ((KOk st5 (StepRes RContinue t1 s1))
+                 (if (loop_advanced c st st5) (lazy_delta_reduction c st5 d t1 s1)
+                 (KFail (FOut RHeartbeats (sym "lazy_delta_reduction")))))
                 ((KOk st5 (StepRes RUnknown t1 s1)) (KOk st5 (DeltaRes LUndef t1 s1)))
                 ((KOk st5 (StepRes REqual t1 s1)) (KOk st5 (DeltaRes LTrue t1 s1)))
                 ((KOk st5 (StepRes RDiff t1 s1)) (KOk st5 (DeltaRes LFalse t1 s1)))))))))))))
 
 ;; l. 1093–1099: reduce_nat on either side, then recurse on the core
 (fn lazy_delta_nat ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes (Option Bool))
+  (measure (Int.natAbs d) 1 0)
   (match (reduce_nat c st d t)
     ((KFail f) (KFail f))
     ((KOk st1 (some tv))
@@ -1813,10 +1946,12 @@
 ;; lazy_delta_proj_reduction (l. 1123): the pin's `while (true)`, as above
 (fn lazy_delta_proj_reduction ((c Ctx) (st St) (d Int) (t Expr) (s Expr) (sname Name) (idx Int))
   (KRes Bool)
-  (measure (- (ctx_max_ticks c) (st_ticks st)))
+  (measure (Int.natAbs d) 8 (Int.natAbs (- (ctx_max_ticks c) (st_ticks st))))
   (match (lazy_delta_step c st d t s)
     ((KFail f) (KFail f))
-    ((KOk st1 (StepRes RContinue t1 s1)) (lazy_delta_proj_reduction c st1 d t1 s1 sname idx))
+    ((KOk st1 (StepRes RContinue t1 s1))
+     (if (loop_advanced c st st1) (lazy_delta_proj_reduction c st1 d t1 s1 sname idx)
+     (KFail (FOut RHeartbeats (sym "lazy_delta_proj_reduction")))))
     ((KOk st1 (StepRes REqual _ _)) (KOk st1 true))
     ((KOk st1 (StepRes _ t1 s1))
      (match (reduce_proj_core c st1 d t1 sname idx)
@@ -1830,6 +1965,7 @@
 
 ;; try_string_lit_expansion (l. 1145), both directions
 (fn try_string_lit_expansion_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
+  (measure (Int.natAbs d) 5 0)
   (match t
     ((Lit _ (LitStr bs))
      (match s
@@ -1848,6 +1984,7 @@
     (_ (KOk st LUndef))))
 
 (fn try_string_lit_expansion ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes LBool)
+  (measure (Int.natAbs d) 6 0)
   (match (try_string_lit_expansion_core c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 LUndef) (try_string_lit_expansion_core c st1 d s t))
@@ -1855,6 +1992,7 @@
 
 ;; is_def_eq_unit_like (l. 1159)
 (fn is_def_eq_unit_like ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 5 0)
   (match (infer c st d t true)
     ((KFail f) (KFail f))
     ((KOk st1 tty0)
@@ -1878,7 +2016,7 @@
 
 ;; is_def_eq_core (l. 1171), in the pin's order
 (fn is_def_eq_core ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
-  (measure d)
+  (measure (Int.natAbs d) 0 0)
   (match (rec_guard c st d (sym "is_def_eq"))
     ((KFail f) (KFail f))
     ((KOk st0 _)
@@ -1900,6 +2038,7 @@
 
 ;; steps 2–3: whnf_core with cheap projections, quick again, proof irrelevance
 (fn defeq_step2 ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 10 0)
   (match (whnf_core_c c st d t false true)
     ((KFail f) (KFail f))
     ((KOk st1 (Prod.mk tch tn))
@@ -1919,6 +2058,7 @@
 
 ;; steps 4–6: lazy delta, constants, fvars, projections
 (fn defeq_step4 ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 9 0)
   (match (lazy_delta_reduction c st d t s)
     ((KFail f) (KFail f))
     ((KOk st1 (DeltaRes LTrue _ _)) (KOk st1 true))
@@ -1949,6 +2089,7 @@
 
 ;; steps 7–13: full whnf_core, app, eta, struct eta, string, unit-like
 (fn defeq_step7 ((c Ctx) (st St) (d Int) (t Expr) (s Expr)) (KRes Bool)
+  (measure (Int.natAbs d) 7 0)
   (match (whnf_core_c c st d t false false)
     ((KFail f) (KFail f))
     ((KOk st1 (Prod.mk tch tnn))
@@ -1973,3 +2114,648 @@
                    ((KOk st6 LTrue) (KOk st6 true))
                    ((KOk st6 LFalse) (KOk st6 false))
                    ((KOk st6 LUndef) (is_def_eq_unit_like c st6 d t s)))))))))))))))
+
+;; ---- the checker's descent -------------------------------------------------------------
+;; The 60 functions from `infer` to `defeq_step7` call each other and are one definition,
+;; measured in three parts: the depth; a rank, the longest chain of calls below the function
+;; that stay at its depth; and what a walk or a loop of its own descends by. A call owes one of
+;; three things. The depth falls, at the three sites past a guard (`rec_guard_ok`) and where
+;; `reduce_nat` normalizes an argument, past its test. Or the depth is the caller's and the rank
+;; falls — every call but those and the twelve of a function to itself. Or depth and rank are
+;; the caller's and the third part falls: a term's body, a list's rest, the fields left up to an
+;; index, the heartbeats left past `loop_advanced`.
+
+(fulfills infer.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 hg x9)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills infer_core.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_core.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_core.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_core.dec_4
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_core.dec_5
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_core.dec_6
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ensure_sort.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ensure_pi.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_sort.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_sort.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_prop.dec_1
+  (by (intro x1 x2 x3 x4) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_lambda.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_lambda.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 he x13 x14 x15 x16 x17 x18 x19 x20 x21)
+    (rw he)
+    (rw Expr.size.eq_6)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills infer_lambda.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_pi.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_pi.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 he x14 x15 x16 x17 x18 x19 x20 x21 x22)
+    (rw he)
+    (rw Expr.size.eq_7)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills infer_pi.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_check.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_check.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_check.dec_3
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_check.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_only.dec_1
+  (by (intro x1 x2 x3 x4) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_only.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_walk.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 ha x10 x11 x12 x13 x14 x15)
+    (rw ha)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills infer_app_walk.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_app_walk.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 ha x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22)
+    (rw ha)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills infer_let.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_let.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 he x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24)
+    (rw he)
+    (rw Expr.size.eq_8)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills infer_let.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills check_let_value.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills check_let_value.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills check_let_value.dec_3
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_proj.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_proj.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_proj.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29 x30)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_proj.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29 x30 x31 x32 x33 x34 x35)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills infer_proj.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29 x30 x31 x32 x33 x34 x35 x36 x37)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills proj_skip_params.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills proj_skip_params.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 hp x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (rw hp)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills proj_walk_fields.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills proj_walk_fields.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 hlt x20)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply natAbs_lt (arith) (arith))))))
+(fulfills proj_walk_fields.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills proj_walk_fields.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 hlt x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply natAbs_lt (arith) (arith))))))
+(fulfills proj_walk_fields.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_c.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 hg x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills whnf_core_c.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 hg x10 x11 x12 x13 x14)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills whnf_core_c.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 hg x10 x11 x12 x13)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills whnf_core_c.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 hg x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills whnf_core_cached.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_4
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_6
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_7
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_8
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_core_work.dec_9
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_proj.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_proj.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_proj.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_proj_core.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_recursor.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills reduce_recursor.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills quot_reduce_rec.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_K.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_K.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_K.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_K.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_structure.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_structure.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills to_cnstr_when_structure.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills inductive_reduce_rec.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills inductive_reduce_rec.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills inductive_reduce_rec.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills inductive_reduce_rec.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29 x30 x31 x32 x33 x34 x35 x36)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills inductive_reduce_rec.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26 x27 x28 x29 x30 x31 x32)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_cached.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_loop.dec_1
+  (by (intro x1 x2 x3 x4) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_loop.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills whnf_loop.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 hl)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply loop_advanced_lt (exact hl))))))
+(fulfills reduce_nat.dec_1
+  (by
+    (intro x1 x2 x3 x4 hd x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.left (apply natAbs_pred (exact hd)))))
+(fulfills reduce_nat.dec_2
+  (by
+    (intro x1 x2 x3 x4 hd x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21)
+    (apply Prod.Lex.left (apply natAbs_pred (exact hd)))))
+(fulfills reduce_nat.dec_3
+  (by
+    (intro x1 x2 x3 x4 hd x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.left (apply natAbs_pred (exact hd)))))
+(fulfills is_def_eq.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills quick_is_def_eq.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills quick_is_def_eq.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_binding.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_binding_go.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_binding_go.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_binding_go.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_binding_go.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 hb x11 x12 x13 x14 x15 x16 x17)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply binding_parts_lt (exact hb))))))
+(fulfills is_def_eq_binding_go.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 hb x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply binding_parts_lt (exact hb))))))
+(fulfills defeq_under.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_args.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_args.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 ht x9 x10 x11 x12 x13 x14)
+    (rw ht)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills try_eta_expansion_core.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_expansion_core.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_expansion_core.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_expansion.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_expansion.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_struct_core.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_struct_core.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_struct_core.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_struct_core.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills eta_struct_fields.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills eta_struct_fields.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 hf x11 x12 x13 x14 x15 x16)
+    (rw hf)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills try_eta_struct.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_eta_struct.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_app.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_app.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_proof_irrel.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_proof_irrel.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_proof_irrel.dec_3
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_proof_irrel.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_unfold_proj_app.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills unfold_core.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_3
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_5
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_6
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_7
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_8
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_9
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_10
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_11
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_12
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_13
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_14
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_15
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_step.dec_16
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_same.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_finish.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_offset.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_reduction.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_reduction.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_reduction.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_reduction.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 hl)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply loop_advanced_lt (exact hl))))))
+(fulfills lazy_delta_nat.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_nat.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_nat.dec_3
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_nat.dec_4
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_1
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 hl)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply loop_advanced_lt (exact hl))))))
+(fulfills lazy_delta_proj_reduction.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_6
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills lazy_delta_proj_reduction.dec_7
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_string_lit_expansion_core.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_string_lit_expansion_core.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_string_lit_expansion.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills try_string_lit_expansion.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_unit_like.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_unit_like.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_unit_like.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_unit_like.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24
+      x25 x26)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills is_def_eq_core.dec_1
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 hg)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills is_def_eq_core.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 hg x9 x10)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills is_def_eq_core.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 hg x9 x10 x11 x12)
+    (apply Prod.Lex.left (apply natAbs_pred (apply rec_guard_ok (exact hg))))))
+(fulfills defeq_step2.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step2.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step2.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step2.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step2.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_2
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_6
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_7
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_8
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_9
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step4.dec_10
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_1
+  (by (intro x1 x2 x3 x4 x5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_2
+  (by (intro x1 x2 x3 x4 x5 x6 x7 x8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_3
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_4
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_5
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_6
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_7
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills defeq_step7.dec_8
+  (by
+    (intro x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
