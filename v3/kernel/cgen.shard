@@ -124,6 +124,7 @@
     ((cons (Prod.mk k v) r) (if (name_eq k c) (some v) (cg_tag_assoc r c)))))
 (fn cg_tags ((ds (List EDecl)) (t (IntMap (List (Prod Name (Prod Int Int))))) (next Int))
   (IntMap (List (Prod Name (Prod Int Int))))
+  (measure (List.length ds))
   (match ds
     (nil t)
     ((cons (EInd _ _ cs) r)
@@ -134,6 +135,7 @@
 (fn cg_tag_ctors
   ((cs (List ECtorDef)) (t (IntMap (List (Prod Name (Prod Int Int))))) (next Int) (i Int))
   (Prod (IntMap (List (Prod Name (Prod Int Int)))) Int)
+  (measure (List.length cs))
   (match cs
     (nil (Prod.mk t next))
     ((cons (ECtorDef c fs) r)
@@ -147,16 +149,23 @@
   (if (= role 2) 900
   (if (= role 8) 908
   (+ 899 role)))))
+(fulfills cg_tag_ctors.dec_1 (by (intro p c fs r h hr) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_tag_ctors.dec_2 (by (intro p c fs r h hr) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_tags.dec_1
+  (by (intro p w1 w2 cs r h t1 next1 h1) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_tags.dec_2 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 ;; what the runtime cannot hold of a type's constructors, each a refusal. The World's tag is
 ;; fixed and even, and with it the bit an `if` reads: a constructor named `World` that is the
 ;; second of its type (Init's own are at their roles' places by declaration). A cell's
 ;; fields: one more than the allocator's size classes reach. errs is newest first
 (fn cg_ctor_errs ((ds (List EDecl)) (errs (List (List Int)))) (List (List Int))
+  (measure (List.length ds))
   (match ds
     (nil errs)
     ((cons (EInd _ _ cs) r) (cg_ctor_errs r (cg_ctor_errs_in cs 0 errs)))
     ((cons _ r) (cg_ctor_errs r errs))))
 (fn cg_ctor_errs_in ((cs (List ECtorDef)) (i Int) (errs (List (List Int)))) (List (List Int))
+  (measure (List.length cs))
   (match cs
     (nil errs)
     ((cons (ECtorDef c fs) r)
@@ -181,8 +190,12 @@
             (append (utf8 " fields: a cell of the runtime holds at most ")
               (show_nat (cg_max_fields)))))))
     errs)))
+(fulfills cg_ctor_errs_in.dec_1 (by (intro p c fs r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_ctor_errs.dec_1 (by (intro p w1 w2 cs r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_ctor_errs.dec_2 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 ;; the World's cell: its constructor's field count, where the program declares one
 (fn cg_world ((ds (List EDecl))) (Option Int)
+  (measure (List.length ds))
   (match ds
     (nil none)
     ((cons (EInd _ _ cs) r)
@@ -191,9 +204,13 @@
        (none (cg_world r))))
     ((cons _ r) (cg_world r))))
 (fn cg_world_in ((cs (List ECtorDef))) (Option Int)
+  (measure (List.length cs))
   (match cs
     (nil none)
     ((cons (ECtorDef c fs) r) (if (= (lw_role c) 8) (some (len fs)) (cg_world_in r)))))
+(fulfills cg_world_in.dec_1 (by (intro cs c fs r h hr) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_world.dec_1 (by (intro ds w1 w2 cs r h h1) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_world.dec_2 (by (intro ds w r h) (rw h) (rw List.length_cons) (arith)))
 
 ;; ---- the context of one function -----------------------------------------------------------
 (type CgCx (CgCx (IntMap (List (Prod Name (Prod Int Int)))) Name Int))  ; tags, the function, its arity
@@ -284,6 +301,7 @@
     ((ELit (LInt n)) (CgOk (cg_int n)))
     (_ (CgErr (utf8 "an operand that is not an atom (not the restricted form)")))))
 (fn cg_atoms ((ts (List ETerm)) (env (List (List Int))) (cx CgCx)) CgRs
+  (measure (List.length ts))
   (match ts
     (nil (CgsOk nil))
     ((cons t r)
@@ -293,6 +311,7 @@
         (match (cg_atoms r env cx)
           ((CgsErr m) (CgsErr m))
           ((CgsOk ds) (CgsOk (cons d ds)))))))))
+(fulfills cg_atoms.dec_1 (by (intro p t r h d hd) (rw h) (rw List.length_cons) (arith)))
 (fn cg_commas ((ds (List CgDoc))) CgDoc
   (measure (struct ds))
   (match ds
@@ -327,12 +346,14 @@
                 (CgS (utf8 " c_; })"))
                 (CgS (utf8 "")))))))))))
 (fn cg_stores ((ds (List CgDoc)) (i Int)) CgDoc
+  (measure (List.length ds))
   (match ds
     (nil (CgS nil))
     ((cons d r)
      (cg_cat4 (cg_cat3 (CgS (utf8 "rt_cellof(c_)->fields[")) (cg_num i) (CgS (utf8 "] = "))) d
        (CgS (utf8 "; "))
        (cg_stores r (+ i 1))))))
+(fulfills cg_stores.dec_1 (by (intro p d r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_rhs ((t ETerm) (env (List (List Int))) (cx CgCx)) CgR
   (match t
     ((ECtor c as) (cg_ctor c as env cx))
@@ -384,19 +405,24 @@
        (cg_cat4 (CgCat (cg_ind ind) (CgS (utf8 "{ "))) (cg_shadow ds 0) (cg_rebind ds 0)
          (CgS (utf8 "goto start_; }\n")))))))
 (fn cg_shadow ((ds (List CgDoc)) (i Int)) CgDoc
+  (measure (List.length ds))
   (match ds
     (nil (CgS nil))
     ((cons d r)
      (cg_cat4 (cg_cat3 (CgS (utf8 "value_t n_")) (cg_num i) (CgS (utf8 " = "))) d (CgS (utf8 "; "))
        (cg_shadow r (+ i 1))))))
+(fulfills cg_shadow.dec_1 (by (intro p d r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_rebind ((ds (List CgDoc)) (i Int)) CgDoc
+  (measure (List.length ds))
   (match ds
     (nil (CgS nil))
     ((cons _ r)
      (cg_cat4 (cg_cat3 (CgS (utf8 "p_")) (cg_num i) (CgS (utf8 " = n_"))) (cg_num i)
        (CgS (utf8 "; "))
        (cg_rebind r (+ i 1))))))
+(fulfills cg_rebind.dec_1 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_tail ((t ETerm) (env (List (List Int))) (cx CgCx) (ind Int)) CgR
+  (measure (* 2 (ETerm.size t)))
   (match t
     ((ELet (cons r nil) body)
      (match (cg_rhs r env cx)
@@ -438,17 +464,22 @@
 ;; ---- a match: the arms' kind is the first arm's that is not a variable -----------------------
 ;; 0 variables only, 1 constructors, 2 numerals
 (fn cg_kind ((arms (List EArm))) Int
+  (measure (List.length arms))
   (match arms
     (nil 0)
     ((cons (EArm (PCtor _ _) _) _) 1)
     ((cons (EArm (PLit _) _) _) 2)
     ((cons (EArm PVar _) r) (cg_kind r))))
+(fulfills cg_kind.dec_1 (by (intro arms w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_has_var ((arms (List EArm))) Bool
+  (measure (List.length arms))
   (match arms
     (nil false)
     ((cons (EArm PVar _) _) true)
     ((cons _ r) (cg_has_var r))))
+(fulfills cg_has_var.dec_1 (by (intro arms w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_match ((s ETerm) (arms (List EArm)) (env (List (List Int))) (cx CgCx) (ind Int)) CgR
+  (measure (+ (* 2 (List_EArm.size arms)) 1))
   (match (cg_atom s env cx)
     ((CgErr m) (CgErr m))
     ((CgOk sd)
@@ -485,6 +516,7 @@
     (CgS (utf8 "}\n"))))))
 (fn cg_arms ((arms (List EArm)) (env (List (List Int))) (sn (List Int)) (cx CgCx) (ind Int) (k Int))
   CgR
+  (measure (* 2 (List_EArm.size arms)))
   (match arms
     (nil (CgOk (CgS (utf8 ""))))
     ((cons (EArm p body) r)
@@ -498,6 +530,7 @@
 (fn cg_arm
   ((p EPat) (body ETerm) (env (List (List Int))) (sn (List Int)) (cx CgCx) (ind Int) (k Int))
   CgR
+  (measure (+ (* 2 (ETerm.size body)) 1))
   (match p
     ((PCtor c ps)
      (if (bool_not (cg_all_vars ps)) (CgErr (utf8 "a nested pattern (not the restricted form)"))
@@ -542,17 +575,22 @@
                (CgS (utf8 ""))))
            (CgOk bd)))))))
 (fn cg_all_vars ((ps (List EPat))) Bool
+  (measure (List.length ps))
   (match ps
     (nil true)
     ((cons PVar r) (cg_all_vars r))
     (_ false)))
+(fulfills cg_all_vars.dec_1 (by (intro ps r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_field ((sn (List Int)) (i Int)) (List Int) (append sn (append (utf8 "f") (show_nat i))))
 (fn cg_field_env ((ps (List EPat)) (sn (List Int)) (env (List (List Int))) (i Int))
   (List (List Int))
+  (measure (List.length ps))
   (match ps
     (nil env)
     ((cons _ r) (cg_field_env r sn (cons (cg_field sn i) env) (+ i 1)))))
+(fulfills cg_field_env.dec_1 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_field_decls ((ps (List EPat)) (sn (List Int)) (ind Int) (i Int)) CgDoc
+  (measure (List.length ps))
   (match ps
     (nil (CgS (utf8 "")))
     ((cons _ r)
@@ -562,6 +600,30 @@
        (cg_cat3 (cg_num i) (CgS (utf8 ");\n")) (cg_field_decls r sn ind (+ i 1)))
        (CgS (utf8 ""))))))
 
+(fulfills cg_field_decls.dec_1 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_tail.dec_1
+  (by (intro t env cx ind r body h rd hr) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills cg_tail.dec_2 (by (intro t env cx ind c a b h cd hc) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills cg_tail.dec_3
+  (by (intro t env cx ind c a b h cd hc ad) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills cg_tail.dec_4 (by (intro t env cx ind s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills cg_match.dec_1
+  (by
+    (intro s arms env cx ind sd hs)
+    (show (< (* 2 (List_EArm.size arms)) (+ (* 2 (List_EArm.size arms)) 1)))
+    (arith)))
+(fulfills cg_arms.dec_1
+  (by
+    (intro arms env sn cx ind k p body r h)
+    (rw h)
+    (rw List_EArm.size.eq_2)
+    (rw EArm.size.eq_1)
+    (arith)))
+(fulfills cg_arms.dec_2
+  (by (intro arms env sn cx ind k p body r h d) (rw h) (rw List_EArm.size.eq_2) (arith)))
+(fulfills cg_arm.dec_1 (by (intro p body env sn cx ind k c ps h hv tag ht) (arith)))
+(fulfills cg_arm.dec_2 (by (intro p body env sn cx ind k l h hn) (arith)))
+(fulfills cg_arm.dec_3 (by (intro p body env sn cx ind k h) (arith)))
 ;; ---- a function: fi is its place in the counters' table ---------------------------------------
 (fn cg_params ((n Int) (i Int)) CgDoc
   (measure (Int.natAbs (- n i)))
@@ -611,6 +673,7 @@
 ;; part's text and count, the next function's index, the refusals (newest first)
 (type CgSt (CgSt (List (Prod (List Int) (List Int))) CgDoc Int Int (List (List Int))))
 (fn cg_fns ((ds (List EDecl)) (tags (IntMap (List (Prod Name (Prod Int Int))))) (st CgSt)) CgSt
+  (measure (List.length ds))
   (match ds
     (nil (cg_flush st))
     ((cons (EFn n _ ps _ _ body) r)
@@ -632,26 +695,52 @@
        0
        fi
        errs)))))
+(fulfills cg_fns.dec_1
+  (by
+    (intro p n w1 ps w2 w3 body r h parts cur k fi errs hs m hm)
+    (rw h)
+    (rw List.length_cons)
+    (arith)))
+(fulfills cg_fns.dec_2
+  (by
+    (intro p n w1 ps w2 w3 body r h parts cur k fi errs hs d hd)
+    (rw h)
+    (rw List.length_cons)
+    (show (< (List.length r) (+ (List.length r) 1)))
+    (arith)))
+(fulfills cg_fns.dec_3 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_protos ((ds (List EDecl))) CgDoc
+  (measure (List.length ds))
   (match ds
     (nil (CgS (utf8 "")))
     ((cons (EFn n _ ps _ _ _) r) (CgCat (cg_proto n (len ps)) (cg_protos r)))
     ((cons _ r) (cg_protos r))))
+(fulfills cg_protos.dec_1 (by (intro ds n w1 ps w2 w3 w4 r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_protos.dec_2 (by (intro ds w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_fnnames ((ds (List EDecl))) CgDoc
+  (measure (List.length ds))
   (match ds
     (nil (CgS (utf8 "")))
     ((cons (EFn n _ _ _ _ _) r)
      (cg_cat4 (CgS (utf8 "  \"")) (CgS (cg_cstr (show_name n))) (CgS (utf8 "\",\n")) (cg_fnnames r)))
     ((cons _ r) (cg_fnnames r))))
+(fulfills cg_fnnames.dec_1
+  (by (intro ds n w1 w2 w3 w4 w5 r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_fnnames.dec_2 (by (intro ds w r h) (rw h) (rw List.length_cons) (arith)))
 (fn cg_count_fns ((ds (List EDecl)) (k Int)) Int
+  (measure (List.length ds))
   (match ds
     (nil k)
     ((cons (EFn _ _ _ _ _ _) r) (cg_count_fns r (+ k 1)))
     ((cons _ r) (cg_count_fns r k))))
+(fulfills cg_count_fns.dec_1
+  (by (intro p w1 w2 w3 w4 w5 w6 r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_count_fns.dec_2 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 ;; the entry's refusal: `main` calls it on the World alone, so it is a function of one
 ;; parameter. What the loader's `--run` reads from the arguments into the parameters before
 ;; the World has no source in a binary
 (fn cg_entry_err ((ds (List EDecl)) (n Name)) (Option (List Int))
+  (measure (List.length ds))
   (match ds
     (nil (some (append (utf8 "no fn ") (append (show_name n) (utf8 " to start from")))))
     ((cons (EFn m _ ps _ _ _) r)
@@ -665,6 +754,9 @@
              (utf8
                " parameters: a binary's main takes the World alone (a main with parameters before the World runs under the loader's --run only)")))))))))
     ((cons _ r) (cg_entry_err r n))))
+(fulfills cg_entry_err.dec_1
+  (by (intro p m w1 ps w2 w3 w4 r h hm) (rw h) (rw List.length_cons) (arith)))
+(fulfills cg_entry_err.dec_2 (by (intro p w r h) (rw h) (rw List.length_cons) (arith)))
 ;; the roles' tags under the names rt.h reads them by
 (fn cg_tag_defs () CgDoc
   (cg_tag_def (utf8 "True") 1
