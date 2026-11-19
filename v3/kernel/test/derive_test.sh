@@ -71,6 +71,15 @@ want size "$out" 'DERIVE main.Tree.size type=main.Tree cap=size policy=structura
 want size "$out" '^ACCEPT main.List_Tree.size.eq_2 '
 want size "$out" '^DEFINE main.weighs equations=main.weighs.eq_1,main.weighs.eq_2$'
 want size "$out" 'pending 0  realized 0  defined 2  errors 0'
+# types that name each other: the form names the second, each type of the block and the
+# auxiliary one has its size, and the group over the three is defined with nothing pending
+R=v3/pins/loader/derive_size_group
+out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
+want size_group "$out" 'DERIVE main.A.size type=main.A cap=size policy=structural fields=main.T.size,main.List_A.size'
+want size_group "$out" '^ACCEPT main.T.size.eq_2 '
+want size_group "$out" '^ACCEPT main.List_A.size.eq_2 '
+want size_group "$out" '^DEFINE main.leaves_all equations=main.leaves_all.eq_1,main.leaves_all.eq_2$'
+want size_group "$out" 'pending 0  realized 0  defined 3  errors 0'
 R=v3/pins/loader/derive_size_plain
 out=$("$EVAL" direct v3/kernel/load.shard --root $R $INIT $R/main.shard 2>&1)
 want size_plain "$out" 'DERIVE main.List_Nat.size type=(List Nat) cap=size policy=structural fields='

@@ -10,7 +10,8 @@ directory name the same cases. `v3/kernel/test/loader_test.shard` holds the case
 state (two root files in order, a wrong export, a load with no export, the records' text, a
 loaded program run). Some shell tests read the records of a case: `define_test.sh`
 (`route_callee`, `discharge_measure`, `registry_native`, `decidable_cells`, `mutual_measure`,
-`derive_refusals`), `derive_test.sh` (`derive_size`, `derive_size_plain`), `wire_test.sh`
+`derive_refusals`), `derive_test.sh` (`derive_size`, `derive_size_plain`, `derive_size_group`),
+`wire_test.sh`
 (`wire_*`), `template_test.sh` (`template_e_first`), `messages_test.sh` (the text after the reason:
 `by_cases_arm_fields`, `by_cases_fields`,
 `impl_read_error`, `impl_load_error`, `match_dead_row`, `match_dead_row_def`, `ev_dead_row`,
@@ -135,8 +136,8 @@ the reason its name spells, less a leading `by_`.
 | cases | what they pin |
 |---|---|
 | `derive_eq`, `derive_containers` | equality derived and used by an `if`; Init's `List`, `Option`, `Prod` at closed arguments |
-| refused: `derive_field`, `derive_needs`, `derive_policy`, `derive_duplicate`, `derive_by`; `derive_nested`, `derive_refusals` (`derive_shape`), `derive_params` (`derive_needs`), `derive_e_first` (`prim_type`), `derive_visible` (`no_decision`) | the derivation's refusals; a derivation is visible where its module is |
-| `derive_size`, `derive_size_plain`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`), `derive_size_group` (`derive_shape`) | a size derived for a type nested through `List` and for a plain type, used as a measure; none for types that name each other |
+| refused: `derive_field`, `derive_needs`, `derive_policy`, `derive_duplicate`, `derive_by`; `derive_nested`, `derive_refusals`, `derive_group_eq` (`derive_shape`), `derive_params` (`derive_needs`), `derive_e_first` (`prim_type`), `derive_visible` (`no_decision`) | the derivation's refusals — a type nested through another and types that name each other have a size and no other derivation; a derivation is visible where its module is |
+| `derive_size`, `derive_size_plain`, `derive_size_group`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`) | a size derived for a type nested through `List`, for a plain type and for types that name each other (a size each, whichever the form names), used as measures |
 | `template_lift`, `template_named`, `template_partial`, `template_passed`, `template_package` | a function-typed binder: a lambda lifted, a named function, a partial application, a parameter passed on, a structure of functions |
 | `template_e_first` (`runnable no_l_identity`); refused: `template_escape`, `template_transform` (`function_value`), `template_growth` (`realize_descent`), `template_budget` (`specialization_budget`) | a lambda elsewhere; a template calling itself at a growing type; the instance budget; an instance taken by a body with no logical reading |
 

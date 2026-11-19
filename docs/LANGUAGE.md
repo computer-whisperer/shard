@@ -232,8 +232,8 @@ file; two things about how they are written set them apart.
 
 - **Six sevenths of their functions are definitions; of those written by hand, more than
   two thirds.** The checker reads every one whose signature reads, and nearly every one's
-  does: of the loader's closure, 8,940 functions — 4,790 of them the rows of a generated
-  table —, it holds 7,640 as definitions. The others are programs with the reason: a function
+  does: of the loader's closure, 8,944 functions — 4,792 of them the rows of a generated
+  table —, it holds 7,653 as definitions. The others are programs with the reason: a function
   they call is a program (`callee_runnable`, some 1,070), a group of functions that call each
   other (about 120), an integer measure (38), a call the definer takes for no descent (30), a
   numeral under a constructor pattern (21). A type error in any of them is refused.
@@ -274,8 +274,12 @@ file; two things about how they are written set them apart.
   `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
   Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
   type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  One group is written so, `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs; 54
-  groups more state a structural clause or none and are programs (`group_measure`). A size
+  Two groups are written so: `expr.shard`'s `expr_eq` and `expr_eq_core`, with 12 proofs,
+  and `prog.shard`'s `calls_acc`, `calls_all` and `calls_arms`, with 16 — walkers over a
+  program's term, its arms and their lists, each measured by the size of what it walks
+  (`ETerm.size`, `List_ETerm.size`, `List_EArm.size`; the two types name each other, and
+  `(derive ETerm size)` gives every one). 53 groups more state a structural clause or none
+  and are programs (`group_measure`). A size
   is the one derivation a build reads: its functions are definitions with no program, the
   loader makes them under `--unchecked` too, and the Rust reader passes the form over.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
@@ -754,9 +758,11 @@ the type's name with its arguments joined by `_`: `Tok`, `List_Tok`, `Prod_Nat_T
 | `(ord structural)` | `NS.compare : T → T → Ordering`: constructors in declaration order, fields left to right; `NS.ctorIdx` | fields of later derivations |
 | `render` | `NS.renderOnto : T → List Nat → List Nat` and `NS.render : T → ByteArray`, the value as canonical source text | printing; import `v3/std/derive.shard` |
 | `(eq by F)`, `(ord by F)`, `(render by F)` | nothing: registers the file's own `F` after checking that its type is the capability's | as the generated one |
-| `size` | `NS.size : T → Nat`, 1 plus the sizes of the recursive fields, with `NS.size.eq_K` per constructor; for a nested type also one per auxiliary type (`List_T.size`) | measures |
+| `size` | `NS.size : T → Nat`, 1 plus the sizes of the recursive fields, with `NS.size.eq_K` per constructor; for a nested type also one per auxiliary type (`List_T.size`); for types that name each other one per type and per auxiliary type, whichever the form names | measures |
 
-`size` is written alone, `(derive T size)`, and is the only capability that takes a nested type.
+`size` is written alone, `(derive T size)`, and is the only capability that takes a nested type
+or one of several types that name each other. For those it is written once: a second form, on
+another type of the group, generates names the first declared (`name_taken`).
 Its functions are `def`s: they have no program. For the others, a field's procedure is the
 built-in one at `Nat` and `Int` (and `Bool` for `eq`), the function itself at a recursive field,
 else the one derivation visible at the field's type — so derive the field types first. A
@@ -765,7 +771,7 @@ derivation is visible wherever its module is. Refusals are `REFUSE MODULE.derive
 | reason | cause |
 |---|---|
 | `derive_type` | not a type here; `Nat` or `Int` (register a procedure with `by`); a proposition; not an inductive type; not closed; an argument that is a value, as in `(Fin 3)` |
-| `derive_shape` | an indexed family; a mutual type; a nested type (for `eq`, `ord`, `render`); no constructors; a field that is a proof or a type, or whose type depends on an earlier field (supply the procedure with `by`) |
+| `derive_shape` | an indexed family; a nested type or one of types that name each other (for `eq`, `ord`, `render`); no constructors; a field that is a proof or a type, or whose type depends on an earlier field (supply the procedure with `by`) |
 | `derive_field` | a function-valued field; no derivation at a field's type (`derive it first — (derive T CAP)`); two visible |
 | `derive_needs` | the generated source cites a constant the file cannot see: import the library file that declares it; for `eq` on a program's `type` with parameters, `C.inj` is not generated |
 | `derive_policy` | bare `ord`, or a policy other than `structural` |

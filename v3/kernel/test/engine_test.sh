@@ -8,7 +8,9 @@
 # module, and a statement's fingerprint carries the module's name): the engine's output is reproducible and the
 # sidecar is machine-owned. (1b) An obligation delegated with `auto` — `(fulfills f.dec_N auto)`
 # in a file with no `auto` theorem — is proved by prove.shard, entered in the sidecar under the
-# obligation's name and discharged from it by a load; a second prove searches nothing.
+# obligation's name and discharged from it by a load; a second prove searches nothing. One of
+# the two obligations is of a match row with a wildcard: its binder has no name a source can
+# write, and the block entered for it reads back.
 # (1c) `auto` inside the implementation of a view — a requirement's `fulfills`, a theorem, an
 # obligation: prove.shard given the directory writes one sidecar, beside the implementation
 # file; a load of a consumer with the directory replays it; a second prove, given the consumer
@@ -52,10 +54,10 @@ echo "engine_test: the example replays 11 theorems from its sidecar and prove re
 # ---- (1b) an obligation delegated with auto: a file whose only `auto` stands in a fulfills.
 # prove writes the entry under the obligation's name as the source writes it; then a load
 # discharges the obligation from it and a second prove finds nothing to search
-printf '%s\n' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' > "$SCRATCH/fulfills.shard"
+printf '%s\n' '(fn dn ((n Nat) (m Nat)) Nat (measure n) (if (< m n) (dn m m) 0))' '(fulfills dn.dec_1 auto)' '(type P (MkP Nat Nat))' '(fn pn ((p P) (m Nat)) Nat (measure m) (match p ((MkP _ k) (if (< k m) (pn p k) 0))))' '(fulfills pn.dec_1 auto)' > "$SCRATCH/fulfills.shard"
 M=$(basename "$SCRATCH").fulfills
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove.txt" 2>&1
-checks=$((checks+1)); grep -q 'proved 1  unsolved 0  sidecars written 1$' "$OUT/f_prove.txt" || { bad "prove did not discharge the delegated obligation"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/f_prove.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q 'proved 2  unsolved 0  sidecars written 1$' "$OUT/f_prove.txt" || { bad "prove did not discharge the two delegated obligations"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/f_prove.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^(proof-for dn\.dec_1 (req ' "$SCRATCH/fulfills.auto.shard" 2>/dev/null || { bad "the sidecar's entry does not bear the obligation's name dn.dec_1"; grep '^(proof-for' "$SCRATCH/fulfills.auto.shard" 2>/dev/null | cut -c1-120; }
 # (1c)'s sources, and its first prove beside (1b)'s two runs
 mkdir "$SCRATCH/lib"
@@ -67,10 +69,10 @@ printf '%s\n' '(import "lib")' "(fn twice_pick ((n Nat)) Nat ($L.pick ($L.pick n
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/fulfills.shard" > "$OUT/f_prove2.txt" 2>&1 &
 "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/lib" > "$OUT/i_prove.txt" 2>&1 &
 wait
-checks=$((checks+1)); { grep -q "^DISCHARGE $M.dn.dec_1 proved$" "$OUT/f_load.txt" && ! grep -q '^PENDING' "$OUT/f_load.txt" && grep -q 'pending 0 .*errors 0$' "$OUT/f_load.txt"; } || { bad "a load does not discharge the obligation from the sidecar"; grep -E 'PENDING|ERROR|^LOAD:' "$OUT/f_load.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); { grep -q "^DISCHARGE $M.dn.dec_1 proved$" "$OUT/f_load.txt" && grep -q "^DISCHARGE $M.pn.dec_1 proved$" "$OUT/f_load.txt" && ! grep -q '^PENDING' "$OUT/f_load.txt" && grep -q 'pending 0 .*errors 0$' "$OUT/f_load.txt"; } || { bad "a load does not discharge the two obligations from the sidecar"; grep -E 'PENDING|ERROR|^LOAD:' "$OUT/f_load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q "^PROVED" "$OUT/f_load.txt" && bad "the build searched for the obligation (a PROVED record under load.shard)"
 checks=$((checks+1)); grep -q 'proved 0  unsolved 0  sidecars written 0$' "$OUT/f_prove2.txt" || { bad "a second prove searched again"; grep -E 'PROVE:' "$OUT/f_prove2.txt" | cut -c1-300; }
-echo "engine_test: an obligation delegated with auto is proved once, entered under its name and discharged from the sidecar"
+echo "engine_test: an obligation delegated with auto — one of a row with a wildcard — is proved once, entered under its name and discharged from the sidecar"
 
 # ---- (1c) auto inside the implementation of a view: the sidecar stands beside the
 # implementation file and holds the three entries under the names the source writes

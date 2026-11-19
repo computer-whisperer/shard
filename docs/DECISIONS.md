@@ -243,7 +243,8 @@ entries are explained under "Measured" at the end.
   different numbers of parameters are no block and stay programs with the reason
   (`block_parameters`), as does a type naming one below a `use` (`e_only_type`): neither
   loaded as a type of the logic before, and a refusal would take the program away. A
-  derivation over a type of a block is refused (`derive_shape`), a size too. Assent, of the
+  derivation over a type of a block is refused (`derive_shape`), its size excepted (below).
+  Assent, of the
   three ways put to them (this, a form around the group, the sources rewritten): "Agreed
   with updating the loader to handle this (option 1). Proceed."; and after it was measured,
   with the next entry's change in it: "Good, we can land this as built. Proceed with the
@@ -258,6 +259,22 @@ entries are explained under "Measured" at the end.
   functions more, in files that call forward throughout, and the loader's closure loaded in
   76 s for 36; with this, 49 s. Assent: "Good, we can land this as built. Proceed with the
   remaining todo items."
+- Types that name each other have a size, and the functions that walk them are measured by
+  it. `(derive T size)` on a type of a block gives each type of the block its size from its
+  own recursor and each auxiliary type its from the recursors K names after the block's
+  first type (`T.rec_N`), whichever type the form names; they are read off the recursor's
+  telescope as a nested type's are, and every other capability stays refused on a block
+  (`derive_shape`). One group is restated by them, as a pilot: `prog.shard` `calls_acc`,
+  `calls_all` and `calls_arms`, each measured by the size of what it walks, with the 16
+  proofs beside them in the fixed lines the toolchain's other descents use (`(rw h) (rw
+  SIZE.eq_K) (arith)`). Not structural recursion for a group: of the 113 groups among the
+  programs, 46 descend on one parameter per member. Whether a bulk of such groups leaves
+  its proofs to the engine, in sidecars beside toolchain sources, is not decided: the
+  pilot's are written. Assent, of the three ways put to them once the recursion the
+  programs lack was read off the call graph (the groups whose descent is plain restated in
+  bulk with the proofs left to the engine; the recursion no measure fits read first, with
+  nothing built; this — a block's size and one group, then that reading): "Let's proceed
+  with C".
 
 ## Programs and the back end
 
@@ -1029,6 +1046,31 @@ measurements; measure again before building on one.
   binaries 553 s for 523, the toolchain's check 261 s for 218, the byte-tie 990 s for 1,016,
   its harness on the bootstrap 916 s for 944 —, `v3` 2,160 s, `replay` 1,835 s: a pipeline is
   42 minutes for 41.
+- A size for types that name each other, and the recursion the programs lack (2026-11-19).
+  Read off the call graph of the loader's closure (8,940 functions, 1,299 of them programs)
+  by the shape of each recursive call: 455 programs do not recurse and wait on a callee, 13
+  have another reason, 205 recurse as the checker takes it and wait on a callee, and 626
+  recurse and lack something, in 220 units — 164 (297 functions, some 770 calls) where every
+  call is on a part of a parameter or a counter less one, 13 (64) by a counter and then a
+  list, 43 (265) where that reading saw no descent. Of the 113 groups among the programs, 46
+  descend on one parameter per member. With `(derive ETerm size)` and the three walkers
+  `calls_acc`, `calls_all`, `calls_arms` measured, 16 proofs: 8,944 functions, 7,653
+  definitions for 7,641, 1,291 programs for 1,299 — the three, `calls_of`, and four of the
+  loader's that waited on it alone; four functions the change adds —, 181 obligations of 114
+  functions for 165 of 111. The checked load of the loader's closure, the sources before
+  against the sources after on one development loader, twice: 57 and 54 s against 58 and
+  52 s. The engine on the 16: 15 unaided, in 3.5 s with the load; the entries it wrote for
+  the rows with a wildcard did not read back — the binder's name, `_ wildcard`, stood in
+  `intro` as two —, which `engine.shard` `binder_name` now names by position. The 43 units
+  read one by one are in `OPEN.md`; of its first kind, the classifier's `c_type` and its
+  eight, with the four pairs under them, restated in a scratch tree: all 17 defined, 25
+  programs of `classify.shard`'s closure fewer, 40 obligations, the engine 33 of them — six
+  of the seven left close by the fixed lines once the two hypotheses of a row under two
+  matches have different names, which the engine gives the same; the seventh needs a lemma
+  about `live_arm`. The gate: all 29 roots loaded checked, 12 at a time, 154 s for 166; the
+  emit tie 361 s for 320 and the byte-tie 430 s for 402, both with scratch loads running
+  beside them; the suite 269 s on the binaries and 1,027 s on the bootstrap, for 241 and
+  1,048.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

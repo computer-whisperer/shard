@@ -123,12 +123,12 @@
                   ((Prod.mk w2 (MtInd ind ls params ctors))
                    (match (env_find env ind)
                      ((some (InductInfo _ _ _ all _ nnested _ _ _))
+                      (if (dv_only_size (cons c1 caps)) (dv_size sc env w2 ty ind all ls params)
                       (if (bool_not (= (len all) 1))
                         (DvErr (sym "derive_shape")
                           (append (show_name ind)
                             (utf8
-                              ": a mutual type — one of several types that name each other: no derivation reads their block, a size among them")))
-                      (if (dv_only_size (cons c1 caps)) (dv_size sc env w2 ty ind ls params)
+                              ": a mutual type — one of several types that name each other: the one derivation that reads their block is its size, (derive TYPE size)")))
                       (if (< 0 nnested)
                         (DvErr (sym "derive_shape")
                           (append (show_name ind)
@@ -289,8 +289,11 @@
 ;; `λ _. Nat` — a constructor is 1 plus the sizes of its recursive fields, a recursive field
 ;; being one K gives an induction hypothesis for. A nested type has a function per auxiliary
 ;; type of K's translation as well, under that type's mangled name (`List_T.size`, from
-;; `T.rec_1`). Each function has its equations `NAME.size.eq_K`, one per constructor in
-;; order, by `Eq.refl`. The functions are `def`s over the recursor — source, as every
+;; `T.rec_1`). Types that name each other — a block of K's — have a function each, from
+;; each one's own recursor, and one per auxiliary type from the recursors K names after the
+;; block's first type, whichever type of the block the form names: every recursor of a block
+;; has the one telescope, the block's types' motives first and in their order. Each function
+;; has its equations `NAME.size.eq_K`, one per constructor in order, by `Eq.refl`. The functions are `def`s over the recursor — source, as every
 ;; derivation's, but no `fn`: a `fn` over a nested type would be a group of its own, whose
 ;; measure this is. They have no program, and need none: a measure is never run, and a
 ;; program whose measure cites one records that (prog.shard RecLogical).
@@ -332,7 +335,14 @@
 (fn dv_nat_s ((sc Scope)) SExpr (dv_s (dv_cite_text sc (n1 (sym "Nat")))))
 (fn dv_size_name ((a Expr)) (List Int) (append (dv_mangle a) (utf8 ".size")))
 (fn dv_size
-  ((sc Scope) (env CheckedEnv) (w W) (ty Expr) (ind Name) (ls (List Level)) (params (List Expr)))
+  ((sc Scope)
+   (env CheckedEnv)
+   (w W)
+   (ty Expr)
+   (ind Name)
+   (all (List Name))
+   (ls (List Level))
+   (params (List Expr)))
   DvRes
   (if (< 0 (len (expr_fvars ty nil)))
     (DvErr (sym "derive_type") (append (show_expr ty) (utf8 " is not closed")))
@@ -368,12 +378,34 @@
                              (list
                                (DvGen ty (sym "size") (dv_size_ident sc (dv_size_name ty))
                                  (sym "structural")
-                                 (dv_size_idents sc (drop 1 mots))
+                                 (dv_size_idents sc (dv_but (dv_block_pos all ind 0) mots))
                                  (append
-                                   (dv_size_defs sc ind lstext (dv_tys_s sc params) mots mots mins 0)
+                                   (dv_size_defs sc all lstext (dv_tys_s sc params) mots mots mins 0)
                                    (dv_size_eqns sc mots mots mins 0)))))))))))))))
             (_ (DvErr (sym "derive_shape") (append (show_name ind) (utf8 " has no recursor"))))))
          (none (DvErr (sym "derive_shape") (append (show_name ind) (utf8 " has no recursor")))))))))
+;; where the type stands in its block, which is where its motive stands among the motives
+(fn dv_block_pos ((all (List Name)) (ind Name) (j Int)) Int
+  (measure (struct all))
+  (match all
+    (nil 0)
+    ((cons t r) (if (name_eq t ind) j (dv_block_pos r ind (+ j 1))))))
+(fn dv_but ((j Int) (mots (List DvMot))) (List DvMot) (append (take j mots) (drop (+ j 1) mots)))
+;; the recursor whose value is motive j's: a type of the block has its own, an auxiliary type
+;; the block's first type's `rec_N`, N from 1 (k/nested.shard aux_rec_map)
+(fn dv_rec_name ((all (List Name)) (j Int)) Name
+  (match (drop j all)
+    ((cons t _) (name_append t (n1 (sym "rec"))))
+    (nil
+      (match all
+        ((cons t _)
+         (name_append t (n1 (sym_of_chars (append (utf8 "rec_") (show_nat (+ (- j (len all)) 1)))))))
+        (nil Anon)))))
+;; a block's types are one file's: native together, or imported together
+(fn dv_native_block ((sc Scope) (block (List Name))) Bool
+  (match block
+    ((cons t _) (native_decl sc t))
+    (nil false)))
 (fn dv_size_ident ((sc Scope) (short (List Int))) Name
   (match (name_of_sym (sym_of_chars short))
     ((some n) (qualify sc n))
@@ -589,10 +621,10 @@
           ((some i) (dv_field_args fvs r (cons (dv_var (utf8 "v") i) acc)))
           (none none)))
        (_ none)))))
-;; `(def NS.size ((x 1 TYPE)) Nat (@T.rec[_J].{1 LS} PARAMS MOTIVES MINORS x 1))`, a motive each
+;; `(def NS.size ((x 1 TYPE)) Nat (@RECURSOR.{1 LS} PARAMS MOTIVES MINORS x 1))`, a motive each
 (fn dv_size_defs
   ((sc Scope)
-   (ind Name)
+   (block (List Name))
    (lstext (List SExpr))
    (params (List SExpr))
    (all (List DvMot))
@@ -614,16 +646,13 @@
              ;; inductive is (a native one by its identity, an imported one under Init)
              (SSymU
                (sym_of_chars
-                 (append (if (native_decl sc ind) (utf8 "@") (utf8 "@Init."))
-                   (show_name
-                     (name_append ind
-                       (n1
-                         (if (= j 0) (sym "rec") (sym_of_chars (append (utf8 "rec_") (show_nat j)))))))))
+                 (append (if (dv_native_block sc block) (utf8 "@") (utf8 "@Init."))
+                   (show_name (dv_rec_name block j))))
                (cons (SNum 1) lstext))
              (append params
                (append (dv_size_motives sc all)
                  (append (dv_minor_sources mins) (list (dv_var (utf8 "x") 1))))))))
-       (dv_size_defs sc ind lstext params all r mins (+ j 1))))))
+       (dv_size_defs sc block lstext params all r mins (+ j 1))))))
 (fn dv_size_motives ((sc Scope) (mots (List DvMot))) (List SExpr)
   (measure (struct mots))
   (match mots
