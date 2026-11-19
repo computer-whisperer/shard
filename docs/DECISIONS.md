@@ -956,7 +956,10 @@ measurements; measure again before building on one.
   343 s before `expr_eq`'s group was a definition; the suite 231 s on the binaries and
   979 s on the bootstrap, for 225 and 946. The loader's closure with it: 8,892 functions,
   7,147 definitions — 14 of the 15 functions the change adds, `req_deps` gone —, loaded
-  checked in 36 s alone for 44.
+  checked in 36 s alone for 44. On CI (#755): `native` 2,426 s for 2,840 (2,486 before the
+  group) — the toolchain's check 218 s for 280 (335), the byte-tie 1,016 s for 1,362 (967),
+  its harness on the bootstrap 944 s for 1,274 (899) —, `v3` 2,189 s, `replay` 1,846 s: a
+  pipeline is 41 minutes for 48, as it was before the group.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
