@@ -180,7 +180,7 @@
 (type ModPath (MPOk Name) (MPView Name) (MPDir) (MPBad (List Int)))
 (fn module_of ((parts (List (List Int)))) ModPath (module_rest Anon parts))
 (fn module_rest ((m Name) (parts (List (List Int)))) ModPath
-  (measure (struct parts))
+  (measure (* 2 (List.length parts)))
   (match parts
     (nil (MPBad (utf8 "empty path")))
     ((cons p nil)
@@ -202,6 +202,7 @@
        (module_step m p (list q))))
     ((cons p r) (module_step m p r))))
 (fn module_step ((m Name) (p (List Int)) (r (List (List Int)))) ModPath
+  (measure (+ (* 2 (List.length r)) 1))
   (if (int_list_eq p (utf8 "mod.req"))
     (MPBad
       (utf8 "a file under mod.req/ other than mod.req.shard: mod.req/ holds the view file alone"))
@@ -246,6 +247,16 @@
     ((cons c r)
      (if (= c 46) (MPBad (append (utf8 "a dot in a file name: ") (rev_onto seen comp)))
      (module_comp m r (cons c seen))))))
+(fulfills module_rest.dec_1
+  (by
+    (intro m parts p q h hb)
+    (rw h)
+    (rw List.length_cons)
+    (rw List.length_cons)
+    (rw List.length_cons)
+    (arith)))
+(fulfills module_rest.dec_2 (by (intro m parts p r h) (rw h) (rw List.length_cons) (arith)))
+(fulfills module_step.dec_1 (by (intro m p r hi m2 hm) (arith)))
 
 ;; ---- the state -------------------------------------------------------------------------
 ;; a loaded module: path, root-relative file, hash (over its accepted
@@ -737,17 +748,21 @@
     ((some n) (name_parts n acc))
     (none acc)))
 (fn form_parts ((s SExpr) (acc (List Symbol))) (List Symbol)
-  (measure (struct s))
+  (measure (SExpr.size s))
   (match s
     ((SSym x) (sym_parts x acc))
     ((SSymU x us) (sym_parts x (forms_parts us acc)))
     ((SList items) (forms_parts items acc))
     (_ acc)))
 (fn forms_parts ((ss (List SExpr)) (acc (List Symbol))) (List Symbol)
-  (measure (struct ss))
+  (measure (List_SExpr.size ss))
   (match ss
     (nil acc)
     ((cons s r) (forms_parts r (form_parts s acc)))))
+(fulfills form_parts.dec_1 (by (intro s acc x us h) (rw h) (rw SExpr.size.eq_3) (arith)))
+(fulfills form_parts.dec_2 (by (intro s acc items h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills forms_parts.dec_1 (by (intro ss acc s r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills forms_parts.dec_2 (by (intro ss acc s r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
 (fn reads_add ((ks (List Known)) (k Name) (s SExpr) (ids (List Name)) (e ReadEnd)) (List Known)
   (measure (struct ks))
   (match ks
@@ -1761,7 +1776,7 @@
 ;; them does not stand below — it is a program only, or no type
 (fn gather_types ((l Load) (sc Scope) (todo (List Name)) (have (List (Prod Name SExpr))) (fuel Int))
   (Option (List (Prod Name SExpr)))
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) none
   (match todo
     (nil (some have))
@@ -1846,7 +1861,7 @@
     (_ (if (< (len g) (len best)) g best))))
 ;; a type and the types it needs among them, through what each cites
 (fn wait_reach ((c (List TWait)) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) seen
   (match todo
     (nil seen)
@@ -1858,6 +1873,8 @@
   (match c
     (nil nil)
     ((cons (TWait m _ cites) r) (if (name_eq m n) cites (twait_cites r n)))))
+(fulfills wait_reach.dec_1 (by (intro p hf n r ht hm) (apply natAbs_pred (arith))))
+(fulfills wait_reach.dec_2 (by (intro p hf n r ht hm) (apply natAbs_pred (arith))))
 (fn waits_named ((c (List TWait)) (ns (List Name))) (List TWait)
   (measure (struct c))
   (match c
@@ -2670,7 +2687,7 @@
 ;; a parked fn's wait leads round to a fn already on the way: a cycle by the recorded waits
 ;; alone, no body read. A wait on a name not declared yet ends the walk: nothing can close
 (fn waits_round ((lt Load) (sc Scope) (k Name) (seen (List Name)) (fuel Int)) Bool
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) false
   (match (parked_find (Load.parked lt) k)
     (none false)
@@ -2680,6 +2697,7 @@
        ((some next)
         (if (bool_or (name_eq next k) (mem_name next seen)) true
         (waits_round lt sc next (cons k seen) (- fuel 1)))))))))
+(fulfills waits_round.dec_1 (by (intro p hf w1 w2 w3 m hp next hw hb) (apply natAbs_pred (arith))))
 ;; how a reading ends, as the search takes it
 (fn read_end ((r PdRes)) ReadEnd
   (match r
@@ -3081,12 +3099,13 @@
 (fn fields_unheld
   ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (fs (List SExpr)) (acc (List Name)))
   (List Name)
-  (measure (struct fs))
+  (measure (List_SExpr.size fs))
   (match fs
     (nil acc)
     ((cons t r) (fields_unheld es sc env self r (etype_unheld es sc env self t acc)))))
 (fn etype_unheld ((es ESt) (sc Scope) (env CheckedEnv) (self Name) (t SExpr) (acc (List Name)))
   (List Name)
+  (measure (SExpr.size t))
   (match t
     ((SSym x) (head_unheld es sc env self x acc))
     ((SList (cons (SSym x) args))
@@ -3110,6 +3129,19 @@
             (none (if (mem_name id acc) acc (cons id acc)))
             (_ acc))))
          (_ acc))))))
+(fulfills fields_unheld.dec_1
+  (by (intro es sc env self fs acc t r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills fields_unheld.dec_2
+  (by (intro es sc env self fs acc t r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills etype_unheld.dec_1
+  (by
+    (intro es sc env self t acc x args h)
+    (rw h)
+    (rw SExpr.size.eq_5)
+    (rw List_SExpr.size.eq_2)
+    (arith)))
+(fulfills gather_types.dec_1 (by (intro p hf n r ht hw s hb) (apply natAbs_pred (arith))))
+(fulfills gather_types.dec_2 (by (intro p hf n r ht hw) (apply natAbs_pred (arith))))
 ;; the E twin of an admitted type / sig fn / sig type
 (fn add_e_twin ((l Load) (f Fx) (s SExpr)) Load
   (let ((h (form_head s)))
@@ -4061,7 +4093,7 @@
     ((cons _ r) (bin_extern_hit r))))
 ;; the entry's E closure: the fns reached through calls, the entry first
 (fn bin_closure ((es ESt) (todo (List Name)) (seen (List Name)) (fuel Int)) (List Name)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) (rev seen)
   (match todo
     (nil (rev seen))
@@ -4074,7 +4106,7 @@
        (_ (bin_closure es r (cons g seen) (- fuel 1)))))))))
 ;; the heads a body calls: the fns and the externs, each once
 (fn bin_heads ((t ETerm) (acc (Prod (List Name) (List Name)))) (Prod (List Name) (List Name))
-  (measure (struct t))
+  (measure (ETerm.size t))
   (match t
     ((EBVar _) acc)
     ((ELit _) acc)
@@ -4095,16 +4127,38 @@
     ((EIf a b c) (bin_heads c (bin_heads b (bin_heads a acc))))))
 (fn bin_heads_all ((ts (List ETerm)) (acc (Prod (List Name) (List Name))))
   (Prod (List Name) (List Name))
-  (measure (struct ts))
+  (measure (List_ETerm.size ts))
   (match ts
     (nil acc)
     ((cons t r) (bin_heads_all r (bin_heads t acc)))))
 (fn bin_heads_arms ((arms (List EArm)) (acc (Prod (List Name) (List Name))))
   (Prod (List Name) (List Name))
-  (measure (struct arms))
+  (measure (List_EArm.size arms))
   (match arms
     (nil acc)
     ((cons (EArm _ b) r) (bin_heads_arms r (bin_heads b acc)))))
+(fulfills bin_heads.dec_1 (by (intro t acc w1 w2 b h) (rw h) (rw ETerm.size.eq_10) (arith)))
+(fulfills bin_heads.dec_2 (by (intro t acc w as h) (rw h) (rw ETerm.size.eq_3) (arith)))
+(fulfills bin_heads.dec_3 (by (intro t acc w as h) (rw h) (rw ETerm.size.eq_5) (arith)))
+(fulfills bin_heads.dec_4 (by (intro t acc g as h) (rw h) (rw ETerm.size.eq_4) (arith)))
+(fulfills bin_heads.dec_5 (by (intro t acc x as h) (rw h) (rw ETerm.size.eq_6) (arith)))
+(fulfills bin_heads.dec_6 (by (intro t acc s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills bin_heads.dec_7 (by (intro t acc s arms h) (rw h) (rw ETerm.size.eq_7) (arith)))
+(fulfills bin_heads.dec_8 (by (intro t acc rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills bin_heads.dec_9 (by (intro t acc rs b h) (rw h) (rw ETerm.size.eq_8) (arith)))
+(fulfills bin_heads.dec_10 (by (intro t acc a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills bin_heads.dec_11 (by (intro t acc a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills bin_heads.dec_12 (by (intro t acc a b c h) (rw h) (rw ETerm.size.eq_9) (arith)))
+(fulfills bin_heads_all.dec_1 (by (intro ts acc t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills bin_heads_all.dec_2 (by (intro ts acc t r h) (rw h) (rw List_ETerm.size.eq_2) (arith)))
+(fulfills bin_heads_arms.dec_1
+  (by (intro arms acc w b r h) (rw h) (rw List_EArm.size.eq_2) (rw EArm.size.eq_1) (arith)))
+(fulfills bin_heads_arms.dec_2
+  (by (intro arms acc w b r h) (rw h) (rw List_EArm.size.eq_2) (rw EArm.size.eq_1) (arith)))
+(fulfills bin_closure.dec_1
+  (by (intro p hf g r ht hm w1 w2 w3 w4 w5 body hd cs w6 hb) (apply natAbs_pred (arith))))
+(fulfills bin_closure.dec_2 (by (intro p hf g r ht hm w hd) (apply natAbs_pred (arith))))
+(fulfills bin_closure.dec_3 (by (intro p hf g r ht hm) (apply natAbs_pred (arith))))
 ;; an extern a function of the closure calls outside the roster, named with the function
 (fn bin_outside ((es ESt) (fns (List Name)) (ids (List Name))) (List (Prod Symbol (List Int)))
   (measure (struct fns))
@@ -4407,17 +4461,21 @@
     (nil t)
     ((cons s r) (form_tokens r (sexpr_tokens s t)))))
 (fn sexpr_tokens ((s SExpr) (t Toks)) Toks
-  (measure (struct s))
+  (measure (SExpr.size s))
   (match s
     ((SSym x) (tok_add t x))
     ((SSymU x us) (tok_add (sexprs_tokens us t) x))
     ((SList items) (sexprs_tokens items t))
     (_ t)))
 (fn sexprs_tokens ((ss (List SExpr)) (t Toks)) Toks
-  (measure (struct ss))
+  (measure (List_SExpr.size ss))
   (match ss
     (nil t)
     ((cons s r) (sexprs_tokens r (sexpr_tokens s t)))))
+(fulfills sexpr_tokens.dec_1 (by (intro s t x us h) (rw h) (rw SExpr.size.eq_3) (arith)))
+(fulfills sexpr_tokens.dec_2 (by (intro s t items h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills sexprs_tokens.dec_1 (by (intro ss t s r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills sexprs_tokens.dec_2 (by (intro ss t s r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
 
 ;; ---- directory modules ------------------------------------------------------------------
 ;; (import "DIR"): the view — DIR/mod.req/mod.req.shard, else DIR/mod.req.shard

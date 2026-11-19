@@ -17,6 +17,7 @@
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.k)
+(use kernel.descent)
 (use kernel.expr)
 (use kernel.kw)
 (use kernel.level)
@@ -220,7 +221,7 @@
 ;; pointer to `@` and the instance written
 (fn sp_instance ((ty Expr)) (Option Expr) (sp_instance_go ty 8))
 (fn sp_instance_go ((ty Expr) (fuel Int)) (Option Expr)
-  (measure fuel)
+  (measure (* 8 (Int.natAbs fuel)))
   (if (< fuel 1) none
   (match (get_app_fn ty)
     ((Const _ cls ls)
@@ -236,11 +237,13 @@
        (_ none)))
     (_ none))))
 (fn sp_inst1 ((cls (List Int)) (ls (List Level)) (car Expr) (fuel Int)) (Option Expr)
+  (measure (+ (* 8 (Int.natAbs (- fuel 1))) 4))
   (match (sp_inst_typed cls ls car fuel)
     ((some v) (some v))
     (none (sp_inst_any cls ls car fuel))))
 ;; the type's own rows; None falls through to sp_inst_any (the Int rows hold no `BEq Int`)
 (fn sp_inst_typed ((cls (List Int)) (ls (List Level)) (car Expr) (fuel Int)) (Option Expr)
+  (measure (+ (* 8 (Int.natAbs (- fuel 1))) 3))
   (match (sp_carrier car)
     ((some c) (if (sym_eq c (sym "Nat")) (sp_inst_nat cls car) (sp_inst_int cls car)))
     (none
@@ -288,6 +291,7 @@
   (if (int_list_eq cls (utf8 "DecidableEq")) (some (sp_c (n1 (sym "instDecidableEqBool")))) none))
 ;; `List α`: Append is List.instAppend; DecidableEq is instDecidableEqList over the element's
 (fn sp_inst_list ((cls (List Int)) (lls (List Level)) (a Expr) (fuel Int)) (Option Expr)
+  (measure (+ (* 8 (Int.natAbs (- fuel 1))) 2))
   (if (int_list_eq cls (utf8 "Append"))
     (some (mk_app (mk_const (n2 (sym "List") (sym "instAppend")) lls) a))
   (if (int_list_eq cls (utf8 "DecidableEq"))
@@ -303,6 +307,7 @@
     (nil LZero)))
 ;; at any type: BEq from its decidable equality
 (fn sp_inst_any ((cls (List Int)) (ls (List Level)) (car Expr) (fuel Int)) (Option Expr)
+  (measure (+ (* 8 (Int.natAbs (- fuel 1))) 1))
   (if (int_list_eq cls (utf8 "BEq"))
     (match (sp_instance_go (mk_app (mk_const (n1 (sym "DecidableEq")) ls) car) (- fuel 1))
       ((some d) (some (mk_app_n (mk_const (n1 (sym "instBEqOfDecidableEq")) ls) (list car d))))
@@ -310,6 +315,7 @@
     none))
 ;; the heterogeneous classes at one type: the homogeneous instance lifted
 (fn sp_inst_h ((cls (List Int)) (ls (List Level)) (a Expr) (fuel Int)) (Option Expr)
+  (measure (+ (* 8 (Int.natAbs (- fuel 1))) 1))
   (match (sp_h_row cls)
     (none none)
     ((some (Prod.mk lift base))
@@ -338,6 +344,24 @@
     ((some c)
      (some (mk_app (sp_c (n1 (if (sym_eq c (sym "Nat")) (sym "instOfNatNat") (sym "instOfNat")))) n)))
     (none none)))
+;; the descent of the six: the fuel is spent where `sp_instance_go` passes its test, and the
+;; others are ranked between the fuel and the fuel less one, so a call back at the fuel less
+;; one is less whatever the fuel is
+(fulfills sp_instance_go.dec_1
+  (by (intro ty fuel hf w cls ls h1 c h2 car h3) (arith (natAbs_pred fuel hf))))
+(fulfills sp_instance_go.dec_2
+  (by (intro ty fuel hf w cls ls h1 c h2 a b d h3 h4) (arith (natAbs_pred fuel hf))))
+(fulfills sp_inst1.dec_1 (by (intro cls ls car fuel) (arith)))
+(fulfills sp_inst1.dec_2 (by (intro cls ls car fuel) (arith)))
+(fulfills sp_inst_typed.dec_1 (by (intro cls ls car fuel h1 h2 lls a h3) (arith)))
+(fulfills sp_inst_list.dec_1 (by (intro cls lls a fuel h1 h2) (arith)))
+(fulfills sp_inst_list.dec_2 (by (intro cls lls a fuel h1 h2) (arith)))
+(fulfills sp_inst_any.dec_1 (by (intro cls ls car fuel h1) (arith)))
+(fulfills sp_inst_h.dec_1
+  (by
+    (intro cls ls a fuel lift base h1)
+    (show (< (* 8 (Int.natAbs (- fuel 1))) (+ (* 8 (Int.natAbs (- fuel 1))) 1)))
+    (arith)))
 
 ;; ---- the kit ---------------------------------------------------------------------------------
 ;; every constant the two tables can write, for the loader's demand (loader.shard init_kit):
