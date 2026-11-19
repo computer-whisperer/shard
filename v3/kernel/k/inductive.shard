@@ -30,6 +30,7 @@
 (use kernel.k.CheckedEnv)
 (use kernel.verdict)
 (use kernel.verdict.Reason)
+(use kernel.verdict.Resource)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.expr.St)
@@ -257,6 +258,37 @@
   (is_def_eq (a_ctx a) (a_st a) (budget_depth) t s))
 (fn a_ensure_sort ((a A) (t Expr)) (KRes Expr) (ensure_sort (a_ctx a) (a_st a) (budget_depth) t))
 
+;; a walk down a telescope spends a heartbeat at each binder it takes — the guard of the
+;; checker's three sites, at a depth that passes — and goes on to the next only when the count
+;; advanced, under the limit, since it was entered: the heartbeats left are what it descends by.
+;; The term it goes on with is the body it substituted into, or what whnf made of that, and
+;; nothing in the term bounds the walk
+(fn a_step ((a A) (site Symbol)) (KRes A)
+  (match (rec_guard (a_ctx a) (a_st a) 1 site)
+    ((KFail f) (KFail f))
+    ((KOk st _) (KOk st (a_set_st a st)))))
+(fn a_advanced ((a A) (a2 A)) Bool
+  (if (< (st_ticks (a_st a)) (st_ticks (a_st a2)))
+    (if (<= (st_ticks (a_st a2)) (budget_ticks)) true false)
+    false))
+(theorem a_advanced_lt ((a A) (a2 A) (h (= (a_advanced a a2) true)))
+  (< (Int.natAbs (- (budget_ticks) (st_ticks (a_st a2))))
+    (Int.natAbs (- (budget_ticks) (st_ticks (a_st a)))))
+  (by
+    (cases (Int.decLt (st_ticks (a_st a)) (st_ticks (a_st a2)))
+      ((isFalse (hn) (have e (= (a_advanced a a2) false) (unfold a_advanced) (rw (if_neg hn)) rfl)
+         (exact (absurd h (ne_true_of_eq_false e))))
+       (isTrue (h1)
+         (cases (Int.decLe (st_ticks (a_st a2)) (budget_ticks))
+           ((isFalse (hn)
+              (have e (= (a_advanced a a2) false)
+                (unfold a_advanced)
+                (rw (if_pos h1))
+                (rw (if_neg hn))
+                rfl)
+              (exact (absurd h (ne_true_of_eq_false e))))
+            (isTrue (h2) (apply natAbs_lt (arith) (arith))))))))))
+
 (fn ldecl_type_of ((a A) (fv Expr)) Expr
   (match fv
     ((FVar _ id)
@@ -343,39 +375,58 @@
 ;; walk a type's binders: the first nparams are the params (created on the
 ;; first type, def-eq-checked on the others), the rest are indices; returns
 ;; (a, (nindices, result))
-(fn cit_binders ((a A) (ty Expr) (i Int) (first Bool) (nidx Int)) (KRes (Prod A (Prod Int Expr)))
-  (measure (struct ty))
-  (match (a_whnf a ty)
+(fn cit_binders ((a0 A) (ty Expr) (i Int) (first Bool) (nidx Int)) (KRes (Prod A (Prod Int Expr)))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "cit_binders"))
     ((KFail f) (KFail f))
-    ((KOk st1 t)
-     (let ((a1 (a_set_st a st1)))
-       (match t
-         ((Pi _ _ _ dom body)
-          (if (< i (a_nparams a1))
-            (if first
-              (match (a_local_for a1 t)
-                ((Prod.mk a2 p)
-                 (match (a_inst1 (a_set_params a2 (append (a_params a2) (cons p nil))) body p)
-                   ((Prod.mk a3 b1) (cit_binders a3 b1 (+ i 1) first nidx)))))
-              (match (nth (a_params a1) i)
-                (none (KFail (FRej (RuleViolation (sym "param_mismatch")))))
-                ((some p)
-                 (match (a_is_def_eq a1 dom (ldecl_type_of a1 p))
-                   ((KFail f) (KFail f))
-                   ((KOk st2 ok)
-                    (if ok
-                      (match (a_inst1 (a_set_st a1 st2) body p)
-                        ((Prod.mk a3 b1) (cit_binders a3 b1 (+ i 1) first nidx)))
-                      (KFail (FRej (RuleViolation (sym "param_mismatch"))))))))))
-            (match (a_local_for a1 t)
-              ((Prod.mk a2 x)
-               (match (a_inst1 a2 body x)
-                 ((Prod.mk a3 b1) (cit_binders a3 b1 (+ i 1) first (+ nidx 1))))))))
-         (_
-           (if (bool_not (= i (a_nparams a1)))
-             (if (< i (a_nparams a1)) (KFail (FRej (RuleViolation (sym "param_count_mismatch"))))
-             (KOk (a_st a1) (Prod.mk a1 (Prod.mk nidx t))))
-             (KOk (a_st a1) (Prod.mk a1 (Prod.mk nidx t))))))))))
+    ((KOk _ a)
+     (match (a_whnf a ty)
+       ((KFail f) (KFail f))
+       ((KOk st1 t)
+        (let ((a1 (a_set_st a st1)))
+          (match t
+            ((Pi _ _ _ dom body)
+             (if (< i (a_nparams a1))
+               (if first
+                 (match (a_local_for a1 t)
+                   ((Prod.mk a2 p)
+                    (match (a_inst1 (a_set_params a2 (append (a_params a2) (cons p nil))) body p)
+                      ((Prod.mk a3 b1)
+                       (if (a_advanced a0 a3) (cit_binders a3 b1 (+ i 1) first nidx)
+                       (KFail (FOut RHeartbeats (sym "cit_binders"))))))))
+                 (match (nth (a_params a1) i)
+                   (none (KFail (FRej (RuleViolation (sym "param_mismatch")))))
+                   ((some p)
+                    (match (a_is_def_eq a1 dom (ldecl_type_of a1 p))
+                      ((KFail f) (KFail f))
+                      ((KOk st2 ok)
+                       (if ok
+                         (match (a_inst1 (a_set_st a1 st2) body p)
+                           ((Prod.mk a3 b1)
+                            (if (a_advanced a0 a3) (cit_binders a3 b1 (+ i 1) first nidx)
+                            (KFail (FOut RHeartbeats (sym "cit_binders"))))))
+                         (KFail (FRej (RuleViolation (sym "param_mismatch"))))))))))
+               (match (a_local_for a1 t)
+                 ((Prod.mk a2 x)
+                  (match (a_inst1 a2 body x)
+                    ((Prod.mk a3 b1)
+                     (if (a_advanced a0 a3) (cit_binders a3 b1 (+ i 1) first (+ nidx 1))
+                     (KFail (FOut RHeartbeats (sym "cit_binders"))))))))))
+            (_
+              (if (< i (a_nparams a1)) (KFail (FRej (RuleViolation (sym "param_count_mismatch"))))
+              (KOk (a_st a1) (Prod.mk a1 (Prod.mk nidx t))))))))))))
+(fulfills cit_binders.dec_1
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 dom body ht hi a2 x hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills cit_binders.dec_2
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 dom body ht hi hf q hq st2 ok hd hok a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills cit_binders.dec_3
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 dom body ht hi hf a2 q hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; ---- is_rec / is_reflexive (l. 308, 337) -------------------------------------------
 
@@ -500,37 +551,57 @@
 (fulfills ivia_go.dec_1 (by (intro p h hv) (apply natAbs_lt (arith) (arith))))
 
 ;; is_rec_argument (l. 426): whnf, open every Pi, then a valid app?
-(fn is_rec_argument ((a A) (t Expr)) (KRes (Option Int))
-  (match (a_whnf a t)
+(fn is_rec_argument ((a0 A) (t Expr)) (KRes (Option Int))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "is_rec_argument"))
     ((KFail f) (KFail f))
-    ((KOk st1 t1)
-     (let ((a1 (a_set_st a st1)))
-       (match t1
-         ((Pi _ _ _ _ body)
-          (match (a_local_for a1 t1)
-            ((Prod.mk a2 x)
-             (match (a_inst1 a2 body x)
-               ((Prod.mk a3 b1) (is_rec_argument a3 b1))))))
-         (_ (KOk (a_st a1) (is_valid_ind_app a1 t1))))))))
+    ((KOk _ a)
+     (match (a_whnf a t)
+       ((KFail f) (KFail f))
+       ((KOk st1 t1)
+        (let ((a1 (a_set_st a st1)))
+          (match t1
+            ((Pi _ _ _ _ body)
+             (match (a_local_for a1 t1)
+               ((Prod.mk a2 x)
+                (match (a_inst1 a2 body x)
+                  ((Prod.mk a3 b1)
+                   (if (a_advanced a0 a3) (is_rec_argument a3 b1)
+                   (KFail (FOut RHeartbeats (sym "is_rec_argument")))))))))
+            (_ (KOk (a_st a1) (is_valid_ind_app a1 t1))))))))))
+(fulfills is_rec_argument.dec_1
+  (by
+    (intro p w0 a hs st1 t1 hw w1 w2 w3 w4 body ht a2 x hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; check_positivity (l. 436)
-(fn check_positivity ((a A) (t0 Expr) (cn Name) (arg_idx Int)) (KRes A)
-  (match (a_whnf a t0)
+(fn check_positivity ((a0 A) (t0 Expr) (cn Name) (arg_idx Int)) (KRes A)
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "check_positivity"))
     ((KFail f) (KFail f))
-    ((KOk st1 t)
-     (let ((a1 (a_set_st a st1)))
-       (if (bool_not (has_ind_occ a1 t)) (KOk (a_st a1) a1)
-       (match t
-         ((Pi _ _ _ dom body)
-          (if (has_ind_occ a1 dom) (KFail (FRej (RuleViolation (sym "non_positive_occurrence"))))
-          (match (a_local_for a1 t)
-            ((Prod.mk a2 x)
-             (match (a_inst1 a2 body x)
-               ((Prod.mk a3 b1) (check_positivity a3 b1 cn arg_idx)))))))
-         (_
-           (match (is_valid_ind_app a1 t)
-             ((some _) (KOk (a_st a1) a1))
-             (none (KFail (FRej (RuleViolation (sym "invalid_occurrence")))))))))))))
+    ((KOk _ a)
+     (match (a_whnf a t0)
+       ((KFail f) (KFail f))
+       ((KOk st1 t)
+        (let ((a1 (a_set_st a st1)))
+          (if (bool_not (has_ind_occ a1 t)) (KOk (a_st a1) a1)
+          (match t
+            ((Pi _ _ _ dom body)
+             (if (has_ind_occ a1 dom) (KFail (FRej (RuleViolation (sym "non_positive_occurrence"))))
+             (match (a_local_for a1 t)
+               ((Prod.mk a2 x)
+                (match (a_inst1 a2 body x)
+                  ((Prod.mk a3 b1)
+                   (if (a_advanced a0 a3) (check_positivity a3 b1 cn arg_idx)
+                   (KFail (FOut RHeartbeats (sym "check_positivity"))))))))))
+            (_
+              (match (is_valid_ind_app a1 t)
+                ((some _) (KOk (a_st a1) a1))
+                (none (KFail (FRej (RuleViolation (sym "invalid_occurrence")))))))))))))))
+(fulfills check_positivity.dec_1
+  (by
+    (intro p w0 a hs st1 t hw ho w1 w2 w3 dom body ht hd a2 x hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; ---- check_constructors (l. 456) --------------------------------------------------------
 
@@ -564,43 +635,58 @@
 
 ;; walk a constructor's binders: params def-eq the params; fields
 ;; universe-checked and positivity-checked; the result a valid app of type idx
-(fn cc_binders ((a A) (t Expr) (i Int) (cn Name) (idx Int)) (KRes A)
-  (measure (struct t))
-  (match t
-    ((Pi _ _ _ dom body)
-     (if (< i (a_nparams a))
-       (match (nth (a_params a) i)
-         (none (KFail (FRej (RuleViolation (sym "param_mismatch")))))
-         ((some p)
-          (match (a_is_def_eq a dom (ldecl_type_of a p))
+(fn cc_binders ((a0 A) (t Expr) (i Int) (cn Name) (idx Int)) (KRes A)
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "cc_binders"))
+    ((KFail f) (KFail f))
+    ((KOk _ a)
+     (match t
+       ((Pi _ _ _ dom body)
+        (if (< i (a_nparams a))
+          (match (nth (a_params a) i)
+            (none (KFail (FRej (RuleViolation (sym "param_mismatch")))))
+            ((some p)
+             (match (a_is_def_eq a dom (ldecl_type_of a p))
+               ((KFail f) (KFail f))
+               ((KOk st1 ok)
+                (if ok
+                  (match (a_inst1 (a_set_st a st1) body p)
+                    ((Prod.mk a2 b1)
+                     (if (a_advanced a0 a2) (cc_binders a2 b1 (+ i 1) cn idx)
+                     (KFail (FOut RHeartbeats (sym "cc_binders"))))))
+                  (KFail (FRej (RuleViolation (sym "ctor_param_mismatch")))))))))
+          (match (a_infer a dom)
             ((KFail f) (KFail f))
-            ((KOk st1 ok)
-             (if ok
-               (match (a_inst1 (a_set_st a st1) body p)
-                 ((Prod.mk a2 b1) (cc_binders a2 b1 (+ i 1) cn idx)))
-               (KFail (FRej (RuleViolation (sym "ctor_param_mismatch")))))))))
-       (match (a_infer a dom)
-         ((KFail f) (KFail f))
-         ((KOk st1 dty)
-          (match (a_ensure_sort (a_set_st a st1) dty)
-            ((KFail f) (KFail f))
-            ((KOk st2 s)
-             (let ((a2 (a_set_st a st2)))
-               (if
-                 (bool_not
-                   (bool_or (is_geq (a_result_level a2) (sort_level s))
-                     (normalizes_to_zero (a_result_level a2))))
-                 (KFail (FRej (RuleViolation (sym "field_universe_too_big"))))
-                 (match (if (a_unsafe a2) (KOk (a_st a2) a2) (check_positivity a2 dom cn i))
-                   ((KFail f) (KFail f))
-                   ((KOk st3 a3)
-                    (match (a_local_for (a_set_st a3 st3) t)
-                      ((Prod.mk a4 x)
-                       (match (a_inst1 a4 body x)
-                         ((Prod.mk a5 b1) (cc_binders a5 b1 (+ i 1) cn idx)))))))))))))))
-    (_
-      (if (is_valid_ind_app_i a t idx) (KOk (a_st a) a)
-      (KFail (FRej (RuleViolation (sym "invalid_ctor_result"))))))))
+            ((KOk st1 dty)
+             (match (a_ensure_sort (a_set_st a st1) dty)
+               ((KFail f) (KFail f))
+               ((KOk st2 s)
+                (let ((a2 (a_set_st a st2)))
+                  (if
+                    (bool_not
+                      (bool_or (is_geq (a_result_level a2) (sort_level s))
+                        (normalizes_to_zero (a_result_level a2))))
+                    (KFail (FRej (RuleViolation (sym "field_universe_too_big"))))
+                    (match (if (a_unsafe a2) (KOk (a_st a2) a2) (check_positivity a2 dom cn i))
+                      ((KFail f) (KFail f))
+                      ((KOk st3 a3)
+                       (match (a_local_for (a_set_st a3 st3) t)
+                         ((Prod.mk a4 x)
+                          (match (a_inst1 a4 body x)
+                            ((Prod.mk a5 b1)
+                             (if (a_advanced a0 a5) (cc_binders a5 b1 (+ i 1) cn idx)
+                             (KFail (FOut RHeartbeats (sym "cc_binders"))))))))))))))))))
+       (_
+         (if (is_valid_ind_app_i a t idx) (KOk (a_st a) a)
+         (KFail (FRej (RuleViolation (sym "invalid_ctor_result"))))))))))
+(fulfills cc_binders.dec_1
+  (by
+    (intro p w0 a hs w1 w2 w3 dom body ht hi st1 dty hy st2 s he hu st3 a3 hp a4 x hl a5 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills cc_binders.dec_2
+  (by
+    (intro p w0 a hs w1 w2 w3 dom body ht hi q hq st1 ok hd hok a2 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; ---- declare_constructors (l. 499) -----------------------------------------------
 
@@ -653,28 +739,35 @@
     (nil (KOk (a_st a) false))))))
 
 ;; one constructor: every non-Prop field must occur in the result's arguments
-(fn eoz_single ((a A) (t Expr) (i Int) (to_check (List Expr))) (KRes Bool)
-  (measure (struct t))
-  (match t
-    ((Pi _ _ _ dom body)
-     (match (a_local_for a t)
-       ((Prod.mk a1 x)
-        (if (< i (a_nparams a1))
-          (match (a_inst1 a1 body x)
-            ((Prod.mk a2 b1) (eoz_single a2 b1 (+ i 1) to_check)))
-          (match (a_infer a1 dom)
-            ((KFail f) (KFail f))
-            ((KOk st1 dty)
-             (match (a_ensure_sort (a_set_st a1 st1) dty)
+(fn eoz_single ((a0 A) (t Expr) (i Int) (to_check (List Expr))) (KRes Bool)
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "eoz_single"))
+    ((KFail f) (KFail f))
+    ((KOk _ a)
+     (match t
+       ((Pi _ _ _ dom body)
+        (match (a_local_for a t)
+          ((Prod.mk a1 x)
+           (if (< i (a_nparams a1))
+             (match (a_inst1 a1 body x)
+               ((Prod.mk a2 b1)
+                (if (a_advanced a0 a2) (eoz_single a2 b1 (+ i 1) to_check)
+                (KFail (FOut RHeartbeats (sym "eoz_single"))))))
+             (match (a_infer a1 dom)
                ((KFail f) (KFail f))
-               ((KOk st2 s)
-                (match (a_inst1 (a_set_st a1 st2) body x)
-                  ((Prod.mk a2 b1)
-                   (eoz_single a2 b1 (+ i 1)
-                     (if (normalizes_to_zero (sort_level s)) to_check (cons x to_check)))))))))))))
-    (_
-      (let ((result_args (get_app_args t)))
-        (KOk (a_st a) (bool_not (all_mem_exprs to_check result_args)))))))
+               ((KOk st1 dty)
+                (match (a_ensure_sort (a_set_st a1 st1) dty)
+                  ((KFail f) (KFail f))
+                  ((KOk st2 s)
+                   (match (a_inst1 (a_set_st a1 st2) body x)
+                     ((Prod.mk a2 b1)
+                      (if (a_advanced a0 a2)
+                        (eoz_single a2 b1 (+ i 1)
+                          (if (normalizes_to_zero (sort_level s)) to_check (cons x to_check)))
+                        (KFail (FOut RHeartbeats (sym "eoz_single"))))))))))))))
+       (_
+         (let ((result_args (get_app_args t)))
+           (KOk (a_st a) (bool_not (all_mem_exprs to_check result_args)))))))))
 
 (fn all_mem_exprs ((xs (List Expr)) (ys (List Expr))) Bool
   (measure (struct xs))
@@ -686,21 +779,31 @@
   (match ys
     (nil false)
     ((cons y r) (if (expr_eq x y) true (mem_expr x r)))))
+(fulfills eoz_single.dec_1
+  (by
+    (intro p w0 a hs w1 w2 w3 dom body ht a1 x hl hi st1 dty hy st2 s he a2 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills eoz_single.dec_2
+  (by (intro p w0 a hs w1 w2 w3 dom body ht a1 x hl hi a2 b1 hb h) (apply a_advanced_lt (exact h))))
 
 ;; init_elim_level (l. 580): Prop, or a fresh universe parameter u, u_1, u_2, …
 (fn init_elim_level ((a A)) (KRes A)
   (match (elim_only_at_universe_zero a)
     ((KFail f) (KFail f))
     ((KOk st1 z)
-     (KOk st1
-       (a_set_elim (a_set_st a st1)
-         (if z LZero (LParam (fresh_univ_name (a_lparams a) (n1 (sym "u")) 1))))))))
+     (if z (KOk st1 (a_set_elim (a_set_st a st1) LZero))
+     (match (fresh_univ_name (a_lparams a) (n1 (sym "u")) 1 (+ (len (a_lparams a)) 1))
+       (none (KFail (FOut RHeartbeats (sym "fresh_univ_name"))))
+       ((some u) (KOk st1 (a_set_elim (a_set_st a st1) (LParam u)))))))))
 
-(fn fresh_univ_name ((taken (List Name)) (base Name) (i Int)) Name
-  (measure (- 1000 i))
-  (if (bool_not (mem_name base taken)) base
-  (let ((cand (name_append_after (n1 (sym "u")) i)))
-    (if (mem_name cand taken) (fresh_univ_name taken cand (+ i 1)) cand))))
+;; `base` when it is not taken, else the first of u_i, u_(i+1), … that is not, within `tries`
+;; of them: one more than the names taken always holds a free one
+(fn fresh_univ_name ((taken (List Name)) (base Name) (i Int) (tries Int)) (Option Name)
+  (measure (Int.natAbs tries))
+  (if (bool_not (mem_name base taken)) (some base)
+  (if (< tries 1) none
+  (fresh_univ_name taken (name_append_after (n1 (sym "u")) i) (+ i 1) (- tries 1)))))
+(fulfills fresh_univ_name.dec_1 (by (intro p hb ht) (apply natAbs_pred (arith))))
 
 ;; init_K_target (l. 607)
 (fn init_k_target ((a A)) A
@@ -764,25 +867,41 @@
                                    (cons (RecInfoF cfv indices major nil) acc)))))))))))))))))))))))
 
 ;; open a type's binders: params instantiated, indices as fresh locals
-(fn mri_open_type ((a A) (ty Expr) (i Int) (indices (List Expr))) (KRes (Prod A (List Expr)))
-  (measure (struct ty))
-  (match (a_whnf a ty)
+(fn mri_open_type ((a0 A) (ty Expr) (i Int) (indices (List Expr))) (KRes (Prod A (List Expr)))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "mri_open_type"))
     ((KFail f) (KFail f))
-    ((KOk st1 t)
-     (let ((a1 (a_set_st a st1)))
-       (match t
-         ((Pi _ _ _ _ body)
-          (if (< i (a_nparams a1))
-            (match (nth (a_params a1) i)
-              (none (KFail (FRej (Malformed (sym "param")))))
-              ((some p)
-               (match (a_inst1 a1 body p)
-                 ((Prod.mk a2 b1) (mri_open_type a2 b1 (+ i 1) indices)))))
-            (match (a_local_for a1 t)
-              ((Prod.mk a2 x)
-               (match (a_inst1 a2 body x)
-                 ((Prod.mk a3 b1) (mri_open_type a3 b1 (+ i 1) (append indices (cons x nil)))))))))
-         (_ (KOk (a_st a1) (Prod.mk a1 indices))))))))
+    ((KOk _ a)
+     (match (a_whnf a ty)
+       ((KFail f) (KFail f))
+       ((KOk st1 t)
+        (let ((a1 (a_set_st a st1)))
+          (match t
+            ((Pi _ _ _ _ body)
+             (if (< i (a_nparams a1))
+               (match (nth (a_params a1) i)
+                 (none (KFail (FRej (Malformed (sym "param")))))
+                 ((some p)
+                  (match (a_inst1 a1 body p)
+                    ((Prod.mk a2 b1)
+                     (if (a_advanced a0 a2) (mri_open_type a2 b1 (+ i 1) indices)
+                     (KFail (FOut RHeartbeats (sym "mri_open_type"))))))))
+               (match (a_local_for a1 t)
+                 ((Prod.mk a2 x)
+                  (match (a_inst1 a2 body x)
+                    ((Prod.mk a3 b1)
+                     (if (a_advanced a0 a3)
+                       (mri_open_type a3 b1 (+ i 1) (append indices (cons x nil)))
+                       (KFail (FOut RHeartbeats (sym "mri_open_type"))))))))))
+            (_ (KOk (a_st a1) (Prod.mk a1 indices))))))))))
+(fulfills mri_open_type.dec_1
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 w4 body ht hi a2 x hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills mri_open_type.dec_2
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 w4 body ht hi q hq a2 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; the minor premises: one per constructor, appended to its type's rec info
 (fn mri_minors ((a A) (ts (List InductiveType)) (idx Int)) (KRes A)
@@ -846,29 +965,42 @@
      (cons (RecInfoF cfv indices major minors) (append_minor r (- idx 1) m))))))
 
 ;; open a constructor type: returns (a, (b_u, (u, result)))
-(fn open_ctor ((a A) (t Expr) (i Int) (b_u (List Expr)) (u (List Expr)))
+(fn open_ctor ((a0 A) (t Expr) (i Int) (b_u (List Expr)) (u (List Expr)))
   (KRes (Prod A (Prod (List Expr) (Prod (List Expr) Expr))))
-  (measure (struct t))
-  (match t
-    ((Pi _ _ _ dom body)
-     (if (< i (a_nparams a))
-       (match (nth (a_params a) i)
-         (none (KFail (FRej (Malformed (sym "param")))))
-         ((some p)
-          (match (a_inst1 a body p)
-            ((Prod.mk a1 b1) (open_ctor a1 b1 (+ i 1) b_u u)))))
-       (match (a_local_for a t)
-         ((Prod.mk a1 l)
-          (match (is_rec_argument a1 dom)
-            ((KFail f) (KFail f))
-            ((KOk st2 recarg)
-             (match (a_inst1 (a_set_st a1 st2) body l)
-               ((Prod.mk a2 b1)
-                (open_ctor a2 b1 (+ i 1) (append b_u (cons l nil))
-                  (match recarg
-                    ((some _) (append u (cons l nil)))
-                    (none u)))))))))))
-    (_ (KOk (a_st a) (Prod.mk a (Prod.mk b_u (Prod.mk u t)))))))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "open_ctor"))
+    ((KFail f) (KFail f))
+    ((KOk _ a)
+     (match t
+       ((Pi _ _ _ dom body)
+        (if (< i (a_nparams a))
+          (match (nth (a_params a) i)
+            (none (KFail (FRej (Malformed (sym "param")))))
+            ((some p)
+             (match (a_inst1 a body p)
+               ((Prod.mk a1 b1)
+                (if (a_advanced a0 a1) (open_ctor a1 b1 (+ i 1) b_u u)
+                (KFail (FOut RHeartbeats (sym "open_ctor"))))))))
+          (match (a_local_for a t)
+            ((Prod.mk a1 l)
+             (match (is_rec_argument a1 dom)
+               ((KFail f) (KFail f))
+               ((KOk st2 recarg)
+                (match (a_inst1 (a_set_st a1 st2) body l)
+                  ((Prod.mk a2 b1)
+                   (if (a_advanced a0 a2)
+                     (open_ctor a2 b1 (+ i 1) (append b_u (cons l nil))
+                       (match recarg
+                         ((some _) (append u (cons l nil)))
+                         (none u)))
+                     (KFail (FOut RHeartbeats (sym "open_ctor"))))))))))))
+       (_ (KOk (a_st a) (Prod.mk a (Prod.mk b_u (Prod.mk u t)))))))))
+(fulfills open_ctor.dec_1
+  (by
+    (intro p w0 a hs w1 w2 w3 dom body ht hi a1 l hl st2 recarg hr a2 b1 hb h)
+    (apply a_advanced_lt (exact h))))
+(fulfills open_ctor.dec_2
+  (by (intro p w0 a hs w1 w2 w3 dom body ht hi q hq a1 b1 hb h) (apply a_advanced_lt (exact h))))
 
 ;; the inductive hypotheses v_i for the recursive fields u_i (l. 675–692)
 (fn mk_ihs ((a A) (u (List Expr)) (acc (List Expr))) (KRes (Prod A (List Expr)))
@@ -904,19 +1036,28 @@
                                  ((Prod.mk a4 v_i) (mk_ihs a4 r (cons v_i acc))))))))))))))))))))))))
 
 ;; whnf and open every Pi of a recursive field's type: (a, (xs, head))
-(fn open_pis ((a A) (ty Expr) (xs (List Expr))) (KRes (Prod A (Prod (List Expr) Expr)))
-  (measure (struct ty))
-  (match (a_whnf a ty)
+(fn open_pis ((a0 A) (ty Expr) (xs (List Expr))) (KRes (Prod A (Prod (List Expr) Expr)))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "open_pis"))
     ((KFail f) (KFail f))
-    ((KOk st1 t)
-     (let ((a1 (a_set_st a st1)))
-       (match t
-         ((Pi _ _ _ _ body)
-          (match (a_local_for a1 t)
-            ((Prod.mk a2 x)
-             (match (a_inst1 a2 body x)
-               ((Prod.mk a3 b1) (open_pis a3 b1 (append xs (cons x nil))))))))
-         (_ (KOk (a_st a1) (Prod.mk a1 (Prod.mk xs t)))))))))
+    ((KOk _ a)
+     (match (a_whnf a ty)
+       ((KFail f) (KFail f))
+       ((KOk st1 t)
+        (let ((a1 (a_set_st a st1)))
+          (match t
+            ((Pi _ _ _ _ body)
+             (match (a_local_for a1 t)
+               ((Prod.mk a2 x)
+                (match (a_inst1 a2 body x)
+                  ((Prod.mk a3 b1)
+                   (if (a_advanced a0 a3) (open_pis a3 b1 (append xs (cons x nil)))
+                   (KFail (FOut RHeartbeats (sym "open_pis")))))))))
+            (_ (KOk (a_st a1) (Prod.mk a1 (Prod.mk xs t)))))))))))
+(fulfills open_pis.dec_1
+  (by
+    (intro p w0 a hs st1 t hw w1 w2 w3 w4 body ht a2 x hl a3 b1 hb h)
+    (apply a_advanced_lt (exact h))))
 
 ;; ---- declare_recursors (l. 795) / mk_rec_rules (l. 749) ----------------------------------
 
@@ -1142,22 +1283,33 @@
                                   (KFail (FRej (RuleViolation (sym "rule_not_type_preserving")))))))))))))))))))))))))))
 
 ;; open a constructor without classifying fields: (a, (fields, result)))
-(fn open_ctor_plain ((a A) (t Expr) (i Int) (b_u (List Expr)))
+(fn open_ctor_plain ((a0 A) (t Expr) (i Int) (b_u (List Expr)))
   (KRes (Prod A (Prod (List Expr) Expr)))
-  (measure (struct t))
-  (match t
-    ((Pi _ _ _ _ body)
-     (if (< i (a_nparams a))
-       (match (nth (a_params a) i)
-         (none (KFail (FRej (Malformed (sym "param")))))
-         ((some p)
-          (match (a_inst1 a body p)
-            ((Prod.mk a1 b1) (open_ctor_plain a1 b1 (+ i 1) b_u)))))
-       (match (a_local_for a t)
-         ((Prod.mk a1 l)
-          (match (a_inst1 a1 body l)
-            ((Prod.mk a2 b1) (open_ctor_plain a2 b1 (+ i 1) (append b_u (cons l nil)))))))))
-    (_ (KOk (a_st a) (Prod.mk a (Prod.mk b_u t))))))
+  (measure (Int.natAbs (- (budget_ticks) (st_ticks (a_st a0)))))
+  (match (a_step a0 (sym "open_ctor_plain"))
+    ((KFail f) (KFail f))
+    ((KOk _ a)
+     (match t
+       ((Pi _ _ _ _ body)
+        (if (< i (a_nparams a))
+          (match (nth (a_params a) i)
+            (none (KFail (FRej (Malformed (sym "param")))))
+            ((some p)
+             (match (a_inst1 a body p)
+               ((Prod.mk a1 b1)
+                (if (a_advanced a0 a1) (open_ctor_plain a1 b1 (+ i 1) b_u)
+                (KFail (FOut RHeartbeats (sym "open_ctor_plain"))))))))
+          (match (a_local_for a t)
+            ((Prod.mk a1 l)
+             (match (a_inst1 a1 body l)
+               ((Prod.mk a2 b1)
+                (if (a_advanced a0 a2) (open_ctor_plain a2 b1 (+ i 1) (append b_u (cons l nil)))
+                (KFail (FOut RHeartbeats (sym "open_ctor_plain"))))))))))
+       (_ (KOk (a_st a) (Prod.mk a (Prod.mk b_u t))))))))
+(fulfills open_ctor_plain.dec_1
+  (by (intro p w0 a hs w1 w2 w3 w4 body ht hi a1 l hl a2 b1 hb h) (apply a_advanced_lt (exact h))))
+(fulfills open_ctor_plain.dec_2
+  (by (intro p w0 a hs w1 w2 w3 w4 body ht hi q hq a1 b1 hb h) (apply a_advanced_lt (exact h))))
 
 ;; ---- add_inductive_fn::operator() (l. 868) -------------------------------------------------
 

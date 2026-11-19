@@ -26,6 +26,7 @@
 (use kernel.k.CheckedEnv)
 (use kernel.verdict)
 (use kernel.verdict.Reason)
+(use kernel.verdict.Resource)
 (use kernel.expr.Expr)
 (use kernel.expr.St)
 (use kernel.name.Name)
@@ -249,12 +250,19 @@
 (fulfills get_params.dec_1
   (by (intro p h a nm bi dom body hm ns1 x hx ns2 b1 hb) (apply natAbs_pred (arith))))
 
-;; mk_unique_name (l. 1005): n_idx, n_(idx+1), … not in the environment
-(fn mk_unique_name ((n N) (base Name)) (Prod N Name)
-  (let ((cand (name_append_after base (n_next n))))
+;; the most auxiliary types one declaration may come to, and the most names tried for one of
+;; them: the pin's two loops (l. 1005, l. 1153) have no bound
+(fn nested_max () Int 100000)
+
+;; mk_unique_name (l. 1005): n_idx, n_(idx+1), … not in the environment, within `tries` of them
+(fn mk_unique_name ((n N) (base Name) (tries Int)) (KRes (Prod N Name))
+  (measure (Int.natAbs tries))
+  (if (< tries 1) (KFail (FOut RHeartbeats (sym "mk_unique_name")))
+  (let ((cand (name_append_after base (n_next n))) (ns1 (n_set_next n (+ (n_next n) 1))))
     (match (env_find (n_env n) cand)
-      (none (Prod.mk (n_set_next n (+ (n_next n) 1)) cand))
-      ((some _) (mk_unique_name (n_set_next n (+ (n_next n) 1)) base)))))
+      (none (KOk (n_st ns1) (Prod.mk ns1 cand)))
+      ((some _) (mk_unique_name ns1 base (- tries 1)))))))
+(fulfills mk_unique_name.dec_1 (by (intro p ht w0 he) (apply natAbs_pred (arith))))
 
 ;; replace_params (l. 1013): the constructor's own param locals As ↦ the shared params
 (fn replace_params ((n N) (e Expr) (as (List Expr))) (Prod N Expr)
@@ -369,8 +377,9 @@
     ((cons jname r)
      (match (env_find (n_env n) jname)
        ((some (InductInfo (ConstantVal _ jlps jty) _ _ _ jctors _ _ _ _))
-        (match (mk_unique_name n (name_concat (nm_nested) jname))
-          ((Prod.mk ns1 auxj)
+        (match (mk_unique_name n (name_concat (nm_nested) jname) (nested_max))
+          ((KFail f) (KFail f))
+          ((KOk _ (Prod.mk ns1 auxj))
            (match (expr_inst_lparams (n_st ns1) jty jlps ls)
              ((Prod.mk st1 jty0)
               (match (instantiate_pi_params st1 jty0 inparams ds)
@@ -482,7 +491,8 @@
 
 ;; the worklist (l. 1153–1175): process type qhead's constructors, then the next
 (fn elim_worklist ((n N) (qhead Int) (nparams Int)) (KRes N)
-  (measure (- 100000 qhead))
+  (measure (Int.natAbs (- (nested_max) qhead)))
+  (if (<= (nested_max) qhead) (KFail (FOut RHeartbeats (sym "elim_worklist")))
   (match (nth (n_types n) qhead)
     (none (KOk (n_st n) n))
     ((some t)
@@ -491,7 +501,7 @@
        ((KOk _ (Prod.mk ns1 ctors))
         (elim_worklist (n_set_type ns1 qhead (InductiveType (it_name t) (it_type t) ctors))
           (+ qhead 1)
-          nparams))))))
+          nparams)))))))
 
 (fn elim_ctors ((n N) (cs (List Constructor)) (nparams Int) (acc (List Constructor)))
   (KRes (Prod N (List Constructor)))
@@ -508,6 +518,8 @@
           ((KOk _ (Prod.mk ns2 body1))
            (match (n_mk_pi ns2 as body1)
              ((Prod.mk n3 cty) (elim_ctors n3 r nparams (cons (Constructor (ctor_name c) cty) acc)))))))))))
+(fulfills elim_worklist.dec_1
+  (by (intro p hq t ht w0 ns1 ctors he) (apply natAbs_lt (arith) (arith))))
 
 ;; ---- restore_nested (l. 927) ------------------------------------------------------------------
 
