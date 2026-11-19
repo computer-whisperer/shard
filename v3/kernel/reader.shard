@@ -132,56 +132,98 @@
 (fn no_producers () Producers (Producers nil (es0) 0 (ReqCtx (scope_of Anon Anon nil VisAll) 0 0)))
 
 ;; ---- the key ------------------------------------------------------------------------------
-;; the key of the closed statement T under the file's parts: S its structural hash (binder
-;; names outside it), D the identity closure, P and E the file's
-(fn req_key ((env CheckedEnv) (rc ReqCtx) (T Expr)) Req
-  (match rc
-    ((ReqCtx sc p e) (ReqFull (hash_expr T) (req_deps env sc (expr_consts T)) p e))))
-;; the referenced declarations' identities: from the constants T cites, every declaration of
-;; the load's own that is reachable through K's edge relation (ci_used, the axiom walk's),
+;; The key of a closed statement T under the file's parts is S.D.P.E: S the statement's
+;; structural hash (binder names outside it), D the identity closure, P and E the file's.
+;; D is the referenced declarations' identities: from the constants T cites, every declaration
+;; of the load's own that is reachable through K's edge relation (ci_used, the axiom walk's),
 ;; each mixed with its name — a sum, so the order of the walk is no part of the key; Init's
-;; names stop the walk (their identity is the export's, E's)
-(fn req_deps ((env CheckedEnv) (sc Scope) (ns (List Name))) Int
-  (match (req_walk env sc ns IMEmpty 0 (req_fuel))
-    ((Prod.mk _ d) d)))
+;; names stop the walk (their identity is the export's, E's).
+;; A declaration's part of every walk that reaches it: its term of the sum, and the constants
+;; it cites, each with its key in the environment (`env_key`) — as ci_used gives them, none
+;; left out, so a walk goes through the names it always went through and no name's bytes
+;; are hashed in it. The memo holds the part of each declaration a walk has reached, by the
+;; name's key: a cache of a function of the declaration as the environment holds it, kept
+;; outside the environment and good for as long as K's memo of axiom closures is (the
+;; loader keeps the two together, loader.shard `Memos`). Whether a name is the load's own
+;; is no part of it: the walk asks its scope at every step, and the table it asks grows
+(type ReqNode (ReqNode Int (List (Prod Name Int))))
+(type ReqMemo (ReqMemo (IntMap (List (Prod Name ReqNode)))))
+;; what a walk leaves: the names it has seen, the sum, the memo
+(type ReqWalk (ReqWalk (IntMap (List (Prod Name Int))) Int ReqMemo))
+(fn req_memo_empty () ReqMemo (ReqMemo IMEmpty))
+(fn req_bucket ((t (IntMap (List (Prod Name ReqNode)))) (k Int)) (List (Prod Name ReqNode))
+  (match (im_find t k)
+    ((some b) b)
+    (none nil)))
+(fn req_bucket_find ((b (List (Prod Name ReqNode))) (n Name)) (Option ReqNode)
+  (measure (struct b))
+  (match b
+    (nil none)
+    ((cons (Prod.mk x v) r) (if (name_eq x n) (some v) (req_bucket_find r n)))))
+;; n's part, from the memo or made and put there; none for a name the environment does not
+;; hold — which it may hold later, so nothing is kept of that
+(fn req_node ((env CheckedEnv) (m ReqMemo) (k Int) (n Name)) (Prod (Option ReqNode) ReqMemo)
+  (match m
+    ((ReqMemo t)
+     (match (req_bucket_find (req_bucket t k) n)
+       ((some v) (Prod.mk (some v) m))
+       (none
+         (match (env_find_at env k n)
+           (none (Prod.mk none m))
+           ((some info) (req_node_put t k n (req_node_of env n info)))))))))
+(fn req_node_of ((env CheckedEnv) (n Name) (info ConstantInfo)) ReqNode
+  (ReqNode
+    (mix (hash_name n)
+      (match (identity_hash env n)
+        ((some h) h)
+        (none 0)))
+    (keyed_all (ci_used info))))
+(fn req_node_put ((t (IntMap (List (Prod Name ReqNode)))) (k Int) (n Name) (v ReqNode))
+  (Prod (Option ReqNode) ReqMemo)
+  (Prod.mk (some v) (ReqMemo (im_insert t k (cons (Prod.mk n v) (req_bucket t k))))))
+;; does the walk pass n by: a name it has seen, or one that is not the load's own
+(fn req_stop ((sc Scope) (seen (IntMap (List (Prod Name Int)))) (k Int) (n Name)) Bool
+  (match (ords_find_at seen k n)
+    ((some _) true)
+    (none (bool_not (native_decl_at sc k n)))))
 (fn req_fuel () Int 1000000)
 (fn req_walk
   ((env CheckedEnv)
    (sc Scope)
-   (ns (List Name))
+   (ns (List (Prod Name Int)))
    (seen (IntMap (List (Prod Name Int))))
    (acc Int)
+   (m ReqMemo)
    (fuel Int))
-  (Prod (IntMap (List (Prod Name Int))) Int)
+  ReqWalk
   (measure (Int.natAbs fuel))
-  (if (< fuel 1) (Prod.mk seen acc)
+  (if (< fuel 1) (ReqWalk seen acc m)
   (match ns
-    (nil (Prod.mk seen acc))
-    ((cons n r)
-     (if
-       (bool_or (bool_not (native_decl sc n))
-         (match (ords_find seen n)
-           ((some _) true)
-           (none false)))
-       (req_walk env sc r seen acc (- fuel 1))
-       (match (env_find env n)
-         (none (req_walk env sc r (ords_add seen n 1) acc (- fuel 1)))
-         ((some info)
-          (match
-            (req_walk env sc (ci_used info) (ords_add seen n 1)
-              (mod
-                (+ acc
-                  (mix (hash_name n)
-                    (match (identity_hash env n)
-                      ((some h) h)
-                      (none 0))))
-                (hash_m))
-              (- fuel 1))
-            ((Prod.mk seen1 acc1) (req_walk env sc r seen1 acc1 (- fuel 1)))))))))))
-(fulfills req_walk.dec_1 (by (intro p h n r hm hc hn) (apply natAbs_pred (arith))))
-(fulfills req_walk.dec_2 (by (intro p h n r hm hc info hs) (apply natAbs_pred (arith))))
-(fulfills req_walk.dec_3 (by (intro p h n r hm hc info hs seen1 acc1) (apply natAbs_pred (arith))))
-(fulfills req_walk.dec_4 (by (intro p h n r hm hc) (apply natAbs_pred (arith))))
+    (nil (ReqWalk seen acc m))
+    ((cons (Prod.mk n k) r)
+     (if (req_stop sc seen k n) (req_walk env sc r seen acc m (- fuel 1))
+     (match (req_node env m k n)
+       ((Prod.mk none m1) (req_walk env sc r (ords_add_at seen k n 1) acc m1 (- fuel 1)))
+       ((Prod.mk (some (ReqNode t cites)) m1)
+        (match
+          (req_walk env sc cites (ords_add_at seen k n 1) (mod (+ acc t) (hash_m)) m1 (- fuel 1))
+          ((ReqWalk seen1 acc1 m2) (req_walk env sc r seen1 acc1 m2 (- fuel 1)))))))))))
+(fulfills req_walk.dec_1 (by (intro p h n k r hm hc m1 hn) (apply natAbs_pred (arith))))
+(fulfills req_walk.dec_2 (by (intro p h n k r hm hc t cites m1 hs) (apply natAbs_pred (arith))))
+(fulfills req_walk.dec_3
+  (by (intro p h n k r hm hc t cites m1 hs seen1 acc1 m2) (apply natAbs_pred (arith))))
+(fulfills req_walk.dec_4 (by (intro p h n k r hm hc) (apply natAbs_pred (arith))))
+;; the key, and the memo of its walk, which the caller keeps for the next key or drops
+(fn req_key ((env CheckedEnv) (rc ReqCtx) (m ReqMemo) (T Expr)) (Prod Req ReqMemo)
+  (match rc
+    ((ReqCtx sc p e)
+     (match (req_walk env sc (keyed_all (expr_consts T)) IMEmpty 0 m (req_fuel))
+       ((ReqWalk _ d m1) (Prod.mk (ReqFull (hash_expr T) d p e) m1))))))
+;; the key by a walk that starts from no memo and keeps none: the reader's, whose environment
+;; holds the matchers of the form it is reading, which the load has not admitted
+(fn req_key_alone ((env CheckedEnv) (rc ReqCtx) (T Expr)) Req
+  (match (req_key env rc (req_memo_empty) T)
+    ((Prod.mk k _) k)))
 ;; the sum of the names' hashes — the policy's part (the trusts' candidates, the parameters)
 (fn req_names ((ns (List Name)) (acc Int)) Int
   (measure (struct ns))
@@ -496,7 +538,7 @@
   (match (close_pis e fvars t)
     ((Prod.mk _ (FinErr r m)) (RDErr r m))
     ((Prod.mk e1 (FinOk T))
-     (let ((key (req_key (el_env e1) (pr_req pr) T)))
+     (let ((key (req_key_alone (el_env e1) (pr_req pr) T)))
        (match (auto_fit entry key)
          ((AutoFits steps)
           (match entry

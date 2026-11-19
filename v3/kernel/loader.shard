@@ -302,12 +302,21 @@
   (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked: its name, entry, externs, trusted axioms' count, requirements, requirements met
   (RBinErr Name Symbol (List Int)))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
 
-;; root, environment, closure memo, modules, the Init load, declaration →
+;; the caches the load keeps beside its checked environment, each of a function of what the
+;; environment holds of a declaration: K's closures of axioms, and the declarations' parts of
+;; the requirement keys (reader.shard `ReqMemo`). One field of the load, so that the two are
+;; kept, advanced and emptied together
+(type Memos (Memos AxMemo ReqMemo))
+(fn memos_empty () Memos (Memos (ax_memo_empty) (req_memo_empty)))
+(fn memos_ax ((m Memos)) AxMemo
+  (match m
+    ((Memos a _) a)))
+;; root, environment, the memos, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
 ;; the view parameters admitted,
 ;; the E table (etable.shard: every E declaration by identity and suffix),
 ;; the pending roots each realization carries
-(record Load (root (List (List Int))) (env CheckedEnv) (memo AxMemo) (mods (List Module))
+(record Load (root (List (List Int))) (env CheckedEnv) (memo Memos) (mods (List Module))
   (init InitSt)
   (tbl (IntMap (List (Prod Name Name))))
   (inits (IntMap (List (Prod Name Int))))  ; declaration → ordinal for every imported declaration
@@ -336,7 +345,7 @@
   (linked (List Load))  ; the fork of each implementation checked, as it ended: the main line merges its programs and drops the rest, and --facts prints the facts those programs are read by, which rest on what the fork fetched of Init
   (states (Option (IntMap (List (Prod Name Int))))))  ; the state's check (thread.shard): None in a plain load; under the driver's --state the modes of the functions judged so far
 (fn load0 ((root (List (List Int)))) Load
-  (make Load (root root) (env (env_empty)) (memo (ax_memo_empty)) (mods nil) (init InitNone)
+  (make Load (root root) (env (env_empty)) (memo (memos_empty)) (mods nil) (init InitNone)
     (tbl IMEmpty)
     (inits IMEmpty)
     (missed nil)
@@ -382,7 +391,7 @@
     (IMEmpty true)
     (_ false)))
 (fn ld_recs ((l Load)) (List Rec) (rev (Load.recs l)))
-(fn ld_with_env ((l Load) (e CheckedEnv) (m AxMemo)) Load (with Load l (env e) (memo m)))
+(fn ld_with_env ((l Load) (e CheckedEnv) (m Memos)) Load (with Load l (env e) (memo m)))
 (fn ld_add_mod ((l Load) (md Module)) Load (with Load l (mods (cons md (Load.mods l)))))
 (fn ld_with_init ((l Load) (i InitSt)) Load (with Load l (init i)))
 (fn ld_with_tbl ((l Load) (t (IntMap (List (Prod Name Name))))) Load (with Load l (tbl t)))
@@ -1031,35 +1040,43 @@
 
 ;; the closures of the declared names against the policy: the first
 ;; declaration outside it, or the records to add
-(type Pol (PolOk AxMemo (List Rec)) (PolOut Name (List Name)) (PolBound Name))
+(type Pol (PolOk Memos (List Rec)) (PolOut Name (List Name)) (PolBound Name))
+;; a theorem's resolved requirement, for its acceptance; the walk's memo with it
+(fn accept_key ((l Load) (f Fx) (env CheckedEnv) (rq ReqMemo) (n Name)) (Prod (Option Req) ReqMemo)
+  (match (env_find env n)
+    ((some (ThmInfo (ConstantVal _ _ ty) _ _))
+     (match (req_key env (req_ctx l f) rq ty)
+       ((Prod.mk k rq1) (Prod.mk (some k) rq1))))
+    (_ (Prod.mk none rq))))
 (fn policy_pass
-  ((l Load) (f Fx) (env CheckedEnv) (memo AxMemo) (ds (List Declaration)) (acc (List Rec)))
+  ((l Load) (f Fx) (env CheckedEnv) (memo Memos) (ds (List Declaration)) (acc (List Rec)))
   Pol
   (measure (struct ds))
   (match ds
     (nil (PolOk memo (rev acc)))
     ((cons d r)
-     (let ((n (decl_name d)))
-       (match (axioms_of env memo n)
-         ((Prod.mk memo1 none) (PolBound n))
-         ((Prod.mk memo1 (some axs0))
-          (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
-            (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
-              (nil
-                (policy_pass l f env memo1 r
-                  (cons
-                    (RAccept n (Fx.module f)
-                      (match (identity_hash env n)
-                        ((some h) h)
-                        (none 0))
-                      axs
-                      (params_of (Load.params l) axs)
-                      (match (env_find env n)
-                        ((some (ThmInfo (ConstantVal _ _ ty) _ _))
-                         (some (req_key env (req_ctx l f) ty)))
-                        (_ none)))
-                    acc)))
-              (out (PolOut n out))))))))))
+     (match memo
+       ((Memos ax rq)
+        (let ((n (decl_name d)))
+          (match (axioms_of env ax n)
+            ((Prod.mk _ none) (PolBound n))
+            ((Prod.mk ax1 (some axs0))
+             (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
+               (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
+                 (nil
+                   (match (accept_key l f env rq n)
+                     ((Prod.mk q rq1)
+                      (policy_pass l f env (Memos ax1 rq1) r
+                        (cons
+                          (RAccept n (Fx.module f)
+                            (match (identity_hash env n)
+                              ((some h) h)
+                              (none 0))
+                            axs
+                            (params_of (Load.params l) axs)
+                            q)
+                          acc)))))
+                 (out (PolOut n out))))))))))))
 ;; a closure with each discharged obligation replaced by what its proof rests on (to a
 ;; fixpoint: a proof may rest on another discharged obligation)
 (fn discharge_axs ((ds (List (Prod Name (List Name)))) (axs (List Name)) (fuel Int)) (List Name)
@@ -1363,7 +1380,7 @@
                     ((PolBound n)
                      (ld_rec l (RLoadErr (fx_file f) (sym "closure_bound") (show_name n))))
                     ((PolOut n out)
-                     (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)))
+                     (ld_rec (ld_with_env l (Load.env l) (memos_empty)) (RPolicy n out)))
                     ((PolOk memo1 recs)
                      (let ((rests (thm_closure_of recs thm)))
                        (if (mem_name k rests)
@@ -1487,11 +1504,11 @@
      (match (policy_pass l f env1 (Load.memo l) ds nil)
        ((PolBound n)
         (Prod.mk
-          (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty))
+          (ld_rec (ld_with_env l (Load.env l) (memos_empty))
             (RLoadErr (fx_file f) (sym "closure_bound") (show_name n)))
           none))
        ((PolOut n out)
-        (Prod.mk (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out)) none))
+        (Prod.mk (ld_rec (ld_with_env l (Load.env l) (memos_empty)) (RPolicy n out)) none))
        ((PolOk memo1 recs)
         (Prod.mk
           (recs_add
@@ -1552,10 +1569,9 @@
      (match (policy_pass l f env1 (Load.memo l) thms nil)
        ((PolBound n)
         (AtDone
-          (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty))
+          (ld_rec (ld_with_env l (Load.env l) (memos_empty))
             (RLoadErr (fx_file f) (sym "closure_bound") (show_name n)))))
-       ((PolOut n out)
-        (AtDone (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy n out))))
+       ((PolOut n out) (AtDone (ld_rec (ld_with_env l (Load.env l) (memos_empty)) (RPolicy n out))))
        ((PolOk memo1 recs)
         (AtOk
           (recs_add
@@ -3952,7 +3968,7 @@
        (match (env_find (Load.env l) d)
          (none nil)  ; no L constant (a program without a definition): nothing rests on anything
          ((some _)
-          (match (axioms_of (Load.env l) (Load.memo l) d)
+          (match (axioms_of (Load.env l) (memos_ax (Load.memo l)) d)
             ((Prod.mk _ none)
              (list
                (Prod.mk (sym "untrusted")
@@ -4611,7 +4627,7 @@
                ((PolBound _)
                 (Prod.mk (ld_rec l (RLoadErr (im_file im) (sym "closure_bound") (show_name n))) im))
                ((PolOut nn out)
-                (Prod.mk (ld_rec (ld_with_env l (Load.env l) (ax_memo_empty)) (RPolicy nn out))
+                (Prod.mk (ld_rec (ld_with_env l (Load.env l) (memos_empty)) (RPolicy nn out))
                   (im_mark im (sym "requirement") n)))
                ((PolOk memo1 recs)
                 (Prod.mk

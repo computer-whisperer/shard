@@ -208,6 +208,22 @@ entries are explained under "Measured" at the end.
   and K checks it. Assent, of the three ways put to them after `expr_eq`'s group doubled the
   toolchain's check (this, the remaining groups first, that landing taken back): "Let's go
   ahead with trying to fix the group search".
+- A requirement key is made by the walk it always was, over names that carry their keys and
+  declarations whose parts are kept. For each declaration a walk reaches, its term of the
+  sum and the constants it cites, each with its key in the environment, are made once in a
+  load (`reader.shard` `ReqNode`, `ReqMemo`, `req_node`); a step of the walk is then a
+  lookup and hashes no name. The names, their order and the fuel spent are what they were,
+  and whether a name is the load's own is asked of the scope at every step as before: the
+  table that answers grows. The memo is one field with K's memo of axiom closures
+  (`loader.shard` `Memos`), so it is kept, advanced and emptied where that one is, and on
+  the same ground: an entry is a function of the declaration as the environment holds it.
+  The reader's own key, at an `auto`, starts from no memo and keeps none — its environment
+  holds matchers the load has not admitted. Not the keys of generated equations left out of
+  the records: no stored proof is matched against one and it would take nearly all the
+  cost, but a record would then say less than `LANGUAGE.md` gives it. Left as they are: the
+  file's parts of the key, made again for each theorem, and the repeats among the constants
+  a declaration cites. Assent, of the three ways put to them once the keys were measured
+  (this, the equations' keys left out, nothing): "Let's proceed with 1".
 
 ## Programs and the back end
 
@@ -889,10 +905,11 @@ measurements; measure again before building on one.
   `k/tc.shard` 6.6 s for 59; all 29 roots loaded checked, 12 at a time, 151 s for 467 (235).
   The loader before it and the loader with it, on the tree before it, record for record and
   exit for exit: the 29 toolchain roots, 4,171 s of load for 1,355; and each of the 542
-  source files of the pins, the examples, the library, the tools and the model loaded as a
-  root — 317 load, 225 fail, alike. Each of four rules that forget a reading has a pin that
-  fails on a loader built without it (`mutual_forward_after`, `mutual_callee_settles`,
-  `mutual_type_between`, `mutual_use_between`); the rules at a `trusts`, an import, a fetch
+  source files of the pins, the examples, the library and the tools loaded as a root — 317
+  load, 225 fail, alike; the 11 files of the imp model were not among them. Each of four
+  rules that forget a reading has a pin that fails on a loader built without it
+  (`mutual_forward_after`, `mutual_callee_settles`, `mutual_type_between`,
+  `mutual_use_between`); the rules at a `trusts`, an import, a fetch
   from Init, a file's end and in a directory's implementation have none — each drops every
   reading kept. The loader's closure with it: 8,878 functions, 7,134 definitions, 12 of the
   23 the change adds among them; 44 groups without a measure, the pair that collects the
@@ -923,6 +940,23 @@ measurements; measure again before building on one.
   once a step and asks what it has seen first, on a scratch loader: the same records, 85 s
   for 96. On the binary, the loader's own closure loaded checked: 47.5 s, and 33.3 s with
   no key made, 11,469 of them. Nothing is changed in the tree.
+- The keys by a walk that keeps each declaration's part (2026-11-18). The loader before it
+  and the loader with it, on the tree before it, record for record and exit for exit: the
+  29 toolchain roots, and each of the 557 other source files loaded as a root, the imp
+  model's 11 among them — 332 load, 225 fail, alike. Three loads side by side, each way:
+  one load of K's view on the bootstrap 61 s for 86, and 57 s with no key made — the keys
+  4 s for 28; the loader's own closure checked on its binary 38.2 s for 49.3, and 35.1 s
+  with no key made — 3 s for 14. What they still cost there is lookups at a key, the
+  comparison of names in a bucket, and the hashing that is left (a statement's own
+  constants, a file's parameters). `loader_test.shard` holds the key of `main.three_rfl`
+  beside that of `a.two_rfl`, a walk that meets in the memo what another file's walk left;
+  a loader whose memo answers a wrong part fails both. The gate: all 29 roots loaded
+  checked, 12 at a time, 128 s for 151; the byte-tie 383 s for 534, its harness of the
+  loader's pins 362 s on the bootstrap for 510 and 20 s on the binary for 24 — 363 s and
+  343 s before `expr_eq`'s group was a definition; the suite 231 s on the binaries and
+  979 s on the bootstrap, for 225 and 946. The loader's closure with it: 8,892 functions,
+  7,147 definitions — 14 of the 15 functions the change adds, `req_deps` gone —, loaded
+  checked in 36 s alone for 44.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
