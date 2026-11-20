@@ -17,6 +17,7 @@ it.
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
+| `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
 | `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
@@ -88,6 +89,12 @@ the rest stand after those bytes.
 proven to be Init's `BitVec.ofNat 64`, `BitVec.add` and `BitVec.sub`. The assembler's fact and its
 lemmas (above) are accepted; a listing with a missing label and one with an immediate too wide are
 proven refused, by evaluation.
+
+`demo_run` (`demo.shard`): three functions written as ordinary shard over machine words — a sum,
+a comparison under an `if`, calls — and a listing for them compiled by hand; the model's run of
+the listing's file exits with the low byte of what the function computes in the logic. K
+evaluates both sides. It is one program: there is no compiler, and the stack's place is fixed in
+the statement.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —

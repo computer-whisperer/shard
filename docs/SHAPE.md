@@ -108,7 +108,7 @@ the development machine, one step after another, and about 38 in CI, its jobs si
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
-| `v3/models/x86/` | 900 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; one program proven to exit; the model held to the processor on programs assembled by hand (§6) |
+| `v3/models/x86/` | 1,400 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; one demonstration from shard functions to a file that runs (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -217,8 +217,9 @@ be built to is `COMPILE.md`.
 - a compiler as a function. The two compiled forms are literal values; no theorem ranges over
   programs;
 - proofs of the runtime's six laws;
-- an assembler from instructions to the bytes the machine's model decodes (`v3/models/x86`), with
-  its fact, and any link between the low-level language and what the present compiler emits;
+- a compiler from a program to a listing of the machine's model (`v3/models/x86`; its one
+  demonstration is compiled by hand), and any link between the low-level language and what the
+  present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.
 

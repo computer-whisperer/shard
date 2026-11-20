@@ -1,0 +1,101 @@
+;;; v3/models/x86/demo.shard — a demonstration, the first from a shard function to a file the
+;;; processor runs: three functions over machine words — a sum, a comparison with an `if`, calls
+;;; — written as ordinary shard; a listing for them, compiled BY HAND under one plain scheme
+;;; (an argument in rdi, then rsi; a result in rax; a function pushes its arguments and reads
+;;; them from the stack); the listing's file; and the theorem that the model's run of the file
+;;; exits with the low byte of what the function computes. Both sides of the theorem are
+;;; evaluated by K for this one program: no compiler is here, and nothing is said of any other
+;;; program. The stack's place is fixed in the statement (`demo_start`); the registers, the
+;;; flags and the memory under the image are any.
+(import "../../std/bytes.shard")
+(import "../../std/host.shard")
+(import "asm.shard")
+(import "linux.shard")
+(use std.bytes)
+(use std.host)
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.asm.Asm)
+(use models.x86.elf)
+(use models.x86.linux)
+(use models.x86.linux.Res)
+(use models.x86.linux.Start)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the program ------------------------------------------------------------------------------
+(fn triple ((a (BitVec 64))) (BitVec 64) (w64_add a (w64_add a a)))
+;; the larger of two, as unsigned numbers
+(fn pick ((a (BitVec 64)) (b (BitVec 64))) (BitVec 64) (if (w64_ltu a b) b a))
+;; three sevens against twenty, less one: 20
+(fn entry () (BitVec 64) (w64_sub (pick (triple (w64 7)) (w64 20)) (w64 1)))
+
+;; ---- its listing, by hand ---------------------------------------------------------------------
+;; labels: 0 triple, 1 pick, 2 pick's else, 3 pick's end
+(fn demo_listing () (List Asm)
+  (list
+    ;; the process's first instruction: entry, then exit with its result's low byte
+    (AI (MovRI32 7 7))  ; mov edi, 7
+    (ACall 0)  ; call triple
+    (AI (MovRmR (RmReg 7) 0))  ; mov rdi, rax
+    (AI (MovRI32 6 20))  ; mov esi, 20
+    (ACall 1)  ; call pick
+    (AI (AluRmI BSub (RmReg 0) 1))  ; sub rax, 1
+    (AI (MovRmR (RmReg 7) 0))  ; mov rdi, rax
+    (AI (MovRI32 0 60))  ; mov eax, 60
+    (AI Syscall)
+    ;; triple: a + (a + a)
+    (ALabel 0)
+    (AI (Push 7))  ; a at [rsp]
+    (AI (MovRRm 0 (RmMem 4 0)))  ; mov rax, [rsp]
+    (AI (AluRRm BAdd 0 (RmMem 4 0)))  ; add rax, [rsp]
+    (AI (MovRmR (RmReg 1) 0))  ; mov rcx, rax
+    (AI (MovRRm 0 (RmMem 4 0)))  ; mov rax, [rsp]
+    (AI (AluRmR BAdd (RmReg 0) 1))  ; add rax, rcx
+    (AI (AluRmI BAdd (RmReg 4) 8))  ; add rsp, 8
+    (AI Ret)
+    ;; pick: b where a is below b, else a
+    (ALabel 1)
+    (AI (Push 7))  ; a at [rsp+8]
+    (AI (Push 6))  ; b at [rsp]
+    (AI (MovRRm 0 (RmMem 4 8)))  ; mov rax, [rsp+8]
+    (AI (AluRRm BCmp 0 (RmMem 4 0)))  ; cmp rax, [rsp]
+    (AJcc 3 2)  ; jae else
+    (AI (MovRRm 0 (RmMem 4 0)))  ; mov rax, [rsp]
+    (AJmp 3)  ; jmp end
+    (ALabel 2)
+    (AI (MovRRm 0 (RmMem 4 8)))  ; mov rax, [rsp+8]
+    (ALabel 3)
+    (AI (AluRmI BAdd (RmReg 4) 16))  ; add rsp, 16
+    (AI Ret)))
+;; the listing's file; no bytes where the assembler answers nothing
+(fn demo_file () (List Nat)
+  (match (assemble demo_listing)
+    (none nil)
+    ((some code) (elf_exec code))))
+
+;; ---- the two ends -----------------------------------------------------------------------------
+;; a start with the stack where the model's runner puts it: eight megabytes under 7FFFFFFFF000,
+;; the stack pointer a page under the top
+(fn demo_start ((r Regs) (f Flags) (m Mem)) Start
+  (MkStart (reg_set r 4 (w64 140737488347136)) f (MkSeg 140737479962624 140737488351232 6) m))
+(fn ten_more ((n Fuel)) Fuel (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS n)))))))))))
+(theorem demo_run ((r Regs) (f Flags) (m Mem))
+  (= (run_file (ten_more (ten_more (ten_more FZ))) demo_file (demo_start r f m))
+    (RExit (% (w64_val entry) 256)))
+  (by rfl))
+(theorem demo_exits ((r Regs) (f Flags) (m Mem))
+  (exits demo_file (demo_start r f m) (% (w64_val entry) 256))
+  (by (apply (Exists.intro (ten_more (ten_more (ten_more FZ)))) ((exact (demo_run r f m))))))
+
+;; the file, written to the path given
+(fn main ((path ByteArray) (w World)) World
+  (match (write_file path (Bytes.ofNats demo_file) w)
+    ((Prod.mk ok w1) (exit (if ok 0 1) w1))))
