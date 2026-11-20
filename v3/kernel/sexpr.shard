@@ -13,6 +13,7 @@
 (import "sym.shard")
 (use Init.Bool false true)
 (use Init.List cons nil)
+(use kernel.descent)
 (use kernel.sym)
 (use kernel.util)
 
@@ -108,7 +109,7 @@
 
 ;; one tree from the input (whitespace and comments skipped first)
 (fn read_expr ((cs0 (List Int)) (fuel Int)) SRes
-  (measure fuel)
+  (measure (* 2 (Int.natAbs (+ fuel 1))))
   (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
@@ -123,7 +124,7 @@
 
 ;; after `(`: the items to the matching `)`
 (fn read_list ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) SRes
-  (measure fuel)
+  (measure (* 2 (Int.natAbs (+ fuel 1))))
   (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
@@ -137,6 +138,7 @@
 
 ;; a numeral or a symbol, with its universe list when the atom ends in `.` and `{` follows
 (fn read_atom ((cs (List Int)) (fuel Int)) SRes
+  (measure (+ (* 2 (Int.natAbs (+ fuel 1))) 1))
   (match (take_atom cs nil)
     ((Prod.mk a rest)
      (match a
@@ -170,7 +172,7 @@
 
 ;; after `NAME.{`: the level terms to `}`
 (fn read_levels ((cs0 (List Int)) (acc (List SExpr)) (s Symbol) (fuel Int)) SRes
-  (measure fuel)
+  (measure (* 2 (Int.natAbs (+ fuel 1))))
   (if (< fuel 0) (SErr (sym "reader_fuel") cs0)
   (let ((cs (skip_blank cs0)))
     (match cs
@@ -184,7 +186,7 @@
 
 ;; after the opening quote: the bytes to the closing quote, escapes decoded
 (fn read_string ((cs (List Int)) (acc (List Int)) (start (List Int))) SRes
-  (measure (struct cs))
+  (measure (List.length cs))
   (match cs
     (nil (SErr (sym "unterminated_string") start))
     ((cons c r)
@@ -231,6 +233,46 @@
     ((cons c r)
      (if (is_hex c) (take_hex r (+ (* acc 16) (hex_val c)) (+ k 1)) (Prod.mk (Prod.mk acc k) cs)))
     (nil (Prod.mk (Prod.mk acc k) nil))))
+;; the rest `take_hex` leaves is no longer than what it was given: `read_string` goes on from
+;; it after a `\u{…}` escape
+(theorem take_hex_le ((cs (List Int)))
+  (forall ((acc Int) (k Int) (v Int) (n Int) (rest (List Int)))
+    (-> (= (take_hex cs acc k) (Prod.mk (Prod.mk v n) rest))
+      (<= (List.length rest) (List.length cs))))
+  (by
+    (induction cs
+      ((nil () (intro acc k v n rest h)
+         (have e (= (Prod.mk (Prod.mk acc k) (@nil Int)) (Prod.mk (Prod.mk v n) rest)) (exact h))
+         (have er (= (@nil Int) rest) (exact (congrArg Prod.snd e)))
+         (rw (<- er))
+         (arith))
+       (cons (c r ih) (intro acc k v n rest h)
+         (cases (Bool.decEq (is_hex c) true)
+           ((isFalse (hn)
+              (have e (= (take_hex (cons c r) acc k) (Prod.mk (Prod.mk acc k) (cons c r)))
+                (rw take_hex.eq_2)
+                (rw (if_neg hn))
+                rfl)
+              (have e2 (= (Prod.mk (Prod.mk acc k) (cons c r)) (Prod.mk (Prod.mk v n) rest))
+                (rw (<- e))
+                (exact h))
+              (have er (= (cons c r) rest) (exact (congrArg Prod.snd e2)))
+              (rw (<- er))
+              (arith))
+            (isTrue (hc)
+              (have e
+                (= (take_hex (cons c r) acc k) (take_hex r (+ (* acc 16) (hex_val c)) (+ k 1)))
+                (rw take_hex.eq_2)
+                (rw (if_pos hc))
+                rfl)
+              (have h2
+                (= (take_hex r (+ (* acc 16) (hex_val c)) (+ k 1)) (Prod.mk (Prod.mk v n) rest))
+                (rw (<- e))
+                (exact h))
+              (have g (<= (List.length rest) (List.length r))
+                (exact (ih (+ (* acc 16) (hex_val c)) (+ k 1) v n rest h2)))
+              (rw List.length_cons)
+              (arith)))))))))
 ;; a code point as UTF-8 bytes
 (fn utf8_of ((cp Int)) (List Int)
   (if (< cp 128) (list cp)
@@ -238,16 +280,88 @@
   (if (< cp 65536) (list (+ 224 (bshr cp 12)) (+ 128 (band (bshr cp 6) 63)) (+ 128 (band cp 63)))
   (list (+ 240 (bshr cp 18)) (+ 128 (band (bshr cp 12) 63)) (+ 128 (band (bshr cp 6) 63))
     (+ 128 (band cp 63)))))))
+(fulfills read_string.dec_1 (by (intro p c r h n1 n2) (rw h) (rw List.length_cons) (arith)))
+(fulfills read_string.dec_2
+  (by
+    (intro p c r h n1 hc e r2 h2 n3 n4 n5 n6 n7 n8 he c3 r3 h3 hc3 cp k r4 ht c5 r5 h5 hb)
+    (have g (<= (List.length r4) (List.length r3)) (exact (take_hex_le r3 0 0 cp k r4 ht)))
+    (have g2 (= (List.length r4) (+ (List.length r5) 1)) (rw h5) (rw List.length_cons) rfl)
+    (rw h)
+    (rw h2)
+    (rw h3)
+    (simp_only List.length_cons)
+    (arith)))
+(fulfills read_string.dec_3
+  (by
+    (intro p c r h n1 hc e r2 h2 n3 n4 n5 n6 n7 he x1 x2 r3 h3 hb)
+    (rw h)
+    (rw h2)
+    (rw h3)
+    (simp_only List.length_cons)
+    (arith)))
+(fulfills read_string.dec_4
+  (by
+    (intro p c r h n1 hc e r2 h2 n3 n4 n5 n6 he)
+    (rw h)
+    (rw h2)
+    (simp_only List.length_cons)
+    (arith)))
+(fulfills read_string.dec_5
+  (by (intro p c r h n1 hc e r2 h2 n3 n4 n5 he) (rw h) (rw h2) (simp_only List.length_cons) (arith)))
+(fulfills read_string.dec_6
+  (by (intro p c r h n1 hc e r2 h2 n3 n4 he) (rw h) (rw h2) (simp_only List.length_cons) (arith)))
+(fulfills read_string.dec_7
+  (by (intro p c r h n1 hc e r2 h2 n3 he) (rw h) (rw h2) (simp_only List.length_cons) (arith)))
+(fulfills read_string.dec_8
+  (by (intro p c r h n1 hc e r2 h2 he) (rw h) (rw h2) (simp_only List.length_cons) (arith)))
+(fulfills read_expr.dec_1
+  (by
+    (intro cs0 fuel hf c r h n1 n2 n3 n4 n5)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
+(fulfills read_expr.dec_2
+  (by
+    (intro cs0 fuel hf c r h hc)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
+(fulfills read_list.dec_1
+  (by
+    (intro cs0 acc fuel hf c r h n1)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
+(fulfills read_list.dec_2
+  (by
+    (intro cs0 acc fuel hf c r h n1 x rest)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
+(fulfills read_atom.dec_1 (by (intro cs fuel a rest h c0 w h2 n1 n2 hd c1 r2 h3 hc) (arith)))
+(fulfills read_levels.dec_1
+  (by
+    (intro cs0 acc s fuel hf c r h n1)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
+(fulfills read_levels.dec_2
+  (by
+    (intro cs0 acc s fuel hf c r h n1 x rest)
+    (have g (< (Int.natAbs (+ (- fuel 1) 1)) (Int.natAbs (+ fuel 1)))
+      (apply natAbs_lt (arith) (arith)))
+    (arith)))
 
 ;; ---- a whole file -------------------------------------------------------------------
 (fn read_all ((src (List Int))) RAll (read_all_go src (len src) nil (read_budget)))
 (fn read_all_go ((cs (List Int)) (total Int) (acc (List SExpr)) (fuel Int)) RAll
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (RAErr (sym "reader_fuel") (- total (len cs)))
   (match (read_expr cs fuel)
     (SEnd (RAOk (rev acc)))
     ((SOk x rest) (read_all_go rest total (cons x acc) (- fuel 1)))
     ((SErr e at) (RAErr e (- total (len at)))))))
+(fulfills read_all_go.dec_1 (by (intro p hf x rest h) (apply natAbs_lt (arith) (arith))))
 
 ;; ---- printing ------------------------------------------------------------------------
 (fn show_sexpr ((s SExpr)) (List Int)

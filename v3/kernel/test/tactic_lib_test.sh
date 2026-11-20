@@ -38,7 +38,7 @@ checks=$((checks+1)); grep -q 'refused 0 .*pending 0 .*errors 0$' "$OUT/replay.t
 for t in $NAMES; do checks=$((checks+1)); grep -q "^ACCEPT examples.tactic.use_split.$t " "$OUT/replay.txt" || bad "$t not accepted from the sidecar"; done
 checks=$((checks+1)); grep -q '^PROVED\|^TACTIC\|^ENGINE' "$OUT/replay.txt" && bad "the build ran a producer (a PROVED, TACTIC or ENGINE record under load.shard)"
 checks=$((checks+1)); grep -q '^SIDECAR' "$OUT/replay.txt" && bad "the committed sidecar is not at the current schema"
-checks=$((checks+1)); grep -q '^RUNNABLE fn examples.tactic.bool_split.solve ' "$OUT/replay.txt" || bad "the library is not loaded as an ordinary E module"
+checks=$((checks+1)); grep -q '^DEFINE examples.tactic.bool_split.solve ' "$OUT/replay.txt" || bad "the library is not loaded as an ordinary E module (its solve, which stands on the s-expression reader, is a definition)"
 echo "tactic_lib_test: the build replays 6 theorems from the sidecar with the library loaded and never run"
 
 # ---- (2) the regeneration through the library

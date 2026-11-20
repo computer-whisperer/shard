@@ -64,7 +64,7 @@
 
 ;; after the opening quote; escapes decoded; \uXXXX (with surrogate pairs) to UTF-8
 (fn parse_string ((bs (List Int)) (acc (List Int))) (Option (Prod (List Int) (List Int)))
-  (measure (struct bs))
+  (measure (List.length bs))
   (match bs
     (nil none)
     ((cons c r)
@@ -108,6 +108,91 @@
      (let ((v (+ (* (hex_val a) 4096) (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))))
        (if (< v 0) none (some (Prod.mk v r)))))
     (_ none)))
+;; the rest `parse_hex4` leaves is no longer than what it was given: `parse_string` goes on
+;; from it after a `\u` escape
+(theorem parse_hex4_le
+  ((bs (List Int)) (cp Int) (rest (List Int)) (h (= (parse_hex4 bs) (some (Prod.mk cp rest)))))
+  (<= (List.length rest) (List.length bs))
+  (by
+    (cases bs
+      ((nil () (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (cons (a t1)
+         (cases t1
+           ((nil ()
+              (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+            (cons (b t2)
+              (cases t2
+                ((nil ()
+                   (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+                 (cons (c t3)
+                   (cases t3
+                     ((nil ()
+                        (exact
+                          (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+                      (cons (d r)
+                        (have e0
+                          (= (parse_hex4 (cons a (cons b (cons c (cons d r)))))
+                            (if
+                              (<
+                                (+ (* (hex_val a) 4096)
+                                  (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                                0)
+                              none
+                              (some
+                                (Prod.mk
+                                  (+ (* (hex_val a) 4096)
+                                    (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                                  r))))
+                          rfl)
+                        (cases
+                          (Int.decLt
+                            (+ (* (hex_val a) 4096)
+                              (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                            0)
+                          ((isFalse (hn)
+                             (have e1
+                               (= (parse_hex4 (cons a (cons b (cons c (cons d r)))))
+                                 (some
+                                   (Prod.mk
+                                     (+ (* (hex_val a) 4096)
+                                       (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                                     r)))
+                               (rw e0)
+                               (rw (if_neg hn))
+                               rfl)
+                             (have e2
+                               (=
+                                 (some
+                                   (Prod.mk
+                                     (+ (* (hex_val a) 4096)
+                                       (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                                     r))
+                                 (some (Prod.mk cp rest)))
+                               (rw (<- e1))
+                               (exact h))
+                             (have e3
+                               (=
+                                 (Prod.mk
+                                   (+ (* (hex_val a) 4096)
+                                     (+ (* (hex_val b) 256) (+ (* (hex_val c) 16) (hex_val d))))
+                                   r)
+                                 (Prod.mk cp rest))
+                               (exact (Option.some.inj e2)))
+                             (have er (= r rest) (exact (congrArg Prod.snd e3)))
+                             (rw (<- er))
+                             (simp_only List.length_cons)
+                             (arith))
+                           (isTrue (hc)
+                             (have e1 (= (parse_hex4 (cons a (cons b (cons c (cons d r))))) none)
+                               (rw e0)
+                               (rw (if_pos hc))
+                               rfl)
+                             (have e2 (= (@none (Prod Int (List Int))) (some (Prod.mk cp rest)))
+                               (rw (<- e1))
+                               (exact h))
+                             (exact
+                               (absurd (congrArg Option.isSome e2)
+                                 (ne_true_of_eq_false (Eq.refl false)))))))))))))))))))))
 
 (fn utf8_encode ((cp Int)) (List Int)
   (if (< cp 128) (list cp)
@@ -115,6 +200,30 @@
   (if (< cp 65536) (list (+ 224 (/ cp 4096)) (+ 128 (mod (/ cp 64) 64)) (+ 128 (mod cp 64)))
   (list (+ 240 (/ cp 262144)) (+ 128 (mod (/ cp 4096) 64)) (+ 128 (mod (/ cp 64) 64))
     (+ 128 (mod cp 64)))))))
+(fulfills parse_string.dec_1 (by (intro p c r h n1 n2) (rw h) (rw List.length_cons) (arith)))
+(fulfills parse_string.dec_2
+  (by (intro p c r h n1 hc e r2 h2 ne) (rw h) (rw h2) (simp_only List.length_cons) (arith)))
+(fulfills parse_string.dec_3
+  (by
+    (intro p c r h n1 hc e r2 h2 he cp r3 hp hs)
+    (have g (<= (List.length r3) (List.length r2)) (exact (parse_hex4_le r2 cp r3 hp)))
+    (rw h)
+    (rw h2)
+    (simp_only List.length_cons)
+    (arith)))
+(fulfills parse_string.dec_4
+  (by
+    (intro p c r h n1 hc e r2 h2 he cp r3 hp hs b1 b2 r4 h3 hb lo r5 hq)
+    (have g (<= (List.length r3) (List.length r2)) (exact (parse_hex4_le r2 cp r3 hp)))
+    (have g2 (<= (List.length r5) (List.length r4)) (exact (parse_hex4_le r4 lo r5 hq)))
+    (have g3 (= (List.length r3) (+ (+ (List.length r4) 1) 1))
+      (rw h3)
+      (simp_only List.length_cons)
+      rfl)
+    (rw h)
+    (rw h2)
+    (simp_only List.length_cons)
+    (arith)))
 
 (fn parse_array ((bs0 (List Int)) (acc (List Json))) JRes
   (measure (struct bs0))
@@ -224,3 +333,68 @@
   (match bs
     (nil (Prod.mk (rev acc) nil))
     ((cons c r) (if (= c 10) (Prod.mk (rev acc) r) (take_line r (cons c acc))))))
+;; the rest `take_line` leaves is no longer than what it was given, and shorter where there
+;; was a byte: what a walk of a block line by line descends by
+(theorem take_line_le ((bs (List Int)))
+  (forall ((acc (List Int)) (line (List Int)) (rest (List Int)))
+    (-> (= (take_line bs acc) (Prod.mk line rest)) (<= (List.length rest) (List.length bs))))
+  (by
+    (induction bs
+      ((nil () (intro acc line rest h)
+         (have e (= (Prod.mk (rev acc) (@nil Int)) (Prod.mk line rest)) (exact h))
+         (have er (= (@nil Int) rest) (exact (congrArg Prod.snd e)))
+         (rw (<- er))
+         (arith))
+       (cons (c r ih) (intro acc line rest h)
+         (cases (Int.decEq c 10)
+           ((isFalse (hn)
+              (have e (= (take_line (cons c r) acc) (take_line r (cons c acc)))
+                (rw take_line.eq_2)
+                (rw (if_neg hn))
+                rfl)
+              (have h2 (= (take_line r (cons c acc)) (Prod.mk line rest)) (rw (<- e)) (exact h))
+              (have g (<= (List.length rest) (List.length r))
+                (exact (ih (cons c acc) line rest h2)))
+              (rw List.length_cons)
+              (arith))
+            (isTrue (hc)
+              (have e (= (take_line (cons c r) acc) (Prod.mk (rev acc) r))
+                (rw take_line.eq_2)
+                (rw (if_pos hc))
+                rfl)
+              (have e2 (= (Prod.mk (rev acc) r) (Prod.mk line rest)) (rw (<- e)) (exact h))
+              (have er (= r rest) (exact (congrArg Prod.snd e2)))
+              (rw (<- er))
+              (rw List.length_cons)
+              (arith)))))))))
+(theorem take_line_lt
+  ((bs (List Int))
+   (c Int)
+   (r (List Int))
+   (acc (List Int))
+   (line (List Int))
+   (rest (List Int))
+   (hb (= bs (cons c r)))
+   (h (= (take_line bs acc) (Prod.mk line rest))))
+  (< (List.length rest) (List.length bs))
+  (by
+    (have h1 (= (take_line (cons c r) acc) (Prod.mk line rest)) (rw (<- hb)) (exact h))
+    (rw hb)
+    (rw List.length_cons)
+    (cases (Int.decEq c 10)
+      ((isFalse (hn)
+         (have e (= (take_line (cons c r) acc) (take_line r (cons c acc)))
+           (rw take_line.eq_2)
+           (rw (if_neg hn))
+           rfl)
+         (have h2 (= (take_line r (cons c acc)) (Prod.mk line rest)) (rw (<- e)) (exact h1))
+         (arith (take_line_le r (cons c acc) line rest h2)))
+       (isTrue (hc)
+         (have e (= (take_line (cons c r) acc) (Prod.mk (rev acc) r))
+           (rw take_line.eq_2)
+           (rw (if_pos hc))
+           rfl)
+         (have e2 (= (Prod.mk (rev acc) r) (Prod.mk line rest)) (rw (<- e)) (exact h1))
+         (have er (= r rest) (exact (congrArg Prod.snd e2)))
+         (rw (<- er))
+         (arith))))))
