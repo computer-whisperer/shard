@@ -196,44 +196,50 @@
     ((cons _ _) false)))
 ;; the type as a derivation writes it: identities, no universe lists
 (fn dv_show_ty ((t Expr)) (List Int)
-  (match (get_app_args t)
-    (nil
-      (match t
-        ((Const _ n _) (show_name n))
-        (_ (show_expr t))))
-    (args
-      (append (utf8 "(")
-        (append (dv_show_ty (get_app_fn t)) (append (dv_show_args args) (utf8 ")")))))))
+  (measure (Expr.size t))
+  (match t
+    ((App _ _ _)
+     (append (utf8 "(")
+       (append (dv_show_ty (get_app_fn t)) (append (dv_show_args (get_app_args t)) (utf8 ")")))))
+    ((Const _ n _) (show_name n))
+    (_ (show_expr t))))
 (fn dv_show_args ((args (List Expr))) (List Int)
-  (measure (struct args))
+  (measure (exprs_weight args))
   (match args
     (nil nil)
     ((cons a r) (cons 32 (append (dv_show_ty a) (dv_show_args r))))))
+(fulfills dv_show_ty.dec_1 (by (intro t w1 w2 w3 h) (rw h) (exact (get_app_fn_lt w1 w2 w3))))
+(fulfills dv_show_ty.dec_2 (by (intro t w1 w2 w3 h) (exact (get_app_args_lt t))))
+(fulfills dv_show_args.dec_1 (by (intro args a r h) (rw h) (rw exprs_weight.eq_2) (arith)))
+(fulfills dv_show_args.dec_2 (by (intro args a r h) (rw h) (rw exprs_weight.eq_2) (arith)))
 ;; the type as the generated source cites it: every constant by its identity (an imported
 ;; one under Init), so a type whose constructor bears its name — `(type Card (Card …))`, bare
 ;; `Card` ambiguous in a term — is cited the same in a binder and in a term
 (fn dv_ty_s ((sc Scope) (t Expr)) SExpr
-  (match (get_app_args t)
-    (nil
-      (match t
-        ((Const _ n _) (dv_cite_in sc n))
-        (_ (dv_s (show_expr t)))))
-    (args (SList (cons (dv_ty_s sc (get_app_fn t)) (dv_tys_s sc args))))))
+  (measure (Expr.size t))
+  (match t
+    ((App _ _ _) (SList (cons (dv_ty_s sc (get_app_fn t)) (dv_tys_s sc (get_app_args t)))))
+    ((Const _ n _) (dv_cite_in sc n))
+    (_ (dv_s (show_expr t)))))
 (fn dv_tys_s ((sc Scope) (ts (List Expr))) (List SExpr)
-  (measure (struct ts))
+  (measure (exprs_weight ts))
   (match ts
     (nil nil)
     ((cons t r) (cons (dv_ty_s sc t) (dv_tys_s sc r)))))
 ;; the mangled name: `Tok`, `List_Tok`, `Prod_Nat_Tok` — prefix notation over fixed arities
 (fn dv_mangle ((ty Expr)) (List Int)
+  (measure (Expr.size ty))
   (match (get_app_fn ty)
     ((Const _ n _) (dv_mangle_args (chars_of_name_last n) (get_app_args ty)))
     (_ (utf8 "T"))))
 (fn dv_mangle_args ((acc (List Int)) (args (List Expr))) (List Int)
-  (measure (struct args))
+  (measure (exprs_weight args))
   (match args
     (nil acc)
     ((cons a r) (dv_mangle_args (append acc (cons 95 (dv_mangle a))) r))))
+(fulfills dv_mangle.dec_1 (by (intro ty w1 n w2 h) (exact (get_app_args_lt ty))))
+(fulfills dv_mangle_args.dec_1 (by (intro acc args a r h) (rw h) (rw exprs_weight.eq_2) (arith)))
+(fulfills dv_mangle_args.dec_2 (by (intro acc args a r h) (rw h) (rw exprs_weight.eq_2) (arith)))
 
 ;; ---- the constructors' fields as K gives them ------------------------------------------------
 (fn dv_raw_ctors
@@ -428,7 +434,7 @@
 ;; the motives opened as locals: each binder is `(x : A) → Sort 1`, A the type the motive is over
 (fn dv_open_motives ((w W) (ty Expr) (n Int) (acc (List DvMot)))
   (Prod W (Option (Prod Expr (List DvMot))))
-  (measure n)
+  (measure (Int.natAbs n))
   (if (< n 1) (Prod.mk w (some (Prod.mk ty (rev acc))))
   (match ty
     ((Pi _ nm _ dom body)
@@ -442,6 +448,10 @@
                 (cons (DvMot (fvar_id_of fv) a (dv_size_name a)) acc)))))))
        (_ (Prod.mk w none))))
     (_ (Prod.mk w none)))))
+(fulfills dv_open_motives.dec_1
+  (by
+    (intro p hf w1 nm w2 dom body h w3 w4 w5 a w6 h2 w1b fv h3 w2b body1 h4)
+    (apply natAbs_pred (arith))))
 (fn dv_mot_index ((mots (List DvMot)) (id Int) (j Int)) (Option (Prod Int (List Int)))
   (measure (struct mots))
   (match mots
@@ -471,7 +481,7 @@
    (k Int)
    (acc (List DvMinor)))
   DvMins
-  (measure n)
+  (measure (Int.natAbs n))
   (if (< n 1) (DvMinsOk (rev acc))
   (match ty
     ((Pi _ _ _ dom body)
@@ -818,6 +828,10 @@
 (fn dv_init ((cs (List Int))) SExpr (dv_s (append (utf8 "Init.") cs)))
 (fn dv_cite_in ((sc Scope) (n Name)) SExpr
   (if (native_decl sc n) (dv_s (show_name n)) (dv_init (show_name n))))
+(fulfills dv_ty_s.dec_1 (by (intro sc t w1 w2 w3 h) (rw h) (exact (get_app_fn_lt w1 w2 w3))))
+(fulfills dv_ty_s.dec_2 (by (intro sc t w1 w2 w3 h) (exact (get_app_args_lt t))))
+(fulfills dv_tys_s.dec_1 (by (intro sc ts t r h) (rw h) (rw exprs_weight.eq_2) (arith)))
+(fulfills dv_tys_s.dec_2 (by (intro sc ts t r h) (rw h) (rw exprs_weight.eq_2) (arith)))
 (fn dv_cite ((cx DvCx) (n Name)) SExpr (dv_cite_in (DvCx.sc cx) n))
 (fn dv_at_cite ((cx DvCx) (n Name)) SExpr
   (dv_s
@@ -827,6 +841,11 @@
 ;; field's type bears its name (a pattern's bare symbol is a constructor where one exists)
 (fn dv_vname ((p (List Int)) (i Int)) (List Int) (append p (cons 32 (show_nat i))))
 (fn dv_var ((p (List Int)) (i Int)) SExpr (dv_s (dv_vname p i)))
+(fulfills dv_minors.dec_1
+  (by
+    (intro p hf w1 w2 w3 dom body h1 w1b fvs cod h2 w4 mid h3 j nm h4 capp h5 fbs ihbs terms w5 h6
+      cs h7 w2b body1 h8)
+    (apply natAbs_pred (arith))))
 ;; p_i … p_k
 (fn dv_vars ((p (List Int)) (k Int) (i Int)) (List SExpr)
   (measure (Int.natAbs (- (+ k 1) i)))

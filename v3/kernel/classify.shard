@@ -259,6 +259,8 @@
                   ((Prod.mk (TyOk _ tps1) ts) (TyOk (ETCon id ts) tps1)))))))
             ((TyOk _ _) (TyErr (sym "bad_type") (utf8 "a type parameter takes no arguments"))))))))
     (_ (TyErr (sym "bad_type") (utf8 "a type is NAME or (NAME TYPE…)")))))
+;; the written arguments that run, or a refusal (`written_data`, below)
+(type Wr (WrOk (List SExpr)) (WrErr Symbol (List Int)))
 ;; a type's written arguments that are types. An inductive of K takes values and propositions
 ;; too — `(Fin n)`, `(Subtype P)`, `(Decidable P)` — which no E type keeps (erase.shard
 ;; l_to_etype): its parameters' roles select the type arguments among those written, by the
@@ -303,65 +305,6 @@
           (_ (ETCon id nil))))
        (_ (ETCon id nil))))
     (none (ETCon id nil))))
-;; is a binder's written type a proposition? Decided on its head, with no elaboration: a
-;; comparison's or a connective's spelling, a bound proposition or predicate, a constant of K
-;; whose type ends in Prop, a function type or a quantification into one. False is no claim
-;; that the type is data: it is then read as an E type, and what is neither is refused
-(fn prop_type ((r Rd) (s SExpr)) Bool
-  (measure (struct s))
-  (match s
-    ((SSym x) (prop_head r (sym_strip x)))
-    ((SList (cons (SSym h) args))
-     (if (prop_spelling h) true
-     (if (bool_or (sym_eq h (sym "->")) (sym_eq h (sym "forall")))
-       (match (last_of args)
-         ((some l) (prop_type r l))
-         (none false))
-       (prop_head r (sym_strip h)))))
-    (_ false)))
-(fn prop_spelling ((h Symbol)) Bool
-  (bool_or (sym_eq h (sym "="))
-    (bool_or (sym_eq h (sym "!="))
-      (bool_or (sym_eq h (sym "<"))
-        (bool_or (sym_eq h (sym "<="))
-          (bool_or (sym_eq h (sym ">"))
-            (bool_or (sym_eq h (sym ">="))
-              (bool_or (sym_eq h (sym "iff"))
-                (bool_or (sym_eq h (sym "and"))
-                  (bool_or (sym_eq h (sym "or"))
-                    (bool_or (sym_eq h (sym "not")) (sym_eq h (sym "exists")))))))))))))
-(fn prop_head ((r Rd) (h Symbol)) Bool
-  (match (name_of_sym h)
-    (none false)
-    ((some n)
-     (match (rd_find r n)
-       ((RdGhost p) p)
-       ((RdVar _) false)
-       (RdNone
-         (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
-           ((RName k _)
-            (match (env_find (rd_env r) k)
-              ((some info) (ends_in_prop (ci_type info)))
-              (none false)))
-           (_ false)))))))
-(fn ends_in_prop ((t Expr)) Bool
-  (measure (struct t))
-  (match t
-    ((Pi _ _ _ _ b) (ends_in_prop b))
-    ((Sort _ l) (is_zero (normalize l)))
-    (_ false)))
-;; `Prop`, or a function type into it: a binder of this type is a proposition or a predicate
-(fn is_pred_sort ((s SExpr)) Bool
-  (measure (struct s))
-  (match s
-    ((SSym x) (sym_eq x (sym "Prop")))
-    ((SList (cons (SSym a) args))
-     (if (sym_eq a (sym "->"))
-       (match (last_of args)
-         ((some l) (is_pred_sort l))
-         (none false))
-       false))
-    (_ false)))
 ;; the argument types in order; the TyRes carries the threaded parameters (its type is a placeholder)
 (fn read_etys
   ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (ss (List SExpr)) (acc (List EType)))
@@ -466,6 +409,66 @@
 (fn erased_msg ((n Name)) (List Int)
   (append (show_name n)
     (utf8 ": a proof or a type in a runtime position — both are erased from a program")))
+
+;; is a binder's written type a proposition? Decided on its head, with no elaboration: a
+;; comparison's or a connective's spelling, a bound proposition or predicate, a constant of K
+;; whose type ends in Prop, a function type or a quantification into one. False is no claim
+;; that the type is data: it is then read as an E type, and what is neither is refused
+(fn prop_type ((r Rd) (s SExpr)) Bool
+  (measure (SExpr.size s))
+  (match s
+    ((SSym x) (prop_head r (sym_strip x)))
+    ((SList (cons (SSym h) args))
+     (if (prop_spelling h) true
+     (if (bool_or (sym_eq h (sym "->")) (sym_eq h (sym "forall")))
+       (match (last_of args)
+         ((some l) (prop_type r l))
+         (none false))
+       (prop_head r (sym_strip h)))))
+    (_ false)))
+(fn prop_spelling ((h Symbol)) Bool
+  (bool_or (sym_eq h (sym "="))
+    (bool_or (sym_eq h (sym "!="))
+      (bool_or (sym_eq h (sym "<"))
+        (bool_or (sym_eq h (sym "<="))
+          (bool_or (sym_eq h (sym ">"))
+            (bool_or (sym_eq h (sym ">="))
+              (bool_or (sym_eq h (sym "iff"))
+                (bool_or (sym_eq h (sym "and"))
+                  (bool_or (sym_eq h (sym "or"))
+                    (bool_or (sym_eq h (sym "not")) (sym_eq h (sym "exists")))))))))))))
+(fn prop_head ((r Rd) (h Symbol)) Bool
+  (match (name_of_sym h)
+    (none false)
+    ((some n)
+     (match (rd_find r n)
+       ((RdGhost p) p)
+       ((RdVar _) false)
+       (RdNone
+         (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
+           ((RName k _)
+            (match (env_find (rd_env r) k)
+              ((some info) (ends_in_prop (ci_type info)))
+              (none false)))
+           (_ false)))))))
+(fn ends_in_prop ((t Expr)) Bool
+  (measure (struct t))
+  (match t
+    ((Pi _ _ _ _ b) (ends_in_prop b))
+    ((Sort _ l) (is_zero (normalize l)))
+    (_ false)))
+;; `Prop`, or a function type into it: a binder of this type is a proposition or a predicate
+(fn is_pred_sort ((s SExpr)) Bool
+  (measure (SExpr.size s))
+  (match s
+    ((SSym x) (sym_eq x (sym "Prop")))
+    ((SList (cons (SSym a) args))
+     (if (sym_eq a (sym "->"))
+       (match (last_of args)
+         ((some l) (is_pred_sort l))
+         (none false))
+       false))
+    (_ false)))
 
 (type TRes (TOk ETerm) (TErr Symbol (List Int)))
 (fn read_et ((r Rd) (s SExpr)) TRes
@@ -615,7 +618,6 @@
 ;; implicit and runtime data is an argument that runs and is not written. And a proof is
 ;; passed over unread, so it must have a reader: where the typed route has not read this same
 ;; form (`checked`), a written proof is refused — nothing checks it
-(type Wr (WrOk (List SExpr)) (WrErr Symbol (List Int)))
 (fn written_data
   ((flags (List (Prod Bool Symbol)))
    (ex Bool)
@@ -811,6 +813,38 @@
     (nil none)
     ((cons x nil) (some x))
     ((cons _ rest) (last_of rest))))
+;; the last of a list of trees is smaller than the list: what `prop_type` and `is_pred_sort`
+;; descend by, reading the result of a function type
+(theorem last_of_lt ((xs (List SExpr)))
+  (forall ((l SExpr)) (-> (= (last_of xs) (some l)) (< (SExpr.size l) (List_SExpr.size xs))))
+  (by
+    (induction xs
+      ((nil () (intro l h)
+         (exact (absurd (congrArg Option.isSome h) (ne_true_of_eq_false (Eq.refl false)))))
+       (cons (x r ih)
+         (cases r
+           ((nil () (intro l h) (have e (= (some x) (some l)) (exact h))
+              (rw (<- (Option.some.inj e)))
+              (rw List_SExpr.size.eq_2)
+              (arith))
+            (cons (y r2) (intro l h)
+              (have g (< (SExpr.size l) (List_SExpr.size (cons y r2))) (exact (ih l h)))
+              (rw List_SExpr.size.eq_2)
+              (arith)))))))))
+(fulfills prop_type.dec_1
+  (by
+    (intro p h args hs hns hb l hl)
+    (rw hs)
+    (rw SExpr.size.eq_5)
+    (rw List_SExpr.size.eq_2)
+    (arith (last_of_lt args l hl))))
+(fulfills is_pred_sort.dec_1
+  (by
+    (intro s a args hs ha l hl)
+    (rw hs)
+    (rw SExpr.size.eq_5)
+    (rw List_SExpr.size.eq_2)
+    (arith (last_of_lt args l hl))))
 ;; field i of the structure sn, of the subject x
 (fn read_proj ((r Rd) (sn Name) (i Int) (x SExpr)) TRes
   (match (struct_ctor r sn)
