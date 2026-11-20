@@ -1,0 +1,59 @@
+;;; v3/models/x86/run_main.shard — the model run on a file from the command line: the file's
+;;; bytes loaded as Linux would, the processor stepped from zeroed registers and cleared flags
+;;; for at most the count given, and how the run ended printed as one line — `exit N`; `stuck`
+;;; with the reason, the address and the bytes found there; `out of steps`. The same file run by
+;;; the real processor is what the model is held to (kernel/test/x86_test.sh).
+;;;
+;;;   load.shard --root v3 --init … --run models.x86.run_main.main v3/models/x86/run_main.shard -- FILE STEPS
+(import "../../std/bytes.shard")
+(import "../../std/derive.shard")
+(import "../../std/host.shard")
+(import "../../std/list.shard")
+(import "linux.shard")
+(use std.bytes)
+(use std.derive)
+(use std.host)
+(use models.x86.linux)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.linux.Res)
+(use models.x86.x86.Why)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; a literal's bytes as numbers
+(fn text ((s String)) (List Nat) (Bytes.toNats (Bytes.ofString s)))
+;; a byte as two hexadecimal digits before `rest`; a list of bytes, a space before each
+(fn hex_digit ((d Nat)) Nat (if (< d 10) (+ 48 d) (+ 87 d)))
+(fn hex2 ((b Nat) (rest (List Nat))) (List Nat)
+  (cons (hex_digit (/ b 16)) (cons (hex_digit (% b 16)) rest)))
+(fn hex_bytes ((bs (List Nat))) (List Nat)
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b r) (cons 32 (hex2 b (hex_bytes r))))))
+
+;; how a run ended, as a line
+(fn show_why ((y Why)) (List Nat)
+  (match y
+    ((WDecode a bs)
+     (List.append (text "stuck: no instruction of the model at ")
+       (Nat.renderOnto a (cons 58 (hex_bytes bs)))))
+    ((WSyscall n) (List.append (text "stuck: no rule for system call ") (Nat.renderOnto n nil)))
+    (WFile (text "stuck: not a file the model loads"))))
+(fn show_res ((r Res)) (List Nat)
+  (match r
+    ((RExit status) (List.append (text "exit ") (Nat.renderOnto status nil)))
+    ((RStuck y) (show_why y))
+    ((ROut c) (List.append (text "out of steps at ") (Nat.renderOnto (w64_val (Cpu.rip c)) nil)))))
+
+(fn main ((path ByteArray) (steps Nat) (w World)) World
+  (match (read_file path w)
+    ((Prod.mk r w1)
+     (match r
+       (none (exit 2 (write_line (Bytes.ofNats (text "x86run: the file cannot be read")) w1)))
+       ((some bs)
+        (write_line
+          (Bytes.ofNats
+            (show_res (run_file (fuel_of steps) (Bytes.toNats bs) regs_zero flags_clear)))
+          w1))))))

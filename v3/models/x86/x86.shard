@@ -1,0 +1,169 @@
+;;; v3/models/x86/x86.shard — the x86-64 processor, as far as a consumer has needed it
+;;; (docs/COMPILE.md §4): the registers, the flags, a memory of bytes with what is mapped, and
+;;; one step — the bytes at the program counter decoded to one instruction, and that instruction
+;;; executed. A program is bytes. Bytes that decode to nothing here, and an access outside what
+;;; is mapped, have no rule: the step is stuck, and says why. Opcodes are written in decimal, the
+;;; reader having no other numeral, with the manual's hexadecimal beside them.
+(import "../../std/mem.shard")
+(import "word.shard")
+(use std.mem)
+(use models.x86.word)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the state ------------------------------------------------------------------------------
+;; the sixteen registers, in the order of their numbers in an encoding (rax 0 … r15 15)
+(record Regs (rax (BitVec 64)) (rcx (BitVec 64)) (rdx (BitVec 64)) (rbx (BitVec 64))
+  (rsp (BitVec 64))
+  (rbp (BitVec 64))
+  (rsi (BitVec 64))
+  (rdi (BitVec 64))
+  (r8 (BitVec 64))
+  (r9 (BitVec 64))
+  (r10 (BitVec 64))
+  (r11 (BitVec 64))
+  (r12 (BitVec 64))
+  (r13 (BitVec 64))
+  (r14 (BitVec 64))
+  (r15 (BitVec 64)))
+;; the register of a number; a number past 15 is r15's (a decoder yields none)
+(fn reg_get ((r Regs) (i Nat)) (BitVec 64)
+  (match i
+    (0 (Regs.rax r))
+    (1 (Regs.rcx r))
+    (2 (Regs.rdx r))
+    (3 (Regs.rbx r))
+    (4 (Regs.rsp r))
+    (5 (Regs.rbp r))
+    (6 (Regs.rsi r))
+    (7 (Regs.rdi r))
+    (8 (Regs.r8 r))
+    (9 (Regs.r9 r))
+    (10 (Regs.r10 r))
+    (11 (Regs.r11 r))
+    (12 (Regs.r12 r))
+    (13 (Regs.r13 r))
+    (14 (Regs.r14 r))
+    (_ (Regs.r15 r))))
+(fn reg_set ((r Regs) (i Nat) (v (BitVec 64))) Regs
+  (match i
+    (0 (with Regs r (rax v)))
+    (1 (with Regs r (rcx v)))
+    (2 (with Regs r (rdx v)))
+    (3 (with Regs r (rbx v)))
+    (4 (with Regs r (rsp v)))
+    (5 (with Regs r (rbp v)))
+    (6 (with Regs r (rsi v)))
+    (7 (with Regs r (rdi v)))
+    (8 (with Regs r (r8 v)))
+    (9 (with Regs r (r9 v)))
+    (10 (with Regs r (r10 v)))
+    (11 (with Regs r (r11 v)))
+    (12 (with Regs r (r12 v)))
+    (13 (with Regs r (r13 v)))
+    (14 (with Regs r (r14 v)))
+    (_ (with Regs r (r15 v)))))
+
+;; the four flags a conditional jump reads: carry, zero, sign, overflow
+(record Flags (cf Bool) (zf Bool) (sf Bool) (of Bool))
+
+;; a mapped range of addresses [lo, hi) and what it permits: 4 read, 2 write, 1 execute
+(record Seg (lo Nat) (hi Nat) (perm Nat))
+;; whether a range holds address a and permits all of `need`
+(fn seg_has ((s Seg) (a Nat) (need Nat)) Bool
+  (if (<= (Seg.lo s) a)
+    (if (< a (Seg.hi s)) (if (= (band (Seg.perm s) need) need) true false) false)
+    false))
+;; whether some mapped range does
+(fn mapped ((segs (List Seg)) (a Nat) (need Nat)) Bool
+  (measure (struct segs))
+  (match segs
+    (nil false)
+    ((cons s r) (if (seg_has s a need) true (mapped r a need)))))
+
+;; every register zero, every flag clear
+(fn regs_zero () Regs
+  (make Regs (rax (w64 0)) (rcx (w64 0)) (rdx (w64 0)) (rbx (w64 0)) (rsp (w64 0)) (rbp (w64 0))
+    (rsi (w64 0))
+    (rdi (w64 0))
+    (r8 (w64 0))
+    (r9 (w64 0))
+    (r10 (w64 0))
+    (r11 (w64 0))
+    (r12 (w64 0))
+    (r13 (w64 0))
+    (r14 (w64 0))
+    (r15 (w64 0))))
+(fn flags_clear () Flags (make Flags (cf false) (zf false) (sf false) (of false)))
+
+(record Cpu (regs Regs) (rip (BitVec 64)) (flags Flags) (mem Mem) (segs (List Seg)))
+(fn cpu_at ((entry Nat) (r Regs) (f Flags) (m Mem) (segs (List Seg))) Cpu
+  (make Cpu (regs r) (rip (w64 entry)) (flags f) (mem m) (segs segs)))
+
+;; ---- fetch ----------------------------------------------------------------------------------
+;; a count that recursion descends by structure
+(type Fuel (FZ) (FS Fuel))
+;; a count of that many
+(fn fuel_of ((n Nat)) Fuel (measure n) (if (= n 0) FZ (FS (fuel_of (- n 1)))))
+(fulfills fuel_of.dec_1 (by (intro p h) (exact (Nat.sub_one_lt h))))
+;; the longest instruction is fifteen bytes
+(fn fifteen () Fuel (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS FZ))))))))))))))))
+;; the bytes from address a, as many as n and as are mapped for execution
+(fn fetch ((segs (List Seg)) (m Mem) (a Nat) (n Fuel)) (List Nat)
+  (measure (struct n))
+  (match n
+    (FZ nil)
+    ((FS n1) (if (mapped segs a 1) (cons (mem_get m a) (fetch segs m (+ a 1) n1)) nil))))
+
+;; ---- instructions ---------------------------------------------------------------------------
+(type Instr
+  (MovRI32 Nat Nat)  ; mov r32, imm32 (B8+r id): the register is the immediate, its high half zero
+  (Syscall))  ; syscall (0F 05): control passes to the operating system
+
+;; four bytes, the least significant first
+(fn le32 ((b0 Nat) (b1 Nat) (b2 Nat) (b3 Nat)) Nat (+ b0 (* 256 (+ b1 (* 256 (+ b2 (* 256 b3)))))))
+
+;; the instruction a byte sequence starts with, and its length
+(fn decode ((bs (List Nat))) (Option (Prod Instr Nat))
+  (match bs
+    (nil none)
+    ((cons b0 r)
+     (if (= b0 15) (decode_0f r)
+     (if (<= 184 b0) (if (< b0 192) (decode_mov_ri (- b0 184) r) none)
+     none)))))
+;; after 0F
+(fn decode_0f ((bs (List Nat))) (Option (Prod Instr Nat))
+  (match bs
+    (nil none)
+    ((cons b1 _) (if (= b1 5) (some (Prod.mk Syscall 2)) none))))
+;; B8+r: four bytes of immediate
+(fn decode_mov_ri ((r Nat) (bs (List Nat))) (Option (Prod Instr Nat))
+  (match bs
+    ((cons i0 (cons i1 (cons i2 (cons i3 _)))) (some (Prod.mk (MovRI32 r (le32 i0 i1 i2 i3)) 5)))
+    (_ none)))
+
+;; ---- one step -------------------------------------------------------------------------------
+;; why a step has no rule
+(type Why
+  (WDecode Nat (List Nat))  ; the bytes at this address are no instruction of the model
+  (WSyscall Nat)  ; a system call the boundary has no rule for
+  (WFile))  ; a file the boundary does not load
+(type Step
+  (SNext Cpu)  ; the next state
+  (SSys Cpu)  ; a system call, the program counter past it
+  (SStuck Why))
+
+;; the program counter moved past an instruction of the given length
+(fn advance ((c Cpu) (len Nat)) Cpu (with Cpu c (rip (w64 (+ (w64_val (Cpu.rip c)) len)))))
+(fn exec ((c Cpu) (i Instr) (len Nat)) Step
+  (match i
+    ((MovRI32 r v) (SNext (advance (with Cpu c (regs (reg_set (Cpu.regs c) r (w64 v)))) len)))
+    (Syscall (SSys (advance c len)))))
+(fn step ((c Cpu)) Step
+  (match (decode (fetch (Cpu.segs c) (Cpu.mem c) (w64_val (Cpu.rip c)) fifteen))
+    (none
+      (SStuck
+        (WDecode (w64_val (Cpu.rip c))
+          (fetch (Cpu.segs c) (Cpu.mem c) (w64_val (Cpu.rip c)) fifteen))))
+    ((some (Prod.mk i len)) (exec c i len))))

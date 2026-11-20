@@ -1,0 +1,134 @@
+;;; v3/models/x86/linux.shard — Linux at the processor's boundary, as far as a consumer has
+;;; needed it: how an executable file becomes a process's first state, and what a system call
+;;; does. A file the model does not load, and a system call it has no rule for, are stuck with
+;;; the reason. A run is the processor's steps until the process exits, counted by a fuel that
+;;; no statement about a run names: `exits` quantifies it away.
+(import "../../std/list.shard")
+(import "x86.shard")
+(use std.mem)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Seg)
+(use models.x86.x86.Step)
+(use models.x86.x86.Why)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- reading a file's bytes -----------------------------------------------------------------
+;; the byte at index i, 0 past the end
+(fn byte_at ((bs (List Nat)) (i Nat)) Nat
+  (measure (struct bs))
+  (match bs
+    (nil 0)
+    ((cons b r) (if (= i 0) b (byte_at r (- i 1))))))
+;; a little-endian number of two, four, eight bytes at index i
+(fn le16_at ((bs (List Nat)) (i Nat)) Nat (+ (byte_at bs i) (* 256 (byte_at bs (+ i 1)))))
+(fn le32_at ((bs (List Nat)) (i Nat)) Nat (+ (le16_at bs i) (* 65536 (le16_at bs (+ i 2)))))
+(fn le64_at ((bs (List Nat)) (i Nat)) Nat (+ (le32_at bs i) (* 4294967296 (le32_at bs (+ i 4)))))
+;; the bytes from index n on
+(fn skip ((bs (List Nat)) (n Nat)) (List Nat)
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b r) (if (= n 0) (cons b r) (skip r (- n 1))))))
+;; the first n bytes of bs stored from address a
+(fn put_bytes ((m Mem) (a Nat) (bs (List Nat)) (n Nat)) Mem
+  (measure (struct bs))
+  (match bs
+    (nil m)
+    ((cons b r) (if (= n 0) m (put_bytes (mem_set m a b) (+ a 1) r (- n 1))))))
+
+;; ---- an executable file ---------------------------------------------------------------------
+;; what a file loads to: where it starts, its bytes in memory, what is mapped
+(record Image (entry Nat) (mem Mem) (segs (List Seg)))
+
+;; the header of a 64-bit little-endian executable for x86-64, with program headers of 56 bytes:
+;; the magic 7F 45 4C 46, class 2, data 1, type 2 (an executable at fixed addresses), machine 62
+(fn elf_header_ok ((bs (List Nat))) Bool
+  (if (= (le32_at bs 0) 1179403647)
+    (if (= (byte_at bs 4) 2)
+      (if (= (byte_at bs 5) 1)
+        (if (= (le16_at bs 16) 2)
+          (if (= (le16_at bs 18) 62) (if (= (le16_at bs 54) 56) true false) false)
+          false)
+        false)
+      false)
+    false))
+;; a loadable segment the model maps: its bytes inside the file, no more of them than its size
+;; in memory, its address and its place in the file alike within a page of 4096, and not below
+;; the lowest address a process may map, 65536
+(fn segment_ok ((len Nat) (off Nat) (vaddr Nat) (filesz Nat) (memsz Nat)) Bool
+  (if (<= (+ off filesz) len)
+    (if (<= filesz memsz)
+      (if (= (% vaddr 4096) (% off 4096)) (if (<= 65536 vaddr) true false) false)
+      false)
+    false))
+;; one program header, at index off: a loadable segment (type 1) is copied and mapped with its
+;; permissions; any other header is refused
+(fn load_ph ((bs (List Nat)) (off Nat) (img Image)) (Option Image)
+  (if (= (le32_at bs off) 1)
+    (if
+      (segment_ok (List.length bs) (le64_at bs (+ off 8)) (le64_at bs (+ off 16))
+        (le64_at bs (+ off 32))
+        (le64_at bs (+ off 40)))
+      (some
+        (make Image (entry (Image.entry img))
+          (mem
+            (put_bytes (Image.mem img) (le64_at bs (+ off 16)) (skip bs (le64_at bs (+ off 8)))
+              (le64_at bs (+ off 32))))
+          (segs
+            (cons
+              (MkSeg (le64_at bs (+ off 16)) (+ (le64_at bs (+ off 16)) (le64_at bs (+ off 40)))
+                (le32_at bs (+ off 4)))
+              (Image.segs img)))))
+      none)
+    none))
+;; k program headers from index off
+(fn load_phs ((bs (List Nat)) (off Nat) (k Nat) (img Image)) (Option Image)
+  (measure k)
+  (if (= k 0) (some img)
+  (match (load_ph bs off img)
+    (none none)
+    ((some img1) (load_phs bs (+ off 56) (- k 1) img1)))))
+(fulfills load_phs.dec_1 (by (intro p h img1 hm) (exact (Nat.sub_one_lt h))))
+;; a file's image, where the model loads it
+(fn elf_load ((bs (List Nat))) (Option Image)
+  (if (elf_header_ok bs)
+    (load_phs bs (le64_at bs 32) (le16_at bs 56)
+      (make Image (entry (le64_at bs 24)) (mem mem_empty) (segs nil)))
+    none))
+
+;; ---- a process ------------------------------------------------------------------------------
+;; how a run ends: the process exited with a status; a step had no rule; the count ran out
+(type Res (RExit Nat) (RStuck Why) (ROut Cpu))
+
+;; a process's first state: the image, and the registers and flags the kernel leaves
+(fn boot ((img Image) (r Regs) (f Flags)) Cpu
+  (cpu_at (Image.entry img) r f (Image.mem img) (Image.segs img)))
+;; a system call, by the number in rax: 60 (exit) ends the process with the low half of rdi
+(fn on_syscall ((c Cpu)) Res
+  (if (= (w64_val (Regs.rax (Cpu.regs c))) 60)
+    (RExit (% (w64_val (Regs.rdi (Cpu.regs c))) 4294967296))
+    (RStuck (WSyscall (w64_val (Regs.rax (Cpu.regs c)))))))
+;; at most n steps
+(fn run ((n Fuel) (c Cpu)) Res
+  (measure (struct n))
+  (match n
+    (FZ (ROut c))
+    ((FS n1)
+     (match (step c)
+       ((SNext c1) (run n1 c1))
+       ((SSys c1) (on_syscall c1))
+       ((SStuck y) (RStuck y))))))
+;; a file run from the registers and flags given
+(fn run_file ((n Fuel) (bs (List Nat)) (r Regs) (f Flags)) Res
+  (match (elf_load bs)
+    (none (RStuck WFile))
+    ((some img) (run n (boot img r f)))))
+
+;; the machine's system (docs/COMPILE.md §2): started on a file, with the registers and flags
+;; the kernel leaves, the process ends with an exit status
+(def exits ((bs (List Nat)) (r Regs) (f Flags) (status Nat)) Prop
+  (exists ((n Fuel)) (= (run_file n bs r f) (RExit status))))

@@ -47,7 +47,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 | a proven step from a definition to its program | the erasure, trusted by review |
 | proofs of the runtime's laws | six axioms in `v3/models/imp/rtlaw.shard`; nothing stated about `init` and `dec` |
 | a compiler as a function, and a theorem over all programs | two compiled forms entered by hand |
-| a machine model | none in this tree; the previous generation's is at a tag (`V2.md` §6) |
+| a machine model | begun: `v3/models/x86` decodes and executes two instructions, loads an executable file and knows `exit` (its README); no memory access, no stack, no assembler; the previous generation's is at a tag (`V2.md` §6) |
 | a large computed result as a theorem | K's evaluation through a measured function gives out at depth 40 to 200; the rewriting step stops at 64 unfoldings. Through a function measured in several parts it does not get past a recursive call: `(= (drain 0 (cons 5 nil)) 5)` by `rfl` fails where `(= (drain 0 nil) 0)` holds (the function of pin `measure_parts`). Not looked into further; the descents there are proven through `Prod.Lex.right'` and `arith`. A proof cites the function's equations |
 | packed byte buffers and machine words | bytes and strings are lists; every number is an arbitrary-size integer |
 | a binary's trace tied to its contract | a binary is compared on output and exit status only; the runtime writes no trace |
