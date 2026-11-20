@@ -1,0 +1,112 @@
+;;; v3/models/x86/test/listings.shard — listings for the assembler, each the program of a file
+;;; of bytes assembled by hand beside it (`stack.hex`, `high.hex`, `add.hex` at KK = F8): the
+;;; assembler's bytes are compared with the hand's by kernel/test/x86_test.sh. Two listings the
+;;; assembler refuses, as theorems. `main` writes the code of the listings named.
+;;;
+;;;   load.shard --root v3 --init … --run models.x86.test.listings.main v3/models/x86/test/listings.shard -- NAME FILE …
+(import "../../../std/bytes.shard")
+(import "../../../std/host.shard")
+(import "../asm.shard")
+(use std.bytes)
+(use std.host)
+(use models.x86.asm)
+(use models.x86.asm.Asm)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; -8 and -2 as the numbers of 64-bit words
+(fn minus8 () Nat 18446744073709551608)
+(fn minus2 () Nat 18446744073709551614)
+
+;; stack.hex: a call and its return, pushes and pops, a jump; label 0 is the function, 1 the
+;; line after the add, 2 the line after the jump
+(fn stack_listing () (List Asm)
+  (list (AI (MovRmR (RmReg 3) 4)) (AI (MovRI32 7 1)) (ACall 0) (AI (AluRmR BCmp (RmReg 3) 4))
+    (AJcc 5 1)
+    (AI (AluRmI BAdd (RmReg 7) 4))
+    (ALabel 1)
+    (AI (MovRI32 0 60))
+    (AI Syscall)
+    (ALabel 0)
+    (AI (Push 7))
+    (AI (Push 8))
+    (AI (MovRI32 7 100))
+    (AI (Pop 8))
+    (AI (Pop 7))
+    (AI (AluRmI BAdd (RmReg 7) 2))
+    (AJmp 2)
+    (ALabel 2)
+    (AI Ret)))
+;; high.hex: the registers r8 and r9, memory at the stack pointer, immediates of one byte
+(fn high_listing () (List Asm)
+  (list (AI (MovRI64 8 5)) (AI (MovRI64 9 7)) (AI (AluRmR BSub (RmReg 8) 9))
+    (AI (AluRmI BSub (RmReg 8) minus2))
+    (AI (MovRmR (RmMem 4 minus8) 9))
+    (AI (AluRRm BAdd 8 (RmMem 4 minus8)))
+    (AI (AluRmI BCmp (RmReg 8) 7))
+    (AJcc 5 0)
+    (AI (MovRI32 7 42))
+    (ALabel 0)
+    (AI (MovRI32 0 60))
+    (AI Syscall)))
+;; add.hex at KK = F8: immediates of eight bytes, a sum, a word stored and read back
+(fn add_listing () (List Asm)
+  (list (AI (MovRI64 0 1234605616436508552)) (AI (MovRI64 1 17366162741940781313))
+    (AI (AluRmR BAdd (RmReg 0) 1))
+    (AI (MovRmR (RmMem 4 minus8) 0))
+    (AI (MovRRm 7 (RmMem 4 minus8)))
+    (AI (MovRI32 0 60))
+    (AI Syscall)))
+
+;; refused: a label no line declares; an immediate that is the sign extension of no four bytes
+(theorem refuses_missing_label () (= (assemble (list (AJmp 7) (AI Ret))) none) (by rfl))
+(theorem refuses_wide_immediate ()
+  (= (assemble (list (AI (AluRmI BAdd (RmReg 0) 1099511627776)))) none)
+  (by rfl))
+;; and a listing it takes, with its bytes: push r8; pop rdi; ret
+(theorem assembles_three ()
+  (= (assemble (list (AI (Push 8)) (AI (Pop 7)) (AI Ret))) (some (list 65 80 95 195)))
+  (by rfl))
+
+;; ---- the command line: NAME FILE … ----------------------------------------------------------
+(fn same ((a (List Nat)) (b (List Nat))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x r)
+     (match b
+       (nil false)
+       ((cons y s) (if (= x y) (same r s) false))))))
+(fn text ((s String)) (List Nat) (Bytes.toNats (Bytes.ofString s)))
+(fn listing_named ((n (List Nat))) (List Asm)
+  (if (same n (text "stack")) stack_listing
+  (if (same n (text "high")) high_listing
+  (if (same n (text "add")) add_listing
+  nil))))
+(fn fail ((w World)) World
+  (exit 2 (write_line (Bytes.ofString "listings: no such listing, not assembled, or not written") w)))
+(fn write_one ((name ByteArray) (dst ByteArray) (w World)) World
+  (match (assemble (listing_named (Bytes.toNats name)))
+    (none (fail w))
+    ((some bs)
+     (match bs
+       (nil (fail w))
+       (_
+         (match (write_file dst (Bytes.ofNats bs) w)
+           ((Prod.mk ok w1) (if ok w1 (fail w1)))))))))
+(fn write_each ((args (List ByteArray)) (w World)) World
+  (measure (struct args))
+  (match args
+    ((cons name (cons dst r)) (write_each r (write_one name dst w)))
+    (_ w)))
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk args w1) (write_each args w1))))

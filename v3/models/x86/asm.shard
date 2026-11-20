@@ -1,0 +1,268 @@
+;;; v3/models/x86/asm.shard — the assembler: an instruction's bytes, and a listing — instructions,
+;;; labels, jumps and calls to labels — as the bytes of its code. Nothing here is believed, and
+;;; `encode` is proven of nothing: `assemble` answers only with bytes that the model's own
+;;; decoder (`x86.shard` `decode`) reads back, instruction by instruction, as the listing with
+;;; its labels resolved. That check is the assembler's fact, made for each listing it assembles
+;;; (docs/COMPILE.md §3, a certificate): `assemble_decodes`.
+(import "../../std/list.shard")
+(import "elf.shard")
+(import "x86.shard")
+(use models.x86.elf)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- an instruction's bytes -----------------------------------------------------------------
+;; whether the number of a 64-bit word is the sign extension of its low byte, of its low half
+(fn fits8 ((d Nat)) Bool
+  (if (< d 128) true
+  (if (<= 18446744073709551488 d) true
+  false)))
+(fn fits32 ((d Nat)) Bool
+  (if (< d 2147483648) true
+  (if (<= 18446744071562067968 d) true
+  false)))
+;; an operation's number in the opcodes 00–3F and in the group 81, 83
+(fn bop_num ((o Bop)) Nat
+  (match o
+    (BAdd 0)
+    (BOr 1)
+    (BAnd 4)
+    (BSub 5)
+    (BXor 6)
+    (BCmp 7)))
+;; the prefix of a 64-bit operation: W, with R the top bit of the register field's number and B
+;; that of the base's or the register's
+(fn rex_w ((rg Nat) (rm Rm)) Nat
+  (match rm
+    ((RmReg r) (+ 72 (+ (* 4 (/ rg 8)) (/ r 8))))
+    ((RmMem b _) (+ 72 (+ (* 4 (/ rg 8)) (/ b 8))))))
+;; a displacement's bytes after a ModRM byte whose low six bits are given: none where it is zero
+;; and the base allows it (md 0), one byte (md 1), four (md 2); `sib` the bytes between
+(fn enc_disp ((low Nat) (sib (List Nat)) (zero_ok Bool) (d Nat)) (List Nat)
+  (if (if (= d 0) zero_ok false) (cons low sib)
+  (if (fits8 d) (cons (+ 64 low) (List.append sib (list (% d 256))))
+  (if (fits32 d) (cons (+ 128 low) (List.append sib (le4 (% d 4294967296))))
+  nil))))
+;; the ModRM byte of a register field and an operand, with what follows it. A base whose low
+;; three bits are 4 takes the SIB byte 24; one whose low three bits are 5 always a displacement
+(fn enc_modrm ((rg Nat) (rm Rm)) (List Nat)
+  (match rm
+    ((RmReg r) (list (+ 192 (+ (* 8 (% rg 8)) (% r 8)))))
+    ((RmMem b d)
+     (if (= (% b 8) 4) (enc_disp (+ (* 8 (% rg 8)) 4) (list 36) true d)
+     (enc_disp (+ (* 8 (% rg 8)) (% b 8)) nil (if (= (% b 8) 5) false true) d)))))
+;; an opcode on a register in its low three bits, the prefix 41 before it for a high register
+(fn enc_plus_r ((op Nat) (r Nat) (rest (List Nat))) (List Nat)
+  (if (< r 8) (cons (+ op r) rest) (cons 65 (cons (+ op (- r 8)) rest))))
+(fn enc_w ((op Nat) (rg Nat) (rm Rm) (rest (List Nat))) (List Nat)
+  (cons (rex_w rg rm) (cons op (List.append (enc_modrm rg rm) rest))))
+;; an instruction's bytes; nothing useful where it has no encoding here (an immediate or a
+;; displacement that does not fit): `assemble` finds that out by decoding
+(fn encode ((i Instr)) (List Nat)
+  (match i
+    ((MovRI32 r v) (enc_plus_r 184 r (le4 v)))
+    ((MovRI64 r v) (cons (+ 72 (/ r 8)) (cons (+ 184 (% r 8)) (le8 v))))
+    ((MovRmR rm r) (enc_w 137 r rm nil))
+    ((MovRRm r rm) (enc_w 139 r rm nil))
+    ((AluRmR o rm r) (enc_w (+ (* 8 (bop_num o)) 1) r rm nil))
+    ((AluRRm o r rm) (enc_w (+ (* 8 (bop_num o)) 3) r rm nil))
+    ((AluRmI o rm v)
+     (if (fits8 v) (enc_w 131 (bop_num o) rm (list (% v 256)))
+     (enc_w 129 (bop_num o) rm (le4 (% v 4294967296)))))
+    ((Jcc cc d) (cons 15 (cons (+ 128 cc) (le4 (% d 4294967296)))))
+    ((Jmp d) (cons 233 (le4 (% d 4294967296))))
+    ((Call d) (cons 232 (le4 (% d 4294967296))))
+    (Ret (list 195))
+    ((Push r) (enc_plus_r 80 r nil))
+    ((Pop r) (enc_plus_r 88 r nil))
+    (Syscall (list 15 5))))
+
+;; ---- a listing --------------------------------------------------------------------------------
+;; a line: an instruction as it stands; a label, which takes no bytes; a conditional jump, a
+;; jump, a call to a label
+(type Asm (AI Instr) (ALabel Nat) (AJcc Nat Nat) (AJmp Nat) (ACall Nat))
+;; a line's length in bytes: a jump or a call to a label is always the form with four bytes of
+;; displacement, so lengths are known before any label's place is
+(fn asm_size ((a Asm)) Nat
+  (match a
+    ((AI i) (List.length (encode i)))
+    ((ALabel _) 0)
+    ((AJcc _ _) 6)
+    ((AJmp _) 5)
+    ((ACall _) 5)))
+;; where a label stands: the bytes before its first line, from `off`
+(fn label_off ((p (List Asm)) (l Nat) (off Nat)) (Option Nat)
+  (measure (struct p))
+  (match p
+    (nil none)
+    ((cons a r)
+     (match a
+       ((ALabel k) (if (= k l) (some off) (label_off r l off)))
+       (_ (label_off r l (+ off (asm_size a))))))))
+;; the displacement from the byte after a line that ends at `next` to `target`, as a word's
+;; number
+(fn rel ((target Nat) (next Nat)) Nat
+  (if (<= next target) (- target next) (- 18446744073709551616 (- next target))))
+;; the lines from offset `off` with their labels resolved in the whole listing `all`: the
+;; instructions, in order
+(fn resolve ((all (List Asm)) (p (List Asm)) (off Nat)) (Option (List Instr))
+  (measure (struct p))
+  (match p
+    (nil (some nil))
+    ((cons a r)
+     (match a
+       ((AI i) (resolved i (resolve all r (+ off (asm_size a)))))
+       ((ALabel _) (resolve all r off))
+       ((AJcc cc l)
+        (match (label_off all l 0)
+          (none none)
+          ((some t) (resolved (Jcc cc (rel t (+ off 6))) (resolve all r (+ off 6))))))
+       ((AJmp l)
+        (match (label_off all l 0)
+          (none none)
+          ((some t) (resolved (Jmp (rel t (+ off 5))) (resolve all r (+ off 5))))))
+       ((ACall l)
+        (match (label_off all l 0)
+          (none none)
+          ((some t) (resolved (Call (rel t (+ off 5))) (resolve all r (+ off 5))))))))))
+(fn resolved ((i Instr) (rest (Option (List Instr)))) (Option (List Instr))
+  (match rest
+    (none none)
+    ((some is) (some (cons i is)))))
+(fn encode_all ((is (List Instr))) (List Nat)
+  (measure (struct is))
+  (match is
+    (nil nil)
+    ((cons i r) (List.append (encode i) (encode_all r)))))
+
+;; ---- the check ------------------------------------------------------------------------------
+(derive Bop eq)
+(derive Rm eq)
+(derive Instr eq)
+;; the first bytes of a sequence, as many as n: what the processor fetches of it
+(fn firstn ((n Fuel) (bs (List Nat))) (List Nat)
+  (measure (struct n))
+  (match n
+    (FZ nil)
+    ((FS n1)
+     (match bs
+       (nil nil)
+       ((cons b r) (cons b (firstn n1 r)))))))
+;; the bytes after the first n
+(fn skipn ((n Nat) (bs (List Nat))) (List Nat)
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b r) (if (= n 0) (cons b r) (skipn (- n 1) r)))))
+;; whether a decoding is the instruction i with the length n
+(fn same_decode ((d (Option (Prod Instr Nat))) (i Instr) (n Nat)) Bool
+  (match d
+    (none false)
+    ((some (Prod.mk j m)) (if (= j i) (if (= m n) true false) false))))
+;; whether the model decodes the first fifteen bytes of bs to the instruction i, of length n
+(fn decodes_to ((i Instr) (n Nat) (bs (List Nat))) Bool
+  (same_decode (decode (firstn fifteen bs)) i n))
+;; whether the bytes are these instructions one after another and nothing more: each decoded by
+;; the model from the bytes at its place, with the length of its encoding
+(fn decodes ((is (List Instr)) (bs (List Nat))) Bool
+  (measure (struct is))
+  (match is
+    (nil
+      (match bs
+        (nil true)
+        (_ false)))
+    ((cons i r)
+     (if (decodes_to i (List.length (encode i)) bs) (decodes r (skipn (List.length (encode i)) bs))
+     false))))
+
+;; ---- the assembler --------------------------------------------------------------------------
+;; a listing's bytes, where its labels resolve and the model decodes the bytes back to it
+(fn checked ((is (List Instr)) (bs (List Nat))) (Option (List Nat))
+  (if (decodes is bs) (some bs) none))
+(fn assemble ((p (List Asm))) (Option (List Nat))
+  (match (resolve p p 0)
+    (none none)
+    ((some is) (checked is (encode_all is)))))
+
+;; ---- the assembler's fact -------------------------------------------------------------------
+;; what `checked` answers is the bytes it was given, and they decode
+(theorem checked_some
+  ((is (List Instr)) (cs (List Nat)) (bs (List Nat)) (h (= (checked is cs) (some bs))))
+  (and (= cs bs) (= (decodes is bs) true))
+  (by
+    (cases (decodes is cs) hd
+      ((false () (have hx (= (checked is cs) none) (rw checked.eq_1) (rw hd) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none bs))))
+       (true () (have hx (= (checked is cs) (some cs)) (rw checked.eq_1) (rw hd) rfl)
+         (have hs (= (some cs) (some bs)) (exact (Eq.trans (Eq.symm hx) h)))
+         (have hcb (= cs bs) (exact (Option.some.inj hs)))
+         (apply And.intro ((exact hcb)) ((rw (<- hcb)) (exact hd))))))))
+;; the bytes `assemble` answers with are the listing's instructions, its labels resolved, each
+;; decoded by the model at its place
+(theorem assemble_decodes ((p (List Asm)) (bs (List Nat)) (h (= (assemble p) (some bs))))
+  (exists ((is (List Instr))) (and (= (resolve p p 0) (some is)) (= (decodes is bs) true)))
+  (by
+    (cases (resolve p p 0) hr
+      ((none () (have hx (= (assemble p) none) (rw assemble.eq_1) (rw hr) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none bs))))
+       (some (is)
+         (have hx (= (assemble p) (checked is (encode_all is))) (rw assemble.eq_1) (rw hr) rfl)
+         (have hc (= (checked is (encode_all is)) (some bs)) (exact (Eq.trans (Eq.symm hx) h)))
+         (apply (Exists.intro is)
+           ((apply And.intro ((exact (Eq.refl (some is))))
+              ((exact (And.right (checked_some is (encode_all is) bs hc))))))))))))
+
+;; what the check of one instruction says
+(theorem same_decode_true
+  ((d (Option (Prod Instr Nat))) (i Instr) (n Nat) (h (= (same_decode d i n) true)))
+  (= d (some (Prod.mk i n)))
+  (by
+    (cases d
+      ((none () (exact (absurd (Eq.trans (Eq.symm (same_decode.eq_1 i n)) h) Bool.false_ne_true)))
+       (some (pr)
+         (cases pr
+           ((mk (j m)
+              (cases (Instr.decEq j i)
+                ((isFalse (hj)
+                   (have hx (= (same_decode (some (Prod.mk j m)) i n) false)
+                     (rw same_decode.eq_2)
+                     (rw (if_neg hj))
+                     rfl)
+                   (exact (absurd (Eq.trans (Eq.symm hx) h) Bool.false_ne_true)))
+                 (isTrue (hj)
+                   (cases (Nat.decEq m n)
+                     ((isFalse (hm)
+                        (have hx (= (same_decode (some (Prod.mk j m)) i n) false)
+                          (rw same_decode.eq_2)
+                          (rw (if_pos hj))
+                          (rw (if_neg hm))
+                          rfl)
+                        (exact (absurd (Eq.trans (Eq.symm hx) h) Bool.false_ne_true)))
+                      (isTrue (hm) (rw hj) (rw hm) rfl))))))))))))))
+;; and of a listing's first instruction: the model decodes it from the first fifteen bytes, with
+;; its encoding's length, and the rest of the listing stands after those bytes
+(theorem decodes_cons
+  ((i Instr) (r (List Instr)) (bs (List Nat)) (h (= (decodes (cons i r) bs) true)))
+  (and (= (decode (firstn fifteen bs)) (some (Prod.mk i (List.length (encode i)))))
+    (= (decodes r (skipn (List.length (encode i)) bs)) true))
+  (by
+    (cases (decodes_to i (List.length (encode i)) bs) hd
+      ((false () (have hx (= (decodes (cons i r) bs) false) (rw decodes.eq_3) (rw hd) rfl)
+         (exact (absurd (Eq.trans (Eq.symm hx) h) Bool.false_ne_true)))
+       (true ()
+         (have hx (= (decodes (cons i r) bs) (decodes r (skipn (List.length (encode i)) bs)))
+           (rw decodes.eq_3)
+           (rw hd)
+           rfl)
+         (have hs (= (same_decode (decode (firstn fifteen bs)) i (List.length (encode i))) true)
+           (exact hd))
+         (apply And.intro
+           ((exact (same_decode_true (decode (firstn fifteen bs)) i (List.length (encode i)) hs)))
+           ((exact (Eq.trans (Eq.symm hx) h)))))))))

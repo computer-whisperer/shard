@@ -14,10 +14,12 @@ it.
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, and the sign extensions `sx8`, `sx32` |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
 | `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
+| `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
+| `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
 
 ## The machine
 
@@ -61,12 +63,31 @@ flags, the stack's range and the memory under the image — whatever the kernel 
 which the run of the file from that start has exited with the status. No statement names the
 count.
 
+## The assembler
+
+`encode` gives an instruction its bytes: a 64-bit operation always with its prefix, an immediate
+in one byte where it is the sign extension of one, a base register's displacement in none, one or
+four bytes. A listing (`Asm`) is instructions, labels, and jumps and calls to labels; a jump to a
+label is always the form with four bytes of displacement, so every line's length is known before
+any label's place. `assemble` resolves the labels, encodes, and then has the model's `decode`
+read the bytes back: it answers only with bytes that decode, instruction by instruction and with
+nothing left over, to the listing. An instruction with no encoding here — an immediate too wide —
+or a label no line declares makes it answer nothing.
+
+Nothing is proven of `encode`. The fact is made for each listing (`docs/COMPILE.md` §3, a
+certificate): `assemble_decodes` — where `assemble p` is the bytes `bs`, the listing's
+instructions decode from `bs` (`decodes`) — and `decodes_cons` opens that one instruction at a
+time: the model decodes the first from the first fifteen bytes, with its encoding's length, and
+the rest stand after those bytes.
+
 ## What is proven, and what is believed
 
 `exit42_run`: the run of the first program's file — 132 bytes, written by `elf_exec` — exits with
 42 after three steps, from every `Start`. K evaluates the model to accept it; it rests on
 `propext`. `exit42_exits` states the same of the system. `w64`, `w64_add` and `w64_sub` are
-proven to be Init's `BitVec.ofNat 64`, `BitVec.add` and `BitVec.sub`.
+proven to be Init's `BitVec.ofNat 64`, `BitVec.add` and `BitVec.sub`. The assembler's fact and its
+lemmas (above) are accepted; a listing with a missing label and one with an immediate too wide are
+proven refused, by evaluation.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
@@ -76,10 +97,13 @@ and, on an x86-64 Linux machine, on the processor: where the model's run exits, 
 exits with the same status. The status is one byte, so a program that checks a word reads it back
 a byte at a time, as eight programs. Fourteen faults planted in the model one at a time each fail
 the test; that was checked by hand, with a tool outside the tree, and found two programs missing.
+The assembler's bytes for three of the programs, written as listings, are the bytes assembled by
+hand.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
-`mov`; a system call that returns; the bitwise three proven to be Init's; the assembler from
-instructions to bytes, with its fact; the link to a shard program.
+`mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
+`encode` for every instruction; the step from an assembled listing in a loaded file to what the
+processor then executes; the link to a shard program.
 
 ## From the command line
 
