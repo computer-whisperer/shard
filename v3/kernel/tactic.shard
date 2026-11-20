@@ -100,7 +100,7 @@
   (NWf SExpr SExpr Name (List Node))  ; (wf LOCAL MEASURE IH STEP…)
   (NDecide)  ; decide
   (NUnfold (List Name))  ; (unfold NAME…)
-  (NReduce Symbol (List (Prod Bool SExpr)))  ; (reduce SIDE? (using RULE…)?): the side (both, lhs, rhs); the rules, each a lemma and whether it is reversed
+  (NReduce Symbol (List Name) (List (Prod Bool SExpr)))  ; (reduce SIDE? (keep NAME…)? (using RULE…)?): the side (both, lhs, rhs); the functions whose calls stay as written; the rules, each a lemma and whether it is reversed
   (NRw Bool SExpr Int (Option SExpr) (List Node))  ; (rw LEMMA | (<- LEMMA)) (occ K EXPECT?)? (STEP…)…: K = 0 is every occurrence; EXPECT the instance expected at the occurrence (refused rw_occ_changed when another is found)
   (NSorry)  ; sorry
   (NArith Bool (List SExpr) (List (List Int)))  ; (arith only? FACT… (farkas K…)?): only (no context row), the facts, the certificates given (two for an equation)
@@ -132,7 +132,7 @@
      (if (sym_eq x (sym "rfl")) (NROk (NRfl))
      (if (sym_eq x (sym "sorry")) (NROk (NSorry))
      (if (sym_eq x (sym "decide")) (NROk (NDecide))
-     (if (sym_eq x (sym "reduce")) (NROk (NReduce (sym "both") nil))
+     (if (sym_eq x (sym "reduce")) (NROk (NReduce (sym "both") nil nil))
      (if (sym_eq x (sym "arith")) (NROk (NArith false nil nil))
      (NRErr (sym "unknown_step")
        (append (chars_of_sym x)
@@ -302,22 +302,34 @@
 (fn read_reduce ((args (List SExpr))) NodeRes
   (match args
     ((cons (SSym side) r)
-     (if (bool_or (sym_eq side (sym "lhs")) (sym_eq side (sym "rhs"))) (read_reduce_with side r)
-     (NRErr (sym "bad_step") (utf8 "(reduce SIDE? (using RULE…)?): SIDE is lhs or rhs"))))
-    (_ (read_reduce_with (sym "both") args))))
-(fn read_reduce_with ((side Symbol) (args (List SExpr))) NodeRes
+     (if (bool_or (sym_eq side (sym "lhs")) (sym_eq side (sym "rhs"))) (read_reduce_keep side r)
+     (NRErr (sym "bad_step")
+       (utf8 "(reduce SIDE? (keep NAME…)? (using RULE…)?): SIDE is lhs or rhs"))))
+    (_ (read_reduce_keep (sym "both") args))))
+;; after the side: (keep NAME…), then (using RULE…), each at most once and in this order
+(fn read_reduce_keep ((side Symbol) (args (List SExpr))) NodeRes
   (match args
-    (nil (NROk (NReduce side nil)))
+    ((cons (SList (cons (SSym w) names)) r)
+     (if (sym_eq w (sym "keep"))
+       (match (read_names names nil (sym "keep"))
+         ((NROk (NUnfold ks)) (read_reduce_with side ks r))
+         (bad bad))
+       (read_reduce_with side nil args)))
+    (_ (read_reduce_with side nil args))))
+(fn read_reduce_with ((side Symbol) (keep (List Name)) (args (List SExpr))) NodeRes
+  (match args
+    (nil (NROk (NReduce side keep nil)))
     ((cons (SList (cons (SSym w) rules)) nil)
      (if (sym_eq w (sym "using"))
        (match rules
          (nil (NRErr (sym "bad_step") (utf8 "(using RULE…) names at least one rule")))
-         (_ (NROk (NReduce side (read_rules rules nil)))))
-       (NRErr (sym "bad_step")
-         (utf8 "(reduce SIDE? (using RULE…)?): after the side, (using RULE…) and nothing else"))))
-    (_
-      (NRErr (sym "bad_step")
-        (utf8 "(reduce SIDE? (using RULE…)?): after the side, (using RULE…) and nothing else")))))
+         (_ (NROk (NReduce side keep (read_rules rules nil)))))
+       (reduce_form_err)))
+    (_ (reduce_form_err))))
+(fn reduce_form_err () NodeRes
+  (NRErr (sym "bad_step")
+    (utf8
+      "(reduce SIDE? (keep NAME…)? (using RULE…)?): after the side, (keep NAME…), then (using RULE…), and nothing else")))
 (fn read_rules ((ss (List SExpr)) (acc (List (Prod Bool SExpr)))) (List (Prod Bool SExpr))
   (measure (struct ss))
   (match ss
@@ -896,7 +908,7 @@
        ((NWf x m ih b) (step_wf e1 ctx target x m ih b))
        ((NDecide) (step_decide e1 ctx target))
        ((NUnfold ns) (step_unfold e1 ctx target ns))
-       ((NReduce side rules) (step_reduce e1 ctx target side rules))
+       ((NReduce side keep rules) (step_reduce e1 ctx target side keep rules))
        ((NRw rv lem occ ex bs) (step_rw e1 ctx target rv lem occ ex bs))
        ((NArith only facts certs) (step_arith e1 ctx target only facts certs))
        ((NSimp rules) (step_simp e1 ctx target rules))
@@ -2100,21 +2112,24 @@
   (match (ci_value info)
     ((some v) (is_const_named (get_app_fn v) (nm_eq_refl)))
     (none false)))
-(fn try_equations ((e El) (s Expr) (eqns (List Name)) (any Bool)) Found
+(fn try_equations ((e El) (s Expr) (eqns (List Name)) (any Bool) (held Bool)) Found
   (measure (struct eqns))
   (match eqns
     (nil (FoundNone e))
     ((cons q r)
-     (if (bool_and (bool_not any) (bool_and (bool_not (computes e q)) (bool_not (ground_term e s))))
-       (try_equations e s r any)
+     (if
+       (bool_and (bool_not any)
+         (bool_and (bool_not (computes e q)) (bool_or held (bool_not (ground_term e s)))))
+       (try_equations e s r any held)
        (match (try_equation e s q)
          ((FoundOk e1 rd) (FoundOk e1 rd))
-         (_ (try_equations e s r any)))))))
+         (_ (try_equations e s r any held)))))))
 ;; a computation rule: an equation whose left side has a constructor or a literal among its
 ;; arguments — `f (cons x r) ys = …`. `f n = ite …` (a measured function's one leaf) is an
 ;; unfolding, which `reduce` applies only to a ground occurrence (a ground computation ends,
 ;; the budget bounding it) — at a variable it would apply to its own result without end — and
-;; `unfold` applies once per occurrence. Ground: no local, no metavariable, and every constant
+;; `unfold` applies once per occurrence. An occurrence a kept call stands in (`held`) is not
+;; ground: the call is a variable to the run. Ground: no local, no metavariable, and every constant
 ;; a definition, a constructor, a recursor, an inductive or a quotient — an opaque constant, an
 ;; axiom or a parameter (a pending obligation) never reduces, so nothing under it ends
 (fn ground_term ((e El) (s Expr)) Bool
@@ -2195,28 +2210,77 @@
     (have l (<= (Expr.size (Proj w1 w2 w3 x)) (Expr.size t)) (rw (<- h)) (exact (get_app_fn_le t)))
     (arith (Expr.size.eq_10 w1 w2 w3 x))))
 ;; a head constant's facts the scan asks at every subterm, found once and kept for the loop:
-;; its equations and whether K's whnf may unfold it. Unkept, equations_of builds and looks up
+;; its equations, whether K's whnf may unfold it, and whether the step keeps its calls as
+;; written ((keep NAME…): 0 it does not; 1 it does; 2 it does and the scan has met one). Unkept, equations_of builds and looks up
 ;; `f.eq_k` — and for a head with none, every constructor, `M.f.realize_k` for the module and
 ;; each one it opens — at each of a goal's subterms on every step, each lookup a hash of the
 ;; name's bytes: most of a whole-run reduction's time
-(type HeadFacts (HeadFacts Name (List Name) Bool))
+(type HeadFacts (HeadFacts Name (List Name) Bool Int))
 (fn head_find ((hs (List HeadFacts)) (f Name)) (Option HeadFacts)
   (measure (struct hs))
   (match hs
     (nil none)
-    ((cons (HeadFacts g q u) r) (if (name_eq g f) (some (HeadFacts g q u)) (head_find r f)))))
+    ((cons (HeadFacts g q u k) r) (if (name_eq g f) (some (HeadFacts g q u k)) (head_find r f)))))
 (fn head_of ((e El) (hs (List HeadFacts)) (f Name)) (Prod (List HeadFacts) HeadFacts)
   (match (head_find hs f)
     ((some h) (Prod.mk hs h))
-    (none (head_new hs (HeadFacts f (equations_of e f) (reducible_head e f))))))
+    (none (head_new hs (HeadFacts f (equations_of e f) (reducible_head e f) 0)))))
 (fn head_new ((hs (List HeadFacts)) (h HeadFacts)) (Prod (List HeadFacts) HeadFacts)
   (Prod.mk (cons h hs) h))
+;; ---- reduce's kept calls: (reduce SIDE? (keep NAME…)) ----------------------------------------
+;; A call of a kept function is a variable to the run: no equation of the function is applied
+;; to it, K takes no step of it, and a term it stands in is an open term — no ground
+;; computation, no step of K's on it, no case step at a discriminant it stands in. Its
+;; arguments are reduced like any term's, and a rule of (using …) rewrites it where its left
+;; side stands. The loop's head facts start as the kept names', so the scan asks nothing more
+;; at a subterm than it did. A kept name no call of which the scan met is refused at the run's
+;; end, as a rule that rewrote nothing is: the list is what the run held, no more
+(fn heads_kept ((e El) (ks (List Name)) (acc (List HeadFacts))) (List HeadFacts)
+  (measure (struct ks))
+  (match ks
+    (nil acc)
+    ((cons f r)
+     (match (head_find acc f)
+       ((some _) (heads_kept e r acc))
+       (none (heads_kept e r (cons (HeadFacts f (equations_of e f) (reducible_head e f) 1) acc)))))))
+(fn kept_names ((hs (List HeadFacts))) (List Name)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (HeadFacts f _ _ k) r) (if (< 0 k) (cons f (kept_names r)) (kept_names r)))))
+(fn head_met ((hs (List HeadFacts)) (f Name)) (List HeadFacts)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (HeadFacts g q u k) r)
+     (if (name_eq g f) (cons (HeadFacts g q u 2) r) (cons (HeadFacts g q u k) (head_met r f))))))
+(fn kept_unmet ((hs (List HeadFacts))) (Option Name)
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons (HeadFacts f _ _ k) r) (if (= k 1) (some f) (kept_unmet r)))))
+;; whether one of the names stands in the term (asked of a closed term only, and not at all
+;; where nothing is kept)
+(fn holds_any ((ks (List Name)) (s Expr)) Bool
+  (match ks
+    (nil false)
+    (_ (names_meet ks (expr_consts s)))))
+(fn names_meet ((ks (List Name)) (ns (List Name))) Bool
+  (measure (struct ns))
+  (match ns
+    (nil false)
+    ((cons n r) (if (mem_name n ks) true (names_meet ks r)))))
+;; an open term to the run: a local or a bound variable in it, or a kept call
+(fn open_to_run ((hs (List HeadFacts)) (s Expr)) Bool
+  (if (has_fvar s) true
+  (if (has_loose_bvars s) true
+  (holds_any (kept_names hs) s))))
 ;; a whnf step that makes progress: the result (its head beta-reduced) differs and its head is
 ;; neither a stuck eliminator nor a lambda (a function constant's value is no reduction of it).
 ;; K's whnf reduces the head as far as it goes, past the one step wanted — an `ite` on a
 ;; decided condition to its branch, then that branch's `fn` unfolded to its recursor form —
-;; so every application of a constant with equations inside `s` is masked by a local first (K
-;; cannot unfold a local) and restored after
+;; so every application of a constant with equations inside `s`, and of a kept one, is masked
+;; by a local first (K cannot unfold a local) and restored after
 (fn whnf_progress ((e El) (hs (List HeadFacts)) (s Expr))
   (Prod (List HeadFacts) (Prod El (Option Expr)))
   (match (mask_fns e hs (rev (tc_subterms s nil)) s nil)
@@ -2230,8 +2294,9 @@
                (Prod.mk hs1 (Prod.mk e2 none))
                (Prod.mk hs1 (Prod.mk e2 (some r))))))))
        ((Prod.mk w1 _) (Prod.mk hs1 (Prod.mk (el_set_w e1 w1) none)))))))
-;; the applications (whole spines) of constants with equations among the subterms, each
-;; replaced by a fresh local of its type: the masked term and the (local, subterm) pairs
+;; the applications (whole spines) of constants with equations, and of kept ones, among the
+;; subterms, each replaced by a fresh local of its type: the masked term and the (local,
+;; subterm) pairs
 (fn mask_fns
   ((e El) (hs (List HeadFacts)) (subs (List Expr)) (t Expr) (acc (List (Prod Expr Expr))))
   (Prod (List HeadFacts) (Prod El (Prod Expr (List (Prod Expr Expr)))))
@@ -2243,15 +2308,15 @@
      (match (get_app_fn s)
        ((Const _ f _)
         (match (head_of e hs f)
-          ((Prod.mk hs1 (HeadFacts _ nil _)) (mask_fns e hs1 r t acc))
-          ((Prod.mk hs1 _)
+          ((Prod.mk hs1 (HeadFacts _ eqns _ k))
+           (if (bool_and (= (len eqns) 0) (= k 0)) (mask_fns e hs1 r t acc)
            (if (= (tc_count t s) 0) (mask_fns e hs1 r t acc)
            (match (el_infer e s)
              ((Prod.mk e1 none) (mask_fns e1 hs1 r t acc))
              ((Prod.mk e1 (some ty))
               (match (el_local e1 (n1 (sym "fn")) ty BDefault)
                 ((Prod.mk e2 fv)
-                 (mask_fns e2 hs1 r (tc_replace t s fv 0) (cons (Prod.mk fv s) acc))))))))))
+                 (mask_fns e2 hs1 r (tc_replace t s fv 0) (cons (Prod.mk fv s) acc)))))))))))
        (_ (mask_fns e hs r t acc)))))))
 (fn unmask ((masks (List (Prod Expr Expr))) (t Expr)) Expr
   (measure (struct masks))
@@ -2458,7 +2523,7 @@
      (match (alt_positions e f (len (get_app_args s)))
        (nil none)
        (_
-         (if (alt_open_discriminant e f (get_app_args s))
+         (if (alt_open_discriminant e f (get_app_args s) nil)
            (nth (get_app_args s) (alt_discriminant_index e f))
            none)))))
     (_ none)))
@@ -2500,7 +2565,8 @@
 ;; K's unfolding of an imported definition is no computation (`Nat.land a 1` to its
 ;; well-founded internals, `a + 8` to eight successors) and buries the term a later rewrite
 ;; must match; an open occurrence unfolds by its equations, by a case step, or by name.
-;; `only` restricts to the named constants (unfold), open or closed
+;; `only` restricts to the named constants (unfold), open or closed. A call of a kept function
+;; (the head facts say which) is no redex, and a term one stands in is an open term
 (fn find_redex
   ((e El) (rules (List Rule)) (hs (List HeadFacts)) (subs (List Expr)) (only (List Name)))
   (Prod (List HeadFacts) Found)
@@ -2518,27 +2584,32 @@
             (if (bool_and (= (len only) 0) (= (len (get_app_args s)) 0))
               (find_redex e rules hs r only)  ; a bare constant is no redex: its unfolding is a lambda over the arguments it lacks
               (match (head_of e hs f)
-                ((Prod.mk hs1 (HeadFacts _ nil red))
-                 (if (if (= (len only) 0) (if red (is_proposition e s) true) false)  ; asked in this order: the type of a constructor's application is never inferred
-                   (find_redex e rules hs1 r only)
-                   (match (alt_step e s)
-                     ((Prod.mk e0 (some t)) (Prod.mk hs1 (FoundOk e0 (Redex s t EvConv false))))
-                     ((Prod.mk e0 none)
-                      (if (bool_and (= (len only) 0) (bool_or (has_fvar s) (has_loose_bvars s)))
-                        (find_redex e0 rules hs1 r only)  ; the goal's context is bound in the closed target
-                        (match (whnf_progress e0 hs1 s)
-                          ((Prod.mk hs2 (Prod.mk e1 (some t)))
-                           (Prod.mk hs2 (FoundOk e1 (Redex s t EvConv false))))
-                          ((Prod.mk hs2 (Prod.mk e1 none))
-                           (match (delta_once e1 s)
-                             ((Prod.mk e2 (some t))
-                              (Prod.mk hs2 (FoundOk e2 (Redex s t EvConv false))))
-                             ((Prod.mk e2 none) (find_redex e2 rules hs2 r only))))))))))
-                ((Prod.mk hs1 (HeadFacts _ eqns _))
-                 (if (rules_hold rules f) (find_redex e rules hs1 r only)  ; a function a rule's left side applies: its equations wait while anything else steps (reduce_loop)
-                 (match (try_equations e s eqns (bool_not (= (len only) 0)))
-                   ((FoundOk e1 rd) (Prod.mk hs1 (FoundOk e1 rd)))
-                   (_ (find_redex e rules hs1 r only)))))))))
+                ((Prod.mk hs1 (HeadFacts _ eqns red k))
+                 (if (< 0 k) (find_redex e rules (if (= k 1) (head_met hs1 f) hs1) r only)  ; a kept call: no redex, whatever its arguments
+                 (match eqns
+                   (nil
+                     (if (if (= (len only) 0) (if red (is_proposition e s) true) false)  ; asked in this order: the type of a constructor's application is never inferred
+                       (find_redex e rules hs1 r only)
+                       (match (alt_step e (kept_names hs1) s)
+                         ((Prod.mk e0 (some t)) (Prod.mk hs1 (FoundOk e0 (Redex s t EvConv false))))
+                         ((Prod.mk e0 none)
+                          (if (bool_and (= (len only) 0) (open_to_run hs1 s))
+                            (find_redex e0 rules hs1 r only)  ; the goal's context is bound in the closed target
+                            (match (whnf_progress e0 hs1 s)
+                              ((Prod.mk hs2 (Prod.mk e1 (some t)))
+                               (Prod.mk hs2 (FoundOk e1 (Redex s t EvConv false))))
+                              ((Prod.mk hs2 (Prod.mk e1 none))
+                               (match (delta_once e1 s)
+                                 ((Prod.mk e2 (some t))
+                                  (Prod.mk hs2 (FoundOk e2 (Redex s t EvConv false))))
+                                 ((Prod.mk e2 none) (find_redex e2 rules hs2 r only))))))))))
+                   (_
+                     (if (rules_hold rules f) (find_redex e rules hs1 r only)  ; a function a rule's left side applies: its equations wait while anything else steps (reduce_loop)
+                     (match
+                       (try_equations e s eqns (bool_not (= (len only) 0))
+                         (holds_any (kept_names hs1) s))
+                       ((FoundOk e1 rd) (Prod.mk hs1 (FoundOk e1 rd)))
+                       (_ (find_redex e rules hs1 r only))))))))))))
            (_
              (if (= (len only) 0)
                (match (whnf_progress e hs s)
@@ -2554,13 +2625,13 @@
 ;; Decidable.rec, which whnf_progress reads as no progress — so the alternatives (an `ite`'s
 ;; branches, a matcher's rows) are masked by locals while K picks one, and the one picked is
 ;; applied to the fields K gave it (and to the equation a measured function's matcher carries)
-(fn alt_step ((e El) (s Expr)) (Prod El (Option Expr))
+(fn alt_step ((e El) (ks (List Name)) (s Expr)) (Prod El (Option Expr))
   (match (get_app_fn s)
     ((Const _ f _)
      (match (alt_positions e f (len (get_app_args s)))
        (nil (Prod.mk e none))
        (ps
-         (if (alt_open_discriminant e f (get_app_args s)) (Prod.mk e none)  ; no K whnf at an open, non-constructor discriminant: its equations first
+         (if (alt_open_discriminant e f (get_app_args s) ks) (Prod.mk e none)  ; no K whnf at an open, non-constructor discriminant: its equations first
          (match (alt_mask e (get_app_args s) ps 0 nil nil)
            ((Prod.mk e1 (Prod.mk margs masks))
             (match (w_whnf_r (el_w e1) (mk_app_n (get_app_fn s) margs))
@@ -2575,15 +2646,16 @@
               ((Prod.mk w1 _) (Prod.mk (el_set_w e1 w1) none)))))))))
     (_ (Prod.mk e none))))
 ;; the case step's discriminant — the instance of an `ite`/`dite`, the scrutinee of a matcher —
-;; when it is open and not constructor-headed: K's whnf there is no
+;; when it is open (a kept call in it makes it so) and not constructor-headed: K's whnf there is no
 ;; computation but a search through the definitions the discriminant is built from (a
 ;; well-founded `fn` over an open list to its accessibility proofs: ten minutes and the box's
 ;; memory on `len`'s tag test), so the step waits; the discriminant reduces by its equations as
 ;; a subterm, and the case step fires once a constructor stands at its head
-(fn alt_open_discriminant ((e El) (f Name) (args (List Expr))) Bool
+(fn alt_open_discriminant ((e El) (f Name) (args (List Expr)) (ks (List Name))) Bool
   (match (nth args (alt_discriminant_index e f))
     ((some d)
-     (bool_and (bool_or (has_fvar d) (has_loose_bvars d)) (bool_not (ctor_shaped (el_env e) d))))
+     (bool_and (bool_or (has_fvar d) (bool_or (has_loose_bvars d) (holds_any ks d)))
+       (bool_not (ctor_shaped (el_env e) d))))
     (none false)))
 (fn alt_discriminant_index ((e El) (f Name)) Int
   (if (bool_or (name_eq f (n1 (sym "ite"))) (name_eq f (n1 (sym "dite")))) 2
@@ -2786,9 +2858,18 @@
               (nil (Prod.mk hs0 (FoundNone e0)))
               (_ (find_redex e0 nil hs0 (rev (tc_subterms (side_of target side) nil)) nil)))))  ; no rule and nothing beside what the rules hold: that steps
          (match again
-           ((Prod.mk _ (FoundNone e1))  ; a normalization: nothing to do is done — and every rule given was used
+           ((Prod.mk hs2 (FoundNone e1))  ; a normalization: nothing to do is done — and every rule given was used, every kept name held a call
             (match (rule_unused rules fired)
-              (none (loop_end e1 ctx cur start target legs))
+              (none
+                (match (kept_unmet hs2)
+                  (none (loop_end e1 ctx cur start target legs))
+                  ((some f)
+                   (LoopErr (sym "reduce_keep_unused")
+                     (append (show_name f)
+                       (append (utf8 " is kept and no call of it stood in the run, in ")
+                         (append (show_nat (- 2000 budget))
+                           (utf8
+                             " rewrites: (keep NAME…) names the functions whose calls the run met and left as written"))))))))
               ((some (Rule i _ _ _ sh _ _))
                (LoopErr (sym "reduce_rule_unused")
                  (append (utf8 "rule ")
@@ -2889,19 +2970,30 @@
     (none target))))
 ;; each loop starts on a goal of its own, so the step's goal is assigned like any other
 (fn step_reduce
-  ((e El) (ctx (List Expr)) (target0 Expr) (side Symbol) (rules0 (List (Prod Bool SExpr))))
+  ((e El)
+   (ctx (List Expr))
+   (target0 Expr)
+   (side Symbol)
+   (keep (List Name))
+   (rules0 (List (Prod Bool SExpr))))
   TStep
   (let ((target (el_zonk e target0)))
-    (match (rules_prepare e ctx rules0 1 nil)
-      ((RulesErr x m) (StepErr x m))
-      ((RulesOk rules)
-       (match (tac_goal e ctx target)
-         ((Made e1 g0 occ0)
-          (match (tac_close e1 ctx occ0)
-            ((Prod.mk e2 filling0)
-             (match (reduce_loop e2 ctx g0 target target nil nil rules nil side 2000 0)
-               ((LoopErr x m) (StepErr x m))
-               ((LoopOk e3 g) (StepOk e3 filling0 nil nil (some g))))))))))))
+    (match (resolve_consts e keep nil)
+      ((Prod.mk _ (Prod.mk none m)) (StepErr (sym "unknown_constant") m))
+      ((Prod.mk e0 (Prod.mk (some ks) _))
+       (match (rules_prepare e0 ctx rules0 1 nil)
+         ((RulesErr x m) (StepErr x m))
+         ((RulesOk rules)
+          (match (tac_goal e0 ctx target)
+            ((Made e1 g0 occ0)
+             (match (tac_close e1 ctx occ0)
+               ((Prod.mk e2 filling0)
+                (match
+                  (reduce_loop e2 ctx g0 target target nil (heads_kept e2 ks nil) rules nil side
+                    2000
+                    0)
+                  ((LoopErr x m) (StepErr x m))
+                  ((LoopOk e3 g) (StepOk e3 filling0 nil nil (some g))))))))))))))
 ;; (unfold NAME…): the names resolved as constants of the scope
 (fn step_unfold ((e El) (ctx (List Expr)) (target0 Expr) (ns (List Name))) TStep
   (let ((target (el_zonk e target0)))
