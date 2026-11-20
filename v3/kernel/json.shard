@@ -300,6 +300,684 @@
     (rw List.length_cons)
     (arith)))
 
+;; ---- what a parse leaves ----------------------------------------------------
+;; A parsed value leaves less input than it was given (`json_parse_lt`, the last of these):
+;; what a reader descends by that parses record after record off one input (k/import.shard
+;; `process_lines`). Each proof follows its function branch by branch with the call standing in
+;; the target, so a result is measured by one number: `jres_room`, the length of what was left
+;; and one more, 0 for an error. "The room is at most the input's length" then says that the
+;; rest is shorter, and holds of an error too.
+(def jres_room ((r JRes)) Nat
+  (match r
+    ((JRes j rest) (+ (List.length rest) 1))
+    (JErr 0)))
+(theorem jres_room_res ((j Json) (rest (List Int)))
+  (= (jres_room (JRes j rest)) (+ (List.length rest) 1))
+  (by rfl))
+;; the comparison a room states, for a result known by its equation
+(theorem jres_room_at
+  ((res JRes)
+   (v Json)
+   (rest (List Int))
+   (n Nat)
+   (h (= res (JRes v rest)))
+   (g (<= (jres_room res) n)))
+  (<= (+ (List.length rest) 1) n)
+  (by (have g2 (<= (jres_room (JRes v rest)) n) (rw (<- h)) (exact g)) (exact g2)))
+;; blanks skipped: no longer, and where a byte is left the tail is shorter
+(theorem skip_ws_le ((bs (List Int))) (<= (List.length (skip_ws bs)) (List.length bs))
+  (by
+    (induction bs
+      ((nil () (rw skip_ws.eq_1) (arith))
+       (cons (c r ih) (rw skip_ws.eq_2)
+         (cases (is_ws c)
+           ((false () (reduce) (arith)) (true () (reduce) (rw List.length_cons) (arith)))))))))
+(theorem skip_ws_cons ((bs (List Int)) (c Int) (r (List Int)) (h (= (skip_ws bs) (cons c r))))
+  (<= (+ (List.length r) 1) (List.length bs))
+  (by
+    (have g (<= (List.length (cons c r)) (List.length bs)) (rw (<- h)) (exact (skip_ws_le bs)))
+    (have e (= (List.length (cons c r)) (+ (List.length r) 1)) (rw List.length_cons) rfl)
+    (arith)))
+;; a number leaves no more than it was given — it may read nothing —, and less where its first
+;; byte is one a value takes for a number's (`num_start`: such a byte is one the number reads)
+(theorem parse_number_room ((bs (List Int)))
+  (forall ((acc (List Int))) (<= (jres_room (parse_number bs acc)) (+ (List.length bs) 1)))
+  (by
+    (induction bs
+      ((nil () (intro acc) (rw parse_number.eq_1) (rw jres_room_res) (arith))
+       (cons (c r ih) (intro acc) (rw parse_number.eq_2)
+         (cases
+           (bool_or (is_digit c)
+             (bool_or (= c 45) (bool_or (= c 46) (bool_or (= c 101) (bool_or (= c 69) (= c 43))))))
+           ((false () (reduce) (rw jres_room_res) (arith))
+            (true () (reduce) (rw List.length_cons) (arith (ih (cons c acc)))))))))))
+(theorem num_start ((c Int))
+  (-> (= (bool_or (is_digit c) (= c 45)) true)
+    (=
+      (bool_or (is_digit c)
+        (bool_or (= c 45) (bool_or (= c 46) (bool_or (= c 101) (bool_or (= c 69) (= c 43))))))
+      true))
+  (by
+    (cases (is_digit c)
+      ((false ()
+         (cases (Int.decEq c 45)
+           ((isFalse (hn) (intro h) (exact (absurd h (ne_true_of_eq_false (Eq.refl false)))))
+            (isTrue (hc) (intro h) rfl))))
+       (true () (intro h) rfl)))))
+;; a string leaves less than it was given: its closing quote at least. `pstr_room` is
+;; `jres_room` for its result
+(def pstr_room ((o (Option (Prod (List Int) (List Int))))) Nat
+  (match o
+    (none 0)
+    ((some (Prod.mk s rest)) (+ (List.length rest) 1))))
+(theorem pstr_room_some ((s (List Int)) (rest (List Int)))
+  (= (pstr_room (some (Prod.mk s rest))) (+ (List.length rest) 1))
+  (by rfl))
+(theorem pstr_room_at
+  ((o (Option (Prod (List Int) (List Int))))
+   (s (List Int))
+   (rest (List Int))
+   (n Nat)
+   (h (= o (some (Prod.mk s rest))))
+   (g (<= (pstr_room o) n)))
+  (<= (+ (List.length rest) 1) n)
+  (by (have g2 (<= (pstr_room (some (Prod.mk s rest))) n) (rw (<- h)) (exact g)) (exact g2)))
+(theorem parse_string_room ((bs (List Int)))
+  (forall ((acc (List Int))) (<= (pstr_room (parse_string bs acc)) (List.length bs)))
+  (by
+    (wf bs (List.length bs) ih (intro acc)
+      (cases bs
+        ((nil () (rw parse_string.eq_1) (reduce) (arith))
+         (cons (c r) (rw parse_string.eq_2)
+           (have l1 (< (List.length r) (List.length (cons c r))) (rw List.length_cons) (arith))
+           (cases (Int.decEq c 34)
+             ((isTrue (hq) (reduce) (rw pstr_room_some) (rw List.length_cons) (arith))
+              (isFalse (hq) (reduce)
+                (cases (Int.decEq c 92)
+                  ((isFalse (hb) (reduce) (arith (ih r l1 (cons c acc))))
+                   (isTrue (hb) (reduce)
+                     (cases r
+                       ((nil () (reduce) (arith))
+                        (cons (e r2) (reduce)
+                          (cases (Int.decEq e 117)
+                            ((isFalse (hu) (reduce)
+                               (have l2 (< (List.length r2) (List.length (cons c (cons e r2))))
+                                 (simp_only List.length_cons)
+                                 (arith))
+                               (arith (ih r2 l2 (cons (unescape e) acc))))
+                             (isTrue (hu) (reduce)
+                               (cases (parse_hex4 r2) hp
+                                 ((none () (reduce) (arith))
+                                  (some (p)
+                                    (cases p
+                                      ((mk (cp r3) (reduce)
+                                         (have g (<= (List.length r3) (List.length r2))
+                                           (exact (parse_hex4_le r2 cp r3 hp)))
+                                         (cases (bool_and (<= 55296 cp) (<= cp 56319))
+                                           ((false () (reduce)
+                                              (have l3
+                                                (< (List.length r3)
+                                                  (List.length (cons c (cons e r2))))
+                                                (simp_only List.length_cons)
+                                                (arith))
+                                              (arith (ih r3 l3 (rev_onto (utf8_encode cp) acc))))
+                                            (true () (reduce)
+                                              (cases r3
+                                                ((nil () (reduce) (arith))
+                                                 (cons (b1 t)
+                                                   (cases t
+                                                     ((nil () (reduce) (arith))
+                                                      (cons (b2 r4) (reduce)
+                                                        (cases (bool_and (= b1 92) (= b2 117))
+                                                          ((false () (reduce) (arith))
+                                                           (true () (reduce)
+                                                             (cases (parse_hex4 r4) hq2
+                                                               ((none () (reduce) (arith))
+                                                                (some (q)
+                                                                  (cases q
+                                                                    ((mk (lo r5) (reduce)
+                                                                       (have g2
+                                                                         (<= (List.length r5)
+                                                                           (List.length r4))
+                                                                         (exact
+                                                                           (parse_hex4_le r4 lo r5
+                                                                             hq2)))
+                                                                       (have g3
+                                                                         (=
+                                                                           (List.length
+                                                                             (cons b1 (cons b2 r4)))
+                                                                           (+ (+ (List.length r4) 1)
+                                                                             1))
+                                                                         (simp_only List.length_cons)
+                                                                         rfl)
+                                                                       (have l4
+                                                                         (< (List.length r5)
+                                                                           (List.length
+                                                                             (cons c (cons e r2))))
+                                                                         (simp_only List.length_cons)
+                                                                         (arith))
+                                                                       (arith
+                                                                         (ih r5 l4
+                                                                           (rev_onto
+                                                                             (utf8_encode
+                                                                               (+ 65536
+                                                                                 (+
+                                                                                   (* (- cp 55296)
+                                                                                     1024)
+                                                                                   (- lo 56320))))
+                                                                             acc)))))))))))))))))))))))))))))))))))))))))))))
+;; the three functions, one step of the fuel each: a value by what an array and an object leave
+;; at the fuel less a byte; an array and an object by what a value leaves at the fuel they have
+;; (which stands as a variable, `hf` its shape: written out, `reduce` would unfold the call of
+;; the value by its equation) and by themselves at the fuel less a byte
+(theorem parse_value_step
+  ((x Int)
+   (fl (List Int))
+   (ha
+     (forall ((bs0 (List Int)) (acc (List Json)))
+       (<= (jres_room (parse_array bs0 acc fl)) (List.length bs0))))
+   (ho
+     (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+       (<= (jres_room (parse_object bs0 acc fl)) (List.length bs0)))))
+  (forall ((bs0 (List Int))) (<= (jres_room (parse_value bs0 (cons x fl))) (List.length bs0)))
+  (by
+    (intro bs0)
+    (rw parse_value.eq_2)
+    (cases (skip_ws bs0) hs
+      ((nil () (reduce) (arith))
+       (cons (c r) (reduce)
+         (have g0 (<= (+ (List.length r) 1) (List.length bs0)) (exact (skip_ws_cons bs0 c r hs)))
+         (have e0 (= (List.length (cons c r)) (+ (List.length r) 1)) (rw List.length_cons) rfl)
+         (cases (Int.decEq c 123)
+           ((isTrue (h1) (reduce) (arith (ho r nil)))
+            (isFalse (h1) (reduce)
+              (cases (Int.decEq c 91)
+                ((isTrue (h2) (reduce) (arith (ha r nil)))
+                 (isFalse (h2) (reduce)
+                   (cases (Int.decEq c 34)
+                     ((isTrue (h3) (reduce)
+                        (cases (parse_string r nil) hp
+                          ((none () (reduce) (arith))
+                           (some (p)
+                             (cases p
+                               ((mk (s rest) (reduce) (rw jres_room_res)
+                                  (arith
+                                    (pstr_room_at (parse_string r nil) s rest (List.length r) hp
+                                      (parse_string_room r nil))))))))))
+                      (isFalse (h3) (reduce)
+                        (cases (bool_or (is_digit c) (= c 45)) hd
+                          ((true () (reduce)
+                             (cases
+                               (bool_or (is_digit c)
+                                 (bool_or (= c 45)
+                                   (bool_or (= c 46) (bool_or (= c 101) (bool_or (= c 69) (= c 43))))))
+                               hb
+                               ((false () (exact (absurd (num_start c hd) (ne_true_of_eq_false hb))))
+                                (true () (reduce) (arith (parse_number_room r (cons c nil)))))))
+                           (false () (reduce) (rw (<- starts_with_lit.eq_3))
+                             (cases (starts_with_lit (list 116 114 117 101) (cons c r)) hl
+                               ((some (rest) (reduce) (rw jres_room_res)
+                                  (arith
+                                    (starts_with_lit_lt 116 (list 114 117 101) (cons c r) rest hl)))
+                                (none () (reduce) (rw (<- starts_with_lit.eq_3))
+                                  (cases (starts_with_lit (list 102 97 108 115 101) (cons c r)) hl2
+                                    ((some (rest) (reduce) (rw jres_room_res)
+                                       (arith
+                                         (starts_with_lit_lt 102 (list 97 108 115 101) (cons c r)
+                                           rest
+                                           hl2)))
+                                     (none () (reduce) (rw (<- starts_with_lit.eq_3))
+                                       (cases (starts_with_lit (list 110 117 108 108) (cons c r))
+                                         hl3
+                                         ((some (rest) (reduce) (rw jres_room_res)
+                                            (arith
+                                              (starts_with_lit_lt 110 (list 117 108 108) (cons c r)
+                                                rest
+                                                hl3)))
+                                          (none () (reduce) (arith)))))))))))))))))))))))))))
+(theorem parse_array_step
+  ((fuel (List Int))
+   (x Int)
+   (fl (List Int))
+   (hf (= fuel (cons x fl)))
+   (hv (forall ((bs0 (List Int))) (<= (jres_room (parse_value bs0 fuel)) (List.length bs0))))
+   (ha
+     (forall ((bs0 (List Int)) (acc (List Json)))
+       (<= (jres_room (parse_array bs0 acc fl)) (List.length bs0)))))
+  (forall ((bs0 (List Int)) (acc (List Json)))
+    (<= (jres_room (parse_array bs0 acc fuel)) (List.length bs0)))
+  (by
+    (intro bs0 acc)
+    (rw hf)
+    (rw parse_array.eq_2)
+    (rw (<- hf))
+    (reduce)
+    (cases (starts_with_lit (list 93) (skip_ws bs0)) hl
+      ((some (r) (reduce) (rw jres_room_res)
+         (arith (starts_with_lit_lt 93 nil (skip_ws bs0) r hl) (skip_ws_le bs0)))
+       (none () (reduce)
+         (cases (parse_value (skip_ws bs0) fuel) hpv
+           ((JErr () (reduce) (arith))
+            (JRes (v rest) (reduce)
+              (have g1 (<= (+ (List.length rest) 1) (List.length (skip_ws bs0)))
+                (exact
+                  (jres_room_at (parse_value (skip_ws bs0) fuel) v rest (List.length (skip_ws bs0))
+                    hpv
+                    (hv (skip_ws bs0)))))
+              (cases (skip_ws rest) hs2
+                ((nil () (reduce) (arith))
+                 (cons (c2 r2) (reduce)
+                   (have g2 (<= (+ (List.length r2) 1) (List.length rest))
+                     (exact (skip_ws_cons rest c2 r2 hs2)))
+                   (cases (Int.decEq c2 44)
+                     ((isTrue (h1) (reduce) (arith (ha r2 (cons v acc)) (skip_ws_le bs0)))
+                      (isFalse (h1) (reduce)
+                        (cases (Int.decEq c2 93)
+                          ((isTrue (h2) (reduce) (rw jres_room_res) (arith (skip_ws_le bs0)))
+                           (isFalse (h2) (reduce) (arith))))))))))))))))))
+(theorem parse_object_step
+  ((fuel (List Int))
+   (x Int)
+   (fl (List Int))
+   (hf (= fuel (cons x fl)))
+   (hv (forall ((bs0 (List Int))) (<= (jres_room (parse_value bs0 fuel)) (List.length bs0))))
+   (ho
+     (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+       (<= (jres_room (parse_object bs0 acc fl)) (List.length bs0)))))
+  (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+    (<= (jres_room (parse_object bs0 acc fuel)) (List.length bs0)))
+  (by
+    (intro bs0 acc)
+    (rw hf)
+    (rw parse_object.eq_2)
+    (rw (<- hf))
+    (cases (skip_ws bs0) hs
+      ((nil () (reduce) (arith))
+       (cons (c r) (reduce)
+         (have g0 (<= (+ (List.length r) 1) (List.length bs0)) (exact (skip_ws_cons bs0 c r hs)))
+         (cases (Int.decEq c 125)
+           ((isTrue (h1) (reduce) (rw jres_room_res) (arith))
+            (isFalse (h1) (reduce)
+              (cases (Int.decEq c 34)
+                ((isFalse (h2) (reduce) (arith))
+                 (isTrue (h2) (reduce)
+                   (cases (parse_string r nil) hp
+                     ((none () (reduce) (arith))
+                      (some (p)
+                        (cases p
+                          ((mk (key rest) (reduce)
+                             (have g1 (<= (+ (List.length rest) 1) (List.length r))
+                               (exact
+                                 (pstr_room_at (parse_string r nil) key rest (List.length r) hp
+                                   (parse_string_room r nil))))
+                             (cases (skip_ws rest) hs2
+                               ((nil () (reduce) (arith))
+                                (cons (c2 r2) (reduce)
+                                  (have g2 (<= (+ (List.length r2) 1) (List.length rest))
+                                    (exact (skip_ws_cons rest c2 r2 hs2)))
+                                  (cases (Int.decEq c2 58)
+                                    ((isFalse (h3) (reduce) (arith))
+                                     (isTrue (h3) (reduce)
+                                       (cases (parse_value r2 fuel) hpv
+                                         ((JErr () (reduce) (arith))
+                                          (JRes (v rest2) (reduce)
+                                            (have g3 (<= (+ (List.length rest2) 1) (List.length r2))
+                                              (exact
+                                                (jres_room_at (parse_value r2 fuel) v rest2
+                                                  (List.length r2)
+                                                  hpv
+                                                  (hv r2))))
+                                            (cases (skip_ws rest2) hs3
+                                              ((nil () (reduce) (arith))
+                                               (cons (c3 r3) (reduce)
+                                                 (have g4
+                                                   (<= (+ (List.length r3) 1) (List.length rest2))
+                                                   (exact (skip_ws_cons rest2 c3 r3 hs3)))
+                                                 (cases (Int.decEq c3 44)
+                                                   ((isTrue (h4) (reduce)
+                                                      (arith (ho r3 (cons (Prod.mk key v) acc))))
+                                                    (isFalse (h4) (reduce)
+                                                      (cases (Int.decEq c3 125)
+                                                        ((isTrue (h5) (reduce) (rw jres_room_res)
+                                                           (arith))
+                                                         (isFalse (h5) (reduce) (arith))))))))))))))))))))))))))))))))))))
+;; a value, an array and an object each leave less than they were given, whatever the fuel: by
+;; induction on the fuel, the three together
+(theorem parse_room ((fuel (List Int)))
+  (And (forall ((bs0 (List Int))) (<= (jres_room (parse_value bs0 fuel)) (List.length bs0)))
+    (And
+      (forall ((bs0 (List Int)) (acc (List Json)))
+        (<= (jres_room (parse_array bs0 acc fuel)) (List.length bs0)))
+      (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+        (<= (jres_room (parse_object bs0 acc fuel)) (List.length bs0)))))
+  (by
+    (induction fuel
+      ((nil ()
+         (apply And.intro ((intro bs0) (rw parse_value.eq_1) (reduce) (arith))
+           ((apply And.intro ((intro bs0 acc) (rw parse_array.eq_1) (reduce) (arith))
+              ((intro bs0 acc) (rw parse_object.eq_1) (reduce) (arith))))))
+       (cons (x fl ih)
+         (have hv
+           (forall ((bs0 (List Int)))
+             (<= (jres_room (parse_value bs0 (cons x fl))) (List.length bs0)))
+           (exact (parse_value_step x fl (And.left (And.right ih)) (And.right (And.right ih)))))
+         (apply And.intro (exact hv)
+           (apply And.intro
+             (exact
+               (parse_array_step (cons x fl) x fl (Eq.refl (cons x fl)) hv (And.left (And.right ih))))
+             (exact
+               (parse_object_step (cons x fl) x fl (Eq.refl (cons x fl)) hv
+                 (And.right (And.right ih)))))))))))
+(theorem parse_value_room ((fuel (List Int)) (bs0 (List Int)))
+  (<= (jres_room (parse_value bs0 fuel)) (List.length bs0))
+  (by
+    (have g (forall ((bs (List Int))) (<= (jres_room (parse_value bs fuel)) (List.length bs)))
+      (exact (And.left (parse_room fuel))))
+    (exact (g bs0))))
+;; a parsed value leaves less input than it was given: what a reader that parses record after
+;; record off one input descends by
+(theorem json_parse_lt
+  ((bs (List Int)) (j Json) (rest (List Int)) (h (= (json_parse bs) (JRes j rest))))
+  (< (List.length rest) (List.length bs))
+  (by
+    (have h2 (= (parse_value bs bs) (JRes j rest)) (exact h))
+    (arith (jres_room_at (parse_value bs bs) j rest (List.length bs) h2 (parse_value_room bs bs)))))
+
+;; ---- the fuel ---------------------------------------------------------------
+;; The parse of an input is its parse at every fuel as long as the input or longer
+;; (`json_parse_fuel`, the last of these): the fuel `json_parse` hands down is never what an
+;; answer turns on. Two fuels are compared with both calls in the target, unfolded side by
+;; side: where the two bodies agree `rfl` closes the branch, and where they call on at the fuel
+;; less a byte, what they call on is short enough for both by the facts above.
+;; an input no longer than the empty fuel is empty, and of the empty input every fuel makes an
+;; error
+(theorem nil_of_len ((bs (List Int)) (h (<= (List.length bs) (List.length (@nil Int))))) (= bs nil)
+  (by
+    (cases bs
+      ((nil () rfl)
+       (cons (c r)
+         (have e1 (= (List.length (cons c r)) (+ (List.length r) 1)) (rw List.length_cons) rfl)
+         (have e2 (= (List.length (@nil Int)) 0) (rw List.length_nil) rfl)
+         (have ff False (arith))
+         (exact (False.elim ff)))))))
+(theorem parse_value_nil ((g (List Int))) (= (parse_value nil g) JErr)
+  (by
+    (cases g ((nil () (rw parse_value.eq_1) rfl) (cons (y gl) (rw parse_value.eq_2) (reduce) rfl)))))
+(theorem parse_array_nil ((acc (List Json)) (g (List Int))) (= (parse_array nil acc g) JErr)
+  (by
+    (cases g ((nil () (rw parse_array.eq_1) rfl) (cons (y gl) (rw parse_array.eq_2) (reduce) rfl)))))
+(theorem parse_object_nil ((acc (List (Prod (List Int) Json))) (g (List Int)))
+  (= (parse_object nil acc g) JErr)
+  (by
+    (cases g ((nil () (rw parse_object.eq_1) rfl) (cons (y gl) (rw parse_object.eq_2) (reduce) rfl)))))
+;; the three functions, one step of both fuels each, as the steps above
+(theorem fuel_step_value
+  ((x Int)
+   (fl (List Int))
+   (y Int)
+   (gl (List Int))
+   (ha
+     (forall ((bs0 (List Int)) (acc (List Json)))
+       (-> (<= (List.length bs0) (List.length fl))
+         (-> (<= (List.length bs0) (List.length gl))
+           (= (parse_array bs0 acc fl) (parse_array bs0 acc gl))))))
+   (ho
+     (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+       (-> (<= (List.length bs0) (List.length fl))
+         (-> (<= (List.length bs0) (List.length gl))
+           (= (parse_object bs0 acc fl) (parse_object bs0 acc gl)))))))
+  (forall ((bs0 (List Int)))
+    (-> (<= (List.length bs0) (List.length (cons x fl)))
+      (-> (<= (List.length bs0) (List.length (cons y gl)))
+        (= (parse_value bs0 (cons x fl)) (parse_value bs0 (cons y gl))))))
+  (by
+    (intro bs0 h1 h2)
+    (rw parse_value.eq_2)
+    (rw parse_value.eq_2)
+    (have e1 (= (List.length (cons x fl)) (+ (List.length fl) 1)) (rw List.length_cons) rfl)
+    (have e2 (= (List.length (cons y gl)) (+ (List.length gl) 1)) (rw List.length_cons) rfl)
+    (cases (skip_ws bs0) hs
+      ((nil () (reduce) rfl)
+       (cons (c r) (reduce)
+         (have g0 (<= (+ (List.length r) 1) (List.length bs0)) (exact (skip_ws_cons bs0 c r hs)))
+         (have l1 (<= (List.length r) (List.length fl)) (arith))
+         (have l2 (<= (List.length r) (List.length gl)) (arith))
+         (cases (Int.decEq c 123)
+           ((isTrue (k1) (reduce) (exact (ho r nil l1 l2)))
+            (isFalse (k1) (reduce)
+              (cases (Int.decEq c 91)
+                ((isTrue (k2) (reduce) (exact (ha r nil l1 l2))) (isFalse (k2) (reduce) rfl)))))))))))
+(theorem fuel_step_array
+  ((f (List Int))
+   (x Int)
+   (fl (List Int))
+   (hf (= f (cons x fl)))
+   (g (List Int))
+   (y Int)
+   (gl (List Int))
+   (hg (= g (cons y gl)))
+   (hv
+     (forall ((bs0 (List Int)))
+       (-> (<= (List.length bs0) (List.length f))
+         (-> (<= (List.length bs0) (List.length g)) (= (parse_value bs0 f) (parse_value bs0 g))))))
+   (ha
+     (forall ((bs0 (List Int)) (acc (List Json)))
+       (-> (<= (List.length bs0) (List.length fl))
+         (-> (<= (List.length bs0) (List.length gl))
+           (= (parse_array bs0 acc fl) (parse_array bs0 acc gl)))))))
+  (forall ((bs0 (List Int)) (acc (List Json)))
+    (-> (<= (List.length bs0) (List.length f))
+      (-> (<= (List.length bs0) (List.length g)) (= (parse_array bs0 acc f) (parse_array bs0 acc g)))))
+  (by
+    (intro bs0 acc h1 h2)
+    (rw hf)
+    (rw parse_array.eq_2)
+    (rw (<- hf))
+    (rw hg)
+    (rw parse_array.eq_2)
+    (rw (<- hg))
+    (have ef (= (List.length f) (+ (List.length fl) 1)) (rw hf) (rw List.length_cons) rfl)
+    (have eg (= (List.length g) (+ (List.length gl) 1)) (rw hg) (rw List.length_cons) rfl)
+    (have s0 (<= (List.length (skip_ws bs0)) (List.length bs0)) (exact (skip_ws_le bs0)))
+    (have l1 (<= (List.length (skip_ws bs0)) (List.length f)) (arith))
+    (have l2 (<= (List.length (skip_ws bs0)) (List.length g)) (arith))
+    (reduce)
+    (cases (starts_with_lit (list 93) (skip_ws bs0)) hl
+      ((some (r) (reduce) rfl)
+       (none () (reduce) (rw (hv (skip_ws bs0) l1 l2))
+         (cases (parse_value (skip_ws bs0) g) hpv
+           ((JErr () (reduce) rfl)
+            (JRes (v rest) (reduce)
+              (have g1 (<= (+ (List.length rest) 1) (List.length (skip_ws bs0)))
+                (exact
+                  (jres_room_at (parse_value (skip_ws bs0) g) v rest (List.length (skip_ws bs0)) hpv
+                    (parse_value_room g (skip_ws bs0)))))
+              (cases (skip_ws rest) hs2
+                ((nil () (reduce) rfl)
+                 (cons (c2 r2) (reduce)
+                   (have g2 (<= (+ (List.length r2) 1) (List.length rest))
+                     (exact (skip_ws_cons rest c2 r2 hs2)))
+                   (have m1 (<= (List.length r2) (List.length fl)) (arith))
+                   (have m2 (<= (List.length r2) (List.length gl)) (arith))
+                   (cases (Int.decEq c2 44)
+                     ((isTrue (k1) (reduce) (exact (ha r2 (cons v acc) m1 m2)))
+                      (isFalse (k1) (reduce) rfl))))))))))))))
+(theorem fuel_step_object
+  ((f (List Int))
+   (x Int)
+   (fl (List Int))
+   (hf (= f (cons x fl)))
+   (g (List Int))
+   (y Int)
+   (gl (List Int))
+   (hg (= g (cons y gl)))
+   (hv
+     (forall ((bs0 (List Int)))
+       (-> (<= (List.length bs0) (List.length f))
+         (-> (<= (List.length bs0) (List.length g)) (= (parse_value bs0 f) (parse_value bs0 g))))))
+   (ho
+     (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+       (-> (<= (List.length bs0) (List.length fl))
+         (-> (<= (List.length bs0) (List.length gl))
+           (= (parse_object bs0 acc fl) (parse_object bs0 acc gl)))))))
+  (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+    (-> (<= (List.length bs0) (List.length f))
+      (-> (<= (List.length bs0) (List.length g))
+        (= (parse_object bs0 acc f) (parse_object bs0 acc g)))))
+  (by
+    (intro bs0 acc h1 h2)
+    (rw hf)
+    (rw parse_object.eq_2)
+    (rw (<- hf))
+    (rw hg)
+    (rw parse_object.eq_2)
+    (rw (<- hg))
+    (have ef (= (List.length f) (+ (List.length fl) 1)) (rw hf) (rw List.length_cons) rfl)
+    (have eg (= (List.length g) (+ (List.length gl) 1)) (rw hg) (rw List.length_cons) rfl)
+    (cases (skip_ws bs0) hs
+      ((nil () (reduce) rfl)
+       (cons (c r) (reduce)
+         (have g0 (<= (+ (List.length r) 1) (List.length bs0)) (exact (skip_ws_cons bs0 c r hs)))
+         (cases (Int.decEq c 125)
+           ((isTrue (k1) (reduce) rfl)
+            (isFalse (k1) (reduce)
+              (cases (Int.decEq c 34)
+                ((isFalse (k2) (reduce) rfl)
+                 (isTrue (k2) (reduce)
+                   (cases (parse_string r nil) hp
+                     ((none () (reduce) rfl)
+                      (some (p)
+                        (cases p
+                          ((mk (key rest) (reduce)
+                             (have g1 (<= (+ (List.length rest) 1) (List.length r))
+                               (exact
+                                 (pstr_room_at (parse_string r nil) key rest (List.length r) hp
+                                   (parse_string_room r nil))))
+                             (cases (skip_ws rest) hs2
+                               ((nil () (reduce) rfl)
+                                (cons (c2 r2) (reduce)
+                                  (have g2 (<= (+ (List.length r2) 1) (List.length rest))
+                                    (exact (skip_ws_cons rest c2 r2 hs2)))
+                                  (cases (Int.decEq c2 58)
+                                    ((isFalse (k3) (reduce) rfl)
+                                     (isTrue (k3) (reduce)
+                                       (have l1 (<= (List.length r2) (List.length f)) (arith))
+                                       (have l2 (<= (List.length r2) (List.length g)) (arith))
+                                       (rw (hv r2 l1 l2))
+                                       (cases (parse_value r2 g) hpv
+                                         ((JErr () (reduce) rfl)
+                                          (JRes (v rest2) (reduce)
+                                            (have g3 (<= (+ (List.length rest2) 1) (List.length r2))
+                                              (exact
+                                                (jres_room_at (parse_value r2 g) v rest2
+                                                  (List.length r2)
+                                                  hpv
+                                                  (parse_value_room g r2))))
+                                            (cases (skip_ws rest2) hs3
+                                              ((nil () (reduce) rfl)
+                                               (cons (c3 r3) (reduce)
+                                                 (have g4
+                                                   (<= (+ (List.length r3) 1) (List.length rest2))
+                                                   (exact (skip_ws_cons rest2 c3 r3 hs3)))
+                                                 (have m1 (<= (List.length r3) (List.length fl))
+                                                   (arith))
+                                                 (have m2 (<= (List.length r3) (List.length gl))
+                                                   (arith))
+                                                 (cases (Int.decEq c3 44)
+                                                   ((isTrue (k4) (reduce)
+                                                      (exact
+                                                        (ho r3 (cons (Prod.mk key v) acc) m1 m2)))
+                                                    (isFalse (k4) (reduce) rfl))))))))))))))))))))))))))))))))
+;; by induction on one fuel, for every other, the three together
+(theorem parse_fuel ((f (List Int)))
+  (forall ((g (List Int)))
+    (And
+      (forall ((bs0 (List Int)))
+        (-> (<= (List.length bs0) (List.length f))
+          (-> (<= (List.length bs0) (List.length g)) (= (parse_value bs0 f) (parse_value bs0 g)))))
+      (And
+        (forall ((bs0 (List Int)) (acc (List Json)))
+          (-> (<= (List.length bs0) (List.length f))
+            (-> (<= (List.length bs0) (List.length g))
+              (= (parse_array bs0 acc f) (parse_array bs0 acc g)))))
+        (forall ((bs0 (List Int)) (acc (List (Prod (List Int) Json))))
+          (-> (<= (List.length bs0) (List.length f))
+            (-> (<= (List.length bs0) (List.length g))
+              (= (parse_object bs0 acc f) (parse_object bs0 acc g))))))))
+  (by
+    (induction f
+      ((nil () (intro g)
+         (apply And.intro
+           ((intro bs0 h1 h2)
+            (rw (nil_of_len bs0 h1))
+            (rw (parse_value_nil (@nil Int)))
+            (rw (parse_value_nil g))
+            rfl)
+           ((apply And.intro
+              ((intro bs0 acc h1 h2)
+               (rw (nil_of_len bs0 h1))
+               (rw (parse_array_nil acc (@nil Int)))
+               (rw (parse_array_nil acc g))
+               rfl)
+              ((intro bs0 acc h1 h2)
+               (rw (nil_of_len bs0 h1))
+               (rw (parse_object_nil acc (@nil Int)))
+               (rw (parse_object_nil acc g))
+               rfl)))))
+       (cons (x fl ih) (intro g)
+         (cases g
+           ((nil ()
+              (apply And.intro
+                ((intro bs0 h1 h2)
+                 (rw (nil_of_len bs0 h2))
+                 (rw (parse_value_nil (cons x fl)))
+                 (rw (parse_value_nil (@nil Int)))
+                 rfl)
+                ((apply And.intro
+                   ((intro bs0 acc h1 h2)
+                    (rw (nil_of_len bs0 h2))
+                    (rw (parse_array_nil acc (cons x fl)))
+                    (rw (parse_array_nil acc (@nil Int)))
+                    rfl)
+                   ((intro bs0 acc h1 h2)
+                    (rw (nil_of_len bs0 h2))
+                    (rw (parse_object_nil acc (cons x fl)))
+                    (rw (parse_object_nil acc (@nil Int)))
+                    rfl)))))
+            (cons (y gl)
+              (have hv
+                (forall ((bs0 (List Int)))
+                  (-> (<= (List.length bs0) (List.length (cons x fl)))
+                    (-> (<= (List.length bs0) (List.length (cons y gl)))
+                      (= (parse_value bs0 (cons x fl)) (parse_value bs0 (cons y gl))))))
+                (exact
+                  (fuel_step_value x fl y gl (And.left (And.right (ih gl)))
+                    (And.right (And.right (ih gl))))))
+              (apply And.intro (exact hv)
+                (apply And.intro
+                  (exact
+                    (fuel_step_array (cons x fl) x fl (Eq.refl (cons x fl)) (cons y gl) y gl
+                      (Eq.refl (cons y gl))
+                      hv
+                      (And.left (And.right (ih gl)))))
+                  (exact
+                    (fuel_step_object (cons x fl) x fl (Eq.refl (cons x fl)) (cons y gl) y gl
+                      (Eq.refl (cons y gl))
+                      hv
+                      (And.right (And.right (ih gl)))))))))))))))
+;; the fuel `json_parse` hands down, the input itself, against any other as long or longer
+(theorem json_parse_fuel ((bs (List Int)) (g (List Int)) (h (<= (List.length bs) (List.length g))))
+  (= (json_parse bs) (parse_value bs g))
+  (by
+    (have v
+      (forall ((bs0 (List Int)))
+        (-> (<= (List.length bs0) (List.length bs))
+          (-> (<= (List.length bs0) (List.length g)) (= (parse_value bs0 bs) (parse_value bs0 g)))))
+      (exact (And.left (parse_fuel bs g))))
+    (have e (= (parse_value bs bs) (parse_value bs g))
+      (exact (v bs (Nat.le_refl (List.length bs)) h)))
+    (exact e)))
+
 ;; ---- accessors --------------------------------------------------------------
 
 (fn jget ((j Json) (key (List Int))) (Option Json)
