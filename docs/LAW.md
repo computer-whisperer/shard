@@ -257,8 +257,11 @@ admitted that the logic does not derive.
     into one particular paradigm. You could verify that all the encode and decode operations
     in your server meet formal requirements, while the overall loop that cannot be proven
     refined as easily can be constructed with other means." What it is for, in §1 there: the
-    owner's words. How a machine is represented (its §4) was left open in the same reply: "I
-    have less confidence that we have the right approach."
+    owner's words. How a machine is represented (its §4) was left open in the same reply — "I
+    have less confidence that we have the right approach" — and settled on the next: the
+    processor's own state and bytes as the floor, notations above it, K reasoning about a
+    model in general and engines running it. "That matches my thinking, rewrite §4 and start
+    there".
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

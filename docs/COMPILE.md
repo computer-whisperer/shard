@@ -2,7 +2,7 @@
 
 Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18). Nothing in the tree
 implements it. It fixes one statement and the two ends of the first chain, and leaves the middle
-open on purpose (§7). §4's account of a machine is under discussion with the owner.
+open on purpose (§7).
 
 ## 1. What it is for
 
@@ -74,22 +74,46 @@ believed, engine runs (`LAW.md` rule 20, for artifacts).
 
 ## 4. Machines
 
-A machine is a library. For each piece of code it supplies a system: the inputs (the outside's
-answers among them, so that a run has at most one outcome), the outcomes with their events, and a
-rule for linking — code that calls a function may be joined with anything the callee is refined
-by. K knows no machine.
+A machine is a library, and K knows none. Its model is a program: one text that theorems are
+stated about, that runs — natively, for tests and for search — and that is held to the real
+machine by running both on the same input. Machine code is data in the language, so the tools that
+search and transform programs reach it as they reach any value.
+
+**The floor is what the processor does.** For x86-64: the registers, the stack pointer and the
+program counter among them, the flags, and a memory of bytes. One step reads the bytes at the
+program counter, decodes one instruction and executes it. A program is bytes, so every program has
+a representation. The model covers the instructions a consumer has needed and no others. Bytes it
+does not decode, and an access outside what is mapped, have no rule: a run that reaches one has no
+outcome, and no fact can be stated of it. A partial model is sound for that reason, and it grows
+by an instruction when a consumer needs one. A machine word is one of Init's bit vectors, so its
+range is its type and Init's lemmas apply to it.
+
+**Notations stand above the floor: several, none universal.** A list of instructions with labels,
+a structured form, low-level shard. Each is tied to the bytes by a step with its fact; for the
+first, an assembler: labels to offsets, instructions to bytes, and the decoding of an encoding
+giving back the instruction. Code that fits no notation is given as bytes, with a proof of its own.
+
+**K reasons about a model in general; engines run it in particular.** The route to a fact about
+machine code is §3's, a pass proven once or a certificate. Stepping the model through one program
+inside K is for a fragment of a few instructions, a system call's stub.
+
+For each piece of code a machine supplies a system (§2): the inputs — the outside's answers among
+them, so that a run has at most one outcome — and the outcomes with their events; and a rule for
+linking: code that calls a function may be joined with anything the callee is refined by.
 
 | machine | its code | today |
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is not yet a definition (`OPEN.md` §2); the loop over host calls is not written |
-| x86-64 under Linux | the bytes of an executable file | not in this tree; the previous generation's model is at a tag (`V2.md` §6) |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
-Between the second and the third stands low-level code: machine words, a memory, loops.
-**A conjecture, to be tested before anything is built on it:** that code is a subset of shard —
-programs over words and a memory value used once — and not a second language. The evaluator, K and
-every tool would then work at every level, and hand-written fast code would be ordinary shard.
+No general form of a machine is designed before a second, different machine exists.
+
+**A conjecture, to be tested before anything is built on it:** low-level code — machine words, a
+memory, loops — is a subset of shard, programs over words and a memory value used once, and not a
+second language. The evaluator, K and every tool would then work at every level, and hand-written
+fast code would be ordinary shard.
 
 ## 5. The first instance: a binary
 
