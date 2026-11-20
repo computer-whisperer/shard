@@ -348,8 +348,8 @@ entries are explained under "Measured" at the end.
   twice (`elab.shard` `el_pat_var`, `list_mismatch`). The owner, of the two ways: "We can
   restate the 21 patterns. Proceed with that when practical".
 - K's walks down a telescope and its three searches are definitions, and with them all of
-  K's directory but the reader of an export's lines, which goes on from the rest the JSON
-  parser returned. Each
+  K's directory but the reader of an export's lines, a definition by a fact about the JSON
+  parser (below). Each
   of the nine walks of the inductive-type checker (`k/inductive.shard`) spends a heartbeat
   at every binder it takes and calls itself only under a test that the count advanced, below
   the limit, since the walk was entered; the heartbeats left are the measure, and each of
@@ -410,7 +410,8 @@ entries are explained under "Measured" at the end.
   the fuel less a byte, and the measure is its length (twice it, and one more on an array
   and an object, which call a value at the fuel they have). The input left is never longer
   than the fuel, so the fuel is empty only where the input is, which is no value, and no
-  answer changes. That is argued and tested, not proven: the parser before and after agree
+  answer changes. That was argued and tested when the fuel was built, and is proven since
+  (the next entry): the parser before and after agree
   on every sequence of up to six of eleven tokens — 1,948,717 inputs, 1,509,842 of them
   refused —, and the Init replay and the Init index are what they were. Not a count —
   twice the input's length, one less at each call, as it was proposed and first built —:
@@ -418,9 +419,24 @@ entries are explained under "Measured" at the end.
   parses each record off the whole rest of a chunk of 20,000 lines. Not the parser left a
   program: the index's builder and verifier and the load on demand waited on it, 21
   functions with its own three. K's reader of an export's lines did not come with them, as the
-  proposal had said it would: it goes on from the rest the parser returned, and waits on a
-  fact about the parser or a fuel of its own (`OPEN.md` §1). The owner, of a fuel or the
+  proposal had said it would: it goes on from the rest the parser returned, and descends by
+  a fact about the parser (the next entry). The owner, of a fuel or the
   parser left a program: "Agreed with giving it fuel -- proceed with A."
+- K's reader of an export's lines is a definition by a fact proven of the JSON parser; not by
+  a fuel of its own. `process_lines` states the length of its input as its measure, and its
+  one obligation is `json_parse_lt`: a parsed value leaves less input than it was given. No
+  body changed. The fact is proven in `json.shard` function by function — the blanks, a
+  number, a string, a literal (`util.shard`), then a value, an array and an object together
+  by induction on the fuel — with each call standing in the target: a result is measured by
+  `jres_room`, the length of what it left and one more, 0 for an error, and a block takes
+  its function's branches by `cases` on each scrutinee and `reduce`. By the same means the
+  fuel's own claim is proven, `json_parse_fuel`: the parse is the same at every fuel as long
+  as the input or longer. Not a fuel in `process_lines`: a body of K's directory changed,
+  with a row never taken, on a fact not proven. The cost chosen: some 700 lines of proof
+  that follow the parser's bodies and are typed again where a body changes. The owner, of
+  the fuel, the proof or the reader left a program: "Let's proceed with proving the fact
+  that the parsed value leaves less input. This seems like a reasonable point to stress
+  test the proof system itself, unless you see a good reason not to."
 
 ## Programs and the back end
 
@@ -645,6 +661,12 @@ entries are explained under "Measured" at the end.
   sums; not reflection and not `omega`: no case split, `≠` no row, `Nat` subtraction an atom.
 - `reduce` lets K's whnf fire on closed subterms only and waits at an open discriminant; not
   everywhere — K turns `a + 8` into eight successors; a forced tag test ran ten minutes, 69 GB.
+- `reduce` opens a `let` by hand where K's whnf ran past it, the body at the value in one
+  step; not the `let` left standing — over a case analysis K's whnf goes on into the row and
+  its `if` on an open condition, a stuck eliminator that reads as no progress, and every
+  case step under the `let` then waited on its variable for good: a function whose body
+  opens with a `let` could be unfolded and taken no further (pin `reduce_let`). Found and
+  built while the JSON parser's facts were typed, which need it; not put to the owner first.
 - ★ A closed example at program size is a test on the binary; not a theorem by `rfl` — K's
   evaluation through a measured definition ends near depth 40 to 200 (see Measured).
 - A long run is split into lemmas; not one theorem — K's budget (10^8 ticks) is per declaration.
@@ -1325,6 +1347,16 @@ measurements; measure again before building on one.
   #767's 1,498. Of the `native` and the `replay` job 26 minutes each are the Init index
   written again before the binaries are built, a source it is stamped by changed; #767
   found it in the cache.
+- The JSON parser's facts (2026-11-20). 27 theorems and 3 definitions, 716 lines with their
+  comments: 678 in `json.shard`, which had 432, and 38 in `util.shard`; the obligation of
+  K's reader is 5 lines. A checked load of `json.shard` alone 3.0 s before, 5.3 s after.
+  Now 8,965 functions, 8,526 definitions, 439 programs, none in K's directory, 1,350
+  obligations of 537 functions. The program text is the one before but for `reduce`'s
+  search for a step and the one function it gained (`tactic.shard` `find_redex`,
+  `zeta_once`). Checked on the dev box before the push, by ruling 17: the state's check;
+  the 29 binaries built in 260 s; then side by side all 29 roots loaded checked, 148,356
+  declarations in 503 s for 529, and the suite on the binaries, 341 s, 52 entrypoints. The
+  Init replay was not run: the parser's program and that of K's reader are what they were.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

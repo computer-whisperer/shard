@@ -231,12 +231,11 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, nearly
-  nine in ten.** The checker reads every one: of the loader's closure, 8,964
-  functions — 4,792 of them the rows of a generated table —, it holds 8,524 as definitions. The
+  nine in ten.** The checker reads every one: of the loader's closure, 8,965
+  functions — 4,792 of them the rows of a generated table —, it holds 8,526 as definitions. The
   others are programs with the reason: a function they call is a program
   (`callee_runnable`, 387), or they are a group of functions that call each other with no
-  measure the definer takes (52, in five groups), or go on from the rest a callee returned
-  (one, `realize_descent`). A type error in any of them is refused. None matches a numeral
+  measure the definer takes (52, in five groups). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
@@ -255,7 +254,7 @@ file; two things about how they are written set them apart.
   | two functions that call each other, one passing the counter on unchanged | `(* 2 (Int.natAbs k))` and `(+ (* 2 (Int.natAbs k)) 1)` | a `have` of the counter's fact, then `(arith)` |
   | a merge sort, on the two piles `halves` deals (`kernel/util.shard`); its last row is written out, `(cons _ (cons _ _))`, not `_`, so that the obligation holds the list's two elements | `(List.length xs)` | `(apply halves_fst_lt (exact hx) (exact h))` and `halves_snd_lt`: `hx` the row's equation, `h` the equation of the piles |
   | a group that goes on from the rest a call of its own returned (`json.shard`, a value, an array, an object): nothing it is given grows smaller at such a call, so the entry hands the input down a second time as a fuel — each member opens `(match fuel (nil …) ((cons _ fl) …))`, a call made after a byte was read passes `fl`, the others `fuel`. The input left is never longer than the fuel, so the `nil` row answers what the empty input does | `(* 2 (List.length fuel))`, and `(+ (* 2 (List.length fuel)) 1)` on a member that calls another at the fuel it has | `(rw hf) (rw List.length_cons) (arith)`, `hf` the equation of the fuel's row; `(arith)` where the fuel is passed as it is |
-  | a reader that goes on from what a helper left of its input (`take_line`, `take_hex`, `parse_hex4`) | `(List.length cs)` | the helper's fact, that it leaves no more than it was given (`json.shard` `take_line_lt`, `parse_hex4_le`; `sexpr.shard` `take_hex_le`), as a `have`; then the rows' equations rewritten, `(simp_only List.length_cons) (arith)` |
+  | a reader that goes on from what a helper left of its input (`take_line`, `take_hex`, `parse_hex4`; `json_parse`, in K's reader of an export's lines) | `(List.length cs)` | the helper's fact, that it leaves no more than it was given (`json.shard` `take_line_lt`, `parse_hex4_le`, `json_parse_lt`; `sexpr.shard` `take_hex_le`), as a `have` or as a fact of `arith`; then the rows' equations rewritten, `(simp_only List.length_cons) (arith)` |
   | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
 
   A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
@@ -1344,6 +1343,31 @@ written bare or in parentheses. Examples: v3/pins/loader/by_core unless a pin or
   measured through `Int.natAbs`; `wf` takes no measure of several parts (a function's may have
   them: "In several parts").
 
+### A fact about what a function returns
+
+No step works on a hypothesis, so a fact of the shape "where `(f x)` is this, that holds" is
+proven with the call standing in the target: stated over a number its result gives, or as an
+equation between two calls. `v3/kernel/json.shard` does both for its parser — a result's
+`jres_room` is the length of what it left and one more, 0 for an error, so that "the rest is
+shorter" reads `(<= (jres_room (parse_value bs fuel)) (List.length bs))` — and the block follows
+the function's body:
+
+- `(rw f.eq_N)` puts the body in the target. Then, branch by branch, a `cases` on the scrutinee
+  — `(cases X H (…))` where the row's equation is wanted, `(cases (Int.decEq c 34) (…))` for an
+  `if`, the `Bool` expression itself for an `if` on one — and `(reduce)`, which takes the row. A
+  `match` that carries its equation (a measured function's) steps as any other.
+- At a call of the function itself the induction hypothesis is a fact of `arith` or the term of
+  an `exact`; at a call of a helper, the helper's fact.
+- `reduce` unfolds every call that has a constructor where one of its equations has one. A call
+  that is to stay as written is given a variable there: the theorem takes `fuel` and `(hf (=
+  fuel (cons x fl)))`, and its block opens `(rw hf) (rw f.eq_2) (rw (<- hf))`. A call `reduce`
+  did unfold is folded by its equation, `(rw (<- g.eq_3))`.
+- A `def` by `match` has no equations: the one wanted is a theorem by `rfl`, and `rw` cites it
+  (`jres_room_res`).
+- Functions that call each other are proven together: a conjunction by `induction` on what
+  bounds them, the step of each a theorem of its own that takes the others' statements as
+  hypotheses (`parse_value_step`, `parse_room`).
+
 ### Rewriting: `rw`, `simp_only`, `unfold`, `reduce`
 
 All four change the target only, never a hypothesis, and none closes a goal: an equation that has
@@ -1367,8 +1391,9 @@ inside the target is never rewritten.
   with a constructor or a literal in its left side applies anywhere. An equation `f n = …` (a
   measured function's) applies only at closed arguments, at most 64 times; at a variable use
   `unfold`. An `if` or a `match` steps once its condition or scrutinee is decided or headed by a
-  constructor. Other definitions unfold only inside closed subterms. A comparison such as
-  `(< a b)` is left as written.
+  constructor. Other definitions unfold only inside closed subterms. A `let` is opened, its
+  body at its value, where the case analysis under it would wait on its variable (pin
+  `reduce_let`). A comparison such as `(< a b)` is left as written.
 - `(reduce (using RULE…))` also rewrites by each RULE where its left side stands, a rule before a
   computation step. A function that a rule's left side applies is not unfolded while anything else
   can step. A rule is given its premises, `(if_pos h)`; every rule must rewrite at least once; a
