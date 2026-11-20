@@ -28,28 +28,39 @@
     ((cons c r) (if (is_ws c) (skip_ws r) bs))
     (nil nil)))
 
-(fn json_parse ((bs0 (List Int))) JRes
-  (measure (struct bs0))
-  (let ((bs (skip_ws bs0)))
-    (match bs
-      (nil JErr)
-      ((cons c r)
-       (if (= c 123) (parse_object r nil)
-       (if (= c 91) (parse_array r nil)
-       (if (= c 34)
-         (match (parse_string r nil)
-           ((some (Prod.mk s rest)) (JRes (JStr s) rest))
-           (none JErr))
-       (if (bool_or (is_digit c) (= c 45)) (parse_number bs nil)
-       (match (starts_with_lit (utf8 "true") bs)
-         ((some rest) (JRes (JBool true) rest))
-         (none
-           (match (starts_with_lit (utf8 "false") bs)
-             ((some rest) (JRes (JBool false) rest))
-             (none
-               (match (starts_with_lit (utf8 "null") bs)
-                 ((some rest) (JRes JNull rest))
-                 (none JErr))))))))))))))
+;; one value from the input. The three functions that read a value, an array and an object go
+;; on from the rest a call of their own returned, so what bounds them is handed down beside the
+;; input: `fuel`, the input as `json_parse` was given it, less a byte at each call made after a
+;; byte was read (a value's call of its array or object, an array's or an object's call of
+;; itself for the next member). What is left to read is never longer than `fuel`: where it is
+;; empty so is the input, which is no value, and no input is refused for it.
+(fn json_parse ((bs (List Int))) JRes (parse_value bs bs))
+
+(fn parse_value ((bs0 (List Int)) (fuel (List Int))) JRes
+  (measure (* 2 (List.length fuel)))
+  (match fuel
+    (nil JErr)
+    ((cons _ fl)
+     (let ((bs (skip_ws bs0)))
+       (match bs
+         (nil JErr)
+         ((cons c r)
+          (if (= c 123) (parse_object r nil fl)
+          (if (= c 91) (parse_array r nil fl)
+          (if (= c 34)
+            (match (parse_string r nil)
+              ((some (Prod.mk s rest)) (JRes (JStr s) rest))
+              (none JErr))
+          (if (bool_or (is_digit c) (= c 45)) (parse_number bs nil)
+          (match (starts_with_lit (utf8 "true") bs)
+            ((some rest) (JRes (JBool true) rest))
+            (none
+              (match (starts_with_lit (utf8 "false") bs)
+                ((some rest) (JRes (JBool false) rest))
+                (none
+                  (match (starts_with_lit (utf8 "null") bs)
+                    ((some rest) (JRes JNull rest))
+                    (none JErr))))))))))))))))
 
 (fn parse_number ((bs (List Int)) (acc (List Int))) JRes
   (measure (struct bs))
@@ -225,48 +236,69 @@
     (simp_only List.length_cons)
     (arith)))
 
-(fn parse_array ((bs0 (List Int)) (acc (List Json))) JRes
-  (measure (struct bs0))
-  (let ((bs (skip_ws bs0)))
-    (match (starts_with_lit (utf8 "]") bs)
-      ((some r) (JRes (JArr (rev acc)) r))
-      (none
-        (match (json_parse bs)
-          (JErr JErr)
-          ((JRes v rest)
-           (match (skip_ws rest)
-             ((cons c r2)
-              (if (= c 44) (parse_array r2 (cons v acc))
-              (if (= c 93) (JRes (JArr (rev (cons v acc))) r2)
-              JErr)))
-             (nil JErr))))))))
+(fn parse_array ((bs0 (List Int)) (acc (List Json)) (fuel (List Int))) JRes
+  (measure (+ (* 2 (List.length fuel)) 1))
+  (match fuel
+    (nil JErr)
+    ((cons _ fl)
+     (let ((bs (skip_ws bs0)))
+       (match (starts_with_lit (utf8 "]") bs)
+         ((some r) (JRes (JArr (rev acc)) r))
+         (none
+           (match (parse_value bs fuel)
+             (JErr JErr)
+             ((JRes v rest)
+              (match (skip_ws rest)
+                ((cons c r2)
+                 (if (= c 44) (parse_array r2 (cons v acc) fl)
+                 (if (= c 93) (JRes (JArr (rev (cons v acc))) r2)
+                 JErr)))
+                (nil JErr))))))))))
 
-(fn parse_object ((bs0 (List Int)) (acc (List (Prod (List Int) Json)))) JRes
-  (measure (struct bs0))
-  (let ((bs (skip_ws bs0)))
-    (match bs
-      ((cons c r)
-       (if (= c 125) (JRes (JObj (rev acc)) r)
-       (if (= c 34)
-         (match (parse_string r nil)
-           (none JErr)
-           ((some (Prod.mk key rest))
-            (match (skip_ws rest)
-              ((cons c2 r2)
-               (if (= c2 58)
-                 (match (json_parse r2)
-                   (JErr JErr)
-                   ((JRes v rest2)
-                    (match (skip_ws rest2)
-                      ((cons c3 r3)
-                       (if (= c3 44) (parse_object r3 (cons (Prod.mk key v) acc))
-                       (if (= c3 125) (JRes (JObj (rev (cons (Prod.mk key v) acc))) r3)
-                       JErr)))
-                      (nil JErr))))
-                 JErr))
-              (nil JErr))))
-         JErr)))
-      (nil JErr))))
+(fn parse_object ((bs0 (List Int)) (acc (List (Prod (List Int) Json))) (fuel (List Int))) JRes
+  (measure (+ (* 2 (List.length fuel)) 1))
+  (match fuel
+    (nil JErr)
+    ((cons _ fl)
+     (let ((bs (skip_ws bs0)))
+       (match bs
+         ((cons c r)
+          (if (= c 125) (JRes (JObj (rev acc)) r)
+          (if (= c 34)
+            (match (parse_string r nil)
+              (none JErr)
+              ((some (Prod.mk key rest))
+               (match (skip_ws rest)
+                 ((cons c2 r2)
+                  (if (= c2 58)
+                    (match (parse_value r2 fuel)
+                      (JErr JErr)
+                      ((JRes v rest2)
+                       (match (skip_ws rest2)
+                         ((cons c3 r3)
+                          (if (= c3 44) (parse_object r3 (cons (Prod.mk key v) acc) fl)
+                          (if (= c3 125) (JRes (JObj (rev (cons (Prod.mk key v) acc))) r3)
+                          JErr)))
+                         (nil JErr))))
+                    JErr))
+                 (nil JErr))))
+            JErr)))
+         (nil JErr))))))
+(fulfills parse_value.dec_1
+  (by (intro bs0 fuel w fl hf c r h n1 hc) (rw hf) (rw List.length_cons) (arith)))
+(fulfills parse_value.dec_2
+  (by (intro bs0 fuel w fl hf c r h hc) (rw hf) (rw List.length_cons) (arith)))
+(fulfills parse_array.dec_1 (by (intro bs0 acc fuel w fl hf hn) (arith)))
+(fulfills parse_array.dec_2
+  (by (intro bs0 acc fuel w fl hf hn v rest c r2 h hc) (rw hf) (rw List.length_cons) (arith)))
+(fulfills parse_object.dec_1
+  (by (intro bs0 acc fuel w fl hf c r h n1 hc key rest hp c2 r2 h2 hc2) (arith)))
+(fulfills parse_object.dec_2
+  (by
+    (intro bs0 acc fuel w fl hf c r h n1 hc key rest hp c2 r2 h2 hc2 v rest2 c3 r3 h3 hc3)
+    (rw hf)
+    (rw List.length_cons)
+    (arith)))
 
 ;; ---- accessors --------------------------------------------------------------
 
