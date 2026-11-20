@@ -12,7 +12,7 @@ and a program that runs. The goal is programs whose behaviour is proven down to 
 | [`docs/SHAPE.md`](docs/SHAPE.md) | the system as it stands: its parts, what is solid, what is weak. Start here. |
 | [`docs/LAW.md`](docs/LAW.md) | the rules the system and the work are held to; the trust base; the owner's rulings |
 | [`docs/OPEN.md`](docs/OPEN.md) | known defects, what is missing, and who needs it |
-| [`docs/COMPILE.md`](docs/COMPILE.md) | a draft, not ratified: the statement the compile system is to be built to |
+| [`docs/COMPILE.md`](docs/COMPILE.md) | the statement the compile system is to be built to; nothing implements it yet |
 | [`docs/AUTHORING.md`](docs/AUTHORING.md) | how to write a program and prove something about it |
 | [`docs/LANGUAGE.md`](docs/LANGUAGE.md) | reference: every form, every proof step, every record the loader prints |
 | [`docs/KERNEL.md`](docs/KERNEL.md) | reference: the toolchain's files, the checker, the trust base in detail, build and gates |

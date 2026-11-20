@@ -199,8 +199,8 @@ area, is `DECISIONS.md`.
 ## 6. Toward the trusted compile system
 
 The goal (`LAW.md` §1) is a compiler from programs to machine code that comes with a proof. This is
-what exists towards it and what does not. The design is not written; a draft of its statement,
-not yet ratified, is `COMPILE.md`.
+what exists towards it and what does not. The design is not written; the statement it is to
+be built to is `COMPILE.md`.
 
 **Exists** (`v3/models/imp/`):
 - a small low-level language (locals, byte and word loads and stores, branches, loops, calls) with

@@ -1,7 +1,8 @@
 # The compile system: the statement
 
-Status: a draft for the owner's ratification. Nothing in the tree implements it. It fixes one
-statement and the two ends of the first chain, and leaves the middle open on purpose (§7).
+Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18). Nothing in the tree
+implements it. It fixes one statement and the two ends of the first chain, and leaves the middle
+open on purpose (§7). §4's account of a machine is under discussion with the owner.
 
 ## 1. What it is for
 
@@ -132,10 +133,14 @@ is a defect of the compiler.
 
 Open on purpose: the form of low-level code (§4's conjecture); how integers of any size,
 constructors and reclaimed memory are represented; the calling convention and the linking rule's
-exact form; events and their prefixes at the Linux boundary; registers; programs that do not end;
-floats; a second target; how results are stored and reused between builds; names and directories.
+exact form; events and their prefixes at the Linux boundary; registers; floats; a second target;
+how results are stored and reused between builds; names and directories.
 
-## 8. For the owner to rule
+Also open: a program that does not run to an end — a server, a desktop application. The fact does
+not ask that a program be refined whole. Its parts carry their own facts, and the loop around them
+may be built by other means (the owner's words: `LAW.md` §6, 18).
+
+## 8. What the owner agreed to
 
 1. §2's fact is the one statement every transformation and every compile step yields.
 2. An engine's run may stand where K cannot compute a proven pass's result, named in the record

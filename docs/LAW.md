@@ -15,7 +15,8 @@ departure from Lean's rules is a decision that names what it gives up: the compa
 Lean's library, and what authors already know.
 
 **The goal now is the trusted compile system**: a compiler from programs to machine code that comes
-with a proof. Today's compiler is unproven and is to be replaced by it.
+with a proof. Today's compiler is unproven and is to be replaced by it. The statement it is built
+to is `COMPILE.md`.
 
 ## 2. The layers
 
@@ -248,6 +249,16 @@ admitted that the logic does not derive.
     speed things up by limiting local gate sweeps to areas relevant with the changes made. CI
     can run async and tell us when low-rate mistakes are made." (§5. What is run for which
     change: `DECISIONS.md`, Build and gates.)
+
+18. *The compile system's statement.* Of `COMPILE.md`, its four points of §8 among them: "I
+    read through it, and I agree with it." And of programs that do not run once to an end: "I
+    do hope for us to use shard in open-ended applications that aren't one-shot (http server,
+    desktop app, etc), but the beauty of this approach is that we aren't locking all consumers
+    into one particular paradigm. You could verify that all the encode and decode operations
+    in your server meet formal requirements, while the overall loop that cannot be proven
+    refined as easily can be constructed with other means." What it is for, in §1 there: the
+    owner's words. How a machine is represented (its §4) was left open in the same reply: "I
+    have less confidence that we have the right approach."
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 
