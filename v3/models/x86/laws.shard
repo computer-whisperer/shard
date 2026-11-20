@@ -1,0 +1,1024 @@
+;;; v3/models/x86/laws.shard — what is proven once of the model, for the facts about pieces of
+;;; machine code to be made from.
+(import "linux.shard")
+(use std.map)
+(use std.mem)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rd)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Step)
+(use models.x86.x86.Why)
+(use models.x86.x86.Wr)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; a state at another program counter, with another memory
+(fn at_pc ((c Cpu) (pc (BitVec 64))) Cpu (Cpu.with_rip pc c))
+(fn mem_to ((c Cpu) (m Mem)) Cpu (Cpu.with_mem m c))
+
+;; ---- a run of steps ---------------------------------------------------------------------------
+;; the state after n steps, none of them a system call or stuck
+(fn steps ((n Fuel) (c Cpu)) (Option Cpu)
+  (measure (struct n))
+  (match n
+    (FZ (some c))
+    ((FS n1)
+     (match (step c)
+       ((SNext c1) (steps n1 c1))
+       ((SSys _) none)
+       ((SStuck _) none)))))
+;; from c the processor comes to c2
+(def reaches ((c Cpu) (c2 Cpu)) Prop (exists ((n Fuel)) (= (steps n c) (some c2))))
+(theorem reaches_refl ((c Cpu)) (reaches c c) (by (apply (Exists.intro FZ) (rfl))))
+(theorem reaches_step ((c Cpu) (c1 Cpu) (c2 Cpu) (hs (= (step c) (SNext c1))) (hr (reaches c1 c2)))
+  (reaches c c2)
+  (by
+    (cases hr
+      ((intro (n hn)
+         (apply (Exists.intro (FS n))
+           ((show (= (steps (FS n) c) (some c2))) (rw steps.eq_2) (rw hs) (reduce) (exact hn))))))))
+
+;; ---- the instruction at the program counter ---------------------------------------------------
+;; the processor, at address a, decodes the instruction i of length len
+(def code_at ((c Cpu) (a Nat) (i Instr) (len Nat)) Prop
+  (= (decode (fetch (Cpu.segs c) (Cpu.mem c) a fifteen)) (some (Prod.mk i len))))
+;; a step where the instruction at the program counter is known is that instruction executed
+(theorem step_at
+  ((c Cpu) (a Nat) (i Instr) (len Nat) (hrip (= (w64_val (Cpu.rip c)) a)) (hc (code_at c a i len)))
+  (= (step c) (exec c i len))
+  (by
+    (have hd (= (decode (fetch (Cpu.segs c) (Cpu.mem c) a fifteen)) (some (Prod.mk i len)))
+      (exact hc))
+    (rw step.eq_1)
+    (rw hrip)
+    (rw hd)
+    rfl))
+
+;; ---- memory ---------------------------------------------------------------------------------
+;; a read of eight bytes mapped to read is the word there; a write of eight mapped to write
+;; changes the memory and nothing else
+(theorem load64_ok ((c Cpu) (a Nat) (hm (= (mapped (Cpu.segs c) a 8 4) true)))
+  (= (load64 c a) (RdOk (w64 (mem_le64 (Cpu.mem c) a))))
+  (by (rw load64.eq_1) (rw (if_pos hm)) rfl))
+(theorem store64_ok ((c Cpu) (a Nat) (v (BitVec 64)) (hm (= (mapped (Cpu.segs c) a 8 2) true)))
+  (= (store64 c a v) (WrOk (mem_to c (mem_put64 (Cpu.mem c) a (w64_val v)))))
+  (by (rw store64.eq_1) (rw (if_pos hm)) rfl))
+
+;; ---- one instruction, as a rule ---------------------------------------------------------------
+;; Each rule: where the processor is at `pc`, decodes the instruction there, and the state after
+;; the instruction comes to c2, the state before it comes to c2. The state after is written out,
+;; its program counter the number `next` (or a jump's `target`) that the rule is given.
+
+;; what follows a read; what follows a push
+(fn after_load ((c Cpu) (r Nat) (pc (BitVec 64)) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (goto (set_reg c r v) pc))))
+(fn after_imul ((c Cpu) (r Nat) (pc (BitVec 64)) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (goto (set_reg (set_flags c flags_none) r (w64_mul (reg c r) v)) pc))))
+(fn after_ret ((c Cpu) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (goto (set_reg c 4 (w64_add (reg c 4) (w64 8))) v))))
+(fn after_pop ((c Cpu) (r Nat) (pc (BitVec 64)) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (goto (set_reg (set_reg c 4 (w64_add (reg c 4) (w64 8))) r v) pc))))
+(fn after_alu_m ((c Cpu) (op Bop) (rm Rm) (r Nat) (pc (BitVec 64)) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (alu_to_rm c op rm v (reg c r) pc))))
+;; the address a push stores at, and the state after one
+(fn push_at ((c Cpu)) Nat (w64_val (w64_sub (reg c 4) (w64 8))))
+(fn pushed ((c Cpu) (v (BitVec 64))) Cpu
+  (set_reg (mem_to c (mem_put64 (Cpu.mem c) (push_at c) (w64_val v))) 4 (w64_sub (reg c 4) (w64 8))))
+(theorem push64_ok ((c Cpu) (v (BitVec 64)) (hm (= (mapped (Cpu.segs c) (push_at c) 8 2) true)))
+  (= (push64 c v) (WrOk (pushed c v)))
+  (by
+    (have hm1 (= (mapped (Cpu.segs c) (w64_val (w64_sub (reg c 4) (w64 8))) 8 2) true) (exact hm))
+    (rw push64.eq_1)
+    (rw (store64_ok c (w64_val (w64_sub (reg c 4) (w64 8))) v hm1))
+    rfl))
+
+;; op r_a, r_b for an operation that writes its result
+(fn x_alu_rr ((c Cpu) (op Bop) (a Nat) (b Nat) (pc (BitVec 64))) Cpu
+  (at_pc
+    (set_reg (set_flags c (alu_flags op (reg c a) (reg c b))) a (alu_res op (reg c a) (reg c b)))
+    pc))
+(theorem do_alu_rr
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (op Bop)
+   (a Nat)
+   (b Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRmR op (RmReg a) b) len))
+   (hw (= (alu_writes op) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_alu_rr c op a b (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_alu_rr c op a b (w64 next)) c2)
+      ((rw (step_at c pc (AluRmR op (RmReg a) b) len hrip hc))
+       (rw (<- hnr))
+       (cases op
+         ((BAdd () rfl)
+          (BOr () rfl)
+          (BAnd () rfl)
+          (BSub () rfl)
+          (BXor () rfl)
+          (BCmp () (exact (absurd hw Bool.false_ne_true))))))
+      ((exact hr)))))
+;; cmp r_a, r_b
+(fn x_cmp_rr ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64))) Cpu
+  (at_pc (set_flags c (alu_flags BCmp (reg c a) (reg c b))) pc))
+(theorem do_cmp_rr
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (a Nat)
+   (b Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRmR BCmp (RmReg a) b) len))
+
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_cmp_rr c a b (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_cmp_rr c a b (w64 next)) c2)
+      ((rw (step_at c pc (AluRmR BCmp (RmReg a) b) len hrip hc)) (rw (<- hnr)) rfl)
+      ((exact hr)))))
+;; op r_a, imm for an operation that writes its result
+(fn x_alu_ri ((c Cpu) (op Bop) (a Nat) (i Nat) (pc (BitVec 64))) Cpu
+  (at_pc (set_reg (set_flags c (alu_flags op (reg c a) (w64 i))) a (alu_res op (reg c a) (w64 i)))
+    pc))
+(theorem do_alu_ri
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (op Bop)
+   (a Nat)
+   (i Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRmI op (RmReg a) i) len))
+   (hw (= (alu_writes op) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_alu_ri c op a i (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_alu_ri c op a i (w64 next)) c2)
+      ((rw (step_at c pc (AluRmI op (RmReg a) i) len hrip hc))
+       (rw (<- hnr))
+       (cases op
+         ((BAdd () rfl)
+          (BOr () rfl)
+          (BAnd () rfl)
+          (BSub () rfl)
+          (BXor () rfl)
+          (BCmp () (exact (absurd hw Bool.false_ne_true))))))
+      ((exact hr)))))
+;; mov r_a, r_b
+(fn x_mov_rr ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64))) Cpu (at_pc (set_reg c a (reg c b)) pc))
+(theorem do_mov_rr
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (a Nat)
+   (b Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (MovRmR (RmReg a) b) len))
+
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_mov_rr c a b (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_mov_rr c a b (w64 next)) c2)
+      ((rw (step_at c pc (MovRmR (RmReg a) b) len hrip hc)) (rw (<- hnr)) rfl)
+      ((exact hr)))))
+;; jcc where the condition does not hold: the next instruction
+(theorem do_jcc_not
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (cc Nat)
+   (d Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Jcc cc d) len))
+   (hcc (= (cc_holds cc (Cpu.flags c)) (some false)))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (at_pc c (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (at_pc c (w64 next)) c2)
+      ((rw (step_at c pc (Jcc cc d) len hrip hc)) (rw exec.eq_9) (rw hcc) (rw (<- hnr)) rfl)
+      ((exact hr)))))
+;; jcc where the condition holds, and jmp: the target
+(theorem do_jcc_taken
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (cc Nat)
+   (len Nat)
+   (d Nat)
+   (target Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Jcc cc d) len))
+   (hcc (= (cc_holds cc (Cpu.flags c)) (some true)))
+   (htgt (= (w64_add (w64 (+ pc len)) (w64 d)) (w64 target)))
+   (hr (reaches (at_pc c (w64 target)) c2)))
+  (reaches c c2)
+  (by
+    (have hj (= (w64_add (next_rip c len) (w64 d)) (w64 target))
+      (show (= (w64_add (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 d)) (w64 target)))
+      (rw hrip)
+      (exact htgt))
+    (apply (reaches_step c (at_pc c (w64 target)) c2)
+      ((rw (step_at c pc (Jcc cc d) len hrip hc)) (rw exec.eq_9) (rw hcc) (rw (<- hj)) rfl)
+      ((exact hr)))))
+(theorem do_jmp
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+
+   (len Nat)
+   (d Nat)
+   (target Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Jmp d) len))
+
+   (htgt (= (w64_add (w64 (+ pc len)) (w64 d)) (w64 target)))
+   (hr (reaches (at_pc c (w64 target)) c2)))
+  (reaches c c2)
+  (by
+    (have hj (= (w64_add (next_rip c len) (w64 d)) (w64 target))
+      (show (= (w64_add (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 d)) (w64 target)))
+      (rw hrip)
+      (exact htgt))
+    (apply (reaches_step c (at_pc c (w64 target)) c2)
+      ((rw (step_at c pc (Jmp d) len hrip hc)) (rw (<- hj)) rfl)
+      ((exact hr)))))
+;; mov r, [base + index*scale + d]
+(fn x_load_sib ((c Cpu) (r Nat) (b Nat) (x Nat) (s Nat) (d Nat) (pc (BitVec 64))) Cpu
+  (at_pc (set_reg c r (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d)))) pc))
+(theorem do_load_sib
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (r Nat)
+   (b Nat)
+   (x Nat)
+   (s Nat)
+   (d Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (MovRRm r (RmSib b x s d)) len))
+   (hm (= (mapped (Cpu.segs c) (ea_sib c b x s d) 8 4) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_load_sib c r b x s d (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_load_sib c r b x s d (w64 next)) c2)
+      ((rw (step_at c pc (MovRRm r (RmSib b x s d)) len hrip hc))
+       (show
+         (= (after_load c r (next_rip c len) (load64 c (ea_sib c b x s d)))
+           (SNext (x_load_sib c r b x s d (w64 next)))))
+       (rw (load64_ok c (ea_sib c b x s d) hm))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; imul r, [base + index*scale + d]
+(fn x_imul_sib ((c Cpu) (r Nat) (b Nat) (x Nat) (s Nat) (d Nat) (pc (BitVec 64))) Cpu
+  (at_pc
+    (set_reg (set_flags c flags_none) r
+      (w64_mul (reg c r) (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d)))))
+    pc))
+(theorem do_imul_sib
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (r Nat)
+   (b Nat)
+   (x Nat)
+   (s Nat)
+   (d Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (ImulRRm r (RmSib b x s d)) len))
+   (hm (= (mapped (Cpu.segs c) (ea_sib c b x s d) 8 4) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_imul_sib c r b x s d (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_imul_sib c r b x s d (w64 next)) c2)
+      ((rw (step_at c pc (ImulRRm r (RmSib b x s d)) len hrip hc))
+       (show
+         (= (after_imul c r (next_rip c len) (load64 c (ea_sib c b x s d)))
+           (SNext (x_imul_sib c r b x s d (w64 next)))))
+       (rw (load64_ok c (ea_sib c b x s d) hm))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; add [base + index*scale + d], r: the word there read, the sum written back
+(fn x_add_m_sib ((c Cpu) (b Nat) (x Nat) (s Nat) (d Nat) (r Nat) (pc (BitVec 64))) Cpu
+  (at_pc
+    (mem_to (set_flags c (alu_flags BAdd (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r)))
+      (mem_put64 (Cpu.mem c) (ea_sib c b x s d)
+        (w64_val (w64_add (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r)))))
+    pc))
+(theorem do_add_m_sib
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (b Nat)
+   (x Nat)
+   (s Nat)
+   (d Nat)
+   (r Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRmR BAdd (RmSib b x s d) r) len))
+   (hm (= (mapped (Cpu.segs c) (ea_sib c b x s d) 8 4) true))
+   (hmw (= (mapped (Cpu.segs c) (ea_sib c b x s d) 8 2) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_add_m_sib c b x s d r (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_add_m_sib c b x s d r (w64 next)) c2)
+      ((rw (step_at c pc (AluRmR BAdd (RmSib b x s d) r) len hrip hc))
+       (show
+         (= (after_alu_m c BAdd (RmSib b x s d) r (next_rip c len) (load64 c (ea_sib c b x s d)))
+           (SNext (x_add_m_sib c b x s d r (w64 next)))))
+       (rw (load64_ok c (ea_sib c b x s d) hm))
+       (have hmw1
+         (=
+           (mapped
+             (Cpu.segs
+               (set_flags c
+                 (alu_flags BAdd (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r))))
+             (ea_sib c b x s d)
+             8
+             2)
+           true)
+         (exact hmw))
+       (show
+         (=
+           (stored
+             (store64
+               (set_flags c
+                 (alu_flags BAdd (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r)))
+               (ea_sib c b x s d)
+               (w64_add (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r)))
+             (next_rip c len))
+           (SNext (x_add_m_sib c b x s d r (w64 next)))))
+       (rw
+         (store64_ok
+           (set_flags c (alu_flags BAdd (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r)))
+           (ea_sib c b x s d)
+           (w64_add (w64 (mem_le64 (Cpu.mem c) (ea_sib c b x s d))) (reg c r))
+           hmw1))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; push r
+(theorem do_push
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (r Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Push r) len))
+   (hm (= (mapped (Cpu.segs c) (push_at c) 8 2) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (at_pc (pushed c (reg c r)) (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (at_pc (pushed c (reg c r)) (w64 next)) c2)
+      ((rw (step_at c pc (Push r) len hrip hc))
+       (show
+         (= (stored (push64 c (reg c r)) (next_rip c len))
+           (SNext (at_pc (pushed c (reg c r)) (w64 next)))))
+       (rw (push64_ok c (reg c r) hm))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; pop r
+(fn x_pop ((c Cpu) (r Nat) (pc (BitVec 64))) Cpu
+  (at_pc
+    (set_reg (set_reg c 4 (w64_add (reg c 4) (w64 8))) r
+      (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4)))))
+    pc))
+(theorem do_pop
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (r Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Pop r) len))
+   (hm (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_pop c r (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_pop c r (w64 next)) c2)
+      ((rw (step_at c pc (Pop r) len hrip hc))
+       (show
+         (= (after_pop c r (next_rip c len) (load64 c (w64_val (reg c 4))))
+           (SNext (x_pop c r (w64 next)))))
+       (rw (load64_ok c (w64_val (reg c 4)) hm))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; call: the address after the call pushed, then the target
+(theorem do_call
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (len Nat)
+   (d Nat)
+   (next Nat)
+   (target Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (Call d) len))
+   (hm (= (mapped (Cpu.segs c) (push_at c) 8 2) true))
+   (hnext (= (+ pc len) next))
+   (htgt (= (w64_add (w64 next) (w64 d)) (w64 target)))
+   (hr (reaches (at_pc (pushed c (w64 next)) (w64 target)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (at_pc (pushed c (w64 next)) (w64 target)) c2)
+      ((rw (step_at c pc (Call d) len hrip hc))
+       (show
+         (= (stored (push64 c (next_rip c len)) (w64_add (next_rip c len) (w64 d)))
+           (SNext (at_pc (pushed c (w64 next)) (w64 target)))))
+       (rw hnr)
+       (rw (push64_ok c (w64 next) hm))
+       (rw htgt)
+       rfl)
+      ((exact hr)))))
+;; ret: to the address at the stack pointer, which then stands above it
+(fn x_ret ((c Cpu)) Cpu
+  (at_pc (set_reg c 4 (w64_add (reg c 4) (w64 8))) (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4))))))
+(theorem do_ret
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (len Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Ret len))
+   (hm (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true))
+   (hr (reaches (x_ret c) c2)))
+  (reaches c c2)
+  (by
+    (apply (reaches_step c (x_ret c) c2)
+      ((rw (step_at c pc Ret len hrip hc))
+       (show (= (after_ret c (load64 c (w64_val (reg c 4)))) (SNext (x_ret c))))
+       (rw (load64_ok c (w64_val (reg c 4)) hm))
+       rfl)
+      ((exact hr)))))
+
+;; ---- runs end to end --------------------------------------------------------------------------
+(theorem reaches_trans ((c Cpu) (c1 Cpu) (c2 Cpu) (h1 (reaches c c1)) (h2 (reaches c1 c2)))
+  (reaches c c2)
+  (by
+    (cases h1
+      ((intro (n hn)
+         (have hall (forall ((n Fuel) (c Cpu)) (-> (= (steps n c) (some c1)) (reaches c c2)))
+           (intro n0)
+           (induction n0
+             ((FZ () (intro c0 h0) (have hc (= (some c0) (some c1)) (exact h0))
+                (rw (Option.some.inj hc))
+                (exact h2))
+              (FS (m ih) (intro c0 h0)
+                (cases (step c0) hs
+                  ((SNext (cx)
+                     (have hx (= (steps (FS m) c0) (steps m cx)) (rw steps.eq_2) (rw hs) rfl)
+                     (exact (reaches_step c0 cx c2 hs (ih cx (Eq.trans (Eq.symm hx) h0)))))
+                   (SSys (cx) (have hx (= (steps (FS m) c0) none) (rw steps.eq_2) (rw hs) rfl)
+                     (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h0)) (Option.some_ne_none c1))))
+                   (SStuck (w) (have hx (= (steps (FS m) c0) none) (rw steps.eq_2) (rw hs) rfl)
+                     (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h0)) (Option.some_ne_none c1))))))))))
+         (exact (hall n c hn)))))))
+
+;; ---- code in place ----------------------------------------------------------------------------
+;; a table of instructions by address: the instruction at an address and its length
+(fn site ((tbl (List (Prod Nat (Prod Instr Nat)))) (a Nat)) (Option (Prod Instr Nat))
+  (measure (struct tbl))
+  (match tbl
+    (nil none)
+    ((cons (Prod.mk a1 il) r) (if (= a1 a) (some il) (site r a)))))
+;; the processor decodes each instruction of a table at its address
+(def code_in ((c Cpu) (tbl (List (Prod Nat (Prod Instr Nat))))) Prop
+  (forall ((a Nat) (i Instr) (len Nat))
+    (-> (= (site tbl a) (some (Prod.mk i len))) (code_at c a i len))))
+
+;; ---- a buffer of words in memory --------------------------------------------------------------
+;; n words from address p are each mapped for `need`
+(def mapped_words ((segs (List Seg)) (p Nat) (n Nat) (need Nat)) Prop
+  (forall ((k Nat)) (-> (< k n) (= (mapped segs (+ p (* 8 k)) 8 need) true))))
+;; an indexed operand of scale 8 and no displacement, where base plus index does not wrap
+(theorem ea_sib_8
+  ((c Cpu)
+   (b Nat)
+   (x Nat)
+   (h (< (+ (w64_val (reg c b)) (* 8 (w64_val (reg c x)))) 18446744073709551616)))
+  (= (ea_sib c b x 8 0) (+ (w64_val (reg c b)) (* 8 (w64_val (reg c x)))))
+  (by
+    (show
+      (= (Nat.mod (+ (w64_val (reg c b)) (* 8 (w64_val (reg c x)))) 18446744073709551616)
+        (+ (w64_val (reg c b)) (* 8 (w64_val (reg c x))))))
+    (exact (Nat.mod_eq_of_lt h))))
+
+;; ---- a comparison and the jump after it -------------------------------------------------------
+;; after cmp r_a, r_b the condition `ae` (3) does not hold where r_a is below r_b as unsigned
+;; numbers, and holds where it is not
+(theorem cmp_below
+  ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64)) (h (< (w64_val (reg c a)) (w64_val (reg c b)))))
+  (= (cc_holds 3 (Cpu.flags (x_cmp_rr c a b pc))) (some false))
+  (by
+    (show (= (some (not (if (< (w64_val (reg c a)) (w64_val (reg c b))) true false))) (some false)))
+    (rw (if_pos h))
+    rfl))
+(theorem cmp_not_below
+  ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64)) (h (Not (< (w64_val (reg c a)) (w64_val (reg c b))))))
+  (= (cc_holds 3 (Cpu.flags (x_cmp_rr c a b pc))) (some true))
+  (by
+    (show (= (some (not (if (< (w64_val (reg c a)) (w64_val (reg c b))) true false))) (some true)))
+    (rw (if_neg h))
+    rfl))
+
+;; ---- a function's return ----------------------------------------------------------------------
+;; the address a function entered in the state c returns to: the word the stack pointer is at
+(fn ret_addr ((c Cpu)) (BitVec 64) (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4)))))
+;; what a function's code keeps of the state c it was entered in, at the state c2 it ends in:
+;; the stack pointer above the return address, what is mapped, and the registers a callee keeps
+;; (rbx, rbp, r12 to r15)
+(def kept ((c Cpu) (c2 Cpu)) Prop
+  (and (= (reg c2 4) (w64_add (reg c 4) (w64 8)))
+    (and (= (Cpu.segs c2) (Cpu.segs c))
+      (and (= (reg c2 3) (reg c 3))
+        (and (= (reg c2 5) (reg c 5))
+          (and (= (reg c2 12) (reg c 12))
+            (and (= (reg c2 13) (reg c 13))
+              (and (= (reg c2 14) (reg c 14)) (= (reg c2 15) (reg c 15))))))))))
+;; a function's code has returned: the program counter at the return address, and `kept`
+(def returned ((c Cpu) (c2 Cpu)) Prop (and (= (Cpu.rip c2) (ret_addr c)) (kept c c2)))
+
+;; ---- a state at a program counter ----------------------------------------------------------
+;; a state put at a program counter twice is put there once
+(theorem at_pc_twice ((c Cpu) (p (BitVec 64)) (q (BitVec 64))) (= (at_pc (at_pc c p) q) (at_pc c q))
+  (by rfl))
+
+;; ---- what a store leaves ------------------------------------------------------------------------
+;; a byte stored is read back (mod 256) and leaves every other address as it was
+(theorem mem_set_same ((m Mem) (k Nat) (v Nat)) (= (mem_get (mem_set m k v) k) (% v 256))
+  (by
+    (have hl (= (map_lookup k (Mem.rep (mem_set m k v))) (some v))
+      (exact (map_lookup_insert_eq Nat k v (Mem.rep m))))
+    (unfold mem_get)
+    (rw hl)
+    rfl))
+(theorem mem_set_other ((m Mem) (k Nat) (v Nat) (x Nat) (h (Not (= x k))))
+  (= (mem_get (mem_set m k v) x) (mem_get m x))
+  (by
+    (have hl (= (map_lookup x (Mem.rep (mem_set m k v))) (map_lookup x (Mem.rep m)))
+      (exact (map_lookup_insert_neq Nat x k v (Mem.rep m) h)))
+    (unfold mem_get)
+    (rw hl)
+    rfl))
+;; an address outside [a, a+n) is none of a+k for k below n
+(theorem ne_of_out ((x Nat) (a Nat) (n Nat) (k Nat) (h (or (< x a) (<= (+ a n) x))) (hk (< k n)))
+  (Not (= x (+ a k)))
+  (by
+    (cases h
+      ((inl (hl) (have hx (< x (+ a k)) (arith hl)) (exact (Nat.ne_of_lt hx)))
+       (inr (hr) (have hx (< (+ a k) x) (arith hr hk)) (exact (Nat.ne_of_gt hx)))))))
+;; four bytes stored, and eight, leave every address outside them as it was
+(theorem mem_put32_other ((m Mem) (a Nat) (v Nat) (x Nat) (h (or (< x a) (<= (+ a 4) x))))
+  (= (mem_get (mem_put32 m a v) x) (mem_get m x))
+  (by
+    (have k0 (< 0 4) decide)
+    (have k1 (< 1 4) decide)
+    (have k2 (< 2 4) decide)
+    (have k3 (< 3 4) decide)
+    (have n0 (Not (= x a)) (exact (ne_of_out x a 4 0 h k0)))
+    (have n1 (Not (= x (+ a 1))) (exact (ne_of_out x a 4 1 h k1)))
+    (have n2 (Not (= x (+ a 2))) (exact (ne_of_out x a 4 2 h k2)))
+    (have n3 (Not (= x (+ a 3))) (exact (ne_of_out x a 4 3 h k3)))
+    (unfold mem_put32)
+    (rw mem_set_other ((exact n3)))
+    (rw mem_set_other ((exact n2)))
+    (rw mem_set_other ((exact n1)))
+    (rw mem_set_other ((exact n0)))
+    rfl))
+(theorem mem_put64_other ((m Mem) (a Nat) (v Nat) (x Nat) (h (or (< x a) (<= (+ a 8) x))))
+  (= (mem_get (mem_put64 m a v) x) (mem_get m x))
+  (by
+    (have hi (or (< x (+ a 4)) (<= (+ (+ a 4) 4) x))
+      (cases h ((inl (hl) (apply Or.inl ((arith hl)))) (inr (hr) (apply Or.inr ((arith hr)))))))
+    (have lo (or (< x a) (<= (+ a 4) x))
+      (cases h ((inl (hl) (apply Or.inl ((exact hl)))) (inr (hr) (apply Or.inr ((arith hr)))))))
+    (unfold mem_put64)
+    (rw mem_put32_other ((exact hi)))
+    (rw mem_put32_other ((exact lo)))
+    rfl))
+
+;; ---- two memories that agree outside a range --------------------------------------------------
+;; m2 is m at every address outside [lo, hi): what a piece of code may have written lies inside
+(def same_outside ((m Mem) (m2 Mem) (lo Nat) (hi Nat)) Prop
+  (forall ((x Nat)) (-> (or (< x lo) (<= hi x)) (= (mem_get m2 x) (mem_get m x)))))
+(theorem same_outside_refl ((m Mem) (lo Nat) (hi Nat)) (same_outside m m lo hi)
+  (by (intro x h) rfl))
+;; a word stored inside the range keeps the agreement
+(theorem same_outside_put64
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (a Nat)
+   (v Nat)
+   (h (same_outside m m2 lo hi))
+   (hlo (<= lo a))
+   (hhi (<= (+ a 8) hi)))
+  (same_outside m (mem_put64 m2 a v) lo hi)
+  (by
+    (intro x hx)
+    (have hx2 (or (< x a) (<= (+ a 8) x))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (rw (mem_put64_other m2 a v x hx2))
+    (exact (h x hx))))
+;; four bytes, and eight, read outside the range are the same in both
+(theorem le32_same
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (x Nat)
+   (h (same_outside m m2 lo hi))
+   (hx (or (<= (+ x 4) lo) (<= hi x))))
+  (= (mem_le32 m2 x) (mem_le32 m x))
+  (by
+    (have o0 (or (< x lo) (<= hi x))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have o1 (or (< (+ x 1) lo) (<= hi (+ x 1)))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have o2 (or (< (+ x 2) lo) (<= hi (+ x 2)))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have o3 (or (< (+ x 3) lo) (<= hi (+ x 3)))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (unfold mem_le32)
+    (rw (h x o0))
+    (rw (h (+ x 1) o1))
+    (rw (h (+ x 2) o2))
+    (rw (h (+ x 3) o3))
+    rfl))
+(theorem le64_same
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (x Nat)
+   (h (same_outside m m2 lo hi))
+   (hx (or (<= (+ x 8) lo) (<= hi x))))
+  (= (mem_le64 m2 x) (mem_le64 m x))
+  (by
+    (have a0 (or (<= (+ x 4) lo) (<= hi x))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have a1 (or (<= (+ (+ x 4) 4) lo) (<= hi (+ x 4)))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (unfold mem_le64)
+    (rw (le32_same m m2 lo hi x h a0))
+    (rw (le32_same m m2 lo hi (+ x 4) h a1))
+    rfl))
+
+;; ---- a word stored is the word read ---------------------------------------------------------------
+;; the four low bytes of a number, least significant first, are the number mod 2^32
+(theorem bytes4 ((v Nat))
+  (= (le32 (% v 256) (% (/ v 256) 256) (% (/ v 65536) 256) (% (/ v 16777216) 256)) (% v 4294967296))
+  (by
+    (have h3 (= (% v 4294967296) (+ (% v 256) (* 256 (% (/ v 256) 16777216))))
+      (exact (@Nat.mod_mul 256 16777216 v)))
+    (have h2 (= (% (/ v 256) 16777216) (+ (% (/ v 256) 256) (* 256 (% (/ (/ v 256) 256) 65536))))
+      (exact (@Nat.mod_mul 256 65536 (/ v 256))))
+    (have h1
+      (= (% (/ (/ v 256) 256) 65536)
+        (+ (% (/ (/ v 256) 256) 256) (* 256 (% (/ (/ (/ v 256) 256) 256) 256))))
+      (exact (@Nat.mod_mul 256 256 (/ (/ v 256) 256))))
+    (have d2 (= (/ (/ v 256) 256) (/ v 65536)) (exact (Nat.div_div_eq_div_mul v 256 256)))
+    (have d3 (= (/ (/ v 65536) 256) (/ v 16777216)) (exact (Nat.div_div_eq_div_mul v 65536 256)))
+    (unfold le32)
+    (rw h3)
+    (rw h2)
+    (rw h1)
+    (rw d2)
+    (rw d3)
+    rfl))
+;; four bytes stored and read back
+(theorem le32_put32_same ((m Mem) (a Nat) (v Nat))
+  (= (mem_le32 (mem_put32 m a v) a) (% v 4294967296))
+  (by
+    (have n01 (Not (= a (+ a 1))) (arith))
+    (have n02 (Not (= a (+ a 2))) (arith))
+    (have n03 (Not (= a (+ a 3))) (arith))
+    (have n12 (Not (= (+ a 1) (+ a 2))) (arith))
+    (have n13 (Not (= (+ a 1) (+ a 3))) (arith))
+    (have n23 (Not (= (+ a 2) (+ a 3))) (arith))
+    (have g0 (= (mem_get (mem_put32 m a v) a) (% v 256))
+      (unfold mem_put32)
+      (rw mem_set_other ((exact n03)))
+      (rw mem_set_other ((exact n02)))
+      (rw mem_set_other ((exact n01)))
+      (exact (mem_set_same m a v)))
+    (have g1 (= (mem_get (mem_put32 m a v) (+ a 1)) (% (/ v 256) 256))
+      (unfold mem_put32)
+      (rw mem_set_other ((exact n13)))
+      (rw mem_set_other ((exact n12)))
+      (exact (mem_set_same (mem_set m a v) (+ a 1) (/ v 256))))
+    (have g2 (= (mem_get (mem_put32 m a v) (+ a 2)) (% (/ v 65536) 256))
+      (unfold mem_put32)
+      (rw mem_set_other ((exact n23)))
+      (exact (mem_set_same (mem_set (mem_set m a v) (+ a 1) (/ v 256)) (+ a 2) (/ v 65536))))
+    (have g3 (= (mem_get (mem_put32 m a v) (+ a 3)) (% (/ v 16777216) 256))
+      (unfold mem_put32)
+      (exact
+        (mem_set_same (mem_set (mem_set (mem_set m a v) (+ a 1) (/ v 256)) (+ a 2) (/ v 65536))
+          (+ a 3)
+          (/ v 16777216))))
+    (unfold mem_le32)
+    (rw g0)
+    (rw g1)
+    (rw g2)
+    (rw g3)
+    (exact (bytes4 v))))
+;; four bytes stored leave memory as it was outside them
+(theorem same_outside_put32 ((m Mem) (a Nat) (v Nat)) (same_outside m (mem_put32 m a v) a (+ a 4))
+  (by (intro x hx) (exact (mem_put32_other m a v x hx))))
+;; eight bytes stored and read back: the number mod 2^64
+(theorem le64_put64_same ((m Mem) (a Nat) (v Nat))
+  (= (mem_le64 (mem_put64 m a v) a) (% v 18446744073709551616))
+  (by
+    (have lo4 (or (<= (+ a 4) (+ a 4)) (<= (+ (+ a 4) 4) a)) (apply Or.inl ((arith))))
+    (have hlow
+      (= (mem_le32 (mem_put32 (mem_put32 m a v) (+ a 4) (/ v 4294967296)) a)
+        (mem_le32 (mem_put32 m a v) a))
+      (exact
+        (le32_same (mem_put32 m a v) (mem_put32 (mem_put32 m a v) (+ a 4) (/ v 4294967296)) (+ a 4)
+          (+ (+ a 4) 4)
+          a
+          (same_outside_put32 (mem_put32 m a v) (+ a 4) (/ v 4294967296))
+          lo4)))
+    (have hm
+      (= (% v 18446744073709551616)
+        (+ (% v 4294967296) (* 4294967296 (% (/ v 4294967296) 4294967296))))
+      (exact (@Nat.mod_mul 4294967296 4294967296 v)))
+    (unfold mem_le64)
+    (unfold mem_put64)
+    (rw hlow)
+    (rw (le32_put32_same m a v))
+    (rw (le32_put32_same (mem_put32 m a v) (+ a 4) (/ v 4294967296)))
+    (rw hm)
+    rfl))
+;; a word stored and read back is the word
+(theorem le64_put64_word ((m Mem) (a Nat) (v (BitVec 64)))
+  (= (w64 (mem_le64 (mem_put64 m a (w64_val v)) a)) v)
+  (by
+    (rw (le64_put64_same m a (w64_val v)))
+    (rw (Nat.mod_eq_of_lt (w64_val_lt v)))
+    (exact (w64_of_val v))))
+
+;; ---- code is where it was after a store elsewhere ---------------------------------------------
+;; a count's number
+(fn fuel_len ((n Fuel)) Nat
+  (measure (struct n))
+  (match n
+    (FZ 0)
+    ((FS n1) (+ 1 (fuel_len n1)))))
+;; the bytes fetched outside the range are the same in both memories
+(theorem fetch_same
+  ((segs (List Seg)) (m Mem) (m2 Mem) (lo Nat) (hi Nat) (h (same_outside m m2 lo hi)) (n Fuel))
+  (forall ((x Nat))
+    (-> (or (<= (+ x (fuel_len n)) lo) (<= hi x)) (= (fetch segs m2 x n) (fetch segs m x n))))
+  (by
+    (induction n
+      ((FZ () (intro x hx) rfl)
+       (FS (n1 ih) (intro x hx)
+         (have o0 (or (< x lo) (<= hi x))
+           (cases hx
+             ((inl (hl) (apply Or.inl ((arith (fuel_len.eq_2 n1)))))
+              (inr (hr) (apply Or.inr ((arith)))))))
+         (have o1 (or (<= (+ (+ x 1) (fuel_len n1)) lo) (<= hi (+ x 1)))
+           (cases hx
+             ((inl (hl) (apply Or.inl ((arith (fuel_len.eq_2 n1)))))
+              (inr (hr) (apply Or.inr ((arith)))))))
+         (rw fetch.eq_2)
+         (rw fetch.eq_2)
+         (rw (h x o0))
+         (rw (ih (+ x 1) o1))
+         rfl)))))
+;; so the instruction decoded at an address fifteen bytes clear of the range is the same
+(theorem code_at_same
+  ((c Cpu)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (a Nat)
+   (i Instr)
+   (len Nat)
+   (h (same_outside (Cpu.mem c) m2 lo hi))
+   (ha (or (<= (+ a 15) lo) (<= hi a)))
+   (hc (code_at c a i len)))
+  (code_at (mem_to c m2) a i len)
+  (by
+    (have ha2 (or (<= (+ a (fuel_len fifteen)) lo) (<= hi a)) (exact ha))
+    (have hf (= (fetch (Cpu.segs c) m2 a fifteen) (fetch (Cpu.segs c) (Cpu.mem c) a fifteen))
+      (exact (fetch_same (Cpu.segs c) (Cpu.mem c) m2 lo hi h fifteen a ha2)))
+    (show (= (decode (fetch (Cpu.segs c) m2 a fifteen)) (some (Prod.mk i len))))
+    (rw hf)
+    (exact hc)))
+;; whether every address of a table lies in [lo, hi)
+(fn all_within ((tbl (List (Prod Nat (Prod Instr Nat)))) (lo Nat) (hi Nat)) Bool
+  (measure (struct tbl))
+  (match tbl
+    (nil true)
+    ((cons (Prod.mk a _) r) (if (within lo a hi) (all_within r lo hi) false))))
+(theorem within_true ((lo Nat) (x Nat) (hi Nat) (h (= (within lo x hi) true)))
+  (and (<= lo x) (< x hi))
+  (by
+    (cases (Nat.decLe lo x)
+      ((isFalse (h1) (have hw (= (within lo x hi) false) (rw within.eq_1) (rw (if_neg h1)) rfl)
+         (exact (absurd (Eq.trans (Eq.symm hw) h) Bool.false_ne_true)))
+       (isTrue (h1)
+         (cases (Nat.decLt x hi)
+           ((isFalse (h2)
+              (have hw (= (within lo x hi) false)
+                (rw within.eq_1)
+                (rw (if_pos h1))
+                (rw (if_neg h2))
+                rfl)
+              (exact (absurd (Eq.trans (Eq.symm hw) h) Bool.false_ne_true)))
+            (isTrue (h2) (exact (And.intro h1 h2))))))))))
+;; an address a table holds lies in the range all its addresses lie in
+(theorem site_within ((tbl (List (Prod Nat (Prod Instr Nat)))) (lo Nat) (hi Nat))
+  (forall ((a Nat) (il (Prod Instr Nat)))
+    (-> (= (all_within tbl lo hi) true) (= (site tbl a) (some il)) (and (<= lo a) (< a hi))))
+  (by
+    (induction tbl
+      ((nil () (intro a il hall hs) (have hn (= (site nil a) none) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hs)) (Option.some_ne_none il))))
+       (cons (e r ih) (intro a il)
+         (cases e
+           ((mk (a1 il1) (intro hall hs)
+              (cases (within lo a1 hi) hw
+                ((false ()
+                   (have hx (= (all_within (cons (Prod.mk a1 il1) r) lo hi) false)
+                     (rw all_within.eq_2)
+                     (rw hw)
+                     rfl)
+                   (exact (absurd (Eq.trans (Eq.symm hx) hall) Bool.false_ne_true)))
+                 (true ()
+                   (have hx (= (all_within (cons (Prod.mk a1 il1) r) lo hi) (all_within r lo hi))
+                     (rw all_within.eq_2)
+                     (rw hw)
+                     rfl)
+                   (have hr (= (all_within r lo hi) true) (exact (Eq.trans (Eq.symm hx) hall)))
+                   (cases (Nat.decEq a1 a)
+                     ((isTrue (he) (rw (<- he)) (exact (within_true lo a1 hi hw)))
+                      (isFalse (hne)
+                        (have hs2 (= (site r a) (some il))
+                          (rw (<- hs))
+                          (rw site.eq_2)
+                          (rw (if_neg hne))
+                          rfl)
+                        (exact (ih a il hr hs2))))))))))))))))
+;; a table in place is in place in a memory that agrees with the first outside a range clear of
+;; the table's addresses
+(theorem code_in_same
+  ((c Cpu)
+   (m2 Mem)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (lo Nat)
+   (hi Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (h (same_outside (Cpu.mem c) m2 lo hi))
+   (hclear (or (<= (+ chi 15) lo) (<= hi clo)))
+   (hc (code_in c tbl)))
+  (code_in (mem_to c m2) tbl)
+  (by
+    (intro a i len hs)
+    (cases (site_within tbl clo chi a (Prod.mk i len) hall hs)
+      ((intro (h1 h2)
+         (have ha (or (<= (+ a 15) lo) (<= hi a))
+           (cases hclear ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+         (exact (code_at_same c m2 lo hi a i len h ha (hc a i len hs))))))))
+
+;; ---- agreement outside a range, composed --------------------------------------------------------
+;; agreement outside a range is agreement outside a wider one
+(theorem same_outside_widen
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (lo2 Nat)
+   (hi2 Nat)
+   (h (same_outside m m2 lo hi))
+   (hlo (<= lo2 lo))
+   (hhi (<= hi hi2)))
+  (same_outside m m2 lo2 hi2)
+  (by
+    (intro x hx)
+    (have hx2 (or (< x lo) (<= hi x))
+      (cases hx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (exact (h x hx2))))
+;; and holds from the first memory to the third where it holds to the second and on
+(theorem same_outside_trans
+  ((m Mem)
+   (m2 Mem)
+   (m3 Mem)
+   (lo Nat)
+   (hi Nat)
+   (h1 (same_outside m m2 lo hi))
+   (h2 (same_outside m2 m3 lo hi)))
+  (same_outside m m3 lo hi)
+  (by (intro x hx) (rw (h2 x hx)) (exact (h1 x hx))))

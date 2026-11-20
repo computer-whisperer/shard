@@ -1,8 +1,8 @@
 # The compile system: the statement
 
-Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18). Nothing in the tree
-implements it. It fixes one statement and the two ends of the first chain, and leaves the middle
-open on purpose (§7).
+Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18). Of it the tree
+holds a machine's model and a trial of low-level code (§4, `v3/models/x86`); no compiler. It fixes
+one statement and the two ends of the first chain, and leaves the middle open on purpose (§7).
 
 ## 1. What it is for
 
@@ -105,15 +105,37 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is not yet a definition (`OPEN.md` §2); the loop over host calls is not written |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, two contracts |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
 
-**A conjecture, to be tested before anything is built on it:** low-level code — machine words, a
-memory, loops — is a subset of shard, programs over words and a memory value used once, and not a
-second language. The evaluator, K and every tool would then work at every level, and hand-written
-fast code would be ordinary shard.
+**A conjecture, under test:** low-level code — machine words, buffers, loops — is a subset of
+shard and not a second language. The evaluator, K and every tool would then work at every level,
+and hand-written fast code would be ordinary shard. The owner's requirement of it (`LAW.md` §6,
+19): the specificity and the performance of C or Rust, no runtime and no evaluator in what runs,
+and facts about a piece of machine code — what it does not write — stated and proven. As it
+stands in the trial (`v3/models/x86/buffers.shard`):
+
+- A function over machine words is the processor's own arithmetic: the model executes an
+  instruction by the function the source calls.
+- A buffer is a value. In the logic it is its contents, a list of words, and no address appears
+  in what a function means. A read or a write takes the evidence that its index is in range — a
+  proof, erased like every proof — so the function is total and its code checks no index.
+- A function that returns a changed buffer may be compiled to code that writes into the buffer
+  it was given. Nothing in the language says a buffer is used once: the code's contract is
+  proven or it is not, and where the old contents are still needed it is not.
+- What is proven of a piece of code is its *contract*: from a state that holds the function's
+  arguments the processor comes to a state that holds its value — in a register, or in the
+  buffer's memory — with what the code has left as it was: memory outside a stated range, the
+  registers a caller keeps. A contract is §2's fact, its specification "end where you began" (K
+  accepts both directions; checked once by hand, held by no test).
+
+Proven there, by hand, from laws of the model stated once (`laws.shard`): the contracts of a sum
+of products over two buffers, which writes nothing, and of a sum into the first of two buffers,
+which changes no byte outside that buffer's words. Not shown: the contract of a function that
+calls another and keeps a frame on the stack; a compiler that derives a contract; and anything
+for code not of this kind — lists, constructors, integers of any size.
 
 ## 5. The first instance: a binary
 

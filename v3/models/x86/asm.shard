@@ -37,12 +37,13 @@
     (BSub 5)
     (BXor 6)
     (BCmp 7)))
-;; the prefix of a 64-bit operation: W, with R the top bit of the register field's number and B
-;; that of the base's or the register's
+;; the prefix of a 64-bit operation: W, with R the top bit of the register field's number, X
+;; that of the index's and B that of the base's or the register's
 (fn rex_w ((rg Nat) (rm Rm)) Nat
   (match rm
     ((RmReg r) (+ 72 (+ (* 4 (/ rg 8)) (/ r 8))))
-    ((RmMem b _) (+ 72 (+ (* 4 (/ rg 8)) (/ b 8))))))
+    ((RmMem b _) (+ 72 (+ (* 4 (/ rg 8)) (/ b 8))))
+    ((RmSib b x _ _) (+ 72 (+ (* 4 (/ rg 8)) (+ (* 2 (/ x 8)) (/ b 8)))))))
 ;; a displacement's bytes after a ModRM byte whose low six bits are given: none where it is zero
 ;; and the base allows it (md 0), one byte (md 1), four (md 2); `sib` the bytes between
 (fn enc_disp ((low Nat) (sib (List Nat)) (zero_ok Bool) (d Nat)) (List Nat)
@@ -50,14 +51,26 @@
   (if (fits8 d) (cons (+ 64 low) (List.append sib (list (% d 256))))
   (if (fits32 d) (cons (+ 128 low) (List.append sib (le4 (% d 4294967296))))
   nil))))
+;; a scale's two bits in a SIB byte
+(fn ss_of ((s Nat)) Nat
+  (match s
+    (1 0)
+    (2 1)
+    (4 2)
+    (_ 3)))
 ;; the ModRM byte of a register field and an operand, with what follows it. A base whose low
-;; three bits are 4 takes the SIB byte 24; one whose low three bits are 5 always a displacement
+;; three bits are 4 takes the SIB byte 24; one whose low three bits are 5 always a displacement;
+;; an index takes the SIB byte of its scale, its number and the base's
 (fn enc_modrm ((rg Nat) (rm Rm)) (List Nat)
   (match rm
     ((RmReg r) (list (+ 192 (+ (* 8 (% rg 8)) (% r 8)))))
     ((RmMem b d)
      (if (= (% b 8) 4) (enc_disp (+ (* 8 (% rg 8)) 4) (list 36) true d)
-     (enc_disp (+ (* 8 (% rg 8)) (% b 8)) nil (if (= (% b 8) 5) false true) d)))))
+     (enc_disp (+ (* 8 (% rg 8)) (% b 8)) nil (if (= (% b 8) 5) false true) d)))
+    ((RmSib b x s d)
+     (enc_disp (+ (* 8 (% rg 8)) 4) (list (+ (* 64 (ss_of s)) (+ (* 8 (% x 8)) (% b 8))))
+       (if (= (% b 8) 5) false true)
+       d))))
 ;; an opcode on a register in its low three bits, the prefix 41 before it for a high register
 (fn enc_plus_r ((op Nat) (r Nat) (rest (List Nat))) (List Nat)
   (if (< r 8) (cons (+ op r) rest) (cons 65 (cons (+ op (- r 8)) rest))))
@@ -76,6 +89,7 @@
     ((AluRmI o rm v)
      (if (fits8 v) (enc_w 131 (bop_num o) rm (list (% v 256)))
      (enc_w 129 (bop_num o) rm (le4 (% v 4294967296)))))
+    ((ImulRRm r rm) (cons (rex_w r rm) (cons 15 (cons 175 (enc_modrm r rm)))))
     ((Jcc cc d) (cons 15 (cons (+ 128 cc) (le4 (% d 4294967296)))))
     ((Jmp d) (cons 233 (le4 (% d 4294967296))))
     ((Call d) (cons 232 (le4 (% d 4294967296))))

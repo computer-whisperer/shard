@@ -262,6 +262,17 @@ admitted that the logic does not derive.
     processor's own state and bytes as the floor, notations above it, K reasoning about a
     model in general and engines running it. "That matches my thinking, rewrite §4 and start
     there".
+19. *Low-level code: as C or Rust, and its machine code's facts provable.* Of the form low-level
+    code is to have (`COMPILE.md` §4), against a proposal that gave it its meaning through the
+    evaluator: "One root requirement here is that programs written in shard should reach the
+    specificity and performance of those written in c or rust. A permanent runtime or evaluator
+    is out of the question to begin with, and facts like 'this chunk of x86 machine code, under
+    these circumstances, does not write memory outside of these addresses' should ideally be
+    statable and provable." The form then put to the owner — a buffer a value, evidence at each
+    access, the contract of a piece of code — is under test and not ruled: "I think we were on
+    the right page, but let's get another thought cycle to review the problem and any predicted
+    consequences of the approach. If everything looks good, then we can proceed with the test
+    you proposed."
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

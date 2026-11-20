@@ -1,0 +1,963 @@
+;;; v3/models/x86/buffers_facts.shard — what is proven of the listing of `buffers.shard`: for each
+;;; of its three functions a contract of its code — from a state at the function's first
+;;; instruction that holds its arguments, the processor comes to a state that holds the
+;;; function's value, with what the code has written stated.
+(import "buffers.shard")
+(import "laws.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.buffers)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- a buffer in memory -----------------------------------------------------------------------
+;; the words of a buffer stand in memory from address p, eight bytes each
+(def holds ((m Mem) (p Nat) (xs (List (BitVec 64)))) Prop
+  (forall ((k Nat)) (-> (< k (List.length xs)) (= (w64 (mem_le64 m (+ p (* 8 k)))) (nth xs k)))))
+;; the word an access with evidence gives is the word at that index
+(theorem get_nth ((xs (List (BitVec 64))))
+  (forall ((k Nat) (h (< k (List.length xs)))) (= (List.get xs (Fin.mk k h)) (nth xs k)))
+  (by
+    (induction xs
+      ((nil () (intro k h) (exact (absurd h (Nat.not_lt_zero k))))
+       (cons (x r ih) (intro k h)
+         (cases k ((zero () rfl) (succ (j) (exact (ih j (Nat.le_of_succ_le_succ h)))))))))))
+(theorem word_at_nth ((xs (List (BitVec 64))) (i (BitVec 64)) (h (< (w64_val i) (List.length xs))))
+  (= (word_at xs i h) (nth xs (w64_val i)))
+  (exact (get_nth xs (w64_val i) h)))
+
+;; a list with one word replaced: that word at its index, every other as it was
+(theorem nth_upd_same ((xs (List (BitVec 64))))
+  (forall ((k Nat) (w (BitVec 64))) (-> (< k (List.length xs)) (= (nth (upd xs k w) k) w)))
+  (by
+    (induction xs
+      ((nil () (intro k w hk) (exact (absurd hk (Nat.not_lt_zero k))))
+       (cons (x r ih) (intro k w hk)
+         (cases (Nat.decEq k 0)
+           ((isTrue (h0) (rw upd.eq_2) (rw (if_pos h0)) (rw nth.eq_2) (rw (if_pos h0)) rfl)
+            (isFalse (h0) (have hk1 (< k (+ (List.length r) 1)) (exact hk)) (rw upd.eq_2)
+              (rw (if_neg h0))
+              (rw nth.eq_2)
+              (rw (if_neg h0))
+              (exact (ih (- k 1) w (get_bound k (List.length r) hk1 h0)))))))))))
+(theorem nth_upd_other ((xs (List (BitVec 64))))
+  (forall ((k Nat) (w (BitVec 64)) (j Nat)) (-> (Not (= j k)) (= (nth (upd xs k w) j) (nth xs j))))
+  (by
+    (induction xs
+      ((nil () (intro k w j hne) rfl)
+       (cons (x r ih) (intro k w j hne)
+         (cases (Nat.decEq k 0)
+           ((isTrue (hk0)
+              (cases (Nat.decEq j 0)
+                ((isTrue (hj0) (exact (absurd (Eq.trans hj0 (Eq.symm hk0)) hne)))
+                 (isFalse (hj0) (rw upd.eq_2) (rw (if_pos hk0)) (rw nth.eq_2) (rw nth.eq_2)
+                   (rw (if_neg hj0))
+                   (rw (if_neg hj0))
+                   rfl))))
+            (isFalse (hk0)
+              (cases (Nat.decEq j 0)
+                ((isTrue (hj0) (rw upd.eq_2) (rw (if_neg hk0)) (rw nth.eq_2) (rw nth.eq_2)
+                   (rw (if_pos hj0))
+                   (rw (if_pos hj0))
+                   rfl)
+                 (isFalse (hj0) (have hj1 (<= 1 j) (exact (Nat.pos_of_ne_zero hj0)))
+                   (have hk1 (<= 1 k) (exact (Nat.pos_of_ne_zero hk0)))
+                   (have hne1 (Not (= (- j 1) (- k 1)))
+                     (intro heq)
+                     (apply hne ((arith heq (Nat.sub_add_cancel hj1) (Nat.sub_add_cancel hk1)))))
+                   (rw upd.eq_2)
+                   (rw (if_neg hk0))
+                   (rw nth.eq_2)
+                   (rw nth.eq_2)
+                   (rw (if_neg hj0))
+                   (rw (if_neg hj0))
+                   (exact (ih (- k 1) w (- j 1) hne1)))))))))))))
+;; a word stored at a buffer's index: the memory then holds the list with that word replaced
+(theorem holds_upd
+  ((m Mem)
+   (p Nat)
+   (xs (List (BitVec 64)))
+   (k Nat)
+   (w (BitVec 64))
+   (h (holds m p xs))
+   (hk (< k (List.length xs))))
+  (holds (mem_put64 m (+ p (* 8 k)) (w64_val w)) p (upd xs k w))
+  (by
+    (intro j hj)
+    (have hj2 (< j (List.length xs)) (rw (<- (upd_length xs k w))) (exact hj))
+    (cases (Nat.decEq j k)
+      ((isTrue (he) (rw he) (rw (le64_put64_word m (+ p (* 8 k)) w))
+         (exact (Eq.symm (nth_upd_same xs k w hk))))
+       (isFalse (hne)
+         (have hso
+           (same_outside m (mem_put64 m (+ p (* 8 k)) (w64_val w)) (+ p (* 8 k)) (+ (+ p (* 8 k)) 8))
+           (exact
+             (same_outside_put64 m m (+ p (* 8 k)) (+ (+ p (* 8 k)) 8) (+ p (* 8 k)) (w64_val w)
+               (same_outside_refl m (+ p (* 8 k)) (+ (+ p (* 8 k)) 8))
+               (Nat.le_refl (+ p (* 8 k)))
+               (Nat.le_refl (+ (+ p (* 8 k)) 8)))))
+         (have hd (or (<= (+ (+ p (* 8 j)) 8) (+ p (* 8 k))) (<= (+ (+ p (* 8 k)) 8) (+ p (* 8 j))))
+           (cases (Nat.decLt j k)
+             ((isTrue (hl) (apply Or.inl ((arith))))
+              (isFalse (hnl)
+                (cases (Nat.decLt k j)
+                  ((isTrue (hr) (apply Or.inr ((arith))))
+                   (isFalse (hnr) (have he (= j k) (arith)) (exact (absurd he hne)))))))))
+         (rw
+           (le64_same m (mem_put64 m (+ p (* 8 k)) (w64_val w)) (+ p (* 8 k)) (+ (+ p (* 8 k)) 8)
+             (+ p (* 8 j))
+             hso
+             hd))
+         (rw (nth_upd_other xs k w j hne))
+         (exact (h j hj2)))))))
+;; a buffer clear of a range is held by any memory that agrees with the first outside the range
+(theorem holds_same
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (q Nat)
+   (ys (List (BitVec 64)))
+   (h (holds m q ys))
+   (hso (same_outside m m2 lo hi))
+   (hclear (or (<= (+ q (* 8 (List.length ys))) lo) (<= hi q))))
+  (holds m2 q ys)
+  (by
+    (intro j hj)
+    (have hd (or (<= (+ (+ q (* 8 j)) 8) lo) (<= hi (+ q (* 8 j))))
+      (cases hclear ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (rw (le64_same m m2 lo hi (+ q (* 8 j)) hso hd))
+    (exact (h j hj))))
+
+;; ---- the code -----------------------------------------------------------------------------------
+;; the three functions' instructions by address, as the listing's file holds them
+(fn buffers_table () (List (Prod Nat (Prod Instr Nat)))
+  (list
+    ;; dot
+    (Prod.mk 4194489 (Prod.mk (AluRmR BXor (RmReg 0) 0) 3))
+    (Prod.mk 4194492 (Prod.mk (AluRmR BXor (RmReg 1) 1) 3))
+    (Prod.mk 4194495 (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))
+    (Prod.mk 4194498 (Prod.mk (Jcc 3 21) 6))
+    (Prod.mk 4194504 (Prod.mk (MovRRm 8 (RmSib 7 1 8 0)) 4))
+    (Prod.mk 4194508 (Prod.mk (ImulRRm 8 (RmSib 6 1 8 0)) 5))
+    (Prod.mk 4194513 (Prod.mk (AluRmR BAdd (RmReg 0) 8) 3))
+    (Prod.mk 4194516 (Prod.mk (AluRmI BAdd (RmReg 1) 1) 4))
+    (Prod.mk 4194520 (Prod.mk (Jmp 18446744073709551586) 5))
+    (Prod.mk 4194525 (Prod.mk Ret 1))
+    ;; addto
+    (Prod.mk 4194526 (Prod.mk (AluRmR BXor (RmReg 1) 1) 3))
+    (Prod.mk 4194529 (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))
+    (Prod.mk 4194532 (Prod.mk (Jcc 3 17) 6))
+    (Prod.mk 4194538 (Prod.mk (MovRRm 8 (RmSib 6 1 8 0)) 4))
+    (Prod.mk 4194542 (Prod.mk (AluRmR BAdd (RmSib 7 1 8 0) 8) 4))
+    (Prod.mk 4194546 (Prod.mk (AluRmI BAdd (RmReg 1) 1) 4))
+    (Prod.mk 4194550 (Prod.mk (Jmp 18446744073709551590) 5))
+    (Prod.mk 4194555 (Prod.mk Ret 1))
+    ;; both
+    (Prod.mk 4194556 (Prod.mk (Push 3) 1))
+    (Prod.mk 4194557 (Prod.mk (Push 12) 2))
+    (Prod.mk 4194559 (Prod.mk (MovRmR (RmReg 3) 7) 3))
+    (Prod.mk 4194562 (Prod.mk (MovRmR (RmReg 12) 2) 3))
+    (Prod.mk 4194565 (Prod.mk (Call 18446744073709551572) 5))
+    (Prod.mk 4194570 (Prod.mk (MovRmR (RmReg 7) 3) 3))
+    (Prod.mk 4194573 (Prod.mk (MovRmR (RmReg 6) 3) 3))
+    (Prod.mk 4194576 (Prod.mk (MovRmR (RmReg 2) 12) 3))
+    (Prod.mk 4194579 (Prod.mk (Call 18446744073709551521) 5))
+    (Prod.mk 4194584 (Prod.mk (Pop 12) 2))
+    (Prod.mk 4194586 (Prod.mk (Pop 3) 1))
+    (Prod.mk 4194587 (Prod.mk Ret 1))))
+
+;; ---- dot: the states its code passes through ----------------------------------------------------
+;; one turn of the loop from its head, the index below the count: after the comparison, the jump
+;; not taken, the load, the product, the sum, the index's increment; the jump back then leaves
+;; the last of them at the loop's head
+(fn dot_s1 ((c Cpu)) Cpu (x_cmp_rr (at_pc c (w64 4194495)) 1 2 (w64 4194498)))
+(fn dot_s2 ((c Cpu)) Cpu (at_pc (dot_s1 c) (w64 4194504)))
+(fn dot_s3 ((c Cpu)) Cpu (x_load_sib (dot_s2 c) 8 7 1 8 0 (w64 4194508)))
+(fn dot_s4 ((c Cpu)) Cpu (x_imul_sib (dot_s3 c) 8 6 1 8 0 (w64 4194513)))
+(fn dot_s5 ((c Cpu)) Cpu (x_alu_rr (dot_s4 c) BAdd 0 8 (w64 4194516)))
+(fn dot_s6 ((c Cpu)) Cpu (x_alu_ri (dot_s5 c) BAdd 1 1 (w64 4194520)))
+;; from the loop's head with the index not below the count: the jump taken, the return
+(fn dot_out ((c Cpu)) Cpu (x_ret (at_pc (dot_s1 c) (w64 4194525))))
+;; from the function's first instruction to the loop's head
+(fn dot_in ((c Cpu)) Cpu
+  (x_alu_rr (x_alu_rr (at_pc c (w64 4194489)) BXor 0 0 (w64 4194492)) BXor 1 1 (w64 4194495)))
+
+;; one turn of the loop
+(theorem dot_turn
+  ((c Cpu)
+   (hcode (code_in c buffers_table))
+   (h (< (w64_val (reg c 1)) (w64_val (reg c 2))))
+   (hmx (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 4) true))
+   (hmy (= (mapped (Cpu.segs c) (ea_sib c 6 1 8 0) 8 4) true)))
+  (reaches (at_pc c (w64 4194495)) (at_pc (dot_s6 c) (w64 4194495)))
+  (by
+    (have h1 (< (w64_val (reg (at_pc c (w64 4194495)) 1)) (w64_val (reg (at_pc c (w64 4194495)) 2)))
+      (exact h))
+    (apply (do_cmp_rr 4194495 1 2 3 4194498) (rfl)
+      ((exact
+         (hcode 4194495 (AluRmR BCmp (RmReg 1) 2) 3
+           (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))))))
+      (rfl)
+      ((apply (do_jcc_not 4194498 3 21 6 4194504) (rfl)
+         ((exact (hcode 4194498 (Jcc 3 21) 6 (Eq.refl (some (Prod.mk (Jcc 3 21) 6))))))
+         ((exact (cmp_below (at_pc c (w64 4194495)) 1 2 (w64 4194498) h1)))
+         (rfl)
+         ((apply (do_load_sib 4194504 8 7 1 8 0 4 4194508) (rfl)
+            ((exact
+               (hcode 4194504 (MovRRm 8 (RmSib 7 1 8 0)) 4
+                 (Eq.refl (some (Prod.mk (MovRRm 8 (RmSib 7 1 8 0)) 4))))))
+            ((exact hmx))
+            (rfl)
+            ((apply (do_imul_sib 4194508 8 6 1 8 0 5 4194513) (rfl)
+               ((exact
+                  (hcode 4194508 (ImulRRm 8 (RmSib 6 1 8 0)) 5
+                    (Eq.refl (some (Prod.mk (ImulRRm 8 (RmSib 6 1 8 0)) 5))))))
+               ((exact hmy))
+               (rfl)
+               ((apply (do_alu_rr 4194513 BAdd 0 8 3 4194516) (rfl)
+                  ((exact
+                     (hcode 4194513 (AluRmR BAdd (RmReg 0) 8) 3
+                       (Eq.refl (some (Prod.mk (AluRmR BAdd (RmReg 0) 8) 3))))))
+                  (rfl)
+                  (rfl)
+                  ((apply (do_alu_ri 4194516 BAdd 1 1 4 4194520) (rfl)
+                     ((exact
+                        (hcode 4194516 (AluRmI BAdd (RmReg 1) 1) 4
+                          (Eq.refl (some (Prod.mk (AluRmI BAdd (RmReg 1) 1) 4))))))
+                     (rfl)
+                     (rfl)
+                     ((apply (do_jmp 4194520 5 18446744073709551586 4194495) (rfl)
+                        ((exact
+                           (hcode 4194520 (Jmp 18446744073709551586) 5
+                             (Eq.refl (some (Prod.mk (Jmp 18446744073709551586) 5))))))
+                        (rfl)
+                        ((exact (reaches_refl (at_pc (dot_s6 c) (w64 4194495))))))))))))))))))))
+;; out of the loop: the index not below the count
+(theorem dot_leave
+  ((c Cpu)
+   (hcode (code_in c buffers_table))
+   (h (Not (< (w64_val (reg c 1)) (w64_val (reg c 2)))))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (reaches (at_pc c (w64 4194495)) (dot_out c))
+  (by
+    (have h1
+      (Not (< (w64_val (reg (at_pc c (w64 4194495)) 1)) (w64_val (reg (at_pc c (w64 4194495)) 2))))
+      (exact h))
+    (apply (do_cmp_rr 4194495 1 2 3 4194498) (rfl)
+      ((exact
+         (hcode 4194495 (AluRmR BCmp (RmReg 1) 2) 3
+           (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))))))
+      (rfl)
+      ((apply (do_jcc_taken 4194498 3 6 21 4194525) (rfl)
+         ((exact (hcode 4194498 (Jcc 3 21) 6 (Eq.refl (some (Prod.mk (Jcc 3 21) 6))))))
+         ((exact (cmp_not_below (at_pc c (w64 4194495)) 1 2 (w64 4194498) h1)))
+         (rfl)
+         ((apply (do_ret 4194525 1) (rfl)
+            ((exact (hcode 4194525 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))))
+            ((exact hsp))
+            ((exact (reaches_refl (dot_out c)))))))))))
+;; into the loop
+(theorem dot_enter ((c Cpu) (hcode (code_in c buffers_table)))
+  (reaches (at_pc c (w64 4194489)) (dot_in c))
+  (by
+    (apply (do_alu_rr 4194489 BXor 0 0 3 4194492) (rfl)
+      ((exact
+         (hcode 4194489 (AluRmR BXor (RmReg 0) 0) 3
+           (Eq.refl (some (Prod.mk (AluRmR BXor (RmReg 0) 0) 3))))))
+      (rfl)
+      (rfl)
+      ((apply (do_alu_rr 4194492 BXor 1 1 3 4194495) (rfl)
+         ((exact
+            (hcode 4194492 (AluRmR BXor (RmReg 1) 1) 3
+              (Eq.refl (some (Prod.mk (AluRmR BXor (RmReg 1) 1) 3))))))
+         (rfl)
+         (rfl)
+         ((exact (reaches_refl (dot_in c)))))))))
+
+;; ---- dot: the loop, and the contract ------------------------------------------------------------
+;; the function's own two cases
+(theorem dot_go_turn
+  ((t Two) (i (BitVec 64)) (acc (BitVec 64)) (h (< (w64_val i) (w64_val (two_n t)))))
+  (= (dot_go t i acc)
+    (dot_go t (w64_add i (w64 1))
+      (w64_add acc
+        (w64_mul (word_at (two_xs t) i (Nat.lt_of_lt_of_le h (two_hx t)))
+          (word_at (two_ys t) i (Nat.lt_of_lt_of_le h (two_hy t)))))))
+  (by (rw dot_go.eq_1 (occ 1)) (rw (dif_pos h)) rfl))
+(theorem dot_go_done
+  ((t Two) (i (BitVec 64)) (acc (BitVec 64)) (h (Not (< (w64_val i) (w64_val (two_n t))))))
+  (= (dot_go t i acc) acc)
+  (by (rw dot_go.eq_1) (rw (dif_neg h)) rfl))
+(theorem dot_out_returned ((c Cpu)) (returned c (dot_out c))
+  (by
+    (unfold returned)
+    (unfold kept)
+    (apply And.intro (rfl)
+      ((apply And.intro (rfl)
+         ((apply And.intro (rfl)
+            ((apply And.intro (rfl)
+               ((apply And.intro (rfl)
+                  ((apply And.intro (rfl) ((apply And.intro (rfl) ((apply And.intro (rfl) (rfl))))))))))))))))))
+;; From the loop's head, in a state whose registers hold the two buffers' addresses, the count,
+;; an index and a sum: the processor comes to the function's return with `dot_go` of that index
+;; and sum in rax, and memory as it was.
+(theorem dot_loop ((t Two) (c Cpu))
+  (-> (code_in c buffers_table) (= (reg c 2) (two_n t))
+    (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t))
+    (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t))
+    (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4)
+    (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4)
+    (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+    (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+    (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)
+    (exists ((c2 Cpu))
+      (and (reaches (at_pc c (w64 4194495)) c2)
+        (and (= (reg c2 0) (dot_go t (reg c 1) (reg c 0)))
+          (and (= (Cpu.mem c2) (Cpu.mem c)) (returned c c2))))))
+  (by
+    (wf c (- (w64_val (two_n t)) (w64_val (reg c 1))) ih (intro hcode hn hx hy hmx hmy hwx hwy hsp)
+      (cases (Nat.decLt (w64_val (reg c 1)) (w64_val (two_n t)))
+        ((isFalse (h) (have h2 (Not (< (w64_val (reg c 1)) (w64_val (reg c 2)))) (rw hn) (exact h))
+           (apply (Exists.intro (dot_out c))
+             ((apply And.intro ((exact (dot_leave c hcode h2 hsp)))
+                ((apply And.intro ((rw (dot_go_done t (reg c 1) (reg c 0) h)) rfl)
+                   ((apply And.intro (rfl) ((exact (dot_out_returned c)))))))))))
+         (isTrue (h) (have h2 (< (w64_val (reg c 1)) (w64_val (reg c 2))) (rw hn) (exact h))
+           (have hkx (< (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 18446744073709551616)
+             (arith))
+           (have hky (< (+ (w64_val (reg c 6)) (* 8 (w64_val (reg c 1)))) 18446744073709551616)
+             (arith))
+           (have hmx1 (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 4) true)
+             (rw (ea_sib_8 c 7 1 hkx))
+             (exact (hmx (w64_val (reg c 1)) h)))
+           (have hmy1 (= (mapped (Cpu.segs c) (ea_sib c 6 1 8 0) 8 4) true)
+             (rw (ea_sib_8 c 6 1 hky))
+             (exact (hmy (w64_val (reg c 1)) h)))
+           (have ex
+             (= (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+               (w64 (mem_le64 (Cpu.mem c) (ea_sib c 7 1 8 0))))
+             (rw (word_at_nth (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t))))
+             (rw (ea_sib_8 c 7 1 hkx))
+             (exact (Eq.symm (hx (w64_val (reg c 1)) (Nat.lt_of_lt_of_le h (two_hx t))))))
+           (have ey
+             (= (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t)))
+               (w64 (mem_le64 (Cpu.mem c) (ea_sib c 6 1 8 0))))
+             (rw (word_at_nth (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t))))
+             (rw (ea_sib_8 c 6 1 hky))
+             (exact (Eq.symm (hy (w64_val (reg c 1)) (Nat.lt_of_lt_of_le h (two_hy t))))))
+           ;; the hypotheses, of the state the turn ends in
+           (have hdec
+             (< (- (w64_val (two_n t)) (w64_val (reg (dot_s6 c) 1)))
+               (- (w64_val (two_n t)) (w64_val (reg c 1))))
+             (exact (loop_descends (two_n t) (reg c 1) h)))
+           (have hcode1 (code_in (dot_s6 c) buffers_table) (exact hcode))
+           (have hn1 (= (reg (dot_s6 c) 2) (two_n t)) (exact hn))
+           (have hx1 (holds (Cpu.mem (dot_s6 c)) (w64_val (reg (dot_s6 c) 7)) (two_xs t))
+             (exact hx))
+           (have hy1 (holds (Cpu.mem (dot_s6 c)) (w64_val (reg (dot_s6 c) 6)) (two_ys t))
+             (exact hy))
+           (have hmx2
+             (mapped_words (Cpu.segs (dot_s6 c)) (w64_val (reg (dot_s6 c) 7)) (w64_val (two_n t)) 4)
+             (exact hmx))
+           (have hmy2
+             (mapped_words (Cpu.segs (dot_s6 c)) (w64_val (reg (dot_s6 c) 6)) (w64_val (two_n t)) 4)
+             (exact hmy))
+           (have hwx1
+             (<= (+ (w64_val (reg (dot_s6 c) 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+             (exact hwx))
+           (have hwy1
+             (<= (+ (w64_val (reg (dot_s6 c) 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+             (exact hwy))
+           (have hsp1 (= (mapped (Cpu.segs (dot_s6 c)) (w64_val (reg (dot_s6 c) 4)) 8 4) true)
+             (exact hsp))
+           (cases (ih (dot_s6 c) hdec hcode1 hn1 hx1 hy1 hmx2 hmy2 hwx1 hwy1 hsp1)
+             ((intro (c2 hc2)
+                (cases hc2
+                  ((intro (hreach hrest)
+                     (apply (Exists.intro c2)
+                       ((apply And.intro
+                          ((exact
+                             (reaches_trans (at_pc c (w64 4194495)) (at_pc (dot_s6 c) (w64 4194495))
+                               c2
+                               (dot_turn c hcode h2 hmx1 hmy1)
+                               hreach)))
+                          ((rw (dot_go_turn t (reg c 1) (reg c 0) h)) (rw ex) (rw ey) (exact hrest)))))))))))))))))
+;; the state the entry ends in is at the loop's head, its index and its sum zero
+(theorem dot_in_head ((c Cpu)) (= (at_pc (dot_in c) (w64 4194495)) (dot_in c))
+  (by (unfold dot_in) (unfold x_alu_rr) (rw at_pc_twice) rfl))
+(theorem dot_in_zero ((t Two) (c Cpu)) (= (dot_go t (reg (dot_in c) 1) (reg (dot_in c) 0)) (dot t))
+  (by
+    (show (= (dot_go t (w64_xor (reg c 1) (reg c 1)) (w64_xor (reg c 0) (reg c 0))) (dot t)))
+    (rw (w64_xor_self (reg c 1)))
+    (rw (w64_xor_self (reg c 0)))
+    rfl))
+;; The contract of `dot`'s code. From a state at its first instruction whose rdi and rsi hold the
+;; addresses of two buffers, each mapped to read for the count in rdx and holding the lists of
+;; t, with the return address readable at the stack pointer: the processor comes to a state at
+;; that return address with `dot t` in rax, the stack pointer above the address, the callee's
+;; registers kept — and memory as it was: the code writes nothing.
+(theorem dot_contract
+  ((t Two)
+   (c Cpu)
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hx (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t)))
+   (hy (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t)))
+   (hmx (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194489)) c2)
+      (and (= (reg c2 0) (dot t)) (and (= (Cpu.mem c2) (Cpu.mem c)) (returned c c2)))))
+  (by
+    (have hcode1 (code_in (dot_in c) buffers_table) (exact hcode))
+    (have hn1 (= (reg (dot_in c) 2) (two_n t)) (exact hn))
+    (have hx1 (holds (Cpu.mem (dot_in c)) (w64_val (reg (dot_in c) 7)) (two_xs t)) (exact hx))
+    (have hy1 (holds (Cpu.mem (dot_in c)) (w64_val (reg (dot_in c) 6)) (two_ys t)) (exact hy))
+    (have hmx1
+      (mapped_words (Cpu.segs (dot_in c)) (w64_val (reg (dot_in c) 7)) (w64_val (two_n t)) 4)
+      (exact hmx))
+    (have hmy1
+      (mapped_words (Cpu.segs (dot_in c)) (w64_val (reg (dot_in c) 6)) (w64_val (two_n t)) 4)
+      (exact hmy))
+    (have hwx1 (<= (+ (w64_val (reg (dot_in c) 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwx))
+    (have hwy1 (<= (+ (w64_val (reg (dot_in c) 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwy))
+    (have hsp1 (= (mapped (Cpu.segs (dot_in c)) (w64_val (reg (dot_in c) 4)) 8 4) true) (exact hsp))
+    (cases (dot_loop t (dot_in c) hcode1 hn1 hx1 hy1 hmx1 hmy1 hwx1 hwy1 hsp1)
+      ((intro (c2 hc2)
+         (cases hc2
+           ((intro (hreach hrest)
+              (have hreach1 (reaches (dot_in c) c2) (rw (<- (dot_in_head c))) (exact hreach))
+              (apply (Exists.intro c2)
+                ((apply And.intro
+                   ((exact
+                      (reaches_trans (at_pc c (w64 4194489)) (dot_in c) c2 (dot_enter c hcode)
+                        hreach1)))
+                   ((rw (<- (dot_in_zero t c))) (exact hrest)))))))))))))
+
+;; The same buffer as both operands (`dot a a`): the contract asks nothing of where the two
+;; buffers stand, so one buffer's hypotheses serve for both.
+(theorem dot_contract_same
+  ((t Two)
+   (c Cpu)
+   (hreg (= (reg c 6) (reg c 7)))
+   (hlist (= (two_ys t) (two_xs t)))
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hx (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t)))
+   (hmx (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194489)) c2)
+      (and (= (reg c2 0) (dot t)) (and (= (Cpu.mem c2) (Cpu.mem c)) (returned c c2)))))
+  (by
+    (have hy (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t)) (rw hreg) (rw hlist) (exact hx))
+    (have hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4)
+      (rw hreg)
+      (exact hmx))
+    (have hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (rw hreg)
+      (exact hwx))
+    (exact (dot_contract t c hcode hn hx hy hmx hmy hwx hwy hsp))))
+
+;; ---- addto: the states its code passes through --------------------------------------------------
+;; one turn of the loop from its head, the index below the count: after the comparison, the jump
+;; not taken, the load of the second buffer's word, the sum written into the first buffer, the
+;; index's increment
+(fn add_s1 ((c Cpu)) Cpu (x_cmp_rr (at_pc c (w64 4194529)) 1 2 (w64 4194532)))
+(fn add_s2 ((c Cpu)) Cpu (at_pc (add_s1 c) (w64 4194538)))
+(fn add_s3 ((c Cpu)) Cpu (x_load_sib (add_s2 c) 8 6 1 8 0 (w64 4194542)))
+(fn add_s4 ((c Cpu)) Cpu (x_add_m_sib (add_s3 c) 7 1 8 0 8 (w64 4194546)))
+(fn add_s5 ((c Cpu)) Cpu (x_alu_ri (add_s4 c) BAdd 1 1 (w64 4194550)))
+(fn add_out ((c Cpu)) Cpu (x_ret (at_pc (add_s1 c) (w64 4194555))))
+(fn add_in ((c Cpu)) Cpu (x_alu_rr (at_pc c (w64 4194526)) BXor 1 1 (w64 4194529)))
+;; the memory after a turn: one word written, the sum of the two words read
+(fn add_mem ((c Cpu)) Mem
+  (mem_put64 (Cpu.mem c) (ea_sib c 7 1 8 0)
+    (w64_val
+      (w64_add (w64 (mem_le64 (Cpu.mem c) (ea_sib c 7 1 8 0)))
+        (w64 (mem_le64 (Cpu.mem c) (ea_sib c 6 1 8 0)))))))
+(theorem add_s5_mem ((c Cpu)) (= (Cpu.mem (add_s5 c)) (add_mem c)) (by rfl))
+;; every address of the table lies in the code's range
+(theorem table_within () (= (all_within buffers_table 4194489 4194588) true) (by rfl))
+
+;; one turn of the loop; the code is in place before the store and after it
+(theorem add_turn
+  ((c Cpu)
+   (hcode (code_in c buffers_table))
+   (hcode4 (code_in (add_s4 c) buffers_table))
+   (h (< (w64_val (reg c 1)) (w64_val (reg c 2))))
+   (hmy (= (mapped (Cpu.segs c) (ea_sib c 6 1 8 0) 8 4) true))
+   (hmx (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 4) true))
+   (hmw (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 2) true)))
+  (reaches (at_pc c (w64 4194529)) (at_pc (add_s5 c) (w64 4194529)))
+  (by
+    (have h1 (< (w64_val (reg (at_pc c (w64 4194529)) 1)) (w64_val (reg (at_pc c (w64 4194529)) 2)))
+      (exact h))
+    (apply (do_cmp_rr 4194529 1 2 3 4194532) (rfl)
+      ((exact
+         (hcode 4194529 (AluRmR BCmp (RmReg 1) 2) 3
+           (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))))))
+      (rfl)
+      ((apply (do_jcc_not 4194532 3 17 6 4194538) (rfl)
+         ((exact (hcode 4194532 (Jcc 3 17) 6 (Eq.refl (some (Prod.mk (Jcc 3 17) 6))))))
+         ((exact (cmp_below (at_pc c (w64 4194529)) 1 2 (w64 4194532) h1)))
+         (rfl)
+         ((apply (do_load_sib 4194538 8 6 1 8 0 4 4194542) (rfl)
+            ((exact
+               (hcode 4194538 (MovRRm 8 (RmSib 6 1 8 0)) 4
+                 (Eq.refl (some (Prod.mk (MovRRm 8 (RmSib 6 1 8 0)) 4))))))
+            ((exact hmy))
+            (rfl)
+            ((apply (do_add_m_sib 4194542 7 1 8 0 8 4 4194546) (rfl)
+               ((exact
+                  (hcode 4194542 (AluRmR BAdd (RmSib 7 1 8 0) 8) 4
+                    (Eq.refl (some (Prod.mk (AluRmR BAdd (RmSib 7 1 8 0) 8) 4))))))
+               ((exact hmx))
+               ((exact hmw))
+               (rfl)
+               ((apply (do_alu_ri 4194546 BAdd 1 1 4 4194550) (rfl)
+                  ((exact
+                     (hcode4 4194546 (AluRmI BAdd (RmReg 1) 1) 4
+                       (Eq.refl (some (Prod.mk (AluRmI BAdd (RmReg 1) 1) 4))))))
+                  (rfl)
+                  (rfl)
+                  ((apply (do_jmp 4194550 5 18446744073709551590 4194529) (rfl)
+                     ((exact
+                        (hcode4 4194550 (Jmp 18446744073709551590) 5
+                          (Eq.refl (some (Prod.mk (Jmp 18446744073709551590) 5))))))
+                     (rfl)
+                     ((exact (reaches_refl (at_pc (add_s5 c) (w64 4194529))))))))))))))))))
+;; out of the loop
+(theorem add_leave
+  ((c Cpu)
+   (hcode (code_in c buffers_table))
+   (h (Not (< (w64_val (reg c 1)) (w64_val (reg c 2)))))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (reaches (at_pc c (w64 4194529)) (add_out c))
+  (by
+    (have h1
+      (Not (< (w64_val (reg (at_pc c (w64 4194529)) 1)) (w64_val (reg (at_pc c (w64 4194529)) 2))))
+      (exact h))
+    (apply (do_cmp_rr 4194529 1 2 3 4194532) (rfl)
+      ((exact
+         (hcode 4194529 (AluRmR BCmp (RmReg 1) 2) 3
+           (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 1) 2) 3))))))
+      (rfl)
+      ((apply (do_jcc_taken 4194532 3 6 17 4194555) (rfl)
+         ((exact (hcode 4194532 (Jcc 3 17) 6 (Eq.refl (some (Prod.mk (Jcc 3 17) 6))))))
+         ((exact (cmp_not_below (at_pc c (w64 4194529)) 1 2 (w64 4194532) h1)))
+         (rfl)
+         ((apply (do_ret 4194555 1) (rfl)
+            ((exact (hcode 4194555 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))))
+            ((exact hsp))
+            ((exact (reaches_refl (add_out c)))))))))))
+;; into the loop
+(theorem add_enter ((c Cpu) (hcode (code_in c buffers_table)))
+  (reaches (at_pc c (w64 4194526)) (add_in c))
+  (by
+    (apply (do_alu_rr 4194526 BXor 1 1 3 4194529) (rfl)
+      ((exact
+         (hcode 4194526 (AluRmR BXor (RmReg 1) 1) 3
+           (Eq.refl (some (Prod.mk (AluRmR BXor (RmReg 1) 1) 3))))))
+      (rfl)
+      (rfl)
+      ((exact (reaches_refl (add_in c)))))))
+(theorem add_out_returned ((c Cpu)) (returned c (add_out c))
+  (by
+    (unfold returned)
+    (unfold kept)
+    (apply And.intro (rfl)
+      ((apply And.intro (rfl)
+         ((apply And.intro (rfl)
+            ((apply And.intro (rfl)
+               ((apply And.intro (rfl)
+                  ((apply And.intro (rfl) ((apply And.intro (rfl) ((apply And.intro (rfl) (rfl))))))))))))))))))
+;; the function's own two cases
+(theorem addto_go_turn ((t Two) (i (BitVec 64)) (h (< (w64_val i) (w64_val (two_n t)))))
+  (= (addto_go t i) (addto_go (addto_next t i h) (w64_add i (w64 1))))
+  (by (rw addto_go.eq_1 (occ 1)) (rw (dif_pos h)) rfl))
+(theorem addto_go_done ((t Two) (i (BitVec 64)) (h (Not (< (w64_val i) (w64_val (two_n t))))))
+  (= (addto_go t i) t)
+  (by (rw addto_go.eq_1) (rw (dif_neg h)) rfl))
+
+;; ---- addto: the loop, and the contract ----------------------------------------------------------
+;; From the loop's head, in a state whose registers hold the two buffers' addresses, the count
+;; and an index, where what the loop will write is clear of the code, of the second buffer and
+;; of the return address: the processor comes to the function's return with the first buffer's
+;; memory holding `addto_go` of that index, and memory outside the first buffer's counted words
+;; as it was.
+(theorem add_loop ((c Cpu))
+  (forall ((t Two))
+    (-> (code_in c buffers_table) (= (reg c 2) (two_n t))
+      (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t))
+      (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t))
+      (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4)
+      (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 2)
+      (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4)
+      (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)
+      (or (<= 4194603 (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489))
+      (or (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 6)))
+        (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) (w64_val (reg c 7))))
+      (or (<= (+ (w64_val (reg c 4)) 8) (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 4))))
+      (exists ((c2 Cpu))
+        (and (reaches (at_pc c (w64 4194529)) c2)
+          (and (holds (Cpu.mem c2) (w64_val (reg c 7)) (two_xs (addto_go t (reg c 1))))
+            (and
+              (same_outside (Cpu.mem c) (Cpu.mem c2) (w64_val (reg c 7))
+                (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+              (returned c c2)))))))
+  (by
+    (wf c (- (w64_val (reg c 2)) (w64_val (reg c 1))) ih
+      (intro t hcode hn hx hy hmxr hmxw hmy hwx hwy hsp dcode dy dsp)
+      (cases (Nat.decLt (w64_val (reg c 1)) (w64_val (two_n t)))
+        ((isFalse (h) (have h2 (Not (< (w64_val (reg c 1)) (w64_val (reg c 2)))) (rw hn) (exact h))
+           (apply (Exists.intro (add_out c))
+             ((apply And.intro ((exact (add_leave c hcode h2 hsp)))
+                ((apply And.intro ((rw (addto_go_done t (reg c 1) h)) (exact hx))
+                   ((apply And.intro
+                      ((exact
+                         (same_outside_refl (Cpu.mem c) (w64_val (reg c 7))
+                           (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))))
+                      ((exact (add_out_returned c)))))))))))
+         (isTrue (h) (have h2 (< (w64_val (reg c 1)) (w64_val (reg c 2))) (rw hn) (exact h))
+           (have hkx (< (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 18446744073709551616)
+             (arith))
+           (have hky (< (+ (w64_val (reg c 6)) (* 8 (w64_val (reg c 1)))) 18446744073709551616)
+             (arith))
+           (have ex7 (= (ea_sib c 7 1 8 0) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+             (exact (ea_sib_8 c 7 1 hkx)))
+           (have ex6 (= (ea_sib c 6 1 8 0) (+ (w64_val (reg c 6)) (* 8 (w64_val (reg c 1)))))
+             (exact (ea_sib_8 c 6 1 hky)))
+           (have hmy1 (= (mapped (Cpu.segs c) (ea_sib c 6 1 8 0) 8 4) true)
+             (rw ex6)
+             (exact (hmy (w64_val (reg c 1)) h)))
+           (have hmx1 (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 4) true)
+             (rw ex7)
+             (exact (hmxr (w64_val (reg c 1)) h)))
+           (have hmw1 (= (mapped (Cpu.segs c) (ea_sib c 7 1 8 0) 8 2) true)
+             (rw ex7)
+             (exact (hmxw (w64_val (reg c 1)) h)))
+           ;; the two words read are the buffers' at the index
+           (have ex
+             (= (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+               (w64 (mem_le64 (Cpu.mem c) (ea_sib c 7 1 8 0))))
+             (rw (word_at_nth (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t))))
+             (rw ex7)
+             (exact (Eq.symm (hx (w64_val (reg c 1)) (Nat.lt_of_lt_of_le h (two_hx t))))))
+           (have ey
+             (= (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t)))
+               (w64 (mem_le64 (Cpu.mem c) (ea_sib c 6 1 8 0))))
+             (rw (word_at_nth (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t))))
+             (rw ex6)
+             (exact (Eq.symm (hy (w64_val (reg c 1)) (Nat.lt_of_lt_of_le h (two_hy t))))))
+           ;; the memory after the turn is the memory before with the sum stored at the index
+           (have hmem
+             (= (add_mem c)
+               (mem_put64 (Cpu.mem c) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (w64_val
+                   (w64_add (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+                     (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t)))))))
+             (rw ex)
+             (rw ey)
+             (rw (<- ex7))
+             rfl)
+           (have hso
+             (same_outside (Cpu.mem c) (add_mem c) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+               (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8))
+             (rw hmem)
+             (exact
+               (same_outside_put64 (Cpu.mem c) (Cpu.mem c)
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (w64_val
+                   (w64_add (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+                     (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t)))))
+                 (same_outside_refl (Cpu.mem c) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                   (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8))
+                 (Nat.le_refl (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+                 (Nat.le_refl (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)))))
+           (have hx4
+             (holds (add_mem c) (w64_val (reg c 7))
+               (upd (two_xs t) (w64_val (reg c 1))
+                 (w64_add (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+                   (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t))))))
+             (rw hmem)
+             (exact
+               (holds_upd (Cpu.mem c) (w64_val (reg c 7)) (two_xs t) (w64_val (reg c 1))
+                 (w64_add (word_at (two_xs t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hx t)))
+                   (word_at (two_ys t) (reg c 1) (Nat.lt_of_lt_of_le h (two_hy t))))
+                 hx
+                 (Nat.lt_of_lt_of_le h (two_hx t)))))
+           (have cy
+             (or
+               (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t))))
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+               (<= (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8) (w64_val (reg c 6))))
+             (cases dy ((inl (hl) (apply Or.inr ((arith)))) (inr (hr) (apply Or.inl ((arith)))))))
+           (have hy4 (holds (add_mem c) (w64_val (reg c 6)) (two_ys t))
+             (exact
+               (holds_same (Cpu.mem c) (add_mem c) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+                 (w64_val (reg c 6))
+                 (two_ys t)
+                 hy
+                 hso
+                 cy)))
+           (have ccode
+             (or (<= (+ 4194588 15) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+               (<= (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8) 4194489))
+             (cases dcode ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+           (have hcode4 (code_in (add_s4 c) buffers_table)
+             (exact
+               (code_in_same c (add_mem c) buffers_table 4194489 4194588
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+                 table_within
+                 hso
+                 ccode
+                 hcode)))
+           (have csp
+             (or (<= (+ (w64_val (reg c 4)) 8) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+               (<= (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8) (w64_val (reg c 4))))
+             (cases dsp ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+           (have hra (= (ret_addr (add_s5 c)) (ret_addr c))
+             (show
+               (= (w64 (mem_le64 (Cpu.mem (add_s5 c)) (w64_val (reg c 4))))
+                 (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4))))))
+             (rw (add_s5_mem c))
+             (rw
+               (le64_same (Cpu.mem c) (add_mem c) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+                 (w64_val (reg c 4))
+                 hso
+                 csp))
+             rfl)
+           (have hlo (<= (w64_val (reg c 7)) (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))))
+             (arith))
+           (have hhi
+             (<= (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+               (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+             (arith))
+           (have hso1
+             (same_outside (Cpu.mem c) (add_mem c) (w64_val (reg c 7))
+               (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+             (exact
+               (same_outside_widen (Cpu.mem c) (add_mem c)
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1))))
+                 (+ (+ (w64_val (reg c 7)) (* 8 (w64_val (reg c 1)))) 8)
+                 (w64_val (reg c 7))
+                 (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+                 hso
+                 hlo
+                 hhi)))
+           ;; the hypotheses, of the state the turn ends in and of the bundle after one word
+           (have hdec
+             (< (- (w64_val (reg (add_s5 c) 2)) (w64_val (reg (add_s5 c) 1)))
+               (- (w64_val (reg c 2)) (w64_val (reg c 1))))
+             (exact (loop_descends (reg c 2) (reg c 1) h2)))
+           (have hcode5 (code_in (add_s5 c) buffers_table) (exact hcode4))
+           (have hn5 (= (reg (add_s5 c) 2) (two_n (addto_next t (reg c 1) h))) (exact hn))
+           (have hx5
+             (holds (Cpu.mem (add_s5 c)) (w64_val (reg (add_s5 c) 7))
+               (two_xs (addto_next t (reg c 1) h)))
+             (exact hx4))
+           (have hy5
+             (holds (Cpu.mem (add_s5 c)) (w64_val (reg (add_s5 c) 6))
+               (two_ys (addto_next t (reg c 1) h)))
+             (exact hy4))
+           (have hmxr5
+             (mapped_words (Cpu.segs (add_s5 c)) (w64_val (reg (add_s5 c) 7))
+               (w64_val (two_n (addto_next t (reg c 1) h)))
+               4)
+             (exact hmxr))
+           (have hmxw5
+             (mapped_words (Cpu.segs (add_s5 c)) (w64_val (reg (add_s5 c) 7))
+               (w64_val (two_n (addto_next t (reg c 1) h)))
+               2)
+             (exact hmxw))
+           (have hmy5
+             (mapped_words (Cpu.segs (add_s5 c)) (w64_val (reg (add_s5 c) 6))
+               (w64_val (two_n (addto_next t (reg c 1) h)))
+               4)
+             (exact hmy))
+           (have hwx5
+             (<= (+ (w64_val (reg (add_s5 c) 7)) (* 8 (w64_val (two_n (addto_next t (reg c 1) h)))))
+               18446744073709551616)
+             (exact hwx))
+           (have hwy5
+             (<= (+ (w64_val (reg (add_s5 c) 6)) (* 8 (w64_val (two_n (addto_next t (reg c 1) h)))))
+               18446744073709551616)
+             (exact hwy))
+           (have hsp5 (= (mapped (Cpu.segs (add_s5 c)) (w64_val (reg (add_s5 c) 4)) 8 4) true)
+             (exact hsp))
+           (have dcode5
+             (or (<= 4194603 (w64_val (reg (add_s5 c) 7)))
+               (<=
+                 (+ (w64_val (reg (add_s5 c) 7)) (* 8 (w64_val (two_n (addto_next t (reg c 1) h)))))
+                 4194489))
+             (exact dcode))
+           (have dy5
+             (or
+               (<=
+                 (+ (w64_val (reg (add_s5 c) 7)) (* 8 (w64_val (two_n (addto_next t (reg c 1) h)))))
+                 (w64_val (reg (add_s5 c) 6)))
+               (<=
+                 (+ (w64_val (reg (add_s5 c) 6))
+                   (* 8 (List.length (two_ys (addto_next t (reg c 1) h)))))
+                 (w64_val (reg (add_s5 c) 7))))
+             (exact dy))
+           (have dsp5
+             (or (<= (+ (w64_val (reg (add_s5 c) 4)) 8) (w64_val (reg (add_s5 c) 7)))
+               (<=
+                 (+ (w64_val (reg (add_s5 c) 7)) (* 8 (w64_val (two_n (addto_next t (reg c 1) h)))))
+                 (w64_val (reg (add_s5 c) 4))))
+             (exact dsp))
+           (cases
+             (ih (add_s5 c) hdec (addto_next t (reg c 1) h) hcode5 hn5 hx5 hy5 hmxr5 hmxw5 hmy5 hwx5
+               hwy5
+               hsp5
+               dcode5
+               dy5
+               dsp5)
+             ((intro (c2 hc2)
+                (cases hc2
+                  ((intro (hreach hr1)
+                     (cases hr1
+                       ((intro (hheld hr2)
+                          (cases hr2
+                            ((intro (hsame hret)
+                               (have hsame1
+                                 (same_outside (add_mem c) (Cpu.mem c2) (w64_val (reg c 7))
+                                   (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+                                 (exact hsame))
+                               (apply (Exists.intro c2)
+                                 ((apply And.intro
+                                    ((exact
+                                       (reaches_trans (at_pc c (w64 4194529))
+                                         (at_pc (add_s5 c) (w64 4194529))
+                                         c2
+                                         (add_turn c hcode hcode4 h2 hmy1 hmx1 hmw1)
+                                         hreach)))
+                                    ((apply And.intro
+                                       ((rw (addto_go_turn t (reg c 1) h)) (exact hheld))
+                                       ((apply And.intro
+                                          ((exact
+                                             (same_outside_trans (Cpu.mem c) (add_mem c)
+                                               (Cpu.mem c2)
+                                               (w64_val (reg c 7))
+                                               (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+                                               hso1
+                                               hsame1)))
+                                          ((unfold returned)
+                                           (cases hret
+                                             ((intro (hrip hkept)
+                                                (apply And.intro ((rw (<- hra)) (exact hrip))
+                                                  ((exact hkept))))))))))))))))))))))))))))))))
+(theorem add_in_zero ((t Two) (c Cpu)) (= (addto_go t (reg (add_in c) 1)) (addto t))
+  (by
+    (show (= (addto_go t (w64_xor (reg c 1) (reg c 1))) (addto t)))
+    (rw (w64_xor_self (reg c 1)))
+    rfl))
+;; The contract of `addto`'s code. From a state at its first instruction whose rdi and rsi hold
+;; the addresses of two buffers that hold the lists of t — the first mapped to read and to
+;; write, the second to read, for the count in rdx — with the return address readable at the
+;; stack pointer, and the first buffer's counted words clear of the code, of the second buffer
+;; and of the return address: the processor comes to a state at that return address in which
+;; the first buffer's memory holds the list `addto t` returns, the callee's registers are kept,
+;; and every byte outside the first buffer's counted words is as it was.
+(theorem addto_contract
+  ((t Two)
+   (c Cpu)
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hx (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t)))
+   (hy (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t)))
+   (hmxr (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hmxw (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 2))
+   (hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true))
+   (dcode
+     (or (<= 4194603 (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489)))
+   (dy
+     (or (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 6)))
+       (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) (w64_val (reg c 7)))))
+   (dsp
+     (or (<= (+ (w64_val (reg c 4)) 8) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 4))))))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194526)) c2)
+      (and (holds (Cpu.mem c2) (w64_val (reg c 7)) (two_xs (addto t)))
+        (and
+          (same_outside (Cpu.mem c) (Cpu.mem c2) (w64_val (reg c 7))
+            (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+          (returned c c2)))))
+  (by
+    (have hcode1 (code_in (add_in c) buffers_table) (exact hcode))
+    (have hn1 (= (reg (add_in c) 2) (two_n t)) (exact hn))
+    (have hx1 (holds (Cpu.mem (add_in c)) (w64_val (reg (add_in c) 7)) (two_xs t)) (exact hx))
+    (have hy1 (holds (Cpu.mem (add_in c)) (w64_val (reg (add_in c) 6)) (two_ys t)) (exact hy))
+    (have hmxr1
+      (mapped_words (Cpu.segs (add_in c)) (w64_val (reg (add_in c) 7)) (w64_val (two_n t)) 4)
+      (exact hmxr))
+    (have hmxw1
+      (mapped_words (Cpu.segs (add_in c)) (w64_val (reg (add_in c) 7)) (w64_val (two_n t)) 2)
+      (exact hmxw))
+    (have hmy1
+      (mapped_words (Cpu.segs (add_in c)) (w64_val (reg (add_in c) 6)) (w64_val (two_n t)) 4)
+      (exact hmy))
+    (have hwx1 (<= (+ (w64_val (reg (add_in c) 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwx))
+    (have hwy1 (<= (+ (w64_val (reg (add_in c) 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwy))
+    (have hsp1 (= (mapped (Cpu.segs (add_in c)) (w64_val (reg (add_in c) 4)) 8 4) true) (exact hsp))
+    (have dcode1
+      (or (<= 4194603 (w64_val (reg (add_in c) 7)))
+        (<= (+ (w64_val (reg (add_in c) 7)) (* 8 (w64_val (two_n t)))) 4194489))
+      (exact dcode))
+    (have dy1
+      (or
+        (<= (+ (w64_val (reg (add_in c) 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg (add_in c) 6)))
+        (<= (+ (w64_val (reg (add_in c) 6)) (* 8 (List.length (two_ys t))))
+          (w64_val (reg (add_in c) 7))))
+      (exact dy))
+    (have dsp1
+      (or (<= (+ (w64_val (reg (add_in c) 4)) 8) (w64_val (reg (add_in c) 7)))
+        (<= (+ (w64_val (reg (add_in c) 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg (add_in c) 4))))
+      (exact dsp))
+    (cases
+      (add_loop (add_in c) t hcode1 hn1 hx1 hy1 hmxr1 hmxw1 hmy1 hwx1 hwy1 hsp1 dcode1 dy1 dsp1)
+      ((intro (c2 hc2)
+         (cases hc2
+           ((intro (hreach hrest)
+              (have hreach1 (reaches (add_in c) c2)
+                (show (reaches (at_pc (add_in c) (w64 4194529)) c2))
+                (exact hreach))
+              (apply (Exists.intro c2)
+                ((apply And.intro
+                   ((exact
+                      (reaches_trans (at_pc c (w64 4194526)) (add_in c) c2 (add_enter c hcode)
+                        hreach1)))
+                   ((rw (<- (add_in_zero t c))) (exact hrest)))))))))))))

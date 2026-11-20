@@ -848,7 +848,7 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `engine_test.sh` | the proof engine: sidecars replay and regenerate identically; an obligation delegated with `auto` is proved, entered under its name and discharged; `auto` inside an implementation is proved into the sidecar beside the implementation file and replayed; its reach over calc |
 | `handle_cost_test.sh` | only `prepare` links; no other file names a handle's internals |
 | `imp_test.sh` | the imp machine model loads and its theorems are accepted |
-| `x86_test.sh` | the x86-64 model loads, its first theorem is accepted, and its runs of programs assembled by hand are the processor's (on an x86-64 Linux machine) |
+| `x86_test.sh` | the x86-64 model loads, its first theorem is accepted, and its runs of programs assembled by hand are the processor's (on an x86-64 Linux machine); the model's laws and the contracts of the trial's code (`models/x86/buffers_facts.shard`) are accepted, and the trial's file runs to what the evaluator computes |
 | `index_test.sh` | the Init index built and read back; four tampered inputs refused |
 | `k_clients_test.sh` | K's tests loaded by the V3 loader (`--unchecked`) and run under `ev`, so K's view is enforced |
 | `loader_pins_list_test.sh` | the cases `loader_pins_test.shard` lists are the directories of `v3/pins/loader/`: none unlisted, none missing, none twice |

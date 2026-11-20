@@ -12,7 +12,10 @@
 # fact and the lemmas that open it accepted, a listing with a missing label and one with an
 # immediate too wide refused, and its bytes for three listings the bytes assembled by hand. The
 # demonstration (demo.shard): its theorems accepted, and its file run by the model and the
-# processor.
+# processor. The trial of low-level code as shard (buffers.shard): its functions definitions,
+# the laws of the model (laws.shard) and the contracts of two functions' code
+# (buffers_facts.shard) accepted on Lean's axioms, and its file's run by the model and by the
+# processor exiting with what the evaluator computes of the functions.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -131,6 +134,34 @@ m=$("${RUN[@]}" run 100 "$OUT/demo" 2>&1 | tail -1)
 checks=$((checks+1)); [ "$m" = "exit 20" ] || bad "the model's run of the demonstration is not exit 20: $m"
 if [ $onchip = 1 ]; then
   checks=$((checks+1)); [ "$(chip "$OUT/demo")" = "exit 20" ] || bad "the processor's run of the demonstration is $(chip "$OUT/demo"), the model's exit 20"
+fi
+
+# ---- low-level code as shard: the trial (buffers.shard, laws.shard, buffers_facts.shard) ----------
+# Three functions over buffers of machine words, an access taking the evidence that its index is
+# in range, and a listing for them compiled by hand. Held here: every function is a definition;
+# the laws of the model and the contracts of the code of `dot` and `addto` are accepted, on no
+# axiom but Lean's three (a stored word read back cites Init's lemmas on division, which rest on
+# `Classical.choice`); the evaluator's run of the functions, the model's run of
+# the listing's file and the processor's give one status, 19.
+"${LOAD[@]}" $M/buffers_facts.shard > "$OUT/buf.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the trial did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/buf.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/buf.txt" || { bad "the trial's summary is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/buf.txt"; }
+checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/buf.txt")" = 0 ] || { bad "a function of the trial is a program without a definition"; grep '^RUNNABLE fn ' "$OUT/buf.txt" | head -5 | cut -c1-200; }
+for f in buffers.word_at buffers.put_at buffers.dot_go buffers.dot buffers.addto_go buffers.addto buffers.both laws.steps; do
+  checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/buf.txt" || bad "models.x86.$f is not a definition with its equations"
+done
+for t in laws.reaches_step laws.reaches_trans laws.step_at laws.do_alu_rr laws.do_cmp_rr laws.do_alu_ri laws.do_mov_rr laws.do_jcc_not laws.do_jcc_taken laws.do_jmp laws.do_load_sib laws.do_imul_sib laws.do_add_m_sib laws.do_push laws.do_pop laws.do_call laws.do_ret laws.mem_put64_other laws.le64_put64_word laws.le64_same laws.fetch_same laws.code_in_same buffers_facts.holds_upd buffers_facts.holds_same buffers_facts.dot_loop buffers_facts.dot_contract buffers_facts.dot_contract_same buffers_facts.add_loop buffers_facts.addto_contract; do
+  checks=$((checks+1)); grep -q "^ACCEPT models.x86.$t " "$OUT/buf.txt" || bad "models.x86.$t is not accepted"
+  axs=$(grep "^ACCEPT models.x86.$t " "$OUT/buf.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
+  other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')
+  checks=$((checks+1)); [ -z "${other// /}" ] || bad "models.x86.$t rests on $other"
+done
+"${LOAD[@]}" --run models.x86.buffers.main $M/buffers.shard -- "$OUT/buffers" > "$OUT/bufrun.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 19 ] && [ -s "$OUT/buffers" ] || { bad "the trial's file was not written, or the evaluator's status of the functions is not 19 (exit $rc)"; tail -3 "$OUT/bufrun.txt" | cut -c1-200; }
+m=$("${RUN[@]}" run 1000 "$OUT/buffers" 2>&1 | tail -1)
+checks=$((checks+1)); [ "$m" = "exit 19" ] || bad "the model's run of the trial's file is not exit 19: $m"
+if [ $onchip = 1 ]; then
+  checks=$((checks+1)); [ "$(chip "$OUT/buffers")" = "exit 19" ] || bad "the processor's run of the trial's file is $(chip "$OUT/buffers"), the model's exit 19"
 fi
 
 echo "x86_test: $checks checks, $fail failed"

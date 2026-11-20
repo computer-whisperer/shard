@@ -66,9 +66,10 @@
     (14 (with Regs r (r14 v)))
     (_ (with Regs r (r15 v)))))
 
-;; the four flags a conditional jump reads: carry, zero, sign, overflow. The parity and the
+;; the four flags a conditional jump reads: carry, zero, sign, overflow; `none` where the last
+;; operation left the flag undefined, or the model does not say what it left. The parity and the
 ;; auxiliary carry are not kept: a jump on parity has no rule
-(record Flags (cf Bool) (zf Bool) (sf Bool) (of Bool))
+(record Flags (cf (Option Bool)) (zf (Option Bool)) (sf (Option Bool)) (of (Option Bool)))
 
 ;; a mapped range of addresses [lo, hi) and what it permits: 4 read, 2 write, 1 execute
 (record Seg (lo Nat) (hi Nat) (perm Nat))
@@ -97,7 +98,10 @@
     (r13 (w64 0))
     (r14 (w64 0))
     (r15 (w64 0))))
-(fn flags_clear () Flags (make Flags (cf false) (zf false) (sf false) (of false)))
+(fn flags_clear () Flags
+  (make Flags (cf (some false)) (zf (some false)) (sf (some false)) (of (some false))))
+;; no flag known
+(fn flags_none () Flags (make Flags (cf none) (zf none) (sf none) (of none)))
 
 (record Cpu (regs Regs) (rip (BitVec 64)) (flags Flags) (mem Mem) (segs (List Seg)))
 (fn cpu_at ((entry Nat) (r Regs) (f Flags) (m Mem) (segs (List Seg))) Cpu
@@ -128,18 +132,23 @@
   (if (mapped (Cpu.segs c) a 8 2) (WrOk (with Cpu c (mem (mem_put64 (Cpu.mem c) a (w64_val v)))))
   (WrFault a)))
 
-;; an operand that is a register or memory: a register, or the eight bytes at a base register
-;; plus a displacement (a word's number)
-(type Rm (RmReg Nat) (RmMem Nat Nat))
+;; an operand that is a register or memory: a register; the eight bytes at a base register plus
+;; a displacement (a word's number); or those at a base register plus an index register times a
+;; scale (1, 2, 4, 8) plus a displacement
+(type Rm (RmReg Nat) (RmMem Nat Nat) (RmSib Nat Nat Nat Nat))
 (fn ea ((c Cpu) (base Nat) (d Nat)) Nat (w64_val (w64_add (reg c base) (w64 d))))
+(fn ea_sib ((c Cpu) (base Nat) (x Nat) (s Nat) (d Nat)) Nat
+  (w64_val (w64 (+ (+ (w64_val (reg c base)) (* s (w64_val (reg c x)))) d))))
 (fn rd ((c Cpu) (rm Rm)) Rd
   (match rm
     ((RmReg r) (RdOk (reg c r)))
-    ((RmMem b d) (load64 c (ea c b d)))))
+    ((RmMem b d) (load64 c (ea c b d)))
+    ((RmSib b x s d) (load64 c (ea_sib c b x s d)))))
 (fn wr ((c Cpu) (rm Rm) (v (BitVec 64))) Wr
   (match rm
     ((RmReg r) (WrOk (set_reg c r v)))
-    ((RmMem b d) (store64 c (ea c b d) v))))
+    ((RmMem b d) (store64 c (ea c b d) v))
+    ((RmSib b x s d) (store64 c (ea_sib c b x s d) v))))
 
 ;; ---- fetch ----------------------------------------------------------------------------------
 ;; a count that recursion descends by structure
@@ -169,6 +178,7 @@
   (AluRmR Bop Rm Nat)  ; op r/m64, r64 (REX.W 01 09 21 29 31 39 /r)
   (AluRRm Bop Nat Rm)  ; op r64, r/m64 (REX.W 03 0B 23 2B 33 3B /r)
   (AluRmI Bop Rm Nat)  ; op r/m64, imm (REX.W 81 /n id, 83 /n ib), the immediate sign-extended
+  (ImulRRm Nat Rm)  ; imul r64, r/m64 (REX.W 0F AF /r): the low word of the product
   (Jcc Nat Nat)  ; jcc rel32 (0F 80+cc cd): the condition's number, the displacement
   (Jmp Nat)  ; jmp rel32 (E9 cd)
   (Call Nat)  ; call rel32 (E8 cd)
@@ -217,42 +227,62 @@
 ;; a ModRM byte read: the register field, the register-or-memory operand, the bytes after the
 ;; operand's, and how many bytes the operand took
 (type MR (MR Nat Rm (List Nat) Nat))
+;; a memory operand: with no index where the scale is given as 0
+(fn mk_mem ((base Nat) (ix Nat) (sc Nat) (d Nat)) Rm
+  (if (= sc 0) (RmMem base d) (RmSib base ix sc d)))
 ;; a displacement of one byte (md 1) or of four (md 2), after `used` bytes
-(fn with_disp ((md Nat) (rg Nat) (base Nat) (r (List Nat)) (used Nat)) (Option MR)
+(fn with_disp ((md Nat) (rg Nat) (base Nat) (ix Nat) (sc Nat) (r (List Nat)) (used Nat)) (Option MR)
   (if (= md 1)
     (match (imm8 r)
       (none none)
-      ((some d) (some (MR rg (RmMem base (sx8 d)) (drop1 r) (+ used 1)))))
+      ((some d) (some (MR rg (mk_mem base ix sc (sx8 d)) (drop1 r) (+ used 1)))))
     (match (imm32 r)
       (none none)
-      ((some d) (some (MR rg (RmMem base (sx32 d)) (drop4 r) (+ used 4)))))))
-;; a SIB byte, in its one form here: no index (the index field 4, the prefix's X clear). With md
-;; 0 a base field of 5 means no base register, which has no rule
+      ((some d) (some (MR rg (mk_mem base ix sc (sx32 d)) (drop4 r) (+ used 4)))))))
+;; the scale of a SIB byte's top two bits
+(fn scale_of ((ss Nat)) Nat
+  (match ss
+    (0 1)
+    (1 2)
+    (2 4)
+    (_ 8)))
+;; the scale an index register's number goes with: none (0) for the number 4, which is no index
+(fn sib_scale ((ix Nat) (ss Nat)) Nat (if (= ix 4) 0 (scale_of ss)))
+;; a SIB byte: the base in its low three bits, the index in the next three — with the prefix's X
+;; its fourth bit; the number 4 is no index — and the scale in the top two. With md 0 a base
+;; field of 5 means no base register, which has no rule
 (fn sib_at ((md Nat) (rg Nat) (x Nat) (b Nat) (r (List Nat))) (Option MR)
   (match r
     (nil none)
     ((cons s r1)
-     (if (= (% (/ s 8) 8) 4)
-       (if (= x 0)
-         (if (= md 0) (if (= (% s 8) 5) none (some (MR rg (RmMem (+ (% s 8) (* 8 b)) 0) r1 2)))
-         (with_disp md rg (+ (% s 8) (* 8 b)) r1 2))
-         none)
-       none))))
+     (if (= md 0)
+       (if (= (% s 8) 5) none
+       (some
+         (MR rg
+           (mk_mem (+ (% s 8) (* 8 b)) (+ (% (/ s 8) 8) (* 8 x))
+             (sib_scale (+ (% (/ s 8) 8) (* 8 x)) (/ s 64))
+             0)
+           r1
+           2)))
+       (with_disp md rg (+ (% s 8) (* 8 b)) (+ (% (/ s 8) 8) (* 8 x))
+         (sib_scale (+ (% (/ s 8) 8) (* 8 x)) (/ s 64))
+         r1
+         2)))))
 ;; the fields of a ModRM byte: md 3 a register; a register-or-memory field of 4 a SIB byte; md 0
 ;; with a field of 5 an address from the program counter, which has no rule
 (fn modrm_at ((md Nat) (rg Nat) (rm Nat) (x Nat) (b Nat) (r (List Nat))) (Option MR)
   (if (= md 3) (some (MR rg (RmReg (+ rm (* 8 b))) r 1))
   (if (= rm 4) (sib_at md rg x b r)
   (if (= md 0) (if (= rm 5) none (some (MR rg (RmMem (+ rm (* 8 b)) 0) r 1)))
-  (with_disp md rg (+ rm (* 8 b)) r 1)))))
+  (with_disp md rg (+ rm (* 8 b)) 0 0 r 1)))))
 ;; under the prefix's R, X and B bits
 (fn modrm ((rr Nat) (x Nat) (b Nat) (bs (List Nat))) (Option MR)
   (match bs
     (nil none)
     ((cons m r) (modrm_at (/ m 64) (+ (% (/ m 8) 8) (* 8 rr)) (% m 8) x b r))))
 
-;; after 0F: syscall (05), with no prefix; jcc (80+cc)
-(fn decode_0f ((pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
+;; after 0F: syscall (05), with no prefix; jcc (80+cc); imul (AF) under the prefix's W
+(fn decode_0f ((w Nat) (rr Nat) (x Nat) (b Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
   (match bs
     (nil none)
     ((cons o2 r)
@@ -261,7 +291,13 @@
        (match (imm32 r)
          (none none)
          ((some d) (dec_ok (Jcc (- o2 128) (sx32 d)) (+ pl 6))))
-       none)))))
+     (if (= o2 175)
+       (if (= w 1)
+         (match (modrm rr x b r)
+           (none none)
+           ((some (MR rg rm _ used)) (dec_ok (ImulRRm rg rm) (+ pl (+ 2 used)))))
+         none)
+       none))))))
 ;; B8+r: eight bytes of immediate under the prefix's W, four without
 (fn decode_mov_ri ((w Nat) (r Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
   (if (= w 1)
@@ -305,7 +341,7 @@
   (match bs
     (nil none)
     ((cons op r)
-     (if (= op 15) (decode_0f pl r)
+     (if (= op 15) (decode_0f w rr x b pl r)
      (if (= op 195) (dec_ok Ret (+ pl 1))
      (if (= op 232)
        (match (imm32 r)
@@ -335,18 +371,19 @@
 ;; after a sum: carry out of the top bit; overflow where the operands' signs agree and the
 ;; result's differs
 (fn flags_add ((a (BitVec 64)) (b (BitVec 64)) (r (BitVec 64))) Flags
-  (make Flags (cf (if (<= 18446744073709551616 (+ (w64_val a) (w64_val b))) true false))
-    (zf (is_zero r))
-    (sf (w64_msb r))
-    (of (if (differ (w64_msb a) (w64_msb b)) false (differ (w64_msb r) (w64_msb a))))))
+  (make Flags (cf (some (if (<= 18446744073709551616 (+ (w64_val a) (w64_val b))) true false)))
+    (zf (some (is_zero r)))
+    (sf (some (w64_msb r)))
+    (of (some (if (differ (w64_msb a) (w64_msb b)) false (differ (w64_msb r) (w64_msb a)))))))
 ;; after a difference a - b: a borrow into the top bit; overflow where the operands' signs
 ;; differ and the result's is not a's
 (fn flags_sub ((a (BitVec 64)) (b (BitVec 64)) (r (BitVec 64))) Flags
-  (make Flags (cf (if (< (w64_val a) (w64_val b)) true false)) (zf (is_zero r)) (sf (w64_msb r))
-    (of (if (differ (w64_msb a) (w64_msb b)) (differ (w64_msb r) (w64_msb a)) false))))
+  (make Flags (cf (some (if (< (w64_val a) (w64_val b)) true false))) (zf (some (is_zero r)))
+    (sf (some (w64_msb r)))
+    (of (some (if (differ (w64_msb a) (w64_msb b)) (differ (w64_msb r) (w64_msb a)) false)))))
 ;; after and, or, xor: carry and overflow clear
 (fn flags_logic ((r (BitVec 64))) Flags
-  (make Flags (cf false) (zf (is_zero r)) (sf (w64_msb r)) (of false)))
+  (make Flags (cf (some false)) (zf (some (is_zero r))) (sf (some (w64_msb r))) (of (some false))))
 (fn alu_res ((op Bop) (a (BitVec 64)) (b (BitVec 64))) (BitVec 64)
   (match op
     (BAdd (w64_add a b))
@@ -368,24 +405,44 @@
   (match op
     (BCmp false)
     (_ true)))
+;; a flag's negation, two flags' disjunction and difference: unknown where one read is
+(fn fl_not ((a (Option Bool))) (Option Bool)
+  (match a
+    (none none)
+    ((some x) (some (not x)))))
+(fn fl_or ((a (Option Bool)) (b (Option Bool))) (Option Bool)
+  (match a
+    (none none)
+    ((some x)
+     (match b
+       (none none)
+       ((some y) (some (or x y)))))))
+(fn fl_differ ((a (Option Bool)) (b (Option Bool))) (Option Bool)
+  (match a
+    (none none)
+    ((some x)
+     (match b
+       (none none)
+       ((some y) (some (differ x y)))))))
 ;; a condition's number against the flags: 0 o, 2 b, 4 e, 6 be, 8 s, C l, E le, and each odd
-;; number the negation of the one before; A and B read the parity, which is not kept
+;; number the negation of the one before; A and B read the parity, which is not kept. Unknown
+;; where a flag it reads is
 (fn cc_holds ((cc Nat) (f Flags)) (Option Bool)
   (match cc
-    (0 (some (Flags.of f)))
-    (1 (some (not (Flags.of f))))
-    (2 (some (Flags.cf f)))
-    (3 (some (not (Flags.cf f))))
-    (4 (some (Flags.zf f)))
-    (5 (some (not (Flags.zf f))))
-    (6 (some (or (Flags.cf f) (Flags.zf f))))
-    (7 (some (not (or (Flags.cf f) (Flags.zf f)))))
-    (8 (some (Flags.sf f)))
-    (9 (some (not (Flags.sf f))))
-    (12 (some (differ (Flags.sf f) (Flags.of f))))
-    (13 (some (not (differ (Flags.sf f) (Flags.of f)))))
-    (14 (some (or (Flags.zf f) (differ (Flags.sf f) (Flags.of f)))))
-    (15 (some (not (or (Flags.zf f) (differ (Flags.sf f) (Flags.of f))))))
+    (0 (Flags.of f))
+    (1 (fl_not (Flags.of f)))
+    (2 (Flags.cf f))
+    (3 (fl_not (Flags.cf f)))
+    (4 (Flags.zf f))
+    (5 (fl_not (Flags.zf f)))
+    (6 (fl_or (Flags.cf f) (Flags.zf f)))
+    (7 (fl_not (fl_or (Flags.cf f) (Flags.zf f))))
+    (8 (Flags.sf f))
+    (9 (fl_not (Flags.sf f)))
+    (12 (fl_differ (Flags.sf f) (Flags.of f)))
+    (13 (fl_not (fl_differ (Flags.sf f) (Flags.of f))))
+    (14 (fl_or (Flags.zf f) (fl_differ (Flags.sf f) (Flags.of f))))
+    (15 (fl_not (fl_or (Flags.zf f) (fl_differ (Flags.sf f) (Flags.of f)))))
     (_ none)))
 
 ;; ---- one step -------------------------------------------------------------------------------
@@ -394,7 +451,7 @@
   (WDecode Nat (List Nat))  ; the bytes at this address are no instruction of the model
   (WLoad Nat)  ; eight bytes at this address are not mapped to read
   (WStore Nat)  ; eight bytes at this address are not mapped to write
-  (WCond Nat)  ; a jump on a condition whose flag the model does not keep
+  (WCond Nat)  ; a jump on a condition a flag of which the model does not keep, or does not know
   (WSyscall Nat)  ; a system call the boundary has no rule for
   (WFile))  ; a file the boundary does not load
 (type Step
@@ -443,6 +500,10 @@
      (match (rd c rm)
        ((RdFault a) (SStuck (WLoad a)))
        ((RdOk v) (alu_to_rm c op rm v (w64 i) (next_rip c len)))))
+    ((ImulRRm r rm)
+     (match (rd c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (goto (set_reg (set_flags c flags_none) r (w64_mul (reg c r) v)) (next_rip c len)))))
     ((Jcc cc d)
      (match (cc_holds cc (Cpu.flags c))
        (none (SStuck (WCond cc)))
