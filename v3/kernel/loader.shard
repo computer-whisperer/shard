@@ -322,6 +322,46 @@
 (fn memos_ax ((m Memos)) AxMemo
   (match m
     ((Memos a _) a)))
+;; the descent obligations proved: how many, and by name the count each was proved at and the
+;; axioms and parameters its proof rests on, which stand in its place in every closure
+(type Dis (Dis Int (IntMap (List (Prod Name (Prod Int (List Name)))))))
+(fn dis_count ((d Dis)) Int
+  (match d
+    ((Dis n _) n)))
+(fn dis_find ((d Dis) (k Name)) (Option (Prod Int (List Name)))
+  (match d
+    ((Dis _ m)
+     (match (im_find m (name_key k))
+       (none none)
+       ((some b) (dis_assoc b k))))))
+(fn dis_assoc ((b (List (Prod Name (Prod Int (List Name))))) (k Name))
+  (Option (Prod Int (List Name)))
+  (measure (struct b))
+  (match b
+    (nil none)
+    ((cons (Prod.mk n v) r) (if (name_eq n k) (some v) (dis_assoc r k)))))
+(fn dis_add ((d Dis) (k Name) (rests (List Name))) Dis
+  (match d
+    ((Dis n m)
+     (let ((h (name_key k)))
+       (Dis (+ n 1)
+         (im_insert m h
+           (cons (Prod.mk k (Prod.mk n rests))
+             (match (im_find m h)
+               ((some b) b)
+               (none nil)))))))))
+;; the parameters of the load by name, beside their list (Load.params)
+(fn names_add ((m (IntMap (List Name))) (n Name)) (IntMap (List Name))
+  (let ((h (name_key n)))
+    (im_insert m h
+      (cons n
+        (match (im_find m h)
+          ((some b) b)
+          (none nil))))))
+(fn names_have ((m (IntMap (List Name))) (n Name)) Bool
+  (match (im_find m (name_key n))
+    (none false)
+    ((some b) (mem_name n b))))
 ;; root, environment, the memos, modules, the Init load, declaration →
 ;; module, pending names, the loading stack (cycles), records newest first,
 ;; the view parameters admitted,
@@ -338,6 +378,7 @@
   (stack (List Name))
   (recs (List Rec))
   (params (List Name))
+  (pset (IntMap (List Name)))  ; the same parameters by name
   (etab ESt)
   (parked (List Parked))
   (later (List SExpr))  ; the forms of the file being read that stand below the declaration being read: a type whose field cites a type declared below it is admitted with it (load_unheld_type)
@@ -345,7 +386,7 @@
   (reads Reads)  ; how the readings of the parked fns ended, kept by the search for a group while they hold (settle_groups)
   (pm (List (Prod Name (List Name))))
   (forms (IntMap (List (Prod Name (Prod Scope SExpr)))))
-  (discharged (List (Prod Name (List Name))))  ; a descent obligation proved: the axioms and parameters its proof rests on, which stand in its place in every closure
+  (discharged Dis)  ; the descent obligations proved, by name
   (typed (List (Prod Name (Prod Scope SExpr))))  ; the fns RUNNABLE on the typed route: a later body binds one as a callee-local
   (derived (List Derived))  ; the derivation table: an entry is visible where its procedure is
   (templates (List (Prod Name Template)))  ; the templates defined, for the instances a body demands
@@ -368,6 +409,7 @@
     (stack nil)
     (recs nil)
     (params nil)
+    (pset IMEmpty)
     (etab (es0))
     (pm nil)
     (forms IMEmpty)
@@ -376,7 +418,7 @@
     (tahead nil)
     (reads (Reads nil nil))
     (typed nil)
-    (discharged nil)
+    (discharged (Dis 0 IMEmpty))
     (derived nil)
     (templates nil)
     (instances nil)
@@ -658,7 +700,8 @@
     (nil false)
     ((cons c r) (if (= c 46) true (has_dot r)))))
 (fn ld_settled ((l Load)) Load (with Load l (missed nil)))
-(fn ld_add_param ((l Load) (n Name)) Load (with Load l (params (cons n (Load.params l)))))
+(fn ld_add_param ((l Load) (n Name)) Load
+  (with Load l (params (cons n (Load.params l))) (pset (names_add (Load.pset l) n))))
 (fn ld_with_e ((l Load) (es ESt)) Load (with Load l (etab es)))
 (fn ld_add_typed ((l Load) (n Name) (sc Scope) (s SExpr)) Load
   (with Load l (typed (cons (Prod.mk n (Prod.mk sc s)) (Load.typed l)))))
@@ -936,7 +979,7 @@
   (list (n1 (sym "propext")) (n2 (sym "Quot") (sym "sound")) (n2 (sym "Classical") (sym "choice"))))
 ;; the axioms of a closure the file's policy lacks; a view parameter is a
 ;; parameter of the load: permitted, named on the record
-(fn outside_policy ((sc Scope) (trusts (List Name)) (params (List Name)) (axs (List Name)))
+(fn outside_policy ((sc Scope) (trusts (List Name)) (params (IntMap (List Name))) (axs (List Name)))
   (List Name)
   (measure (struct axs))
   (match axs
@@ -946,9 +989,9 @@
      (cons a (outside_policy sc trusts params r))))))
 ;; a standard axiom is Init's own: the constant under that name is one the load imported (its
 ;; ordinal table holds it), never a declaration of the load's — a name is no warrant
-(fn permitted ((sc Scope) (trusts (List Name)) (params (List Name)) (a Name)) Bool
+(fn permitted ((sc Scope) (trusts (List Name)) (params (IntMap (List Name))) (a Name)) Bool
   (if (bool_and (mem_name a (std_axioms)) (imported_decl sc a)) true
-  (if (mem_name a params) true
+  (if (names_have params a) true
   (trusted sc trusts a))))
 (fn imported_decl ((sc Scope) (a Name)) Bool
   (match (sc_vis sc)
@@ -957,11 +1000,11 @@
      (match (ords_find inits a)
        ((some _) true)
        (none false)))))
-(fn params_of ((params (List Name)) (axs (List Name))) (List Name)
+(fn params_of ((params (IntMap (List Name))) (axs (List Name))) (List Name)
   (measure (struct axs))
   (match axs
     (nil nil)
-    ((cons a r) (if (mem_name a params) (cons a (params_of params r)) (params_of params r)))))
+    ((cons a r) (if (names_have params a) (cons a (params_of params r)) (params_of params r)))))
 ;; a trusted name is spelled as a citation would be: it resolves through the scope
 (fn trusted ((sc Scope) (ts (List Name)) (a Name)) Bool
   (measure (struct ts))
@@ -1095,8 +1138,9 @@
         (match (axioms_of env ax n)
           ((Prod.mk _ none) (PolBound n))
           ((Prod.mk ax1 (some axs0))
-           (let ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (len (Load.discharged l))))))
-             (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.params l) axs)
+           (let
+             ((axs (discharge_axs (Load.discharged l) axs0 (+ 1 (dis_count (Load.discharged l))))))
+             (match (outside_policy (fx_scope l f) (Fx.trusts f) (Load.pset l) axs)
                (nil
                  (match (accept_key l f env rq n)
                    ((Prod.mk q rq1)
@@ -1107,31 +1151,40 @@
                             ((some h) h)
                             (none 0))
                           axs
-                          (params_of (Load.params l) axs)
+                          (params_of (Load.pset l) axs)
                           q)
                         acc)))))
                (out (PolOut n out)))))))))))
 ;; a closure with each discharged obligation replaced by what its proof rests on (to a
-;; fixpoint: a proof may rest on another discharged obligation)
-(fn discharge_axs ((ds (List (Prod Name (List Name)))) (axs (List Name)) (fuel Int)) (List Name)
+;; fixpoint: a proof may rest on another discharged obligation), the one proved last first
+(fn discharge_axs ((ds Dis) (axs (List Name)) (fuel Int)) (List Name)
   (measure (Int.natAbs fuel))
   (if (< fuel 1) axs
-  (match (first_discharged ds axs)
+  (match (last_discharged ds axs none)
     (none axs)
-    ((some (Prod.mk k rest)) (discharge_axs ds (names_union (names_without axs k) rest) (- fuel 1))))))
-(fn first_discharged ((ds (List (Prod Name (List Name)))) (axs (List Name)))
-  (Option (Prod Name (List Name)))
-  (measure (struct ds))
-  (match ds
-    (nil none)
-    ((cons (Prod.mk k rest) r)
-     (if (mem_name k axs) (some (Prod.mk k rest)) (first_discharged r axs)))))
+    ((some (Prod.mk k (Prod.mk _ rest)))
+     (discharge_axs ds (names_union (names_without axs k) rest) (- fuel 1))))))
+;; the obligation of a closure that was proved last, with the count it was proved at
+(fn last_discharged ((ds Dis) (axs (List Name)) (best (Option (Prod Name (Prod Int (List Name))))))
+  (Option (Prod Name (Prod Int (List Name))))
+  (measure (struct axs))
+  (match axs
+    (nil best)
+    ((cons a r)
+     (last_discharged ds r
+       (match (dis_find ds a)
+         (none best)
+         ((some (Prod.mk at rest))
+          (match best
+            (none (some (Prod.mk a (Prod.mk at rest))))
+            ((some (Prod.mk _ (Prod.mk at0 _)))
+             (if (< at0 at) (some (Prod.mk a (Prod.mk at rest))) best)))))))))
 (fn names_without ((ns (List Name)) (k Name)) (List Name)
   (measure (struct ns))
   (match ns
     (nil nil)
     ((cons n r) (if (name_eq n k) (names_without r k) (cons n (names_without r k))))))
-(fulfills discharge_axs.dec_1 (by (intro p h k rest hm) (apply natAbs_pred (arith))))
+(fulfills discharge_axs.dec_1 (by (intro p h k at rest hm) (apply natAbs_pred (arith))))
 
 (fn mix_recs ((f Fx) (rs (List Rec))) Fx
   (measure (struct rs))
@@ -1437,17 +1490,15 @@
                                 recs)))
                            (settle_discharge
                              (ld_rec
-                               (with Load l1
-                                 (discharged (cons (Prod.mk k rests) (Load.discharged l1))))
+                               (with Load l1 (discharged (dis_add (Load.discharged l1) k rests)))
                                (RDischarge k (sym "proved")))
                              k
                              rests)))))))))
               (_ l)))))))))
-(fn has_discharged ((ds (List (Prod Name (List Name)))) (k Name)) Bool
-  (measure (struct ds))
-  (match ds
-    (nil false)
-    ((cons (Prod.mk n _) r) (if (name_eq n k) true (has_discharged r k)))))
+(fn has_discharged ((ds Dis) (k Name)) Bool
+  (match (dis_find ds k)
+    ((some _) true)
+    (none false)))
 (fn thm_closure_of ((recs (List Rec)) (n Name)) (List Name)
   (measure (struct recs))
   (match recs
@@ -1457,7 +1508,7 @@
 ;; the account recomputed: k replaced in every ACCEPT record's closure and parameters; its
 ;; function, once none of its obligations is open, out of every pending= and no longer PENDING
 (fn settle_discharge ((l Load) (k Name) (rests (List Name))) Load
-  (let ((rs1 (rewrite_closures (Load.recs l) k rests (Load.params l))) (g (obligation_owner k)))
+  (let ((rs1 (rewrite_closures (Load.recs l) k rests (Load.pset l))) (g (obligation_owner k)))
     (if (open_obligation rs1 g (Load.discharged l)) (ld_with_recs_raw l rs1)
     (with Load (ld_with_recs_raw l (drop_root rs1 g)) (pm (pm_without (Load.pm l) g))))))
 (fn obligation_owner ((n Name)) Name
@@ -1465,7 +1516,8 @@
     ((Str p _) p)
     ((Num p _) p)
     (Anon Anon)))
-(fn rewrite_closures ((rs (List Rec)) (k Name) (rests (List Name)) (params (List Name))) (List Rec)
+(fn rewrite_closures ((rs (List Rec)) (k Name) (rests (List Name)) (params (IntMap (List Name))))
+  (List Rec)
   (measure (struct rs))
   (match rs
     (nil nil)
@@ -1478,7 +1530,7 @@
        (rewrite_closures r k rests params)))
     ((cons x r) (cons x (rewrite_closures r k rests params)))))
 ;; an obligation of g — a parameter g.dec_N — not yet discharged
-(fn open_obligation ((rs (List Rec)) (g Name) (ds (List (Prod Name (List Name))))) Bool
+(fn open_obligation ((rs (List Rec)) (g Name) (ds Dis)) Bool
   (measure (struct rs))
   (match rs
     (nil false)
@@ -4286,7 +4338,7 @@
              (list
                (Prod.mk (sym "untrusted")
                  (append (show_name d) (utf8 ": its assumptions could not be walked")))))
-            ((Prod.mk _ (some axs)) (bin_rests_axs d (outside_policy sc ts (Load.params l) axs))))))
+            ((Prod.mk _ (some axs)) (bin_rests_axs d (outside_policy sc ts (Load.pset l) axs))))))
        (bin_rests l sc ts r)))))
 (fn bin_rests_axs ((d Name) (axs (List Name))) (List (Prod Symbol (List Int)))
   (measure (struct axs))
