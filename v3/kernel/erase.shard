@@ -138,8 +138,12 @@
 ;; types or propositions, its fields E types or propositions; registered with its
 ;; constructors (runtime field types over the type parameters) on the first yes.
 ;; `pending` holds the inductives under examination (a field of the type itself, or a
-;; nested occurrence, counts as eligible while its own check runs).
-(fn ind_eligible ((w W) (es ESt) (sc Scope) (n Name) (pending (List Name))) (Prod (Prod W ESt) Bool)
+;; nested occurrence, counts as eligible while its own check runs). `depth` is how far a type
+;; may yet be read into, a caller's `(budget_depth)`: reading a type's arguments or an
+;; inductive's fields takes one (l_to_etype), and a type deeper than that is no E type.
+(fn ind_eligible ((w W) (es ESt) (sc Scope) (n Name) (pending (List Name)) (depth Int))
+  (Prod (Prod W ESt) Bool)
+  (measure (Int.natAbs depth) 3 0)
   (if (bool_or (is_nat_or_int n) (rep_row n)) (Prod.mk (Prod.mk w es) false)
   (if (mem_name n pending) (Prod.mk (Prod.mk w es) true)
   (match (es_info es n)
@@ -158,7 +162,7 @@
                  (match (ind_params w1 ty nparams nil nil)
                    ((Prod.mk w2 none) (Prod.mk (Prod.mk w2 es) false))
                    ((Prod.mk w2 (some (Prod.mk fvs tps)))
-                    (match (ind_ctors w2 es sc n ctors ls fvs tps (cons n pending) nil)
+                    (match (ind_ctors w2 es sc n ctors ls fvs tps (cons n pending) nil depth)
                       ((Prod.mk (Prod.mk w3 es3) none) (Prod.mk (Prod.mk w3 es3) false))
                       ((Prod.mk (Prod.mk w3 es3) (some cdefs))
                        (Prod.mk (Prod.mk w3 (register_ind es3 (decl_module sc n) n (len tps) cdefs))
@@ -277,9 +281,10 @@
    (fvs (List Expr))
    (tps (List Expr))
    (pending (List Name))
-   (acc (List ECtorDef)))
+   (acc (List ECtorDef))
+   (depth Int))
   (Prod (Prod W ESt) (Option (List ECtorDef)))
-  (measure (struct cs))
+  (measure (Int.natAbs depth) 2 (List.length cs))
   (match cs
     (nil (Prod.mk (Prod.mk w es) (some (rev acc))))
     ((cons c r)
@@ -290,10 +295,10 @@
            (match (inst_params w1 cty fvs)
              ((Prod.mk w2 none) (Prod.mk (Prod.mk w2 es) none))
              ((Prod.mk w2 (some fty))
-              (match (ctor_fields w2 es sc fty tps pending nil (budget_depth))
+              (match (ctor_fields w2 es sc fty tps pending nil (budget_depth) depth)
                 ((Prod.mk (Prod.mk w3 es3) none) (Prod.mk (Prod.mk w3 es3) none))
                 ((Prod.mk (Prod.mk w3 es3) (some fts))
-                 (ind_ctors w3 es3 sc ind r ls fvs tps pending (cons (ECtorDef c fts) acc)))))))))
+                 (ind_ctors w3 es3 sc ind r ls fvs tps pending (cons (ECtorDef c fts) acc) depth))))))))
        (none (Prod.mk (Prod.mk w es) none))))))
 ;; the leading binders instantiated with the parameters' locals
 (fn inst_params ((w W) (ty Expr) (fvs (List Expr))) (Prod W (Option Expr))
@@ -315,9 +320,10 @@
    (tps (List Expr))
    (pending (List Name))
    (acc (List EType))
-   (fuel Int))
+   (fuel Int)
+   (depth Int))
   (Prod (Prod W ESt) (Option (List EType)))
-  (measure fuel)
+  (measure (Int.natAbs depth) 1 (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk (Prod.mk w es) none)
   (match (w_whnf w ty)
     ((Prod.mk w1 (some (Pi _ n _ dom body)))
@@ -326,16 +332,16 @@
         (match (w_local w2 n dom)
           ((Prod.mk w3 fv)
            (match (w_inst1 w3 body fv)
-             ((Prod.mk w4 body1) (ctor_fields w4 es sc body1 tps pending acc (- fuel 1)))))))
+             ((Prod.mk w4 body1) (ctor_fields w4 es sc body1 tps pending acc (- fuel 1) depth))))))
        ((Prod.mk w2 _)
-        (match (l_to_etype w2 es sc dom tps pending)
+        (match (l_to_etype w2 es sc dom tps pending depth)
           ((Prod.mk (Prod.mk w3 es3) none) (Prod.mk (Prod.mk w3 es3) none))
           ((Prod.mk (Prod.mk w3 es3) (some t))
            (match (w_local w3 n dom)
              ((Prod.mk w4 fv)
               (match (w_inst1 w4 body fv)
                 ((Prod.mk w5 body1)
-                 (ctor_fields w5 es3 sc body1 tps pending (cons t acc) (- fuel 1)))))))))))
+                 (ctor_fields w5 es3 sc body1 tps pending (cons t acc) (- fuel 1) depth))))))))))
     ((Prod.mk w1 (some _)) (Prod.mk (Prod.mk w1 es) (some (rev acc))))
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none)))))
 (fn register_ind ((es ESt) (m Name) (n Name) (ntparams Int) (cdefs (List ECtorDef))) ESt
@@ -348,8 +354,11 @@
 ;; over the type parameters' locals: a local is its ETVar, `Nat` and `Int` are themselves, an
 ;; E-eligible inductive applied to its parameters keeps the type arguments and drops the erased
 ;; ones, and so does a row of the registry (rep_row), which is no inductive of E
-(fn l_to_etype ((w W) (es ESt) (sc Scope) (e Expr) (tps (List Expr)) (pending (List Name)))
+(fn l_to_etype
+  ((w W) (es ESt) (sc Scope) (e Expr) (tps (List Expr)) (pending (List Name)) (depth Int))
   (Prod (Prod W ESt) (Option EType))
+  (measure (Int.natAbs depth) 0 0)
+  (if (< depth 1) (Prod.mk (Prod.mk w es) none)
   (match (w_whnf w e)
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none))
     ((Prod.mk w1 (some e1))
@@ -369,19 +378,20 @@
                 ((Prod.mk w2 none) (Prod.mk (Prod.mk w2 es) none))
                 ((Prod.mk w2 (some roles))
                  (if (bool_not (= (len roles) (get_app_num_args e1))) (Prod.mk (Prod.mk w2 es) none)
-                 (match (etype_args w2 es sc roles (get_app_args e1) tps pending nil)
+                 (match (etype_args w2 es sc roles (get_app_args e1) tps pending nil (- depth 1))
                    ((Prod.mk (Prod.mk w3 es3) none) (Prod.mk (Prod.mk w3 es3) none))
                    ((Prod.mk (Prod.mk w3 es3) (some args))
                     (Prod.mk (Prod.mk w3 es3) (some (ETCon n args))))))))
               (match (es_info es n)
                 ((some (EISigType a))  ; a view's sig type: the parameter applied to its type arguments
                  (if (bool_not (= a (get_app_num_args e1))) (Prod.mk (Prod.mk w1 es) none)
-                 (match (etype_args w1 es sc (trues a) (get_app_args e1) tps pending nil)
+                 (match
+                   (etype_args w1 es sc (trues a) (get_app_args e1) tps pending nil (- depth 1))
                    ((Prod.mk (Prod.mk w4 es4) none) (Prod.mk (Prod.mk w4 es4) none))
                    ((Prod.mk (Prod.mk w4 es4) (some args))
                     (Prod.mk (Prod.mk w4 es4) (some (ETCon n args)))))))
                 (_
-                  (match (ind_eligible w1 es sc n pending)
+                  (match (ind_eligible w1 es sc n pending (- depth 1))
                     ((Prod.mk (Prod.mk w2 es2) false) (Prod.mk (Prod.mk w2 es2) none))
                     ((Prod.mk (Prod.mk w2 es2) true)
                      (match (ind_param_roles w2 n)
@@ -389,11 +399,13 @@
                        ((Prod.mk w3 (some roles))
                         (if (bool_not (= (len roles) (get_app_num_args e1)))
                           (Prod.mk (Prod.mk w3 es2) none)
-                          (match (etype_args w3 es2 sc roles (get_app_args e1) tps pending nil)
+                          (match
+                            (etype_args w3 es2 sc roles (get_app_args e1) tps pending nil
+                              (- depth 1))
                             ((Prod.mk (Prod.mk w4 es4) none) (Prod.mk (Prod.mk w4 es4) none))
                             ((Prod.mk (Prod.mk w4 es4) (some args))
                              (Prod.mk (Prod.mk w4 es4) (some (ETCon n args)))))))))))))))
-           (_ (Prod.mk (Prod.mk w1 es) none))))))))
+           (_ (Prod.mk (Prod.mk w1 es) none)))))))))
 (fn trues ((n Int)) (List Bool)
   (measure (Int.natAbs n))
   (if (< n 1) nil (cons true (trues (- n 1)))))
@@ -406,9 +418,10 @@
    (args (List Expr))
    (tps (List Expr))
    (pending (List Name))
-   (acc (List EType)))
+   (acc (List EType))
+   (depth Int))
   (Prod (Prod W ESt) (Option (List EType)))
-  (measure (struct roles))
+  (measure (Int.natAbs depth) 1 (List.length roles))
   (match roles
     (nil (Prod.mk (Prod.mk w es) (some (rev acc))))
     ((cons is_type rr)
@@ -416,11 +429,71 @@
        (nil (Prod.mk (Prod.mk w es) none))
        ((cons a ar)
         (if is_type
-          (match (l_to_etype w es sc a tps pending)
+          (match (l_to_etype w es sc a tps pending depth)
             ((Prod.mk (Prod.mk w1 es1) none) (Prod.mk (Prod.mk w1 es1) none))
             ((Prod.mk (Prod.mk w1 es1) (some t))
-             (etype_args w1 es1 sc rr ar tps pending (cons t acc))))
-          (etype_args w es sc rr ar tps pending acc)))))))
+             (etype_args w1 es1 sc rr ar tps pending (cons t acc) depth)))
+          (etype_args w es sc rr ar tps pending acc depth)))))))
+(fulfills ind_eligible.dec_1
+  (by
+    (intro w es sc n pending depth h1 h2 he info hi cv nparams nindices al ctors nn ir unsafe refl
+      hinfo hf w1 ls ty ht w2 fvs tps hp)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ind_ctors.dec_1
+  (by
+    (intro w es sc ind cs ls fvs tps pending acc depth c r h info hi w1 cty hc w2 fty hf)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ind_ctors.dec_2
+  (by
+    (intro w es sc ind cs ls fvs tps pending acc depth c r h info hi w1 cty hc w2 fty hf w3 es3 fts)
+    (rw h)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills ctor_fields.dec_1
+  (by
+    (intro w es sc ty tps pending acc fuel depth h w1 dd n bi dom body hw w2 hp w3 fv hl w4 body1 hi)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply natAbs_lt (arith) (arith))))))
+(fulfills ctor_fields.dec_2
+  (by
+    (intro w es sc ty tps pending acc fuel depth h w1 dd n bi dom body hw w2 o hp)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ctor_fields.dec_3
+  (by
+    (intro w es sc ty tps pending acc fuel depth h w1 dd n bi dom body hw w2 o hp w3 es3 t w4 fv hl
+      w5 body1 hi)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply natAbs_lt (arith) (arith))))))
+(fulfills l_to_etype.dec_1
+  (by
+    (intro w es sc e tps pending depth h w1 e1 hw x hx dd n ls hf h1 h2 a he ha)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills l_to_etype.dec_2
+  (by
+    (intro w es sc e tps pending depth h w1 e1 hw x hx dd n ls hf h1 h2 o he)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills l_to_etype.dec_3
+  (by
+    (intro w es sc e tps pending depth h w1 e1 hw x hx dd n ls hf h1 h2 o he w2 es2 w3 roles hr hn)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills l_to_etype.dec_4
+  (by
+    (intro w es sc e tps pending depth h w1 e1 hw x hx dd n ls hf h1 h2 w2 roles hr hn)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills etype_args.dec_1
+  (by
+    (intro w es sc roles args tps pending acc depth is_type rr h a ar ha ht)
+    (rw h)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills etype_args.dec_2
+  (by
+    (intro w es sc roles args tps pending acc depth is_type rr h a ar ha ht)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills etype_args.dec_3
+  (by
+    (intro w es sc roles args tps pending acc depth is_type rr h a ar ha ht w1 es1 t)
+    (rw h)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 
 ;; ---- the roles of a constant's binders -----------------------------------------------------
 ;; BStatic: a function-typed binder — a static parameter, the declaration
@@ -438,12 +511,12 @@
     ((Prod.mk w1 (some (Prod.mk ls ty))) (tele_walk w1 es sc ty nil ls (budget_depth)))))
 (fn tele_walk ((w W) (es ESt) (sc Scope) (ty Expr) (acc (List TBind)) (ls (List Level)) (fuel Int))
   TeleRes
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (TeleErr (sym "realize_signature") (utf8 "the telescope is too deep"))
   (match (w_whnf w ty)
     ((Prod.mk w1 none) (TeleErr (sym "realize_signature") (utf8 "K could not read the type")))
     ((Prod.mk w1 (some (Pi _ n bi dom body)))
-     (match (binder_role w1 es sc dom (tparams_of acc))
+     (match (binder_role w1 es sc dom (tparams_of acc) (budget_depth))
        ((Prod.mk (Prod.mk w2 es2) none)
         (TeleErr (sym "realize_signature")
           (append (show_name n)
@@ -455,7 +528,7 @@
              ((Prod.mk w4 body1)
               (tele_walk w4 es2 sc body1 (cons (TBind n role fv) acc) ls (- fuel 1)))))))))
     ((Prod.mk w1 (some r))
-     (match (binder_role w1 es sc r (tparams_of acc))
+     (match (binder_role w1 es sc r (tparams_of acc) (budget_depth))
        ((Prod.mk (Prod.mk w2 es2) (some (BData rt))) (TeleOk w2 es2 (Tele ls (rev acc) rt r)))
        ((Prod.mk (Prod.mk w2 es2) _)
         (TeleErr (sym "realize_signature")
@@ -472,7 +545,7 @@
 (fn tele_params
   ((w W) (es ESt) (sc Scope) (ty Expr) (acc (List TBind)) (ls (List Level)) (k Int) (fuel Int))
   TeleRes
-  (measure k)
+  (measure (Int.natAbs k))
   (if (<= k 0) (tele_walk w es sc ty acc ls fuel)
   (match (w_whnf w ty)
     ((Prod.mk w1 (some (Pi _ n bi dom body)))
@@ -501,9 +574,11 @@
     ((cons _ r) (tparams_rev r))))
 ;; a binder's role from its type: a Sort at Type is a type parameter, a Sort at Prop or a
 ;; proposition is erased, a Pi over propositions erases to its codomain, an E type is data, a
-;; function type is a static parameter (fn_arity)
-(fn binder_role ((w W) (es ESt) (sc Scope) (dom Expr) (tps (List Expr)))
+;; function type is a static parameter (fn_arity). `depth` is how many package types may
+;; yet be opened one inside another, a caller's `(budget_depth)` (package_type)
+(fn binder_role ((w W) (es ESt) (sc Scope) (dom Expr) (tps (List Expr)) (depth Int))
   (Prod (Prod W ESt) (Option BRole))
+  (measure (Int.natAbs depth) 1 0)
   (match (w_whnf w dom)
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none))
     ((Prod.mk w1 (some (Sort _ l)))
@@ -517,13 +592,13 @@
        ((Prod.mk w2 _)
         (match (erased_pi w2 d (budget_depth))
           ((Prod.mk w3 d1)
-           (match (l_to_etype w3 es sc d1 tps nil)
+           (match (l_to_etype w3 es sc d1 tps nil (budget_depth))
              ((Prod.mk (Prod.mk w4 es4) (some t)) (Prod.mk (Prod.mk w4 es4) (some (BData t))))
              ((Prod.mk (Prod.mk w4 es4) none)
               (match (fn_arity w4 es4 sc d1 tps)
                 ((Prod.mk (Prod.mk w5 es5) (some k)) (Prod.mk (Prod.mk w5 es5) (some (BStatic k))))
                 ((Prod.mk (Prod.mk w5 es5) none)
-                 (match (package_type w5 es5 sc d1)  ; a binder of a package type is a static parameter of arity 0
+                 (match (package_type w5 es5 sc d1 depth)  ; a binder of a package type is a static parameter of arity 0
                    ((Prod.mk (Prod.mk w6 es6) true) (Prod.mk (Prod.mk w6 es6) (some (BStatic 0))))
                    ((Prod.mk (Prod.mk w6 es6) false) (Prod.mk (Prod.mk w6 es6) none))))))))))))))
 ;; a function type's domains and result as E types: a Pi chain of
@@ -533,12 +608,12 @@
 (fn static_etypes
   ((w W) (es ESt) (sc Scope) (d Expr) (tps (List Expr)) (acc (List EType)) (fuel Int))
   (Prod (Prod W ESt) (Option (List EType)))
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk (Prod.mk w es) none)
   (match (w_whnf w d)
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none))
     ((Prod.mk w1 (some (Pi _ n _ dom body)))
-     (match (l_to_etype w1 es sc dom tps nil)
+     (match (l_to_etype w1 es sc dom tps nil (budget_depth))
        ((Prod.mk (Prod.mk w2 es2) none) (Prod.mk (Prod.mk w2 es2) none))
        ((Prod.mk (Prod.mk w2 es2) (some dt))
         (match (w_local w2 n dom)
@@ -547,31 +622,38 @@
              ((Prod.mk w4 body1) (static_etypes w4 es2 sc body1 tps (cons dt acc) (- fuel 1)))))))))
     ((Prod.mk w1 (some r))
      (if (= (len acc) 0) (Prod.mk (Prod.mk w1 es) none)
-     (match (l_to_etype w1 es sc r tps nil)
+     (match (l_to_etype w1 es sc r tps nil (budget_depth))
        ((Prod.mk (Prod.mk w2 es2) (some rt)) (Prod.mk (Prod.mk w2 es2) (some (rev (cons rt acc)))))
        ((Prod.mk (Prod.mk w2 es2) none) (Prod.mk (Prod.mk w2 es2) none))))))))
 (fn fn_arity ((w W) (es ESt) (sc Scope) (d Expr) (tps (List Expr))) (Prod (Prod W ESt) (Option Int))
   (match (static_etypes w es sc d tps nil (budget_depth))
     ((Prod.mk ws (some ts)) (Prod.mk ws (some (- (len ts) 1))))
     ((Prod.mk ws none) (Prod.mk ws none))))
+(fulfills static_etypes.dec_1
+  (by
+    (intro p h w1 dd n bi dom body hw w2 es2 dt hd w3 fv hl w4 body1 hi)
+    (apply natAbs_lt (arith) (arith))))
 ;; a package type: a structure — one constructor, no indices, not unsafe —
 ;; that is no E type, with a function-typed field. Its constructor and its fields' roles: a
 ;; function field a static parameter, a proposition a law (erased), an E-typed field a value; a
 ;; field that is a type, or that is none of these, is no package. The type as written — the
 ;; structure applied to its parameters
-(fn package_type ((w W) (es ESt) (sc Scope) (d Expr)) (Prod (Prod W ESt) Bool)
+(fn package_type ((w W) (es ESt) (sc Scope) (d Expr) (depth Int)) (Prod (Prod W ESt) Bool)
+  (measure (Int.natAbs depth) 0 0)
+  (if (< depth 1) (Prod.mk (Prod.mk w es) false)
   (match (w_whnf w d)
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) false))
     ((Prod.mk w1 (some d1))
      (match (get_app_fn d1)
        ((Const _ n _)
-        (match (package_of w1 es sc n)
+        (match (package_of w1 es sc n (- depth 1))
           ((Prod.mk ws (some _)) (Prod.mk ws true))
           ((Prod.mk ws none) (Prod.mk ws false))))
-       (_ (Prod.mk (Prod.mk w1 es) false))))))
-(fn package_of ((w W) (es ESt) (sc Scope) (n Name))
+       (_ (Prod.mk (Prod.mk w1 es) false)))))))
+(fn package_of ((w W) (es ESt) (sc Scope) (n Name) (depth Int))
   (Prod (Prod W ESt) (Option (Prod Name (List BRole))))
-  (match (ind_eligible w es sc n nil)
+  (measure (Int.natAbs depth) 3 0)
+  (match (ind_eligible w es sc n nil (budget_depth))
     ((Prod.mk (Prod.mk w1 es1) true) (Prod.mk (Prod.mk w1 es1) none))
     ((Prod.mk (Prod.mk w1 es1) false)
      (match (env_find (w_env w1) n)
@@ -586,7 +668,7 @@
                 (match (package_params w2 cty nparams nil)
                   ((Prod.mk w3 none) (Prod.mk (Prod.mk w3 es1) none))
                   ((Prod.mk w3 (some (Prod.mk tps fty)))
-                   (match (package_fields w3 es1 sc fty tps nil (budget_depth))
+                   (match (package_fields w3 es1 sc fty tps nil (budget_depth) depth)
                      ((Prod.mk (Prod.mk w4 es4) none) (Prod.mk (Prod.mk w4 es4) none))
                      ((Prod.mk (Prod.mk w4 es4) (some roles))
                       (Prod.mk (Prod.mk w4 es4)
@@ -615,21 +697,22 @@
 (fulfills package_params.dec_1
   (by (intro p h w1 dd n bi dom body hm w2 dw hw w3 fv hl w4 body1 hi) (apply natAbs_pred (arith))))
 (fn package_fields
-  ((w W) (es ESt) (sc Scope) (ty Expr) (tps (List Expr)) (acc (List BRole)) (fuel Int))
+  ((w W) (es ESt) (sc Scope) (ty Expr) (tps (List Expr)) (acc (List BRole)) (fuel Int) (depth Int))
   (Prod (Prod W ESt) (Option (List BRole)))
-  (measure fuel)
+  (measure (Int.natAbs depth) 2 (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk (Prod.mk w es) none)
   (match (w_whnf w ty)
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none))
     ((Prod.mk w1 (some (Pi _ n _ dom body)))
-     (match (binder_role w1 es sc dom tps)
+     (match (binder_role w1 es sc dom tps depth)
        ((Prod.mk (Prod.mk w2 es2) none) (Prod.mk (Prod.mk w2 es2) none))
        ((Prod.mk (Prod.mk w2 es2) (some BType)) (Prod.mk (Prod.mk w2 es2) none))
        ((Prod.mk (Prod.mk w2 es2) (some role))
         (match (w_local w2 n dom)
           ((Prod.mk w3 fv)
            (match (w_inst1 w3 body fv)
-             ((Prod.mk w4 body1) (package_fields w4 es2 sc body1 tps (cons role acc) (- fuel 1)))))))))
+             ((Prod.mk w4 body1)
+              (package_fields w4 es2 sc body1 tps (cons role acc) (- fuel 1) depth))))))))
     ((Prod.mk w1 (some _)) (Prod.mk (Prod.mk w1 es) (some (rev acc)))))))
 (fn has_static_role ((roles (List BRole))) Bool
   (measure (struct roles))
@@ -653,6 +736,33 @@
     (_ (Prod.mk w d)))))
 (fulfills erased_pi.dec_1
   (by (intro p h dd n bi dom body hm w1 hp w2 fv hl w3 body1 hi) (apply natAbs_lt (arith) (arith))))
+(fulfills tele_walk.dec_1
+  (by
+    (intro p h w1 dd n bi dom body hw w2 es2 role hr w3 fv hl w4 body1 hi)
+    (apply natAbs_lt (arith) (arith))))
+(fulfills tele_params.dec_1
+  (by (intro p h w1 dd n bi dom body hm w2 dw hw w3 fv hl w4 body1 hi) (apply natAbs_pred (arith))))
+(fulfills binder_role.dec_1
+  (by
+    (intro w es sc dom tps depth w1 d hw w2 o hp w3 d1 he w4 es4 hl w5 es5 hf)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills package_type.dec_1
+  (by
+    (intro w es sc d depth h w1 d1 hw dd n ls hf)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills package_of.dec_1
+  (by
+    (intro w es sc n depth w1 es1 he cv nparams nindices al c nn ir unsafe refl hi hf cinfo hc w2 ls
+      cty ht w3 tps fty hp)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills package_fields.dec_1
+  (by
+    (intro w es sc ty tps acc fuel depth h w1 dd n bi dom body hw)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills package_fields.dec_2
+  (by
+    (intro w es sc ty tps acc fuel depth h w1 dd n bi dom body hw w2 es2 role w3 fv hl w4 body1 hi)
+    (apply Prod.Lex.right (apply Prod.Lex.right (apply natAbs_lt (arith) (arith))))))
 
 ;; ---- runtime flags ---------------------------------------------------------------------------
 ;; a telescope's binders: True for runtime data, False for a type or an erased one
@@ -693,7 +803,7 @@
   (match (scan_sexpr (w0 env) es sc s)
     ((Prod.mk _ es1) es1)))
 (fn scan_sexpr ((w W) (es ESt) (sc Scope) (s SExpr)) (Prod W ESt)
-  (measure (struct s))
+  (measure (SExpr.size s))
   (match s
     ((SSym x) (scan_name w es sc x))
     ((SSymU x _) (scan_name w es sc x))
@@ -701,7 +811,7 @@
     ((SList xs) (scan_list w es sc xs))
     (_ (Prod.mk w es))))
 (fn scan_list ((w W) (es ESt) (sc Scope) (xs (List SExpr))) (Prod W ESt)
-  (measure (struct xs))
+  (measure (List_SExpr.size xs))
   (match xs
     (nil (Prod.mk w es))
     ((cons x r)
@@ -715,10 +825,14 @@
        ((RName k _)
         (match (env_find (w_env w) k)
           ((some (InductInfo _ _ _ _ _ _ _ _ _))
-           (match (ind_eligible w es sc k nil)
+           (match (ind_eligible w es sc k nil (budget_depth))
              ((Prod.mk (Prod.mk w1 es1) _) (Prod.mk w1 es1))))
           ((some (CtorInfo _ ind _ _ _ _))
-           (match (ind_eligible w es sc ind nil)
+           (match (ind_eligible w es sc ind nil (budget_depth))
              ((Prod.mk (Prod.mk w1 es1) _) (Prod.mk w1 es1))))
           (_ (Prod.mk w es))))
        (_ (Prod.mk w es))))))
+(fulfills scan_sexpr.dec_1 (by (intro w es sc s xs h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills scan_list.dec_1 (by (intro w es sc xs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills scan_list.dec_2
+  (by (intro w es sc xs x r h w1 es1) (rw h) (rw List_SExpr.size.eq_2) (arith)))

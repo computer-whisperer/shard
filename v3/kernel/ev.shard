@@ -891,11 +891,14 @@
 ;; own parameters; a type read by identity, applied to none (an Array to one). An inductive's
 ;; constructors are examined once (seen), the arguments at every application — so an argument
 ;; a type never uses is examined too. A type parameter of the entry that no parameter states
-;; is no obstacle: no value is read at it
+;; is no obstacle: no value is read at it. `depth` is how many inductives may yet be opened
+;; one inside another, at the entry the count of the program's declarations: an inductive is
+;; opened while it is not among the seen, and those open are among them, so no more are open
+;; at once than the program declares and the count is never spent
 (type Tc (TcOk (List Name)) (TcNo (List Int)))
 (fn checked_door ((h Handle) (ds (List EDecl))) Prep
   (let ((inds (index_inds ds IMEmpty)))
-    (match (params_checked inds (Handle.params h) 1 nil)
+    (match (params_checked inds (Handle.params h) 1 nil (len ds))
       ((TcNo m)
        (PrepNo (sym "preconditioned")
          (append (show_name (Handle.entry h)) (append (utf8 ": parameter ") m))))
@@ -908,40 +911,54 @@
     ((cons (EInd n np cs) r) (index_inds r (decl_index_add x (EInd n np cs))))
     ((cons _ r) (index_inds r x))))
 (fn params_checked
-  ((inds (IntMap (List (Prod Name EDecl)))) (ps (List EType)) (i Int) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl))))
+   (ps (List EType))
+   (i Int)
+   (seen (List Name))
+   (depth Int))
   Tc
   (measure (struct ps))
   (match ps
     (nil (TcOk seen))
     ((cons t r)
-     (match (ty_checked inds 0 t seen)
+     (match (ty_checked inds 0 t seen depth)
        ((TcNo m)
         (TcNo
           (append (show_nat i)
             (append (utf8 " states ") (append (show_etype t) (append (utf8 ": ") m))))))
-       ((TcOk seen1) (params_checked inds r (+ i 1) seen1))))))
+       ((TcOk seen1) (params_checked inds r (+ i 1) seen1 depth))))))
 ;; np: the type parameters in scope — none at a parameter of the entry, its inductive's at a field
 (fn tys_checked
-  ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (ts (List EType)) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl))))
+   (np Int)
+   (ts (List EType))
+   (seen (List Name))
+   (depth Int))
   Tc
-  (measure (struct ts))
+  (measure (Int.natAbs depth) 1 (List_EType.size ts))
   (match ts
     (nil (TcOk seen))
     ((cons t r)
-     (match (ty_checked inds np t seen)
+     (match (ty_checked inds np t seen depth)
        ((TcNo m) (TcNo m))
-       ((TcOk seen1) (tys_checked inds np r seen1))))))
-(fn ty_checked ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (t EType) (seen (List Name))) Tc
+       ((TcOk seen1) (tys_checked inds np r seen1 depth))))))
+(fn ty_checked
+  ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (t EType) (seen (List Name)) (depth Int))
+  Tc
+  (measure (Int.natAbs depth) 1 (EType.size t))
   (match t
     ((ETVar i)
      (if (bool_and (<= 0 i) (< i np)) (TcOk seen)
      (TcNo (append (show_etype t) (utf8 " is a type parameter with no type stated for it")))))
     ((ETCon n args)
-     (match (head_checked inds n (len args) seen)
+     (match (head_checked inds n (len args) seen depth)
        ((TcNo m) (TcNo m))
-       ((TcOk seen1) (tys_checked inds np args seen1))))))
+       ((TcOk seen1) (tys_checked inds np args seen1 depth))))))
 ;; a type's head applied to k types
-(fn head_checked ((inds (IntMap (List (Prod Name EDecl)))) (n Name) (k Int) (seen (List Name))) Tc
+(fn head_checked
+  ((inds (IntMap (List (Prod Name EDecl)))) (n Name) (k Int) (seen (List Name)) (depth Int))
+  Tc
+  (measure (Int.natAbs depth) 0 0)
   (if (door_reads n)
     (if (= k (if (name_eq n (n1 (sym "Array"))) 1 0)) (TcOk seen)
     (TcNo (arity_text n (if (name_eq n (n1 (sym "Array"))) 1 0) k)))
@@ -954,22 +971,28 @@
       ((some (EInd _ np cs))
        (if (bool_not (= k np)) (TcNo (arity_text n np k))
        (if (mem_name n seen) (TcOk seen)
-       (ctors_checked inds np cs (cons n seen)))))
+       (if (< depth 1)
+         (TcNo (append (show_name n) (utf8 " opens more types than the program declares")))
+         (ctors_checked inds np cs (cons n seen) (- depth 1))))))
       (_ (TcNo (append (show_name n) (utf8 " is not a type the program defines"))))))))
 (fn arity_text ((n Name) (takes Int) (k Int)) (List Int)
   (append (show_name n)
     (append (utf8 " takes ")
       (append (show_nat takes) (append (utf8 " type argument(s) and is applied to ") (show_nat k))))))
 (fn ctors_checked
-  ((inds (IntMap (List (Prod Name EDecl)))) (np Int) (cs (List ECtorDef)) (seen (List Name)))
+  ((inds (IntMap (List (Prod Name EDecl))))
+   (np Int)
+   (cs (List ECtorDef))
+   (seen (List Name))
+   (depth Int))
   Tc
-  (measure (struct cs))
+  (measure (Int.natAbs depth) 2 (List.length cs))
   (match cs
     (nil (TcOk seen))
     ((cons (ECtorDef _ fts) r)
-     (match (tys_checked inds np fts seen)
+     (match (tys_checked inds np fts seen depth)
        ((TcNo m) (TcNo m))
-       ((TcOk seen1) (ctors_checked inds np r seen1))))))
+       ((TcOk seen1) (ctors_checked inds np r seen1 depth))))))
 ;; the types the validation reads by identity: the integers, and the registry's rows
 ;; whose invariant a value shows — a UInt8 below 256, an Array's and a
 ;; ByteArray's cells, a String's bytes and their validity; and the rows it cannot
@@ -982,6 +1005,38 @@
 (fn door_dropped ((n Name)) Bool
   (bool_or (name_eq n (n1 (sym "Fin")))
     (bool_or (name_eq n (n1 (sym "BitVec"))) (name_eq n (n1 (sym "Subtype"))))))
+(fulfills tys_checked.dec_1
+  (by
+    (intro inds np ts seen depth t r h)
+    (rw h)
+    (rw List_EType.size.eq_2)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills tys_checked.dec_2
+  (by
+    (intro inds np ts seen depth t r h seen1)
+    (rw h)
+    (rw List_EType.size.eq_2)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills ty_checked.dec_1
+  (by (intro inds np t seen depth n args h) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ty_checked.dec_2
+  (by
+    (intro inds np t seen depth n args h seen1)
+    (rw h)
+    (rw EType.size.eq_1)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills head_checked.dec_1
+  (by
+    (intro inds n k seen depth h1 h2 m np cs hf h3 h4 h)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills ctors_checked.dec_1
+  (by (intro inds np cs seen depth c fts r h) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills ctors_checked.dec_2
+  (by
+    (intro inds np cs seen depth c fts r h seen1)
+    (rw h)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 
 ;; ---- invocation ------------------------------------------------------------------------------
 ;; the machine ran, and its answer; an argument refused before it started — its 1-based

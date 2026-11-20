@@ -259,7 +259,7 @@
     (none (Prod.mk t none))))
 (fn open_fields ((t Tr) (ind Name) (ty Expr) (acc (List Field)) (fuel Int))
   (Prod Tr (Option (List Field)))
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk t none)
   (match (tr_whnf t ty)
     ((Prod.mk t1 (some (Pi _ n _ dom body)))
@@ -271,7 +271,7 @@
              ((Prod.mk w4 body1)
               (open_fields (tr_set_w t1 w4) ind body1 (cons (Field fv none false) acc) (- fuel 1)))))))
        ((Prod.mk w2 _)
-        (match (l_to_etype w2 (Tr.es t1) (Tr.sc t1) dom (Tr.tps t1) nil)
+        (match (l_to_etype w2 (Tr.es t1) (Tr.sc t1) dom (Tr.tps t1) nil (budget_depth))
           ((Prod.mk (Prod.mk w3 es3) fety)
            (match (w_local w3 n dom)
              ((Prod.mk w4 fv)
@@ -286,6 +286,14 @@
   (match (get_app_fn e)
     ((Const _ c _) (name_eq c n))
     (_ false)))
+(fulfills open_fields.dec_1
+  (by
+    (intro p h t1 dd n bi dom body hw w2 hp w3 fv hl w4 body1 hi)
+    (apply natAbs_lt (arith) (arith))))
+(fulfills open_fields.dec_2
+  (by
+    (intro p h t1 dd n bi dom body hw w2 o hp w3 es3 fety he w4 fv hl w5 body1 hi)
+    (apply natAbs_lt (arith) (arith))))
 (fn mentions_any ((e Expr) (ids (List Int))) Bool
   (measure (struct e))
   (if (bool_not (has_fvar e)) false
@@ -487,7 +495,7 @@
               (ErErr (sym "erased_in_runtime")
                 (append (show_name sn) (utf8 ": a projection of an erased field"))))
             ((some _) (ErOk t2 x1)))))
-       (match (ind_eligible (Tr.w t1) (Tr.es t1) (Tr.sc t1) sn nil)
+       (match (ind_eligible (Tr.w t1) (Tr.es t1) (Tr.sc t1) sn nil (budget_depth))
          ((Prod.mk (Prod.mk w2 es2) false)
           (ErErr (sym "no_realization") (append (show_name sn) (utf8 " is not an E type"))))
          ((Prod.mk (Prod.mk w2 es2) true)
@@ -551,7 +559,7 @@
 ;; ---- a package ---------------------------------------------------------
 ;; a package type by erase.shard's reading, over the walk
 (fn tr_package ((t Tr) (sn Name)) (Prod Tr (Option (Prod Name (List BRole))))
-  (match (package_of (Tr.w t) (Tr.es t) (Tr.sc t) sn)
+  (match (package_of (Tr.w t) (Tr.es t) (Tr.sc t) sn (budget_depth))
     ((Prod.mk (Prod.mk w1 es1) r) (Prod.mk (tr_set_es (tr_set_w t w1) es1) r))))
 ;; the subject of a package's projection: a package parameter at its shape — the constant's
 ;; fields (its value read by whnf to the constructor applied), or a placeholder at the template's
@@ -1097,7 +1105,7 @@
 ;; keeps its runtime fields
 (fn mt_epat ((t Tr) (p MtPat) (runtime Bool) (fuel Int))
   (Prod Tr (Option (Prod (Option EPat) (List Bool))))
-  (measure fuel)
+  (measure (Int.natAbs fuel) 0)
   (if (< fuel 1) (Prod.mk t none)
   (match p
     ((MtVar _) (Prod.mk t (some (Prod.mk (if runtime (some PVar) none) (list runtime)))))
@@ -1113,7 +1121,7 @@
                ((Prod.mk t2 (some (Prod.mk (cons q nil) vroles)))
                 (Prod.mk t2 (some (Prod.mk (some q) vroles))))
                ((Prod.mk t2 _) (Prod.mk t2 none)))))
-          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
+          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil (budget_depth))
             ((Prod.mk (Prod.mk w1 es1) false) (Prod.mk t none))
             ((Prod.mk (Prod.mk w1 es1) true)
              (match (field_roles (tr_set_es (tr_set_w t w1) es1) c)
@@ -1127,7 +1135,7 @@
 (fn mt_epats
   ((t Tr) (subs (List MtPat)) (roles (List Bool)) (eps (List EPat)) (vroles (List Bool)) (fuel Int))
   (Prod Tr (Option (Prod (List EPat) (List Bool))))
-  (measure (struct subs))
+  (measure (Int.natAbs fuel) (+ (List.length subs) 1))
   (match subs
     (nil (Prod.mk t (some (Prod.mk (rev eps) vroles))))
     ((cons p r)
@@ -1143,6 +1151,22 @@
                (none eps))
              (append vroles vr)
              fuel))))))))
+(fulfills mt_epat.dec_1
+  (by
+    (intro t p runtime fuel h c subs hp hr cv ind ci np nf us hf hn w1 es1 he t1 roles hfr)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills mt_epat.dec_2
+  (by
+    (intro t p runtime fuel h c subs hp hr cv ind ci np nf us hf hn t1 x roles hrf)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills mt_epats.dec_1
+  (by (intro t subs roles eps vroles fuel p r h rt rr h2) (apply Prod.Lex.right (arith))))
+(fulfills mt_epats.dec_2
+  (by
+    (intro t subs roles eps vroles fuel p r h rt rr h2 t1 ep vr)
+    (rw h)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (arith))))
 ;; one alternative: a lambda per variable of the row, then its body
 (fn erase_alt ((t Tr) (env (List ErEnt)) (a Expr) (roles (List Bool)) (fuel Int))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr ETerm))
@@ -1256,7 +1280,7 @@
      (match (w_local_type w (fvar_id_of fv))
        (none (Prod.mk (Prod.mk w es) none))
        ((some ty)
-        (match (binder_role w es sc ty tps)
+        (match (binder_role w es sc ty tps (budget_depth))
           ((Prod.mk (Prod.mk w1 es1) none) (Prod.mk (Prod.mk w1 es1) none))
           ((Prod.mk (Prod.mk w1 es1) (some role))
            (predef_binds w1 es1 sc r
@@ -1269,7 +1293,7 @@
   (Prod (Prod W ESt) (Option EType))
   (match (mt_inst_args w (pd_type pd) (pd_binders pd))
     ((Prod.mk w1 none) (Prod.mk (Prod.mk w1 es) none))
-    ((Prod.mk w1 (some rt)) (l_to_etype w1 es sc rt (tbind_types binds) nil))))
+    ((Prod.mk w1 (some rt)) (l_to_etype w1 es sc rt (tbind_types binds) nil (budget_depth)))))
 
 ;; ---- constructors, calls, decisions, case analyses ---------------------------------------------
 ;; a constructor: its inductive E-eligible, the static and erased arguments dropped
@@ -1291,7 +1315,7 @@
            ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
            ((Prod.mk none (Prod.mk t2 (cons a nil))) (ErOk t2 a))
            ((Prod.mk none _) (ErErr (sym "no_realization") (show_name c)))))))
-    (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
+    (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil (budget_depth))
       ((Prod.mk (Prod.mk w1 es1) false)
        (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
       ((Prod.mk (Prod.mk w1 es1) true)
@@ -1372,7 +1396,7 @@
           (erase_row_cases t env c ind (nth args (+ nparams 1)) (nth args (+ nparams 2))
             (if (= (len args) (+ nparams 3)) true false)
             fuel)
-          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
+          (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil (budget_depth))
             ((Prod.mk (Prod.mk w1 es1) false)
              (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
             ((Prod.mk (Prod.mk w1 es1) true)
@@ -1484,7 +1508,7 @@
             (erase_row_cases t env c ind (nth args (+ nparams 2)) (nth args (+ nparams 1))
               (bool_and (= nminors 1) (= (len args) (+ nparams 3)))
               fuel)
-            (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil)
+            (match (ind_eligible (Tr.w t) (Tr.es t) (Tr.sc t) ind nil (budget_depth))
               ((Prod.mk (Prod.mk w1 es1) false)
                (ErErr (sym "no_realization") (append (show_name ind) (utf8 " is not an E type"))))
               ((Prod.mk (Prod.mk w1 es1) true)
@@ -1708,7 +1732,7 @@
                     (append (show_name c)
                       (utf8
                         ": a template taken at an open type — a type parameter of the caller; an instance is at closed types")))))
-              (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a (Tr.tps t) nil)
+              (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) a (Tr.tps t) nil (budget_depth))
                 ((Prod.mk (Prod.mk w1 es1) none)
                  (Prod.mk (tr_set_es (tr_set_w t w1) es1)
                    (TaErr (sym "no_realization")
@@ -2016,7 +2040,7 @@
                   (Prod.mk t3
                     (SsErr (sym "function_value") (utf8 "a lambda whose body K could not type"))))
                  ((Prod.mk t3 (some bty))
-                  (match (l_to_etype (Tr.w t3) (Tr.es t3) (Tr.sc t3) bty nil nil)
+                  (match (l_to_etype (Tr.w t3) (Tr.es t3) (Tr.sc t3) bty nil nil (budget_depth))
                     ((Prod.mk (Prod.mk w4 es4) none)
                      (Prod.mk (tr_set_es (tr_set_w t3 w4) es4)
                        (SsErr (sym "function_value")
@@ -2111,7 +2135,7 @@
        (none (Prod.mk t none))
        ((some ty)
         (if (has_fvar ty) (Prod.mk t none)
-        (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) ty nil nil)
+        (match (l_to_etype (Tr.w t) (Tr.es t) (Tr.sc t) ty nil nil (budget_depth))
           ((Prod.mk (Prod.mk w1 es1) none) (Prod.mk (tr_set_es (tr_set_w t w1) es1) none))
           ((Prod.mk (Prod.mk w1 es1) (some ety))
            (local_etypes (tr_set_es (tr_set_w t w1) es1) r (cons ety acc))))))))))
