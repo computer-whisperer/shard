@@ -232,9 +232,9 @@ file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, more
   than nine in ten.** The checker reads every one: of the loader's closure, 8,974
-  functions — 4,792 of them the rows of a generated table —, it holds 8,713 as definitions. The
+  functions — 4,792 of them the rows of a generated table —, it holds 8,771 as definitions. The
   others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 218), or they are a group of functions that call each other with no
+  (`callee_runnable`, 160), or they are a group of functions that call each other with no
   measure the definer takes (43, in three groups). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
@@ -263,14 +263,15 @@ file; two things about how they are written set them apart.
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
   over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
-  measure it states (`measure_type`); 26 state an integer or a term where the checker
+  measure it states (`measure_type`); 24 state an integer or a term where the checker
   does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Fifteen groups are written so, 121 functions: that one, `matcher.shard`'s
+  parts"). Sixteen groups are written so, 160 functions, and the loader's `build_demands`
+  alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
   axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
@@ -280,6 +281,7 @@ file; two things about how they are written set them apart.
   the types an entry states (`ev.shard` `ty_checked`), the definer's projection of a body
   (`define.shard` `pj_term`, twelve functions) and the split of its equations
   (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
+  the erasure itself in three, 39 functions (`erase` to `lift_lambda`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
@@ -291,7 +293,15 @@ file; two things about how they are written set them apart.
   test it and the walk of an argument list state `(Int.natAbs d)`; so the projection's ten
   that hand their fuel to `pj_term` less one, which tests it —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
-  given a depth of at least 1).
+  given a depth of at least 1). No such statement serves a member that both hands its fuel
+  to the one that tests it and hands on one less elsewhere: it knows nothing of its fuel,
+  and one less is no nearer a bound. There the functions that test the fuel are the ones
+  that step it — the erasure's `erase` and `static_shape`, the two its walk comes back to,
+  hand on one less where they go round, and the other 37 hand on the fuel they were given —,
+  every member states the one term `(Int.natAbs (+ fuel 1))`, the tester's step is
+  `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` and every other call a lower
+  rank or a shorter list. A member of a group may call any number of the others (pin
+  `mutual_wide`).
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The member
   that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one that takes

@@ -476,6 +476,36 @@ entries are explained under "Measured" at the end.
   the reader: a body of 39 functions changed, with a row never taken, on a claim not proven.
   Not the reader left a program: 127 programs stood above it, 65 on it alone. The owner, of
   the six units left and my lean to this one: "Let's continue with the classifier's reader".
+- The erasure of a term is a definition by its fuel, and the function that tests a fuel is
+  the one that steps it. `erasure.shard`'s 39 functions hand a fuel round. `erase` tested
+  it, and 19 other functions handed on one less, at 31 calls, without a test: nothing such a
+  function knows of its fuel says that one less is nearer a bound, so no measure stated
+  the step. `static_shape` went round on a lambda applied, at one less, with no test
+  anywhere on the loop, and through `package_field_shape` on a term it built, at the fuel
+  it had. Now `erase` and `static_shape`, the two functions the walk comes back to, test the
+  fuel and hand on one less where they go round — `erase` at its three dispatches,
+  `static_shape` at its own call and at `package_field_shape` —, and every other function
+  hands on the fuel it was given. A function's measure is the fuel, a rank above every
+  function it hands the fuel to, and the list it walks. Not the bodies kept under a measure
+  staggered between the tester and the rest, as the definer's projection has it:
+  `erase_cond` enters `erase` at its own fuel and calls members at it, and `static_shape`
+  tests under `erase` at one fuel, which leaves no room for the half steps. Not a size of
+  the term for the arguments erased at the caller's fuel: it takes facts about
+  `get_app_args`, `drop` and `append`, and the terms the erasure builds must be stepped all
+  the same. The cost chosen: what the fuel counts changed — every entry of `erase` costs
+  one, where an argument erased through `erase_all` cost none and a lambda's body under a
+  static argument two —, and `static_shape` refuses `erased_in_runtime` where the fuel is
+  spent, where it read on. The budget is the 8,192 it was, and the deepest body of the
+  loader's closure needs the same before and after (Measured). Found on the way: the
+  loader's search for a group read a waiting function again for 16 callees at most, and
+  `erase_const_at` names 17 members, so the group was never found and each member was
+  recorded as waiting on another; the search has the bound of the load's own loop, 1,024
+  (pin `mutual_wide`). The owner, of the five units left and my lean to this one, which I
+  had described as "three one-token body changes, then the recipe": "Good. Let's proceed
+  with the erasure unit". That description was wrong — it counted the three terms built at
+  the caller's fuel and not the 31 steps without a test. Which function steps the fuel, the
+  refusal in `static_shape` and the search's bound are the builder's, built and then put
+  to the owner.
 
 ## Programs and the back end
 
@@ -1461,7 +1491,28 @@ measurements; measure again before building on one.
   suite on the binaries, 377 s for 393, 52 entrypoints. The checked load of all 29 roots
   was started beside the suite and stopped unfinished when the machine ran short of memory;
   it was left to CI. The state's check and the Init replay were not run: nothing K runs
-  changed.
+  changed. On CI: #774 70.7 minutes (`native` 70.0, `v3` 39.1, `replay` 30.8), the checked
+  load of all 29 roots in it.
+- The erasure (2026-11-20). 58 programs became definitions: 8,974 functions, 8,771
+  definitions, 203 programs — 160 for a function they call, 43 in three groups (the
+  elaborator's 34, the evaluator's machine 4, `lw_jp` 5) —, 1,655 obligations of 658
+  functions. The group's 117: 6 a step of the fuel, 14 a shorter list, 97 a lower rank at
+  the same fuel, each accepted as first typed. Above it the loader's `build_demands`
+  stated an integer and states its fuel and its list (3 obligations); seven functions of
+  `loader.shard` waited on it alone. What the fuel counts was measured by lowering the
+  budget in a scratch loader and loading the loader's closure checked: at 128 levels one
+  function is refused (`k/accel_pins.shard` `accel_ref_closure`, 20 nested `if`s around a
+  list of 158 names), at 192 none — before the change and after it, of 8,192. The closure's
+  program text differs in 24 functions: 23 of `erasure.shard`, and the search's
+  `probe_reach`. The checked load of the loader's closure takes 253 s for 192, timed side
+  by side: the 58 definitions, not the search, which timed 254 s at a bound of 20 and
+  256 s at 1,024. `erasure.shard` is 2,685 lines for 2,183. Checked on the dev box before
+  the push, by ruling 17: the 29 binaries built in 272 s, the Init index the one before;
+  the loader's closure loaded checked, 58 modules with none pending; the state's check, 36
+  checks; the suite on the binaries, 265 s, 52 entrypoints, the loader's pins 352
+  directories. The checked load of all 29 roots was not run on the dev box and is CI's: it
+  was stopped there for memory at the step before, and was not started again unasked. The
+  Init replay was not run: nothing of K's directory changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
