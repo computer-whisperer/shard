@@ -85,6 +85,9 @@
   (LIf LTerm LTerm LTerm)
   (LAbsurd))  ; a refuted row: reached only by a program K did not warrant
 (type LArm (LArm LPat LTerm))
+;; the size of a linked term — `LTerm.size`, and with it `LArm.size`, `List_LTerm.size` and
+;; `List_LArm.size` —, what the machine is measured by; definitions with no program
+(derive LTerm size)
 (type LFn
   (LBody Name Int LTerm)  ; a function: identity, parameter count, body
   (LExtern Name Symbol Int (List EType) EType)  ; an extern: identity, its short name (the host's), parameter count, the declared types (the wire's codec reads them)
@@ -438,7 +441,21 @@
   (HExhausted Symbol Int)  ; a primitive's resource (nat_size, nat_count), the function
   (HExt Int (List IVal) Kont Int Int))  ; an extern to perform: its index, arguments, the continuation, cur, fuel
 
+;; what a continuation holds to run at the fuel it was made at: twice the size of each frame's
+;; terms, and one or two for the frame. The machine is measured by the fuel, then by twice
+;; the term's size and this: a call spends a unit of fuel, and every other step either opens
+;; a term into a frame and its first part or closes a frame
+(def kont_weight ((k Kont)) Nat
+  (measure (struct k))
+  (match k
+    (KHalt 0)
+    ((KArg _ _ _ rest _ _ next) (+ (+ (* 2 (List_LTerm.size rest)) 2) (kont_weight next)))
+    ((KMatch arms _ _ next) (+ (+ (* 2 (List_LArm.size arms)) 1) (kont_weight next)))
+    ((KLet rest body _ _ next)
+     (+ (+ (* 2 (+ (List_LTerm.size rest) (LTerm.size body))) 1) (kont_weight next)))
+    ((KIf a b _ _ next) (+ (+ (* 2 (+ (LTerm.size a) (LTerm.size b))) 1) (kont_weight next)))))
 (fn ev_term ((lk Linked) (env (List IVal)) (t LTerm) (k Kont) (cur Int) (fuel Int)) Halt
+  (measure (Int.natAbs fuel) (+ (* 2 (LTerm.size t)) (kont_weight k)))
   (match t
     ((LBVar i)
      (match (nth env i)
@@ -472,6 +489,7 @@
     ((LIf c a b) (ev_term lk env c (KIf a b env cur k) cur fuel))
     (LAbsurd (HStuck (sym "unreachable") cur))))
 (fn ev_ret ((lk Linked) (v IVal) (k Kont) (cur Int) (fuel Int)) Halt
+  (measure (Int.natAbs fuel) (kont_weight k))
   (match k
     (KHalt (HVal v))
     ;; an argument's value: the next argument, left to right, or the saturated head over its
@@ -500,12 +518,14 @@
        (_ (HStuck (sym "if_tag") cur1))))))
 ;; a function over its arguments' values (last first: the body's frame): one unit of fuel
 (fn ev_call ((lk Linked) (head Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (measure (Int.natAbs fuel) (kont_weight k))
   (match (im_find (lk_fns lk) head)
     ((some (LBody _ _ body)) (if (< fuel 1) (HOut head) (ev_term lk done body k head (- fuel 1))))
     ((some (LUnlinked _)) (HStuck (sym "unlinked") head))
     (_ (HStuck (sym "unknown_head") cur))))
 ;; a primitive over its arguments' values (last first)
 (fn ev_prim ((lk Linked) (op Int) (done (List IVal)) (k Kont) (cur Int) (fuel Int)) Halt
+  (measure (Int.natAbs fuel) (+ (kont_weight k) 1))
   (match (prim_apply lk op (rev done))
     ((PrimVal v) (ev_ret lk v k cur fuel))
     (PrimGuard (HStuck (sym "guard") cur))
@@ -553,6 +573,39 @@
   (by (intro ps vs env p pr h v vr hv) (rw h) (rw List_LPat.size.eq_2) (arith)))
 (fulfills match_fields.dec_2
   (by (intro ps vs env p pr h v vr hv env1) (rw h) (rw List_LPat.size.eq_2) (arith)))
+;; The arm picked is one of the arms: its body is no larger than they are, which is what the
+;; machine's step into it descends by (ev_ret). A pick's room is its body's size, 0 where no
+;; arm took the value, so that the fact is stated of the call itself
+(def arm_room ((a Arm)) Nat
+  (match a
+    (ArmNone 0)
+    ((ArmAt _ body) (LTerm.size body))))
+(theorem arm_room_at ((env (List IVal)) (body LTerm))
+  (= (arm_room (ArmAt env body)) (LTerm.size body))
+  (by rfl))
+(theorem pick_arm_room ((v IVal) (arms (List LArm)) (env (List IVal)))
+  (<= (arm_room (pick_arm v arms env)) (List_LArm.size arms))
+  (by
+    (induction arms
+      ((nil () (rw pick_arm.eq_1) (reduce) (arith))
+       (cons (x r ih)
+         (cases x
+           ((LArm (p body) (rw pick_arm.eq_2)
+              (cases (match_pat p v env)
+                ((none () (reduce) (arith ih)) (some (env1) (reduce) (rw arm_room_at) (arith))))))))))))
+(theorem pick_arm_le
+  ((v IVal)
+   (arms (List LArm))
+   (env (List IVal))
+   (env1 (List IVal))
+   (body LTerm)
+   (h (= (pick_arm v arms env) (ArmAt env1 body))))
+  (<= (LTerm.size body) (List_LArm.size arms))
+  (by
+    (have g (<= (arm_room (ArmAt env1 body)) (List_LArm.size arms))
+      (rw (<- h))
+      (exact (pick_arm_room v arms env)))
+    (arith g (arm_room_at env1 body))))
 
 ;; ---- the primitives (prog.shard's codes) ----------------------------------------------------
 ;; a primitive's outcome: a value; the guard failed (the input outside the operation's
@@ -683,6 +736,140 @@
   (if (= x -1) -1
   (int_shr (bshr x 62) (- y 62))))))
 (fulfills int_shr.dec_1 (by (intro p h hx hm) (apply natAbs_lt (arith) (arith))))
+;; the machine's descents, here below the last function it calls: a call's unit of fuel
+;; (ev_call), and at one fuel a term opened or a frame closed — the sizes written out by
+;; `reduce`, the arm picked by `pick_arm_le`, the branch of an `if` by the test's two cases
+(fulfills ev_term.dec_1
+  (by (intro lk env t k cur fuel i ht v hn) (rw ht) (reduce) (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_2
+  (by (intro lk env t k cur fuel v ht) (rw ht) (reduce) (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_3
+  (by
+    (intro lk env t k cur fuel tag args ht ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_4
+  (by
+    (intro lk env t k cur fuel tag args ht a more ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_5
+  (by
+    (intro lk env t k cur fuel id args ht ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_6
+  (by
+    (intro lk env t k cur fuel id args ht a more ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_7
+  (by
+    (intro lk env t k cur fuel op args ht ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_8
+  (by
+    (intro lk env t k cur fuel op args ht a more ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_9
+  (by
+    (intro lk env t k cur fuel id args ht a more ha)
+    (rw ht)
+    (rw ha)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_10
+  (by (intro lk env t k cur fuel s arms ht) (rw ht) (reduce) (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_11
+  (by
+    (intro lk env t k cur fuel rhss body ht hr)
+    (rw ht)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_12
+  (by
+    (intro lk env t k cur fuel rhss body ht r1 rest hr)
+    (rw ht)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_term.dec_13
+  (by (intro lk env t k cur fuel c a b ht) (rw ht) (reduce) (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_1
+  (by
+    (intro lk v k cur fuel kind head done rest env cur1 next hk a more hr)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_2
+  (by
+    (intro lk v k cur fuel kind head done rest env cur1 next hk hr h0 h1 h2)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_3
+  (by
+    (intro lk v k cur fuel kind head done rest env cur1 next hk hr h0 h1)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_4
+  (by
+    (intro lk v k cur fuel kind head done rest env cur1 next hk hr h0)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_5
+  (by
+    (intro lk v k cur fuel arms env cur1 next hk env1 body hp)
+    (rw hk)
+    (reduce)
+    (apply Prod.Lex.right (arith (pick_arm_le v arms env env1 body hp)))))
+(fulfills ev_ret.dec_6
+  (by
+    (intro lk v k cur fuel rest body env cur1 next hk hr)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_7
+  (by
+    (intro lk v k cur fuel rest body env cur1 next hk r1 more hr)
+    (rw hk)
+    (rw hr)
+    (reduce)
+    (apply Prod.Lex.right (arith))))
+(fulfills ev_ret.dec_8
+  (by
+    (intro lk v k cur fuel a b env cur1 next hk tag w hv)
+    (rw hk)
+    (cases (Int.decEq (band tag 1) 1)
+      ((isFalse (hc) (reduce) (apply Prod.Lex.right (arith)))
+       (isTrue (hc) (reduce) (apply Prod.Lex.right (arith)))))))
+(fulfills ev_call.dec_1
+  (by
+    (intro lk head done k cur fuel w1 w2 body hf hn)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills ev_prim.dec_1 (by (intro lk op done k cur fuel v hp) (apply Prod.Lex.right (arith))))
 
 ;; ---- `ev` -----------------------------------------------------------------------------------
 (fn val_in ((lk Linked) (v Val)) (Option IVal)
