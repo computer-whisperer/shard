@@ -31,7 +31,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 
 | File | What it does | Rests on | Called by |
 |---|---|---|---|
-| `sexpr.shard` | The s-expression reader: bytes → `SExpr` (numeral, symbol, symbol with universe list, string, list); `read_all` for a whole file with the error's byte offset; `show_sexpr` printer; `size_sexpr`. No name has a meaning here. | `util.shard` | `scope.shard`, `record.shard` (imports); `loader.shard` and `reader.shard` (`read_all`), `derive.shard`, `engine.shard`, `prove.shard`; `v3/tools/shardfmt/reads` (the formatter's judge) |
+| `sexpr.shard` | The s-expression reader: bytes → `SExpr` (numeral, symbol, symbol with universe list, string, list); `read_all` for a whole file with the error's byte offset; `show_sexpr` printer; `size_sexpr`. No name has a meaning here. Every function of it is a definition: the reader of a string descends by the bytes left, the four that call each other by a fuel. | `util.shard` | `scope.shard`, `record.shard` (imports); `loader.shard` and `reader.shard` (`read_all`), `derive.shard`, `engine.shard`, `prove.shard`; `v3/tools/shardfmt/reads` (the formatter's judge) |
 | `descent.shard` | The descent facts of the toolchain's integer measures, theorems alone: `natAbs_lt`; `natAbs_pred`, a counter stepping down past a test that it is at least 1; `natAbs_div10`, a number losing a decimal digit; `natAbs_shr2_le` and `natAbs_shr2_lt`, an integer losing its two low bits. A function that recurses on an `Int` states `(measure (Int.natAbs n))` and each `fulfills` beside it cites one (133 functions in 33 files, K's directory among them; the forms: `LANGUAGE.md`, "Toolchain files and ordinary files"). No program is made of this file, and a build passes it over. | — | `util.shard`, `intmap.shard` (imports); every file with such a function (`(use kernel.descent)`) |
 | `util.shard` | List, byte and decimal utilities: `len append rev nth take drop`, `halves` (a list dealt into two piles, what the merge sorts of `dump`, `index` and `initload` halve by, with the fact that each pile of a list of two or more is shorter), `is_ws is_digit`, `show_nat show_int`, `hex_val`, `utf8_ok`; `utf8`, a literal's bytes (text here is `(List Int)`, a literal a `String`), and `utf8_all` for a list of them. The lowest file a program is made of. | `descent.shard` | `sym.shard`; nearly every kernel file (`sexpr`, `json`, `record`, `index`, `initload`, …) |
 | `base.shard` | The base: the definitions every file sees beside Init's, as text the loader reads as the module `shard.int` when a file's forms first use one of its operators — `land`, `lor`, `xor` on `Int`, by cases on an integer's two constructors over Init's `Nat.land`, `Nat.lor`, `Nat.xor`. `base_decl` (a declaration of the base: the one native declaration a row of the registry speaks for), `uses_base`, `base_reserved` (no file's module is `shard`). | `util.shard`, `sym.shard`, `name.shard`, `sexpr.shard` | `elab.shard` (the operators at `Int`), `prog.shard` (the rows), `erasure.shard`, `loader.shard` |
@@ -198,7 +198,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   `push_max_args_weight`). Rests on util. Used by expr, tc, elab.
 - `decl.shard` (186) — `Declaration` (raw) and `ConstantInfo` (checked entries), hints, safety,
   recursor rules; the admission rules as comments. `verdict.shard` (66) — `Outcome`, `Reason`,
-  `Resource`, `Verdict`, `Failure`, `KRes`. `name.shard` (180) — `Name`, `hash_name`, `name_key`,
+  `Resource`, `Verdict`, `Failure`, `KRes`. `name.shard` (178) — `Name`, `hash_name`, `name_key`,
   `mix`, `hash_under`. Also `intmap` (96), `util` (170), `json` (217), `host` (21); and `descent` (43), theorems that `util` and `intmap` cite.
 - `kw.shard` (187) — the walk over K from outside the seal: `W` = environment + local context +
   state; `w_infer`, `w_whnf`, `w_is_def_eq` (and `_r` forms that keep K's failure), `w_local`,
@@ -218,7 +218,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   name, util. Called by initindex, initload.
 - `initindex.shard` (60) — driver: build an index, or `--verify` one. Called by
   `kernel/test/init_index.sh` (keeps `v3/.cache/init.index` current) and index_test.
-- `initload.shard` (848) — the load on demand: `od_open` (meta line against the pin, index
+- `initload.shard` (850) — the load on demand: `od_open` (meta line against the pin, index
   header, export size), `od_lookup` (name → ordinal), `od_walk` (the closure of the demanded
   records by range reads), `od_feed` (lines through K's `process_record` on `run_on env`),
   `od_load`. Rests on index, the view, json, host. Called by loader (`init_through`,

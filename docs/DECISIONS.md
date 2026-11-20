@@ -392,8 +392,13 @@ entries are explained under "Measured" at the end.
   The unifier's twelve functions, which waited on the walks alone, are measured as K's
   checker is — the depth, a rank, a list's length — with no code changed: the two that test
   the depth and the walk of an argument list state it, and the nine that pass it on to a
-  function that steps it state the stepped depth. A function stands below the type its signature names; four that stood
-  above it were programs nothing read. The way was the one assented for the bulk (above:
+  function that steps it state the stepped depth. A function stands below the type its
+  signature names; four that stood above it were programs nothing read. The readers that go
+  on from what a helper left of their input are measured by the length of the input, on the
+  fact that the helper leaves no more than it was given (`initload.shard` `od_block_lines`
+  over `take_line`, `sexpr.shard` `read_string` over `take_hex`, `json.shard`
+  `parse_string` over `parse_hex4`): with them the whole s-expression reader is a
+  definition. The way was the one assented for the bulk (above:
   "The bulk's proofs can live in the sources"); then, with the walks landed: "Good. Let's
   push on to the next chunk while CI runs."
 
@@ -1276,7 +1281,14 @@ measurements; measure again before building on one.
   Init replay, 661 s, 57,977 accepted and none exhausted, all 29 roots loaded checked in
   500 s for 477, and the suite on the binaries, 337 s, 52 entrypoints. The Init index as
   the tree's sources write it under the bootstrap is the one the binary built before the
-  change writes, 19,208,769 bytes, byte for byte.
+  change writes, 19,208,769 bytes, byte for byte. Then the three readers and the
+  s-expression reader's four functions and its loop over a file, which they opened: 461
+  programs, 8,502 definitions, 1,340 obligations of 530 functions; one row restated
+  (`od_block_lines`, `(cons _ _)` for `_`), no other body changed. Checked the same way:
+  the build 263 s, the replay 663 s, the roots checked in 506 s, the suite 345 s — where
+  the tactic library's test failed, its `solve` a definition now and the example's sidecar
+  stale by the library's fingerprint, and passed with the expectation and the sidecar
+  renewed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
