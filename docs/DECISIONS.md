@@ -370,6 +370,32 @@ entries are explained under "Measured" at the end.
   helper's answer. One branch of `cit_binders` that tested the parameter count twice for one
   answer tests it once. The design was put with the checker's; then: "Good work. Let's
   continue with K's other walks while CI runs."
+- A descent through a helper is a fact about the helper, proven once beside it. A walk of a
+  term by its spine goes on with the head `get_app_fn` returned and the arguments
+  `get_app_args` returned; `expr.shard` weighs a list of terms at each term's size and one
+  (`exprs_weight`, a `def`) and proves that the head and the arguments together weigh what
+  the term does, and ten units descend by what follows from it — the head smaller under an
+  application, the arguments lighter than the term, an argument smaller than it. Not an
+  induction in each of the ten, and not a fuel handed to each walk: the code was right as
+  it stood, and what was missing was a statement about two functions. Two shapes had no
+  measure and were restated. A function handed a head and its arguments apart
+  (`tactic.shard` `tc_show_app`) showed the head by a call back to the printer, which no
+  measure pays for when the list may be empty: it takes the constant's name now, and the
+  head that is no constant is shown where the term is known to be an application. And a
+  function that asked whether the argument list was empty matches on the term
+  (`derive.shard` `dv_show_ty`, `dv_ty_s`): a row `(App _ _ _)` says what a variable row
+  after `nil` does not. A merge sort's two piles are dealt by one function (`util.shard`
+  `halves`), with the fact that each pile of a list of two or more is shorter, and the four
+  copies of it are gone; a sort's last row is written out, `(cons _ (cons _ _))`. Not
+  another sort — bottom-up, or by a count of elements, whose descents are plainer —: either
+  orders equal keys otherwise, and the Init index and a dump are compared byte for byte.
+  The unifier's twelve functions, which waited on the walks alone, are measured as K's
+  checker is — the depth, a rank, a list's length — with no code changed: the two that test
+  the depth and the walk of an argument list state it, and the nine that pass it on to a
+  function that steps it state the stepped depth. A function stands below the type its signature names; four that stood
+  above it were programs nothing read. The way was the one assented for the bulk (above:
+  "The bulk's proofs can live in the sources"); then, with the walks landed: "Good. Let's
+  push on to the next chunk while CI runs."
 
 ## Programs and the back end
 
@@ -1221,7 +1247,10 @@ measurements; measure again before building on one.
   obligations of 464 functions. Checked on the dev box before the push, by ruling 17: the
   29 binaries built in 279 s, all roots loaded checked in 422 s beside the suite on the
   binaries, 386 s, 52 entrypoints; then for the six units the loader's program text against
-  that build's, byte for byte.
+  that build's, byte for byte. On CI (#764): 77.2 minutes for the pipeline before's 47.9 —
+  `native` 76.1, `v3` 62.1, `replay` 57.7; the `v3` job's build of the Init index took 27
+  of them. The cause was not found: the runner is a pod of the cluster, not the dev box,
+  and the next pipeline ran beside this one only for its last 25 minutes.
 - K's walks and searches (2026-11-19). 672 programs before, 616 after: the 13 functions and
   those that waited on them alone. Now 8,965 functions, 8,349 definitions, 1,153 obligations
   of 476 functions; of the functions of K's directory one is a program, for 57. Checked on
@@ -1233,7 +1262,21 @@ measurements; measure again before building on one.
   it had, and the generator of the reference rows prints the committed table byte for byte
   (`t0 --pins` over the export's first 36 chunks, 105 s on the binary). The first build
   failed 11 of the 29 binaries on the user's quota of `/tmp`, where the compiler writes its
-  temporary files; with `TMPDIR` on the home disk it built.
+  temporary files; with `TMPDIR` on the home disk it built. On CI (#765): `native` 48.6
+  minutes, `v3` 61.9, `replay` 27.4 at its second run — the first ended in 28 s at the
+  checkout, the runner's pod not resolving the GitLab host, and the job was run again.
+- The helper facts (2026-11-19). 616 programs before, 471 after: 29 units (a function, or a
+  group) and those that waited on them alone. They opened in three rounds, each read off a
+  load of the whole closure: the fourteen units of the facts and the two readers of a
+  proposition, 543 programs left; the unifier's twelve and nine functions with an integer
+  counter that had stood directly above, 479; one more counter and two functions above
+  their type, 471. Now 8,963 functions, 8,492 definitions, 1,319 obligations of 522
+  functions; three functions are not read, for 13. Checked on the dev box before the push,
+  by ruling 17: the state's check; the 29 binaries built in 264 s; then side by side the
+  Init replay, 661 s, 57,977 accepted and none exhausted, all 29 roots loaded checked in
+  500 s for 477, and the suite on the binaries, 337 s, 52 entrypoints. The Init index as
+  the tree's sources write it under the bootstrap is the one the binary built before the
+  change writes, 19,208,769 bytes, byte for byte.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

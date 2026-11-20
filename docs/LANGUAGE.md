@@ -230,19 +230,20 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Nine tenths of their functions are definitions; of those written by hand, four
-  fifths.** The checker reads every one whose signature reads, and nearly every one's does:
-  of the loader's closure, 8,965 functions — 4,792 of them the rows of a generated table —,
-  it holds 8,349 as definitions. The others are programs with the reason: a function they
-  call is a program (`callee_runnable`, 559), a group of functions that call each other
-  (33), a call the definer takes for no descent (10). A type error in any of them is
-  refused. None matches a numeral under a constructor (below, "Terms"): such a row has no
-  form in the logic, so the sources bind the field and compare it.
+- **Nineteen in twenty of their functions are definitions; of those written by hand, nearly
+  nine in ten.** The checker reads all but three — one whose signature names a type declared
+  below it, and the two that call it (a program's run) —: of the loader's closure, 8,963
+  functions — 4,792 of them the rows of a generated table —, it holds 8,492 as definitions. The
+  others it reads are programs with the reason: a function they call is a program
+  (`callee_runnable`, 413), a group of functions that call each other (52), a call the definer
+  takes for no descent (3). A type error in any of them is refused. None matches a numeral
+  under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
+  bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 150 functions in 33 files:
+  `kernel/descent.shard`. The forms the sources use, 161 functions in 33 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -252,6 +253,7 @@ file; two things about how they are written set them apart.
   | a remainder, `(mod a b)` past `(<= b 0)` | `(Int.natAbs b)` | `natAbs_lt` over Init's `Int.emod_nonneg` and `Int.emod_lt_of_pos` |
   | a walk down one or two lists by their rows | `(+ (List.length a) (List.length b))` — Init's length, a `Nat`; not the sources' own `len`, an `Int` | `(rw hA) (rw List.length_cons) (arith)`, `hA` the row's equation; each list a row names is rewritten |
   | two functions that call each other, one passing the counter on unchanged | `(* 2 (Int.natAbs k))` and `(+ (* 2 (Int.natAbs k)) 1)` | a `have` of the counter's fact, then `(arith)` |
+  | a merge sort, on the two piles `halves` deals (`kernel/util.shard`); its last row is written out, `(cons _ (cons _ _))`, not `_`, so that the obligation holds the list's two elements | `(List.length xs)` | `(apply halves_fst_lt (exact hx) (exact h))` and `halves_snd_lt`: `hx` the row's equation, `h` the equation of the piles |
   | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
 
   A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
@@ -259,53 +261,66 @@ file; two things about how they are written set them apart.
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
   over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
-  measure it states (`measure_type`); some 57 state an integer or a term where the checker
+  measure it states (`measure_type`); some 44 state an integer or a term where the checker
   does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Eight groups are written so, 78 functions: that one, `matcher.shard`'s
+  parts"). Nine groups are written so, 90 functions: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
   axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
-  `closure_of`) —, and K's checker, 60 functions in three parts (`k/tc.shard`, "the
+  `closure_of`) —, the unifier's twelve in the same three (`unify.shard`, `unify_go` to
+  `unify_after_whnf`), and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
   caller's depth to a function of lower rank owes `(apply Prod.Lex.right (apply
   Prod.Lex.left (arith)))` whatever stands before it, 169 of the 189. A member that steps
   the fuel without testing it states the stepped fuel as its part, `(Int.natAbs (+ (- d 1)
-  1))`, so that the first parts are one term; a step past a test made by another function
+  1))`, so that the first parts are one term — the unifier's nine that only pass the
+  depth on to one that steps it state `(Int.natAbs (- d 1))` likewise, and the two that
+  test it and the walk of an argument list state `(Int.natAbs d)` —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
   given a depth of at least 1).
 - **Functions that call each other over a term are measured by the term's derived size.**
-  `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The
-  member that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one
-  that takes it apart `(measure (* 2 (Expr.size a)))`; the first's obligations close by
-  `(arith)`, and each call back, on a term under a row's constructor, by `(rw hA) (rw
-  Expr.size.eq_K) (arith)` — `hA` the row's equation, `K` the constructor's number in the
-  type. A test that is itself a call of a member gives no hypothesis, so it takes no name.
-  The sources' walkers are written so, 208 functions in 24 files over fourteen sizes
-  (`Expr`, `Level`, `Name`, `SExpr`, `ETerm` with its arms, `EType`, `EPat`, `Val`, `IVal`,
-  `LPat`, `LwE` with its arms, `LwP`, `MtPat`, `Node`): the typing of a term (`classify.shard`
-  `c_type`), the threading pass, the lowering, the C generator's walk, the dump — each
-  member measured by the size of what it walks (`ETerm.size`, `List_ETerm.size`,
-  `List_EArm.size`: `ETerm` and `EArm` name each other, and `(derive ETerm size)` gives
-  every one), a `let`'s member by the sum of its bindings' and its body's. A rank is a
-  scaled size, `(+ (* 4 (ETerm.size t)) 1)`. A descent through a helper that returns a part
-  of its argument is proven by cases on the argument (`lower.shard` `lw_fv`), or from a fact
-  proven beside the function by induction (`classify.shard` `live_arm_lt`; `level.shard`
-  `to_offset_le`, the base under a level's successors). A list the function walks that has
-  no derived size is weighed by a `def` of the file, which has no program (`level.shard`
-  `levels_weight` and its fact `push_max_args_weight`). In such a proof a hypothesis whose
-  left side must compute first is restated by a `have`, and so is an equation of pairs
-  before `(congrArg Prod.fst …)` is taken of it (`OPEN.md` §1). A `fulfills`
-  of a group stands below the last function its members reach, which may be far below the
-  group. 33 functions in 11 groups still state a structural clause or none and are programs
-  (`group_measure`). A size
-  is the one derivation a build reads: its functions are definitions with no program, the
-  loader makes them under `--unchecked` too, and the Rust reader passes the form over.
+  `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The member
+  that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one that takes
+  it apart `(measure (* 2 (Expr.size a)))`; the first's obligations close by `(arith)`, and
+  each call back, on a term under a row's constructor, by `(rw hA) (rw Expr.size.eq_K) (arith)`
+  — `hA` the row's equation, `K` the constructor's number in the type. A test that is itself a
+  call of a member gives no hypothesis, so it takes no name. The sources' walkers are written
+  so, 228 functions in 27 files over fourteen sizes (`Expr`, `Level`, `Name`, `SExpr`, `ETerm`
+  with its arms, `EType`, `EPat`, `Val`, `IVal`, `LPat`, `LwE` with its arms, `LwP`, `MtPat`,
+  `Node`): the typing of a term (`classify.shard` `c_type`), the threading pass, the lowering,
+  the C generator's walk, the dump — each member measured by the size of what it walks
+  (`ETerm.size`, `List_ETerm.size`, `List_EArm.size`: `ETerm` and `EArm` name each other, and
+  `(derive ETerm size)` gives every one), a `let`'s member by the sum of its bindings' and its
+  body's. A rank is a scaled size, `(+ (* 4 (ETerm.size t)) 1)`. A descent through a helper
+  that returns a part of its argument is proven by cases on the argument (`lower.shard`
+  `lw_fv`), or from a fact proven beside the function by induction (`classify.shard`
+  `live_arm_lt`; `level.shard` `to_offset_le`, the base under a level's successors;
+  `classify.shard` `last_of_lt`). A list the function walks that has no derived size is weighed
+  by a `def` of the file, which has no program (`level.shard` `levels_weight` and its fact
+  `push_max_args_weight`). A walk of a term by its spine — the head `get_app_fn` returns, then
+  the arguments `get_app_args` returns — is measured so: the term by `(Expr.size t)`, the list
+  of arguments by `(exprs_weight ts)`, each term's size and one (`expr.shard`). The head and
+  the arguments together weigh what the term does, and the facts beside the two helpers are
+  what a descent cites: under the row `(App _ _ _)`, `(rw h) (exact (get_app_fn_lt w1 w2 w3))`
+  for the head and `(exact (get_app_args_lt t))` for the list; `(apply app_arg_lt (exact h))`
+  where a row of the argument list names the argument (`app_arg2_lt` the second); down the list
+  `(rw h) (rw exprs_weight.eq_2) (arith)`. Ten units are written so (`spelling.shard`
+  `sp_canon`, the type printers of `derive.shard`, `tactic.shard`'s printer, rewriter and
+  subterm walk, `arith.shard` `ar_num` and `ar_rel`, `tactic.shard` `stuck_head`). A function
+  handed a head and its arguments apart has no such measure — the list may be empty — and
+  matches on the term instead. In such a proof a hypothesis whose left side must compute first
+  is restated by a `have`, and so is an equation of pairs before `(congrArg Prod.fst …)` is
+  taken of it (`OPEN.md` §1). A `fulfills` of a group stands below the last function its
+  members reach, which may be far below the group. 52 functions in 5 groups still state a
+  structural clause or none and are programs (`group_measure`). A size is the one derivation a
+  build reads: its functions are definitions with no program, the loader makes them under
+  `--unchecked` too, and the Rust reader passes the form over.
 - **Text there is a list of bytes, `(List Int)`, and a literal is a `String`.** A literal
   used as bytes is converted: `(utf8 "…")` (`kernel/util.shard`); without the conversion a
   function the checker reads is refused `type_mismatch: expected (List Int), found String`.
