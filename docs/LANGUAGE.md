@@ -230,19 +230,19 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Nineteen in twenty of their functions are definitions; of those written by hand, nearly
-  nine in ten.** The checker reads every one: of the loader's closure, 8,974
-  functions — 4,792 of them the rows of a generated table —, it holds 8,535 as definitions. The
+- **Nineteen in twenty of their functions are definitions; of those written by hand, more
+  than nine in ten.** The checker reads every one: of the loader's closure, 8,974
+  functions — 4,792 of them the rows of a generated table —, it holds 8,648 as definitions. The
   others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 387), or they are a group of functions that call each other with no
-  measure the definer takes (52, in five groups). A type error in any of them is refused. None matches a numeral
+  (`callee_runnable`, 281), or they are a group of functions that call each other with no
+  measure the definer takes (45, in four groups). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 169 functions in 34 files:
+  `kernel/descent.shard`. The forms the sources use, 174 functions in 35 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -256,25 +256,31 @@ file; two things about how they are written set them apart.
   | a group that goes on from the rest a call of its own returned (`json.shard`, a value, an array, an object): nothing it is given grows smaller at such a call, so the entry hands the input down a second time as a fuel — each member opens `(match fuel (nil …) ((cons _ fl) …))`, a call made after a byte was read passes `fl`, the others `fuel`. The input left is never longer than the fuel, so the `nil` row answers what the empty input does | `(* 2 (List.length fuel))`, and `(+ (* 2 (List.length fuel)) 1)` on a member that calls another at the fuel it has | `(rw hf) (rw List.length_cons) (arith)`, `hf` the equation of the fuel's row; `(arith)` where the fuel is passed as it is |
   | a reader that goes on from what a helper left of its input (`take_line`, `take_hex`, `parse_hex4`; `json_parse`, in K's reader of an export's lines) | `(List.length cs)` | the helper's fact, that it leaves no more than it was given (`json.shard` `take_line_lt`, `parse_hex4_le`, `json_parse_lt`; `sexpr.shard` `take_hex_le`), as a `have` or as a fact of `arith`; then the rows' equations rewritten, `(simp_only List.length_cons) (arith)` |
   | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
+  | a reading of a type into the types it names — a type's arguments, an inductive's fields, a package's —, whose next term K computed or the environment holds: a depth the caller hands down, `(budget_depth)`, less one past a test at each reading (`erase.shard` `l_to_etype`, `package_type`; `ev.shard` `head_checked`, where the depth is the count of the program's declarations). A type read deeper is answered as one that is none | `(Int.natAbs depth)`, then a rank and a list (the next item) | `(apply Prod.Lex.left (apply natAbs_pred (arith)))` at the step |
 
   A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
   over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
-  measure it states (`measure_type`); some 40 state an integer or a term where the checker
+  measure it states (`measure_type`); 26 state an integer or a term where the checker
   does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Nine groups are written so, 90 functions: that one, `matcher.shard`'s
+  parts"). Fifteen groups are written so, 121 functions: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
   axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
   `closure_of`) —, the unifier's twelve in the same three (`unify.shard`, `unify_go` to
-  `unify_after_whnf`), and K's checker, 60 functions in three parts (`k/tc.shard`, "the
+  `unify_after_whnf`), in those three too the eraser's readings of a type (`erase.shard`,
+  `ind_eligible` to `etype_args` and `binder_role` to `package_fields`), the evaluator's of
+  the types an entry states (`ev.shard` `ty_checked`), the definer's projection of a body
+  (`define.shard` `pj_term`, twelve functions) and the split of its equations
+  (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
+  and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
   caller's depth to a function of lower rank owes `(apply Prod.Lex.right (apply
@@ -282,7 +288,8 @@ file; two things about how they are written set them apart.
   the fuel without testing it states the stepped fuel as its part, `(Int.natAbs (+ (- d 1)
   1))`, so that the first parts are one term — the unifier's nine that only pass the
   depth on to one that steps it state `(Int.natAbs (- d 1))` likewise, and the two that
-  test it and the walk of an argument list state `(Int.natAbs d)` —; a step past a test made by another function
+  test it and the walk of an argument list state `(Int.natAbs d)`; so the projection's ten
+  that hand their fuel to `pj_term` less one, which tests it —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
   given a depth of at least 1).
 - **Functions that call each other over a term are measured by the term's derived size.**
@@ -318,7 +325,7 @@ file; two things about how they are written set them apart.
   matches on the term instead. In such a proof a hypothesis whose left side must compute first
   is restated by a `have`, and so is an equation of pairs before `(congrArg Prod.fst …)` is
   taken of it (`OPEN.md` §1). A `fulfills` of a group stands below the last function its
-  members reach, which may be far below the group. 52 functions in 5 groups still state a
+  members reach, which may be far below the group. 45 functions in 4 groups still state a
   structural clause or none and are programs (`group_measure`). A size is the one derivation a
   build reads: its functions are definitions with no program, the loader makes them under
   `--unchecked` too, and the Rust reader passes the form over.

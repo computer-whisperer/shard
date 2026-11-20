@@ -437,6 +437,33 @@ entries are explained under "Measured" at the end.
   the fuel, the proof or the reader left a program: "Let's proceed with proving the fact
   that the parsed value leaves less input. This seems like a reasonable point to stress
   test the proof system itself, unless you see a good reason not to."
+- The eraser's readings of a type, and the evaluator's of the types an entry states, take a
+  depth from their caller and are definitions by it. A type is read into the types it names
+  — a type's arguments, an inductive's fields while its eligibility is examined
+  (`erase.shard` `l_to_etype`, `ind_eligible` and their three walks), a package's fields
+  (`binder_role`, `package_type`, `package_of`, `package_fields`) —, and the next term is
+  one K computed or one the environment holds: nothing the function is given grows smaller.
+  A caller hands down `(budget_depth)`, 8,192, as callers hand a telescope's walk its fuel;
+  `l_to_etype` and `package_type` answer none where it is spent and read on at one less;
+  the measure is the depth, then a rank, then a walk's own list or fuel. Not a measure over
+  the names not yet seen, which the guard of the first reading suggests: it takes facts
+  about the environment's table that are nowhere stated, and the second reading had no such
+  guard. Not the two left programs: 316 programs stood above them. The cost chosen: a type
+  that names types deeper than the depth is answered as no program type, or no package,
+  with no record that the depth ran out — as a constructor of more than 8,192 fields
+  already was. In `ev.shard` the depth of the door's reading (`ty_checked`, four functions)
+  is the count of the program's declarations and is never spent — an inductive is opened
+  while it is not among the seen, and those open are among them —, so no answer changes;
+  that is argued, not proven (`OPEN.md` §4). Found on the way: the package reading had no
+  guard, and a structure with a function-typed field and a field of its own type, as a
+  function's parameter, sent the loader round without end; with the depth the reading ends
+  in the time of any load and the function is a program, as over every type that is neither
+  a package nor a program type (pin `package_recursive`). Not also a test of the
+  inductive's own flag for recursion: the depth gives the same answer. The owner, when the
+  walks were put to them with K's checker (above): "the budget parameter in the eraser's
+  environment walks sound reasonable", and to go on: "let's continue with the eraser's
+  budget". The value handed down, the answer where it is spent and the evaluator's count
+  are the builder's, not asked apart.
 
 ## Programs and the back end
 
@@ -675,11 +702,13 @@ entries are explained under "Measured" at the end.
   the argument the equation would match on, its shape a hypothesis (the statement then carries
   what only the proof wants, and every caller passes an `Eq.refl`); not the call unfolded and
   folded again by its equation reversed (that holds where one equation fired once). The owner:
-  "build the folded-call option". Its shape is the builder's and not ruled: named per step and
-  by function, not a form of its own over a block of steps (a seventeenth form) nor the
-  call's own term; `keep` before `using`; a name no call of which the run met refused
+  "build the folded-call option". Its shape is the builder's: named per step and by
+  function, not a form of its own over a block of steps (a seventeenth form) nor the call's
+  own term; `keep` before `using`; a name no call of which the run met refused
   (`reduce_keep_unused`), as a rule that rewrote nothing is — so a keep cannot be written on
-  every step of a block, only where the call stands.
+  every step of a block, only where the call stands. Put to the owner, per step or a block's
+  form: "The per-step shape can stay for now" (the order and the refusal were not asked
+  apart).
 - ★ A closed example at program size is a test on the binary; not a theorem by `rfl` — K's
   evaluation through a measured definition ends near depth 40 to 200 (see Measured).
 - A long run is split into lemmas; not one theorem — K's budget (10^8 ticks) is per declaration.
@@ -1385,6 +1414,23 @@ measurements; measure again before building on one.
   declarations in 510 s for 503, and the suite on the binaries, 383 s, 52 entrypoints, the
   loader's pins 350 directories. The Init replay was not run: nothing of K's directory or of
   a program K runs changed.
+- The eraser's depth (2026-11-20). 113 programs became definitions: 8,974 functions, 8,648
+  definitions, 326 programs — 281 for a function they call, 45 in four groups (the
+  elaborator's 34, the evaluator's machine 4, `lw_jp` 5, the classifier's reader of a
+  written type 2). The 13 functions that take the depth state 25 obligations; above them
+  29 functions that stated an integer, a structural clause in a group, or nothing were
+  restated by the fixed lines with no body changed — the definer's projection of a body
+  (`define.shard` `pj_term`, 12 functions, 35 obligations) and the split of its equations
+  (`realize.shard`, 4), the classifier's pattern readers (4), the erasure's patterns and a
+  constructor's fields (3), `facts_closure`, and five of `erase.shard` —: 88 obligations in
+  all, 1,438 of 579 functions now, each accepted as first typed. The program text differs
+  in 34 functions, those that take a depth or hand one down. The file that never ended
+  loads in 2.3 s, the time of the same file without the field of its own type. Checked on
+  the dev box before the push, by ruling 17: the state's check; the 29 binaries built in
+  271 s, the Init index the one before byte for byte; then side by side all 29 roots loaded
+  checked, 148,464 declarations in 520 s for 510, and the suite on the binaries, 393 s
+  for 383, 52 entrypoints, the loader's pins 351 directories. The Init replay was not run:
+  nothing of K's directory changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
