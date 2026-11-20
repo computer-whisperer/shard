@@ -231,11 +231,12 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, more
-  than nine in ten.** The checker reads every one: of the loader's closure, 8,974
-  functions — 4,792 of them the rows of a generated table —, it holds 8,771 as definitions. The
+  than nine in ten.** The checker reads every one: of the loader's closure, 8,984
+  functions — 4,792 of them the rows of a generated table —, it holds 8,798 as definitions. The
   others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 160), or they are a group of functions that call each other with no
-  measure the definer takes (43, in three groups). A type error in any of them is refused. None matches a numeral
+  (`callee_runnable`, 151), or they are a group of functions that call each other with no
+  measure the definer takes (34, the elaborator's), or a function that calls itself with none
+  (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
@@ -270,7 +271,7 @@ file; two things about how they are written set them apart.
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Sixteen groups are written so, 160 functions, and the loader's `build_demands`
+  parts"). Seventeen groups are written so, 164 functions, and the loader's `build_demands`
   alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
@@ -281,7 +282,8 @@ file; two things about how they are written set them apart.
   the types an entry states (`ev.shard` `ty_checked`), the definer's projection of a body
   (`define.shard` `pj_term`, twelve functions) and the split of its equations
   (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
-  the erasure itself in three, 39 functions (`erase` to `lift_lambda`),
+  the erasure itself in three, 39 functions (`erase` to `lift_lambda`), the evaluator's
+  machine in two, its fuel and what is left to run at that fuel (`ev.shard` `ev_term`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
@@ -301,7 +303,16 @@ file; two things about how they are written set them apart.
   every member states the one term `(Int.natAbs (+ fuel 1))`, the tester's step is
   `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` and every other call a lower
   rank or a shorter list. A member of a group may call any number of the others (pin
-  `mutual_wide`).
+  `mutual_wide`). A machine that runs a term under a continuation states, after its fuel,
+  twice the term's size and a weight of the continuation's frames — the terms each holds,
+  and one or two for the frame (`ev.shard` `kont_weight`, a definition with no program) —:
+  a term opened into a frame and its first part costs the term's own node, a frame closed
+  its one or two, and the arm a match picked is no larger than its arms by a fact proven of
+  the function that picks it (`pick_arm_le`). Where functions hand one term round — an
+  operand's position to a lifted one to a tail position and, on a row that matches no
+  shape, back —, no rank orders them: an obligation knows of its term what its row matched.
+  The row the functions share is a function of its own, ranked below them
+  (`lower.shard` `lw_jp_app`).
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The member
   that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one that takes
