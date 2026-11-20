@@ -1357,6 +1357,9 @@ measurements; measure again before building on one.
   the 29 binaries built in 260 s; then side by side all 29 roots loaded checked, 148,356
   declarations in 503 s for 529, and the suite on the binaries, 341 s, 52 entrypoints. The
   Init replay was not run: the parser's program and that of K's reader are what they were.
+  On CI: #770 65.9 minutes (`native` 65.2, `v3` 40.6, `replay` 31.2), both jobs finding the
+  Init index in the cache; the replay itself 1,458 s, 57,977 accepted and none exhausted;
+  all 29 roots loaded checked in 499 s; the byte-tie 2,167 s for 82 checks.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
