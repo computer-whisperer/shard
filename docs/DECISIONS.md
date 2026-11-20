@@ -464,6 +464,18 @@ entries are explained under "Measured" at the end.
   environment walks sound reasonable", and to go on: "let's continue with the eraser's
   budget". The value handed down, the answer where it is spent and the evaluator's count
   are the builder's, not asked apart.
+- The classifier's reader of a written type and of a body is a definition by a fact proven
+  of the helper it goes on from; no body changed. A type's reader and a call's hand the
+  arguments written to `written_data`, which keeps those that run, and read what it kept:
+  a list that is no part of what they were given. The fact is that it is no larger —
+  `written_data_room`, by induction on the binders' flags with the call in the target, a
+  result measured by `wr_room`, its list's size and 0 for a refusal; `written_data_le` and
+  `type_args_le` state it of a result known by its equation —, and with `last_of_lt` it is
+  all the reader's 39 functions cite: the two of a type are measured by the size of what
+  they hold, the 37 of a body by eight times that size and a rank. Not a fuel handed down
+  the reader: a body of 39 functions changed, with a row never taken, on a claim not proven.
+  Not the reader left a program: 127 programs stood above it, 65 on it alone. The owner, of
+  the six units left and my lean to this one: "Let's continue with the classifier's reader".
 
 ## Programs and the back end
 
@@ -1413,7 +1425,8 @@ measurements; measure again before building on one.
   index the one before byte for byte; then side by side all 29 roots loaded checked, 148,464
   declarations in 510 s for 503, and the suite on the binaries, 383 s, 52 entrypoints, the
   loader's pins 350 directories. The Init replay was not run: nothing of K's directory or of
-  a program K runs changed.
+  a program K runs changed. On CI: #772 66.3 minutes (`native` 65.1, `v3` 39.4, `replay`
+  31.4).
 - The eraser's depth (2026-11-20). 113 programs became definitions: 8,974 functions, 8,648
   definitions, 326 programs — 281 for a function they call, 45 in four groups (the
   elaborator's 34, the evaluator's machine 4, `lw_jp` 5, the classifier's reader of a
@@ -1430,7 +1443,25 @@ measurements; measure again before building on one.
   271 s, the Init index the one before byte for byte; then side by side all 29 roots loaded
   checked, 148,464 declarations in 520 s for 510, and the suite on the binaries, 393 s
   for 383, 52 entrypoints, the loader's pins 351 directories. The Init replay was not run:
-  nothing of K's directory changed.
+  nothing of K's directory changed. On CI: #773 66.4 minutes (`native` 65.6, `v3` 40.2,
+  `replay` 30.9).
+- The classifier's reader (2026-11-20). 65 programs became definitions: 8,974 functions,
+  8,713 definitions, 261 programs — 218 for a function they call, 43 in three groups (the
+  elaborator's 34, the evaluator's machine 4, `lw_jp` 5) —, 1,535 obligations of 618
+  functions. Eight theorems and a `def` beside `written_data`, some 100 lines; 97
+  obligations of the reader's 39 functions, 94 of them the body's: 48 by `(arith)` alone,
+  43 by the row's equation, `(reduce)` and `(arith)`, 3 by a fact (`written_data_le` twice,
+  `last_of_lt`), each accepted as first typed. The fact itself was refused twice before it
+  stood: its function's equations are per innermost row, and `reduce` computed the closed
+  symbols its conditions name before `cases` could name them (`LANGUAGE.md`, "A fact about
+  what a function returns"). `classify.shard` is 3,994 lines for 3,740. No program changed: the
+  loader's program text is the one before byte for byte and so is its binary. Checked on
+  the dev box before the push, by ruling 17: the 29 binaries built in 269 s, the Init index
+  the one before; the loader's closure loaded checked, 58 modules with none pending; the
+  suite on the binaries, 377 s for 393, 52 entrypoints. The checked load of all 29 roots
+  was started beside the suite and stopped unfinished when the machine ran short of memory;
+  it was left to CI. The state's check and the Init replay were not run: nothing K runs
+  changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

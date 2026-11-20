@@ -232,10 +232,10 @@ file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, more
   than nine in ten.** The checker reads every one: of the loader's closure, 8,974
-  functions — 4,792 of them the rows of a generated table —, it holds 8,648 as definitions. The
+  functions — 4,792 of them the rows of a generated table —, it holds 8,713 as definitions. The
   others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 281), or they are a group of functions that call each other with no
-  measure the definer takes (45, in four groups). A type error in any of them is refused. None matches a numeral
+  (`callee_runnable`, 218), or they are a group of functions that call each other with no
+  measure the definer takes (43, in three groups). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
@@ -299,17 +299,22 @@ file; two things about how they are written set them apart.
   each call back, on a term under a row's constructor, by `(rw hA) (rw Expr.size.eq_K) (arith)`
   — `hA` the row's equation, `K` the constructor's number in the type. A test that is itself a
   call of a member gives no hypothesis, so it takes no name. The sources' walkers are written
-  so, 228 functions in 27 files over fourteen sizes (`Expr`, `Level`, `Name`, `SExpr`, `ETerm`
+  so, 275 functions in 28 files over fourteen sizes (`Expr`, `Level`, `Name`, `SExpr`, `ETerm`
   with its arms, `EType`, `EPat`, `Val`, `IVal`, `LPat`, `LwE` with its arms, `LwP`, `MtPat`,
   `Node`): the typing of a term (`classify.shard` `c_type`), the threading pass, the lowering,
   the C generator's walk, the dump — each member measured by the size of what it walks
   (`ETerm.size`, `List_ETerm.size`, `List_EArm.size`: `ETerm` and `EArm` name each other, and
   `(derive ETerm size)` gives every one), a `let`'s member by the sum of its bindings' and its
-  body's. A rank is a scaled size, `(+ (* 4 (ETerm.size t)) 1)`. A descent through a helper
+  body's. A rank is a scaled size, `(+ (* 4 (ETerm.size t)) 1)`: the classifier's reader of
+  a body, 37 functions that hand a head's written arguments from one to the next, states
+  eight times the size of what a member holds and its rank, the longest chain below it that
+  takes nothing off (`classify.shard`, `read_et` to `read_elist`), and every obligation of a
+  call that hands the arguments on whole closes by `(arith)`. A descent through a helper
   that returns a part of its argument is proven by cases on the argument (`lower.shard`
   `lw_fv`), or from a fact proven beside the function by induction (`classify.shard`
   `live_arm_lt`; `level.shard` `to_offset_le`, the base under a level's successors;
-  `classify.shard` `last_of_lt`). A list the function walks that has no derived size is weighed
+  `classify.shard` `last_of_lt`, and `written_data_le`: the arguments a call's reader keeps
+  of those written are no larger than those written). A list the function walks that has no derived size is weighed
   by a `def` of the file, which has no program (`level.shard` `levels_weight` and its fact
   `push_max_args_weight`). A walk of a term by its spine — the head `get_app_fn` returns, then
   the arguments `get_app_args` returns — is measured so: the term by `(Expr.size t)`, the list
@@ -325,7 +330,7 @@ file; two things about how they are written set them apart.
   matches on the term instead. In such a proof a hypothesis whose left side must compute first
   is restated by a `have`, and so is an equation of pairs before `(congrArg Prod.fst …)` is
   taken of it (`OPEN.md` §1). A `fulfills` of a group stands below the last function its
-  members reach, which may be far below the group. 45 functions in 4 groups still state a
+  members reach, which may be far below the group. 43 functions in 3 groups still state a
   structural clause or none and are programs (`group_measure`). A size is the one derivation a
   build reads: its functions are definitions with no program, the loader makes them under
   `--unchecked` too, and the Rust reader passes the form over.
@@ -1373,6 +1378,13 @@ the function's body:
   is refused (`reduce_keep_unused`), which is how the first place is found.
 - A `def` by `match` has no equations: the one wanted is a theorem by `rfl`, and `rw` cites it
   (`jres_room_res`).
+- A function whose row opens with another `match` has an equation for each innermost row:
+  `written_data.eq_1` and `eq_2` are its first row at an empty list and at a longer one
+  (`classify.shard`), and the target is split by `cases` until one of them matches.
+- `reduce` computes a closed term — `(sym "keep")`, a literal's bytes, a size at a
+  constructor —, and a `cases` names its condition as the body writes it. So every condition
+  of a branch is split before that branch's first `reduce` (`written_data_room`: three
+  `cases` on the body's tests, one on the list, then one `reduce` and `arith` at each leaf).
 - Functions that call each other are proven together: a conjunction by `induction` on what
   bounds them, the step of each a theorem of its own that takes the others' statements as
   hypotheses (`parse_value_step`, `parse_room`).
