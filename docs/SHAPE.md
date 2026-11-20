@@ -84,8 +84,8 @@ every test, and nothing more. Numbers are big integers (a native binary stops at
 and strings are lists.
 
 **Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
-Init's types, and the checker reads them: of the 8,965 functions the loader is made of, 8,526 are
-definitions in the logic — 4,792 of them the rows of one generated table, 3,734 written, all of
+Init's types, and the checker reads them: of the 8,974 functions the loader is made of, 8,535 are
+definitions in the logic — 4,792 of them the rows of one generated table, 3,743 written, all of
 K's among them —, and the other 439
 are type-checked and run as programs, for their recursion or that of a function
 they call. What is proven about a toolchain function is that its recursion ends, for 537 of

@@ -666,7 +666,20 @@ entries are explained under "Measured" at the end.
   its `if` on an open condition, a stuck eliminator that reads as no progress, and every
   case step under the `let` then waited on its variable for good: a function whose body
   opens with a `let` could be unfolded and taken no further (pin `reduce_let`). Found and
-  built while the JSON parser's facts were typed, which need it; not put to the owner first.
+  built while the JSON parser's facts were typed, which need it, and put to the owner after:
+  "Keep the reduce change".
+- `reduce` leaves the calls of the functions a step names as written, `(reduce (keep NAME…))`,
+  as if each were a variable: no equation of the function at such a call, no step of K's on a
+  closed term it stands in, a case step waiting where it stands in the discriminant; its
+  arguments reduced, a rule of `using` rewriting it. Not a variable written in the theorem for
+  the argument the equation would match on, its shape a hypothesis (the statement then carries
+  what only the proof wants, and every caller passes an `Eq.refl`); not the call unfolded and
+  folded again by its equation reversed (that holds where one equation fired once). The owner:
+  "build the folded-call option". Its shape is the builder's and not ruled: named per step and
+  by function, not a form of its own over a block of steps (a seventeenth form) nor the
+  call's own term; `keep` before `using`; a name no call of which the run met refused
+  (`reduce_keep_unused`), as a rule that rewrote nothing is — so a keep cannot be written on
+  every step of a block, only where the call stands.
 - ★ A closed example at program size is a test on the binary; not a theorem by `rfl` — K's
   evaluation through a measured definition ends near depth 40 to 200 (see Measured).
 - A long run is split into lemmas; not one theorem — K's budget (10^8 ticks) is per declaration.
@@ -1360,6 +1373,18 @@ measurements; measure again before building on one.
   On CI: #770 65.9 minutes (`native` 65.2, `v3` 40.6, `replay` 31.2), both jobs finding the
   Init index in the cache; the replay itself 1,458 s, 57,977 accepted and none exhausted;
   all 29 roots loaded checked in 499 s; the byte-tie 2,167 s for 82 checks.
+- `reduce`'s kept calls (2026-11-20). Nine functions more in `tactic.shard` (3,366 lines for
+  3,274), each a definition: 8,974 functions, 8,535 definitions, 439 programs. In `json.shard`
+  the four step theorems that took a variable for the fuel and its shape as a hypothesis state
+  the fuel as it is, and the three rewrites that folded a literal's call again are gone: 15
+  keeps, 8 of the value's call and 7 of the literal's, 1,082 lines for 1,110, its checked load
+  alone 5.4 s for 5.3. The program text is the one before but for the step elaborator's
+  functions the option touches and the engine's printer of a step. Checked on the dev box
+  before the push, by ruling 17: the state's check; the 29 binaries built in 277 s, the Init
+  index the one before byte for byte; then side by side all 29 roots loaded checked, 148,464
+  declarations in 510 s for 503, and the suite on the binaries, 383 s, 52 entrypoints, the
+  loader's pins 350 directories. The Init replay was not run: nothing of K's directory or of
+  a program K runs changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

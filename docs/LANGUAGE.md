@@ -231,8 +231,8 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, nearly
-  nine in ten.** The checker reads every one: of the loader's closure, 8,965
-  functions — 4,792 of them the rows of a generated table —, it holds 8,526 as definitions. The
+  nine in ten.** The checker reads every one: of the loader's closure, 8,974
+  functions — 4,792 of them the rows of a generated table —, it holds 8,535 as definitions. The
   others are programs with the reason: a function they call is a program
   (`callee_runnable`, 387), or they are a group of functions that call each other with no
   measure the definer takes (52, in five groups). A type error in any of them is refused. None matches a numeral
@@ -1319,7 +1319,7 @@ written bare or in parentheses. Examples: v3/pins/loader/by_core unless a pin or
 | `(wf X MEASURE NAME STEP…)` | Well-founded induction on the local X under MEASURE, a term of type `Nat`. The inner steps prove the target with `NAME : ∀ y, MEASURE[y] < MEASURE[X] → target[y]`. | `(wf n (Int.natAbs n) ih (intro h) …)` (v3/examples/calc/calc_show.shard) |
 | `decide` | Closes a target whose decision K evaluates to `true`: `<`, `<=` at `Nat` and `Int`; `=` at `Nat`, `Int`, `Bool` and a type with a derived equality. No conjunction, disjunction or negation. | `(by decide)` at `(< 1 2)` |
 | `(unfold NAME…)` | Rewrites each occurrence of the named constants present when the step starts, once: by the first of the function's equations that matches, else by its definition. Continues. | `(by (unfold tok_size) rfl)` |
-| `reduce`, `(reduce SIDE)`, `(reduce SIDE? (using RULE…))` | Normalizes the target by computation; with SIDE (`lhs`, `rhs`), one side of an equation. With `using`, also rewrites by the given facts. Continues; succeeds unchanged when nothing reduces. | `(by (reduce) rfl)`; `(reduce lhs (using (if_pos h)))` (reduce_using) |
+| `reduce`, `(reduce SIDE)`, `(reduce SIDE? (keep NAME…)? (using RULE…)?)` | Normalizes the target by computation; with SIDE (`lhs`, `rhs`), one side of an equation. With `keep`, leaves the calls of the named functions as written. With `using`, also rewrites by the given facts. Continues; succeeds unchanged when nothing reduces. | `(by (reduce) rfl)`; `(reduce lhs (using (if_pos h)))` (reduce_using); `(reduce (keep step))` (reduce_keep) |
 | `(rw LEMMA BLOCK…)`, `(rw (<- LEMMA) …)`, `(rw LEMMA (occ K EXPECT?) BLOCK…)` | Rewrites the target by an equation, left to right, or right to left under `<-`. Each premise of LEMMA left open is a child goal with its BLOCK. Continues. | `(rw h (occ 2))`; `(rw (<- h))`; `(rw if_pos (exact h))` |
 | `(simp_only RULE…)` | Rewrites by the listed equations, each RULE a lemma or `(<- LEMMA)`, until none applies. Continues. | `(simp_only (if_neg h2) (if_pos h3))` (simp_core) |
 | `arith`, `(arith FACT…)`, `(arith only FACT…)`, `(arith … (farkas K…))` | Closes a target that follows by linear arithmetic over `Int` and `Nat` from the context and the FACTs. | `(by arith)`; `(arith only h (farkas 1 1))` (arith_only) |
@@ -1359,9 +1359,11 @@ the function's body:
 - At a call of the function itself the induction hypothesis is a fact of `arith` or the term of
   an `exact`; at a call of a helper, the helper's fact.
 - `reduce` unfolds every call that has a constructor where one of its equations has one. A call
-  that is to stay as written is given a variable there: the theorem takes `fuel` and `(hf (=
-  fuel (cons x fl)))`, and its block opens `(rw hf) (rw f.eq_2) (rw (<- hf))`. A call `reduce`
-  did unfold is folded by its equation, `(rw (<- g.eq_3))`.
+  that is to stay as written — the one the induction hypothesis or a helper's fact speaks of —
+  is kept: `(reduce (keep parse_value))`, at each `reduce` from the row that frees the call's
+  arguments to the `cases` on the call. Before that row the call mentions a variable the row
+  binds, and `reduce` looks at no such term; a keep there, or in a branch the call is not in,
+  is refused (`reduce_keep_unused`), which is how the first place is found.
 - A `def` by `match` has no equations: the one wanted is a theorem by `rfl`, and `rw` cites it
   (`jres_room_res`).
 - Functions that call each other are proven together: a conjunction by `induction` on what
@@ -1393,11 +1395,18 @@ inside the target is never rewritten.
   `unfold`. An `if` or a `match` steps once its condition or scrutinee is decided or headed by a
   constructor. Other definitions unfold only inside closed subterms. A `let` is opened, its
   body at its value, where the case analysis under it would wait on its variable (pin
-  `reduce_let`). A comparison such as `(< a b)` is left as written.
+  `reduce_let`). A comparison such as `(< a b)` is left as written. A term that mentions a
+  variable bound above it — a call on a row's fields, until the row is taken — is not looked at.
 - `(reduce (using RULE…))` also rewrites by each RULE where its left side stands, a rule before a
   computation step. A function that a rule's left side applies is not unfolded while anything else
   can step. A rule is given its premises, `(if_pos h)`; every rule must rewrite at least once; a
   function's name is not a rule, since equations apply unnamed.
+- `(reduce (keep NAME…))` leaves every call of a named function as written, as if the call were
+  a variable: none of the function's equations is applied to it, a closed term it stands in is
+  not computed, and an `if` or a `match` whose condition or scrutinee it stands in waits. Its
+  arguments are reduced, and a rule of `using` rewrites it where the rule's left side stands.
+  `keep` is written before `using`. Every name must hold a call the run met (pins `reduce_keep`,
+  `reduce_keep_unused`).
 
 ### `arith`
 
@@ -1452,6 +1461,7 @@ two `(farkas …)` forms.
 | `reduce_budget` | reduce | `the normalization ran out of budget (2000 rewrites)`; `64 unfoldings of a function at closed arguments did not end the computation: T` |
 | `reduce_rule_open` | reduce | `rule N has an argument its left side does not fix, of type T: a rule is given its premises, as (if_pos h) — reduce looks for none` |
 | `reduce_rule_unused` | reduce | `rule N rewrote nothing: no subterm of the run matched its left side, L, in K rewrites` |
+| `reduce_keep_unused` | reduce | `NAME is kept and no call of it stood in the run, in K rewrites: (keep NAME…) names the functions whose calls the run met and left as written` |
 | `rw_not_eq` | rw, simp_only, reduce | `the lemma is not an equation: T`; for a function's name it ends in a pointer (`leave it out`, or `its equations are reduce's`) |
 | `rw_no_match` | rw | `no subterm of the target matches L in T`; `the target has N occurrence(s) of L` |
 | `rw_occ_changed` | rw | `(occ K EXPECT): the occurrence found is A, not the expected B — the source moved under the guard, or the expectation is wrong` |
