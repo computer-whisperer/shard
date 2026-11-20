@@ -392,9 +392,13 @@
            ((BData _) EKVar)
            ((BStatic _) EKErased)))
        (binder_ents_fwd r)))))  ; a static binder is bound by template.shard (a fn's or a realize's template), never here: erased, so a use is loud
-;; the erasure of an L term in a runtime position
+;; the erasure of an L term in a runtime position. `fuel` bounds how deep the walk goes:
+;; `erase` and `static_shape`, the two functions the walk comes back to, test it and hand on
+;; one less where they go round; every other function hands on the fuel it was given. A
+;; function's measure is the fuel, then its rank — above every function it hands the fuel
+;; to —, then the list it walks
 (fn erase ((t Tr) (env (List ErEnt)) (e Expr) (fuel Int)) ErRes
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)) 0 0)
   (if (< fuel 0) (ErErr (sym "erased_in_runtime") (utf8 "the body is too deep"))
   (match e
     ((FVar _ id)
@@ -427,7 +431,7 @@
      (if (utf8_ok bs) (ErOk t (ELit (LStr bs)))
      (ErErr (sym "bad_string")
        (utf8 "a string literal's bytes are not UTF-8: K reads the literal by decoding it"))))
-    ((Let _ n ty v b) (erase_let t env n ty v b fuel))
+    ((Let _ n ty v b) (erase_let t env n ty v b (- fuel 1)))
     ((Lam _ _ _ _ _)
      (ErErr (sym "function_value")
        (utf8
@@ -435,11 +439,11 @@
     ((Pi _ _ _ _ _) (ErErr (sym "erased_in_runtime") (utf8 "a type in a runtime position")))
     ((Sort _ _) (ErErr (sym "erased_in_runtime") (utf8 "a sort in a runtime position")))
     ((BVar _ _) (ErErr (sym "erased_in_runtime") (utf8 "a loose variable")))
-    ((Proj _ sn i x) (erase_proj t env sn i x fuel))
-    (_ (erase_app t env (get_app_fn e) (get_app_args e) fuel)))))
+    ((Proj _ sn i x) (erase_proj t env sn i x (- fuel 1)))
+    (_ (erase_app t env (get_app_fn e) (get_app_args e) (- fuel 1))))))
 (fn erase_all ((t Tr) (env (List ErEnt)) (es (List Expr)) (fuel Int) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr (List ETerm)))
-  (measure (struct es))
+  (measure (Int.natAbs (+ fuel 1)) 1 (List.length es))
   (match es
     (nil (Prod.mk none (Prod.mk t (rev acc))))
     ((cons e r)
@@ -448,38 +452,41 @@
        ((ErOk t1 e1) (erase_all t1 env r fuel (cons e1 acc)))))))
 ;; a let: a proposition or a type vanishes (its variable erased), a value is an E let
 (fn erase_let ((t Tr) (env (List ErEnt)) (n Name) (ty Expr) (v Expr) (b Expr) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
   (match (w_is_prop (Tr.w t) ty)
     ((Prod.mk w1 (some true))
      (match (tr_local_val (tr_set_w t w1) n ty v)
        ((Prod.mk t1 fv)
         (match (tr_inst1 t1 b fv)
-          ((Prod.mk t2 b1) (erase t2 (cons (ErEnt (fvar_id_of fv) EKErased) env) b1 (- fuel 1)))))))
+          ((Prod.mk t2 b1) (erase t2 (cons (ErEnt (fvar_id_of fv) EKErased) env) b1 fuel))))))
     ((Prod.mk w1 _)
      (match (tr_whnf (tr_set_w t w1) ty)
        ((Prod.mk t1 (some (Sort _ _)))
         (match (tr_local_val t1 n ty v)
           ((Prod.mk t2 fv)
            (match (tr_inst1 t2 b fv)
-             ((Prod.mk t3 b1) (erase t3 (cons (ErEnt (fvar_id_of fv) EKStatic) env) b1 (- fuel 1)))))))
+             ((Prod.mk t3 b1) (erase t3 (cons (ErEnt (fvar_id_of fv) EKStatic) env) b1 fuel))))))
        ((Prod.mk t1 _)
-        (match (erase t1 env v (- fuel 1))
+        (match (erase t1 env v fuel)
           ((ErErr e m) (ErErr e m))
           ((ErOk t2 v1)
            (match (tr_local_val t2 n ty v)
              ((Prod.mk t3 fv)
               (match (tr_inst1 t3 b fv)
                 ((Prod.mk t4 b1)
-                 (match (erase t4 (cons (ErEnt (fvar_id_of fv) EKVar) env) b1 (- fuel 1))
+                 (match (erase t4 (cons (ErEnt (fvar_id_of fv) EKVar) env) b1 fuel)
                    ((ErErr e m) (ErErr e m))
                    ((ErOk t5 b2) (ErOk t5 (ELet (list v1) b2)))))))))))))))
 ;; a projection: a match on the structure's constructor, the field's variable; of a row of the
 ;; registry's types, the subject itself
 (fn erase_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (match (tr_package t sn)
     ((Prod.mk t0 (some _)) (erase_package_proj t0 env sn i x nil fuel))
     ((Prod.mk t0 none) (erase_struct_proj t0 env sn i x fuel))))
 (fn erase_struct_proj ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (fuel Int)) ErRes
-  (match (erase t env x (- fuel 1))
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
+  (match (erase t env x fuel)
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 x1)
      (if (rep_row sn)
@@ -621,11 +628,12 @@
 (fn erase_package_proj
   ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (match (package_subject t env x)
     ((Prod.mk t1 (PkErr e m)) (ErErr e m))
     ((Prod.mk t1 (PkFields _ fields))
      (match (nth fields i)
-       ((some fi) (erase t1 env (mk_app_n fi args) (- fuel 1)))
+       ((some fi) (erase t1 env (mk_app_n fi args) fuel))
        (none
          (ErErr (sym "no_realization")
            (append (show_name sn) (utf8 ": a projection past the constructor's fields"))))))
@@ -675,11 +683,12 @@
     (none (Prod.mk t none))))
 ;; an application by its head
 (fn erase_app ((t Tr) (env (List ErEnt)) (head Expr) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 9 0)
   (match head
     ((Const _ c _) (erase_const t env c args fuel))
     ((FVar _ id)
      (match (er_index env id 0)
-       ((some (Prod.mk EKVar i)) (erase_erased_args t env (EBVar i) args fuel))
+       ((some (Prod.mk EKVar i)) (erase_erased_args t env (EBVar i) args))
        ((some (Prod.mk EKIH _))
         (ErErr (sym "recursion_structure")
           (utf8
@@ -698,7 +707,7 @@
            (utf8 "an application whose head is not a constant: a function is no value")))))
     ((Lam _ _ _ _ _)
      (match (beta_head (w_st (Tr.w t)) head args)
-       ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1)))))
+       ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r fuel))))
     ((Proj _ sn i x)  ; a package's function field applied
      (match (tr_package t sn)
        ((Prod.mk t1 (some _)) (erase_package_proj t1 env sn i x args fuel))
@@ -709,7 +718,7 @@
       (ErErr (sym "function_value")
         (utf8 "an application whose head is not a constant: a function is no value")))))
 ;; a runtime variable applied to proofs (dite's branches): the variable itself; to anything else, a function value
-(fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr)) (fuel Int)) ErRes
+(fn erase_erased_args ((t Tr) (env (List ErEnt)) (v ETerm) (args (List Expr))) ErRes
   (measure (struct args))
   (match args
     (nil (ErOk t v))
@@ -717,7 +726,7 @@
      (match (tr_infer t a)
        ((Prod.mk t1 (some aty))
         (match (w_is_prop (Tr.w t1) aty)
-          ((Prod.mk w2 (some true)) (erase_erased_args (tr_set_w t1 w2) env v r fuel))
+          ((Prod.mk w2 (some true)) (erase_erased_args (tr_set_w t1 w2) env v r))
           ((Prod.mk w2 _)
            (ErErr (sym "function_value")
              (utf8
@@ -755,10 +764,12 @@
 ;; name (a module `Bool` declaring `or` under a prefix that stops before Init's) is its own
 ;; program, never the row's
 (fn erase_const ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 8 0)
   (erase_const_at t env c (if (bool_and (native_decl (Tr.sc t) c) (bool_not (base_decl c))) Anon c)
     args
     fuel))
 (fn erase_const_at ((t Tr) (env (List ErEnt)) (c Name) (k Name) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 7 0)
   (let ((lc (last_component c)))
     (if (bool_or (name_eq k (n1 (sym "absurd"))) (name_eq k (n2 (sym "False") (sym "elim"))))
       (ErOk t EAbsurd)  ; a refuted row
@@ -772,19 +783,19 @@
     (if (name_eq k (nm_nat_succ))
       (match args
         ((cons x nil)
-         (match (erase t env x (- fuel 1))
+         (match (erase t env x fuel)
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 x1) (ErOk t1 (EPrim (n2 (sym "Nat") (sym "add")) (list x1 (ELit (LNat 1))))))))
         (_ (ErErr (sym "function_value") (utf8 "Nat.succ unapplied"))))
     (if (name_eq k (nm_int_of_nat))  ; Nat and Int share the integer: the coercion is the identity
       (match args
-        ((cons x nil) (erase t env x (- fuel 1)))
+        ((cons x nil) (erase t env x fuel))
         (_ (ErErr (sym "function_value") (utf8 "Int.ofNat unapplied"))))
     (if (name_eq k (nm_int_neg_succ))
       (match args
         ((cons (Lit _ (LitNat n)) nil) (ErOk t (ELit (LInt (- (- 0 n) 1)))))
         ((cons x nil)
-         (match (erase t env x (- fuel 1))
+         (match (erase t env x fuel)
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 x1)
             (ErOk t1
@@ -796,13 +807,13 @@
       ;; explicit — (if ⟦inst⟧ true false) over Init's Bool
       (match args
         ((cons _ (cons inst nil))
-         (match (erase_cond t env inst (- fuel 1))
+         (match (erase_cond t env inst fuel)
            ((ErErr e m) (ErErr e m))
            ((ErOk t1 i1)
-            (match (erase t1 env (mk_const (n2 (sym "Bool") (sym "true")) nil) (- fuel 1))
+            (match (erase t1 env (mk_const (n2 (sym "Bool") (sym "true")) nil) fuel)
               ((ErErr e m) (ErErr e m))
               ((ErOk t2 tt)
-               (match (erase t2 env (mk_const (n2 (sym "Bool") (sym "false")) nil) (- fuel 1))
+               (match (erase t2 env (mk_const (n2 (sym "Bool") (sym "false")) nil) fuel)
                  ((ErErr e m) (ErErr e m))
                  ((ErOk t3 ff) (ErOk t3 (EIf i1 tt ff)))))))))
         (_ (ErErr (sym "function_value") (utf8 "Decidable.decide unapplied"))))
@@ -901,11 +912,12 @@
 (fn erase_unfold_matcher
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
   (match info
     ((DefnInfo _ v _ _ _)
      (if (is_match_name c)
        (match (beta_head (w_st (Tr.w t)) v args)
-         ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r (- fuel 1))))
+         ((Prod.mk st r) (erase (tr_set_w t (w_set_st (Tr.w t) st)) env r fuel)))
        (ErErr (sym "no_realization")
          (append (show_name c)
            (utf8 ": no realization attached — realize it first, or import the file that does")))))
@@ -934,6 +946,7 @@
 ;; (if TEST isTrue isFalse): with the bare test in every position, a
 ;; match on `(Nat.decEq a b)` by constructor would take the wrong row
 (fn erase_dec_value ((t Tr) (env (List ErEnt)) (test ETerm) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (let ((tt (mk_const (n1 (sym "True")) nil)) (pf (mk_const (n2 (sym "True") (sym "intro")) nil)))
     (match
       (erase_all t env
@@ -950,16 +963,19 @@
 ;; `a = b` at Bool: the test over the erased operands (prog.shard bool_eq_cond) — `a` where b
 ;; is `true` (and symmetrically), else (if a b (if b false true)) over Init's Bool cells
 (fn bool_eq_test ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (match (erase_all t env (list a b) fuel nil)
     ((Prod.mk (some (Prod.mk e m)) _) (ErErr e m))
     ((Prod.mk none (Prod.mk t1 (cons a1 (cons b1 nil)))) (ErOk t1 (bool_eq_cond a1 b1)))
     ((Prod.mk none _) (ErErr (sym "no_realization") (utf8 "Bool's decidable equality")))))
 (fn erase_bool_eq ((t Tr) (env (List ErEnt)) (a Expr) (b Expr) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (match (bool_eq_test t env a b fuel)
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 test) (erase_dec_value t1 env test fuel))))
 ;; a decision where an `if` reads it
 (fn erase_cond ((t Tr) (env (List ErEnt)) (h Expr) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (match (get_app_fn h)
     ((Const _ c _)
      (if (native_decl (Tr.sc t) c) (erase t env h fuel)
@@ -985,6 +1001,7 @@
 ;; `Bool.and a b` is (if a b false), `Bool.or a b` (if a true b), `Bool.not a` (if a false true),
 ;; the second operand not evaluated where the first decides (Init marks them macro_inline)
 (fn erase_bool_op ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (match
     (erase_all t env
       (append args
@@ -1011,6 +1028,7 @@
 ;; matching row's arm only
 (fn erase_matcher ((t Tr) (env (List ErEnt)) (c Name) (desc MtDesc) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (match desc
     ((MtDesc np nd rows)
      (if (bool_not (= nd 1))
@@ -1022,7 +1040,7 @@
        (match (nth args (+ np 1))
          (none (ErErr (sym "function_value") (show_name c)))
          ((some scrut)
-          (match (erase t env scrut (- fuel 1))
+          (match (erase t env scrut fuel)
             ((ErErr e m) (ErErr e m))
             ((ErOk t1 s1)
              (match
@@ -1039,7 +1057,7 @@
    (fuel Int)
    (acc (List EArm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr (List EArm)))
-  (measure (struct rows))
+  (measure (Int.natAbs (+ fuel 1)) 2 (List.length rows))
   (match rows
     (nil (Prod.mk none (Prod.mk t (rev acc))))
     ((cons (cons p nil) r)
@@ -1170,10 +1188,10 @@
 ;; one alternative: a lambda per variable of the row, then its body
 (fn erase_alt ((t Tr) (env (List ErEnt)) (a Expr) (roles (List Bool)) (fuel Int))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr ETerm))
-  (measure (struct roles))
+  (measure (Int.natAbs (+ fuel 1)) 1 (List.length roles))
   (match roles
     (nil
-      (match (erase t env a (- fuel 1))
+      (match (erase t env a fuel)
         ((ErErr e msg) (Prod.mk (some (Prod.mk e msg)) (Prod.mk t (EBVar 0))))
         ((ErOk t1 b) (Prod.mk none (Prod.mk t1 b)))))
     ((cons rt r)
@@ -1300,6 +1318,7 @@
 (fn erase_ctor
   ((t Tr) (env (List ErEnt)) (c Name) (ind Name) (nparams Int) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (if (rep_row ind)  ; a row's constructor is its one runtime argument
     (match (row_field t ind)
       ((Prod.mk t1 none)
@@ -1332,7 +1351,7 @@
 (fn erase_roles
   ((t Tr) (env (List ErEnt)) (roles (List Bool)) (args (List Expr)) (fuel Int) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr (List ETerm)))
-  (measure (struct roles))
+  (measure (Int.natAbs (+ fuel 1)) 1 (List.length roles))
   (match roles
     (nil (Prod.mk none (Prod.mk t (rev acc))))
     ((cons rt r)
@@ -1341,7 +1360,7 @@
          (Prod.mk (some (Prod.mk (sym "function_value") (utf8 "partially applied"))) (Prod.mk t nil)))
        ((cons a ar)
         (if rt
-          (match (erase t env a (- fuel 1))
+          (match (erase t env a fuel)
             ((ErErr e m) (Prod.mk (some (Prod.mk e m)) (Prod.mk t nil)))
             ((ErOk t1 a1) (erase_roles t1 env r ar fuel (cons a1 acc))))
           (erase_roles t env r ar fuel acc)))))))
@@ -1349,12 +1368,14 @@
 (fn erase_call
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (erase_call_as t env c info args fuel false))
 ;; an extern's call is the effect, EExt: the extern is an opaque
 ;; constant in L, its program the extern — `ev` stops there, `run` performs it
 (fn erase_call_as
   ((t Tr) (env (List ErEnt)) (c Name) (info ConstantInfo) (args (List Expr)) (fuel Int) (ext Bool))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (match (tr_tele t info)
     ((Prod.mk t1 none) (ErErr (sym "no_realization") (show_name c)))
     ((Prod.mk t1 (some (Tele _ binds _ _)))
@@ -1367,7 +1388,8 @@
            ((Prod.mk none (Prod.mk t2 as)) (ErOk t2 (if ext (EExt c as) (ECall c as))))))))))
 ;; ite / dite: an if on the decision; dite's branches applied to their proof
 (fn erase_ite ((t Tr) (env (List ErEnt)) (h Expr) (a Expr) (b Expr) (dep Bool) (fuel Int)) ErRes
-  (match (erase_cond t env h (- fuel 1))
+  (measure (Int.natAbs (+ fuel 1)) 4 0)
+  (match (erase_cond t env h fuel)
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 h1)
      (match (erase_branch t1 env a dep fuel)
@@ -1377,17 +1399,18 @@
           ((ErErr e m) (ErErr e m))
           ((ErOk t3 b1) (ErOk t3 (EIf h1 a1 b1)))))))))
 (fn erase_branch ((t Tr) (env (List ErEnt)) (br Expr) (dep Bool) (fuel Int)) ErRes
-  (if (bool_not dep) (erase t env br (- fuel 1))
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
+  (if (bool_not dep) (erase t env br fuel)
   (match br
     ((Lam _ n _ dom body)
      (match (tr_local t n dom)
        ((Prod.mk t1 fv)
         (match (tr_inst1 t1 body fv)
-          ((Prod.mk t2 body1)
-           (erase t2 (cons (ErEnt (fvar_id_of fv) EKErased) env) body1 (- fuel 1)))))))
-    (_ (erase t env br (- fuel 1))))))
+          ((Prod.mk t2 body1) (erase t2 (cons (ErEnt (fvar_id_of fv) EKErased) env) body1 fuel))))))
+    (_ (erase t env br fuel)))))
 ;; T.casesOn params motive major minors: a match, each minor's field lambdas the pattern's variables
 (fn erase_cases ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 4 0)
   (match c
     ((Str ind _)
      (match (env_find (tr_env t) ind)
@@ -1408,11 +1431,11 @@
                    ((some major)
                     (match (if_branches t1 ctors (drop (+ nparams 2) args))
                       ((some (Prod.mk else_b then_b))
-                       (match (erase_cond t1 env major (- fuel 1))
+                       (match (erase_cond t1 env major fuel)
                          ((ErErr e m) (ErErr e m))
                          ((ErOk t2 major1) (erase_ite_bodies t2 env major1 then_b else_b fuel))))
                       (none
-                        (match (erase t1 env major (- fuel 1))
+                        (match (erase t1 env major fuel)
                           ((ErErr e m) (ErErr e m))
                           ((ErOk t2 major1)
                            (match
@@ -1433,6 +1456,7 @@
    (saturated Bool)
    (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (match (Prod.mk major minor)
     ((Prod.mk (some mj) (some mn))
      (if (bool_not saturated)
@@ -1444,7 +1468,7 @@
               (utf8
                 ": the registry's row does not describe this structure (one constructor, one runtime field)"))))
          ((Prod.mk t1 (some (Prod.mk _ roles)))
-          (match (erase t1 env mj (- fuel 1))
+          (match (erase t1 env mj fuel)
             ((ErErr e m) (ErErr e m))
             ((ErOk t2 mj1)
              (match (erase_minor t2 env mn roles 0 fuel)
@@ -1480,10 +1504,11 @@
     (_ none))))
 (fulfills strip_unused_lams.dec_1 (by (intro p h dd n bi t b hm) (apply natAbs_pred (arith))))
 (fn erase_ite_bodies ((t Tr) (env (List ErEnt)) (c ETerm) (a Expr) (b Expr) (fuel Int)) ErRes
-  (match (erase t env a (- fuel 1))
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
+  (match (erase t env a fuel)
     ((ErErr e m) (ErErr e m))
     ((ErOk t1 a1)
-     (match (erase t1 env b (- fuel 1))
+     (match (erase t1 env b fuel)
        ((ErErr e m) (ErErr e m))
        ((ErOk t2 b1) (ErOk t2 (EIf c a1 b1)))))))
 ;; T.rec params motive minors major with no use of an induction hypothesis: a match
@@ -1497,6 +1522,7 @@
    (args (List Expr))
    (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (match c
     ((Str ind _)
      (if (bool_not (= nmotives 1))
@@ -1518,7 +1544,7 @@
                    (match (nth args (+ nparams (+ 1 nminors)))
                      (none (ErErr (sym "function_value") (show_name c)))
                      ((some major)
-                      (match (erase t1 env major (- fuel 1))
+                      (match (erase t1 env major fuel)
                         ((ErErr e m) (ErErr e m))
                         ((ErOk t2 major1)
                          (match
@@ -1539,7 +1565,7 @@
    (fuel Int)
    (acc (List EArm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr (List EArm)))
-  (measure (struct ctors))
+  (measure (Int.natAbs (+ fuel 1)) 2 (List.length ctors))
   (match ctors
     (nil (Prod.mk none (Prod.mk t (rev acc))))
     ((cons c r)
@@ -1582,10 +1608,10 @@
 ;; one minor: a lambda per field (erased fields and hypotheses as erased entries), then its body
 (fn erase_minor ((t Tr) (env (List ErEnt)) (m Expr) (roles (List Bool)) (nihs Int) (fuel Int))
   (Prod (Option (Prod Symbol (List Int))) (Prod Tr ETerm))
-  (measure (struct roles))
+  (measure (Int.natAbs (+ fuel 1)) 1 (List.length roles))
   (match roles
     (nil
-      (match (open_ihs_lams t env m nihs fuel)
+      (match (open_ihs_lams t env m nihs)
         ((Prod.mk t1 none)
          (Prod.mk
            (some
@@ -1593,7 +1619,7 @@
                (utf8 "a case alternative K could not open as a function of its hypotheses")))
            (Prod.mk t1 (EBVar 0))))
         ((Prod.mk t1 (some (Prod.mk env1 body)))
-         (match (erase t1 env1 body (- fuel 1))
+         (match (erase t1 env1 body fuel)
            ((ErErr e msg) (Prod.mk (some (Prod.mk e msg)) (Prod.mk t1 (EBVar 0))))
            ((ErOk t2 b) (Prod.mk none (Prod.mk t2 b)))))))
     ((cons rt r)
@@ -1628,14 +1654,14 @@
 ;; alt_with_extra's descent, here below the last function it calls
 (fulfills alt_with_extra.dec_1
   (by (intro p w hm hk t1 fv body ho) (apply natAbs_lt (arith) (arith))))
-(fn open_ihs_lams ((t Tr) (env (List ErEnt)) (m Expr) (k Int) (fuel Int))
+(fn open_ihs_lams ((t Tr) (env (List ErEnt)) (m Expr) (k Int))
   (Prod Tr (Option (Prod (List ErEnt) Expr)))
   (measure (Int.natAbs k))
   (if (< k 1) (Prod.mk t (some (Prod.mk env m)))
   (match (open_lam t m)
     ((Prod.mk t1 none) (Prod.mk t1 none))
     ((Prod.mk t1 (some (Prod.mk fv body)))
-     (open_ihs_lams t1 (cons (ErEnt (fvar_id_of fv) EKIH) env) body (- k 1) fuel)))))
+     (open_ihs_lams t1 (cons (ErEnt (fvar_id_of fv) EKIH) env) body (- k 1))))))
 (fulfills open_ihs_lams.dec_1 (by (intro p hk t1 fv body ho) (apply natAbs_pred (arith))))
 
 ;; ---- a template's call, the shapes of its static arguments, the lifted lambda -----------------
@@ -1650,6 +1676,7 @@
     ((some (EITemplate _ _ _ _)) true)
     (_ false)))
 (fn erase_template_call ((t Tr) (env (List ErEnt)) (c Name) (args (List Expr)) (fuel Int)) ErRes
+  (measure (Int.natAbs (+ fuel 1)) 6 0)
   (match (owner_binds t c)
     ((some binds) (erase_template_at t env c binds args fuel))
     (none
@@ -1664,6 +1691,7 @@
 (fn erase_template_at
   ((t Tr) (env (List ErEnt)) (c Name) (binds (List TBind)) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 5 0)
   (if (bool_not (= (len args) (len binds)))
     (ErErr (sym "function_value")
       (append (show_name c)
@@ -1701,7 +1729,7 @@
    (caps (List ETerm))
    (data (List ETerm)))
   (Prod Tr TaRes)
-  (measure (struct binds))
+  (measure (Int.natAbs (+ fuel 1)) 4 (List.length binds))
   (match binds
     (nil (Prod.mk t (TaOk (rev tyl) (rev tye) (rev shapes) caps (rev data))))
     ((cons (TBind _ role _) br)
@@ -1745,7 +1773,7 @@
                    data)))))
           (BErased (template_args t env c br ar fuel tyl tye shapes caps data))
           ((BData _)
-           (match (erase t env a (- fuel 1))
+           (match (erase t env a fuel)
              ((ErErr e m) (Prod.mk t (TaErr e m)))
              ((ErOk t1 a1) (template_args t1 env c br ar fuel tyl tye shapes caps (cons a1 data)))))
           ((BStatic k)
@@ -1757,6 +1785,7 @@
 (fn erase_shape_call
   ((t Tr) (env (List ErEnt)) (sh Shape) (ids (List Int)) (args (List Expr)) (fuel Int))
   ErRes
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
   (if (bool_not (= (len args) (shape_arity sh)))
     (ErErr (sym "function_value")
       (append (utf8 "a static parameter (at ")
@@ -1793,6 +1822,8 @@
   (utf8
     "a static argument is the name of a fn with a program, a realized constant or an instance, such a name applied to runtime values of the caller, a closed lambda, or a static parameter passed on"))
 (fn static_shape ((t Tr) (env (List ErEnt)) (a Expr) (k Int) (fuel Int)) (Prod Tr SsRes)
+  (measure (Int.natAbs (+ fuel 1)) 3 0)
+  (if (< fuel 0) (Prod.mk t (SsErr (sym "erased_in_runtime") (utf8 "the body is too deep")))
   (match a
     ((Lam _ _ _ _ _) (lift_lambda t env a k fuel))
     ((FVar _ id) (passed_shape t env id k))
@@ -1806,7 +1837,7 @@
               ;; a package's function field passed on: the field's term at the constant, a
               ;; placeholder at the check
               ((some (Prod.mk (Prod.mk sn i) (Prod.mk x rest)))
-               (package_field_shape t env sn i x rest k fuel))
+               (package_field_shape t env sn i x rest k (- fuel 1)))
               (none (named_shape t env (Const d g ls) g (get_app_args a) k fuel))))
            (none (named_shape t env (Const d g ls) g (get_app_args a) k fuel)))))
         ((FVar _ id)
@@ -1819,11 +1850,11 @@
                     (utf8
                       ") applied as a static argument: a static parameter is passed on, never transformed"))))))
            (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer))))))
-        ((Proj _ sn i x) (package_field_shape t env sn i x (get_app_args a) k fuel))
+        ((Proj _ sn i x) (package_field_shape t env sn i x (get_app_args a) k (- fuel 1)))
         ((Lam _ _ _ _ _)  ; a lambda applied (a package's lambda field at its captured values): reduced, then read as any static argument
          (match (beta_head (w_st (Tr.w t)) (get_app_fn a) (get_app_args a))
            ((Prod.mk st r) (static_shape (tr_set_w t (w_set_st (Tr.w t) st)) env r k (- fuel 1)))))
-        (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer))))))))
+        (_ (Prod.mk t (SsErr (sym "function_value") (static_pointer)))))))))
 ;; (e) a package constant: a closed term whose value whnf reads as a package type's
 ;; constructor applied — the shape its identity with its arguments, nothing captured
 (fn package_shape ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)))
@@ -1853,6 +1884,7 @@
 (fn package_field_shape
   ((t Tr) (env (List ErEnt)) (sn Name) (i Int) (x Expr) (rest (List Expr)) (k Int) (fuel Int))
   (Prod Tr SsRes)
+  (measure (Int.natAbs (+ fuel 1)) 4 0)
   (match (package_subject t env x)
     ((Prod.mk t1 (PkErr e m)) (Prod.mk t1 (SsErr e m)))
     ((Prod.mk t1 (PkFields pk fields))
@@ -1900,6 +1932,7 @@
 (fn named_shape
   ((t Tr) (env (List ErEnt)) (head Expr) (g Name) (gargs (List Expr)) (k Int) (fuel Int))
   (Prod Tr SsRes)
+  (measure (Int.natAbs (+ fuel 1)) 2 0)
   (if (is_template (Tr.es t) g)
     (Prod.mk t
       (SsErr (sym "function_value")
@@ -1947,7 +1980,7 @@
    (cvals (List ETerm))
    (prim (Option Name)))
   (Prod Tr SsRes)
-  (measure (struct binds))
+  (measure (Int.natAbs (+ fuel 1)) 1 (List.length gargs))
   (match gargs
     (nil
       (if (trailing_data binds k)
@@ -1993,7 +2026,7 @@
                     (append (show_name g)
                       (utf8
                         ": a captured value whose type mentions a local of the caller — its type must be closed"))))
-                (match (erase t1 env a (- fuel 1))
+                (match (erase t1 env a fuel)
                   ((ErErr e m) (Prod.mk t1 (SsErr e m)))
                   ((ErOk t2 a1)
                    (shape_args t2 env head g br ar k fuel (cons none leading) (cons ty ctys)
@@ -2017,6 +2050,7 @@
 ;; erased over them; its L definition the same lambda over the captured locals. A lambda over
 ;; a type parameter, a proof, a function with no K constant or a static parameter is refused
 (fn lift_lambda ((t Tr) (env (List ErEnt)) (lam Expr) (k Int) (fuel Int)) (Prod Tr SsRes)
+  (measure (Int.natAbs (+ fuel 1)) 1 0)
   (match (captured_of env (fvars_of lam) nil)
     ((Left6 e m) (Prod.mk t (SsErr e m)))
     ((Right6 captured)
@@ -2049,7 +2083,7 @@
                     ((Prod.mk (Prod.mk w4 es4) (some rty))
                      (match
                        (erase (tr_set_es (tr_set_w t3 w4) es4) (lifted_env env captured bfvs) body
-                         (- fuel 1))
+                         fuel)
                        ((ErErr e m) (Prod.mk t3 (SsErr e m)))
                        ((ErOk t5 ebody)
                         (match (tr_lams t5 (append captured bfvs) body)
@@ -2179,5 +2213,473 @@
   (match ss
     (nil nil)
     ((cons s r) (cons (Prod.mk (shape_id s) (len (shape_captured s))) (shape_keys r)))))
+;; the erasure's descents, below the last function its group calls: a step of the fuel
+;; (`erase`, `static_shape`), a lower rank at the same fuel, or a walk's shorter list
+(fulfills erase.dec_1
+  (by
+    (intro t env e fuel hf u1 n ty v b he)
+    (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills erase.dec_2
+  (by (intro t env e fuel hf u1 sn i x he) (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills erase.dec_3
+  (by (intro t env e fuel hf u1 he) (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills erase_all.dec_1
+  (by (intro t env es fuel acc e r hes) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_all.dec_2
+  (by
+    (intro t env es fuel acc e r hes t1 e1)
+    (rw hes)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_let.dec_1
+  (by
+    (intro t env n ty v b fuel w1 h1 t1 fv h2 t2 b1 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_let.dec_2
+  (by
+    (intro t env n ty v b fuel w1 u1 h1 t1 u2 u3 h2 t2 fv h3 t3 b1 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_let.dec_3
+  (by
+    (intro t env n ty v b fuel w1 u1 h1 t1 u2 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_let.dec_4
+  (by
+    (intro t env n ty v b fuel w1 u1 h1 t1 u2 h2 t2 v1 t3 fv h3 t4 b1 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_proj.dec_1
+  (by (intro t env sn i x fuel t0 u1 h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_proj.dec_2
+  (by (intro t env sn i x fuel t0 h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_struct_proj.dec_1
+  (by (intro t env sn i x fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_package_proj.dec_1
+  (by
+    (intro t env sn i x args fuel t1 u1 fields h1 fi h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_package_proj.dec_2
+  (by
+    (intro t env sn i x args fuel t1 pn h1 t2 u1 roles h2 k h3 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_1
+  (by (intro t env head args fuel u1 c u2 h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_2
+  (by
+    (intro t env head args fuel u1 id h1 c roles u2 h2 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_3
+  (by
+    (intro t env head args fuel u1 id h1 sh ids u2 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_4
+  (by
+    (intro t env head args fuel u1 id h1 c u2 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_5
+  (by
+    (intro t env head args fuel u1 u2 u3 u4 u5 h1 st r h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_app.dec_6
+  (by
+    (intro t env head args fuel u1 sn i x h1 t1 u2 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const.dec_1
+  (by (intro t env c args fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_1
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 ind u2 nparams u3
+      u4 hc)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_2
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 u2 nparams u3
+      nmotives nminors u4 u5 u6 hc)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_3
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 u3 ps
+      u4 u5 u6 hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_4
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 u3 ps
+      u4 hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_5
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 u3 u4
+      u5 hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_6
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd p
+      hr)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_7
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd p
+      hr t1 xs hx)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_8
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      body hb)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_9
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      hb u3 hp)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_10
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      hb hp desc hm)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_11
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      hb hp hm sn i x hj)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_12
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      hb hp hm sn i x rest hj t1 u3 hk)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_13
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 g14 u2 hd hr
+      hb hp hm hj)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_14
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc g13 hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_15
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 g10 g11 g12 info hi u1 hc hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_16
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 g9 hd)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_17
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 g8 hd u1 u2 h a b ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_18
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 g7 hd a b ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_19
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 hd u1 inst ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_20
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 hd u1 inst ha t1 i1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_21
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 g6 hd u1 inst ha t1 i1 t2 tt)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_22
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 g5 hd x ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_23
+  (by
+    (intro t env c k args fuel g1 g2 g3 g4 hd x ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_const_at.dec_24
+  (by
+    (intro t env c k args fuel g1 g2 g3 hd x ha)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_unfold_matcher.dec_1
+  (by
+    (intro t env c info args fuel u1 v u2 u3 u4 h1 h2 st r h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_dec_value.dec_1
+  (by (intro t env test fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills bool_eq_test.dec_1
+  (by (intro t env a b fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_bool_eq.dec_1
+  (by (intro t env a b fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_bool_eq.dec_2
+  (by (intro t env a b fuel t1 test) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_1
+  (by (intro t env h fuel u1 c u2 h1 h2 h3 h4) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_2
+  (by
+    (intro t env h fuel u1 c u2 h1 h2 h3 h4 p h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_3
+  (by
+    (intro t env h fuel u1 c u2 h1 h2 h3 h4 h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_4
+  (by
+    (intro t env h fuel u1 c u2 h1 h2 h3 a b h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_5
+  (by
+    (intro t env h fuel u1 c u2 h1 h2 h3 u3 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_6
+  (by (intro t env h fuel u1 c u2 h1 h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cond.dec_7
+  (by (intro t env h fuel u1 h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_bool_op.dec_1
+  (by (intro t env c args fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_matcher.dec_1
+  (by
+    (intro t env c desc args fuel np nd rows h1 h2 h3 scrut h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_matcher.dec_2
+  (by
+    (intro t env c desc args fuel np nd rows h1 h2 h3 scrut h4 t1 s1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_alts.dec_1
+  (by
+    (intro t env rows alts extra fuel acc p r hrows a ar h2 t1 ep roles h3 t1x a1 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_alts.dec_2
+  (by
+    (intro t env rows alts extra fuel acc p r hrows a ar h2 t1 ep roles h3 t1x a1 h4 t2 body)
+    (rw hrows)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_alt.dec_1
+  (by (intro t env a roles fuel hroles) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_alt.dec_2
+  (by
+    (intro t env a roles fuel rt r hroles t1 fv body h2)
+    (rw hroles)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_ctor.dec_1
+  (by
+    (intro t env c ind nparams args fuel h1 w1 es1 h2 t2 roles h3 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ctor.dec_2
+  (by
+    (intro t env c ind nparams args fuel h1 t1 u1 roles h2 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_roles.dec_1
+  (by
+    (intro t env roles args fuel acc rt r hroles a ar h2 h3)
+    (rw hroles)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_roles.dec_2
+  (by
+    (intro t env roles args fuel acc rt r hroles a ar h2 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_roles.dec_3
+  (by
+    (intro t env roles args fuel acc rt r hroles a ar h2 h3 t1 a1)
+    (rw hroles)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_call.dec_1
+  (by (intro t env c info args fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_call_as.dec_1
+  (by
+    (intro t env c info args fuel ext t1 u1 binds u2 u3 h1 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ite.dec_1
+  (by (intro t env h a b dep fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ite.dec_2
+  (by (intro t env h a b dep fuel t1 c1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ite.dec_3
+  (by (intro t env h a b dep fuel t1 c1 t2 a1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_branch.dec_1
+  (by
+    (intro t env br dep fuel h1 u1 n u2 dom body h2 t1 fv h3 t2 body1 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_branch.dec_2
+  (by (intro t env br dep fuel h1 u1 h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_branch.dec_3
+  (by (intro t env br dep fuel h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cases.dec_1
+  (by
+    (intro t env c args fuel ind u1 h1 u2 nparams u3 u4 ctors u5 u6 u7 u8 h2 h3 w1 es1 h4 h5 major
+      h6 else_b then_b h7)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cases.dec_2
+  (by
+    (intro t env c args fuel ind u1 h1 u2 nparams u3 u4 ctors u5 u6 u7 u8 h2 h3 w1 es1 h4 h5 major
+      h6 else_b then_b h7 t2 major1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cases.dec_3
+  (by
+    (intro t env c args fuel ind u1 h1 u2 nparams u3 u4 ctors u5 u6 u7 u8 h2 h3 w1 es1 h4 h5 major
+      h6 h7)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cases.dec_4
+  (by
+    (intro t env c args fuel ind u1 h1 u2 nparams u3 u4 ctors u5 u6 u7 u8 h2 h3 w1 es1 h4 h5 major
+      h6 h7 t2 major1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_cases.dec_5
+  (by
+    (intro t env c args fuel ind u1 h1 u2 nparams u3 u4 ctors u5 u6 u7 u8 h2 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_row_cases.dec_1
+  (by
+    (intro t env c ind major minor saturated fuel mj mn h1 h2 t1 u1 roles h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_row_cases.dec_2
+  (by
+    (intro t env c ind major minor saturated fuel mj mn h1 h2 t1 u1 roles h3 t2 mj1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ite_bodies.dec_1
+  (by (intro t env c a b fuel) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_ite_bodies.dec_2
+  (by (intro t env c a b fuel t1 a1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_rec.dec_1
+  (by
+    (intro t env c nparams nmotives nminors args fuel ind u1 h1 h2 u2 u3 u4 u5 ctors u6 u7 u8 u9 h3
+      h4 w1 es1 h5 h6 major h7)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_rec.dec_2
+  (by
+    (intro t env c nparams nmotives nminors args fuel ind u1 h1 h2 u2 u3 u4 u5 ctors u6 u7 u8 u9 h3
+      h4 w1 es1 h5 h6 major h7 t2 major1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_rec.dec_3
+  (by
+    (intro t env c nparams nmotives nminors args fuel ind u1 h1 h2 u2 u3 u4 u5 ctors u6 u7 u8 u9 h3
+      h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_minors.dec_1
+  (by
+    (intro t env ctors minors with_ihs fuel acc c r hctors m mr h2 t1 roles h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_minors.dec_2
+  (by
+    (intro t env ctors minors with_ihs fuel acc c r hctors m mr h2 t1 roles h3 t2 body)
+    (rw hctors)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_minor.dec_1
+  (by
+    (intro t env m roles nihs fuel hroles t1 env1 body h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_minor.dec_2
+  (by
+    (intro t env m roles nihs fuel rt r hroles t1 fv body h2)
+    (rw hroles)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_template_call.dec_1
+  (by (intro t env c args fuel binds h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_template_call.dec_2
+  (by
+    (intro t env c args fuel h1 info h2 t1 u1 binds u2 u3 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_template_at.dec_1
+  (by (intro t env c binds args fuel h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills template_args.dec_1
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 h3 h4 w1
+      es1 ety h5)
+    (rw hbinds)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills template_args.dec_2
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 h3)
+    (rw hbinds)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills template_args.dec_3
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 u3 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills template_args.dec_4
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 u3 h3 t1 a1)
+    (rw hbinds)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills template_args.dec_5
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 k h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills template_args.dec_6
+  (by
+    (intro t env c binds args fuel tyl tye shapes caps data u1 role u2 br hbinds a ar h2 k h3 t1 sh
+      cs)
+    (rw hbinds)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills erase_shape_call.dec_1
+  (by (intro t env sh ids args fuel h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills erase_shape_call.dec_2
+  (by
+    (intro t env sh ids args fuel h1 t1 xs p h2 h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills static_shape.dec_1
+  (by
+    (intro t env a k fuel hf u1 u2 u3 u4 u5 h1)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills static_shape.dec_2
+  (by
+    (intro t env a k fuel hf u1 h1 d g ls h2 h3 info h4 sn i x rest h5)
+    (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills static_shape.dec_3
+  (by
+    (intro t env a k fuel hf u1 h1 d g ls h2 h3 info h4 h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills static_shape.dec_4
+  (by
+    (intro t env a k fuel hf u1 h1 d g ls h2 h3 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills static_shape.dec_5
+  (by
+    (intro t env a k fuel hf u1 h1 u2 sn i x h2)
+    (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills static_shape.dec_6
+  (by
+    (intro t env a k fuel hf u1 h1 u2 u3 u4 u5 u6 h2 st r h3)
+    (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills package_field_shape.dec_1
+  (by
+    (intro t env sn i x rest k fuel t1 pk fields h1 fi h2 t2 term h3)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills named_shape.dec_1
+  (by
+    (intro t env head g gargs k fuel h1 prim h2 info h3 t1 u1 binds u2 u3 h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills shape_args.dec_1
+  (by
+    (intro t env head g binds gargs k fuel leading ctys cvals prim a ar hgargs u1 role u2 br h2 h3
+      h4)
+    (rw hgargs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills shape_args.dec_2
+  (by
+    (intro t env head g binds gargs k fuel leading ctys cvals prim a ar hgargs u1 role u2 br h2 h3
+      h4)
+    (rw hgargs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills shape_args.dec_3
+  (by
+    (intro t env head g binds gargs k fuel leading ctys cvals prim a ar hgargs u1 role u2 br h2 u3
+      h3 t1 ty h4 h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills shape_args.dec_4
+  (by
+    (intro t env head g binds gargs k fuel leading ctys cvals prim a ar hgargs u1 role u2 br h2 u3
+      h3 t1 ty h4 h5 t2 a1)
+    (rw hgargs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills lift_lambda.dec_1
+  (by
+    (intro t env lam k fuel captured h1 t1 bfvs body h2 t2 ptys h3 t3 bty h4 w4 es4 rty h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fn shape_record ((s Shape)) (List Int)
   (append (show_name (shape_id s)) (cons 47 (show_nat (len (shape_captured s))))))
