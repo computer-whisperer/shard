@@ -348,7 +348,8 @@ entries are explained under "Measured" at the end.
   twice (`elab.shard` `el_pat_var`, `list_mismatch`). The owner, of the two ways: "We can
   restate the 21 patterns. Proceed with that when practical".
 - K's walks down a telescope and its three searches are definitions, and with them all of
-  K's directory but the reader of an export's lines, which stands on the JSON parser. Each
+  K's directory but the reader of an export's lines, which goes on from the rest the JSON
+  parser returned. Each
   of the nine walks of the inductive-type checker (`k/inductive.shard`) spends a heartbeat
   at every binder it takes and calls itself only under a test that the count advanced, below
   the limit, since the walk was entered; the heartbeats left are the measure, and each of
@@ -401,6 +402,25 @@ entries are explained under "Measured" at the end.
   definition. The way was the one assented for the bulk (above:
   "The bulk's proofs can live in the sources"); then, with the walks landed: "Good. Let's
   push on to the next chunk while CI runs."
+- The JSON parser's three functions take a fuel beside the input, and the fuel is the input.
+  A value, an array and an object go on from the rest a call of their own returned, and
+  nothing they are given grows smaller at such a call. `json_parse` hands its input down a
+  second time; each of the three answers `JErr` where the fuel is empty, a value's call of
+  its array or object and an array's or an object's call of itself for the next member pass
+  the fuel less a byte, and the measure is its length (twice it, and one more on an array
+  and an object, which call a value at the fuel they have). The input left is never longer
+  than the fuel, so the fuel is empty only where the input is, which is no value, and no
+  answer changes. That is argued and tested, not proven: the parser before and after agree
+  on every sequence of up to six of eleven tokens — 1,948,717 inputs, 1,509,842 of them
+  refused —, and the Init replay and the Init index are what they were. Not a count —
+  twice the input's length, one less at each call, as it was proposed and first built —:
+  the entry would measure its input at every call, and K's reader of an export's lines
+  parses each record off the whole rest of a chunk of 20,000 lines. Not the parser left a
+  program: the index's builder and verifier and the load on demand waited on it, 21
+  functions with its own three. K's reader of an export's lines did not come with them, as the
+  proposal had said it would: it goes on from the rest the parser returned, and waits on a
+  fact about the parser or a fuel of its own (`OPEN.md` §1). The owner, of a fuel or the
+  parser left a program: "Agreed with giving it fuel -- proceed with A."
 
 ## Programs and the back end
 
@@ -1288,7 +1308,19 @@ measurements; measure again before building on one.
   the build 263 s, the replay 663 s, the roots checked in 506 s, the suite 345 s — where
   the tactic library's test failed, its `solve` a definition now and the example's sidecar
   stale by the library's fingerprint, and passed with the expectation and the sidecar
-  renewed.
+  renewed. On CI: #766 82.3 minutes (`native` 81.0, `v3` 62.4, `replay` 57.3); #767, which
+  started while it ran, 64.5 (`native` 54.2, `v3` 63.9, `replay` 31.3).
+- The JSON parser's fuel (2026-11-19). 461 programs before, 440 after: the parser's three
+  functions, the two walks of the index's builder and the walk of the load on demand, which
+  stated a counter (`ix_scan`, `ix_lines`, `od_walk`), and the 15 that waited on those. Now
+  8,964 functions, 8,524 definitions, 1,349 obligations of 536 functions, and no function
+  the checker does not read: the type a run ends as stands above the first signature that
+  names it (`ev.shard` `RunRes`), and the three that were unread wait on the evaluator's
+  machine. Checked on the dev box before the push, by ruling 17: the state's check; the 29
+  binaries built in 270 s; the Init replay alone, 424 s for 413, 57,977 accepted and none
+  exhausted; then side by side all 29 roots loaded checked in 529 s and the suite on the
+  binaries, 371 s, 52 entrypoints. The Init index as the new binary writes it is the one
+  the tree's sources wrote before the change, 19,208,769 bytes, byte for byte.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

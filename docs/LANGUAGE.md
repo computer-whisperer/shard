@@ -231,19 +231,19 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, nearly
-  nine in ten.** The checker reads all but three — one whose signature names a type declared
-  below it, and the two that call it (a program's run) —: of the loader's closure, 8,963
-  functions — 4,792 of them the rows of a generated table —, it holds 8,502 as definitions. The
-  others it reads are programs with the reason: a function they call is a program
-  (`callee_runnable`, 403), or they are a group of functions that call each other with no
-  measure the definer takes (55, in six groups). A type error in any of them is refused. None matches a numeral
+  nine in ten.** The checker reads every one: of the loader's closure, 8,964
+  functions — 4,792 of them the rows of a generated table —, it holds 8,524 as definitions. The
+  others are programs with the reason: a function they call is a program
+  (`callee_runnable`, 387), or they are a group of functions that call each other with no
+  measure the definer takes (52, in five groups), or go on from the rest a callee returned
+  (one, `realize_descent`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 166 functions in 34 files:
+  `kernel/descent.shard`. The forms the sources use, 169 functions in 34 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -254,6 +254,7 @@ file; two things about how they are written set them apart.
   | a walk down one or two lists by their rows | `(+ (List.length a) (List.length b))` — Init's length, a `Nat`; not the sources' own `len`, an `Int` | `(rw hA) (rw List.length_cons) (arith)`, `hA` the row's equation; each list a row names is rewritten |
   | two functions that call each other, one passing the counter on unchanged | `(* 2 (Int.natAbs k))` and `(+ (* 2 (Int.natAbs k)) 1)` | a `have` of the counter's fact, then `(arith)` |
   | a merge sort, on the two piles `halves` deals (`kernel/util.shard`); its last row is written out, `(cons _ (cons _ _))`, not `_`, so that the obligation holds the list's two elements | `(List.length xs)` | `(apply halves_fst_lt (exact hx) (exact h))` and `halves_snd_lt`: `hx` the row's equation, `h` the equation of the piles |
+  | a group that goes on from the rest a call of its own returned (`json.shard`, a value, an array, an object): nothing it is given grows smaller at such a call, so the entry hands the input down a second time as a fuel — each member opens `(match fuel (nil …) ((cons _ fl) …))`, a call made after a byte was read passes `fl`, the others `fuel`. The input left is never longer than the fuel, so the `nil` row answers what the empty input does | `(* 2 (List.length fuel))`, and `(+ (* 2 (List.length fuel)) 1)` on a member that calls another at the fuel it has | `(rw hf) (rw List.length_cons) (arith)`, `hf` the equation of the fuel's row; `(arith)` where the fuel is passed as it is |
   | a reader that goes on from what a helper left of its input (`take_line`, `take_hex`, `parse_hex4`) | `(List.length cs)` | the helper's fact, that it leaves no more than it was given (`json.shard` `take_line_lt`, `parse_hex4_le`; `sexpr.shard` `take_hex_le`), as a `have`; then the rows' equations rewritten, `(simp_only List.length_cons) (arith)` |
   | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
 
@@ -318,7 +319,7 @@ file; two things about how they are written set them apart.
   matches on the term instead. In such a proof a hypothesis whose left side must compute first
   is restated by a `have`, and so is an equation of pairs before `(congrArg Prod.fst …)` is
   taken of it (`OPEN.md` §1). A `fulfills` of a group stands below the last function its
-  members reach, which may be far below the group. 55 functions in 6 groups still state a
+  members reach, which may be far below the group. 52 functions in 5 groups still state a
   structural clause or none and are programs (`group_measure`). A size is the one derivation a
   build reads: its functions are definitions with no program, the loader makes them under
   `--unchecked` too, and the Rust reader passes the form over.
