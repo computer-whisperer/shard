@@ -1,9 +1,10 @@
 ;;; v3/models/x86/x86.shard — the x86-64 processor, as far as a consumer has needed it
 ;;; (docs/COMPILE.md §4): the registers, the flags, a memory of bytes with what is mapped, and
 ;;; one step — the bytes at the program counter decoded to one instruction, and that instruction
-;;; executed. A program is bytes. Bytes that decode to nothing here, and an access outside what
-;;; is mapped, have no rule: the step is stuck, and says why. Opcodes are written in decimal, the
-;;; reader having no other numeral, with the manual's hexadecimal beside them.
+;;; executed. A program is bytes. Bytes that decode to nothing here, an access outside what is
+;;; mapped and a jump on a flag the model does not keep have no rule: the step is stuck, and says
+;;; why. Opcodes are written in decimal, the reader having no other numeral, with the manual's
+;;; hexadecimal beside them.
 (import "../../std/mem.shard")
 (import "word.shard")
 (use std.mem)
@@ -65,22 +66,23 @@
     (14 (with Regs r (r14 v)))
     (_ (with Regs r (r15 v)))))
 
-;; the four flags a conditional jump reads: carry, zero, sign, overflow
+;; the four flags a conditional jump reads: carry, zero, sign, overflow. The parity and the
+;; auxiliary carry are not kept: a jump on parity has no rule
 (record Flags (cf Bool) (zf Bool) (sf Bool) (of Bool))
 
 ;; a mapped range of addresses [lo, hi) and what it permits: 4 read, 2 write, 1 execute
 (record Seg (lo Nat) (hi Nat) (perm Nat))
-;; whether a range holds address a and permits all of `need`
-(fn seg_has ((s Seg) (a Nat) (need Nat)) Bool
+;; whether a range holds the n bytes from address a and permits all of `need`
+(fn seg_holds ((s Seg) (a Nat) (n Nat) (need Nat)) Bool
   (if (<= (Seg.lo s) a)
-    (if (< a (Seg.hi s)) (if (= (band (Seg.perm s) need) need) true false) false)
+    (if (<= (+ a n) (Seg.hi s)) (if (= (band (Seg.perm s) need) need) true false) false)
     false))
-;; whether some mapped range does
-(fn mapped ((segs (List Seg)) (a Nat) (need Nat)) Bool
+;; whether some one mapped range does: an access across two ranges has no rule
+(fn mapped ((segs (List Seg)) (a Nat) (n Nat) (need Nat)) Bool
   (measure (struct segs))
   (match segs
     (nil false)
-    ((cons s r) (if (seg_has s a need) true (mapped r a need)))))
+    ((cons s r) (if (seg_holds s a n need) true (mapped r a n need)))))
 
 ;; every register zero, every flag clear
 (fn regs_zero () Regs
@@ -100,6 +102,44 @@
 (record Cpu (regs Regs) (rip (BitVec 64)) (flags Flags) (mem Mem) (segs (List Seg)))
 (fn cpu_at ((entry Nat) (r Regs) (f Flags) (m Mem) (segs (List Seg))) Cpu
   (make Cpu (regs r) (rip (w64 entry)) (flags f) (mem m) (segs segs)))
+(fn reg ((c Cpu) (r Nat)) (BitVec 64) (reg_get (Cpu.regs c) r))
+(fn set_reg ((c Cpu) (r Nat) (v (BitVec 64))) Cpu (with Cpu c (regs (reg_set (Cpu.regs c) r v))))
+(fn set_flags ((c Cpu) (f Flags)) Cpu (with Cpu c (flags f)))
+
+;; ---- memory ---------------------------------------------------------------------------------
+;; four bytes, the least significant first
+(fn le32 ((b0 Nat) (b1 Nat) (b2 Nat) (b3 Nat)) Nat (+ b0 (* 256 (+ b1 (* 256 (+ b2 (* 256 b3)))))))
+;; the little-endian number of four, of eight bytes at address a
+(fn mem_le32 ((m Mem) (a Nat)) Nat
+  (le32 (mem_get m a) (mem_get m (+ a 1)) (mem_get m (+ a 2)) (mem_get m (+ a 3))))
+(fn mem_le64 ((m Mem) (a Nat)) Nat (+ (mem_le32 m a) (* 4294967296 (mem_le32 m (+ a 4)))))
+;; v stored so (a byte read is its store mod 256)
+(fn mem_put32 ((m Mem) (a Nat) (v Nat)) Mem
+  (mem_set (mem_set (mem_set (mem_set m a v) (+ a 1) (/ v 256)) (+ a 2) (/ v 65536)) (+ a 3)
+    (/ v 16777216)))
+(fn mem_put64 ((m Mem) (a Nat) (v Nat)) Mem (mem_put32 (mem_put32 m a v) (+ a 4) (/ v 4294967296)))
+
+;; a read: the word, or the address that is not mapped to read; a write likewise
+(type Rd (RdOk (BitVec 64)) (RdFault Nat))
+(type Wr (WrOk Cpu) (WrFault Nat))
+(fn load64 ((c Cpu) (a Nat)) Rd
+  (if (mapped (Cpu.segs c) a 8 4) (RdOk (w64 (mem_le64 (Cpu.mem c) a))) (RdFault a)))
+(fn store64 ((c Cpu) (a Nat) (v (BitVec 64))) Wr
+  (if (mapped (Cpu.segs c) a 8 2) (WrOk (with Cpu c (mem (mem_put64 (Cpu.mem c) a (w64_val v)))))
+  (WrFault a)))
+
+;; an operand that is a register or memory: a register, or the eight bytes at a base register
+;; plus a displacement (a word's number)
+(type Rm (RmReg Nat) (RmMem Nat Nat))
+(fn ea ((c Cpu) (base Nat) (d Nat)) Nat (w64_val (w64_add (reg c base) (w64 d))))
+(fn rd ((c Cpu) (rm Rm)) Rd
+  (match rm
+    ((RmReg r) (RdOk (reg c r)))
+    ((RmMem b d) (load64 c (ea c b d)))))
+(fn wr ((c Cpu) (rm Rm) (v (BitVec 64))) Wr
+  (match rm
+    ((RmReg r) (WrOk (set_reg c r v)))
+    ((RmMem b d) (store64 c (ea c b d) v))))
 
 ;; ---- fetch ----------------------------------------------------------------------------------
 ;; a count that recursion descends by structure
@@ -114,39 +154,247 @@
   (measure (struct n))
   (match n
     (FZ nil)
-    ((FS n1) (if (mapped segs a 1) (cons (mem_get m a) (fetch segs m (+ a 1) n1)) nil))))
+    ((FS n1) (if (mapped segs a 1 1) (cons (mem_get m a) (fetch segs m (+ a 1) n1)) nil))))
 
 ;; ---- instructions ---------------------------------------------------------------------------
+;; the two-operand arithmetic the opcodes 00–3F and the group 81, 83 share, by its number there:
+;; 0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp (2 and 3, with carry, are not here)
+(type Bop (BAdd) (BOr) (BAnd) (BSub) (BXor) (BCmp))
+;; an immediate or a jump's displacement is the number of the 64-bit word it extends to
 (type Instr
   (MovRI32 Nat Nat)  ; mov r32, imm32 (B8+r id): the register is the immediate, its high half zero
+  (MovRI64 Nat Nat)  ; mov r64, imm64 (REX.W B8+r io)
+  (MovRmR Rm Nat)  ; mov r/m64, r64 (REX.W 89 /r)
+  (MovRRm Nat Rm)  ; mov r64, r/m64 (REX.W 8B /r)
+  (AluRmR Bop Rm Nat)  ; op r/m64, r64 (REX.W 01 09 21 29 31 39 /r)
+  (AluRRm Bop Nat Rm)  ; op r64, r/m64 (REX.W 03 0B 23 2B 33 3B /r)
+  (AluRmI Bop Rm Nat)  ; op r/m64, imm (REX.W 81 /n id, 83 /n ib), the immediate sign-extended
+  (Jcc Nat Nat)  ; jcc rel32 (0F 80+cc cd): the condition's number, the displacement
+  (Jmp Nat)  ; jmp rel32 (E9 cd)
+  (Call Nat)  ; call rel32 (E8 cd)
+  (Ret)  ; ret (C3)
+  (Push Nat)  ; push r64 (50+r)
+  (Pop Nat)  ; pop r64 (58+r)
   (Syscall))  ; syscall (0F 05): control passes to the operating system
 
-;; four bytes, the least significant first
-(fn le32 ((b0 Nat) (b1 Nat) (b2 Nat) (b3 Nat)) Nat (+ b0 (* 256 (+ b1 (* 256 (+ b2 (* 256 b3)))))))
+;; ---- decode ---------------------------------------------------------------------------------
+(fn within ((lo Nat) (x Nat) (hi Nat)) Bool (if (<= lo x) (if (< x hi) true false) false))
+(fn dec_ok ((i Instr) (len Nat)) (Option (Prod Instr Nat)) (some (Prod.mk i len)))
+;; the first byte; the first four and the first eight as a number; the bytes after one, four
+(fn imm8 ((bs (List Nat))) (Option Nat)
+  (match bs
+    (nil none)
+    ((cons b _) (some b))))
+(fn imm32 ((bs (List Nat))) (Option Nat)
+  (match bs
+    ((cons i0 (cons i1 (cons i2 (cons i3 _)))) (some (le32 i0 i1 i2 i3)))
+    (_ none)))
+(fn imm64 ((bs (List Nat))) (Option Nat)
+  (match bs
+    ((cons i0 (cons i1 (cons i2 (cons i3 r))))
+     (match (imm32 r)
+       (none none)
+       ((some hi) (some (+ (le32 i0 i1 i2 i3) (* 4294967296 hi))))))
+    (_ none)))
+(fn drop1 ((bs (List Nat))) (List Nat)
+  (match bs
+    (nil nil)
+    ((cons _ r) r)))
+(fn drop4 ((bs (List Nat))) (List Nat)
+  (match bs
+    ((cons _ (cons _ (cons _ (cons _ r)))) r)
+    (_ nil)))
+(fn bop_of ((k Nat)) (Option Bop)
+  (match k
+    (0 (some BAdd))
+    (1 (some BOr))
+    (4 (some BAnd))
+    (5 (some BSub))
+    (6 (some BXor))
+    (7 (some BCmp))
+    (_ none)))
 
-;; the instruction a byte sequence starts with, and its length
+;; a ModRM byte read: the register field, the register-or-memory operand, the bytes after the
+;; operand's, and how many bytes the operand took
+(type MR (MR Nat Rm (List Nat) Nat))
+;; a displacement of one byte (md 1) or of four (md 2), after `used` bytes
+(fn with_disp ((md Nat) (rg Nat) (base Nat) (r (List Nat)) (used Nat)) (Option MR)
+  (if (= md 1)
+    (match (imm8 r)
+      (none none)
+      ((some d) (some (MR rg (RmMem base (sx8 d)) (drop1 r) (+ used 1)))))
+    (match (imm32 r)
+      (none none)
+      ((some d) (some (MR rg (RmMem base (sx32 d)) (drop4 r) (+ used 4)))))))
+;; a SIB byte, in its one form here: no index (the index field 4, the prefix's X clear). With md
+;; 0 a base field of 5 means no base register, which has no rule
+(fn sib_at ((md Nat) (rg Nat) (x Nat) (b Nat) (r (List Nat))) (Option MR)
+  (match r
+    (nil none)
+    ((cons s r1)
+     (if (= (% (/ s 8) 8) 4)
+       (if (= x 0)
+         (if (= md 0) (if (= (% s 8) 5) none (some (MR rg (RmMem (+ (% s 8) (* 8 b)) 0) r1 2)))
+         (with_disp md rg (+ (% s 8) (* 8 b)) r1 2))
+         none)
+       none))))
+;; the fields of a ModRM byte: md 3 a register; a register-or-memory field of 4 a SIB byte; md 0
+;; with a field of 5 an address from the program counter, which has no rule
+(fn modrm_at ((md Nat) (rg Nat) (rm Nat) (x Nat) (b Nat) (r (List Nat))) (Option MR)
+  (if (= md 3) (some (MR rg (RmReg (+ rm (* 8 b))) r 1))
+  (if (= rm 4) (sib_at md rg x b r)
+  (if (= md 0) (if (= rm 5) none (some (MR rg (RmMem (+ rm (* 8 b)) 0) r 1)))
+  (with_disp md rg (+ rm (* 8 b)) r 1)))))
+;; under the prefix's R, X and B bits
+(fn modrm ((rr Nat) (x Nat) (b Nat) (bs (List Nat))) (Option MR)
+  (match bs
+    (nil none)
+    ((cons m r) (modrm_at (/ m 64) (+ (% (/ m 8) 8) (* 8 rr)) (% m 8) x b r))))
+
+;; after 0F: syscall (05), with no prefix; jcc (80+cc)
+(fn decode_0f ((pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
+  (match bs
+    (nil none)
+    ((cons o2 r)
+     (if (= o2 5) (if (= pl 0) (dec_ok Syscall 2) none)
+     (if (within 128 o2 144)
+       (match (imm32 r)
+         (none none)
+         ((some d) (dec_ok (Jcc (- o2 128) (sx32 d)) (+ pl 6))))
+       none)))))
+;; B8+r: eight bytes of immediate under the prefix's W, four without
+(fn decode_mov_ri ((w Nat) (r Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
+  (if (= w 1)
+    (match (imm64 bs)
+      (none none)
+      ((some i) (dec_ok (MovRI64 r i) (+ pl 9))))
+    (match (imm32 bs)
+      (none none)
+      ((some i) (dec_ok (MovRI32 r i) (+ pl 5))))))
+;; the group 81, 83: the operation is the ModRM byte's register field
+(fn decode_alu_imm ((n Nat) (rm Rm) (i Nat) (len Nat)) (Option (Prod Instr Nat))
+  (match (bop_of n)
+    (none none)
+    ((some o) (dec_ok (AluRmI o rm i) len))))
+;; an opcode with a ModRM byte, under the prefix's W: 89, 8B; 81, 83; and of 00–3F those whose
+;; low three bits are 1 (to the register-or-memory operand) or 3 (to the register)
+(fn decode_w ((op Nat) (rr Nat) (x Nat) (b Nat) (pl Nat) (r (List Nat))) (Option (Prod Instr Nat))
+  (match (modrm rr x b r)
+    (none none)
+    ((some (MR rg rm rest used))
+     (if (= op 137) (dec_ok (MovRmR rm rg) (+ pl (+ 1 used)))
+     (if (= op 139) (dec_ok (MovRRm rg rm) (+ pl (+ 1 used)))
+     (if (= op 129)
+       (match (imm32 rest)
+         (none none)
+         ((some i) (decode_alu_imm (% rg 8) rm (sx32 i) (+ pl (+ 5 used)))))
+     (if (= op 131)
+       (match (imm8 rest)
+         (none none)
+         ((some i) (decode_alu_imm (% rg 8) rm (sx8 i) (+ pl (+ 2 used)))))
+     (if (< op 64)
+       (match (bop_of (/ op 8))
+         (none none)
+         ((some o)
+          (if (= (% op 8) 1) (dec_ok (AluRmR o rm rg) (+ pl (+ 1 used)))
+          (if (= (% op 8) 3) (dec_ok (AluRRm o rg rm) (+ pl (+ 1 used)))
+          none))))
+       none))))))))
+;; an opcode after a prefix of pl bytes (0 or 1) with the bits w, rr, x, b
+(fn decode_op ((w Nat) (rr Nat) (x Nat) (b Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
+  (match bs
+    (nil none)
+    ((cons op r)
+     (if (= op 15) (decode_0f pl r)
+     (if (= op 195) (dec_ok Ret (+ pl 1))
+     (if (= op 232)
+       (match (imm32 r)
+         (none none)
+         ((some d) (dec_ok (Call (sx32 d)) (+ pl 5))))
+     (if (= op 233)
+       (match (imm32 r)
+         (none none)
+         ((some d) (dec_ok (Jmp (sx32 d)) (+ pl 5))))
+     (if (within 80 op 88) (dec_ok (Push (+ (- op 80) (* 8 b))) (+ pl 1))
+     (if (within 88 op 96) (dec_ok (Pop (+ (- op 88) (* 8 b))) (+ pl 1))
+     (if (within 184 op 192) (decode_mov_ri w (+ (- op 184) (* 8 b)) pl r)
+     (if (= w 1) (decode_w op rr x b pl r)
+     none)))))))))))
+;; the instruction a byte sequence starts with, and its length: a REX prefix (40–4F) first, or
+;; none. No other prefix has a rule
 (fn decode ((bs (List Nat))) (Option (Prod Instr Nat))
   (match bs
     (nil none)
     ((cons b0 r)
-     (if (= b0 15) (decode_0f r)
-     (if (<= 184 b0) (if (< b0 192) (decode_mov_ri (- b0 184) r) none)
-     none)))))
-;; after 0F
-(fn decode_0f ((bs (List Nat))) (Option (Prod Instr Nat))
-  (match bs
-    (nil none)
-    ((cons b1 _) (if (= b1 5) (some (Prod.mk Syscall 2)) none))))
-;; B8+r: four bytes of immediate
-(fn decode_mov_ri ((r Nat) (bs (List Nat))) (Option (Prod Instr Nat))
-  (match bs
-    ((cons i0 (cons i1 (cons i2 (cons i3 _)))) (some (Prod.mk (MovRI32 r (le32 i0 i1 i2 i3)) 5)))
+     (if (within 64 b0 80) (decode_op (% (/ b0 8) 2) (% (/ b0 4) 2) (% (/ b0 2) 2) (% b0 2) 1 r)
+     (decode_op 0 0 0 0 0 (cons b0 r))))))
+
+;; ---- arithmetic and flags -------------------------------------------------------------------
+(fn differ ((a Bool) (b Bool)) Bool (if a (if b false true) b))
+(fn is_zero ((r (BitVec 64))) Bool (if (= (w64_val r) 0) true false))
+;; after a sum: carry out of the top bit; overflow where the operands' signs agree and the
+;; result's differs
+(fn flags_add ((a (BitVec 64)) (b (BitVec 64)) (r (BitVec 64))) Flags
+  (make Flags (cf (if (<= 18446744073709551616 (+ (w64_val a) (w64_val b))) true false))
+    (zf (is_zero r))
+    (sf (w64_msb r))
+    (of (if (differ (w64_msb a) (w64_msb b)) false (differ (w64_msb r) (w64_msb a))))))
+;; after a difference a - b: a borrow into the top bit; overflow where the operands' signs
+;; differ and the result's is not a's
+(fn flags_sub ((a (BitVec 64)) (b (BitVec 64)) (r (BitVec 64))) Flags
+  (make Flags (cf (if (< (w64_val a) (w64_val b)) true false)) (zf (is_zero r)) (sf (w64_msb r))
+    (of (if (differ (w64_msb a) (w64_msb b)) (differ (w64_msb r) (w64_msb a)) false))))
+;; after and, or, xor: carry and overflow clear
+(fn flags_logic ((r (BitVec 64))) Flags
+  (make Flags (cf false) (zf (is_zero r)) (sf (w64_msb r)) (of false)))
+(fn alu_res ((op Bop) (a (BitVec 64)) (b (BitVec 64))) (BitVec 64)
+  (match op
+    (BAdd (w64_add a b))
+    (BOr (w64_or a b))
+    (BAnd (w64_and a b))
+    (BSub (w64_sub a b))
+    (BXor (w64_xor a b))
+    (BCmp (w64_sub a b))))
+(fn alu_flags ((op Bop) (a (BitVec 64)) (b (BitVec 64))) Flags
+  (match op
+    (BAdd (flags_add a b (w64_add a b)))
+    (BOr (flags_logic (w64_or a b)))
+    (BAnd (flags_logic (w64_and a b)))
+    (BSub (flags_sub a b (w64_sub a b)))
+    (BXor (flags_logic (w64_xor a b)))
+    (BCmp (flags_sub a b (w64_sub a b)))))
+;; cmp sets the flags and writes nothing
+(fn alu_writes ((op Bop)) Bool
+  (match op
+    (BCmp false)
+    (_ true)))
+;; a condition's number against the flags: 0 o, 2 b, 4 e, 6 be, 8 s, C l, E le, and each odd
+;; number the negation of the one before; A and B read the parity, which is not kept
+(fn cc_holds ((cc Nat) (f Flags)) (Option Bool)
+  (match cc
+    (0 (some (Flags.of f)))
+    (1 (some (not (Flags.of f))))
+    (2 (some (Flags.cf f)))
+    (3 (some (not (Flags.cf f))))
+    (4 (some (Flags.zf f)))
+    (5 (some (not (Flags.zf f))))
+    (6 (some (or (Flags.cf f) (Flags.zf f))))
+    (7 (some (not (or (Flags.cf f) (Flags.zf f)))))
+    (8 (some (Flags.sf f)))
+    (9 (some (not (Flags.sf f))))
+    (12 (some (differ (Flags.sf f) (Flags.of f))))
+    (13 (some (not (differ (Flags.sf f) (Flags.of f)))))
+    (14 (some (or (Flags.zf f) (differ (Flags.sf f) (Flags.of f)))))
+    (15 (some (not (or (Flags.zf f) (differ (Flags.sf f) (Flags.of f))))))
     (_ none)))
 
 ;; ---- one step -------------------------------------------------------------------------------
 ;; why a step has no rule
 (type Why
   (WDecode Nat (List Nat))  ; the bytes at this address are no instruction of the model
+  (WLoad Nat)  ; eight bytes at this address are not mapped to read
+  (WStore Nat)  ; eight bytes at this address are not mapped to write
+  (WCond Nat)  ; a jump on a condition whose flag the model does not keep
   (WSyscall Nat)  ; a system call the boundary has no rule for
   (WFile))  ; a file the boundary does not load
 (type Step
@@ -154,12 +402,63 @@
   (SSys Cpu)  ; a system call, the program counter past it
   (SStuck Why))
 
-;; the program counter moved past an instruction of the given length
-(fn advance ((c Cpu) (len Nat)) Cpu (with Cpu c (rip (w64 (+ (w64_val (Cpu.rip c)) len)))))
+;; the address after an instruction of the given length; the state at a program counter
+(fn next_rip ((c Cpu) (len Nat)) (BitVec 64) (w64 (+ (w64_val (Cpu.rip c)) len)))
+(fn goto ((c Cpu) (pc (BitVec 64))) Step (SNext (with Cpu c (rip pc))))
+(fn stored ((w Wr) (pc (BitVec 64))) Step
+  (match w
+    ((WrFault a) (SStuck (WStore a)))
+    ((WrOk c1) (goto c1 pc))))
+;; a word pushed: stored below the stack pointer, which then points at it
+(fn push64 ((c Cpu) (v (BitVec 64))) Wr
+  (match (store64 c (w64_val (w64_sub (reg c 4) (w64 8))) v)
+    ((WrFault a) (WrFault a))
+    ((WrOk c1) (WrOk (set_reg c1 4 (w64_sub (reg c 4) (w64 8)))))))
+;; an operation's flags set and its result written, where it writes one
+(fn alu_to_rm ((c Cpu) (op Bop) (rm Rm) (a (BitVec 64)) (b (BitVec 64)) (pc (BitVec 64))) Step
+  (if (alu_writes op) (stored (wr (set_flags c (alu_flags op a b)) rm (alu_res op a b)) pc)
+  (goto (set_flags c (alu_flags op a b)) pc)))
+(fn alu_to_reg ((c Cpu) (op Bop) (r Nat) (a (BitVec 64)) (b (BitVec 64)) (pc (BitVec 64))) Step
+  (if (alu_writes op) (goto (set_reg (set_flags c (alu_flags op a b)) r (alu_res op a b)) pc)
+  (goto (set_flags c (alu_flags op a b)) pc)))
+
 (fn exec ((c Cpu) (i Instr) (len Nat)) Step
   (match i
-    ((MovRI32 r v) (SNext (advance (with Cpu c (regs (reg_set (Cpu.regs c) r (w64 v)))) len)))
-    (Syscall (SSys (advance c len)))))
+    ((MovRI32 r v) (goto (set_reg c r (w64 v)) (next_rip c len)))
+    ((MovRI64 r v) (goto (set_reg c r (w64 v)) (next_rip c len)))
+    ((MovRmR rm r) (stored (wr c rm (reg c r)) (next_rip c len)))
+    ((MovRRm r rm)
+     (match (rd c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (goto (set_reg c r v) (next_rip c len)))))
+    ((AluRmR op rm r)
+     (match (rd c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (alu_to_rm c op rm v (reg c r) (next_rip c len)))))
+    ((AluRRm op r rm)
+     (match (rd c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (alu_to_reg c op r (reg c r) v (next_rip c len)))))
+    ((AluRmI op rm i)
+     (match (rd c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (alu_to_rm c op rm v (w64 i) (next_rip c len)))))
+    ((Jcc cc d)
+     (match (cc_holds cc (Cpu.flags c))
+       (none (SStuck (WCond cc)))
+       ((some t) (goto c (if t (w64_add (next_rip c len) (w64 d)) (next_rip c len))))))
+    ((Jmp d) (goto c (w64_add (next_rip c len) (w64 d))))
+    ((Call d) (stored (push64 c (next_rip c len)) (w64_add (next_rip c len) (w64 d))))
+    (Ret
+      (match (load64 c (w64_val (reg c 4)))
+        ((RdFault a) (SStuck (WLoad a)))
+        ((RdOk v) (goto (set_reg c 4 (w64_add (reg c 4) (w64 8))) v))))
+    ((Push r) (stored (push64 c (reg c r)) (next_rip c len)))
+    ((Pop r)
+     (match (load64 c (w64_val (reg c 4)))
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (goto (set_reg (set_reg c 4 (w64_add (reg c 4) (w64 8))) r v) (next_rip c len)))))
+    (Syscall (SSys (with Cpu c (rip (next_rip c len)))))))
 (fn step ((c Cpu)) Step
   (match (decode (fetch (Cpu.segs c) (Cpu.mem c) (w64_val (Cpu.rip c)) fifteen))
     (none

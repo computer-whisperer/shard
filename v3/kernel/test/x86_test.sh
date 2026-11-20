@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # v3/kernel/test/x86_test.sh — the x86-64 model (v3/models/x86), loaded, and held to the
-# processor: the model, its Linux boundary, the file writer and the runner load with every
-# function a definition and nothing refused or pending; `exit42_run` and `exit42_exits` —
-# the model's run of the first program's file ends the process with status 42, from any
-# registers and flags — are accepted on no axiom but `propext`; the file is written by the
-# model's own writer; the runner's line for it is `exit 42`; and on an x86-64 Linux machine the
-# file is run and the processor's exit status is the model's. A file the model does not load is
-# `stuck` with its reason. On another machine the processor's run is skipped, and said so.
+# processor. The load: the model, its Linux boundary, the file writer and the runner, every
+# function a definition, nothing refused or pending; `exit42_run` and `exit42_exits` — the
+# model's run of the first program's file ends the process with status 42, from whatever the
+# kernel leaves — accepted on no axiom but `propext`. The runs: the first program's file, written
+# by the model's own writer, and the programs of v3/models/x86/test/*.hex, each run by the model
+# from the command line and, on an x86-64 Linux machine, by the processor: where the model's run
+# exits, the processor's exits with the same status. A file the model does not load, an
+# instruction it does not have and a read of an unmapped address are `stuck` with the reason. On
+# another machine the processor's runs are skipped, and said so.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -36,25 +38,66 @@ for t in exit42_run exit42_exits; do
   checks=$((checks+1)); case "$axs" in ""|propext) ;; *) bad "models.x86.exit42.$t rests on $axs" ;; esac
 done
 
-# ---- the file, the model's run of it, the processor's ------------------------------------------
+# ---- the first program's file: written, run by the model, run by the processor ------------------
+RUN=("${LOAD[@]}" --run models.x86.run_main.main $M/run_main.shard --)
 "${LOAD[@]}" --run models.x86.exit42.main $M/exit42.shard -- "$OUT/exit42" > "$OUT/write.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] && [ "$(stat -c %s "$OUT/exit42" 2>/dev/null)" = 132 ] || { bad "the writer did not write the 132 bytes (exit $rc)"; head -3 "$OUT/write.txt" | cut -c1-200; }
-model() { "${LOAD[@]}" --run models.x86.run_main.main $M/run_main.shard -- "$1" "$2" 2>&1 | tail -1; }
-m=$(model "$OUT/exit42" 100)
-checks=$((checks+1)); [ "$m" = "exit 42" ] || bad "the model's run of the file is not exit 42: $m"
-# out of steps: two steps do not reach the system call
-m=$(model "$OUT/exit42" 2)
-checks=$((checks+1)); [ "$m" = "out of steps at 4194434" ] || bad "two steps of the model do not stop at the system call's address: $m"
-# a file the model does not load
 printf '\177ELF' > "$OUT/junk"
-m=$(model "$OUT/junk" 100)
-checks=$((checks+1)); [ "$m" = "stuck: not a file the model loads" ] || bad "a file of four bytes is not refused by the model: $m"
-if [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ]; then
-  chmod +x "$OUT/exit42"; "$OUT/exit42"; rc=$?
-  checks=$((checks+1)); [ "$rc" = 42 ] || bad "the processor's exit status is $rc, the model's 42"
+"${RUN[@]}" run 100 "$OUT/exit42" "$OUT/junk" > "$OUT/first.txt" 2>&1
+checks=$((checks+1)); [ "$(sed -n 1p "$OUT/first.txt")" = "exit 42" ] || bad "the model's run of the file is not exit 42: $(sed -n 1p "$OUT/first.txt")"
+checks=$((checks+1)); [ "$(sed -n 2p "$OUT/first.txt")" = "stuck: not a file the model loads" ] || bad "a file of four bytes is not refused by the model: $(sed -n 2p "$OUT/first.txt")"
+# out of steps: two steps do not reach the system call
+m=$("${RUN[@]}" run 2 "$OUT/exit42" 2>&1 | tail -1)
+checks=$((checks+1)); [ "$m" = "out of steps at 4194434" ] || bad "two steps of the model do not stop at the system call's address: $m"
+onchip=0; [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ] && onchip=1
+# a file run by the processor: `exit N`, or `killed` where the shell reports a signal
+chip() { local err rc; chmod +x "$1"; err=$( { bash -c '"$0"; exit $?' "$1"; } 2>&1 >/dev/null ); rc=$?; if [ -n "$err" ]; then echo killed; else echo "exit $rc"; fi; }
+if [ $onchip = 1 ]; then
+  checks=$((checks+1)); [ "$(chip "$OUT/exit42")" = "exit 42" ] || bad "the processor's run of the file is $(chip "$OUT/exit42"), the model's exit 42"
 else
-  echo "x86_test: not an x86-64 Linux machine: the processor's run is skipped"
+  echo "x86_test: not an x86-64 Linux machine: the processor's runs are skipped"
 fi
+
+# ---- the programs of test/*.hex -----------------------------------------------------------------
+# A file is hexadecimal bytes with `;` comments. Where it holds `KK`, it is eight programs, KK
+# running F8..FF. Its comments state `; statuses: N…` (one for each program: the model's line is
+# `exit N`) or `; model: LINE` (the model's line), and may state `; processor: exit N` or
+# `; processor: killed`. Each program is wrapped by the model's writer and run by the model;
+# where the model's run exits, the processor's run of the same file must exit with that status.
+hex2bin() { local h; for h in $(sed 's/;.*//' "$1" | tr -s ' \n' ' '); do printf "\\x${h/KK/$2}"; done; }
+pairs=(); files=(); wants=(); chips=()
+for f in $M/test/*.hex; do
+  n=$(basename "$f" .hex)
+  if sed 's/;.*//' "$f" | grep -q KK; then ks="F8 F9 FA FB FC FD FE FF"; else ks="--"; fi
+  read -r -a st <<< "$(sed -n 's/^; statuses: //p' "$f")"
+  ml=$(sed -n 's/^; model: //p' "$f"); cl=$(sed -n 's/^; processor: //p' "$f")
+  j=0
+  for k in $ks; do
+    hex2bin "$f" "$k" > "$OUT/$n.$k.bin"
+    pairs+=("$OUT/$n.$k.bin" "$OUT/$n.$k"); files+=("$OUT/$n.$k")
+    if [ -n "$ml" ]; then wants+=("$ml"); elif [ -n "${st[$j]:-}" ]; then wants+=("exit ${st[$j]}"); else wants+=(""); fi
+    chips+=("$cl"); j=$((j+1))
+  done
+done
+"${RUN[@]}" wrap "${pairs[@]}" > "$OUT/wrap.txt" 2>&1; rc=$?
+checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the programs were not wrapped (exit $rc)"; head -3 "$OUT/wrap.txt" | cut -c1-200; }
+"${RUN[@]}" run 10000 "${files[@]}" > "$OUT/model.txt" 2>&1
+checks=$((checks+1)); [ "$(wc -l < "$OUT/model.txt")" = "${#files[@]}" ] || { bad "the model printed $(wc -l < "$OUT/model.txt") lines for ${#files[@]} programs"; head -3 "$OUT/model.txt" | cut -c1-200; }
+checks=$((checks+1)); [ "${#files[@]}" -ge 20 ] || bad "only ${#files[@]} programs were found under $M/test"
+i=0
+for e in "${files[@]}"; do
+  m=$(sed -n "$((i+1))p" "$OUT/model.txt"); name=$(basename "$e")
+  checks=$((checks+1)); [ -n "${wants[$i]}" ] || bad "$name states no expectation (statuses: or model:)"
+  checks=$((checks+1)); [ -z "${wants[$i]}" ] || [ "$m" = "${wants[$i]}" ] || bad "$name: the model's run is '$m', the file states '${wants[$i]}'"
+  if [ $onchip = 1 ]; then
+    c=$(chip "$e")
+    case "$m" in
+      "exit "*) checks=$((checks+1)); [ "$c" = "$m" ] || bad "$name: the model's run is '$m', the processor's '$c'" ;;
+    esac
+    checks=$((checks+1)); [ -z "${chips[$i]}" ] || [ "$c" = "${chips[$i]}" ] || bad "$name: the processor's run is '$c', the file states '${chips[$i]}'"
+  fi
+  i=$((i+1))
+done
 
 echo "x86_test: $checks checks, $fail failed"
 exit $fail

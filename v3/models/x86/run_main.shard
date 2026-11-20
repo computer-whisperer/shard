@@ -1,23 +1,30 @@
 ;;; v3/models/x86/run_main.shard — the model run on a file from the command line: the file's
-;;; bytes loaded as Linux would, the processor stepped from zeroed registers and cleared flags
-;;; for at most the count given, and how the run ended printed as one line — `exit N`; `stuck`
+;;; bytes loaded as Linux would, the processor stepped from `start_zero` for at most the count
+;;; given, and how the run ended printed as one line — `exit N`; `stuck`
 ;;; with the reason, the address and the bytes found there; `out of steps`. The same file run by
 ;;; the real processor is what the model is held to (kernel/test/x86_test.sh).
 ;;;
-;;;   load.shard --root v3 --init … --run models.x86.run_main.main v3/models/x86/run_main.shard -- FILE STEPS
+;;;   load.shard --root v3 --init … --run models.x86.run_main.main v3/models/x86/run_main.shard -- run STEPS FILE…
+;;;   … -- wrap CODE FILE …     the bytes of CODE as the executable file FILE that runs them
 (import "../../std/bytes.shard")
 (import "../../std/derive.shard")
 (import "../../std/host.shard")
 (import "../../std/list.shard")
+(import "elf.shard")
 (import "linux.shard")
 (use std.bytes)
 (use std.derive)
 (use std.host)
+(use std.mem)
+(use models.x86.elf)
 (use models.x86.linux)
 (use models.x86.word)
 (use models.x86.x86)
 (use models.x86.linux.Res)
+(use models.x86.linux.Start)
+(use models.x86.x86.Seg)
 (use models.x86.x86.Why)
+(use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
 
@@ -34,26 +41,89 @@
     ((cons b r) (cons 32 (hex2 b (hex_bytes r))))))
 
 ;; how a run ended, as a line
+(fn at_address ((what String) (a Nat) (rest (List Nat))) (List Nat)
+  (List.append (text what) (Nat.renderOnto a rest)))
 (fn show_why ((y Why)) (List Nat)
   (match y
     ((WDecode a bs)
-     (List.append (text "stuck: no instruction of the model at ")
-       (Nat.renderOnto a (cons 58 (hex_bytes bs)))))
-    ((WSyscall n) (List.append (text "stuck: no rule for system call ") (Nat.renderOnto n nil)))
+     (at_address "stuck: no instruction of the model at " a (cons 58 (hex_bytes bs))))
+    ((WLoad a) (at_address "stuck: not mapped to read at " a nil))
+    ((WStore a) (at_address "stuck: not mapped to write at " a nil))
+    ((WCond cc) (at_address "stuck: no rule for a jump on condition " cc nil))
+    ((WSyscall n) (at_address "stuck: no rule for system call " n nil))
     (WFile (text "stuck: not a file the model loads"))))
 (fn show_res ((r Res)) (List Nat)
   (match r
-    ((RExit status) (List.append (text "exit ") (Nat.renderOnto status nil)))
+    ((RExit status) (at_address "exit " status nil))
     ((RStuck y) (show_why y))
-    ((ROut c) (List.append (text "out of steps at ") (Nat.renderOnto (w64_val (Cpu.rip c)) nil)))))
+    ((ROut c) (at_address "out of steps at " (w64_val (Cpu.rip c)) nil))))
 
-(fn main ((path ByteArray) (steps Nat) (w World)) World
+;; what the runner starts a process from: zeroed registers but the stack pointer, cleared flags,
+;; eight megabytes of zeroed stack below 7FFFFFFFF000, the stack pointer a page under its top
+(fn start_zero () Start
+  (MkStart (reg_set regs_zero 4 (w64 140737488347136)) flags_clear
+    (MkSeg 140737479962624 140737488351232 6)
+    mem_empty))
+
+;; ---- the command line ----------------------------------------------------------------------
+;;   run STEPS FILE…      each file run for at most STEPS steps, a line each
+;;   wrap SRC DST …       each SRC's bytes as code, wrapped as the executable file DST
+(fn same ((a (List Nat)) (b (List Nat))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x r)
+     (match b
+       (nil false)
+       ((cons y s) (if (= x y) (same r s) false))))))
+;; decimal digits as a number
+(fn nat_of ((ds (List Nat)) (acc Nat)) Nat
+  (measure (struct ds))
+  (match ds
+    (nil acc)
+    ((cons d r) (nat_of r (+ (* 10 acc) (- d 48))))))
+(fn fail ((w World)) World
+  (exit 2 (write_line (Bytes.ofNats (text "x86run: a file cannot be read or written")) w)))
+(fn run_one ((steps Nat) (path ByteArray) (w World)) World
   (match (read_file path w)
     ((Prod.mk r w1)
      (match r
-       (none (exit 2 (write_line (Bytes.ofNats (text "x86run: the file cannot be read")) w1)))
+       (none (fail w1))
        ((some bs)
         (write_line
-          (Bytes.ofNats
-            (show_res (run_file (fuel_of steps) (Bytes.toNats bs) regs_zero flags_clear)))
+          (Bytes.ofNats (show_res (run_file (fuel_of steps) (Bytes.toNats bs) start_zero)))
           w1))))))
+(fn run_each ((steps Nat) (paths (List ByteArray)) (w World)) World
+  (measure (struct paths))
+  (match paths
+    (nil w)
+    ((cons p r) (run_each steps r (run_one steps p w)))))
+(fn wrap_one ((src ByteArray) (dst ByteArray) (w World)) World
+  (match (read_file src w)
+    ((Prod.mk r w1)
+     (match r
+       (none (fail w1))
+       ((some bs)
+        (match (write_file dst (Bytes.ofNats (elf_exec (Bytes.toNats bs))) w1)
+          ((Prod.mk ok w2) (if ok w2 (fail w2)))))))))
+(fn wrap_each ((paths (List ByteArray)) (w World)) World
+  (measure (struct paths))
+  (match paths
+    ((cons src (cons dst r)) (wrap_each r (wrap_one src dst w)))
+    (_ w)))
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk args w1)
+     (match args
+       ((cons cmd rest)
+        (if (same (Bytes.toNats cmd) (text "wrap")) (wrap_each rest w1)
+        (match rest
+          ((cons steps files)
+           (if (same (Bytes.toNats cmd) (text "run"))
+             (run_each (nat_of (Bytes.toNats steps) 0) files w1)
+             (fail w1)))
+          (nil (fail w1)))))
+       (nil (fail w1))))))
