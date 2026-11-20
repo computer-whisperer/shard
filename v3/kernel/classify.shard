@@ -218,6 +218,7 @@
 ;; the type parameters are threaded (`(T Type)` binders, read_params; an unknown name binds none)
 (type TyRes (TyOk EType (List Name)) (TyErr Symbol (List Int)))
 (fn read_ety ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (s SExpr)) TyRes
+  (measure (SExpr.size s))
   (match s
     ((SSym x)
      (match (name_of_sym x)
@@ -309,7 +310,7 @@
 (fn read_etys
   ((es ESt) (sc Scope) (env CheckedEnv) (tps (List Name)) (ss (List SExpr)) (acc (List EType)))
   (Prod TyRes (List EType))
-  (measure (struct ss))
+  (measure (List_SExpr.size ss))
   (match ss
     (nil (Prod.mk (TyOk (ETVar 0) tps) (rev acc)))
     ((cons s r)
@@ -472,7 +473,7 @@
 
 (type TRes (TOk ETerm) (TErr Symbol (List Int)))
 (fn read_et ((r Rd) (s SExpr)) TRes
-  (measure (struct s))
+  (measure (* 8 (SExpr.size s)))
   (match s
     ((SNum k) (TOk (ELit (if (< k 0) (LInt k) (LNat k)))))  ; the kind is the sign
     ((SStr bs) (read_estr bs))
@@ -564,9 +565,11 @@
 ;; (HEAD E…): a constructor, a function or sig fn, an extern, a primitive — saturated.
 ;; `@HEAD` names every binder of a constant of K; `%` is `mod`'s other spelling
 (fn read_eapp ((r Rd) (h0 Symbol) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 5))
   (let ((h (sym_strip h0)))
     (read_eapp_at r (sym_explicit h0) (if (sym_eq h (sym "%")) (sym "mod") h) args)))
 (fn read_eapp_at ((r Rd) (ex Bool) (h Symbol) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 4))
   (match (name_of_sym h)
     (none (TErr (sym "bad_name") (chars_of_sym h)))
     ((some n)
@@ -653,6 +656,80 @@
          (utf8
            ": a binder that is implicit and runtime data — its argument exists at run time and is not written; write the call with @ and every argument"))
        (written_data fr ex checked args acc))))))
+;; What it keeps is no larger than what it was given: the readers that go on with the kept
+;; arguments descend by this (read_ety, read_known, read_row_ctor). A result's room is the
+;; size of its list, 0 for a refusal, so that the fact is stated of the call itself
+(def wr_room ((w Wr)) Nat
+  (match w
+    ((WrOk ss) (List_SExpr.size ss))
+    ((WrErr _ _) 0)))
+(theorem wr_room_ok ((ss (List SExpr))) (= (wr_room (WrOk ss)) (List_SExpr.size ss)) (by rfl))
+(theorem wr_room_err ((e Symbol) (m (List Int))) (= (wr_room (WrErr e m)) 0) (by rfl))
+(theorem sexprs_size_pos ((xs (List SExpr))) (<= 1 (List_SExpr.size xs))
+  (by
+    (cases xs
+      ((nil () (rw List_SExpr.size.eq_1) (arith)) (cons (x r) (rw List_SExpr.size.eq_2) (arith))))))
+(theorem rev_onto_size ((xs (List SExpr)))
+  (forall ((acc (List SExpr)))
+    (= (+ (List_SExpr.size (rev_onto xs acc)) 1) (+ (List_SExpr.size xs) (List_SExpr.size acc))))
+  (by
+    (induction xs
+      ((nil () (intro acc) (rw rev_onto.eq_1) (rw List_SExpr.size.eq_1) (arith))
+       (cons (x r ih) (intro acc) (rw rev_onto.eq_2)
+         (arith (ih (cons x acc)) (List_SExpr.size.eq_2 x acc) (List_SExpr.size.eq_2 x r)))))))
+(theorem written_data_room ((flags (List (Prod Bool Symbol))))
+  (forall ((ex Bool) (checked Bool) (args (List SExpr)) (acc (List SExpr)))
+    (<= (+ (wr_room (written_data flags ex checked args acc)) 1)
+      (+ (List_SExpr.size args) (List_SExpr.size acc))))
+  (by
+    (induction flags
+      ((nil () (intro ex checked args acc)
+         (cases args
+           ((nil () (rw written_data.eq_1) (rw wr_room_ok) (rw rev.eq_1)
+              (arith (rev_onto_size acc nil)))
+            (cons (a ar) (rw written_data.eq_2) (rw wr_room_err)
+              (arith (sexprs_size_pos (cons a ar)) (sexprs_size_pos acc))))))
+       (cons (f fr ih) (intro ex checked args acc)
+         (cases f
+           ((mk (explicit role) (rw written_data.eq_3)
+              (cases (bool_or ex explicit)
+                ((false ()
+                   (cases (sym_eq role (sym "keep"))
+                     ((false () (reduce) (exact (ih ex checked args acc)))
+                      (true () (reduce) (arith (sexprs_size_pos args))))))
+                 (true ()
+                   (cases (sym_eq role (sym "keep"))
+                     ((false ()
+                        (cases (bool_and (sym_eq role (sym "proof")) (bool_not checked))
+                          ((false ()
+                             (cases args
+                               ((nil () (reduce) (arith))
+                                (cons (a ar) (reduce)
+                                  (arith (ih ex checked ar acc) (List_SExpr.size.eq_2 a ar))))))
+                           (true ()
+                             (cases args ((nil () (reduce) (arith)) (cons (a ar) (reduce) (arith))))))))
+                      (true ()
+                        (cases args
+                          ((nil () (reduce) (arith))
+                           (cons (a ar) (reduce)
+                             (arith (ih ex checked ar (cons a acc)) (List_SExpr.size.eq_2 a acc)
+                               (List_SExpr.size.eq_2 a ar)))))))))))))))))))
+(theorem written_data_le
+  ((flags (List (Prod Bool Symbol)))
+   (ex Bool)
+   (checked Bool)
+   (args (List SExpr))
+   (ss (List SExpr))
+   (h (= (written_data flags ex checked args nil) (WrOk ss))))
+  (<= (List_SExpr.size ss) (List_SExpr.size args))
+  (by
+    (have g (<= (+ (wr_room (WrOk ss)) 1) (+ (List_SExpr.size args) (List_SExpr.size (@nil SExpr))))
+      (rw (<- h))
+      (exact (written_data_room flags ex checked args nil)))
+    (have g2
+      (<= (+ (List_SExpr.size ss) 1) (+ (List_SExpr.size args) (List_SExpr.size (@nil SExpr))))
+      (exact g))
+    (arith List_SExpr.size.eq_1)))
 ;; a head's binders' flags: the fn being read by its own written binders, else K's constant
 (fn head_flags ((r Rd) (id Name)) (Option (List (Prod Bool Symbol)))
   (match (rd_own r)
@@ -691,8 +768,31 @@
   (match bi
     (BDefault true)
     (_ false)))
+;; a type's written arguments that are types are no larger than those written (read_ety)
+(theorem type_args_room ((env CheckedEnv) (id Name) (ex Bool) (args (List SExpr)))
+  (<= (wr_room (type_args env id ex args)) (List_SExpr.size args))
+  (by
+    (rw type_args.eq_1)
+    (cases (type_flags env id)
+      ((none () (reduce) (rw wr_room_ok) (arith))
+       (some (flags) (reduce)
+         (arith (written_data_room flags ex true args nil) List_SExpr.size.eq_1))))))
+(theorem type_args_le
+  ((env CheckedEnv)
+   (id Name)
+   (ex Bool)
+   (args (List SExpr))
+   (ss (List SExpr))
+   (h (= (type_args env id ex args) (WrOk ss))))
+  (<= (List_SExpr.size ss) (List_SExpr.size args))
+  (by
+    (have g (<= (wr_room (WrOk ss)) (List_SExpr.size args))
+      (rw (<- h))
+      (exact (type_args_room env id ex args)))
+    (exact g)))
 ;; a head the E table knows: its runtime arguments among those written
 (fn read_known ((r Rd) (id Name) (k Int) (ex Bool) (args (List SExpr)) (kind Symbol)) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 2))
   (match (head_flags r id)
     ((some flags)
      (match (written_data flags ex (rd_checked r) args nil)
@@ -708,10 +808,12 @@
 ;; a primitive written by name: the table's entry; a decision of the registry is a value here —
 ;; Decidable's cell by its test, as the erasure writes it (erasure.shard erase_dec_value)
 (fn read_prim_head ((r Rd) (id Name) (k Int) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 3))
   (match (decision_test id)
     ((some p) (read_decision r p args))
     (none (read_head_args r (table_entry id) k args (sym "prim")))))
 (fn read_decision ((r Rd) (p Name) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 2))
   (match (read_head_args r p 2 args (sym "prim"))
     ((TErr e m) (TErr e m))
     ((TOk test) (TOk (EIf test (dec_true) (dec_false))))))
@@ -727,6 +829,7 @@
 ;; function: of a row the subject itself, of a structure the field's variable under a match on
 ;; its constructor (erasure.shard erase_const_at gives the same constants the same shapes)
 (fn k_head ((r Rd) (ex Bool) (n Name) (args (List SExpr))) (Option TRes)
+  (measure (+ (* 8 (List_SExpr.size args)) 2))
   (match (resolve (cx0 (rd_sc r) (rd_env r) nil nil) n)
     ((RName k _)
      (if (name_eq k (n1 (sym "dite"))) (some (read_ite r ex true args))
@@ -763,6 +866,7 @@
     (append (show_name k)
       (utf8 ": no realization attached — realize it first, or import the file that does"))))
 (fn read_row_ctor ((r Rd) (ex Bool) (k Name) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match (k_flags r k)
     (none
       (TErr (sym "no_realization")
@@ -794,6 +898,7 @@
 (fn read_proj_fn
   ((r Rd) (ex Bool) (k Name) (sn Name) (i Int) (lams (List Bool)) (args (List SExpr)))
   TRes
+  (measure (* 8 (List_SExpr.size args)))
   (if (< (if ex (len lams) (count_true lams)) (len args))
     (TErr (sym "function_value")
       (append (show_name k)
@@ -847,6 +952,7 @@
     (arith (last_of_lt args l hl))))
 ;; field i of the structure sn, of the subject x
 (fn read_proj ((r Rd) (sn Name) (i Int) (x SExpr)) TRes
+  (measure (+ (* 8 (SExpr.size x)) 1))
   (match (struct_ctor r sn)
     (none (TErr (sym "no_realization") (append (show_name sn) (utf8 " is not a structure"))))
     ((some c)
@@ -882,6 +988,7 @@
     (_ none)))
 ;; (proj S i E): field i of the structure S
 (fn read_eproj ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons (SSym sx) (cons (SNum i) (cons x nil)))
      (match (name_of_sym sx)
@@ -898,6 +1005,7 @@
 ;; hypothesis, a proof. Without @ the decision is an instance argument — it runs and is not
 ;; written — so the plain forms are `if` and `dif`
 (fn read_ite ((r Rd) (ex Bool) (dep Bool) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (if (bool_not ex)
     (TErr (sym "unwritten_argument")
       (utf8
@@ -915,6 +1023,7 @@
                ((TOk tb) (TOk (EIf c ta tb)))))))))
       (_ (TErr (sym "unsaturated") (utf8 "@ite and @dite take five arguments"))))))
 (fn read_branch ((r Rd) (dep Bool) (s SExpr)) TRes
+  (measure (+ (* 8 (SExpr.size s)) 1))
   (if (bool_not dep) (read_et r s)
   (match s
     ((SList (cons (SSym f) (cons (SList (cons (SList (cons (SSym x) _)) nil)) (cons body nil))))
@@ -929,6 +1038,7 @@
 ;; derived decision, a variable — is its value, whose cell the `if` reads
 (type CondHead (CondPrim Name) (CondBoolEq) (CondNone))
 (fn read_cond ((r Rd) (s SExpr)) TRes
+  (measure (+ (* 8 (SExpr.size s)) 1))
   (match s
     ((SList (cons (SSym h0) args))
      (match (name_of_sym (sym_strip h0))
@@ -954,12 +1064,14 @@
         (_ CondNone)))
     (_ CondNone)))
 (fn read_bool_eq ((r Rd) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons a (cons b nil))) (TOk (bool_eq_cond a b)))
     ((Prod.mk none _) (TErr (sym "unsaturated") (utf8 "instDecidableEqBool takes 2 arguments")))))
 ;; (dif h C A B): the `if` on C, its hypothesis a proof in both branches
 (fn read_edif ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons (SSym hn) (cons c (cons a (cons b nil))))
      (match (name_of_sym hn)
@@ -994,6 +1106,7 @@
 ;; with an expression (`Int.natAbs`) and the identity (`Int.ofNat`) keep their name as the
 ;; head until the body is typed (settle_ops) and are written out last (expand_rows)
 (fn init_row ((r Rd) (h Symbol) (n Name) (args (List SExpr))) (Option TRes)
+  (measure (+ (* 8 (List_SExpr.size args)) 3))
   (if (sym_eq h (sym "and")) (some (read_bool_row r (sym "and") args))
   (if (sym_eq h (sym "or")) (some (read_bool_row r (sym "or") args))
   (if (sym_eq h (sym "not")) (some (read_bool_row r (sym "not") args))
@@ -1012,12 +1125,14 @@
            (none none)))))))))
     (_ none))))))
 (fn read_succ ((r Rd) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons x nil))
      (TOk (EPrim (n2 (sym "Nat") (sym "add")) (list x (ELit (LNat 1))))))
     ((Prod.mk none _) (TErr (sym "unsaturated") (utf8 "Nat.succ takes 1 argument")))))
 (fn read_bool_row ((r Rd) (op Symbol) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (match (read_ets_list r args nil)
     ((Prod.mk (some (Prod.mk e m)) _) (TErr e m))
     ((Prod.mk none (cons a nil))
@@ -1033,6 +1148,7 @@
 ;; is refused by the caller, `renamed_primitive`)
 (fn prim_head ((sc Scope) (n Name)) (Option (Prod Name Prim)) (prim_of (scope_candidates sc n)))
 (fn read_head_args ((r Rd) (id Name) (k Int) (args (List SExpr)) (kind Symbol)) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (if (bool_not (= k (len args)))
     (TErr (sym "unsaturated")
       (append (show_name id)
@@ -1049,7 +1165,7 @@
 ;; the arguments in order, or the first error
 (fn read_ets_list ((r Rd) (ss (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (List ETerm))
-  (measure (struct ss))
+  (measure (* 8 (List_SExpr.size ss)))
   (match ss
     (nil (Prod.mk none (rev acc)))
     ((cons s rest)
@@ -1062,6 +1178,7 @@
 ;; name applied to its captured terms; the instance is taken by take_instances once the body
 ;; is read and its types are known
 (fn read_template_app ((r Rd) (id Name) (ebs (List EBind)) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (if (bool_not (= (len ebs) (len args)))
     (TErr (sym "unsaturated")
       (append (show_name id)
@@ -1072,7 +1189,7 @@
       ((Prod.mk none ts) (TOk (ECall id ts))))))
 (fn read_tm_args ((r Rd) (id Name) (ebs (List EBind)) (args (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (List ETerm))
-  (measure (struct ebs))
+  (measure (* 8 (List_SExpr.size args)))
   (match ebs
     (nil (Prod.mk none (rev acc)))
     ((cons b br)
@@ -1093,6 +1210,7 @@
 ;; runtime terms (its captured values) short of its arity. Anything else written is refused
 ;; with its pointer — a bound variable, a polymorphic fn, a template, a constructor, an extern
 (fn read_static_arg ((r Rd) (tm Name) (s SExpr)) TRes
+  (measure (+ (* 8 (SExpr.size s)) 3))
   (match s
     ((SSym x) (read_static_head r tm x nil))
     ((SList (cons (SSym h) gargs))
@@ -1102,6 +1220,7 @@
         (append (show_name tm)
           (utf8 ": a static argument is a name, or a name applied to its captured values"))))))
 (fn read_static_head ((r Rd) (tm Name) (h Symbol) (gargs (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size gargs)) 2))
   (match (name_of_sym h)
     (none (TErr (sym "bad_name") (chars_of_sym h)))
     ((some n)
@@ -1145,6 +1264,7 @@
            ((cons (EHit id _ _) nil)
             (TErr (sym "unbound_name") (append (show_name id) (utf8 " is a type"))))))))))
 (fn read_static_fn ((r Rd) (id Name) (k Int) (gargs (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size gargs)) 1))
   (if (bool_not (= (e_tparams (rd_es r) id) 0))
     (TErr (sym "function_value")
       (append (show_name id)
@@ -1177,6 +1297,7 @@
        (none none)))
     (_ none)))
 (fn read_static_registry ((r Rd) (k Name) (gargs (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size gargs)) 1))
   (if (<= 2 (len gargs))
     (TErr (sym "function_value")
       (append (show_name k)
@@ -1219,6 +1340,7 @@
 ;; E type, and the body is read under them. It stays a lambda in the body as read (ELam) and
 ;; is lifted to a fn where the instance is taken (take_lambda)
 (fn read_elam ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons (SList bs) (cons body nil))
      (match (read_lam_binders r bs nil nil)
@@ -1258,6 +1380,7 @@
 ;; (match E (PAT E)…): the first arm whose pattern matches; each arm's variables bound for its
 ;; body, typed from the scrutinee's static type (a constructor's name is read at that type)
 (fn read_ematch ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons s arms)
      (match (read_et r s)
@@ -1276,6 +1399,7 @@
 ;; `_` or a name for the scrutinee. A local scrutinee is itself in the tests; anything else
 ;; is bound once. At Nat and Int, where the scrutinee's type is fixed
 (fn read_ematch_lit ((r Rd) (t ETerm) (arms (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size arms)) 1))
   (if (bool_not (numeral_typed (rd_type r t)))
     (TErr (sym "pattern_type") (utf8 "a numeral row matches a value read at Nat or Int"))
     (match t
@@ -1289,7 +1413,7 @@
     (none true)
     (_ (bool_or (is_nat_type t) (is_int_type t)))))
 (fn read_lit_rows ((r Rd) (x ETerm) (arms (List SExpr))) TRes
-  (measure (struct arms))
+  (measure (* 8 (List_SExpr.size arms)))
   (match arms
     (nil
       (TErr (sym "match_not_exhaustive")
@@ -1316,7 +1440,7 @@
           "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all")))))
 (fn read_earms ((r Rd) (st (Option EType)) (arms (List SExpr)) (acc (List EArm)))
   (Prod (Option (Prod Symbol (List Int))) (List EArm))
-  (measure (struct arms))
+  (measure (* 8 (List_SExpr.size arms)))
   (match arms
     (nil (Prod.mk none (rev acc)))
     ((cons (SList (cons p (cons b nil))) rest)
@@ -1547,6 +1671,7 @@
 ;; binding may state its type, (x TYPE E): at a proposition it is a proof and
 ;; vanishes with its variable, as the erasure drops it; a let of proofs alone is its body
 (fn read_elet ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons (SList binds) (cons body nil))
      (match (read_ebinds r binds nil)
@@ -1568,7 +1693,7 @@
     ((cons v r) (ELet (list v) (let_chain r b)))))
 (fn read_ebinds ((r Rd) (binds (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod (List ETerm) Rd))
-  (measure (struct binds))
+  (measure (* 8 (List_SExpr.size binds)))
   (match binds
     (nil (Prod.mk none (Prod.mk (rev acc) r)))
     ((cons (SList (cons (SSym x) (cons e nil))) rest) (read_ebind r x e rest acc))
@@ -1587,6 +1712,7 @@
     (_ (Prod.mk (some (Prod.mk (sym "bad_shape") (utf8 "a binding is (NAME E)"))) (Prod.mk nil r)))))
 (fn read_ebind ((r Rd) (x Symbol) (e SExpr) (rest (List SExpr)) (acc (List ETerm)))
   (Prod (Option (Prod Symbol (List Int))) (Prod (List ETerm) Rd))
+  (measure (+ (* 8 (+ (SExpr.size e) (List_SExpr.size rest))) 1))
   (match (name_of_sym x)
     (none (Prod.mk (some (Prod.mk (sym "bad_name") (chars_of_sym x))) (Prod.mk nil r)))
     ((some n)
@@ -1595,6 +1721,7 @@
        ((TOk t) (read_ebinds (rd_bind r n (rd_type r t)) rest (cons t acc)))))))
 
 (fn read_eif ((r Rd) (args (List SExpr))) TRes
+  (measure (* 8 (List_SExpr.size args)))
   (match args
     ((cons c (cons a (cons b nil)))
      (match (read_cond r c)
@@ -1614,6 +1741,7 @@
 ;; bytes as Init's List cells, String's representation — carried as one literal the linker
 ;; builds once (prog.shard LStr)
 (fn read_elist ((r Rd) (args (List SExpr))) TRes
+  (measure (+ (* 8 (List_SExpr.size args)) 1))
   (match (list_in_scope r)
     (none (TErr (sym "no_list") (utf8 "(list …) needs a two-constructor List in scope")))
     ((some (Prod.mk nil_id cons_id))
@@ -3213,6 +3341,17 @@
        (_ (foreign_ctor es st r))))
     ((cons _ r) (foreign_ctor es st r))))
 (fn builtin_type ((n Name)) Bool (bool_or (name_eq n (nm_nat)) (name_eq n (n1 (sym "Int")))))
+(fulfills read_ety.dec_1
+  (by
+    (intro es sc env tps s x args hs hx n hn id a1 a2 hi hd targs ht)
+    (rw hs)
+    (rw SExpr.size.eq_5)
+    (rw List_SExpr.size.eq_2)
+    (arith (type_args_le env id (sym_explicit x) args targs ht))))
+(fulfills read_etys.dec_1
+  (by (intro es sc env tps ss acc s r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills read_etys.dec_2
+  (by (intro es sc env tps ss acc s r h t tps1) (rw h) (rw List_SExpr.size.eq_2) (arith)))
 (fn is_ind ((es ESt) (n Name)) Bool
   (match (es_info es n)
     ((some (EIInd _ _)) true)
@@ -3467,6 +3606,121 @@
   (match rs
     (nil (c_type es tys b))
     ((cons t r) (c_type_let es (cons (c_type es tys t) tys) r b))))
+(fulfills read_et.dec_1
+  (by (intro r s h args hs t1 t2 t3 t4 t5 t6 t7 t8 t9) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_2 (by (intro r s h args hs t1 t2 t3 t4 t5 t6 t7 t8) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_3 (by (intro r s h args hs t1 t2 t3 t4 t5 t6) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_4 (by (intro r s h args hs t1 t2 t3 t4) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_5 (by (intro r s h args hs t1 t2 t3) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_6 (by (intro r s h args hs t1 t2) (rw hs) (reduce) (arith)))
+(fulfills read_et.dec_7 (by (intro r s h args hs t1) (rw hs) (reduce) (arith)))
+(fulfills read_eapp.dec_1
+  (by
+    (intro r h0 args)
+    (show (< (+ (* 8 (List_SExpr.size args)) 4) (+ (* 8 (List_SExpr.size args)) 5)))
+    (arith)))
+(fulfills read_eapp_at.dec_1 (by (intro r ex h args n hn hf id a1 a2 a3 k ho) (arith)))
+(fulfills read_eapp_at.dec_2 (by (intro r ex h args n hn hf id a1 k ho) (arith)))
+(fulfills read_eapp_at.dec_3 (by (intro r ex h args n hn hf id a1 k ho) (arith)))
+(fulfills read_eapp_at.dec_4 (by (intro r ex h args n hn hf id a1 k ho) (arith)))
+(fulfills read_eapp_at.dec_5 (by (intro r ex h args n hn hf id a1 a2 ebs a3 a4 ho) (arith)))
+(fulfills read_eapp_at.dec_6 (by (intro r ex h args n hn hf ho id a1 k hp hr) (arith)))
+(fulfills read_eapp_at.dec_7 (by (intro r ex h args n hn hf ho hp) (arith)))
+(fulfills read_eapp_at.dec_8 (by (intro r ex h args n hn hf ho hp) (arith)))
+(fulfills read_known.dec_1
+  (by
+    (intro r id k ex args kind flags hf ss hw)
+    (arith (written_data_le flags ex (rd_checked r) args ss hw))))
+(fulfills read_known.dec_2 (by (intro r id k ex args kind hf hx) (arith)))
+(fulfills read_prim_head.dec_1 (by (intro r id k args p hd) (arith)))
+(fulfills read_prim_head.dec_2 (by (intro r id k args hd) (arith)))
+(fulfills read_decision.dec_1 (by (intro r p args) (arith)))
+(fulfills k_head.dec_1
+  (by (intro r ex n args k a1 hr t1 t2 t3 t4 info he a2 ind a3 a4 a5 a6 hi hrr) (arith)))
+(fulfills k_head.dec_2
+  (by (intro r ex n args k a1 hr t1 t2 t3 t4 info he a2 v a3 a4 a5 hi sn i depth hp) (arith)))
+(fulfills k_head.dec_3 (by (intro r ex n args k a1 hr t1 t2 t3 hq) (arith)))
+(fulfills k_head.dec_4 (by (intro r ex n args k a1 hr t1 hq) (arith)))
+(fulfills k_head.dec_5 (by (intro r ex n args k a1 hr hq) (arith)))
+(fulfills read_row_ctor.dec_1
+  (by
+    (intro r ex k args flags hf a hw)
+    (arith (written_data_le flags ex (rd_checked r) args (cons a nil) hw)
+      (List_SExpr.size.eq_2 a nil))))
+(fulfills read_proj_fn.dec_1
+  (by (intro r ex k sn i lams args h1 h2 x hl) (arith (last_of_lt args x hl))))
+(fulfills read_proj.dec_1 (by (intro r sn i x c hs flags hf j nrt hr) (arith)))
+(fulfills read_eproj.dec_1 (by (intro r args sx i x h n hn sn a1 hr) (rw h) (reduce) (arith)))
+(fulfills read_ite.dec_1 (by (intro r ex dep args hx a1 a2 d a b h) (rw h) (reduce) (arith)))
+(fulfills read_ite.dec_2 (by (intro r ex dep args hx a1 a2 d a b h tc) (rw h) (reduce) (arith)))
+(fulfills read_ite.dec_3 (by (intro r ex dep args hx a1 a2 d a b h tc ta) (rw h) (reduce) (arith)))
+(fulfills read_branch.dec_1 (by (intro r dep s hd f x a1 body hs hq n hn) (rw hs) (reduce) (arith)))
+(fulfills read_branch.dec_2 (by (intro r dep s hd) (arith)))
+(fulfills read_cond.dec_1 (by (intro r s h0 args hs hn) (arith)))
+(fulfills read_cond.dec_2 (by (intro r s h0 args hs n hn p hc) (rw hs) (reduce) (arith)))
+(fulfills read_cond.dec_3 (by (intro r s h0 args hs n hn hc) (rw hs) (reduce) (arith)))
+(fulfills read_cond.dec_4 (by (intro r s h0 args hs n hn hc) (arith)))
+(fulfills read_cond.dec_5 (by (intro r s a1 hs) (arith)))
+(fulfills read_bool_eq.dec_1 (by (intro r args) (arith)))
+(fulfills read_edif.dec_1 (by (intro r args hn c a b h n hnn) (rw h) (reduce) (arith)))
+(fulfills read_edif.dec_2 (by (intro r args hn c a b h n hnn tc) (rw h) (reduce) (arith)))
+(fulfills read_edif.dec_3 (by (intro r args hn c a b h n hnn tc ta) (rw h) (reduce) (arith)))
+(fulfills init_row.dec_1 (by (intro r h n args t1 t2 t3 k a1 hr t4 t5 t6 t7 p hp hc) (arith)))
+(fulfills init_row.dec_2 (by (intro r h n args t1 t2 t3 k a1 hr t4 t5 t6 t7 p hp hc) (arith)))
+(fulfills init_row.dec_3 (by (intro r h n args t1 t2 t3 k a1 hr t4 t5 t6 t7 hp a2 ht) (arith)))
+(fulfills init_row.dec_4 (by (intro r h n args t1 t2 t3 k a1 hr t4 t5 t6 hq) (arith)))
+(fulfills init_row.dec_5 (by (intro r h n args t1 t2 t3 k a1 hr t4 t5 hq) (arith)))
+(fulfills init_row.dec_6 (by (intro r h n args t1 t2 t3 k a1 hr t4 hq) (arith)))
+(fulfills init_row.dec_7 (by (intro r h n args t1 t2 t3 k a1 hr hq) (arith)))
+(fulfills init_row.dec_8 (by (intro r h n args t1 t2 hq) (arith)))
+(fulfills init_row.dec_9 (by (intro r h n args t1 hq) (arith)))
+(fulfills init_row.dec_10 (by (intro r h n args hq) (arith)))
+(fulfills read_succ.dec_1 (by (intro r args) (arith)))
+(fulfills read_bool_row.dec_1 (by (intro r op args) (arith)))
+(fulfills read_head_args.dec_1 (by (intro r id k args kind h) (arith)))
+(fulfills read_ets_list.dec_1 (by (intro r ss acc s rest h) (rw h) (reduce) (arith)))
+(fulfills read_ets_list.dec_2 (by (intro r ss acc s rest h t) (rw h) (reduce) (arith)))
+(fulfills read_template_app.dec_1 (by (intro r id ebs args h) (arith)))
+(fulfills read_tm_args.dec_1
+  (by (intro r id ebs args acc b br he a ar h a1 hb) (rw h) (reduce) (arith)))
+(fulfills read_tm_args.dec_2
+  (by (intro r id ebs args acc b br he a ar h a1 a2 hb) (rw h) (reduce) (arith)))
+(fulfills read_tm_args.dec_3
+  (by (intro r id ebs args acc b br he a ar h t) (rw h) (reduce) (arith)))
+(fulfills read_static_arg.dec_1 (by (intro r tm s x h) (rw h) (reduce) (arith)))
+(fulfills read_static_arg.dec_2 (by (intro r tm s hd gargs h hq) (rw h) (reduce) (arith)))
+(fulfills read_static_arg.dec_3 (by (intro r tm s hd gargs h hq) (rw h) (reduce) (arith)))
+(fulfills read_static_head.dec_1 (by (intro r tm h gargs n hn hf id a1 k ho) (arith)))
+(fulfills read_static_head.dec_2 (by (intro r tm h gargs n hn hf id a1 k ho) (arith)))
+(fulfills read_static_head.dec_3 (by (intro r tm h gargs n hn hf ho k hr) (arith)))
+(fulfills read_static_fn.dec_1 (by (intro r id k gargs h1 h2) (arith)))
+(fulfills read_static_registry.dec_1 (by (intro r k gargs h) (arith)))
+(fulfills read_elam.dec_1 (by (intro r args bs body h names types hb) (rw h) (reduce) (arith)))
+(fulfills read_ematch.dec_1 (by (intro r args s arms h) (rw h) (reduce) (arith)))
+(fulfills read_ematch.dec_2 (by (intro r args s arms h t hn) (rw h) (reduce) (arith)))
+(fulfills read_ematch.dec_3 (by (intro r args s arms h t hn) (rw h) (reduce) (arith)))
+(fulfills read_ematch_lit.dec_1 (by (intro r t arms hn a1 ht) (arith)))
+(fulfills read_ematch_lit.dec_2 (by (intro r t arms hn a1 ht) (arith)))
+(fulfills read_lit_rows.dec_1 (by (intro r x arms k body rest h) (rw h) (reduce) (arith)))
+(fulfills read_lit_rows.dec_2 (by (intro r x arms k body rest h b) (rw h) (reduce) (arith)))
+(fulfills read_lit_rows.dec_3 (by (intro r x arms v body h hq n hn) (rw h) (reduce) (arith)))
+(fulfills read_lit_rows.dec_4 (by (intro r x arms v body h hq) (rw h) (reduce) (arith)))
+(fulfills read_earms.dec_1
+  (by (intro r st arms acc p b rest h pat names ghosts hp) (rw h) (reduce) (arith)))
+(fulfills read_earms.dec_2
+  (by (intro r st arms acc p b rest h pat names ghosts hp body) (rw h) (reduce) (arith)))
+(fulfills read_elet.dec_1 (by (intro r args binds body h) (rw h) (reduce) (arith)))
+(fulfills read_elet.dec_2 (by (intro r args binds body h rhss r1) (rw h) (reduce) (arith)))
+(fulfills read_ebinds.dec_1 (by (intro r binds acc x e rest h) (rw h) (reduce) (arith)))
+(fulfills read_ebinds.dec_2 (by (intro r binds acc x ty e rest h hp) (rw h) (reduce) (arith)))
+(fulfills read_ebinds.dec_3
+  (by (intro r binds acc x ty e rest h hp hc n hn) (rw h) (reduce) (arith)))
+(fulfills read_ebind.dec_1 (by (intro r x e rest acc n hn) (arith)))
+(fulfills read_ebind.dec_2 (by (intro r x e rest acc n hn t) (arith)))
+(fulfills read_eif.dec_1 (by (intro r args c a b h) (rw h) (reduce) (arith)))
+(fulfills read_eif.dec_2 (by (intro r args c a b h tc) (rw h) (reduce) (arith)))
+(fulfills read_eif.dec_3 (by (intro r args c a b h tc ta) (rw h) (reduce) (arith)))
+(fulfills read_elist.dec_1 (by (intro r args nil_id cons_id h) (arith)))
 (fulfills tm_solve.dec_1 (by (intro es ls tys ebs args) (arith)))
 (fulfills tm_pass.dec_1
   (by
