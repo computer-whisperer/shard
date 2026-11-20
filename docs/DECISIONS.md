@@ -1320,7 +1320,11 @@ measurements; measure again before building on one.
   binaries built in 270 s; the Init replay alone, 424 s for 413, 57,977 accepted and none
   exhausted; then side by side all 29 roots loaded checked in 529 s and the suite on the
   binaries, 371 s, 52 entrypoints. The Init index as the new binary writes it is the one
-  the tree's sources wrote before the change, 19,208,769 bytes, byte for byte.
+  the tree's sources wrote before the change, 19,208,769 bytes, byte for byte. On CI: #768
+  80.6 minutes (`native` 79.9, `v3` 61.9, `replay` 57.6), the replay itself 1,442 s for
+  #767's 1,498. Of the `native` and the `replay` job 26 minutes each are the Init index
+  written again before the binaries are built, a source it is stamped by changed; #767
+  found it in the cache.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
