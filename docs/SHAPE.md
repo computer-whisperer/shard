@@ -108,7 +108,7 @@ the development machine, one step after another, and about 38 in CI, its jobs si
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
-| `v3/models/x86/` | 5,900 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
+| `v3/models/x86/` | 6,400 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -218,7 +218,9 @@ be built to is `COMPILE.md`.
 - laws proven once of the model (`laws.shard`): for each instruction a rule — where the processor
   decodes it at the program counter and the state after it comes to a state, the state before
   does —, what a store leaves as it was, a stored word read back, code unmoved by a store
-  elsewhere;
+  elsewhere; and of a function's stack frame (`frame.shard`): the words that stand from the stack
+  pointer up to the return address, and what a push, a pop, a callee's return and the function's
+  own return make of them;
 - a trial of low-level code as ordinary shard (`buffers.shard`, `COMPILE.md` §4): functions over
   buffers of machine words that take the evidence of each access's range, a listing for them
   compiled by hand, and the contract of each one's code, proven against the functions'
@@ -230,7 +232,7 @@ be built to is `COMPILE.md`.
   check; and by it and the caller's contract, that the trial's file exits with the low byte of
   what its functions compute (`buffers_exits`), for the start the model's runner gives;
 - a tactic library (`derive.shard`) that writes the proof of a run of a listing's instructions
-  from the listing's table; eight of the trial's lemmas are proven by it.
+  from the listing's table; nine of the trial's lemmas are proven by it.
 
 **Assumed there:** six laws about the runtime's allocator and reference counts, stated as axioms.
 

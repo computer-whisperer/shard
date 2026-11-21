@@ -1,0 +1,116 @@
+;;; v3/models/x86/words.shard — a buffer of machine words as a value: a list of words. The word
+;;; at an index and the list with one word replaced, which statements about a buffer are written
+;;; with; an access that takes the evidence that its index is one of the buffer's, which a
+;;; function over buffers is written with; and the facts that tie the two.
+(import "../../std/list.shard")
+(import "word.shard")
+(use std.list)
+(use models.x86.word)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; ---- a buffer's words -------------------------------------------------------------------------
+;; the word at an index, 0 past the end: what the statements about a buffer are written with
+(fn nth ((xs (List (BitVec 64))) (k Nat)) (BitVec 64)
+  (measure (struct xs))
+  (match xs
+    (nil (w64 0))
+    ((cons x r) (if (= k 0) x (nth r (- k 1))))))
+;; the list with the word at an index replaced; the list itself past the end
+(fn upd ((xs (List (BitVec 64))) (k Nat) (v (BitVec 64))) (List (BitVec 64))
+  (measure (struct xs))
+  (match xs
+    (nil nil)
+    ((cons x r) (if (= k 0) (cons v r) (cons x (upd r (- k 1) v))))))
+(theorem upd_length ((xs (List (BitVec 64))))
+  (forall ((k Nat) (v (BitVec 64))) (= (List.length (upd xs k v)) (List.length xs)))
+  (by
+    (induction xs
+      ((nil () (intro k v) rfl)
+       (cons (x r ih) (intro k v)
+         (cases (Nat.decEq k 0)
+           ((isFalse (hk) (rw upd.eq_2) (rw (if_neg hk)) (reduce) (rw (ih (- k 1) v)) rfl)
+            (isTrue (hk) (rw upd.eq_2) (rw (if_pos hk)) rfl))))))))
+
+;; the word at index i of a buffer, with the evidence that i is one of its indices
+(fn word_at ((xs (List (BitVec 64))) (i (BitVec 64)) (h (< (w64_val i) (List.length xs))))
+  (BitVec 64)
+  (List.get xs (Fin.mk (w64_val i) h)))
+;; the buffer with the word at index i replaced, with the same evidence
+(fn put_at
+  ((xs (List (BitVec 64))) (i (BitVec 64)) (v (BitVec 64)) (h (< (w64_val i) (List.length xs))))
+  (List (BitVec 64))
+  (upd xs (w64_val i) v))
+;; evidence carried past a write: the buffer is as long as it was
+(theorem put_at_room
+  ((xs (List (BitVec 64)))
+   (i (BitVec 64))
+   (v (BitVec 64))
+   (h (< (w64_val i) (List.length xs)))
+   (n (BitVec 64))
+   (hn (<= (w64_val n) (List.length xs))))
+  (<= (w64_val n) (List.length (put_at xs i v h)))
+  (by
+    (have hl (= (List.length (put_at xs i v h)) (List.length xs))
+      (exact (upd_length xs (w64_val i) v)))
+    (rw hl)
+    (exact hn)))
+
+;; ---- the two tied -----------------------------------------------------------------------------
+;; the word an access with evidence gives is the word at that index
+(theorem get_nth ((xs (List (BitVec 64))))
+  (forall ((k Nat) (h (< k (List.length xs)))) (= (List.get xs (Fin.mk k h)) (nth xs k)))
+  (by
+    (induction xs
+      ((nil () (intro k h) (exact (absurd h (Nat.not_lt_zero k))))
+       (cons (x r ih) (intro k h)
+         (cases k ((zero () rfl) (succ (j) (exact (ih j (Nat.le_of_succ_le_succ h)))))))))))
+(theorem word_at_nth ((xs (List (BitVec 64))) (i (BitVec 64)) (h (< (w64_val i) (List.length xs))))
+  (= (word_at xs i h) (nth xs (w64_val i)))
+  (exact (get_nth xs (w64_val i) h)))
+;; a list with one word replaced: that word at its index, every other as it was
+(theorem nth_upd_same ((xs (List (BitVec 64))))
+  (forall ((k Nat) (w (BitVec 64))) (-> (< k (List.length xs)) (= (nth (upd xs k w) k) w)))
+  (by
+    (induction xs
+      ((nil () (intro k w hk) (exact (absurd hk (Nat.not_lt_zero k))))
+       (cons (x r ih) (intro k w hk)
+         (cases (Nat.decEq k 0)
+           ((isTrue (h0) (rw upd.eq_2) (rw (if_pos h0)) (rw nth.eq_2) (rw (if_pos h0)) rfl)
+            (isFalse (h0) (have hk1 (< k (+ (List.length r) 1)) (exact hk)) (rw upd.eq_2)
+              (rw (if_neg h0))
+              (rw nth.eq_2)
+              (rw (if_neg h0))
+              (exact (ih (- k 1) w (get_bound k (List.length r) hk1 h0)))))))))))
+(theorem nth_upd_other ((xs (List (BitVec 64))))
+  (forall ((k Nat) (w (BitVec 64)) (j Nat)) (-> (Not (= j k)) (= (nth (upd xs k w) j) (nth xs j))))
+  (by
+    (induction xs
+      ((nil () (intro k w j hne) rfl)
+       (cons (x r ih) (intro k w j hne)
+         (cases (Nat.decEq k 0)
+           ((isTrue (hk0)
+              (cases (Nat.decEq j 0)
+                ((isTrue (hj0) (exact (absurd (Eq.trans hj0 (Eq.symm hk0)) hne)))
+                 (isFalse (hj0) (rw upd.eq_2) (rw (if_pos hk0)) (rw nth.eq_2) (rw nth.eq_2)
+                   (rw (if_neg hj0))
+                   (rw (if_neg hj0))
+                   rfl))))
+            (isFalse (hk0)
+              (cases (Nat.decEq j 0)
+                ((isTrue (hj0) (rw upd.eq_2) (rw (if_neg hk0)) (rw nth.eq_2) (rw nth.eq_2)
+                   (rw (if_pos hj0))
+                   (rw (if_pos hj0))
+                   rfl)
+                 (isFalse (hj0) (have hj1 (<= 1 j) (exact (Nat.pos_of_ne_zero hj0)))
+                   (have hk1 (<= 1 k) (exact (Nat.pos_of_ne_zero hk0)))
+                   (have hne1 (Not (= (- j 1) (- k 1)))
+                     (intro heq)
+                     (apply hne ((arith heq (Nat.sub_add_cancel hj1) (Nat.sub_add_cancel hk1)))))
+                   (rw upd.eq_2)
+                   (rw (if_neg hk0))
+                   (rw nth.eq_2)
+                   (rw nth.eq_2)
+                   (rw (if_neg hj0))
+                   (rw (if_neg hj0))
+                   (exact (ih (- k 1) w (- j 1) hne1)))))))))))))

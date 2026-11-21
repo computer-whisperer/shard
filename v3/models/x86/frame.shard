@@ -1,0 +1,730 @@
+;;; v3/models/x86/frame.shard — words in memory, and a function's stack frame. A list of words
+;;; stands in memory from an address (`holds`): a buffer a function was handed, or the words a
+;;; function has pushed. A frame is described once, for every function: where the stack pointer
+;;; stands, which words are mapped, that they are clear of the code (`room`); and at a state
+;;; inside the function, the words that stand from the stack pointer up to the return address
+;;; (`framed`). A push, a pop, a call's return and the function's own return each take one
+;;; description to the next.
+(import "laws.shard")
+(import "words.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Instr)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- a list of words in memory ----------------------------------------------------------------
+;; the words of a buffer stand in memory from address p, eight bytes each
+(def holds ((m Mem) (p Nat) (xs (List (BitVec 64)))) Prop
+  (forall ((k Nat)) (-> (< k (List.length xs)) (= (w64 (mem_le64 m (+ p (* 8 k)))) (nth xs k)))))
+;; a list in memory, word by word
+(theorem holds_nil ((m Mem) (p Nat)) (holds m p nil)
+  (by (intro k hk) (exact (absurd hk (Nat.not_lt_zero k)))))
+(theorem holds_cons
+  ((m Mem)
+   (p Nat)
+   (x (BitVec 64))
+   (r (List (BitVec 64)))
+   (h1 (= (w64 (mem_le64 m p)) x))
+   (h2 (holds m (+ p 8) r)))
+  (holds m p (cons x r))
+  (by
+    (intro k hk)
+    (cases (Nat.decEq k 0)
+      ((isTrue (h0) (rw h0) (rw nth.eq_2) (rw (if_pos (Eq.refl 0))) (exact h1))
+       (isFalse (h0) (have hk1 (<= 1 k) (exact (Nat.pos_of_ne_zero h0)))
+         (have hl (< k (+ (List.length r) 1)) (exact hk))
+         (have hk2 (< (- k 1) (List.length r)) (arith (Nat.sub_add_cancel hk1)))
+         (have ea (= (+ p (* 8 k)) (+ (+ p 8) (* 8 (- k 1)))) (arith (Nat.sub_add_cancel hk1)))
+         (rw nth.eq_2)
+         (rw (if_neg h0))
+         (rw ea)
+         (exact (h2 (- k 1) hk2)))))))
+;; a word stored at a buffer's index: the memory then holds the list with that word replaced
+(theorem holds_upd
+  ((m Mem)
+   (p Nat)
+   (xs (List (BitVec 64)))
+   (k Nat)
+   (w (BitVec 64))
+   (h (holds m p xs))
+   (hk (< k (List.length xs))))
+  (holds (mem_put64 m (+ p (* 8 k)) (w64_val w)) p (upd xs k w))
+  (by
+    (intro j hj)
+    (have hj2 (< j (List.length xs)) (rw (<- (upd_length xs k w))) (exact hj))
+    (cases (Nat.decEq j k)
+      ((isTrue (he) (rw he) (rw (le64_put64_word m (+ p (* 8 k)) w))
+         (exact (Eq.symm (nth_upd_same xs k w hk))))
+       (isFalse (hne)
+         (have hso
+           (same_outside m (mem_put64 m (+ p (* 8 k)) (w64_val w)) (+ p (* 8 k)) (+ (+ p (* 8 k)) 8))
+           (exact
+             (same_outside_put64 m m (+ p (* 8 k)) (+ (+ p (* 8 k)) 8) (+ p (* 8 k)) (w64_val w)
+               (same_outside_refl m (+ p (* 8 k)) (+ (+ p (* 8 k)) 8))
+               (Nat.le_refl (+ p (* 8 k)))
+               (Nat.le_refl (+ (+ p (* 8 k)) 8)))))
+         (have hd (or (<= (+ (+ p (* 8 j)) 8) (+ p (* 8 k))) (<= (+ (+ p (* 8 k)) 8) (+ p (* 8 j))))
+           (cases (Nat.decLt j k)
+             ((isTrue (hl) (apply Or.inl ((arith))))
+              (isFalse (hnl)
+                (cases (Nat.decLt k j)
+                  ((isTrue (hr) (apply Or.inr ((arith))))
+                   (isFalse (hnr) (have he (= j k) (arith)) (exact (absurd he hne)))))))))
+         (rw
+           (le64_same m (mem_put64 m (+ p (* 8 k)) (w64_val w)) (+ p (* 8 k)) (+ (+ p (* 8 k)) 8)
+             (+ p (* 8 j))
+             hso
+             hd))
+         (rw (nth_upd_other xs k w j hne))
+         (exact (h j hj2)))))))
+;; a buffer clear of a range is held by any memory that agrees with the first outside the range
+(theorem holds_same
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (q Nat)
+   (ys (List (BitVec 64)))
+   (h (holds m q ys))
+   (hso (same_outside m m2 lo hi))
+   (hclear (or (<= (+ q (* 8 (List.length ys))) lo) (<= hi q))))
+  (holds m2 q ys)
+  (by
+    (intro j hj)
+    (have hd (or (<= (+ (+ q (* 8 j)) 8) lo) (<= hi (+ q (* 8 j))))
+      (cases hclear ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (rw (le64_same m m2 lo hi (+ q (* 8 j)) hso hd))
+    (exact (h j hj))))
+
+;; a list's first word, and the rest a word on
+(theorem holds_head
+  ((m Mem) (p Nat) (x (BitVec 64)) (r (List (BitVec 64))) (h (holds m p (cons x r))))
+  (= (w64 (mem_le64 m p)) x)
+  (by
+    (have h0 (< 0 (List.length (cons x r))) (exact (Nat.zero_lt_succ (List.length r))))
+    (have e (= (w64 (mem_le64 m (+ p (* 8 0)))) (nth (cons x r) 0)) (exact (h 0 h0)))
+    (have en (= (nth (cons x r) 0) x) (rw nth.eq_2) (rw (if_pos (Eq.refl 0))) rfl)
+    (exact (Eq.trans e en))))
+(theorem holds_tail
+  ((m Mem) (p Nat) (x (BitVec 64)) (r (List (BitVec 64))) (h (holds m p (cons x r))))
+  (holds m (+ p 8) r)
+  (by
+    (intro k hk)
+    (have hk1 (< (+ k 1) (List.length (cons x r))) (exact (Nat.succ_lt_succ hk)))
+    (have e (= (w64 (mem_le64 m (+ p (* 8 (+ k 1))))) (nth (cons x r) (+ k 1)))
+      (exact (h (+ k 1) hk1)))
+    (have ea (= (+ (+ p 8) (* 8 k)) (+ p (* 8 (+ k 1)))) (arith))
+    (have h0 (Not (= (+ k 1) 0)) (exact (Nat.succ_ne_zero k)))
+    (have en (= (nth (cons x r) (+ k 1)) (nth r k)) (rw nth.eq_2) (rw (if_neg h0)) rfl)
+    (rw ea)
+    (exact (Eq.trans e en))))
+
+;; ---- a function's frame -------------------------------------------------------------------------
+;; Room for a frame of k words, in the state c a function is entered in: the stack pointer
+;; stands k words above an address f; the k words from f are mapped to write, and they and the
+;; return address above them to read; and the k words are clear of the code, which lies in
+;; [clo, chi) and is read up to fifteen bytes past an instruction's address.
+(def room ((c Cpu) (clo Nat) (chi Nat) (f Nat) (k Nat)) Prop
+  (and (= (w64_val (reg c 4)) (+ f (* 8 k)))
+    (and (mapped_words (Cpu.segs c) f (+ k 1) 4)
+      (and (mapped_words (Cpu.segs c) f k 2) (or (<= (+ chi 15) f) (<= (+ f (* 8 k)) clo))))))
+;; A state c inside a function that was entered in the state c0 with room for k words above f,
+;; the code of the table tbl lying in [clo, chi). The mapping is the entry's; the stack pointer
+;; stands j words above f; the words ws stand from there up to the return address, the last of
+;; them; the table's code is in place; and memory outside the k words is as in m0 — the
+;; entry's memory, or the memory a callee returned in.
+(def framed
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64))))
+  Prop
+  (and (room c0 clo chi f k)
+    (and (= (all_within tbl clo chi) true)
+      (and (= (Cpu.segs c) (Cpu.segs c0))
+        (and (= (w64_val (reg c 4)) (+ f (* 8 j)))
+          (and (holds (Cpu.mem c) (+ f (* 8 j)) ws)
+            (and (= (+ j (List.length ws)) (+ k 1))
+              (and (code_in c tbl) (same_outside m0 (Cpu.mem c) f (+ f (* 8 k)))))))))))
+;; what a description says, one fact at a time
+(theorem framed_room
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (room c0 clo chi f k)
+  (exact (And.left h)))
+(theorem framed_all
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (= (all_within tbl clo chi) true)
+  (exact (And.left (And.right h))))
+(theorem framed_segs
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (= (Cpu.segs c) (Cpu.segs c0))
+  (exact (And.left (And.right (And.right h)))))
+(theorem framed_sp
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (= (w64_val (reg c 4)) (+ f (* 8 j)))
+  (exact (And.left (And.right (And.right (And.right h))))))
+(theorem framed_holds
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (holds (Cpu.mem c) (+ f (* 8 j)) ws)
+  (exact (And.left (And.right (And.right (And.right (And.right h)))))))
+(theorem framed_len
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (= (+ j (List.length ws)) (+ k 1))
+  (exact (And.left (And.right (And.right (And.right (And.right (And.right h))))))))
+(theorem framed_code
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (code_in c tbl)
+  (exact (And.left (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))
+(theorem framed_mem
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j ws)))
+  (same_outside m0 (Cpu.mem c) f (+ f (* 8 k)))
+  (exact (And.right (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))
+
+;; ---- into a function ----------------------------------------------------------------------------
+;; the state a function is entered in, described: its stack pointer k words above f, and the
+;; one word there its return address
+(theorem framed_enter
+  ((c Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (hr (room c clo chi f k))
+   (hall (= (all_within tbl clo chi) true))
+   (hc (code_in c tbl)))
+  (framed c tbl clo chi f k (Cpu.mem c) c k (cons (ret_addr c) nil))
+  (by
+    (have hf (= (w64_val (reg c 4)) (+ f (* 8 k))) (exact (And.left hr)))
+    (have e (= (w64 (mem_le64 (Cpu.mem c) (+ f (* 8 k)))) (ret_addr c)) (rw (<- hf)) rfl)
+    (have hh (holds (Cpu.mem c) (+ f (* 8 k)) (cons (ret_addr c) nil))
+      (exact
+        (holds_cons (Cpu.mem c) (+ f (* 8 k)) (ret_addr c) nil e
+          (holds_nil (Cpu.mem c) (+ (+ f (* 8 k)) 8)))))
+    (have hl (= (+ k (List.length (cons (ret_addr c) nil))) (+ k 1)) rfl)
+    (exact
+      (And.intro hr
+        (And.intro hall
+          (And.intro (Eq.refl (Cpu.segs c))
+            (And.intro hf
+              (And.intro hh
+                (And.intro hl (And.intro hc (same_outside_refl (Cpu.mem c) f (+ f (* 8 k)))))))))))))
+
+;; ---- a push -------------------------------------------------------------------------------------
+;; where the stack pointer stands a word above j words: a push stores at the j-th word
+(theorem framed_push_at
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (ws (List (BitVec 64)) implicit)
+   (j Nat)
+   (h (framed c0 tbl clo chi f k m0 c (+ j 1) ws)))
+  (= (push_at c) (+ f (* 8 j)))
+  (by
+    (have hsp (= (w64_val (reg c 4)) (+ f (* 8 (+ j 1)))) (exact (framed_sp h)))
+    (have h2 (= (w64_val (reg c 4)) (+ (+ f (* 8 j)) 8)) (rw hsp) (arith))
+    (have k8 (< 8 18446744073709551616) (arith))
+    (exact (w64_val_sub (reg c 4) (+ f (* 8 j)) 8 h2 k8))))
+;; that word is mapped to write, for j1 one more than j
+(theorem framed_push_ok_eq
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j1 Nat implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (j Nat)
+   (g (framed c0 tbl clo chi f k m0 c j1 (cons w ws)))
+   (hj (= j1 (+ j 1))))
+  (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+  (by
+    (have h (framed c0 tbl clo chi f k m0 c (+ j 1) (cons w ws)) (rw (<- hj)) (exact g))
+    (have hr (room c0 clo chi f k) (exact (framed_room h)))
+    (have hw (mapped_words (Cpu.segs c0) f k 2) (exact (And.left (And.right (And.right hr)))))
+    (have hl (= (+ (+ j 1) (+ (List.length ws) 1)) (+ k 1)) (exact (framed_len h)))
+    (have hj (< j k) (arith))
+    (rw (framed_push_at j h))
+    (rw (framed_segs h))
+    (exact (hw j hj))))
+;; and the state after the push is described, j words up: the word pushed stands first
+(theorem framed_push_eq
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j1 Nat implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (j Nat)
+   (v (BitVec 64))
+   (g (framed c0 tbl clo chi f k m0 c j1 (cons w ws)))
+   (hj (= j1 (+ j 1))))
+  (framed c0 tbl clo chi f k m0 (pushed c v) j (cons v (cons w ws)))
+  (by
+    (have h (framed c0 tbl clo chi f k m0 c (+ j 1) (cons w ws)) (rw (<- hj)) (exact g))
+    (have hr (room c0 clo chi f k) (exact (framed_room h)))
+    (have hclear (or (<= (+ chi 15) f) (<= (+ f (* 8 k)) clo))
+      (exact (And.right (And.right (And.right hr)))))
+    (have hh (holds (Cpu.mem c) (+ f (* 8 (+ j 1))) (cons w ws)) (exact (framed_holds h)))
+    (have hl (= (+ (+ j 1) (+ (List.length ws) 1)) (+ k 1)) (exact (framed_len h)))
+    (have ha (= (push_at c) (+ f (* 8 j))) (exact (framed_push_at j h)))
+    (have hj (< j k) (arith))
+    (have hsp2 (= (w64_val (reg (pushed c v) 4)) (+ f (* 8 j))) (exact ha))
+    (have lo1 (<= f (+ f (* 8 j))) (arith))
+    (have hi1 (<= (+ (+ f (* 8 j)) 8) (+ f (* 8 k))) (arith))
+    ;; memory: the frame's words alone written, since m0 and since c
+    (have hm2 (same_outside m0 (Cpu.mem (pushed c v)) f (+ f (* 8 k)))
+      (show (same_outside m0 (mem_put64 (Cpu.mem c) (push_at c) (w64_val v)) f (+ f (* 8 k))))
+      (rw ha)
+      (exact
+        (same_outside_put64 m0 (Cpu.mem c) f (+ f (* 8 k)) (+ f (* 8 j)) (w64_val v) (framed_mem h)
+          lo1
+          hi1)))
+    (have hs1 (same_outside (Cpu.mem c) (Cpu.mem (pushed c v)) f (+ f (* 8 k)))
+      (show
+        (same_outside (Cpu.mem c) (mem_put64 (Cpu.mem c) (push_at c) (w64_val v)) f (+ f (* 8 k))))
+      (rw ha)
+      (exact
+        (same_outside_put64 (Cpu.mem c) (Cpu.mem c) f (+ f (* 8 k)) (+ f (* 8 j)) (w64_val v)
+          (same_outside_refl (Cpu.mem c) f (+ f (* 8 k)))
+          lo1
+          hi1)))
+    (have hc2 (code_in (pushed c v) tbl)
+      (exact
+        (code_in_after c (pushed c v) tbl clo chi f (+ f (* 8 k)) (framed_all h)
+          (Eq.refl (Cpu.segs c))
+          hs1
+          hclear
+          (framed_code h))))
+    ;; the words: the one pushed, and those above it as they stood
+    (have hw1 (same_outside (Cpu.mem c) (Cpu.mem (pushed c v)) (+ f (* 8 j)) (+ (+ f (* 8 j)) 8))
+      (show
+        (same_outside (Cpu.mem c) (mem_put64 (Cpu.mem c) (push_at c) (w64_val v)) (+ f (* 8 j))
+          (+ (+ f (* 8 j)) 8)))
+      (rw ha)
+      (exact
+        (same_outside_put64 (Cpu.mem c) (Cpu.mem c) (+ f (* 8 j)) (+ (+ f (* 8 j)) 8) (+ f (* 8 j))
+          (w64_val v)
+          (same_outside_refl (Cpu.mem c) (+ f (* 8 j)) (+ (+ f (* 8 j)) 8))
+          (Nat.le_refl (+ f (* 8 j)))
+          (Nat.le_refl (+ (+ f (* 8 j)) 8)))))
+    (have ea (= (+ f (* 8 (+ j 1))) (+ (+ f (* 8 j)) 8)) (arith))
+    (have hrest (holds (Cpu.mem (pushed c v)) (+ (+ f (* 8 j)) 8) (cons w ws))
+      (rw (<- ea))
+      (apply
+        (holds_same (Cpu.mem c) (Cpu.mem (pushed c v)) (+ f (* 8 j)) (+ (+ f (* 8 j)) 8)
+          (+ f (* 8 (+ j 1)))
+          (cons w ws)
+          hh
+          hw1)
+        ((apply Or.inr ((arith))))))
+    (have htop (= (w64 (mem_le64 (Cpu.mem (pushed c v)) (+ f (* 8 j)))) v)
+      (rw (<- ha))
+      (exact (le64_put64_word (Cpu.mem c) (push_at c) v)))
+    (have hh2 (holds (Cpu.mem (pushed c v)) (+ f (* 8 j)) (cons v (cons w ws)))
+      (exact (holds_cons (Cpu.mem (pushed c v)) (+ f (* 8 j)) v (cons w ws) htop hrest)))
+    (have hl2 (= (+ j (List.length (cons v (cons w ws)))) (+ k 1))
+      (show (= (+ j (+ (+ (List.length ws) 1) 1)) (+ k 1)))
+      (arith))
+    (exact
+      (And.intro hr
+        (And.intro (framed_all h)
+          (And.intro (framed_segs h)
+            (And.intro hsp2 (And.intro hh2 (And.intro hl2 (And.intro hc2 hm2))))))))))
+
+;; The two as a proof is written with them, of a state described j1 words up with j1 at least
+;; one — which `(Eq.refl true)` shows of a numeral, by computation; a numeral is not matched
+;; against a sum. The word a push stores at is mapped to write: what the rule of a push, or of a
+;; call, asks.
+(theorem framed_push_ok
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j1 Nat implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (g (framed c0 tbl clo chi f k m0 c j1 (cons w ws)))
+   (hj (= (Nat.ble 1 j1) true)))
+  (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+  (by
+    (have h1 (<= 1 j1) (exact (Nat.le_of_ble_eq_true hj)))
+    (have e (= j1 (+ (- j1 1) 1)) (arith (Nat.sub_add_cancel h1)))
+    (exact (framed_push_ok_eq (- j1 1) g e))))
+;; And the state after the push is described, a word down: the word pushed stands first.
+(theorem framed_push
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j1 Nat implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (v (BitVec 64))
+   (g (framed c0 tbl clo chi f k m0 c j1 (cons w ws)))
+   (hj (= (Nat.ble 1 j1) true)))
+  (framed c0 tbl clo chi f k m0 (pushed c v) (- j1 1) (cons v (cons w ws)))
+  (by
+    (have h1 (<= 1 j1) (exact (Nat.le_of_ble_eq_true hj)))
+    (have e (= j1 (+ (- j1 1) 1)) (arith (Nat.sub_add_cancel h1)))
+    (exact (framed_push_eq (- j1 1) v g e))))
+
+;; ---- the word at the stack pointer --------------------------------------------------------------
+;; it is mapped to read: what the rule of a pop or of a return asks, and a callee of its
+;; return address
+(theorem framed_top_ok
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (v (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons v ws))))
+  (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)
+  (by
+    (have hr (room c0 clo chi f k) (exact (framed_room h)))
+    (have hrd (mapped_words (Cpu.segs c0) f (+ k 1) 4) (exact (And.left (And.right hr))))
+    (have hl (= (+ j (+ (List.length ws) 1)) (+ k 1)) (exact (framed_len h)))
+    (have hj (< j (+ k 1)) (arith))
+    (rw (framed_sp h))
+    (rw (framed_segs h))
+    (exact (hrd j hj))))
+;; and it is the first of the words
+(theorem framed_top
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (v (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons v ws))))
+  (= (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4)))) v)
+  (by (rw (framed_sp h)) (exact (holds_head (Cpu.mem c) (+ f (* 8 j)) v ws (framed_holds h)))))
+
+;; ---- a word up ----------------------------------------------------------------------------------
+;; A state c2 with the mapping of c and its stack pointer a word above c's, in which the words
+;; above c's first stand, the code is in place, and memory outside the frame is as in m1: c2 is
+;; described, a word up. What a pop and a callee's return have in common.
+(theorem framed_up
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (v (BitVec 64) implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (c2 Cpu implicit)
+   (m1 Mem implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons v (cons w ws))))
+   (hsegs (= (Cpu.segs c2) (Cpu.segs c)))
+   (hsp (= (reg c2 4) (w64_add (reg c 4) (w64 8))))
+   (hh (holds (Cpu.mem c2) (+ f (* 8 (+ j 1))) (cons w ws)))
+   (hc (code_in c2 tbl))
+   (hm (same_outside m1 (Cpu.mem c2) f (+ f (* 8 k)))))
+  (framed c0 tbl clo chi f k m1 c2 (+ j 1) (cons w ws))
+  (by
+    (have hr (room c0 clo chi f k) (exact (framed_room h)))
+    (have hf0 (= (w64_val (reg c0 4)) (+ f (* 8 k))) (exact (And.left hr)))
+    (have hb (< (+ f (* 8 k)) 18446744073709551616) (rw (<- hf0)) (exact (w64_val_lt (reg c0 4))))
+    (have hl (= (+ j (+ (+ (List.length ws) 1) 1)) (+ k 1)) (exact (framed_len h)))
+    (have hspc (= (w64_val (reg c 4)) (+ f (* 8 j))) (exact (framed_sp h)))
+    (have hlt (< (+ (+ f (* 8 j)) 8) 18446744073709551616) (arith))
+    (have hsp2 (= (w64_val (reg c2 4)) (+ f (* 8 (+ j 1))))
+      (rw hsp)
+      (rw (w64_val_add (reg c 4) (+ f (* 8 j)) 8 hspc hlt))
+      (arith))
+    (have hl2 (= (+ (+ j 1) (List.length (cons w ws))) (+ k 1))
+      (show (= (+ (+ j 1) (+ (List.length ws) 1)) (+ k 1)))
+      (arith))
+    (exact
+      (And.intro hr
+        (And.intro (framed_all h)
+          (And.intro (Eq.trans hsegs (framed_segs h))
+            (And.intro hsp2 (And.intro hh (And.intro hl2 (And.intro hc hm))))))))))
+;; a pop into a register other than the stack pointer
+(theorem framed_pop
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (v (BitVec 64) implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (r Nat)
+   (pc (BitVec 64))
+   (h (framed c0 tbl clo chi f k m0 c j (cons v (cons w ws))))
+   (hr4 (= (reg (x_pop c r pc) 4) (w64_add (reg c 4) (w64 8)))))
+  (framed c0 tbl clo chi f k m0 (x_pop c r pc) (+ j 1) (cons w ws))
+  (by
+    (have ht (holds (Cpu.mem c) (+ (+ f (* 8 j)) 8) (cons w ws))
+      (exact (holds_tail (Cpu.mem c) (+ f (* 8 j)) v (cons w ws) (framed_holds h))))
+    (have ea (= (+ f (* 8 (+ j 1))) (+ (+ f (* 8 j)) 8)) (arith))
+    (have hh (holds (Cpu.mem (x_pop c r pc)) (+ f (* 8 (+ j 1))) (cons w ws)) (rw ea) (exact ht))
+    (exact (framed_up h (Eq.refl (Cpu.segs c)) hr4 hh (framed_code h) (framed_mem h)))))
+
+;; ---- a callee's return --------------------------------------------------------------------------
+;; A callee entered in the described state c, its return address the first of the words, has
+;; returned in c2: the program counter is at that address,
+(theorem framed_back_at
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ra (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (c2 Cpu implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons ra ws)))
+   (hret (returned c c2)))
+  (= (Cpu.rip c2) ra)
+  (by (rw (returned_at c c2 hret)) (exact (framed_top h))))
+;; and c2 is described, a word up: where the callee wrote inside [a, b) alone, a range clear of
+;; the words above its return address and of the code,
+(theorem framed_back
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ra (BitVec 64) implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (c2 Cpu implicit)
+   (a Nat implicit)
+   (b Nat implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons ra (cons w ws))))
+   (hret (returned c c2))
+   (hso (same_outside (Cpu.mem c) (Cpu.mem c2) a b))
+   (hwords (or (<= b (+ f (* 8 (+ j 1)))) (<= (+ f (* 8 (+ k 1))) a)))
+   (hcode (or (<= (+ chi 15) a) (<= b clo))))
+  (framed c0 tbl clo chi f k (Cpu.mem c2) c2 (+ j 1) (cons w ws))
+  (by
+    (have kp (kept c c2) (exact (returned_kept c c2 hret)))
+    (have ht (holds (Cpu.mem c) (+ (+ f (* 8 j)) 8) (cons w ws))
+      (exact (holds_tail (Cpu.mem c) (+ f (* 8 j)) ra (cons w ws) (framed_holds h))))
+    (have ea (= (+ f (* 8 (+ j 1))) (+ (+ f (* 8 j)) 8)) (arith))
+    (have hl (= (+ j (+ (+ (List.length ws) 1) 1)) (+ k 1)) (exact (framed_len h)))
+    (have hh (holds (Cpu.mem c2) (+ f (* 8 (+ j 1))) (cons w ws))
+      (rw ea)
+      (apply (holds_same (Cpu.mem c) (Cpu.mem c2) a b (+ (+ f (* 8 j)) 8) (cons w ws) ht hso)
+        ((show
+           (or (<= (+ (+ (+ f (* 8 j)) 8) (* 8 (+ (List.length ws) 1))) a)
+             (<= b (+ (+ f (* 8 j)) 8))))
+         (cases hwords ((inl (hl1) (apply Or.inr ((arith)))) (inr (hr1) (apply Or.inl ((arith)))))))))
+    (have hc2 (code_in c2 tbl)
+      (exact
+        (code_in_after c c2 tbl clo chi a b (framed_all h) (kept_segs c c2 kp) hso hcode
+          (framed_code h))))
+    (exact
+      (framed_up h (kept_segs c c2 kp) (kept_sp c c2 kp) hh hc2
+        (same_outside_refl (Cpu.mem c2) f (+ f (* 8 k)))))))
+;; or where the callee wrote nothing
+(theorem framed_back_same
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (j Nat implicit)
+   (ra (BitVec 64) implicit)
+   (w (BitVec 64) implicit)
+   (ws (List (BitVec 64)) implicit)
+   (c2 Cpu implicit)
+   (h (framed c0 tbl clo chi f k m0 c j (cons ra (cons w ws))))
+   (hret (returned c c2))
+   (hmem (= (Cpu.mem c2) (Cpu.mem c))))
+  (framed c0 tbl clo chi f k m0 c2 (+ j 1) (cons w ws))
+  (by
+    (have kp (kept c c2) (exact (returned_kept c c2 hret)))
+    (have ht (holds (Cpu.mem c) (+ (+ f (* 8 j)) 8) (cons w ws))
+      (exact (holds_tail (Cpu.mem c) (+ f (* 8 j)) ra (cons w ws) (framed_holds h))))
+    (have ea (= (+ f (* 8 (+ j 1))) (+ (+ f (* 8 j)) 8)) (arith))
+    (have hh (holds (Cpu.mem c2) (+ f (* 8 (+ j 1))) (cons w ws)) (rw hmem) (rw ea) (exact ht))
+    (have hc2 (code_in c2 tbl)
+      (exact (code_in_of c c2 tbl (kept_segs c c2 kp) hmem (framed_code h))))
+    (have hm2 (same_outside m0 (Cpu.mem c2) f (+ f (* 8 k))) (rw hmem) (exact (framed_mem h)))
+    (exact (framed_up h (kept_segs c c2 kp) (kept_sp c c2 kp) hh hc2 hm2))))
+
+;; ---- out of the function ------------------------------------------------------------------------
+;; Where the stack pointer stands again as the function was entered, at the return address, and
+;; the registers a callee keeps are the entry's: the state after the return instruction is the
+;; function's code returned.
+(theorem framed_returned
+  ((c0 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))) implicit)
+   (clo Nat implicit)
+   (chi Nat implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (m0 Mem implicit)
+   (c Cpu implicit)
+   (h (framed c0 tbl clo chi f k m0 c k (cons (ret_addr c0) nil)))
+   (h3 (= (reg c 3) (reg c0 3)))
+   (h5 (= (reg c 5) (reg c0 5)))
+   (h12 (= (reg c 12) (reg c0 12)))
+   (h13 (= (reg c 13) (reg c0 13)))
+   (h14 (= (reg c 14) (reg c0 14)))
+   (h15 (= (reg c 15) (reg c0 15))))
+  (returned c0 (x_ret c))
+  (by
+    (have hr (room c0 clo chi f k) (exact (framed_room h)))
+    (have hf0 (= (w64_val (reg c0 4)) (+ f (* 8 k))) (exact (And.left hr)))
+    (have e (= (reg c 4) (reg c0 4))
+      (apply BitVec.eq_of_toNat_eq
+        ((show (= (w64_val (reg c 4)) (w64_val (reg c0 4)))) (rw hf0) (exact (framed_sp h)))))
+    (have hsp (= (reg (x_ret c) 4) (w64_add (reg c0 4) (w64 8)))
+      (show (= (w64_add (reg c 4) (w64 8)) (w64_add (reg c0 4) (w64 8))))
+      (rw e)
+      rfl)
+    (have hrip (= (Cpu.rip (x_ret c)) (ret_addr c0)) (exact (framed_top h)))
+    (exact
+      (And.intro hrip
+        (And.intro hsp
+          (And.intro (framed_segs h)
+            (And.intro h3 (And.intro h5 (And.intro h12 (And.intro h13 (And.intro h14 h15)))))))))))

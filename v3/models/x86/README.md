@@ -12,6 +12,7 @@ it.
 | file | what it holds |
 |---|---|
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
+| `words.shard` | a buffer of machine words as a value, a list: the word at an index (`nth`), the list with one replaced (`upd`), an access that takes the evidence that its index is in range (`word_at`, `put_at`) |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
 | `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `runner_start`, the start the runner gives), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
@@ -20,6 +21,7 @@ it.
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fifteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
+| `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
 | `derive.shard` | a tactic library: `derive_block`, the proof of a run of a listing's instructions by the laws' rules, read off the listing's table |
 | `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file, its instructions by address (`buffers_table`) |
@@ -124,10 +126,43 @@ that calls: the word at the stack pointer after a push is the word pushed (`ret_
 what a callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …);
 code in place in any later state with the same mapping whose memory agrees outside a range
 clear of it (`code_in_after`); agreement outside two ranges, a buffer and a frame
-(`same_outside2`). Of what is mapped: a range mapped whole is mapped word by word
+(`same_outside2`), composed of a caller's writes to its frame around a callee's to a buffer
+(`same_outside2_around`). Of what is mapped: a range mapped whole is mapped word by word
 (`mapped_words_of`). Of a run's end: a run from a state the processor comes to is a run from
 where it came (`run_of_steps`), and the system call `exit` ends the process with the low byte of
 `rdi` (`run_exit`).
+
+**A function's frame** (`frame.shard`). `(holds m p ws)`: the words `ws` stand in the memory
+`m` from the address `p`, eight bytes each — a buffer a function was handed, or the words a
+function has pushed. `(room c clo chi f k)`, of the state a function is entered in: the stack
+pointer stands `k` words above an address `f`; the `k` words from `f` are mapped to write, and
+they and the return address above them to read; and they are clear of the code, which lies in
+`[clo, chi)`. It is what a contract asks of its caller's stack, in one hypothesis.
+`(framed c0 tbl clo chi f k m0 c j ws)`, of a state `c` inside a function entered in `c0` with
+that room: the mapping is the entry's, the stack pointer stands `j` words above `f`, the words
+`ws` stand from there up to the return address — the last of them — the table's code is in
+place, and memory outside the `k` words is as in `m0`: the entry's memory, or the memory a
+callee returned in. Each law takes one description to the next:
+
+- `framed_enter`: the entry state is described, the one word at its stack pointer its return
+  address;
+- `framed_push`, `framed_push_ok`: after a push the word pushed stands first, a word down; and
+  the word a push stores at is mapped — what the rule of a `push` or a `call` asks;
+- `framed_pop`, `framed_top`, `framed_top_ok`: after a pop the rest stand, a word up; the word
+  at the stack pointer is the first of the words — the word a `pop` gives, the address a `ret`
+  jumps to — and is mapped to read;
+- `framed_back`, `framed_back_same`, `framed_back_at`: a callee entered in a described state
+  has returned: the state it returned in is described, a word up, where what it wrote lies in a
+  range clear of the words and of the code, or where it wrote nothing; and the program counter
+  is at the first of the words, the address the `call` pushed;
+- `framed_returned`: where the stack pointer stands again at the return address and the six
+  registers a callee keeps are the entry's, the state after `ret` is the function's code
+  `returned`.
+
+So the stack pointer's arithmetic, each saved word read back, the code still in place after a
+push and the mapping of each word are proven once, and a function's proof names its words.
+The laws are used by one function, `both`: a callee that keeps a frame of its own (its
+footprint two ranges) and a frame that holds variables have no law yet.
 
 **A listing's file, loaded** (`loaded.shard`). `elf_load_exec`: the file `elf_exec` writes for
 any code that ends below the top of a process's addresses loads to one range, the file's bytes
@@ -138,7 +173,7 @@ processor decodes each instruction of the listing, its labels resolved, at its a
 the stack's to execute. It is proven once, from the assembler's own check: no instruction of a
 file is decoded again to know it. `run_file_exec`: a run of the file is a run from that state.
 
-**The trial** (`buffers.shard`, `buffers_facts.shard`; `docs/COMPILE.md` §4). Three functions
+**The trial** (`buffers.shard`, `words.shard`, `buffers_facts.shard`; `docs/COMPILE.md` §4). Three functions
 written as ordinary shard: `dot`, the sum of the products of two buffers' words; `addto`, the
 first buffer with the second's words added to it — in the logic a new list; and `both`, which
 calls the two, `dot` on one buffer as both operands. A buffer is a list of words; a read
@@ -159,16 +194,19 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   state at the return address in which the first buffer's memory holds the list `addto` returns,
   and every byte outside that buffer's counted words is as it was.
 - `both_contract`: from a state at `both`'s first instruction with the two buffers as for
-  `addto`, whose stack pointer stands 24 above an address `f` — the three words from `f` mapped
-  to write, those and the return address to read, the frame clear of the code and of both
-  buffers — the processor comes to a state at the return address with `both`'s value in `rax`,
-  the first buffer's memory holding the list `both` returns, `rbx` and `r12` as the caller had
-  them, and every byte outside the first buffer's counted words and the 24 bytes from `f` as it
-  was. Its proof takes `addto_contract` and `dot_contract_same` as they are stated, each in the
-  state the code calls from: what a callee is said to keep — the stack pointer, the mapping,
-  six registers — and what it is said to leave unwritten is all the caller's proof has of the
-  state the callee returns in. The proof is thirty lemmas and not one: K's recursion is
-  bounded in depth, and a proof of a hundred steps in one piece is refused (`OPEN.md` §3).
+  `addto` and room for a frame of three words above an address `f` (`room`), the frame and the
+  return address clear of both buffers, the processor comes to a state at the return address
+  with `both`'s value in `rax`, the first buffer's memory holding the list `both` returns,
+  `rbx` and `r12` as the caller had them, and every byte outside the first buffer's counted
+  words and the 24 bytes from `f` as it was. Its proof takes `addto_contract` and
+  `dot_contract_same` as they are stated, each in the state the code calls from: what a callee
+  is said to keep — the stack pointer, the mapping, six registers — and what it is said to
+  leave unwritten is all the caller's proof has of the state the callee returns in. Its frame
+  is the laws of `frame.shard`: the proof names the words that stand from the stack pointer at
+  each state — the return address; under it `rbx`; under that `r12`; under that a call's
+  return address — and each push, pop and return is one law. It is five theorems beside its
+  three runs of instructions, and not one theorem: K's recursion is bounded in depth
+  (`OPEN.md` §3), so each part is a lemma whose statement lists its hypotheses again.
 
 - `buffers_exits` (`buffers_run.shard`): the listing's file, started as the runner starts it —
   whatever the registers but the stack pointer, the flags and the memory then hold — exits with
@@ -184,7 +222,7 @@ decodes the listing's instructions at their addresses (`code_in`); `listing_load
 of the first state, and `buffers_exits` is the one statement here that assumes nothing of the
 code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`. The evaluator's
 run of `both`, the model's run of the listing's file and the processor's give that one status,
-19. No compiler made the listing. The proofs are written by hand, but for eight: the runs of
+19. No compiler made the listing. The proofs are written by hand, but for nine: the runs of
 instructions between a function's branch points, which a tactic derives.
 
 **Derived proofs** (`derive.shard`; `docs/LANGUAGE.md`, "A tactic library"). A statement that
@@ -197,9 +235,10 @@ the code still in place after a store — taken from the statement's hypotheses 
 It follows a jump, and ends where B's program counter is reached, after a `ret`, after a `call`,
 or after a number of instructions a hint gives. A function of the listing's own hands it the
 table (`buffers_tactic.shard` `block`), and a theorem names that function: `(auto (tactic
-models.x86.buffers_tactic.block))`. Eight theorems of the trial are proven so — `dot_turn`,
-`dot_leave`, `dot_enter`, `add_turn`, `add_leave`, `add_enter`, `both_mid`, `both_leave` — their
-blocks in `buffers_facts.auto.shard`, which `prove` writes and a load replays. No file of the
+models.x86.buffers_tactic.block))`. Nine theorems of the trial are proven so — `dot_turn`,
+`dot_leave`, `dot_enter`, `add_turn`, `add_leave`, `add_enter`, `both_enter`, `both_mid`,
+`both_leave` — their blocks in `buffers_facts.auto.shard`, which `prove` writes and a load
+replays. No file of the
 trial imports the library, so a load does not read it; `prove` is given the tactic's file first:
 
 ```
@@ -207,13 +246,14 @@ v3/bin/prove --root v3 --init $EXPORT --init-index $INDEX \
   v3/models/x86/buffers_tactic.shard v3/models/x86/buffers_facts.shard
 ```
 
-`x86_test.sh` holds that the library still derives the eight: on the binaries it runs `prove` on
+`x86_test.sh` holds that the library still derives the nine: on the binaries it runs `prove` on
 a copy of the model without the blocks, and the file written is the committed one byte for byte.
 
 Nothing of the library is believed: K checks each block it answers, and a goal it does not
 understand it leaves unanswered. It writes a proof and no statement: the states a run passes
 through and the lemma for each run are still written by hand, and so is everything about a
-loop, a call's hypotheses and a frame.
+loop and a call's hypotheses. What a run asks of the stack — each push's word mapped, the code
+in place after it — is a hypothesis of the run's lemma, which the frame's description gives.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
@@ -221,10 +261,12 @@ sums and differences with their carries, a product, the fourteen conditions over
 sign extension at its edge, memory through each form of operand, the stack, a call — under the model
 and, on an x86-64 Linux machine, on the processor: where the model's run exits, the processor's
 exits with the same status. The status is one byte, so a program that checks a word reads it back
-a byte at a time, as eight programs. Fourteen faults planted in the model one at a time each failed
-the test as it stood before the product, the indexed operand and the unknown flags were added;
-that was checked by hand, with a tool outside the tree, found two programs missing, and has not
-been done again since.
+a byte at a time, as eight programs. Twenty faults planted one at a time each failed the test:
+thirteen in the model's rules, two in the file's layout, one in the assembler, two in the trial (a
+function, its listing's table), one in the tactic library and one in a stored proof. A change to
+the model leaves every stored proof stale, which alone fails the test, so the stored proofs were
+derived again under each fault. That was checked with a tool outside the tree, on the test as it
+stood before the laws of a frame were added.
 The assembler's bytes for three of the programs, written as listings, are the bytes assembled by
 hand.
 
@@ -233,9 +275,9 @@ Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bit
 `encode` for every instruction; a start whose stack is anywhere but where the runner puts it,
 in a statement about a file; a rule for every instruction form; a contract of code whose frame
 holds variables of its own (there is no rule for an operand at the stack pointer and a
-displacement); a derivation of a whole contract (a loop's invariant, a callee's hypotheses, a
-frame's bookkeeping are by hand); a compiler from a shard function to a listing and its
-contract.
+displacement); a law for the return of a callee that keeps a frame of its own; a derivation of
+a whole contract (a loop's invariant and a callee's hypotheses are by hand, and the frame's
+laws are applied by hand); a compiler from a shard function to a listing and its contract.
 
 ## From the command line
 

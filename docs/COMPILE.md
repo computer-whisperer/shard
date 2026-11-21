@@ -135,7 +135,10 @@ Proven there, by hand, from laws of the model stated once (`laws.shard`): the co
 of products over two buffers, which writes nothing; of a sum into the first of two buffers,
 which changes no byte outside that buffer's words; and of a function that calls the two and
 saves two registers on the stack, which changes no byte outside that buffer's words and three
-words of its stack. The caller's proof takes each callee's contract as it is stated. A contract
+words of its stack. The caller's proof takes each callee's contract as it is stated, and its
+frame is laws stated once (`frame.shard`): a state inside a function is described by the words
+that stand from its stack pointer up to the return address, and a push, a pop and a return
+each take one description to the next. A contract
 assumes its code in place; that is proven once, of the first state of the file of any listing
 the assembler answers for (`loaded.shard`), and with it the system's statement of the trial's
 file: started as the model's runner starts it, the file exits with the low byte of what the
@@ -143,7 +146,8 @@ functions compute (`buffers_run.shard` `buffers_exits`) — every hypothesis of 
 contract met in the state the file's first instructions reach. The proof of a run of
 instructions between two branch points is derived from the listing by a tactic library
 (`derive.shard`), a certificate in §3's sense; everything else is written by hand. Not shown:
-a compiler that derives a contract; a frame that holds variables of its own; a start whose
+a compiler that derives a contract; a frame that holds variables of its own; a caller of a
+function that keeps a frame; a start whose
 stack is elsewhere; and anything for
 code not of this kind — lists, constructors, integers of any size.
 
