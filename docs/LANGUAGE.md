@@ -230,20 +230,19 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Ninety-nine in a hundred of their functions are definitions; of those written by hand,
-  more than nineteen in twenty.** The checker reads every one: of the loader's closure, 8,990
-  functions — 4,792 of them the rows of a generated table —, it holds 8,945 as definitions. The
-  other 45 are programs with the reason: a function they call is a program
-  (`callee_runnable`, 43), or it states an integer for its measure (`measure_type`:
-  `loader.shard` `probe_reach`, left so for what its definition costs K — `OPEN.md` §1), or
-  a function that calls itself with none (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
+- **All but eight of their functions are definitions.** The checker reads every one: of the
+  loader's closure, 8,990
+  functions — 4,792 of them the rows of a generated table —, it holds 8,982 as definitions. The
+  other 8 are programs with the reason: a function that calls itself with no measure
+  (`realize_recursion`: `ev.shard` `run_loop`, a program's run with effects), and the seven
+  above it, each for a callee that is a program (`callee_runnable`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 181 functions in 35 files:
+  `kernel/descent.shard`. The forms the sources use, 189 functions in 35 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -264,15 +263,14 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. One function is a program for the
-  integer it states (`measure_type`: `loader.shard` `probe_reach`); 12 more state an
-  integer where the checker does not get to it, behind a callee that is a program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. No function of the loader's closure
+  states an integer for its measure.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Twenty-two groups are written so, 211 functions, and the loader's `build_demands`
+  parts"). Twenty-four groups are written so, 228 functions, and the loader's `build_demands`
   alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
@@ -288,7 +286,9 @@ file; two things about how they are written set them apart.
   normalization in two and their run of a block in three (`tactic.shard` `reduce_loop`,
   `tac_block`), the producer's ladder in three — its depth, a rank, and its budget or a
   list (`engine.shard` `eng_solve`) —, the loader's reading of a `fn` in three — two fuels
-  and a rank (`loader.shard` `load_fn_with`) —, the evaluator's
+  and a rank (`loader.shard` `load_fn_with`) —, its re-entry on the forms a derivation
+  generated in three — a depth, a rank, a list (`load_derive`) — and its reading of a module
+  with its imports in the same three, the import depth first (`load_file_module`), the evaluator's
   machine in two, its fuel and what is left to run at that fuel (`ev.shard` `ev_term`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that

@@ -69,7 +69,7 @@ Paths are under `v3/kernel/` unless they start elsewhere. "Rests on" is what a f
 | `record.shard` | 447 | `(record …)` expanded at the s-expression level before anything is read: the `type`, accessor and updater `fn`s; `(make …)` and `(with …)` rewritten in every form of the file, also over a parameterless `structure`. | `sexpr`, `util` | `loader` (`expand_records`, per file) |
 | `inhabit.shard` | 129 | Builds a default value of a K type structurally (a lambda for a function type; the first constructor whose fields all close) — the value an `extern`'s opaque constant is declared with. | `kw` | `reader` (`read_extern`) |
 | `thread.shard` | 1368 | The use check over programs: World types and carriers, abstract tokens and boxes, the walk (`th_term`), a function's verdict (`th_fn`: `ok`, `world_twice`, `world_unsupported`, `world_forged`); second half: the same walk over the checker's own state, on request (`--state`). | `classify` (static types), `etable`, `prog` | `loader` (`rec_threads` at each file's end, `bin_threads`, `rec_states`) |
-| `loader.shard` (declaration parts) | 5507 | `load_decl_go` dispatches each form; `load_e_form`/`load_fn_with` (the `fn` pipeline: pre-definition → erasure → definition; parking on a forward reference, read again once the callee has a declaration: `retry_each`, `callee_awaited`), `load_unheld_type` (a `type` naming types K does not hold: those below it gathered with their forms, `gather_types`, and admitted where it stands, block by block, `admit_gathered`/`admit_types`; the ones admitted ahead of their forms, `Load.tahead`, get their program's declaration there; else a program with its reason), `settle_groups`/`find_group`/`load_group` (groups; the search keeps how the readings of the waiting functions ended, `Reads`, and forgets one when what it rested on changes: `reading`, `reads_settled`, `ld_forget`, `ld_forget_all`), `load_ldef` (a recursive `def`), `load_extern`, `load_realize`, `load_derive`, `load_discharge` (obligations), `load_template`/`build_demands` (instances), `admit_core`/`policy_pass` (K admission and the axiom policy, each type of a block a subject: `decls_subjects`), `bundle_after` (the bundle of every type admitted), `check_bin`, `rec_threads`, `show_rec` (the printed records). | `reader`, `k`, `realize`, `define`, `template`, `record`, `derive`, `elab`, `tactic`, `thread`, `initload` | `load.shard` (the driver), `run.shard`, `prove.shard`, tests |
+| `loader.shard` (declaration parts) | 5647 | `load_decl_go` dispatches each form; `load_e_form`/`load_fn_with` (the `fn` pipeline: pre-definition → erasure → definition; parking on a forward reference, read again once the callee has a declaration: `retry_each`, `callee_awaited`), `load_unheld_type` (a `type` naming types K does not hold: those below it gathered with their forms, `gather_types`, and admitted where it stands, block by block, `admit_gathered`/`admit_types`; the ones admitted ahead of their forms, `Load.tahead`, get their program's declaration there; else a program with its reason), `settle_groups`/`find_group`/`load_group` (groups; the search keeps how the readings of the waiting functions ended, `Reads`, and forgets one when what it rested on changes: `reading`, `reads_settled`, `ld_forget`, `ld_forget_all`), `load_ldef` (a recursive `def`), `load_extern`, `load_realize`, `load_derive`, `load_discharge` (obligations), `load_template`/`build_demands` (instances), `admit_core`/`policy_pass` (K admission and the axiom policy, each type of a block a subject: `decls_subjects`), `bundle_after` (the bundle of every type admitted), `check_bin`, `rec_threads`, `show_rec` (the printed records). | `reader`, `k`, `realize`, `define`, `template`, `record`, `derive`, `elab`, `tactic`, `thread`, `initload` | `load.shard` (the driver), `run.shard`, `prove.shard`, tests |
 
 Related files outside the list that the area depends on: `reader.shard` (the L declaration forms
 `def`, `abbrev`, `opaque`, `theorem`, `axiom`, `inductive`, `type`, `structure`, `sig`,
@@ -90,7 +90,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 | `matcher.shard` (646) | Generates the auxiliary definition a `match` elaborates to (`mt_generate`) and recognizes one by regenerating it from its type (`mt_is_matcher`). | `kw.shard`, `scope.shard`, K's view. | `elab.shard` (`elab_match`), `tactic.shard` (the case step of `reduce`), `define.shard`, `realize.shard`, `erasure.shard`, `derive.shard`, `template.shard`. |
 | `kw.shard` (187) | The walk over K's terms from outside K: an environment, a local context and checker state (`W`), with K's `whnf`, `infer`, `is_def_eq`, `is_prop`, local creation and binder closing wrapped so that a failure is a value. | K's view only. | Every elaborating file: `unify`, `elab`, `tactic`, `arith`, `spelling`, `matcher`, `reader`, `loader`, `define`, `realize`, `derive`, `erase`, `erasure`, `template`, `classify`, `inhabit`, `run`, `predef`. |
 | `elab.shard` (2,596), proof-related parts | The term elaborator the steps call for every TERM, PROP, LEMMA and FACT (`elab`, `elab_type`); the elaborator state `El`; `el_finish` and `unsolved_msg` (the refusals for undetermined arguments); `decision_of` and `no_decision` (what `decide` and `if` can decide); `el_sees` (can the module cite this constant); the `pending_obligation` refusal on citing a pending name. | `unify.shard`, `matcher.shard`, `scope.shard`, `spelling.shard`, `kw.shard`. | `reader.shard`, `tactic.shard`, `arith.shard`, `engine.shard`, `derive.shard`, `loader.shard`. |
-| `loader.shard` (5,507), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`) and gives each accepted theorem its key (`accept_key`), the walk's memo kept in one field with K's memo of axiom closures (`Memos`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
+| `loader.shard` (5,647), proof-related parts | Reads the sidecar once per file, and once for the implementation file of a view where its check begins (`read_sidecar`, `sidecar_split`, `sidecar_entries`; `sidecar_schema` is 3); computes the file's parts of the key (`req_ctx`) and gives each accepted theorem its key (`accept_key`), the walk's memo kept in one field with K's memo of axiom closures (`Memos`); turns the reader's answers into records (`RPending`, `RProved`, `REngine`, `RTactic`, `RSidecar`, `RRecon`; `rd_plain`); keeps the pending names (`Load.pending`); handles `(fulfills f.dec_N PROOF)` (`load_discharge`, `settle_discharge`, `fulfills_cycle`) and a view's `fulfills` (`fulfil`); checks a `bin`'s `requires` against pending theorems (`bin_requires`); prints every record (`show_rec`) and the counts. | `reader.shard`, `tactic.shard`, `elab.shard`, K. | `load.shard`, `prove.shard`, `run.shard`, the loader tests. |
 
 #### Other files on the path of a proof
 
@@ -114,9 +114,11 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
 - `env.shard` (39) — `CheckedEnv` (constants by 24-bit name key with buckets, quotInitialized,
   pinned names, node-id watermark) and `env_empty`; states the one-environment invariant.
   Rests on decl, intmap, verdict. Used by every other K file.
-- `tc.shard` (2,761) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
+- `tc.shard` (2,768) — the type checker: `infer` (checking and inference-only modes), `whnf_core`,
   `whnf`, `is_def_eq` in Lean's order (quick check, proof irrelevance, lazy delta, eta, structure
-  eta, string literal expansion, unit-like); memo tables; `guard` (depth and heartbeat budgets);
+  eta, string literal expansion, unit-like); a structure's recursor at a major premise that
+  reduces to no constructor takes the fields as the projections of the major as written, where
+  Lean takes those of what it reduced to (`to_cnstr_when_structure`); memo tables; `guard` (depth and heartbeat budgets);
   literal typing gated on pins; `reduce_nat` / `nat_apply` (the 14 accelerators); `reduce_native`
   (Unsupported). Its 60 functions that call each other, `infer` to `defeq_step7`, are one
   definition of the logic, each measured by the depth, then its rank among the calls that stay
@@ -173,7 +175,7 @@ functions), `scope.shard` (name resolution, `renamed_prim`, the derivation table
   recursion ends, beside the functions (`fulfills`), over the facts of `../descent.shard`, which
   reaches the directory through `../intmap.shard`. They are no part of K's program: a build
   passes them over, and `toolchain_check.sh` checks them.
-- `test/tc_test.shard` (101 cases), `test/inductive_test.shard` (29), `test/nested_test.shard`
+- `test/tc_test.shard` (105 cases), `test/inductive_test.shard` (29), `test/nested_test.shard`
   (11), `test/add_test.shard` (321, with the one-counter census), `test/accel_test.shard` (98) —
   tests inside the seal; run by `v3/test.sh` on the bootstrap and by `k_clients_test.sh` through
   the V3 loader.
@@ -305,7 +307,7 @@ is public and outside its directory: `name`, `level`, `expr` (terms, node data, 
 | file (`v3/kernel/k/`) | lines | holds |
 |---|---|---|
 | `env.shard` | 39 | `CheckedEnv`: constants by name hash, whether `Quot` is declared, the pinned names, the node-id watermark |
-| `tc.shard` | 2,761 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators; the descent of its 60 functions |
+| `tc.shard` | 2,768 | type inference, weak-head normal form, definitional equality; memo tables; budgets; literal rules; the `Nat` accelerators; the descent of its 60 functions |
 | `inductive.shard` | 1,366 | inductive blocks: the checks, the constructors, the recursors and their rules; the descent of its walks |
 | `nested.shard` | 1,050 | nested inductives through auxiliary mutual types |
 | `add.shard` | 519 | `check`: admission per kind, the `Quot` constants, the pin match, the raw entry |
@@ -339,7 +341,10 @@ site`. First it rebuilds every term of `decl` from its structure. Then, by kind:
 depth of 8,192 and 100,000,000 steps for each declaration; a numeral is capped at 128 MiB, a `pow`
 or `shiftLeft` count at 32 bits. A result reached under a budget is the same under a larger one;
 the loader has no option to raise them. Inference, reduction and definitional equality follow
-Lean's kernel in its order; memo tables are fresh for each declaration and change cost only.
+Lean's kernel in its order, but for one term: where a structure's recursor meets a major premise
+that reduces to no constructor, K takes the structure apart as the projections of the major as
+written, Lean as those of what it reduced to — convertible terms, and the same rule
+(`DECISIONS.md`, the checker K). Memo tables are fresh for each declaration and change cost only.
 
 ### The boundary
 
