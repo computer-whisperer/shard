@@ -1752,7 +1752,10 @@ measurements; measure again before building on one.
   import depth moved (`base_loaded`, `load_file_module`, `load_forms`, `impl_replay`,
   `impl_form`). After the driver: the 29 binaries built in 263 s, the suite 248 s, 52
   entrypoints, none failed; the loader's closure loaded checked, 58 modules with none
-  pending. The checked load of all 29 roots was not run on the dev box and is CI's.
+  pending. The checked load of all 29 roots was not run on the dev box and is CI's. On CI,
+  #792 (`5f9375ce`): `native` 4,245 s — the build 488, all 29 roots loaded checked in 885 for
+  641 on #787, 148,624 declarations and none failed, the byte-tie 36 minutes —, `v3` 2,521,
+  `replay` 1,805 with the replay itself 1,412 s and 57,977 accepted; the pipeline 6,215.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
