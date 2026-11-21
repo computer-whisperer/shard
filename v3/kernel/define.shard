@@ -83,13 +83,13 @@
 ;; constructor of the group's argument type, its measure over its data binders, those binders
 (type PjCallee (PjCallee Int Name Expr (List Expr)))
 ;; PkStruct: C's id, the structural position among the data arguments. PkWf: rec, the tuple,
-;; the components' types, the measure over the data binders, the data binders. PkEqn: the
+;; the components' types and their levels, the measure over the data binders, the data binders. PkEqn: the
 ;; statement of a measured function's equations (a self-call stays a call, a matcher carries
 ;; its equation as under PkWf). PkGrp: a member of a group — rec, the member's measure, its
 ;; data binders, the members as this body calls them
 (type PjKind
   (PkStruct Int Int)
-  (PkWf Expr Expr (List Expr) Expr (List Expr))
+  (PkWf Expr Expr (List Expr) (List Level) Expr (List Expr))
   (PkEqn)
   (PkGrp Expr Expr (List Expr) (List PjCallee)))
 (fn pj_carries_eq ((k PjKind)) Bool
@@ -128,7 +128,7 @@
 (fn pj_out ((cx PjCx)) (List Int)
   (append
     (match (PjCx.kind cx)
-      ((PkWf recl _ _ _ _) (list (fvar_id_of recl)))
+      ((PkWf recl _ _ _ _ _) (list (fvar_id_of recl)))
       ((PkGrp recl _ _ _) (list (fvar_id_of recl)))
       (_ nil))
     (pj_beyond_ids (PjCx.beyond cx))))
@@ -480,60 +480,56 @@
   TrAux
   (match (local_types t data nil)
     ((Prod.mk t1 ltys)
-     (match (wf_tuple_type t1 ltys)
-       ((Prod.mk t2 alpha)
-        (match (tr_local t2 (n1 (sym "p")) alpha)
-          ((Prod.mk t3 pm)
-           (match (pj_subst_projs t3 m data pm (len data) 0)
-             ((Prod.mk t5 ml)
-              (match (tr_lams t5 (list pm) ml)
-                ((Prod.mk t6 mfn)
-                 (match (wf_relation t6 alpha mfn ord)
-                   ((Prod.mk t7 (Prod.mk rel hwf))
-                    (match (tr_local t7 (pj_tuple_name pd data) alpha)
-                      ((Prod.mk t8 p)
-                       (match (wf_rec_type t8 alpha rel p rl)
-                         ((Prod.mk t9 rty)
-                          (match (tr_local t9 (n1 (sym "rec")) rty)
-                            ((Prod.mk t10 recl)
-                             (match (pj_subst_projs t10 (pd_body pd) data p (len data) 0)
-                               ((Prod.mk t11 body1)
-                                (let
-                                  ((cx
-                                     (make PjCx (self selfid) (tps tps)
-                                       (kind (PkWf recl p ltys m data))
-                                       (tables nil)
-                                       (scope (list (Prod.mk false p)))
-                                       (members nil)
-                                       (beyond nil))))
-                                  (match (pj_term t11 cx body1 (budget_depth))
-                                    ((TrErr e m2) (AuxErr t11 e m2))
-                                    ((TrOk t12 b)
-                                     (match (tr_lams t12 (list p recl) b)
-                                       ((Prod.mk t13 fnl)
-                                        (match (tr_local t13 (n1 (sym "x")) alpha)
-                                          ((Prod.mk t14 xc)
-                                           (match (tr_lams t14 (list xc) rl)
-                                             ((Prod.mk t15 cmot)
-                                              (match (wf_tuple t15 ltys data)
-                                                ((Prod.mk t16 tup)
-                                                 (match
-                                                   (tr_apps t16
-                                                     (mk_const (n2 (sym "WellFounded") (sym "fix"))
-                                                       (list (level_one) (level_one)))
-                                                     (list alpha cmot rel hwf fnl tup))
-                                                   ((Prod.mk t17 fixed)
-                                                    (match (tr_lams t17 (pd_binders pd) fixed)
-                                                      ((Prod.mk t18 v)
-                                                       (AuxOk (tr_set_value t18 v) nil)))))))))))))))))))))))))))))))))))))
-;; e with the k-th data binder the k-th component of the tuple p
-(fn pj_subst_projs ((t Tr) (e Expr) (data (List Expr)) (p Expr) (n Int) (k Int)) (Prod Tr Expr)
-  (measure (struct data))
-  (match data
-    (nil (Prod.mk t e))
-    ((cons fv r)
-     (match (tr_subst t e (fvar_id_of fv) (wf_proj p n k))
-       ((Prod.mk t1 e1) (pj_subst_projs t1 e1 r p n (+ k 1)))))))
+     (match (wf_levels t1 ltys nil)
+       ((Prod.mk t1b lvs)
+        (match (wf_tuple_type t1b data ltys lvs)
+          ((Prod.mk t2 alpha)
+           (match (tr_local t2 (n1 (sym "p")) alpha)
+             ((Prod.mk t3 pm)
+              (match (pj_subst_list t3 m data (wf_projs alpha pm (len data)))
+                ((Prod.mk t5 ml)
+                 (match (tr_lams t5 (list pm) ml)
+                   ((Prod.mk t6 mfn)
+                    (match (wf_relation t6 alpha mfn ord)
+                      ((Prod.mk t7 (Prod.mk rel hwf))
+                       (match (tr_local t7 (pj_tuple_name pd data) alpha)
+                         ((Prod.mk t8 p)
+                          (match (wf_rec_type t8 alpha rel p rl)
+                            ((Prod.mk t9 rty)
+                             (match (tr_local t9 (n1 (sym "rec")) rty)
+                               ((Prod.mk t10 recl)
+                                (match
+                                  (pj_subst_list t10 (pd_body pd) data (wf_projs alpha p (len data)))
+                                  ((Prod.mk t11 body1)
+                                   (let
+                                     ((cx
+                                        (make PjCx (self selfid) (tps tps)
+                                          (kind (PkWf recl p ltys lvs m data))
+                                          (tables nil)
+                                          (scope (list (Prod.mk false p)))
+                                          (members nil)
+                                          (beyond nil))))
+                                     (match (pj_term t11 cx body1 (budget_depth))
+                                       ((TrErr e m2) (AuxErr t11 e m2))
+                                       ((TrOk t12 b)
+                                        (match (tr_lams t12 (list p recl) b)
+                                          ((Prod.mk t13 fnl)
+                                           (match (tr_local t13 (n1 (sym "x")) alpha)
+                                             ((Prod.mk t14 xc)
+                                              (match (tr_lams t14 (list xc) rl)
+                                                ((Prod.mk t15 cmot)
+                                                 (match (wf_tuple t15 data ltys lvs data)
+                                                   ((Prod.mk t16 tup)
+                                                    (match
+                                                      (tr_apps t16
+                                                        (mk_const
+                                                          (n2 (sym "WellFounded") (sym "fix"))
+                                                          (list (level_one) (level_one)))
+                                                        (list alpha cmot rel hwf fnl tup))
+                                                      ((Prod.mk t17 fixed)
+                                                       (match (tr_lams t17 (pd_binders pd) fixed)
+                                                         ((Prod.mk t18 v)
+                                                          (AuxOk (tr_set_value t18 v) nil)))))))))))))))))))))))))))))))))))))))
 (fn local_types ((t Tr) (fvs (List Expr)) (acc (List Expr))) (Prod Tr (List Expr))
   (measure (struct fvs))
   (match fvs
@@ -566,48 +562,105 @@
     (nil nil)
     ((cons (Prod.mk true _) r) (scope_lambda_fvars r))
     ((cons (Prod.mk false fv) r) (cons fv (scope_lambda_fvars r)))))
-;; the parameter tuple: one parameter is itself, more a right-nested PProd
-(fn wf_tuple ((t Tr) (ltys (List Expr)) (vals (List Expr))) (Prod Tr Expr)
+;; The parameter tuple. One parameter is itself; more are pairs nested to the right, and a
+;; pair is `PProd` where no later parameter's type names its first component and `PSigma`
+;; over that component where one does — evidence about a parameter, `(hk (<= k n))` beside
+;; `k` and `n` —, which is how Lean packs a recursion's domain. A component that is a
+;; proposition stands at level 0, any other at level 1.
+;; the level of each component's type
+(fn wf_levels ((t Tr) (ltys (List Expr)) (acc (List Level))) (Prod Tr (List Level))
+  (measure (struct ltys))
+  (match ltys
+    (nil (Prod.mk t (rev acc)))
+    ((cons ty r)
+     (match (tr_infer t ty)
+       ((Prod.mk t1 (some s))
+        (match (tr_whnf t1 s)
+          ((Prod.mk t2 (some (Sort _ LZero))) (wf_levels t2 r (cons LZero acc)))
+          ((Prod.mk t2 _) (wf_levels t2 r (cons (level_one) acc)))))
+       ((Prod.mk t1 none) (wf_levels t1 r (cons (level_one) acc)))))))
+;; the level of what stands after a pair's first component: the last component's own, a
+;; pair's 1
+(fn wf_rest_level ((lvs (List Level))) Level
+  (match lvs
+    ((cons l nil) l)
+    (_ (level_one))))
+;; the tuple of these values, each component's type at the values before it
+(fn wf_tuple ((t Tr) (data (List Expr)) (ltys (List Expr)) (lvs (List Level)) (vals (List Expr)))
+  (Prod Tr Expr)
   (measure (struct vals))
   (match vals
     (nil (Prod.mk t (mk_const (nm_punit_unit) (list (level_one)))))
     ((cons v nil) (Prod.mk t v))
     ((cons v r)
-     (match ltys
-       ((cons ty tr0)
-        (match (wf_tuple t tr0 r)
-          ((Prod.mk t1 rest)
-           (match (wf_tuple_type t1 tr0)
-             ((Prod.mk t2 restty)
-              (match
-                (tr_apps t2 (mk_const (nm_pprod_mk) (list (level_one) (level_one)))
-                  (list ty restty v rest))
-                ((Prod.mk t3 e) (Prod.mk t3 e))))))))
-       (nil (Prod.mk t v))))))
-(fn wf_tuple_type ((t Tr) (ltys (List Expr))) (Prod Tr Expr)
+     (match (Prod.mk data (Prod.mk ltys lvs))
+       ((Prod.mk (cons x xr) (Prod.mk (cons ty tr0) (cons u ur)))
+        (match (wf_tuple_type t xr tr0 ur)
+          ((Prod.mk t1 restty)
+           (if (mentions_any restty (list (fvar_id_of x)))
+             (match (wf_subst_all t1 tr0 (fvar_id_of x) v nil)
+               ((Prod.mk t2 tr1)
+                (match (wf_tuple t2 xr tr1 ur r)
+                  ((Prod.mk t3 rest)
+                   (match (tr_lams t3 (list x) restty)
+                     ((Prod.mk t4 fam)
+                      (tr_apps t4 (mk_const (nm_psigma_mk) (list u (wf_rest_level ur)))
+                        (list ty fam v rest))))))))
+             (match (wf_tuple t1 xr tr0 ur r)
+               ((Prod.mk t2 rest)
+                (tr_apps t2 (mk_const (nm_pprod_mk) (list u (wf_rest_level ur)))
+                  (list ty restty v rest))))))))
+       (_ (Prod.mk t v))))))
+(fn wf_subst_all ((t Tr) (es (List Expr)) (id Int) (v Expr) (acc (List Expr))) (Prod Tr (List Expr))
+  (measure (struct es))
+  (match es
+    (nil (Prod.mk t (rev acc)))
+    ((cons e r)
+     (match (tr_subst t e id v)
+       ((Prod.mk t1 e1) (wf_subst_all t1 r id v (cons e1 acc)))))))
+(fn wf_tuple_type ((t Tr) (data (List Expr)) (ltys (List Expr)) (lvs (List Level))) (Prod Tr Expr)
   (measure (struct ltys))
   (match ltys
     (nil (Prod.mk t (mk_const (n1 (sym "PUnit")) (list (level_one)))))
     ((cons ty nil) (Prod.mk t ty))
     ((cons ty r)
-     (match (wf_tuple_type t r)
-       ((Prod.mk t1 restty)
-        (match
-          (tr_apps t1 (mk_const (n1 (sym "PProd")) (list (level_one) (level_one))) (list ty restty))
-          ((Prod.mk t2 e) (Prod.mk t2 e))))))))
-;; the k-th component of a tuple of n: (p.2)^k .1, the last (p.2)^(n-1)
-(fn wf_proj ((p Expr) (n Int) (k Int)) Expr
-  (measure k)
-  (if (= n 1) p
-  (if (< k 1) (mk_proj (n1 (sym "PProd")) 0 p)
-  (wf_proj_rest (mk_proj (n1 (sym "PProd")) 1 p) (- n 1) (- k 1)))))
-(fn wf_proj_rest ((p Expr) (n Int) (k Int)) Expr
-  (measure (Int.natAbs k))
-  (if (= n 1) p
-  (if (< k 1) (mk_proj (n1 (sym "PProd")) 0 p)
-  (wf_proj_rest (mk_proj (n1 (sym "PProd")) 1 p) (- n 1) (- k 1)))))
-(fulfills wf_proj_rest.dec_1 (by (intro q hn h) (apply natAbs_pred (arith))))
+     (match (Prod.mk data lvs)
+       ((Prod.mk (cons x xr) (cons u ur))
+        (match (wf_tuple_type t xr r ur)
+          ((Prod.mk t1 restty)
+           (if (mentions_any restty (list (fvar_id_of x)))
+             (match (tr_lams t1 (list x) restty)
+               ((Prod.mk t2 fam)
+                (tr_apps t2 (mk_const (n1 (sym "PSigma")) (list u (wf_rest_level ur))) (list ty fam))))
+             (tr_apps t1 (mk_const (n1 (sym "PProd")) (list u (wf_rest_level ur))) (list ty restty))))))
+       (_ (Prod.mk t ty))))))
+;; the components of a tuple of n at the type alpha: (p.2)^k .1, the last (p.2)^(n-1), each
+;; projection of the pair its level is
+(fn wf_projs ((alpha Expr) (p Expr) (n Int)) (List Expr)
+  (measure (Int.natAbs n))
+  (if (< n 1) nil
+  (if (< n 2) (list p)
+  (let ((s (wf_pair_name alpha)))
+    (cons (mk_proj s 0 p) (wf_projs (wf_pair_rest alpha) (mk_proj s 1 p) (- n 1)))))))
+(fn wf_pair_name ((alpha Expr)) Name
+  (match (get_app_fn alpha)
+    ((Const _ c _) c)
+    (_ (n1 (sym "PProd")))))
+;; the type of a pair's second component — under its binder where the pair is over the
+;; first, which is read for the next pair's name alone
+(fn wf_pair_rest ((alpha Expr)) Expr
+  (match (get_app_args alpha)
+    ((cons _ (cons (Lam _ _ _ _ b) nil)) b)
+    ((cons _ (cons b nil)) b)
+    (_ alpha)))
+;; the components of the tuple local p
+(fn wf_comps ((t Tr) (p Expr) (n Int)) (List Expr)
+  (match (tr_type_of_local t p)
+    ((some alpha) (wf_projs alpha p n))
+    (none nil)))
+(fulfills wf_projs.dec_1 (by (intro p h1 h2) (apply natAbs_pred (arith))))
 (fn nm_pprod_mk () Name (n2 (sym "PProd") (sym "mk")))
+(fn nm_psigma_mk () Name (n2 (sym "PSigma") (sym "mk")))
 (fn nm_punit_unit () Name (n2 (sym "PUnit") (sym "unit")))
 ;; the recursor applied: the parameters, a constant motive over the result type, the minors, the major
 (fn rec_app
@@ -972,17 +1025,17 @@
                  ((Prod.mk t2 (some entry))
                   (match (tr_apps t2 entry (without_index dargs pos 0))
                     ((Prod.mk t3 r) (TrOk t3 r))))))))
-           ((PkWf recl p ltys m data)
+           ((PkWf recl p ltys lvs m data)
             (let ((n (len ltys)))
               (if (< (len dargs) n)
                 (TrErr (sym "function_value")
                   (append (show_name (Tr.id t1))
                     (utf8 ": its own name is not applied to all its arguments (no function values)")))
-              (if (pj_own_params (take n dargs) p n 0)
+              (if (pj_exprs_eq (take n dargs) (wf_comps t1 p n))
                 (TrErr (sym "realize_descent")
                   (append (show_name (Tr.id t1))
                     (utf8 " calls itself on its own parameters — no measure decreases")))
-                (match (wf_tuple t1 ltys (take n dargs))
+                (match (wf_tuple t1 data ltys lvs (take n dargs))
                   ((Prod.mk t2 tup)
                    (match (pj_descent t2 m data (take n dargs) p n)
                      ((Prod.mk t3 goal)
@@ -1024,7 +1077,7 @@
   (Prod Tr Expr)
   (match (pj_subst_list t m data args)
     ((Prod.mk t1 ma)
-     (match (pj_subst_projs t1 m data p n 0)
+     (match (pj_subst_list t1 m data (wf_comps t1 p n))
        ((Prod.mk t2 mp) (wf_goal t2 m ma mp))))))
 (fn pj_subst_list ((t Tr) (e Expr) (olds (List Expr)) (news (List Expr))) (Prod Tr Expr)
   (measure (struct olds))
@@ -1126,11 +1179,6 @@
      (match bs
        ((cons b br) (if (expr_eq a b) (pj_exprs_eq r br) false))
        (nil false)))))
-(fn pj_own_params ((args (List Expr)) (p Expr) (n Int) (k Int)) Bool
-  (measure (struct args))
-  (match args
-    (nil true)
-    ((cons a r) (if (expr_eq a (wf_proj p n k)) (pj_own_params r p n (+ k 1)) false))))
 
 ;; `ite c inst a b` inside a recursive function: `Decidable.rec` with a constant motive, the
 ;; proof of ¬c a local of the else-branch and of c the then-branch's.

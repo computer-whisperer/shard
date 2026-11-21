@@ -476,6 +476,78 @@ entries are explained under "Measured" at the end.
   the reader: a body of 39 functions changed, with a row never taken, on a claim not proven.
   Not the reader left a program: 127 programs stood above it, 65 on it alone. The owner, of
   the six units left and my lean to this one: "Let's continue with the classifier's reader".
+- The erasure of a term is a definition by its fuel, and the function that tests a fuel is
+  the one that steps it. `erasure.shard`'s 39 functions hand a fuel round. `erase` tested
+  it, and 19 other functions handed on one less, at 31 calls, without a test: nothing such a
+  function knows of its fuel says that one less is nearer a bound, so no measure stated
+  the step. `static_shape` went round on a lambda applied, at one less, with no test
+  anywhere on the loop, and through `package_field_shape` on a term it built, at the fuel
+  it had. Now `erase` and `static_shape`, the two functions the walk comes back to, test the
+  fuel and hand on one less where they go round — `erase` at its three dispatches,
+  `static_shape` at its own call and at `package_field_shape` —, and every other function
+  hands on the fuel it was given. A function's measure is the fuel, a rank above every
+  function it hands the fuel to, and the list it walks. Not the bodies kept under a measure
+  staggered between the tester and the rest, as the definer's projection has it:
+  `erase_cond` enters `erase` at its own fuel and calls members at it, and `static_shape`
+  tests under `erase` at one fuel, which leaves no room for the half steps. Not a size of
+  the term for the arguments erased at the caller's fuel: it takes facts about
+  `get_app_args`, `drop` and `append`, and the terms the erasure builds must be stepped all
+  the same. The cost chosen: what the fuel counts changed — every entry of `erase` costs
+  one, where an argument erased through `erase_all` cost none and a lambda's body under a
+  static argument two —, and `static_shape` refuses `erased_in_runtime` where the fuel is
+  spent, where it read on. The budget is the 8,192 it was, and the deepest body of the
+  loader's closure needs the same before and after (Measured). Found on the way: the
+  loader's search for a group read a waiting function again for 16 callees at most, and
+  `erase_const_at` names 17 members, so the group was never found and each member was
+  recorded as waiting on another; the search has the bound of the load's own loop, 1,024
+  (pin `mutual_wide`). The owner, of the five units left and my lean to this one, which I
+  had described as "three one-token body changes, then the recipe": "Good. Let's proceed
+  with the erasure unit". That description was wrong — it counted the three terms built at
+  the caller's fuel and not the 31 steps without a test. Which function steps the fuel, the
+  refusal in `static_shape` and the search's bound are the builder's, built and then put
+  to the owner, who took them: "This works -- we can ratify the fuel discipline. Let's
+  proceed with the next units".
+- The evaluator's machine is a definition with no body changed, and the join-point pass
+  with one row made a function. `ev.shard`'s `ev_call` already tested the fuel and stepped
+  it; at one fuel the machine either opens a term into a frame and its first part or
+  closes a frame, so its second part is twice the term's size and a weight of the
+  continuation's frames (`kont_weight`), and its step into the arm a match picked descends
+  by a fact proven of `pick_arm`. Not a fuel spent at every step: the machine's answers
+  would change with it, and `ev.shard` is what "run" means (rule 21). `lower.shard`'s
+  `lw_jp_named`, `lw_jp_lifted` and `lw_jp_tail` handed one term round, the last on a row
+  that matches no shape; the row the first and the last ended on is `lw_jp_app`, which both
+  call. Not the rows of `lw_jp_tail` written out one a constructor with a rank that reads
+  the term's shape: seven rows and a measure with a case in it, for what one function
+  says. The pass before and the pass after compile the loader to one C text. The owner's
+  word for both is the one above, "the next units", of a list that named them with the
+  loader's re-entry and the elaborator; the weight and the function are the builder's.
+  Left where they were, each with a choice that is the owner's and was put to them: the
+  elaborator (a depth its callers hand down, as the eraser's, or the size of its source
+  with a weight that pays for the three forms it builds), the loader's re-entry (a bound
+  on a derivation generating a derivation) and `run_loop` (a bound on a run's externs, a
+  fact about the machine's halt, or a program). The owner, of the three and of the
+  definer's request below: "On your decisions: 1: depth handed down, 2: do it with the
+  elaborator, 3: leave it as a program, 4: do it before the elaborator, and do your
+  research first, but mirroring lean's approach is a decent prior." So the elaborator
+  takes a depth its callers hand down, the loader's re-entry is bounded with it, and
+  `run_loop` stays a program.
+- A function defined by a measure takes evidence about its parameters, and the recursion's
+  parameters are packed as Lean packs them where that is needed and as they were where it
+  is not. The definer nested the data parameters' types in `PProd` as written, so a type
+  that names an earlier parameter (`(hk (<= k n))`) left the tuple's type open — the
+  obligation over it was no closed statement (`fvar_in_type`) —, and a proposition among
+  the parameters did not fit a pair built at levels 1, 1 (`app_type_mismatch`). Now a pair
+  is `PSigma` over its first component where a later type names that component, `PProd`
+  where none does, and a proposition stands at level 0. Not `PSigma` at every pair, which
+  is Lean's whole packing: the term of every function defined by a measure would change,
+  and with it the obligations of 47 proofs in 11 files that spell `(proj PProd …)`, for
+  no function that takes it today; where no type names a parameter the tuple is the term
+  it was, held on the loader's closure (Measured). Not the evidence moved out of the tuple
+  into the result's type (`∀ evidence, RET`): it is not how Lean packs, the prior the
+  owner named, and it was not built to compare. Left as it was and written in `OPEN.md`
+  §1: a group of functions that call each other takes no evidence. Asked for by the
+  `compiler` branch for its buffer loops; the owner's word is the fourth above. Which
+  pairs are dependent and the levels are the builder's, on that prior.
 
 ## Programs and the back end
 
@@ -840,6 +912,11 @@ entries are explained under "Measured" at the end.
   (`parity_test.sh`); for a changed body, the build and the tests of its area, and for K the
   Init replay (`LAW.md` ruling 17; which checks count for which change is this file's reading
   of it).
+- The kernel's sources (`v3/kernel`) are changed in the main worktree, and the `compiler`
+  branch asks there for what it needs of them; not edited on both branches. The owner, to
+  that branch's session as it relayed them: "pass a message to the agent working in the
+  main branch on the toolchain fix. Let's treat that agent as the main kernel editor"; and
+  here: "I figured it would be best to concentrate kernel changes here".
 
 ## Layout
 
@@ -1461,7 +1538,69 @@ measurements; measure again before building on one.
   suite on the binaries, 377 s for 393, 52 entrypoints. The checked load of all 29 roots
   was started beside the suite and stopped unfinished when the machine ran short of memory;
   it was left to CI. The state's check and the Init replay were not run: nothing K runs
-  changed.
+  changed. On CI: #774 70.7 minutes (`native` 70.0, `v3` 39.1, `replay` 30.8), the checked
+  load of all 29 roots in it.
+- The erasure (2026-11-20). 58 programs became definitions: 8,974 functions, 8,771
+  definitions, 203 programs — 160 for a function they call, 43 in three groups (the
+  elaborator's 34, the evaluator's machine 4, `lw_jp` 5) —, 1,655 obligations of 658
+  functions. The group's 117: 6 a step of the fuel, 14 a shorter list, 97 a lower rank at
+  the same fuel, each accepted as first typed. Above it the loader's `build_demands`
+  stated an integer and states its fuel and its list (3 obligations); seven functions of
+  `loader.shard` waited on it alone. What the fuel counts was measured by lowering the
+  budget in a scratch loader and loading the loader's closure checked: at 128 levels one
+  function is refused (`k/accel_pins.shard` `accel_ref_closure`, 20 nested `if`s around a
+  list of 158 names), at 192 none — before the change and after it, of 8,192. The closure's
+  program text differs in 24 functions: 23 of `erasure.shard`, and the search's
+  `probe_reach`. The checked load of the loader's closure takes 253 s for 192, timed side
+  by side: the 58 definitions, not the search, which timed 254 s at a bound of 20 and
+  256 s at 1,024. `erasure.shard` is 2,685 lines for 2,183. Checked on the dev box before
+  the push, by ruling 17: the 29 binaries built in 272 s, the Init index the one before;
+  the loader's closure loaded checked, 58 modules with none pending; the state's check, 36
+  checks; the suite on the binaries, 265 s, 52 entrypoints, the loader's pins 352
+  directories. The checked load of all 29 roots was not run on the dev box and is CI's: it
+  was stopped there for memory at the step before, and was not started again unasked. The
+  Init replay was not run: nothing of K's directory changed.
+  On CI: #778 `native` 81.8 minutes for #774's 70.0, the checked load of all 29 roots in
+  it; `v3` 44.7.
+- The machine, the join-point pass and the loader's account (2026-11-20). 17 programs
+  became definitions: 8,984 functions, 8,798 definitions, 186 programs — 151 for a function
+  they call, the elaborator's 34, `run_loop` —, 1,697 obligations of 668 functions. The
+  machine's 23 obligations and the pass's 19 were accepted as first typed; the fact about
+  `pick_arm` at the second try (a definition over a constructor is cited by an equation of
+  its own, `arm_room_at`: `reduce` does not open it). The pass before and after compiles
+  the loader to one C text, 35 files, 25,084,934 bytes. Where a checked load's time goes
+  was profiled on `erasure.shard`'s closure, its 39 functions as programs (37 s) and as
+  definitions (54 s): the calls double, 9.1 to 18.7 thousand million, down one chain —
+  `mem_name`, `name_eq`, `sym_eq`, `int_list_eq` — under `discharge_axs` (9.7% of the load
+  as programs, 24.9% as definitions) and `params_of` (1.0%, 6.3%); K's checking is 22% and
+  16.5%, 0.6 s more. With the discharged obligations and the parameters found by name,
+  side by side on one tree: the loader's closure loads checked in 122 s for 256 s and
+  `erasure.shard`'s in 37 s for 51 s, the records of the two loads the same bytes (47,232
+  lines); `loader.shard`'s in 92 s for 241 s. The index was built unasked, on the profile,
+  and reported. Checked on the dev box before the push, by ruling 17: the 29 binaries
+  built in 281 s, the Init index the one before; the loader's closure loaded checked, 58
+  modules with none pending; the suite on the binaries, 268 s, 52 entrypoints —
+  `parity_test.sh` had failed on the build before, K's table of Init's facts 45 lines for
+  the file's 42: a proof of the machine's names `band`, and the scan for the base's
+  operators read the proofs a build passes over; the scan reads what the load reads, and
+  the table is the 42 —; the state's check, 36 checks, one commit before the last. The
+  checked load of all 29 roots was not run on the dev box and is CI's. The Init replay was
+  not run: nothing of K's directory changed.
+  On CI: #780 `native` 66.7 minutes for #778's 81.8, the checked load of all 29 roots in
+  it; `v3` 41.8, `replay` 32.0 (#778's `replay` 29.0).
+- Evidence among a measured function's parameters (2026-11-20). Probed before and after
+  with one form each: a measure and `(hk (<= k n))` beside `k` and `n` was
+  `definition_refused` (`fvar_in_type`), the same with the evidence between the data, and
+  a proposition that names no parameter `definition_refused` (`app_type_mismatch`); each
+  is a definition now, and so is a function of two parts. The loader's closure loaded
+  checked before and after: of 47,301 records, the 45,660 outside `define.shard`'s module
+  are the same with the requirement key left out — every hash the one it was —, and the
+  key differs in 1,663, where `define.shard` is seen. `define.shard` is 2,977 lines for
+  2,929. Checked on the dev box before the push, by ruling 17: the 29 binaries built in
+  416 s, the Init index the one before; the loader's closure loaded checked, 58 modules
+  with none pending; the suite on the binaries, 317 s, 52 entrypoints, the loader's pins
+  353 directories. The checked load of all 29 roots was not run on the dev box and is CI's.
+  The state's check and the Init replay were not run: nothing K runs changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

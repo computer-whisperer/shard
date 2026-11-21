@@ -231,11 +231,12 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **Nineteen in twenty of their functions are definitions; of those written by hand, more
-  than nine in ten.** The checker reads every one: of the loader's closure, 8,974
-  functions — 4,792 of them the rows of a generated table —, it holds 8,713 as definitions. The
+  than nine in ten.** The checker reads every one: of the loader's closure, 8,984
+  functions — 4,792 of them the rows of a generated table —, it holds 8,798 as definitions. The
   others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 218), or they are a group of functions that call each other with no
-  measure the definer takes (43, in three groups). A type error in any of them is refused. None matches a numeral
+  (`callee_runnable`, 151), or they are a group of functions that call each other with no
+  measure the definer takes (34, the elaborator's), or a function that calls itself with none
+  (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
@@ -263,14 +264,15 @@ file; two things about how they are written set them apart.
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
   over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
-  measure it states (`measure_type`); 26 state an integer or a term where the checker
+  measure it states (`measure_type`); 24 state an integer or a term where the checker
   does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Fifteen groups are written so, 121 functions: that one, `matcher.shard`'s
+  parts"). Seventeen groups are written so, 164 functions, and the loader's `build_demands`
+  alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
   axiom closure in three parts — a depth, a rank, a list (`k/axioms.shard`
@@ -280,6 +282,8 @@ file; two things about how they are written set them apart.
   the types an entry states (`ev.shard` `ty_checked`), the definer's projection of a body
   (`define.shard` `pj_term`, twelve functions) and the split of its equations
   (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
+  the erasure itself in three, 39 functions (`erase` to `lift_lambda`), the evaluator's
+  machine in two, its fuel and what is left to run at that fuel (`ev.shard` `ev_term`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
   stay at its depth; and what a walk or a loop of its own descends by. There a call at the
@@ -291,7 +295,24 @@ file; two things about how they are written set them apart.
   test it and the walk of an argument list state `(Int.natAbs d)`; so the projection's ten
   that hand their fuel to `pj_term` less one, which tests it —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
-  given a depth of at least 1).
+  given a depth of at least 1). No such statement serves a member that both hands its fuel
+  to the one that tests it and hands on one less elsewhere: it knows nothing of its fuel,
+  and one less is no nearer a bound. There the functions that test the fuel are the ones
+  that step it — the erasure's `erase` and `static_shape`, the two its walk comes back to,
+  hand on one less where they go round, and the other 37 hand on the fuel they were given —,
+  every member states the one term `(Int.natAbs (+ fuel 1))`, the tester's step is
+  `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` and every other call a lower
+  rank or a shorter list. A member of a group may call any number of the others (pin
+  `mutual_wide`). A machine that runs a term under a continuation states, after its fuel,
+  twice the term's size and a weight of the continuation's frames — the terms each holds,
+  and one or two for the frame (`ev.shard` `kont_weight`, a definition with no program) —:
+  a term opened into a frame and its first part costs the term's own node, a frame closed
+  its one or two, and the arm a match picked is no larger than its arms by a fact proven of
+  the function that picks it (`pick_arm_le`). Where functions hand one term round — an
+  operand's position to a lifted one to a tail position and, on a row that matches no
+  shape, back —, no rank orders them: an obligation knows of its term what its row matched.
+  The row the functions share is a function of its own, ranked below them
+  (`lower.shard` `lw_jp_app`).
 - **Functions that call each other over a term are measured by the term's derived size.**
   `(derive Expr size)` after the type gives `Expr.size`, a `Nat` (below, `derive`). The member
   that hands its term on whole states `(measure (+ (* 2 (Expr.size a)) 1))`, the one that takes
@@ -756,7 +777,12 @@ that recurses fails —: a proof about one cites its equations (`(rw drain.eq_2)
 - *Statement.* A `<` at `Nat`, under every variable in scope at the call, outermost first: the
   function's type parameters, each under its own name (pin `measure_type_param`), then the data
   parameters — one stands under its own name, several stand as a single tuple `p :
-  PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, … —, then pattern variables and
+  PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, …; where a later parameter's
+  type names an earlier one — evidence about it, `(hk (<= k n))` beside `k` and `n` — the pair
+  is `PSigma` over the earlier, `p : (PSigma Nat (fun ((n Nat)) …))`, with components `(proj
+  PSigma 0 p)`, `(proj PSigma 1 p)`, so the body uses the evidence and a call hands on evidence
+  about its own arguments (pin `measure_evidence`; a group of functions that call each other
+  takes no evidence, `OPEN.md` §1) —, then pattern variables and
   `let`s, and the facts the enclosing branches give: under an `if`, `h : C` in the then-branch and
   `h : ¬C` in the else-branch; under a `match` row, `h : scrutinee = pattern`. Left out is what
   states the function's own values: a `let` bound to a recursive call, a `let` computed from one,
