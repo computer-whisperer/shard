@@ -1686,6 +1686,25 @@ measurements; measure again before building on one.
   pending; the suite on the binaries, 270 s, 52 entrypoints, none failed. The checked load
   of all 29 roots was not run on the dev box and is CI's. The state's check and the Init
   replay were not run: nothing of K's directory changed.
+- Where the cost of a closed fuel comes from (2026-11-21, `OPEN.md` §1; nothing in the tree
+  changed). The file of 24 lines at a fuel of 256, a load's seconds, 2.2 of them Init: 15.4
+  as it stands; 2.3 with the fuel a variable; 2.2 with the callee and the caller returning
+  the three-constructor type and no pair; 14.1 with the pair matched by one row and its
+  first part matched inside; 2.2 with the call naming only variables the match bound; 14.1
+  with it naming another parameter; 15.1 with the callee's fuel a `Nat`; 2.3 with the
+  caller one of a group of two; 14.9 with a callee that does not stop on a variable, which
+  K runs to its end. The stack nine seconds in: K's comparison 195 deep — 91 rounds of an
+  application's arguments and a binder's body under the comparison of two projections —
+  over 54 recursors, each waiting on its major premise. A loader built from the tree's
+  sources with one change to K, three lines — the pair is taken apart as the projections of
+  the call as it stood, not of its unfolding — loads the file in 2.3 s at 256 and at 1,024,
+  and the loader's own source with `probe_reach` measured by `Int.natAbs` in 130 s at
+  7.3 GB with the equation accepted; the callee that does not stop still costs 14.1. That
+  change is in no tree: it leaves Lean's order at one line, and is the owner's to rule on.
+  Of the measured functions outside a group, 174 take two parameters or more, with 278
+  obligations, read off the call graph; 279 descent proofs open by naming the tuple `p`.
+- Pipeline #785 (the elaborator, `bd2f2d88`): `native` 4,451 s, `v3` 2,527, `replay` 1,823,
+  the pipeline 6,432 — `native` was 4,293 on #782.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
