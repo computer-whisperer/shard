@@ -21,7 +21,9 @@ it.
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fifteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
-| `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file |
+| `derive.shard` | a tactic library: `derive_block`, the proof of a run of a listing's instructions by the laws' rules, read off the listing's table |
+| `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file, its instructions by address (`buffers_table`) |
+| `buffers_tactic.shard` | the tactic the trial's lemmas name: `derive_block` over the trial's table |
 | `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
 | `buffers_run.shard` | that listing's file from end to end: started as the runner starts it, it exits with 19 (`buffers_exits`), by `both`'s contract |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
@@ -182,7 +184,36 @@ decodes the listing's instructions at their addresses (`code_in`); `listing_load
 of the first state, and `buffers_exits` is the one statement here that assumes nothing of the
 code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`. The evaluator's
 run of `both`, the model's run of the listing's file and the processor's give that one status,
-19. No compiler made the listing and no tool the proofs.
+19. No compiler made the listing. The proofs are written by hand, but for eight: the runs of
+instructions between a function's branch points, which a tactic derives.
+
+**Derived proofs** (`derive.shard`; `docs/LANGUAGE.md`, "A tactic library"). A statement that
+the processor comes from one state to another through a run of the listing's instructions —
+`(reaches A B)`, A at a known program counter — is proven by one rule of `laws.shard` for each
+instruction, in order. `derive_block` writes that proof: it walks the listing's table from A's
+program counter, and for each instruction answers the rule with its numbers, the table's row,
+and what else the rule asks — an operand mapped, the outcome of the comparison before a `jae`,
+the code still in place after a store — taken from the statement's hypotheses by their shape.
+It follows a jump, and ends where B's program counter is reached, after a `ret`, after a `call`,
+or after a number of instructions a hint gives. A function of the listing's own hands it the
+table (`buffers_tactic.shard` `block`), and a theorem names that function: `(auto (tactic
+models.x86.buffers_tactic.block))`. Eight theorems of the trial are proven so — `dot_turn`,
+`dot_leave`, `dot_enter`, `add_turn`, `add_leave`, `add_enter`, `both_mid`, `both_leave` — their
+blocks in `buffers_facts.auto.shard`, which `prove` writes and a load replays. No file of the
+trial imports the library, so a load does not read it; `prove` is given the tactic's file first:
+
+```
+v3/bin/prove --root v3 --init $EXPORT --init-index $INDEX \
+  v3/models/x86/buffers_tactic.shard v3/models/x86/buffers_facts.shard
+```
+
+`x86_test.sh` holds that the library still derives the eight: on the binaries it runs `prove` on
+a copy of the model without the blocks, and the file written is the committed one byte for byte.
+
+Nothing of the library is believed: K checks each block it answers, and a goal it does not
+understand it leaves unanswered. It writes a proof and no statement: the states a run passes
+through and the lemma for each run are still written by hand, and so is everything about a
+loop, a call's hypotheses and a frame.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
@@ -202,7 +233,9 @@ Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bit
 `encode` for every instruction; a start whose stack is anywhere but where the runner puts it,
 in a statement about a file; a rule for every instruction form; a contract of code whose frame
 holds variables of its own (there is no rule for an operand at the stack pointer and a
-displacement); a compiler from a shard function to a listing and its contract.
+displacement); a derivation of a whole contract (a loop's invariant, a callee's hypotheses, a
+frame's bookkeeping are by hand); a compiler from a shard function to a listing and its
+contract.
 
 ## From the command line
 

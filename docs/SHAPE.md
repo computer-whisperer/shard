@@ -228,7 +228,9 @@ be built to is `COMPILE.md`.
 - the step from a listing to the processor (`loaded.shard`): the code of any listing the
   assembler answers for is in place when its file is loaded, proven once from the assembler's
   check; and by it and the caller's contract, that the trial's file exits with the low byte of
-  what its functions compute (`buffers_exits`), for the start the model's runner gives.
+  what its functions compute (`buffers_exits`), for the start the model's runner gives;
+- a tactic library (`derive.shard`) that writes the proof of a run of a listing's instructions
+  from the listing's table; eight of the trial's lemmas are proven by it.
 
 **Assumed there:** six laws about the runtime's allocator and reference counts, stated as axioms.
 
@@ -237,7 +239,8 @@ be built to is `COMPILE.md`.
   programs;
 - proofs of the runtime's six laws;
 - a compiler from a program to a listing of the machine's model (`v3/models/x86`; its listings
-  are compiled by hand and their contracts proven by hand), and any link between the low-level
+  are compiled by hand and their contracts proven by hand, the runs of instructions apart), and
+  any link between the low-level
   language and what the present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.

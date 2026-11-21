@@ -1,0 +1,574 @@
+;;; v3/models/x86/derive.shard — proofs about a listing's code, derived: a tactic library
+;;; (docs/LANGUAGE.md, "A tactic library"). `derive_block` reads a goal `(reaches A B)` as text
+;;; and answers the block that proves it by the rules of `laws.shard`, one rule for each
+;;; instruction the processor executes from A's program counter, read off the listing's table.
+;;; What a rule asks beside the instruction — an operand mapped, a comparison's outcome, the code
+;;; still in place after a store — it takes from the goal's hypotheses by their shape. Nothing
+;;; here is believed: `prove` runs it and K checks the block it answers; a goal it does not
+;;; understand it leaves unanswered. A listing's file names it through a function of its own
+;;; that hands it the listing's table: `(fn my_block ((goal (List Int)) (hints (List Int)))
+;;; (List Int) (derive_block my_table goal hints))`, then `(auto (tactic M.my_block))`.
+;;;
+;;; The walk starts at A — `(at_pc c (w64 PC))`, or a state `c` with a hypothesis `(= (w64_val
+;;; (Cpu.rip c)) PC)` — and ends where B's program counter is reached (B an `(at_pc X (w64
+;;; E))`), after a `ret`, after a `call`, or after the number of instructions the hint `(count
+;;; N)` gives. Hypotheses it uses, each found by its shape:
+;;;   (code_in X TABLE)           the code in place: the first until a store, then the next, …
+;;;   (= (mapped S (ea_sib X B I SC D) 8 NEED) true)   an indexed operand, by B I SC D and NEED
+;;;   (= (mapped S ADDR 8 NEED) true)   any other address — the stack's: taken in order, by NEED
+;;;   (< (w64_val (reg X A)) (w64_val (reg X B)))  or its negation: the outcome of `cmp rA, rB`
+;;;                               for the `jae` after it
+(import "../../kernel/sexpr.shard")
+(import "laws.shard")
+(use kernel.sexpr)
+(use kernel.sexpr.RAll)
+(use kernel.sexpr.SExpr)
+(use kernel.sym)
+(use models.x86.laws)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- text ---------------------------------------------------------------------------------------
+(fn sy ((s String)) SExpr (SSym (sym s)))
+(fn nm ((n Nat)) SExpr (SNum (Int.ofNat n)))
+(fn ap ((xs (List SExpr))) SExpr (SList xs))
+;; the characters after a name's last dot: `models.x86.laws.reaches` is `reaches`
+(fn last_part ((cs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (nil (List.reverse acc))
+    ((cons c r) (if (= c 46) (last_part r nil) (last_part r (cons c acc))))))
+(fn bytes_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (nil
+      (match b
+        (nil true)
+        (_ false)))
+    ((cons x r)
+     (match b
+       (nil false)
+       ((cons y q) (if (= x y) (bytes_eq r q) false))))))
+;; whether a tree is the name given, under any module
+(fn named ((s SExpr) (n String)) Bool
+  (match s
+    ((SSym x) (bytes_eq (last_part (chars_of_sym x) nil) (chars_of_sym (sym n))))
+    (_ false)))
+(fn num_of ((s SExpr)) (Option Nat)
+  (match s
+    ((SNum i) (if (<= 0 i) (some (Int.natAbs i)) none))
+    (_ none)))
+(fn num_is ((s SExpr) (n Nat)) Bool
+  (match (num_of s)
+    (none false)
+    ((some k) (if (= k n) true false))))
+
+;; ---- an instruction as text -----------------------------------------------------------------------
+(fn sx_bop ((o Bop)) SExpr
+  (match o
+    (BAdd (sy "BAdd"))
+    (BOr (sy "BOr"))
+    (BAnd (sy "BAnd"))
+    (BSub (sy "BSub"))
+    (BXor (sy "BXor"))
+    (BCmp (sy "BCmp"))))
+(fn sx_rm ((m Rm)) SExpr
+  (match m
+    ((RmReg r) (ap (list (sy "RmReg") (nm r))))
+    ((RmMem b d) (ap (list (sy "RmMem") (nm b) (nm d))))
+    ((RmSib b x s d) (ap (list (sy "RmSib") (nm b) (nm x) (nm s) (nm d))))))
+(fn sx_instr ((i Instr)) SExpr
+  (match i
+    ((MovRI32 r v) (ap (list (sy "MovRI32") (nm r) (nm v))))
+    ((MovRI64 r v) (ap (list (sy "MovRI64") (nm r) (nm v))))
+    ((MovRmR m r) (ap (list (sy "MovRmR") (sx_rm m) (nm r))))
+    ((MovRRm r m) (ap (list (sy "MovRRm") (nm r) (sx_rm m))))
+    ((AluRmR o m r) (ap (list (sy "AluRmR") (sx_bop o) (sx_rm m) (nm r))))
+    ((AluRRm o r m) (ap (list (sy "AluRRm") (sx_bop o) (nm r) (sx_rm m))))
+    ((AluRmI o m v) (ap (list (sy "AluRmI") (sx_bop o) (sx_rm m) (nm v))))
+    ((ImulRRm r m) (ap (list (sy "ImulRRm") (nm r) (sx_rm m))))
+    ((Jcc cc d) (ap (list (sy "Jcc") (nm cc) (nm d))))
+    ((Jmp d) (ap (list (sy "Jmp") (nm d))))
+    ((Call d) (ap (list (sy "Call") (nm d))))
+    (Ret (sy "Ret"))
+    ((Push r) (ap (list (sy "Push") (nm r))))
+    ((Pop r) (ap (list (sy "Pop") (nm r))))
+    (Syscall (sy "Syscall"))))
+
+;; ---- the goal's hypotheses, by shape ------------------------------------------------------------
+;; a hypothesis: its name and its statement
+(type Hyp (MkHyp SExpr SExpr))
+(fn hyp_name ((h Hyp)) SExpr
+  (match h
+    ((MkHyp n _) n)))
+(fn hyp_type ((h Hyp)) SExpr
+  (match h
+    ((MkHyp _ t) t)))
+(fn hyps_of ((bs (List SExpr))) (List Hyp)
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons (SList (cons n (cons t nil))) r) (cons (MkHyp n t) (hyps_of r)))
+    ((cons _ r) (hyps_of r))))
+;; (code_in X TABLE)
+(fn is_code ((t SExpr)) Bool
+  (match t
+    ((SList (cons f (cons _ (cons _ nil)))) (named f "code_in"))
+    (_ false)))
+(fn code_hyps ((hs (List Hyp))) (List SExpr)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons h r) (if (is_code (hyp_type h)) (cons (hyp_name h) (code_hyps r)) (code_hyps r)))))
+;; the address and the need of (= (mapped S ADDR 8 NEED) true)
+(fn mapped_parts ((t SExpr)) (Option (Prod SExpr Nat))
+  (match t
+    ((SList
+       (cons eq (cons (SList (cons f (cons _ (cons addr (cons w (cons need nil)))))) (cons tr nil))))
+     (if (named eq "=")
+       (if (named f "mapped")
+         (if (num_is w 8)
+           (if (named tr "true")
+             (match (num_of need)
+               (none none)
+               ((some k) (some (Prod.mk addr k))))
+             none)
+           none)
+         none)
+       none))
+    (_ none)))
+;; whether an address is (ea_sib X b x s d)
+(fn is_sib ((addr SExpr) (b Nat) (x Nat) (s Nat) (d Nat)) Bool
+  (match addr
+    ((SList (cons f (cons _ (cons b1 (cons x1 (cons s1 (cons d1 nil)))))))
+     (if (named f "ea_sib")
+       (if (num_is b1 b) (if (num_is x1 x) (if (num_is s1 s) (num_is d1 d) false) false) false)
+       false))
+    (_ false)))
+(fn any_sib ((addr SExpr)) Bool
+  (match addr
+    ((SList (cons f _)) (named f "ea_sib"))
+    (_ false)))
+;; the hypothesis that an indexed operand is mapped for a need
+(fn sib_hyp ((hs (List Hyp)) (b Nat) (x Nat) (s Nat) (d Nat) (need Nat)) (Option SExpr)
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons h r)
+     (match (mapped_parts (hyp_type h))
+       (none (sib_hyp r b x s d need))
+       ((some (Prod.mk addr k))
+        (if (= k need) (if (is_sib addr b x s d) (some (hyp_name h)) (sib_hyp r b x s d need))
+        (sib_hyp r b x s d need)))))))
+;; the hypotheses that some other address is mapped, in order: name and need
+(fn stack_hyps ((hs (List Hyp))) (List (Prod SExpr Nat))
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons h r)
+     (match (mapped_parts (hyp_type h))
+       (none (stack_hyps r))
+       ((some (Prod.mk addr k))
+        (if (any_sib addr) (stack_hyps r) (cons (Prod.mk (hyp_name h) k) (stack_hyps r))))))))
+;; the first of them for a need, and the rest without it
+(fn take_stack ((ss (List (Prod SExpr Nat))) (need Nat))
+  (Option (Prod SExpr (List (Prod SExpr Nat))))
+  (measure (struct ss))
+  (match ss
+    (nil none)
+    ((cons (Prod.mk n k) r)
+     (if (= k need) (some (Prod.mk n r))
+     (match (take_stack r need)
+       (none none)
+       ((some (Prod.mk m q)) (some (Prod.mk m (cons (Prod.mk n k) q)))))))))
+;; whether a tree is (w64_val (reg X a))
+(fn is_reg_val ((t SExpr) (a Nat)) Bool
+  (match t
+    ((SList (cons f (cons (SList (cons g (cons _ (cons r nil)))) nil)))
+     (if (named f "w64_val") (if (named g "reg") (num_is r a) false) false))
+    (_ false)))
+;; whether a statement is (< (w64_val (reg X a)) (w64_val (reg X b)))
+(fn is_below ((t SExpr) (a Nat) (b Nat)) Bool
+  (match t
+    ((SList (cons lt (cons l (cons r nil))))
+     (if (named lt "<") (if (is_reg_val l a) (is_reg_val r b) false) false))
+    (_ false)))
+;; the outcome of `cmp rA, rB` the hypotheses give: the name, and whether A is below B
+(fn cmp_hyp ((hs (List Hyp)) (a Nat) (b Nat)) (Option (Prod SExpr Bool))
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons h r)
+     (if (is_below (hyp_type h) a b) (some (Prod.mk (hyp_name h) true))
+     (match (hyp_type h)
+       ((SList (cons nt (cons inner nil)))
+        (if (named nt "Not")
+          (if (is_below inner a b) (some (Prod.mk (hyp_name h) false)) (cmp_hyp r a b))
+          (cmp_hyp r a b)))
+       (_ (cmp_hyp r a b)))))))
+;; the program counter a hypothesis gives a state: (= (w64_val (Cpu.rip X)) PC)
+(fn rip_hyp ((hs (List Hyp))) (Option (Prod SExpr Nat))
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons h r)
+     (match (hyp_type h)
+       ((SList
+          (cons eq (cons (SList (cons f (cons (SList (cons g (cons _ nil))) nil))) (cons pc nil))))
+        (if (named eq "=")
+          (if (named f "w64_val")
+            (if (named g "rip")
+              (match (num_of pc)
+                (none (rip_hyp r))
+                ((some k) (some (Prod.mk (hyp_name h) k))))
+              (rip_hyp r))
+            (rip_hyp r))
+          (rip_hyp r)))
+       (_ (rip_hyp r))))))
+
+;; ---- the walk -----------------------------------------------------------------------------------
+;; blocks of one step
+(fn b_rfl () SExpr (ap (list (sy "rfl"))))
+(fn b_exact ((t SExpr)) SExpr (ap (list (ap (list (sy "exact") t)))))
+(fn w64_of ((n Nat)) SExpr (ap (list (sy "w64") (nm n))))
+;; a rule applied: its name and numbers, the program counter's block, the code's, the blocks of
+;; what else it asks, and the block for the state after it
+(fn rule
+  ((name String) (args (List SExpr)) (hrip SExpr) (hc SExpr) (asks (List SExpr)) (rest SExpr))
+  SExpr
+  (ap
+    (List.append (list (sy "apply") (ap (cons (sy name) args)) hrip hc)
+      (List.append asks (list rest)))))
+;; the code's block: the table's row for the instruction, at the hypothesis in force
+(fn code_block ((hc SExpr) (pc Nat) (i Instr) (len Nat)) SExpr
+  (b_exact
+    (ap
+      (list hc (nm pc) (sx_instr i) (nm len)
+        (ap
+          (list (sy "Eq.refl")
+            (ap (list (sy "some") (ap (list (sy "Prod.mk") (sx_instr i) (nm len)))))))))))
+;; the address a jump or a call goes to
+(fn jump_to ((next Nat) (d Nat)) Nat (% (+ next d) 18446744073709551616))
+;; the code's hypothesis after a store: the next one, where there is one
+(fn after_store ((codes (List SExpr))) (List SExpr)
+  (match codes
+    ((cons _ (cons c2 r)) (cons c2 r))
+    (_ codes)))
+;; the last comparison: the state it was made in, its two registers, the address after it
+(type Cmp (MkCmp SExpr Nat Nat Nat))
+;; what the walk carries: the hypotheses, the code's in force and after, the stack's left to
+;; use, the last comparison, where to stop
+(type Walk (MkWalk (List Hyp) (List SExpr) (List (Prod SExpr Nat)) (Option Cmp) (Option Nat)))
+(fn w_hyps ((w Walk)) (List Hyp)
+  (match w
+    ((MkWalk h _ _ _ _) h)))
+(fn w_codes ((w Walk)) (List SExpr)
+  (match w
+    ((MkWalk _ c _ _ _) c)))
+(fn w_stack ((w Walk)) (List (Prod SExpr Nat))
+  (match w
+    ((MkWalk _ _ s _ _) s)))
+(fn w_cmp ((w Walk)) (Option Cmp)
+  (match w
+    ((MkWalk _ _ _ c _) c)))
+(fn w_end ((w Walk)) (Option Nat)
+  (match w
+    ((MkWalk _ _ _ _ e) e)))
+(fn with_codes ((w Walk) (c (List SExpr))) Walk
+  (MkWalk (w_hyps w) c (w_stack w) (w_cmp w) (w_end w)))
+(fn with_stack ((w Walk) (s (List (Prod SExpr Nat)))) Walk
+  (MkWalk (w_hyps w) (w_codes w) s (w_cmp w) (w_end w)))
+(fn with_cmp ((w Walk) (c (Option Cmp))) Walk
+  (MkWalk (w_hyps w) (w_codes w) (w_stack w) c (w_end w)))
+;; whether the walk ends before the instruction at pc: the count has run out, or — with no
+;; count — the end's program counter is reached after a first instruction
+(fn stops ((w Walk) (count (Option Nat)) (done Nat) (pc Nat)) Bool
+  (match count
+    ((some k) (if (<= k done) true false))
+    (none
+      (if (= done 0) false
+      (match (w_end w)
+        (none false)
+        ((some e) (if (= e pc) true false)))))))
+;; One instruction's rule: its name, its numbers and the blocks of what it asks beside the
+;; program counter and the code; a step to make before it; the state after it and that state's
+;; program counter; what the walk carries from there; whether the walk ends with it.
+(type Rule (MkRule String (List SExpr) (List SExpr) (List SExpr) SExpr Nat Walk Bool))
+(fn plain ((name String) (args (List SExpr)) (asks (List SExpr)) (s2 SExpr) (pc2 Nat) (w Walk))
+  (Option Rule)
+  (some (MkRule name args asks nil s2 pc2 w false)))
+;; `jae` after a comparison whose outcome a hypothesis gives: the outcome restated of the state
+;; the comparison was made in, then the rule for the jump taken or not
+(fn jcc_rule
+  ((w Walk) (s SExpr) (pc Nat) (len Nat) (next Nat) (d Nat) (c Cmp) (h SExpr) (below Bool))
+  (Option Rule)
+  (match c
+    ((MkCmp sc a b cnext)
+     (let
+       ((fact
+          (ap
+            (list (sy "<") (ap (list (sy "w64_val") (ap (list (sy "reg") sc (nm a)))))
+              (ap (list (sy "w64_val") (ap (list (sy "reg") sc (nm b)))))))))
+       (if below
+         (some
+           (MkRule "do_jcc_not" (list (nm pc) (nm 3) (nm d) (nm len) (nm next))
+             (list
+               (b_exact (ap (list (sy "cmp_below") sc (nm a) (nm b) (w64_of cnext) (sy "hcmp"))))
+               b_rfl)
+             (list (ap (list (sy "have") (sy "hcmp") fact (ap (list (sy "exact") h)))))
+             (ap (list (sy "at_pc") s (w64_of next)))
+             next
+             w
+             false))
+         (some
+           (MkRule "do_jcc_taken" (list (nm pc) (nm 3) (nm len) (nm d) (nm (jump_to next d)))
+             (list
+               (b_exact (ap (list (sy "cmp_not_below") sc (nm a) (nm b) (w64_of cnext) (sy "hcmp"))))
+               b_rfl)
+             (list
+               (ap
+                 (list (sy "have") (sy "hcmp") (ap (list (sy "Not") fact))
+                   (ap (list (sy "exact") h)))))
+             (ap (list (sy "at_pc") s (w64_of (jump_to next d))))
+             (jump_to next d)
+             w
+             false)))))))
+;; the rule for the instruction at pc in the state s; nothing where its needs are not met
+(fn rule_of ((w Walk) (s SExpr) (pc Nat) (i Instr) (len Nat) (next Nat)) (Option Rule)
+  (match i
+    ((AluRmR o m r)
+     (match m
+       ((RmReg a)
+        (match o
+          (BCmp
+            (plain "do_cmp_rr" (list (nm pc) (nm a) (nm r) (nm len) (nm next)) (list b_rfl)
+              (ap (list (sy "x_cmp_rr") s (nm a) (nm r) (w64_of next)))
+              next
+              (with_cmp w (some (MkCmp s a r next)))))
+          (_
+            (plain "do_alu_rr" (list (nm pc) (sx_bop o) (nm a) (nm r) (nm len) (nm next))
+              (list b_rfl b_rfl)
+              (ap (list (sy "x_alu_rr") s (sx_bop o) (nm a) (nm r) (w64_of next)))
+              next
+              w))))
+       ((RmSib b x sc d)
+        (match o
+          (BAdd
+            (match (sib_hyp (w_hyps w) b x sc d 4)
+              (none none)
+              ((some hr)
+               (match (sib_hyp (w_hyps w) b x sc d 2)
+                 (none none)
+                 ((some hw)
+                  (plain "do_add_m_sib"
+                    (list (nm pc) (nm b) (nm x) (nm sc) (nm d) (nm r) (nm len) (nm next))
+                    (list (b_exact hr) (b_exact hw) b_rfl)
+                    (ap
+                      (list (sy "x_add_m_sib") s (nm b) (nm x) (nm sc) (nm d) (nm r) (w64_of next)))
+                    next
+                    (with_codes w (after_store (w_codes w)))))))))
+          (_ none)))
+       (_ none)))
+    ((AluRmI o m v)
+     (match m
+       ((RmReg a)
+        (plain "do_alu_ri" (list (nm pc) (sx_bop o) (nm a) (nm v) (nm len) (nm next))
+          (list b_rfl b_rfl)
+          (ap (list (sy "x_alu_ri") s (sx_bop o) (nm a) (nm v) (w64_of next)))
+          next
+          w))
+       (_ none)))
+    ((MovRmR m r)
+     (match m
+       ((RmReg a)
+        (plain "do_mov_rr" (list (nm pc) (nm a) (nm r) (nm len) (nm next)) (list b_rfl)
+          (ap (list (sy "x_mov_rr") s (nm a) (nm r) (w64_of next)))
+          next
+          w))
+       (_ none)))
+    ((MovRI32 r v)
+     (plain "do_mov_ri32" (list (nm pc) (nm r) (nm v) (nm len) (nm next)) (list b_rfl)
+       (ap (list (sy "x_mov_ri") s (nm r) (nm v) (w64_of next)))
+       next
+       w))
+    ((MovRRm r m)
+     (match m
+       ((RmSib b x sc d)
+        (match (sib_hyp (w_hyps w) b x sc d 4)
+          (none none)
+          ((some hm)
+           (plain "do_load_sib"
+             (list (nm pc) (nm r) (nm b) (nm x) (nm sc) (nm d) (nm len) (nm next))
+             (list (b_exact hm) b_rfl)
+             (ap (list (sy "x_load_sib") s (nm r) (nm b) (nm x) (nm sc) (nm d) (w64_of next)))
+             next
+             w))))
+       (_ none)))
+    ((ImulRRm r m)
+     (match m
+       ((RmSib b x sc d)
+        (match (sib_hyp (w_hyps w) b x sc d 4)
+          (none none)
+          ((some hm)
+           (plain "do_imul_sib"
+             (list (nm pc) (nm r) (nm b) (nm x) (nm sc) (nm d) (nm len) (nm next))
+             (list (b_exact hm) b_rfl)
+             (ap (list (sy "x_imul_sib") s (nm r) (nm b) (nm x) (nm sc) (nm d) (w64_of next)))
+             next
+             w))))
+       (_ none)))
+    ((Jcc cc d)
+     (if (= cc 3)
+       (match (w_cmp w)
+         (none none)
+         ((some c)
+          (match c
+            ((MkCmp _ a b _)
+             (match (cmp_hyp (w_hyps w) a b)
+               (none none)
+               ((some (Prod.mk h below)) (jcc_rule w s pc len next d c h below)))))))
+       none))
+    ((Jmp d)
+     (plain "do_jmp" (list (nm pc) (nm len) (nm d) (nm (jump_to next d))) (list b_rfl)
+       (ap (list (sy "at_pc") s (w64_of (jump_to next d))))
+       (jump_to next d)
+       w))
+    ((Push r)
+     (match (take_stack (w_stack w) 2)
+       (none none)
+       ((some (Prod.mk hm left))
+        (plain "do_push" (list (nm pc) (nm r) (nm len) (nm next)) (list (b_exact hm) b_rfl)
+          (ap
+            (list (sy "at_pc") (ap (list (sy "pushed") s (ap (list (sy "reg") s (nm r)))))
+              (w64_of next)))
+          next
+          (with_stack (with_codes w (after_store (w_codes w))) left)))))
+    ((Pop r)
+     (match (take_stack (w_stack w) 4)
+       (none none)
+       ((some (Prod.mk hm left))
+        (plain "do_pop" (list (nm pc) (nm r) (nm len) (nm next)) (list (b_exact hm) b_rfl)
+          (ap (list (sy "x_pop") s (nm r) (w64_of next)))
+          next
+          (with_stack w left)))))
+    ((Call d)
+     (match (take_stack (w_stack w) 2)
+       (none none)
+       ((some (Prod.mk hm left))
+        (some
+          (MkRule "do_call" (list (nm pc) (nm len) (nm d) (nm next) (nm (jump_to next d)))
+            (list (b_exact hm) b_rfl b_rfl)
+            nil
+            (ap
+              (list (sy "at_pc") (ap (list (sy "pushed") s (w64_of next))) (w64_of (jump_to next d))))
+            (jump_to next d)
+            (with_stack w left)
+            true)))))
+    (Ret
+      (match (take_stack (w_stack w) 4)
+        (none none)
+        ((some (Prod.mk hm left))
+         (some
+           (MkRule "do_ret" (list (nm pc) (nm len)) (list (b_exact hm)) nil
+             (ap (list (sy "x_ret") s))
+             0
+             (with_stack w left)
+             true)))))
+    (_ none)))
+;; The block for the run from the state `s` at `pc`: `done` instructions are behind it, `hrip` is
+;; the block for the program counter of `s`. Nothing where a rule's needs are not met.
+(fn walk
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (n Fuel)
+   (w Walk)
+   (count (Option Nat))
+   (done Nat)
+   (s SExpr)
+   (pc Nat)
+   (hrip SExpr))
+  (Option SExpr)
+  (measure (struct n))
+  (match n
+    (FZ none)
+    ((FS n1)
+     (if (stops w count done pc) (some (b_exact (ap (list (sy "reaches_refl") s))))
+     (match (w_codes w)
+       (nil none)
+       ((cons hc _)
+        (match (site tbl pc)
+          (none none)
+          ((some (Prod.mk i len))
+           (match (rule_of w s pc i len (+ pc len))
+             (none none)
+             ((some (MkRule name args asks pre s2 pc2 w2 last))
+              (match
+                (if last (some (b_exact (ap (list (sy "reaches_refl") s2))))
+                (walk tbl n1 w2 count (+ done 1) s2 pc2 b_rfl))
+                (none none)
+                ((some rest)
+                 (some
+                   (ap
+                     (List.append pre
+                       (list (rule name args hrip (code_block hc pc i len) asks rest)))))))))))))))))
+
+;; ---- the goal -----------------------------------------------------------------------------------
+;; the hint (count N)
+(fn count_hint ((hs (List SExpr))) (Option Nat)
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons (SList (cons f (cons k nil))) r) (if (named f "count") (num_of k) (count_hint r)))
+    ((cons _ r) (count_hint r))))
+;; the program counter of (at_pc X (w64 PC))
+(fn at_pc_of ((t SExpr)) (Option Nat)
+  (match t
+    ((SList (cons f (cons _ (cons (SList (cons g (cons k nil))) nil))))
+     (if (named f "at_pc") (if (named g "w64") (num_of k) none) none))
+    (_ none)))
+;; where a goal's run starts: the program counter, and the block that shows it of the state
+(fn start_of ((a SExpr) (hs (List Hyp))) (Option (Prod Nat SExpr))
+  (match (at_pc_of a)
+    ((some pc) (some (Prod.mk pc b_rfl)))
+    (none
+      (match (rip_hyp hs)
+        (none none)
+        ((some (Prod.mk h pc)) (some (Prod.mk pc (b_exact h))))))))
+(fn sixty_four () Fuel (fuel_of 64))
+;; the tactic: a goal (reaches A B) under hypotheses, the hints, the block — or nothing
+(fn derive_block ((tbl (List (Prod Nat (Prod Instr Nat)))) (goal (List Int)) (hints (List Int)))
+  (List Int)
+  (match (read_all goal)
+    ((RAErr _ _) nil)
+    ((RAOk forms)
+     (match forms
+       ((cons (SList (cons _ (cons (SList binders) (cons target _)))) nil)
+        (match target
+          ((SList (cons f (cons a (cons b nil))))
+           (if (named f "reaches")
+             (match (start_of a (hyps_of binders))
+               (none nil)
+               ((some (Prod.mk pc hrip))
+                (match
+                  (walk tbl sixty_four
+                    (MkWalk (hyps_of binders) (code_hyps (hyps_of binders))
+                      (stack_hyps (hyps_of binders))
+                      none
+                      (at_pc_of b))
+                    (match (read_all hints)
+                      ((RAOk (cons (SList hs) nil)) (count_hint hs))
+                      (_ none))
+                    0
+                    a
+                    pc
+                    hrip)
+                  (none nil)
+                  ((some blk) (show_sexpr blk)))))
+             nil))
+          (_ nil)))
+       (_ nil)))))
