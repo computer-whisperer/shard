@@ -547,7 +547,58 @@ entries are explained under "Measured" at the end.
   owner named, and it was not built to compare. Left as it was and written in `OPEN.md`
   §1: a group of functions that call each other takes no evidence. Asked for by the
   `compiler` branch for its buffer loops; the owner's word is the fourth above. Which
-  pairs are dependent and the levels are the builder's, on that prior.
+  pairs are dependent and the levels are the builder's, on that prior. The owner, asked
+  whether the group's gap is to be queued: "We can wait on the group-with-evidence point
+  until it's actually needed."
+- The elaborator is a definition by a depth its callers hand down, and `elab` alone tests
+  it. Its 34 functions took no measure on the source: `elab_list` elaborates the
+  constructor chain it built from a list literal, `elab_match_lit` the `if`s it built from
+  numeral rows, `elab_type` a head it read as a type. Every member takes the depth last;
+  `elab`, which every cycle of the group passes through but a walk of a list at one depth,
+  tests it and hands on one less at its 14 dispatches, and the other members hand on what
+  they were given — the discipline ratified with the erasure —, so a member is measured by
+  the depth, a rank above every member it calls at that depth, and the list it walks.
+  `elab_op_at`'s call of itself for `>` and `>=` was the one cycle outside `elab`: the part
+  that call reaches is `elab_op_go`, which both call. Callers pass `(budget_depth)`, K's
+  8,192, and not a budget of the elaborator's own: K already refused a term nested deeper,
+  so one number bounds a term, and the elaborator's refusal (`term_depth`) comes first and
+  says what to do. Not a wrapper that keeps `elab`'s three parameters for the 36 callers
+  outside the group: the eraser's callers pass the depth where they call, and a caller
+  that holds one can hand on its own. The cost chosen: every caller states the depth, and
+  a list literal costs a level for each element — 8,190 at most, as K held it (Measured).
+  The loader's re-entry is bounded the same way: `load_derive` tests a depth and hands on
+  one less, a file's forms are loaded at `(derive_depth)`, 1, and a `derive` among the
+  forms a derivation generated is refused `derive_generated`. No capability generates one,
+  so the refusal has no pin, and the bound states what the code did; its six functions
+  state their measures and wait on the loader's units below them. The owner's rulings are
+  the first and the second above, and then, of the plan: "Proceed with the elaborator".
+  Which function tests, the budget's being K's, the refusal's name and text, `elab_op_go`
+  and the re-entry's depth of 1 are the builder's.
+- The proof steps' loops, the producer's ladder, the loader's reading of a `fn` and the
+  loader's driver are definitions. Steps moved to the function that tests, by the
+  discipline: `reduce_loop` tests the budget and hands `reduce_step` one less, which handed
+  it back less one untested; `eng_solve` tests the depth and hands `eng_induct` one less,
+  where `eng_induct_on` stepped it three calls on; `settle_missed` tests its fuel before
+  anything else — every row of it answered the same at a spent fuel — and a fact says that
+  a reading to be made again was given a fuel of at least 1 (`settle_missed_ok`), which
+  `flush_fetching`, `load_decl_fetching` and the implementation's two loops descend by as
+  the checker's loops do by `rec_guard_ok`. `load_fn_with` and `load_template` each test
+  the fuel they step, and state both fuels and a rank. In the reading of a module with its
+  imports the depth is stepped by `load_file_module`, which tests it, where `load_forms`
+  stepped it untested: a file's forms are read one below the depth its import passed, the
+  two callers of `load_forms` outside the group hand it one less, and the depth at which
+  `load_file_module` refuses is what it was. `base_loaded`, which steps into the base
+  module's source, tests before it (`(< fuel -1)`): the last file asks for the base at -1,
+  so the test turns away only a base that asks for itself, which went round without end.
+  The group's eleven are measured by the depth plus 2, a rank and the list walked; the
+  re-entry's six by their depth, a rank and a list; the eight loops by their counter.
+  `probe_reach` matches on `probe_fn` called at a fuel of 1,024, and its `Nat` measure was
+  held back while K's check of its equation did not end; it stands since K takes a stuck
+  major apart as written (below, "The checker K and the Init import"). Not the budget
+  handed to `probe_reach` as a parameter, so that it is a variable there: that hid the cost
+  at one site and left it for the next function that writes a budget as a numeral. The
+  owner's words are the ones for the units, and of the cost when it was put to them:
+  "Find and fix the blowup problem."; what was built is the builder's.
 
 ## Programs and the back end
 
@@ -798,11 +849,47 @@ entries are explained under "Measured" at the end.
 - A long run is split into lemmas; not one theorem — K's budget (10^8 ticks) is per declaration.
 - ★ Init is the library: a statement Init has is cited by Init's name and `v3/std` holds only
   what Init lacks; not a native copy of list and arithmetic lemmas.
+- An application's written arguments are read in three passes — the bare names of locals and
+  the values already elaborated, then the result type against the expected type and the
+  compound arguments, numerals last — and an argument whose parameter's type names a
+  parameter that was written out waits for the pass that reads that one (`elab.shard`
+  `slots_order`); not the passes alone. Under them a hypothesis about `c` settled a
+  parameter written as `(bump c)` to `c` wherever the two agree by unfolding, and the next
+  argument, about `(bump c)`, was refused against the wrong instance, with a message that
+  named neither cause (pin `arg_written_first`). Not every written argument left to right,
+  as Lean reads them: a local read first is what lets the expected type meet an
+  eliminator's `?motive t` as a pattern, and a numeral read last takes the type the other
+  arguments fix. A numeral whose own parameter's type is still open is not waited for: read
+  first it would be a `Nat`. The owner, of the defect put to them with this fix and with
+  its record alone: "Let's fix the order".
 
 ## The checker K and the Init import
 
 - K implements the pinned Lean kernel rule for rule (structure eta, nested inductives, literals,
   lazy delta, `eagerReduce`); not a smaller theory — the gate is all of `Init`, verdict for verdict.
+- ★ Where a structure's recursor meets a major premise that reduces to no constructor, K takes
+  the structure apart as the projections of the major as it was written; not, as the pinned
+  kernel does, as the projections of what reduction made of it (`k/tc.shard`
+  `to_cnstr_when_structure`). The two terms are convertible and the same rule fires, so the
+  rules are Lean's and the Init replay holds the verdicts to Lean's as before; what is given
+  up is the pin's order at this one line, and with it a term's cost being Lean's there.
+  Lean's choice loses the call: a function's call that reduction unfolded and left stuck is
+  replaced, on both sides of a comparison, by its unfolding, and where the two sides spell an
+  argument differently the unfoldings are compared part by part. A function defined by a
+  measure and by itself reads its parameters out of the tuple of its arguments
+  (`define.shard` `pj_wf_go`), so the two sides of its unfolding equation do spell them
+  differently; with the matched call's result a pair, the callee measured and its fuel a
+  numeral, the comparison went down the callee's recursion a level for each unit of the
+  fuel, each level reducing an accessibility proof — the square of the fuel and more
+  (Measured). Kept as written, two calls are compared by their arguments. Not the definer
+  giving such a function the shape a group has — the arguments taken apart by their
+  recursor, as Lean's own definitions by well-founded recursion are, which spells a
+  parameter alike on both sides and is free of the cost today (Measured): K would stay the
+  pin, but 278 obligations of 174 functions would be restated over the parameters by name, a
+  group takes no evidence yet (`OPEN.md` §1), and it closes this source of two spellings and
+  not the next. Not the budget handed down as a variable (above, "Definitions and
+  recursion"). The owner, of the cost put to them with the three: "Find and fix the blowup
+  problem." — which of the three is the builder's, and a checkpoint.
 - ★ A theorem's body is delta-reducible in K; not opaque to unfolding — the pinned kernel's
   `has_value` is "definition or theorem", and Init checks under that rule. `opaque` never unfolds.
 - ★ Native reduction (`Lean.reduceBool`), `unsafe`, `partial` and mutual definition blocks are
@@ -1600,7 +1687,99 @@ measurements; measure again before building on one.
   416 s, the Init index the one before; the loader's closure loaded checked, 58 modules
   with none pending; the suite on the binaries, 317 s, 52 entrypoints, the loader's pins
   353 directories. The checked load of all 29 roots was not run on the dev box and is CI's.
-  The state's check and the Init replay were not run: nothing K runs changed.
+  The state's check and the Init replay were not run: nothing K runs changed. On CI: #782
+  `native` 71.6 minutes, `v3` 45.8, `replay` 28.0, the checked load of all 29 roots in it.
+- The elaborator (2026-11-21). 87 programs became definitions: 8,990 functions, 8,891
+  definitions, 99 programs — 90 for a function they call, 8 for the integer they state as
+  a measure, `run_loop` —, 1,797 obligations of 703 functions. The group's 100: 14 a step
+  of the depth, 8 a shorter list, 78 a lower rank at the same depth, each accepted as first
+  typed. What the depth counts was measured with scratch loaders whose test was lowered,
+  the loader's closure loaded checked: at 128 levels one function is refused
+  (`k/accel_pins.shard` `accel_ref_closure`, the one the erasure's fuel met), at 256 and at
+  512 none, of 8,192. A list literal, by the loader before the change and by the one after:
+  each reads 8,190 elements and refuses 8,191 — K before (`exhausted_rec_depth_at_infer`),
+  the elaborator now (`term_depth`). The closure's program text differs in 79 functions: 77
+  changed (the group's, the loader's six, their callers), `elab_op_go` and `derive_depth`
+  new. `elab.shard` is 2,596 lines for 2,188. Checked on the dev box before the push, by
+  ruling 17: the 29 binaries built in 278 s, the Init index the one before; the loader's
+  closure loaded checked, 58 modules with none pending; the suite on the binaries, 268 s,
+  52 entrypoints, of which one failed — the formatter's gate on `elab.shard`, which was not
+  formatted after its proofs were placed; formatted, and that entrypoint run again, 69
+  checks, 0 failed; the loader's pins 354 directories. The checked load of all 29 roots
+  was not run on the dev box and is CI's. The state's check and the Init replay were not
+  run: nothing of K's directory changed.
+- The driver's lower units (2026-11-21). 54 programs became definitions: 8,990 functions,
+  8,945 definitions, 45 programs — 43 for a function they call, `probe_reach` for its
+  integer, `run_loop` —, 1,826 obligations of 722 functions. The 29 proofs (the proof
+  steps' 10, the producer's 9, the loader's 10) were each accepted as first typed. The
+  closure's program text differs in 5 functions. The cost of a closed fuel under a
+  constructor match (`OPEN.md` §1), on a file of 24 lines, the load's time less the 2.5 s
+  it takes at a fuel of 1 to 16: 0.1 s at 32, 0.6 at 64, 2.9 at 128, 13.5 at 256; with a
+  result bound by a row that names no constructor, with the call handed to a function,
+  and from a caller that recurses structurally or not at all, 256 costs nothing. The
+  loader's own case was found by a load that ran ten minutes to 45 GB, then by a stack,
+  then by a loader whose K gives up at 4 million heartbeats, which names the declaration:
+  `probe_reach.eq_1`. `verify.sh`'s readings of the loader's closure take 370 s for 309.
+  Checked on the dev box before the push, by ruling 17: the 29 binaries built in 292 s,
+  the Init index the one before; the loader's closure loaded checked, 58 modules with none
+  pending; the suite on the binaries, 270 s, 52 entrypoints, none failed. The checked load
+  of all 29 roots was not run on the dev box and is CI's. The state's check and the Init
+  replay were not run: nothing of K's directory changed.
+- Where the cost of a closed fuel comes from (2026-11-21, `OPEN.md` §1; nothing in the tree
+  changed). The file of 24 lines at a fuel of 256, a load's seconds, 2.2 of them Init: 15.4
+  as it stands; 2.3 with the fuel a variable; 2.2 with the callee and the caller returning
+  the three-constructor type and no pair; 14.1 with the pair matched by one row and its
+  first part matched inside; 2.2 with the call naming only variables the match bound; 14.1
+  with it naming another parameter; 15.1 with the callee's fuel a `Nat`; 2.3 with the
+  caller one of a group of two; 14.9 with a callee that does not stop on a variable, which
+  K runs to its end. The stack nine seconds in: K's comparison 195 deep — 91 rounds of an
+  application's arguments and a binder's body under the comparison of two projections —
+  over 54 recursors, each waiting on its major premise. A loader built from the tree's
+  sources with one change to K, three lines — the pair is taken apart as the projections of
+  the call as it stood, not of its unfolding — loads the file in 2.3 s at 256 and at 1,024,
+  and the loader's own source with `probe_reach` measured by `Int.natAbs` in 130 s at
+  7.3 GB with the equation accepted; the callee that does not stop still costs 14.1.
+  Of the measured functions outside a group, 174 take two parameters or more, with 278
+  obligations, read off the call graph; 279 descent proofs open by naming the tuple `p`.
+- Pipeline #785 (the elaborator, `bd2f2d88`): `native` 4,451 s, `v3` 2,527, `replay` 1,823,
+  the pipeline 6,432 — `native` was 4,293 on #782. Pipeline #787 (the driver's lower units,
+  `748ccaa0`): `native` 4,440, `v3` 2,438, `replay` 1,836, the pipeline 6,949. Its `native`
+  job, 74 minutes, from the job's log: the build of the 29 binaries 514 s, the emit tie 53,
+  all 29 roots loaded checked 641, the byte-tie 42 minutes, the suite on the binaries 9.
+- K's structure eta on the major as written, and the loader's driver (2026-11-21). The
+  change to K is three lines; `to_cnstr_when_structure`'s three descents name one more
+  local. `tc_test` has 105 cases for 101: the four on the test structure's recursor, of
+  which two fail on K as it was. At a fuel of 1,024 the 24-line file was stopped by a guard
+  at 24.4 GB after 155 s on K as it was, and loads in 2.3 s. Checked on the dev box before
+  the push, by ruling 17: the 29 binaries built in 269 s; the state's check, 36 checks;
+  the suite on the binaries, 286 s, 52 entrypoints, none failed; the Init replay on
+  compiled K — 57,977 accepted, none rejected or exhausted, the axiom closures the
+  oracle's, the verdict line the pinned one, all 20 accelerators pinned —, 551 s and
+  29 GiB beside two other loads (420 s is the box's time alone). Then the driver: 37
+  programs became definitions — 8,990 functions, 8,982 definitions, 8 programs, `run_loop`
+  and the seven above it —, 1,866 obligations of 747 functions. The 40 proofs (2 for
+  `probe_reach`, 38 for the 24 functions above it) were each accepted as first typed.
+  `loader.shard` alone loads checked in 190 s at 8.2 GB, for 133 s with `probe_reach` only
+  and 151 s before either; it is 5,647 lines for 5,507. The closure's program text differs
+  in 7 functions: `to_cnstr_when_structure` and `inductive_reduce_rec`, and the five whose
+  import depth moved (`base_loaded`, `load_file_module`, `load_forms`, `impl_replay`,
+  `impl_form`). After the driver: the 29 binaries built in 263 s, the suite 248 s, 52
+  entrypoints, none failed; the loader's closure loaded checked, 58 modules with none
+  pending. The checked load of all 29 roots was not run on the dev box and is CI's. On CI,
+  #792 (`5f9375ce`): `native` 4,245 s — the build 488, all 29 roots loaded checked in 885 for
+  641 on #787, 148,624 declarations and none failed, the byte-tie 36 minutes —, `v3` 2,521,
+  `replay` 1,805 with the replay itself 1,412 s and 57,977 accepted; the pipeline 6,215.
+- The order of an application's arguments (2026-11-21). Three functions more in `elab.shard`
+  (2,636 lines for 2,596), each a definition: 8,993 functions, 8,985 definitions, 8
+  programs. The three descents of `elab_slots` under its explicit row name one more local.
+  The pin's file is refused by the loader before (`type_mismatch`, at the hypothesis after
+  the one that settled the parameter) and loads on the one after; a numeral for `j` and a
+  hypothesis about `(+ j 1)` likewise. The proofs the suite and the loader's closure hold
+  load under the new order. Checked on
+  the dev box before the push, by ruling 17 — the 29 binaries built in 260 s; the suite on
+  the binaries, 245 s, 52 entrypoints, none failed; the loader's closure loaded checked, 58
+  modules with none pending; the loader's pins 355 directories. The checked load of all 29
+  roots was not run on the dev box and is CI's.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

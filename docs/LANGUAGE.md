@@ -230,20 +230,19 @@ work on Init's `List`, `Option`, `Bool` and `Prod`, with Lean's constructor
 names opened by name (`(use Init.List cons nil)`). No rule reads them differently from any other
 file; two things about how they are written set them apart.
 
-- **Nineteen in twenty of their functions are definitions; of those written by hand, more
-  than nine in ten.** The checker reads every one: of the loader's closure, 8,984
-  functions — 4,792 of them the rows of a generated table —, it holds 8,798 as definitions. The
-  others are programs with the reason: a function they call is a program
-  (`callee_runnable`, 151), or they are a group of functions that call each other with no
-  measure the definer takes (34, the elaborator's), or a function that calls itself with none
-  (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
+- **All but eight of their functions are definitions.** The checker reads every one: of the
+  loader's closure, 8,993
+  functions — 4,792 of them the rows of a generated table —, it holds 8,985 as definitions. The
+  other 8 are programs with the reason: a function that calls itself with no measure
+  (`realize_recursion`: `ev.shard` `run_loop`, a program's run with effects), and the seven
+  above it, each for a callee that is a program (`callee_runnable`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 174 functions in 35 files:
+  `kernel/descent.shard`. The forms the sources use, 189 functions in 35 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -258,20 +257,20 @@ file; two things about how they are written set them apart.
   | a reader that goes on from what a helper left of its input (`take_line`, `take_hex`, `parse_hex4`; `json_parse`, in K's reader of an export's lines) | `(List.length cs)` | the helper's fact, that it leaves no more than it was given (`json.shard` `take_line_lt`, `parse_hex4_le`, `json_parse_lt`; `sexpr.shard` `take_hex_le`), as a `have` or as a fact of `arith`; then the rows' equations rewritten, `(simp_only List.length_cons) (arith)` |
   | a walk that nothing it is given bounds — K's down a telescope, whose next term is a body it substituted into: a heartbeat of the checker at each step (`a_step`), and the call of itself under a test that the count advanced below the limit (`a_advanced`) | `(Int.natAbs (- (budget_ticks) (st_ticks (a_st a0))))`, the heartbeats left | `(apply a_advanced_lt (exact h))`, `h` the test's hypothesis |
   | a reading of a type into the types it names — a type's arguments, an inductive's fields, a package's —, whose next term K computed or the environment holds: a depth the caller hands down, `(budget_depth)`, less one past a test at each reading (`erase.shard` `l_to_etype`, `package_type`; `ev.shard` `head_checked`, where the depth is the count of the program's declarations). A type read deeper is answered as one that is none | `(Int.natAbs depth)`, then a rank and a list (the next item) | `(apply Prod.Lex.left (apply natAbs_pred (arith)))` at the step |
+  | the elaboration of a term, which at three places goes on with a form it built from the source — a list literal's constructor chain, a literal match's `if`s, a type's head read as a type —, larger than what it came from: a depth the caller hands down, `(budget_depth)`, which `elab` alone tests and hands on less one (`elab.shard`). A term nested deeper is refused `term_depth`; a list literal costs a level for each element. The loader's reading of the forms a derivation generated likewise, at a depth of 1 (`loader.shard` `load_derive`, `derive_depth`) | `(Int.natAbs depth)`, then a rank and a list | the same at `elab`'s 14 dispatches; a lower rank or a shorter list at every other call |
 
   A test that is a `Bool` expression (`(bool_or (< k 1) …)`) gives its hypothesis as an
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. No function is a program for the
-  measure it states (`measure_type`); 24 state an integer or a term where the checker
-  does not get to it, behind a callee that is a program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. No function of the loader's closure
+  states an integer for its measure.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Seventeen groups are written so, 164 functions, and the loader's `build_demands`
+  parts"). Twenty-four groups are written so, 228 functions, and the loader's `build_demands`
   alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
@@ -282,7 +281,14 @@ file; two things about how they are written set them apart.
   the types an entry states (`ev.shard` `ty_checked`), the definer's projection of a body
   (`define.shard` `pj_term`, twelve functions) and the split of its equations
   (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
-  the erasure itself in three, 39 functions (`erase` to `lift_lambda`), the evaluator's
+  the erasure itself in three, 39 functions (`erase` to `lift_lambda`), the elaborator in
+  three, 35 functions (`elab.shard`, `elab` to `elab_exists`), the proof steps'
+  normalization in two and their run of a block in three (`tactic.shard` `reduce_loop`,
+  `tac_block`), the producer's ladder in three — its depth, a rank, and its budget or a
+  list (`engine.shard` `eng_solve`) —, the loader's reading of a `fn` in three — two fuels
+  and a rank (`loader.shard` `load_fn_with`) —, its re-entry on the forms a derivation
+  generated in three — a depth, a rank, a list (`load_derive`) — and its reading of a module
+  with its imports in the same three, the import depth first (`load_file_module`), the evaluator's
   machine in two, its fuel and what is left to run at that fuel (`ev.shard` `ev_term`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
@@ -295,14 +301,19 @@ file; two things about how they are written set them apart.
   test it and the walk of an argument list state `(Int.natAbs d)`; so the projection's ten
   that hand their fuel to `pj_term` less one, which tests it —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
-  given a depth of at least 1). No such statement serves a member that both hands its fuel
+  given a depth of at least 1; `loader.shard` `settle_missed_ok`: a reading that is to be
+  made again was given a fuel of at least 1). No such statement serves a member that both hands its fuel
   to the one that tests it and hands on one less elsewhere: it knows nothing of its fuel,
   and one less is no nearer a bound. There the functions that test the fuel are the ones
   that step it — the erasure's `erase` and `static_shape`, the two its walk comes back to,
-  hand on one less where they go round, and the other 37 hand on the fuel they were given —,
-  every member states the one term `(Int.natAbs (+ fuel 1))`, the tester's step is
-  `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` and every other call a lower
-  rank or a shorter list. A member of a group may call any number of the others (pin
+  hand on one less where they go round, and the other 37 hand on the fuel they were given;
+  the elaborator's `elab` alone, which every cycle of its group passes through but a walk of
+  a list, hands on one less at its 14 dispatches, and the other 34 the depth they were
+  given; the normalization's `reduce_loop` and the producer's `eng_solve` hand on one less
+  where a function they call did it untested —, every member states the one term (`(Int.natAbs (+ fuel 1))` past a test
+  `(< fuel 0)`, `(Int.natAbs depth)` past `(< depth 1)`), the tester's step is
+  `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` or `… (apply natAbs_pred
+  (arith))` and every other call a lower rank or a shorter list. A member of a group may call any number of the others (pin
   `mutual_wide`). A machine that runs a term under a continuation states, after its fuel,
   twice the term's size and a weight of the continuation's frames — the terms each holds,
   and one or two for the frame (`ev.shard` `kont_weight`, a definition with no program) —:
@@ -584,8 +595,13 @@ other. No candidate is `unknown_constant`.
 **Application, implicit arguments, levels.** A constant's binders marked `implicit` or `inst` are
 filled by the elaborator; written arguments go to the explicit binders, left to right. The
 unknowns — and the universe levels of a constant cited without `.{…}` — are solved by first-order
-unification: the result type against the expected type first, then the arguments, numerals last,
-so `(List.cons 0 nil)` at `(List Int)` reads `0` as an `Int`. `@NAME` makes every binder explicit:
+unification: the arguments that are a local's bare name first, then the result type against the
+expected type, then the other arguments, numerals last,
+so `(List.cons 0 nil)` at `(List Int)` reads `0` as an `Int`. An argument whose parameter's type is
+stated over a parameter that was written out is read after that one: in `(lemma (f c) h)`, where
+the lemma states `h` about its first parameter, `(f c)` is read before `h`, so `h` may be a
+hypothesis about any term that agrees with `(f c)` by computation, and a numeral written for `j` is
+read before a hypothesis about `(+ j 1)` (pin `arg_written_first`). `@NAME` makes every binder explicit:
 `(@List.nil a)`. What the inputs do not determine is refused, never defaulted: `unsolved_implicit`
 (write the application with `@`), `unsolved_universe` (write `NAME.{…}`). Too many arguments is
 `function_expected`, which names the head as it was resolved — `the head resolved to Add — Init's

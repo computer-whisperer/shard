@@ -104,7 +104,7 @@ linking: code that calls a function may be joined with anything the callee is re
 | machine | its code | today |
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
-| shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is not yet a definition (`OPEN.md` §2); the loop over host calls is not written |
+| shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
 | x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts, one file proven by them to exit as its functions compute |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 

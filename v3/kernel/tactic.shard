@@ -952,7 +952,7 @@
 
 ;; (exact TERM): the term at the target
 (fn step_exact ((e El) (ctx (List Expr)) (target Expr) (t SExpr)) TStep
-  (match (elab e t (some target))
+  (match (elab e t (some target) (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 v _)
      (match (tac_unsolved e1 v)
@@ -1042,7 +1042,7 @@
 ;; (have NAME PROP STEP…): the cut — the child goal PROP over ctx, the continuation with
 ;; NAME : PROP; the filling applies the continuation's lambda to the child's occurrence
 (fn step_have ((e El) (ctx (List Expr)) (target Expr) (n Name) (p SExpr) (b (List Node))) TStep
-  (match (elab_type e p)
+  (match (elab_type e p (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 prop _)
      (match (tac_unsolved e1 prop)
@@ -1061,7 +1061,7 @@
 
 ;; (show PROP): the target replaced where K's conversion agrees
 (fn step_show ((e El) (ctx (List Expr)) (target Expr) (p SExpr)) TStep
-  (match (elab_type e p)
+  (match (elab_type e p (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 prop _)
      (match (tac_unsolved e1 prop)
@@ -1214,7 +1214,7 @@
 ;; (apply TERM BLOCK…): TERM's conclusion after arity(TERM) - arity(target) binders unified with
 ;; the target; each premise left open a child goal in binder order
 (fn step_apply ((e El) (ctx (List Expr)) (target Expr) (t SExpr) (bs (List Node))) TStep
-  (match (elab e t none)
+  (match (elab e t none (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 v ty)
      (match (tac_arity e1 ty 64)
@@ -1293,7 +1293,7 @@
    (arms (List Node))
    (ind Bool))
   TStep
-  (match (elab e t none)
+  (match (elab e t none (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 x0 xty)
      (let ((x (el_zonk e1 x0)))
@@ -1568,13 +1568,13 @@
 (fn step_wf
   ((e El) (ctx (List Expr)) (target Expr) (xs SExpr) (ms SExpr) (ihn Name) (b (List Node)))
   TStep
-  (match (elab e xs none)
+  (match (elab e xs none (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 x0 alpha0)
      (match (el_zonk e1 x0)
        ((FVar dd xid)
         (let ((x (FVar dd xid)) (alpha (el_zonk e1 alpha0)))
-          (match (elab e1 ms (some (mk_const (nm_nat) nil)))
+          (match (elab e1 ms (some (mk_const (nm_nat) nil)) (budget_depth))
             ((EErr xx m) (StepErr xx m))
             ((EOk e2 mz _)
              (match (tac_unsolved e2 mz)
@@ -1978,7 +1978,7 @@
    (expect (Option SExpr))
    (bs (List Node)))
   TStep
-  (match (elab e lem none)
+  (match (elab e lem none (budget_depth))
     ((EErr x m) (StepErr x m))
     ((EOk e1 v ty)
      (match (eq_of_lemma e1 v ty)
@@ -2031,7 +2031,7 @@
   (match expect
     (none (Prod.mk e none))
     ((some s)
-     (match (elab e s (some ty))
+     (match (elab e s (some ty) (budget_depth))
        ((EErr x m) (Prod.mk e (some (Prod.mk x m))))
        ((EOk e1 v _)
         (let ((vz (sp_canon (el_zonk e1 v))))
@@ -2344,7 +2344,7 @@
   (match rules
     (nil (RulesOk (rev acc)))
     ((cons (Prod.mk rv lem) r)
-     (match (elab e lem none)
+     (match (elab e lem none (budget_depth))
        ((EErr x m)
         (RulesErr x (append (utf8 "rule ") (append (show_nat idx) (append (utf8 ": ") m)))))
        ((EOk e1 v ty)
@@ -2472,7 +2472,7 @@
          ((FoundOk e1 rd) (FoundOk e1 rd))
          (_ (try_rules e s r)))))))
 (fn try_rule ((e El) (s Expr) (i Int) (rv Bool) (lem SExpr)) Found
-  (match (elab e lem none)
+  (match (elab e lem none (budget_depth))
     ((EErr _ _) (FoundNone e))
     ((EOk e1 v ty)
      (match (eq_of_lemma e1 v ty)
@@ -2843,7 +2843,7 @@
    (budget Int)
    (unfolds Int))
   Loop
-  (measure budget)
+  (measure (Int.natAbs budget) 0)
   (if (< budget 1)
     (LoopErr (sym "reduce_budget") (utf8 "the normalization ran out of budget (2000 rewrites)"))
   (if (< 64 unfolds)
@@ -2881,9 +2881,9 @@
                            (append (show_nat (- 2000 budget))
                              (append (utf8 " rewrites") (waits_note e1 ctx (side_of target side)))))))))))))
            ((Prod.mk hs1 (FoundOk e1 rd))
-            (reduce_step e1 ctx cur start target legs hs1 rules fired side budget unfolds rd)))))
+            (reduce_step e1 ctx cur start target legs hs1 rules fired side (- budget 1) unfolds rd)))))
       ((Prod.mk hs1 (FoundOk e1 rd))
-       (reduce_step e1 ctx cur start target legs hs1 rules fired side budget unfolds rd))))))
+       (reduce_step e1 ctx cur start target legs hs1 rules fired side (- budget 1) unfolds rd))))))
 (fn reduce_step
   ((e El)
    (ctx (List Expr))
@@ -2899,13 +2899,14 @@
    (unfolds Int)
    (rd Redex))
   Loop
+  (measure (Int.natAbs budget) 1)
   (match (redex_apply e ctx target rd)
     ((RaErr x m) (LoopErr x m))
     ((RaOk e2 target1 eqn)
      (reduce_loop e2 ctx cur start target1 (legs_add legs target target1 eqn) hs rules
        (fired_add fired rd)
        side
-       (- budget 1)
+       budget
        (if (redex_unfolds rd) (+ unfolds 1) unfolds)))))
 (fn redex_unfolds ((rd Redex)) Bool
   (match rd
@@ -2968,6 +2969,18 @@
   (match (eq_sides target)
     ((some (Prod.mk _ (Prod.mk _ (Prod.mk l r)))) (if (sym_eq side (sym "lhs")) l r))
     (none target))))
+(fulfills reduce_loop.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills reduce_loop.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills reduce_step.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
+    (apply Prod.Lex.right (arith))))
 ;; each loop starts on a goal of its own, so the step's goal is assigned like any other
 (fn step_reduce
   ((e El)
@@ -3016,7 +3029,7 @@
   (match ns
     (nil (Prod.mk e (Prod.mk (some (rev acc)) nil)))
     ((cons n r)
-     (match (elab e (SSym (sym_of_chars (show_name n))) none)
+     (match (elab e (SSym (sym_of_chars (show_name n))) none (budget_depth))
        ((EErr _ m) (Prod.mk e (Prod.mk none m)))
        ((EOk e1 v _)
         (match (get_app_fn (el_zonk e1 v))
@@ -3031,7 +3044,7 @@
   (match facts
     (nil (FactsOk e (rev acc)))
     ((cons t r)
-     (match (elab e t none)
+     (match (elab e t none (budget_depth))
        ((EErr x m) (FactsErr x m))
        ((EOk e1 v ty)
         (match (tac_unsolved e1 v)
@@ -3127,7 +3140,7 @@
    (budget Int)
    (made Int))
   Loop
-  (measure budget)
+  (measure (Int.natAbs budget))
   (if (< budget 1)
     (LoopErr (sym "simp_budget")
       (append (utf8 "256 rewrites did not reach a fixpoint (a rule rewrites its own result): ")
@@ -3153,7 +3166,7 @@
   (match rules
     (nil (RaOk e target none))
     ((cons (Prod.mk rv lem) r)
-     (match (elab e lem none)
+     (match (elab e lem none (budget_depth))
        ((EErr x m) (RaErr x (append (utf8 "rule ") (append (show_nat idx) (append (utf8 ": ") m)))))
        ((EOk e1 v ty)
         (match (eq_of_lemma e1 v ty)
@@ -3247,6 +3260,7 @@
        ((some t) (if (expr_eq (el_zonk e t) ty) (some (FVar d id)) (assumption_of e r ty)))
        (none (assumption_of e r ty))))
     ((cons _ r) (assumption_of e r ty))))
+(fulfills simp_loop.dec_1 (by (intro p h1 e1 target1 eqn h2 h3) (apply natAbs_pred (arith))))
 
 ;; ---- the block runner and the entry -------------------------------------------------------
 ;; the blocks of apply's and rw's premises
@@ -3266,7 +3280,7 @@
 ;; a block on one goal: each node a step, its children's blocks run, the continuation the rest
 (fn tac_block ((e El) (g Goal) (nodes (List Node)) (idx Int) (sorried (List Goal)) (fuel Int))
   TacRes
-  (measure fuel)
+  (measure (Int.natAbs fuel) 0 0)
   (if (< fuel 1) (TacErr (sym "tactic_budget") (utf8 "the derivation is deeper than 100000 nodes"))
   (match nodes
     (nil
@@ -3299,6 +3313,7 @@
    (sorried (List Goal))
    (fuel Int))
   TacRes
+  (measure (Int.natAbs fuel) 1 0)
   (match cont
     ((some g1) (tac_block e g1 rest (+ idx 1) sorried fuel))
     (none
@@ -3311,7 +3326,7 @@
 (fn tac_children
   ((e El) (gs (List Goal)) (blocks (List (List Node))) (sorried (List Goal)) (fuel Int))
   TacRes
-  (measure (struct gs))
+  (measure (Int.natAbs fuel) 1 (List.length gs))
   (match gs
     (nil (TacOk e sorried))
     ((cons g r)
@@ -3321,6 +3336,30 @@
         (match (tac_block e g b 1 sorried fuel)
           ((TacErr x m) (TacErr x m))
           ((TacOk e1 sorried1) (tac_children e1 r br sorried1 fuel))))))))
+(fulfills tac_block.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills tac_block.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills tac_block.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills tac_after.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills tac_children.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills tac_children.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 hs a9 a10 a11 a12 a13)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 
 ;; the entry: the statement closed over the theorem's binders (`nctx` of them), the block; the
 ;; value instantiated, or the sorried goals, or the refusal

@@ -84,20 +84,21 @@ every test, and nothing more. Numbers are big integers (a native binary stops at
 and strings are lists.
 
 **Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
-Init's types, and the checker reads them: of the 8,984 functions the loader is made of, 8,798 are
-definitions in the logic — 4,792 of them the rows of one generated table, 4,006 written, all of
-K's among them —, and the other 186
-are type-checked and run as programs, for their recursion or that of a function
-they call. What is proven about a toolchain function is that its recursion ends, for 668 of
-them (1,697 proofs
+Init's types, and the checker reads them: of the 8,993 functions the loader is made of, 8,985 are
+definitions in the logic — 4,792 of them the rows of one generated table, 4,193 written, all of
+K's among them —, and the other 8
+are type-checked and run as programs: the run of a program with effects, which calls itself
+with no measure, and the seven functions above it. What is proven about a toolchain function is that its recursion ends, for 747 of
+them (1,866 proofs
 beside them, over the facts of `kernel/descent.shard`, a term's derived size and a list's length), and of the JSON parser that a parsed value leaves less input than it was given and that its answer does not turn on the fuel it is defined by (`kernel/json.shard`); nothing else is stated. One check loads the
 toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a build and every
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
 **Build and gates.** 56 test scripts run on both engines and their outputs are compared byte for
-byte. With the full replay of Init and the layout check, the whole gate takes about 45 minutes on
-the development machine, one step after another, and about 38 in CI, its jobs side by side.
+byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
+in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
+tie of the two engines' outputs is 42. It is not run whole on the development machine.
 
 ## 3. What is in the tree
 
@@ -167,9 +168,9 @@ host calls.
 *Cost.*
 - Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
   replay of Init takes 7 minutes natively and 76 on the bootstrap.
-- The full gate is 45 minutes in CI and about as long on the development machine. A change to
-  the toolchain is pushed after the checks it can move, minutes there, and the pipeline's verdict
-  on the whole follows it.
+- The full gate is 75 minutes in CI. A change to
+  the toolchain is pushed after the checks it can move, minutes on the development machine, and
+  the pipeline's verdict on the whole follows it.
 
 ## 5. Decisions most likely to be proposed again
 
