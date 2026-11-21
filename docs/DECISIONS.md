@@ -547,7 +547,33 @@ entries are explained under "Measured" at the end.
   owner named, and it was not built to compare. Left as it was and written in `OPEN.md`
   §1: a group of functions that call each other takes no evidence. Asked for by the
   `compiler` branch for its buffer loops; the owner's word is the fourth above. Which
-  pairs are dependent and the levels are the builder's, on that prior.
+  pairs are dependent and the levels are the builder's, on that prior. The owner, asked
+  whether the group's gap is to be queued: "We can wait on the group-with-evidence point
+  until it's actually needed."
+- The elaborator is a definition by a depth its callers hand down, and `elab` alone tests
+  it. Its 34 functions took no measure on the source: `elab_list` elaborates the
+  constructor chain it built from a list literal, `elab_match_lit` the `if`s it built from
+  numeral rows, `elab_type` a head it read as a type. Every member takes the depth last;
+  `elab`, which every cycle of the group passes through but a walk of a list at one depth,
+  tests it and hands on one less at its 14 dispatches, and the other members hand on what
+  they were given — the discipline ratified with the erasure —, so a member is measured by
+  the depth, a rank above every member it calls at that depth, and the list it walks.
+  `elab_op_at`'s call of itself for `>` and `>=` was the one cycle outside `elab`: the part
+  that call reaches is `elab_op_go`, which both call. Callers pass `(budget_depth)`, K's
+  8,192, and not a budget of the elaborator's own: K already refused a term nested deeper,
+  so one number bounds a term, and the elaborator's refusal (`term_depth`) comes first and
+  says what to do. Not a wrapper that keeps `elab`'s three parameters for the 36 callers
+  outside the group: the eraser's callers pass the depth where they call, and a caller
+  that holds one can hand on its own. The cost chosen: every caller states the depth, and
+  a list literal costs a level for each element — 8,190 at most, as K held it (Measured).
+  The loader's re-entry is bounded the same way: `load_derive` tests a depth and hands on
+  one less, a file's forms are loaded at `(derive_depth)`, 1, and a `derive` among the
+  forms a derivation generated is refused `derive_generated`. No capability generates one,
+  so the refusal has no pin, and the bound states what the code did; its six functions
+  state their measures and wait on the loader's units below them. The owner's rulings are
+  the first and the second above, and then, of the plan: "Proceed with the elaborator".
+  Which function tests, the budget's being K's, the refusal's name and text, `elab_op_go`
+  and the re-entry's depth of 1 are the builder's.
 
 ## Programs and the back end
 
@@ -1600,7 +1626,27 @@ measurements; measure again before building on one.
   416 s, the Init index the one before; the loader's closure loaded checked, 58 modules
   with none pending; the suite on the binaries, 317 s, 52 entrypoints, the loader's pins
   353 directories. The checked load of all 29 roots was not run on the dev box and is CI's.
-  The state's check and the Init replay were not run: nothing K runs changed.
+  The state's check and the Init replay were not run: nothing K runs changed. On CI: #782
+  `native` 71.6 minutes, `v3` 45.8, `replay` 28.0, the checked load of all 29 roots in it.
+- The elaborator (2026-11-21). 87 programs became definitions: 8,990 functions, 8,891
+  definitions, 99 programs — 90 for a function they call, 8 for the integer they state as
+  a measure, `run_loop` —, 1,797 obligations of 703 functions. The group's 100: 14 a step
+  of the depth, 8 a shorter list, 78 a lower rank at the same depth, each accepted as first
+  typed. What the depth counts was measured with scratch loaders whose test was lowered,
+  the loader's closure loaded checked: at 128 levels one function is refused
+  (`k/accel_pins.shard` `accel_ref_closure`, the one the erasure's fuel met), at 256 and at
+  512 none, of 8,192. A list literal, by the loader before the change and by the one after:
+  each reads 8,190 elements and refuses 8,191 — K before (`exhausted_rec_depth_at_infer`),
+  the elaborator now (`term_depth`). The closure's program text differs in 79 functions: 77
+  changed (the group's, the loader's six, their callers), `elab_op_go` and `derive_depth`
+  new. `elab.shard` is 2,596 lines for 2,188. Checked on the dev box before the push, by
+  ruling 17: the 29 binaries built in 278 s, the Init index the one before; the loader's
+  closure loaded checked, 58 modules with none pending; the suite on the binaries, 268 s,
+  52 entrypoints, of which one failed — the formatter's gate on `elab.shard`, which was not
+  formatted after its proofs were placed; formatted, and that entrypoint run again, 69
+  checks, 0 failed; the loader's pins 354 directories. The checked load of all 29 roots
+  was not run on the dev box and is CI's. The state's check and the Init replay were not
+  run: nothing of K's directory changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
