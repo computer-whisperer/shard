@@ -232,18 +232,18 @@ file; two things about how they are written set them apart.
 
 - **Ninety-nine in a hundred of their functions are definitions; of those written by hand,
   more than nineteen in twenty.** The checker reads every one: of the loader's closure, 8,990
-  functions — 4,792 of them the rows of a generated table —, it holds 8,891 as definitions. The
-  other 99 are programs with the reason: a function they call is a program
-  (`callee_runnable`, 90), or they state an integer for their measure (`measure_type`, 8:
-  loops of the loader and of the proof steps), or a function that calls itself with none
-  (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
+  functions — 4,792 of them the rows of a generated table —, it holds 8,945 as definitions. The
+  other 45 are programs with the reason: a function they call is a program
+  (`callee_runnable`, 43), or it states an integer for its measure (`measure_type`:
+  `loader.shard` `probe_reach`, left so for what its definition costs K — `OPEN.md` §1), or
+  a function that calls itself with none (`realize_recursion`: `ev.shard` `run_loop`). A type error in any of them is refused. None matches a numeral
   under a constructor (below, "Terms"): such a row has no form in the logic, so the sources
   bind the field and compare it.
 - **A function that recurses on an integer states a `Nat` measure and proves its descent
   beside it.** `(measure (Int.natAbs k))`, then a `(fulfills F.dec_N …)` for each obligation
   (below, "By measure"), which introduces what stands before the comparison — one name for
   each `forall` and each `->` of the statement, none for a `let` — and cites a fact of
-  `kernel/descent.shard`. The forms the sources use, 174 functions in 35 files:
+  `kernel/descent.shard`. The forms the sources use, 181 functions in 35 files:
 
   | the recursion | the measure | the proof after the introductions |
   |---|---|---|
@@ -264,16 +264,15 @@ file; two things about how they are written set them apart.
   equation with `true`, and the proof turns it into the comparison first (`decide_eq_true`).
   A `fulfills` follows a function that is defined by then: what the function calls stands
   above it, or the `fulfills` stands below the last of them. A build passes these proofs
-  over (`--unchecked`); `toolchain_check.sh` checks them. Eight functions are programs for the
-  integer they state (`measure_type`: the loader's and the proof steps' loops, which the
-  checker reaches now that the elaborator is a definition); 16 more state an integer where
-  it does not get to it, behind a callee that is a program.
+  over (`--unchecked`); `toolchain_check.sh` checks them. One function is a program for the
+  integer it states (`measure_type`: `loader.shard` `probe_reach`); 12 more state an
+  integer where the checker does not get to it, behind a callee that is a program.
 - **A group that descends by a fuel and then by a list states both parts.** The member
   that steps the fuel states `(measure (Int.natAbs fuel) 0)`, the one that walks a list at
   that fuel `(measure (Int.natAbs fuel) (+ (List.length ts) 1))` (`kw.shard` `w_norm_ty` and
   `w_norm_tys`); the first's proof ends in `(apply Prod.Lex.left (apply natAbs_pred
   (arith)))`, the second's two in `(apply Prod.Lex.right (arith))` (below, "In several
-  parts"). Eighteen groups are written so, 199 functions, and the loader's `build_demands`
+  parts"). Twenty-two groups are written so, 211 functions, and the loader's `build_demands`
   alone, in two: that one, `matcher.shard`'s
   `mt_compile` and `mt_pat_of` with their walks, `inhabit.shard`'s four, `classify.shard`
   `matrix_exh`, the elaborator's patterns (`elab.shard` `el_pat` and `el_pat_fields`), K's
@@ -285,7 +284,11 @@ file; two things about how they are written set them apart.
   (`define.shard` `pj_term`, twelve functions) and the split of its equations
   (`realize.shard` `pj_leaves`), the erasure's patterns in two (`erasure.shard` `mt_epat`),
   the erasure itself in three, 39 functions (`erase` to `lift_lambda`), the elaborator in
-  three, 35 functions (`elab.shard`, `elab` to `elab_exists`), the evaluator's
+  three, 35 functions (`elab.shard`, `elab` to `elab_exists`), the proof steps'
+  normalization in two and their run of a block in three (`tactic.shard` `reduce_loop`,
+  `tac_block`), the producer's ladder in three — its depth, a rank, and its budget or a
+  list (`engine.shard` `eng_solve`) —, the loader's reading of a `fn` in three — two fuels
+  and a rank (`loader.shard` `load_fn_with`) —, the evaluator's
   machine in two, its fuel and what is left to run at that fuel (`ev.shard` `ev_term`),
   and K's checker, 60 functions in three parts (`k/tc.shard`, "the
   checker's descent"): the depth; a rank, the longest chain of calls below the function that
@@ -298,14 +301,16 @@ file; two things about how they are written set them apart.
   test it and the walk of an argument list state `(Int.natAbs d)`; so the projection's ten
   that hand their fuel to `pj_term` less one, which tests it —; a step past a test made by another function
   cites a fact about that function (`k/tc.shard` `rec_guard_ok`: a guard that passed was
-  given a depth of at least 1). No such statement serves a member that both hands its fuel
+  given a depth of at least 1; `loader.shard` `settle_missed_ok`: a reading that is to be
+  made again was given a fuel of at least 1). No such statement serves a member that both hands its fuel
   to the one that tests it and hands on one less elsewhere: it knows nothing of its fuel,
   and one less is no nearer a bound. There the functions that test the fuel are the ones
   that step it — the erasure's `erase` and `static_shape`, the two its walk comes back to,
   hand on one less where they go round, and the other 37 hand on the fuel they were given;
   the elaborator's `elab` alone, which every cycle of its group passes through but a walk of
   a list, hands on one less at its 14 dispatches, and the other 34 the depth they were
-  given —, every member states the one term (`(Int.natAbs (+ fuel 1))` past a test
+  given; the normalization's `reduce_loop` and the producer's `eng_solve` hand on one less
+  where a function they call did it untested —, every member states the one term (`(Int.natAbs (+ fuel 1))` past a test
   `(< fuel 0)`, `(Int.natAbs depth)` past `(< depth 1)`), the tester's step is
   `(apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))` or `… (apply natAbs_pred
   (arith))` and every other call a lower rank or a shorter list. A member of a group may call any number of the others (pin

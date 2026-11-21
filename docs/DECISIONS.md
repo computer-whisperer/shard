@@ -574,6 +574,28 @@ entries are explained under "Measured" at the end.
   the first and the second above, and then, of the plan: "Proceed with the elaborator".
   Which function tests, the budget's being K's, the refusal's name and text, `elab_op_go`
   and the re-entry's depth of 1 are the builder's.
+- The proof steps' loops, the producer's ladder and the loader's reading of a `fn` are
+  definitions; the loader's driver above `probe_reach` is not, and waits on a cost in K.
+  Three steps moved to the function that tests, by the discipline: `reduce_loop` tests the
+  budget and hands `reduce_step` one less, which handed it back less one untested;
+  `eng_solve` tests the depth and hands `eng_induct` one less, where `eng_induct_on`
+  stepped it three calls on; `settle_missed` tests its fuel before anything else — every
+  row of it answered the same at a spent fuel — and a fact says that a reading to be made
+  again was given a fuel of at least 1 (`settle_missed_ok`), which `flush_fetching`
+  descends by as the checker's loops do by `rec_guard_ok`. `load_fn_with` and
+  `load_template` each test the fuel they step, and state both fuels and a rank. Held
+  back: a `Nat` measure for `probe_reach`. With it the function is a definition, and K's
+  check of the equation it is given did not end — ten minutes and 45 GB on the dev box
+  when it was stopped; the cause is the row of `OPEN.md` §1, a constructor match on a
+  measured call at a closed fuel. So `probe_reach` keeps its integer and is a program for
+  it, and the functions above it wait. What was written for them — the import depth
+  stepped by `load_file_module`, which tests it, where `load_forms` stepped it untested; a
+  test in `base_loaded`; measures for the module group's eleven and for seven loops — is
+  not in the tree: no load would check it. Not the budget handed to `probe_reach` as a
+  parameter, so that it is a variable there: that hides the cost at one site and leaves
+  it for the next function that writes a budget as a numeral. The owner's word is the one
+  for the units; what was built and what was held back are the builder's, and the cost is
+  put to the owner.
 
 ## Programs and the back end
 
@@ -1647,6 +1669,23 @@ measurements; measure again before building on one.
   checks, 0 failed; the loader's pins 354 directories. The checked load of all 29 roots
   was not run on the dev box and is CI's. The state's check and the Init replay were not
   run: nothing of K's directory changed.
+- The driver's lower units (2026-11-21). 54 programs became definitions: 8,990 functions,
+  8,945 definitions, 45 programs — 43 for a function they call, `probe_reach` for its
+  integer, `run_loop` —, 1,826 obligations of 722 functions. The 29 proofs (the proof
+  steps' 10, the producer's 9, the loader's 10) were each accepted as first typed. The
+  closure's program text differs in 5 functions. The cost of a closed fuel under a
+  constructor match (`OPEN.md` §1), on a file of 24 lines, the load's time less the 2.5 s
+  it takes at a fuel of 1 to 16: 0.1 s at 32, 0.6 at 64, 2.9 at 128, 13.5 at 256; with a
+  result bound by a row that names no constructor, with the call handed to a function,
+  and from a caller that recurses structurally or not at all, 256 costs nothing. The
+  loader's own case was found by a load that ran ten minutes to 45 GB, then by a stack,
+  then by a loader whose K gives up at 4 million heartbeats, which names the declaration:
+  `probe_reach.eq_1`. `verify.sh`'s readings of the loader's closure take 370 s for 309.
+  Checked on the dev box before the push, by ruling 17: the 29 binaries built in 292 s,
+  the Init index the one before; the loader's closure loaded checked, 58 modules with none
+  pending; the suite on the binaries, 270 s, 52 entrypoints, none failed. The checked load
+  of all 29 roots was not run on the dev box and is CI's. The state's check and the Init
+  replay were not run: nothing of K's directory changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

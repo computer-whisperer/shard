@@ -84,12 +84,12 @@ every test, and nothing more. Numbers are big integers (a native binary stops at
 and strings are lists.
 
 **Two kinds of source.** The toolchain's own files (under `v3/kernel/`) are ordinary files on
-Init's types, and the checker reads them: of the 8,990 functions the loader is made of, 8,891 are
-definitions in the logic — 4,792 of them the rows of one generated table, 4,099 written, all of
-K's among them —, and the other 99
+Init's types, and the checker reads them: of the 8,990 functions the loader is made of, 8,945 are
+definitions in the logic — 4,792 of them the rows of one generated table, 4,153 written, all of
+K's among them —, and the other 45
 are type-checked and run as programs, for their recursion or that of a function
-they call. What is proven about a toolchain function is that its recursion ends, for 703 of
-them (1,797 proofs
+they call. What is proven about a toolchain function is that its recursion ends, for 722 of
+them (1,826 proofs
 beside them, over the facts of `kernel/descent.shard`, a term's derived size and a list's length), and of the JSON parser that a parsed value leaves less input than it was given and that its answer does not turn on the fuel it is defined by (`kernel/json.shard`); nothing else is stated. One check loads the
 toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a build and every
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
