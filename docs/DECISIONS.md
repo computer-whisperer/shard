@@ -849,6 +849,19 @@ entries are explained under "Measured" at the end.
 - A long run is split into lemmas; not one theorem — K's budget (10^8 ticks) is per declaration.
 - ★ Init is the library: a statement Init has is cited by Init's name and `v3/std` holds only
   what Init lacks; not a native copy of list and arithmetic lemmas.
+- An application's written arguments are read in three passes — the bare names of locals and
+  the values already elaborated, then the result type against the expected type and the
+  compound arguments, numerals last — and an argument whose parameter's type names a
+  parameter that was written out waits for the pass that reads that one (`elab.shard`
+  `slots_order`); not the passes alone. Under them a hypothesis about `c` settled a
+  parameter written as `(bump c)` to `c` wherever the two agree by unfolding, and the next
+  argument, about `(bump c)`, was refused against the wrong instance, with a message that
+  named neither cause (pin `arg_written_first`). Not every written argument left to right,
+  as Lean reads them: a local read first is what lets the expected type meet an
+  eliminator's `?motive t` as a pattern, and a numeral read last takes the type the other
+  arguments fix. A numeral whose own parameter's type is still open is not waited for: read
+  first it would be a `Nat`. The owner, of the defect put to them with this fix and with
+  its record alone: "Let's fix the order".
 
 ## The checker K and the Init import
 
@@ -1756,6 +1769,17 @@ measurements; measure again before building on one.
   #792 (`5f9375ce`): `native` 4,245 s — the build 488, all 29 roots loaded checked in 885 for
   641 on #787, 148,624 declarations and none failed, the byte-tie 36 minutes —, `v3` 2,521,
   `replay` 1,805 with the replay itself 1,412 s and 57,977 accepted; the pipeline 6,215.
+- The order of an application's arguments (2026-11-21). Three functions more in `elab.shard`
+  (2,636 lines for 2,596), each a definition: 8,993 functions, 8,985 definitions, 8
+  programs. The three descents of `elab_slots` under its explicit row name one more local.
+  The pin's file is refused by the loader before (`type_mismatch`, at the hypothesis after
+  the one that settled the parameter) and loads on the one after; a numeral for `j` and a
+  hypothesis about `(+ j 1)` likewise. The proofs the suite and the loader's closure hold
+  load under the new order. Checked on
+  the dev box before the push, by ruling 17 — the 29 binaries built in 260 s; the suite on
+  the binaries, 245 s, 52 entrypoints, none failed; the loader's closure loaded checked, 58
+  modules with none pending; the loader's pins 355 directories. The checked load of all 29
+  roots was not run on the dev box and is CI's.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
