@@ -256,18 +256,19 @@ loop and a call's hypotheses. What a run asks of the stack — each push's word 
 in place after it — is a hypothesis of the run's lemma, which the frame's description gives.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
-`kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
+`kernel/test/x86_test.sh` (the assembler and the demonstration are `x86_asm_test.sh`'s, the trial
+`x86_trial_test.sh`'s). It runs the first program's file and the programs of `test/*.hex` —
 sums and differences with their carries, a product, the fourteen conditions over the four flags,
 sign extension at its edge, memory through each form of operand, the stack, a call — under the model
 and, on an x86-64 Linux machine, on the processor: where the model's run exits, the processor's
 exits with the same status. The status is one byte, so a program that checks a word reads it back
-a byte at a time, as eight programs. Twenty faults planted one at a time each failed the test:
-thirteen in the model's rules, two in how a file is laid out and loaded, one in the assembler, two
-in the trial (a function, its listing's table), one in the tactic library and one in a stored
-proof. A change to the model leaves every stored proof stale, which alone fails the test, so the
-stored proofs were derived again under each fault. That was checked with a tool outside the tree,
-on the test as it stood before the laws of a frame were added, when it held the tactic library
-too (`x86_derive_test.sh` now).
+a byte at a time, as eight programs. Twenty faults planted one at a time each failed one of the
+model's four tests at least: thirteen in the model's rules (each fails `x86_test.sh`, the
+comparison with the processor), two in how a file is laid out and loaded, one in the assembler,
+two in the trial (a function, its listing's table), one in the tactic library (only
+`x86_derive_test.sh` fails) and one in a stored proof. A change to the model leaves every stored
+proof stale, which alone fails the trial's test, so the stored proofs were derived again under
+each fault. That was checked with a tool outside the tree.
 The assembler's bytes for three of the programs, written as listings, are the bytes assembled by
 hand.
 
