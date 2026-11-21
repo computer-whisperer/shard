@@ -961,3 +961,965 @@
                       (reaches_trans (at_pc c (w64 4194526)) (add_in c) c2 (add_enter c hcode)
                         hreach1)))
                    ((rw (<- (add_in_zero t c))) (exact hrest)))))))))))))
+
+;; ---- both: what `addto` keeps of a bundle -------------------------------------------------------
+;; the count, and the first buffer's length
+(theorem addto_go_keeps ((k Nat))
+  (forall ((t Two) (i (BitVec 64)))
+    (-> (= (- (w64_val (two_n t)) (w64_val i)) k)
+      (and (= (two_n (addto_go t i)) (two_n t))
+        (= (List.length (two_xs (addto_go t i))) (List.length (two_xs t))))))
+  (by
+    (wf k k ih (intro t i hk)
+      (cases (Nat.decLt (w64_val i) (w64_val (two_n t)))
+        ((isFalse (h) (rw (addto_go_done t i h)) (apply And.intro (rfl) (rfl)))
+         (isTrue (h)
+           (have hdec (< (- (w64_val (two_n (addto_next t i h))) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact (loop_descends (two_n t) i h)))
+           (cases
+             (ih (- (w64_val (two_n (addto_next t i h))) (w64_val (w64_add i (w64 1)))) hdec
+               (addto_next t i h)
+               (w64_add i (w64 1))
+               (Eq.refl (- (w64_val (two_n (addto_next t i h))) (w64_val (w64_add i (w64 1))))))
+             ((intro (hn hl) (rw (addto_go_turn t i h))
+                (apply And.intro ((rw hn) rfl)
+                  ((rw hl)
+                   (exact
+                     (upd_length (two_xs t) (w64_val i)
+                       (w64_add (word_at (two_xs t) i (Nat.lt_of_lt_of_le h (two_hx t)))
+                         (word_at (two_ys t) i (Nat.lt_of_lt_of_le h (two_hy t)))))))))))))))))
+(theorem addto_n ((t Two)) (= (two_n (addto t)) (two_n t))
+  (exact
+    (And.left
+      (addto_go_keeps (- (w64_val (two_n t)) (w64_val (w64 0))) t (w64 0)
+        (Eq.refl (- (w64_val (two_n t)) (w64_val (w64 0))))))))
+(theorem addto_len ((t Two)) (= (List.length (two_xs (addto t))) (List.length (two_xs t)))
+  (exact
+    (And.right
+      (addto_go_keeps (- (w64_val (two_n t)) (w64_val (w64 0))) t (w64 0)
+        (Eq.refl (- (w64_val (two_n t)) (w64_val (w64 0))))))))
+
+;; ---- both: the states its code passes through ---------------------------------------------------
+;; to the first call: rbx and r12 pushed, the first address and the count moved into them, the
+;; return address pushed — the state `addto` is entered in, put at its first instruction
+(fn bo_s1 ((c Cpu)) Cpu
+  (at_pc (pushed (at_pc c (w64 4194556)) (reg (at_pc c (w64 4194556)) 3)) (w64 4194557)))
+(fn bo_s2 ((c Cpu)) Cpu (at_pc (pushed (bo_s1 c) (reg (bo_s1 c) 12)) (w64 4194559)))
+(fn bo_s3 ((c Cpu)) Cpu (x_mov_rr (bo_s2 c) 3 7 (w64 4194562)))
+(fn bo_s4 ((c Cpu)) Cpu (x_mov_rr (bo_s3 c) 12 2 (w64 4194565)))
+(fn bo_s5 ((c Cpu)) Cpu (pushed (bo_s4 c) (w64 4194570)))
+;; from the state `addto` returned in to the second call: the kept address as both buffers, the
+;; kept count, the return address pushed — the state `dot` is entered in
+(fn bo_m1 ((c Cpu)) Cpu (x_mov_rr c 7 3 (w64 4194573)))
+(fn bo_m2 ((c Cpu)) Cpu (x_mov_rr (bo_m1 c) 6 3 (w64 4194576)))
+(fn bo_m3 ((c Cpu)) Cpu (x_mov_rr (bo_m2 c) 2 12 (w64 4194579)))
+(fn bo_m4 ((c Cpu)) Cpu (pushed (bo_m3 c) (w64 4194584)))
+;; from the state `dot` returned in: r12 and rbx popped, the return
+(fn bo_e1 ((c Cpu)) Cpu (x_pop c 12 (w64 4194586)))
+(fn bo_e2 ((c Cpu)) Cpu (x_pop (bo_e1 c) 3 (w64 4194587)))
+(fn bo_out ((c Cpu)) Cpu (x_ret (bo_e2 c)))
+
+;; the stack pointer one, two and three words below where a state has it
+(fn below1 ((c Cpu)) (BitVec 64) (w64_sub (reg c 4) (w64 8)))
+(fn below2 ((c Cpu)) (BitVec 64) (w64_sub (below1 c) (w64 8)))
+(fn below3 ((c Cpu)) (BitVec 64) (w64_sub (below2 c) (w64 8)))
+
+;; ---- both: its frame ----------------------------------------------------------------------------
+;; where the stack pointer stands 24 above an address f: the addresses of the three words pushed
+(theorem fr_16 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (= (w64_val (below1 c)) (+ f 16))
+  (by
+    (have h (= (w64_val (reg c 4)) (+ (+ f 16) 8)) (arith))
+    (have k8 (< 8 18446744073709551616) (arith))
+    (exact (w64_val_sub (reg c 4) (+ f 16) 8 h k8))))
+(theorem fr_8 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (= (w64_val (below2 c)) (+ f 8))
+  (by
+    (have h (= (w64_val (below1 c)) (+ (+ f 8) 8)) (rw (fr_16 c f hf)) (arith))
+    (have k8 (< 8 18446744073709551616) (arith))
+    (exact (w64_val_sub (below1 c) (+ f 8) 8 h k8))))
+(theorem fr_0 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24)))) (= (w64_val (below3 c)) f)
+  (by
+    (have h (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have k8 (< 8 18446744073709551616) (arith))
+    (exact (w64_val_sub (below2 c) f 8 h k8))))
+;; memory up to the first call is as it was outside the frame: where the stack pointer stands
+;; 24 above f, the three words pushed lie in the 24 bytes from f
+(theorem bo_so1 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (same_outside (Cpu.mem c) (Cpu.mem (bo_s1 c)) f (+ f 24))
+  (by
+    (have h16 (= (w64_val (below1 c)) (+ f 16)) (exact (fr_16 c f hf)))
+    (have a1 (<= f (w64_val (below1 c))) (rw h16) (arith))
+    (have b1 (<= (+ (w64_val (below1 c)) 8) (+ f 24)) (rw h16) (arith))
+    (exact
+      (same_outside_put64 (Cpu.mem c) (Cpu.mem c) f (+ f 24) (w64_val (below1 c))
+        (w64_val (reg c 3))
+        (same_outside_refl (Cpu.mem c) f (+ f 24))
+        a1
+        b1))))
+(theorem bo_so2 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (same_outside (Cpu.mem c) (Cpu.mem (bo_s2 c)) f (+ f 24))
+  (by
+    (have h8 (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have a2 (<= f (w64_val (below2 c))) (rw h8) (arith))
+    (have b2 (<= (+ (w64_val (below2 c)) 8) (+ f 24)) (rw h8) (arith))
+    (exact
+      (same_outside_put64 (Cpu.mem c) (Cpu.mem (bo_s1 c)) f (+ f 24) (w64_val (below2 c))
+        (w64_val (reg c 12))
+        (bo_so1 c f hf)
+        a2
+        b2))))
+(theorem bo_so5 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (same_outside (Cpu.mem c) (Cpu.mem (bo_s5 c)) f (+ f 24))
+  (by
+    (have h0 (= (w64_val (below3 c)) f) (exact (fr_0 c f hf)))
+    (have a3 (<= f (w64_val (below3 c))) (rw h0) (arith))
+    (have b3 (<= (+ (w64_val (below3 c)) 8) (+ f 24)) (rw h0) (arith))
+    (exact
+      (same_outside_put64 (Cpu.mem c) (Cpu.mem (bo_s2 c)) f (+ f 24) (w64_val (below3 c))
+        (w64_val (w64 4194570))
+        (bo_so2 c f hf)
+        a3
+        b3))))
+;; so the code is in place where `addto` is entered
+(theorem bo_code5
+  ((c Cpu)
+   (f Nat)
+   (hcode (code_in c buffers_table))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfc (or (<= 4194603 f) (<= (+ f 24) 4194489))))
+  (code_in (bo_s5 c) buffers_table)
+  (by
+    (have sg5 (= (Cpu.segs (bo_s5 c)) (Cpu.segs c)) rfl)
+    (have cfc (or (<= (+ 4194588 15) f) (<= (+ f 24) 4194489)) (exact dfc))
+    (exact
+      (code_in_after c (bo_s5 c) buffers_table 4194489 4194588 f (+ f 24) table_within sg5
+        (bo_so5 c f hf)
+        cfc
+        hcode))))
+;; the words the frame holds where `addto` is entered: rbx and r12 as the caller had them
+(theorem bo_saved_rbx ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (= (w64 (mem_le64 (Cpu.mem (bo_s5 c)) (+ f 16))) (reg c 3))
+  (by
+    (have h16 (= (w64_val (below1 c)) (+ f 16)) (exact (fr_16 c f hf)))
+    (have h8 (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have h0 (= (w64_val (below3 c)) f) (exact (fr_0 c f hf)))
+    (have x3 (or (<= (+ (+ f 16) 8) (w64_val (below3 c))) (<= (+ (w64_val (below3 c)) 8) (+ f 16)))
+      (rw h0)
+      (apply Or.inr ((arith))))
+    (have x2 (or (<= (+ (+ f 16) 8) (w64_val (below2 c))) (<= (+ (w64_val (below2 c)) 8) (+ f 16)))
+      (rw h8)
+      (apply Or.inr ((arith))))
+    (have e1 (= (mem_le64 (Cpu.mem (bo_s5 c)) (+ f 16)) (mem_le64 (Cpu.mem (bo_s2 c)) (+ f 16)))
+      (exact
+        (le64_put64_other (Cpu.mem (bo_s2 c)) (w64_val (below3 c)) (w64_val (w64 4194570)) (+ f 16)
+          x3)))
+    (have e2 (= (mem_le64 (Cpu.mem (bo_s2 c)) (+ f 16)) (mem_le64 (Cpu.mem (bo_s1 c)) (+ f 16)))
+      (exact
+        (le64_put64_other (Cpu.mem (bo_s1 c)) (w64_val (below2 c)) (w64_val (reg c 12)) (+ f 16) x2)))
+    (have e3 (= (w64 (mem_le64 (Cpu.mem (bo_s1 c)) (w64_val (below1 c)))) (reg c 3))
+      (exact (le64_put64_word (Cpu.mem c) (w64_val (below1 c)) (reg c 3))))
+    (rw e1)
+    (rw e2)
+    (rw (<- h16))
+    (exact e3)))
+(theorem bo_saved_r12 ((c Cpu) (f Nat) (hf (= (w64_val (reg c 4)) (+ f 24))))
+  (= (w64 (mem_le64 (Cpu.mem (bo_s5 c)) (+ f 8))) (reg c 12))
+  (by
+    (have h8 (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have h0 (= (w64_val (below3 c)) f) (exact (fr_0 c f hf)))
+    (have x3 (or (<= (+ (+ f 8) 8) (w64_val (below3 c))) (<= (+ (w64_val (below3 c)) 8) (+ f 8)))
+      (rw h0)
+      (apply Or.inr ((arith))))
+    (have e1 (= (mem_le64 (Cpu.mem (bo_s5 c)) (+ f 8)) (mem_le64 (Cpu.mem (bo_s2 c)) (+ f 8)))
+      (exact
+        (le64_put64_other (Cpu.mem (bo_s2 c)) (w64_val (below3 c)) (w64_val (w64 4194570)) (+ f 8)
+          x3)))
+    (have e3 (= (w64 (mem_le64 (Cpu.mem (bo_s2 c)) (w64_val (below2 c)))) (reg c 12))
+      (exact (le64_put64_word (Cpu.mem (bo_s1 c)) (w64_val (below2 c)) (reg c 12))))
+    (rw e1)
+    (rw (<- h8))
+    (exact e3)))
+
+;; ---- both: its code, block by block -------------------------------------------------------------
+;; to the first call
+(theorem both_enter
+  ((c Cpu)
+   (f Nat)
+   (hcode (code_in c buffers_table))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hfw (mapped_words (Cpu.segs c) f 3 2))
+   (dfc (or (<= 4194603 f) (<= (+ f 24) 4194489))))
+  (reaches (at_pc c (w64 4194556)) (at_pc (bo_s5 c) (w64 4194526)))
+  (by
+    (have h16 (= (w64_val (below1 c)) (+ f 16)) (exact (fr_16 c f hf)))
+    (have h8 (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have h0 (= (w64_val (below3 c)) f) (exact (fr_0 c f hf)))
+    (have n0 (< 0 3) (arith))
+    (have n1 (< 1 3) (arith))
+    (have n2 (< 2 3) (arith))
+    (have hm1 (= (mapped (Cpu.segs c) (w64_val (below1 c)) 8 2) true) (rw h16) (exact (hfw 2 n2)))
+    (have hm2 (= (mapped (Cpu.segs c) (w64_val (below2 c)) 8 2) true) (rw h8) (exact (hfw 1 n1)))
+    (have hm3 (= (mapped (Cpu.segs c) (w64_val (below3 c)) 8 2) true) (rw h0) (exact (hfw 0 n0)))
+    (have sg1 (= (Cpu.segs (bo_s1 c)) (Cpu.segs c)) rfl)
+    (have sg2 (= (Cpu.segs (bo_s2 c)) (Cpu.segs c)) rfl)
+    (have cfc (or (<= (+ 4194588 15) f) (<= (+ f 24) 4194489)) (exact dfc))
+    (have hcode1 (code_in (bo_s1 c) buffers_table)
+      (exact
+        (code_in_after c (bo_s1 c) buffers_table 4194489 4194588 f (+ f 24) table_within sg1
+          (bo_so1 c f hf)
+          cfc
+          hcode)))
+    (have hcode2 (code_in (bo_s2 c) buffers_table)
+      (exact
+        (code_in_after c (bo_s2 c) buffers_table 4194489 4194588 f (+ f 24) table_within sg2
+          (bo_so2 c f hf)
+          cfc
+          hcode)))
+    (apply (do_push 4194556 3 1 4194557) (rfl)
+      ((exact (hcode 4194556 (Push 3) 1 (Eq.refl (some (Prod.mk (Push 3) 1))))))
+      ((exact hm1))
+      (rfl)
+      ((apply (do_push 4194557 12 2 4194559) (rfl)
+         ((exact (hcode1 4194557 (Push 12) 2 (Eq.refl (some (Prod.mk (Push 12) 2))))))
+         ((exact hm2))
+         (rfl)
+         ((apply (do_mov_rr 4194559 3 7 3 4194562) (rfl)
+            ((exact
+               (hcode2 4194559 (MovRmR (RmReg 3) 7) 3
+                 (Eq.refl (some (Prod.mk (MovRmR (RmReg 3) 7) 3))))))
+            (rfl)
+            ((apply (do_mov_rr 4194562 12 2 3 4194565) (rfl)
+               ((exact
+                  (hcode2 4194562 (MovRmR (RmReg 12) 2) 3
+                    (Eq.refl (some (Prod.mk (MovRmR (RmReg 12) 2) 3))))))
+               (rfl)
+               ((apply (do_call 4194565 5 18446744073709551572 4194570 4194526) (rfl)
+                  ((exact
+                     (hcode2 4194565 (Call 18446744073709551572) 5
+                       (Eq.refl (some (Prod.mk (Call 18446744073709551572) 5))))))
+                  ((exact hm3))
+                  (rfl)
+                  (rfl)
+                  ((exact (reaches_refl (at_pc (bo_s5 c) (w64 4194526))))))))))))))))
+;; from the first call's return to the second call
+(theorem both_mid
+  ((c Cpu)
+   (hrip (= (w64_val (Cpu.rip c)) 4194570))
+   (hcode (code_in c buffers_table))
+   (hm (= (mapped (Cpu.segs c) (w64_val (below1 c)) 8 2) true)))
+  (reaches c (at_pc (bo_m4 c) (w64 4194489)))
+  (by
+    (apply (do_mov_rr 4194570 7 3 3 4194573) ((exact hrip))
+      ((exact
+         (hcode 4194570 (MovRmR (RmReg 7) 3) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 3) 3))))))
+      (rfl)
+      ((apply (do_mov_rr 4194573 6 3 3 4194576) (rfl)
+         ((exact
+            (hcode 4194573 (MovRmR (RmReg 6) 3) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 6) 3) 3))))))
+         (rfl)
+         ((apply (do_mov_rr 4194576 2 12 3 4194579) (rfl)
+            ((exact
+               (hcode 4194576 (MovRmR (RmReg 2) 12) 3
+                 (Eq.refl (some (Prod.mk (MovRmR (RmReg 2) 12) 3))))))
+            (rfl)
+            ((apply (do_call 4194579 5 18446744073709551521 4194584 4194489) (rfl)
+               ((exact
+                  (hcode 4194579 (Call 18446744073709551521) 5
+                    (Eq.refl (some (Prod.mk (Call 18446744073709551521) 5))))))
+               ((exact hm))
+               (rfl)
+               (rfl)
+               ((exact (reaches_refl (at_pc (bo_m4 c) (w64 4194489))))))))))))))
+;; from the second call's return to the function's own
+(theorem both_leave
+  ((c Cpu)
+   (hrip (= (w64_val (Cpu.rip c)) 4194584))
+   (hcode (code_in c buffers_table))
+   (hm1 (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true))
+   (hm2 (= (mapped (Cpu.segs c) (w64_val (w64_add (reg c 4) (w64 8))) 8 4) true))
+   (hm3 (= (mapped (Cpu.segs c) (w64_val (w64_add (w64_add (reg c 4) (w64 8)) (w64 8))) 8 4) true)))
+  (reaches c (bo_out c))
+  (by
+    (apply (do_pop 4194584 12 2 4194586) ((exact hrip))
+      ((exact (hcode 4194584 (Pop 12) 2 (Eq.refl (some (Prod.mk (Pop 12) 2))))))
+      ((exact hm1))
+      (rfl)
+      ((apply (do_pop 4194586 3 1 4194587) (rfl)
+         ((exact (hcode 4194586 (Pop 3) 1 (Eq.refl (some (Prod.mk (Pop 3) 1))))))
+         ((exact hm2))
+         (rfl)
+         ((apply (do_ret 4194587 1) (rfl)
+            ((exact (hcode 4194587 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))))
+            ((exact hm3))
+            ((exact (reaches_refl (bo_out c)))))))))))
+
+;; ---- both: its two calls ------------------------------------------------------------------------
+;; The first call: `addto`'s contract in the state the code enters it in, its hypotheses met
+;; from the caller's, and what it gives said of the caller's registers.
+(theorem both_first
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hx (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t)))
+   (hy (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t)))
+   (hmxr (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hmxw (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 2))
+   (hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hfr (mapped_words (Cpu.segs c) f 4 4))
+   (dcode
+     (or (<= 4194603 (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489)))
+   (dy
+     (or (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 6)))
+       (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) (w64_val (reg c 7)))))
+   (dfc (or (<= 4194603 f) (<= (+ f 24) 4194489)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (dfy
+     (or (<= (+ f 24) (w64_val (reg c 6)))
+       (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) f))))
+  (exists ((c6 Cpu))
+    (and (reaches (at_pc (bo_s5 c) (w64 4194526)) c6)
+      (and (holds (Cpu.mem c6) (w64_val (reg c 7)) (two_xs (addto t)))
+        (and
+          (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+            (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))))
+          (returned (bo_s5 c) c6)))))
+  (by
+    (have h0 (= (w64_val (below3 c)) f) (exact (fr_0 c f hf)))
+    (have hlen (<= (w64_val (two_n t)) (List.length (two_xs t))) (exact (two_hx t)))
+    (have r0 (< 0 4) (arith))
+    (have so5 (same_outside (Cpu.mem c) (Cpu.mem (bo_s5 c)) f (+ f 24)) (exact (bo_so5 c f hf)))
+    (have hcode5 (code_in (bo_s5 c) buffers_table) (exact (bo_code5 c f hcode hf dfc)))
+    (have cx
+      (or (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)
+        (<= (+ f 24) (w64_val (reg c 7))))
+      (cases dfx ((inl (hl) (apply Or.inr ((arith)))) (inr (hr) (apply Or.inl ((exact hr)))))))
+    (have cy
+      (or (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) f)
+        (<= (+ f 24) (w64_val (reg c 6))))
+      (cases dfy ((inl (hl) (apply Or.inr ((exact hl)))) (inr (hr) (apply Or.inl ((exact hr)))))))
+    (have hn5 (= (reg (bo_s5 c) 2) (two_n t)) (exact hn))
+    (have hx5 (holds (Cpu.mem (bo_s5 c)) (w64_val (reg (bo_s5 c) 7)) (two_xs t))
+      (exact
+        (holds_same (Cpu.mem c) (Cpu.mem (bo_s5 c)) f (+ f 24) (w64_val (reg c 7)) (two_xs t) hx so5
+          cx)))
+    (have hy5 (holds (Cpu.mem (bo_s5 c)) (w64_val (reg (bo_s5 c) 6)) (two_ys t))
+      (exact
+        (holds_same (Cpu.mem c) (Cpu.mem (bo_s5 c)) f (+ f 24) (w64_val (reg c 6)) (two_ys t) hy so5
+          cy)))
+    (have hmxr5
+      (mapped_words (Cpu.segs (bo_s5 c)) (w64_val (reg (bo_s5 c) 7)) (w64_val (two_n t)) 4)
+      (exact hmxr))
+    (have hmxw5
+      (mapped_words (Cpu.segs (bo_s5 c)) (w64_val (reg (bo_s5 c) 7)) (w64_val (two_n t)) 2)
+      (exact hmxw))
+    (have hmy5 (mapped_words (Cpu.segs (bo_s5 c)) (w64_val (reg (bo_s5 c) 6)) (w64_val (two_n t)) 4)
+      (exact hmy))
+    (have hwx5 (<= (+ (w64_val (reg (bo_s5 c) 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwx))
+    (have hwy5 (<= (+ (w64_val (reg (bo_s5 c) 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616)
+      (exact hwy))
+    (have hsp5a (= (mapped (Cpu.segs c) (w64_val (below3 c)) 8 4) true) (rw h0) (exact (hfr 0 r0)))
+    (have hsp5 (= (mapped (Cpu.segs (bo_s5 c)) (w64_val (reg (bo_s5 c) 4)) 8 4) true) (exact hsp5a))
+    (have dcode5
+      (or (<= 4194603 (w64_val (reg (bo_s5 c) 7)))
+        (<= (+ (w64_val (reg (bo_s5 c) 7)) (* 8 (w64_val (two_n t)))) 4194489))
+      (exact dcode))
+    (have dy5
+      (or (<= (+ (w64_val (reg (bo_s5 c) 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg (bo_s5 c) 6)))
+        (<= (+ (w64_val (reg (bo_s5 c) 6)) (* 8 (List.length (two_ys t))))
+          (w64_val (reg (bo_s5 c) 7))))
+      (exact dy))
+    (have dsp5a
+      (or (<= (+ (w64_val (below3 c)) 8) (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (below3 c))))
+      (rw h0)
+      (cases dfx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have dsp5
+      (or (<= (+ (w64_val (reg (bo_s5 c) 4)) 8) (w64_val (reg (bo_s5 c) 7)))
+        (<= (+ (w64_val (reg (bo_s5 c) 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg (bo_s5 c) 4))))
+      (exact dsp5a))
+    (exact
+      (addto_contract t (bo_s5 c) hcode5 hn5 hx5 hy5 hmxr5 hmxw5 hmy5 hwx5 hwy5 hsp5 dcode5 dy5 dsp5))))
+
+;; in the state `addto` returned in: the stack pointer two words below the caller's, the word
+;; below it at f, and the second call's push inside the frame
+(theorem bo_sp6 ((c Cpu) (c6 Cpu) (kp6 (kept (bo_s5 c) c6))) (= (reg c6 4) (below2 c))
+  (by (rw (kept_sp (bo_s5 c) c6 kp6)) (exact (w64_sub_add (below2 c) (w64 8)))))
+(theorem bo_a6
+  ((c Cpu) (f Nat) (c6 Cpu) (hf (= (w64_val (reg c 4)) (+ f 24))) (kp6 (kept (bo_s5 c) c6)))
+  (= (w64_val (below1 c6)) f)
+  (by
+    (show (= (w64_val (w64_sub (reg c6 4) (w64 8))) f))
+    (rw (bo_sp6 c c6 kp6))
+    (exact (fr_0 c f hf))))
+(theorem bo_so7
+  ((c Cpu) (f Nat) (c6 Cpu) (hf (= (w64_val (reg c 4)) (+ f 24))) (kp6 (kept (bo_s5 c) c6)))
+  (same_outside (Cpu.mem c6) (Cpu.mem (bo_m4 c6)) f (+ f 24))
+  (by
+    (have ha6 (= (w64_val (below1 c6)) f) (exact (bo_a6 c f c6 hf kp6)))
+    (have a7 (<= f (w64_val (below1 c6))) (rw ha6) (arith))
+    (have b7 (<= (+ (w64_val (below1 c6)) 8) (+ f 24)) (rw ha6) (arith))
+    (exact
+      (same_outside_put64 (Cpu.mem c6) (Cpu.mem c6) f (+ f 24) (w64_val (below1 c6))
+        (w64_val (w64 4194584))
+        (same_outside_refl (Cpu.mem c6) f (+ f 24))
+        a7
+        b7))))
+
+;; The second call: from the state `addto` returned in, through the three moves and the call,
+;; `dot`'s contract with the one buffer as both operands, its hypotheses met from what the
+;; first call gave and what it kept.
+(theorem both_second
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hmxr (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hfr (mapped_words (Cpu.segs c) f 4 4))
+   (hfw (mapped_words (Cpu.segs c) f 3 2))
+   (dcode
+     (or (<= 4194603 (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489)))
+   (dfc (or (<= 4194603 f) (<= (+ f 24) 4194489)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hx6 (holds (Cpu.mem c6) (w64_val (reg c 7)) (two_xs (addto t))))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (hret6 (returned (bo_s5 c) c6)))
+  (exists ((c8 Cpu))
+    (and (reaches c6 c8)
+      (and (code_in c8 buffers_table)
+        (and (= (reg c8 0) (dot (twice (addto t))))
+          (and (holds (Cpu.mem c8) (w64_val (reg c 7)) (two_xs (addto t)))
+            (and (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6))) (returned (bo_m4 c6) c8)))))))
+  (by
+    (have n0 (< 0 3) (arith))
+    (have r0 (< 0 4) (arith))
+    (have kp6 (kept (bo_s5 c) c6) (exact (returned_kept (bo_s5 c) c6 hret6)))
+    (have hsegs6 (= (Cpu.segs c6) (Cpu.segs c)) (exact (kept_segs (bo_s5 c) c6 kp6)))
+    (have hrbx6 (= (reg c6 3) (reg c 7)) (exact (kept_rbx (bo_s5 c) c6 kp6)))
+    (have hr12x (= (reg c6 12) (reg c 2)) (exact (kept_r12 (bo_s5 c) c6 kp6)))
+    (have hra6 (= (ret_addr (bo_s5 c)) (w64 4194570))
+      (exact (ret_addr_pushed (bo_s4 c) (w64 4194570))))
+    (have hrip6 (= (w64_val (Cpu.rip c6)) 4194570)
+      (rw (returned_at (bo_s5 c) c6 hret6))
+      (rw hra6)
+      rfl)
+    ;; the code is in place after the first call, and after the second call's push
+    (have hcode5 (code_in (bo_s5 c) buffers_table) (exact (bo_code5 c f hcode hf dfc)))
+    (have ccode6
+      (or (<= (+ 4194588 15) (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489))
+      (exact dcode))
+    (have hcode6 (code_in c6 buffers_table)
+      (exact
+        (code_in_after (bo_s5 c) c6 buffers_table 4194489 4194588 (w64_val (reg c 7))
+          (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+          table_within
+          (kept_segs (bo_s5 c) c6 kp6)
+          hso6
+          ccode6
+          hcode5)))
+    (have ha6 (= (w64_val (below1 c6)) f) (exact (bo_a6 c f c6 hf kp6)))
+    (have hm6 (= (mapped (Cpu.segs c6) (w64_val (below1 c6)) 8 2) true)
+      (rw hsegs6)
+      (rw ha6)
+      (exact (hfw 0 n0)))
+    (have so7 (same_outside (Cpu.mem c6) (Cpu.mem (bo_m4 c6)) f (+ f 24))
+      (exact (bo_so7 c f c6 hf kp6)))
+    (have sg7 (= (Cpu.segs (bo_m4 c6)) (Cpu.segs c6)) rfl)
+    (have cfc (or (<= (+ 4194588 15) f) (<= (+ f 24) 4194489)) (exact dfc))
+    (have hcode7 (code_in (bo_m4 c6) buffers_table)
+      (exact
+        (code_in_after c6 (bo_m4 c6) buffers_table 4194489 4194588 f (+ f 24) table_within sg7 so7
+          cfc
+          hcode6)))
+    ;; `dot`'s hypotheses, of the state it is entered in
+    (have hreg7 (= (reg (bo_m4 c6) 6) (reg (bo_m4 c6) 7)) rfl)
+    (have hlist7 (= (two_ys (twice (addto t))) (two_xs (twice (addto t)))) rfl)
+    (have hn7 (= (reg (bo_m4 c6) 2) (two_n (twice (addto t))))
+      (show (= (reg c6 12) (two_n (addto t))))
+      (rw hr12x)
+      (rw (addto_n t))
+      (exact hn))
+    (have cx7
+      (or (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs (addto t))))) f)
+        (<= (+ f 24) (w64_val (reg c 7))))
+      (rw (addto_len t))
+      (cases dfx ((inl (hl) (apply Or.inr ((arith)))) (inr (hr) (apply Or.inl ((exact hr)))))))
+    (have hx7a (holds (Cpu.mem (bo_m4 c6)) (w64_val (reg c 7)) (two_xs (addto t)))
+      (exact
+        (holds_same (Cpu.mem c6) (Cpu.mem (bo_m4 c6)) f (+ f 24) (w64_val (reg c 7))
+          (two_xs (addto t))
+          hx6
+          so7
+          cx7)))
+    (have hx7 (holds (Cpu.mem (bo_m4 c6)) (w64_val (reg (bo_m4 c6) 7)) (two_xs (twice (addto t))))
+      (show (holds (Cpu.mem (bo_m4 c6)) (w64_val (reg c6 3)) (two_xs (addto t))))
+      (rw hrbx6)
+      (exact hx7a))
+    (have hmx7
+      (mapped_words (Cpu.segs (bo_m4 c6)) (w64_val (reg (bo_m4 c6) 7))
+        (w64_val (two_n (twice (addto t))))
+        4)
+      (show (mapped_words (Cpu.segs c6) (w64_val (reg c6 3)) (w64_val (two_n (addto t))) 4))
+      (rw hsegs6)
+      (rw hrbx6)
+      (rw (addto_n t))
+      (exact hmxr))
+    (have hwx7
+      (<= (+ (w64_val (reg (bo_m4 c6) 7)) (* 8 (w64_val (two_n (twice (addto t))))))
+        18446744073709551616)
+      (show (<= (+ (w64_val (reg c6 3)) (* 8 (w64_val (two_n (addto t))))) 18446744073709551616))
+      (rw hrbx6)
+      (rw (addto_n t))
+      (exact hwx))
+    (have hsp7 (= (mapped (Cpu.segs (bo_m4 c6)) (w64_val (reg (bo_m4 c6) 4)) 8 4) true)
+      (show (= (mapped (Cpu.segs c6) (w64_val (below1 c6)) 8 4) true))
+      (rw hsegs6)
+      (rw ha6)
+      (exact (hfr 0 r0)))
+    (cases
+      (dot_contract_same (twice (addto t)) (bo_m4 c6) hreg7 hlist7 hcode7 hn7 hx7 hmx7 hwx7 hsp7)
+      ((intro (c8 hc8)
+         (cases hc8
+           ((intro (hreach8 hr8a)
+              (cases hr8a
+                ((intro (hv8 hr8b)
+                   (cases hr8b
+                     ((intro (hmem8 hret8)
+                        (apply (Exists.intro c8)
+                          ((apply And.intro
+                             ((exact
+                                (reaches_trans c6 (at_pc (bo_m4 c6) (w64 4194489)) c8
+                                  (both_mid c6 hrip6 hcode6 hm6)
+                                  hreach8)))
+                             ((apply And.intro
+                                ((exact
+                                   (code_in_of (bo_m4 c6) c8 buffers_table
+                                     (kept_segs (bo_m4 c6) c8 (returned_kept (bo_m4 c6) c8 hret8))
+                                     hmem8
+                                     hcode7)))
+                                ((apply And.intro ((exact hv8))
+                                   ((apply And.intro ((rw hmem8) (exact hx7a))
+                                      ((apply And.intro ((exact hmem8)) ((exact hret8)))))))))))))))))))))))))))
+
+;; ---- both: the way out --------------------------------------------------------------------------
+;; in the state `dot` returned in the stack pointer is again two words below the caller's; one
+;; word up and two words up
+(theorem bo_sp8 ((c Cpu) (c6 Cpu) (c8 Cpu) (kp6 (kept (bo_s5 c) c6)) (kp8 (kept (bo_m4 c6) c8)))
+  (= (reg c8 4) (below2 c))
+  (by
+    (rw (kept_sp (bo_m4 c6) c8 kp8))
+    (show (= (w64_add (w64_sub (reg c6 4) (w64 8)) (w64 8)) (below2 c)))
+    (rw (w64_sub_add (reg c6 4) (w64 8)))
+    (exact (bo_sp6 c c6 kp6))))
+(theorem bo_up1 ((c Cpu)) (= (w64_add (below2 c) (w64 8)) (below1 c))
+  (exact (w64_sub_add (below1 c) (w64 8))))
+(theorem bo_up2 ((c Cpu)) (= (w64_add (below1 c) (w64 8)) (reg c 4))
+  (exact (w64_sub_add (reg c 4) (w64 8))))
+;; the two pops and the return
+(theorem both_exit
+  ((c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hfr (mapped_words (Cpu.segs c) f 4 4))
+   (hcode8 (code_in c8 buffers_table))
+   (kp6 (kept (bo_s5 c) c6))
+   (hret8 (returned (bo_m4 c6) c8)))
+  (reaches c8 (bo_out c8))
+  (by
+    (have kp8 (kept (bo_m4 c6) c8) (exact (returned_kept (bo_m4 c6) c8 hret8)))
+    (have hsegs6 (= (Cpu.segs c6) (Cpu.segs c)) (exact (kept_segs (bo_s5 c) c6 kp6)))
+    (have hsegs8 (= (Cpu.segs c8) (Cpu.segs c)) (rw (kept_segs (bo_m4 c6) c8 kp8)) (exact hsegs6))
+    (have hsp8 (= (reg c8 4) (below2 c)) (exact (bo_sp8 c c6 c8 kp6 kp8)))
+    (have hra8 (= (ret_addr (bo_m4 c6)) (w64 4194584))
+      (exact (ret_addr_pushed (bo_m3 c6) (w64 4194584))))
+    (have hrip8 (= (w64_val (Cpu.rip c8)) 4194584)
+      (rw (returned_at (bo_m4 c6) c8 hret8))
+      (rw hra8)
+      rfl)
+    (have h16 (= (w64_val (below1 c)) (+ f 16)) (exact (fr_16 c f hf)))
+    (have h8 (= (w64_val (below2 c)) (+ f 8)) (exact (fr_8 c f hf)))
+    (have r1 (< 1 4) (arith))
+    (have r2 (< 2 4) (arith))
+    (have r3 (< 3 4) (arith))
+    (have hp1 (= (mapped (Cpu.segs c8) (w64_val (reg c8 4)) 8 4) true)
+      (rw hsegs8)
+      (rw hsp8)
+      (rw h8)
+      (exact (hfr 1 r1)))
+    (have hp2 (= (mapped (Cpu.segs c8) (w64_val (w64_add (reg c8 4) (w64 8))) 8 4) true)
+      (rw hsegs8)
+      (rw hsp8)
+      (rw (bo_up1 c))
+      (rw h16)
+      (exact (hfr 2 r2)))
+    (have hp3
+      (= (mapped (Cpu.segs c8) (w64_val (w64_add (w64_add (reg c8 4) (w64 8)) (w64 8))) 8 4) true)
+      (rw hsegs8)
+      (rw hsp8)
+      (rw (bo_up1 c))
+      (rw (bo_up2 c))
+      (rw hf)
+      (exact (hfr 3 r3)))
+    (exact (both_leave c8 hrip8 hcode8 hp1 hp2 hp3))))
+;; memory where the code returns: as it was outside the first buffer's counted words and the
+;; frame
+(theorem both_foot
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (same_outside2 (Cpu.mem c) (Cpu.mem c8) (w64_val (reg c 7))
+    (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+    f
+    (+ f 24))
+  (by
+    (have ha6 (= (w64_val (below1 c6)) f) (exact (bo_a6 c f c6 hf kp6)))
+    (have a7 (<= f (w64_val (below1 c6))) (rw ha6) (arith))
+    (have b7 (<= (+ (w64_val (below1 c6)) 8) (+ f 24)) (rw ha6) (arith))
+    (have s2
+      (same_outside2 (Cpu.mem c) (Cpu.mem c6) (w64_val (reg c 7))
+        (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+        f
+        (+ f 24))
+      (exact
+        (same_outside2_of (Cpu.mem c) (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+          (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+          f
+          (+ f 24)
+          (bo_so5 c f hf)
+          hso6)))
+    (rw hmem8)
+    (exact
+      (same_outside2_put64 (Cpu.mem c) (Cpu.mem c6) (w64_val (reg c 7))
+        (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+        f
+        (+ f 24)
+        (w64_val (below1 c6))
+        (w64_val (w64 4194584))
+        s2
+        a7
+        b7))))
+;; a word of the frame or the return address, k bytes above f, read where `dot` has returned,
+;; is the word there when `addto` was entered: the second call's push is below it, and the
+;; first buffer is clear of it
+(theorem both_word
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (k Nat)
+   (hk (<= 8 k))
+   (hk2 (<= k 24))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (= (mem_le64 (Cpu.mem c8) (+ f k)) (mem_le64 (Cpu.mem (bo_s5 c)) (+ f k)))
+  (by
+    (have hlen (<= (w64_val (two_n t)) (List.length (two_xs t))) (exact (two_hx t)))
+    (have ha6 (= (w64_val (below1 c6)) f) (exact (bo_a6 c f c6 hf kp6)))
+    (have d (or (<= (+ (+ f k) 8) (w64_val (below1 c6))) (<= (+ (w64_val (below1 c6)) 8) (+ f k)))
+      (rw ha6)
+      (apply Or.inr ((arith))))
+    (have g
+      (or (<= (+ (+ f k) 8) (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (+ f k)))
+      (cases dfx ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (have eA (= (mem_le64 (Cpu.mem (bo_m4 c6)) (+ f k)) (mem_le64 (Cpu.mem c6) (+ f k)))
+      (exact (le64_put64_other (Cpu.mem c6) (w64_val (below1 c6)) (w64_val (w64 4194584)) (+ f k) d)))
+    (have eB (= (mem_le64 (Cpu.mem c6) (+ f k)) (mem_le64 (Cpu.mem (bo_s5 c)) (+ f k)))
+      (exact
+        (le64_same (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+          (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+          (+ f k)
+          hso6
+          g)))
+    (rw hmem8)
+    (rw eA)
+    (exact eB)))
+;; the code returns where its caller's return address says
+(theorem both_ret
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (kp8 (kept (bo_m4 c6) c8))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (= (Cpu.rip (bo_out c8)) (ret_addr c))
+  (by
+    (have k1 (<= 8 24) (arith))
+    (have k2 (<= 24 24) (arith))
+    (have dA (or (<= (+ (+ f 24) 8) f) (<= (+ f 24) (+ f 24))) (apply Or.inr ((arith))))
+    (have eC (= (mem_le64 (Cpu.mem (bo_s5 c)) (+ f 24)) (mem_le64 (Cpu.mem c) (+ f 24)))
+      (exact (le64_same (Cpu.mem c) (Cpu.mem (bo_s5 c)) f (+ f 24) (+ f 24) (bo_so5 c f hf) dA)))
+    (show
+      (= (w64 (mem_le64 (Cpu.mem c8) (w64_val (w64_add (w64_add (reg c8 4) (w64 8)) (w64 8)))))
+        (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c 4))))))
+    (rw (bo_sp8 c c6 c8 kp6 kp8))
+    (rw (bo_up1 c))
+    (rw (bo_up2 c))
+    (rw hf)
+    (rw (both_word t c f c6 c8 24 k1 k2 hf dfx hso6 kp6 hmem8))
+    (rw eC)
+    rfl))
+;; rbx and r12 are popped as the caller had them
+(theorem both_rbx
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (kp8 (kept (bo_m4 c6) c8))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (= (reg (bo_out c8) 3) (reg c 3))
+  (by
+    (have k1 (<= 8 16) (arith))
+    (have k2 (<= 16 24) (arith))
+    (show (= (w64 (mem_le64 (Cpu.mem c8) (w64_val (w64_add (reg c8 4) (w64 8))))) (reg c 3)))
+    (rw (bo_sp8 c c6 c8 kp6 kp8))
+    (rw (bo_up1 c))
+    (rw (fr_16 c f hf))
+    (rw (both_word t c f c6 c8 16 k1 k2 hf dfx hso6 kp6 hmem8))
+    (exact (bo_saved_rbx c f hf))))
+(theorem both_r12
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (kp8 (kept (bo_m4 c6) c8))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (= (reg (bo_out c8) 12) (reg c 12))
+  (by
+    (have k1 (<= 8 8) (arith))
+    (have k2 (<= 8 24) (arith))
+    (show (= (w64 (mem_le64 (Cpu.mem c8) (w64_val (reg c8 4)))) (reg c 12)))
+    (rw (bo_sp8 c c6 c8 kp6 kp8))
+    (rw (fr_8 c f hf))
+    (rw (both_word t c f c6 c8 8 k1 k2 hf dfx hso6 kp6 hmem8))
+    (exact (bo_saved_r12 c f hf))))
+;; what the code keeps of the state it was entered in
+(theorem both_kept
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (c6 Cpu)
+   (c8 Cpu)
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (hso6
+     (same_outside (Cpu.mem (bo_s5 c)) (Cpu.mem c6) (w64_val (reg c 7))
+       (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))))
+   (kp6 (kept (bo_s5 c) c6))
+   (kp8 (kept (bo_m4 c6) c8))
+   (hmem8 (= (Cpu.mem c8) (Cpu.mem (bo_m4 c6)))))
+  (kept c (bo_out c8))
+  (by
+    (have hsegs6 (= (Cpu.segs c6) (Cpu.segs c)) (exact (kept_segs (bo_s5 c) c6 kp6)))
+    (have hrbp6 (= (reg c6 5) (reg c 5)) (exact (kept_rbp (bo_s5 c) c6 kp6)))
+    (have hr13x (= (reg c6 13) (reg c 13)) (exact (kept_r13 (bo_s5 c) c6 kp6)))
+    (have hr14x (= (reg c6 14) (reg c 14)) (exact (kept_r14 (bo_s5 c) c6 kp6)))
+    (have hr15x (= (reg c6 15) (reg c 15)) (exact (kept_r15 (bo_s5 c) c6 kp6)))
+    (unfold kept)
+    (apply And.intro
+      ((show
+         (= (w64_add (w64_add (w64_add (reg c8 4) (w64 8)) (w64 8)) (w64 8))
+           (w64_add (reg c 4) (w64 8))))
+       (rw (bo_sp8 c c6 c8 kp6 kp8))
+       (rw (bo_up1 c))
+       (rw (bo_up2 c))
+       rfl)
+      ((apply And.intro
+         ((show (= (Cpu.segs c8) (Cpu.segs c))) (rw (kept_segs (bo_m4 c6) c8 kp8)) (exact hsegs6))
+         ((apply And.intro ((exact (both_rbx t c f c6 c8 hf dfx hso6 kp6 kp8 hmem8)))
+            ((apply And.intro
+               ((show (= (reg c8 5) (reg c 5))) (rw (kept_rbp (bo_m4 c6) c8 kp8)) (exact hrbp6))
+               ((apply And.intro ((exact (both_r12 t c f c6 c8 hf dfx hso6 kp6 kp8 hmem8)))
+                  ((apply And.intro
+                     ((show (= (reg c8 13) (reg c 13)))
+                      (rw (kept_r13 (bo_m4 c6) c8 kp8))
+                      (exact hr13x))
+                     ((apply And.intro
+                        ((show (= (reg c8 14) (reg c 14)))
+                         (rw (kept_r14 (bo_m4 c6) c8 kp8))
+                         (exact hr14x))
+                        ((show (= (reg c8 15) (reg c 15)))
+                         (rw (kept_r15 (bo_m4 c6) c8 kp8))
+                         (exact hr15x)))))))))))))))))
+
+;; ---- both: the contract -------------------------------------------------------------------------
+;; The contract of `both`'s code. From a state at its first instruction whose rdi and rsi hold
+;; the addresses of two buffers that hold the lists of t — the first mapped to read and to
+;; write, the second to read, for the count in rdx — whose stack pointer stands 24 above an
+;; address f, with the three words from f mapped to write and those and the return address to
+;; read, the first buffer's counted words clear of the code and of the second buffer, and the
+;; frame clear of the code and of both buffers: the processor comes to a state at the return
+;; address with the value of `both t` in rax, the first buffer's memory holding the list
+;; `both t` returns, the callee's registers as the caller had them, and every byte outside the
+;; first buffer's counted words and the 24 bytes from f as it was.
+(theorem both_contract
+  ((t Two)
+   (c Cpu)
+   (f Nat)
+   (hcode (code_in c buffers_table))
+   (hn (= (reg c 2) (two_n t)))
+   (hx (holds (Cpu.mem c) (w64_val (reg c 7)) (two_xs t)))
+   (hy (holds (Cpu.mem c) (w64_val (reg c 6)) (two_ys t)))
+   (hmxr (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 4))
+   (hmxw (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (two_n t)) 2))
+   (hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (two_n t)) 4))
+   (hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (two_n t)))) 18446744073709551616))
+   (hf (= (w64_val (reg c 4)) (+ f 24)))
+   (hfr (mapped_words (Cpu.segs c) f 4 4))
+   (hfw (mapped_words (Cpu.segs c) f 3 2))
+   (dcode
+     (or (<= 4194603 (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) 4194489)))
+   (dy
+     (or (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t)))) (w64_val (reg c 6)))
+       (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) (w64_val (reg c 7)))))
+   (dfc (or (<= 4194603 f) (<= (+ f 24) 4194489)))
+   (dfx
+     (or (<= (+ f 32) (w64_val (reg c 7)))
+       (<= (+ (w64_val (reg c 7)) (* 8 (List.length (two_xs t)))) f)))
+   (dfy
+     (or (<= (+ f 24) (w64_val (reg c 6)))
+       (<= (+ (w64_val (reg c 6)) (* 8 (List.length (two_ys t)))) f))))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194556)) c2)
+      (and (= (reg c2 0) (Prod.fst (both t)))
+        (and (holds (Cpu.mem c2) (w64_val (reg c 7)) (two_xs (Prod.snd (both t))))
+          (and
+            (same_outside2 (Cpu.mem c) (Cpu.mem c2) (w64_val (reg c 7))
+              (+ (w64_val (reg c 7)) (* 8 (w64_val (two_n t))))
+              f
+              (+ f 24))
+            (returned c c2))))))
+  (by
+    (cases (both_first t c f hcode hn hx hy hmxr hmxw hmy hwx hwy hf hfr dcode dy dfc dfx dfy)
+      ((intro (c6 hc6)
+         (cases hc6
+           ((intro (hreach6 hr6a)
+              (cases hr6a
+                ((intro (hx6 hr6b)
+                   (cases hr6b
+                     ((intro (hso6 hret6)
+                        (have kp6 (kept (bo_s5 c) c6) (exact (returned_kept (bo_s5 c) c6 hret6)))
+                        (cases
+                          (both_second t c f c6 hcode hn hmxr hwx hf hfr hfw dcode dfc dfx hx6 hso6
+                            hret6)
+                          ((intro (c8 hc8)
+                             (cases hc8
+                               ((intro (hreach8 hr8a)
+                                  (cases hr8a
+                                    ((intro (hcode8 hr8b)
+                                       (cases hr8b
+                                         ((intro (hv8 hr8c)
+                                            (cases hr8c
+                                              ((intro (hx8 hr8d)
+                                                 (cases hr8d
+                                                   ((intro (hmem8 hret8)
+                                                      (have kp8 (kept (bo_m4 c6) c8)
+                                                        (exact (returned_kept (bo_m4 c6) c8 hret8)))
+                                                      (apply (Exists.intro (bo_out c8))
+                                                        ((apply And.intro
+                                                           ((exact
+                                                              (reaches_trans (at_pc c (w64 4194556))
+                                                                (at_pc (bo_s5 c) (w64 4194526))
+                                                                (bo_out c8)
+                                                                (both_enter c f hcode hf hfw dfc)
+                                                                (reaches_trans
+                                                                  (at_pc (bo_s5 c) (w64 4194526))
+                                                                  c6
+                                                                  (bo_out c8)
+                                                                  hreach6
+                                                                  (reaches_trans c6 c8 (bo_out c8)
+                                                                    hreach8
+                                                                    (both_exit c f c6 c8 hf hfr
+                                                                      hcode8 kp6 hret8))))))
+                                                           ((apply And.intro
+                                                              ((show
+                                                                 (= (reg c8 0)
+                                                                   (dot (twice (addto t)))))
+                                                               (exact hv8))
+                                                              ((apply And.intro
+                                                                 ((show
+                                                                    (holds (Cpu.mem c8)
+                                                                      (w64_val (reg c 7))
+                                                                      (two_xs (addto t))))
+                                                                  (exact hx8))
+                                                                 ((apply And.intro
+                                                                    ((exact
+                                                                       (both_foot t c f c6 c8 hf
+                                                                         hso6 kp6 hmem8)))
+                                                                    ((unfold returned)
+                                                                     (apply And.intro
+                                                                       ((exact
+                                                                          (both_ret t c f c6 c8 hf
+                                                                            dfx hso6 kp6 kp8 hmem8)))
+                                                                       ((exact
+                                                                          (both_kept t c f c6 c8 hf
+                                                                            dfx hso6 kp6 kp8 hmem8))))))))))))))))))))))))))))))))))))))))))))))

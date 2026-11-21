@@ -105,17 +105,17 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is not yet a definition (`OPEN.md` §2); the loop over host calls is not written |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, two contracts |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
 
-**A conjecture, under test:** low-level code — machine words, buffers, loops — is a subset of
-shard and not a second language. The evaluator, K and every tool would then work at every level,
-and hand-written fast code would be ordinary shard. The owner's requirement of it (`LAW.md` §6,
-19): the specificity and the performance of C or Rust, no runtime and no evaluator in what runs,
-and facts about a piece of machine code — what it does not write — stated and proven. As it
-stands in the trial (`v3/models/x86/buffers.shard`):
+**Low-level code** — machine words, buffers, loops — is a subset of shard and not a second
+language (the owner's ruling after a trial, `LAW.md` §6, 19). The evaluator, K and every tool work
+at every level, and hand-written fast code is ordinary shard. The owner's requirement of it: the
+specificity and the performance of C or Rust, no runtime and no evaluator in what runs, and facts
+about a piece of machine code — what it does not write — stated and proven. Its form, as the trial
+has it (`v3/models/x86/buffers.shard`):
 
 - A function over machine words is the processor's own arithmetic: the model executes an
   instruction by the function the source calls.
@@ -132,10 +132,12 @@ stands in the trial (`v3/models/x86/buffers.shard`):
   accepts both directions; checked once by hand, held by no test).
 
 Proven there, by hand, from laws of the model stated once (`laws.shard`): the contracts of a sum
-of products over two buffers, which writes nothing, and of a sum into the first of two buffers,
-which changes no byte outside that buffer's words. Not shown: the contract of a function that
-calls another and keeps a frame on the stack; a compiler that derives a contract; and anything
-for code not of this kind — lists, constructors, integers of any size.
+of products over two buffers, which writes nothing; of a sum into the first of two buffers,
+which changes no byte outside that buffer's words; and of a function that calls the two and
+saves two registers on the stack, which changes no byte outside that buffer's words and three
+words of its stack. The caller's proof takes each callee's contract as it is stated. Not shown:
+a compiler that derives a contract; a frame that holds variables of its own; and anything for
+code not of this kind — lists, constructors, integers of any size.
 
 ## 5. The first instance: a binary
 
@@ -177,8 +179,8 @@ joint — a wrong byte, a wrong instruction, a pass that drops a branch, an unde
 refused. After that the chain widens by what `calc`, `shardfmt` and the loader refuse; a refusal
 is a defect of the compiler.
 
-Open on purpose: the form of low-level code (§4's conjecture); how integers of any size,
-constructors and reclaimed memory are represented; the calling convention and the linking rule's
+Open on purpose: how integers of any size, constructors and reclaimed memory are represented
+(§4's form of low-level code does not reach them); the calling convention and the linking rule's
 exact form; events and their prefixes at the Linux boundary; registers; floats; a second target;
 how results are stored and reused between builds; names and directories.
 
@@ -193,3 +195,5 @@ may be built by other means (the owner's words: `LAW.md` §6, 18).
    (§3, §6).
 3. The first trust removed is the back end; the erasure stays believed until a later step.
 4. A binary may stop early with a declared failure, and no requirement is restated for it (§5).
+5. Low-level code is ordinary shard, in §4's form: a buffer a value, evidence at each access, a
+   piece of code's contract with what it leaves unwritten (`LAW.md` §6, 19).

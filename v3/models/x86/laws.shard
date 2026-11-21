@@ -1022,3 +1022,113 @@
    (h2 (same_outside m2 m3 lo hi)))
   (same_outside m m3 lo hi)
   (by (intro x hx) (rw (h2 x hx)) (exact (h1 x hx))))
+
+;; ---- two ranges ---------------------------------------------------------------------------------
+;; m2 is m at every address outside both [lo, hi) and [lo2, hi2): a buffer written and a frame
+(def same_outside2 ((m Mem) (m2 Mem) (lo Nat) (hi Nat) (lo2 Nat) (hi2 Nat)) Prop
+  (forall ((x Nat))
+    (-> (or (< x lo) (<= hi x)) (or (< x lo2) (<= hi2 x)) (= (mem_get m2 x) (mem_get m x)))))
+;; agreement outside the second range, then outside the first
+(theorem same_outside2_of
+  ((m Mem)
+   (m1 Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (lo2 Nat)
+   (hi2 Nat)
+   (h1 (same_outside m m1 lo2 hi2))
+   (h2 (same_outside m1 m2 lo hi)))
+  (same_outside2 m m2 lo hi lo2 hi2)
+  (by (intro x hx hx2) (rw (h2 x hx)) (exact (h1 x hx2))))
+;; a word stored inside the second range keeps the agreement
+(theorem same_outside2_put64
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (lo2 Nat)
+   (hi2 Nat)
+   (a Nat)
+   (v Nat)
+   (h (same_outside2 m m2 lo hi lo2 hi2))
+   (hlo (<= lo2 a))
+   (hhi (<= (+ a 8) hi2)))
+  (same_outside2 m (mem_put64 m2 a v) lo hi lo2 hi2)
+  (by
+    (intro x hx hx2)
+    (have ho (or (< x a) (<= (+ a 8) x))
+      (cases hx2 ((inl (hl) (apply Or.inl ((arith)))) (inr (hr) (apply Or.inr ((arith)))))))
+    (rw (mem_put64_other m2 a v x ho))
+    (exact (h x hx hx2))))
+;; a word stored leaves a word clear of it as it was
+(theorem le64_put64_other ((m Mem) (a Nat) (v Nat) (x Nat) (h (or (<= (+ x 8) a) (<= (+ a 8) x))))
+  (= (mem_le64 (mem_put64 m a v) x) (mem_le64 m x))
+  (exact
+    (le64_same m (mem_put64 m a v) a (+ a 8) x
+      (same_outside_put64 m m a (+ a 8) a v (same_outside_refl m a (+ a 8)) (Nat.le_refl a)
+        (Nat.le_refl (+ a 8)))
+      h)))
+
+;; ---- a caller's laws ----------------------------------------------------------------------------
+;; in the state a push leaves, the word at the stack pointer is the word pushed: a call's return
+;; address
+(theorem ret_addr_pushed ((c Cpu) (v (BitVec 64))) (= (ret_addr (pushed c v)) v)
+  (exact (le64_put64_word (Cpu.mem c) (push_at c) v)))
+;; what `returned` and `kept` say, one at a time
+(theorem returned_at ((c Cpu) (c2 Cpu) (h (returned c c2))) (= (Cpu.rip c2) (ret_addr c))
+  (by (cases h ((intro (h1 h2) (exact h1))))))
+(theorem returned_kept ((c Cpu) (c2 Cpu) (h (returned c c2))) (kept c c2)
+  (by (cases h ((intro (h1 h2) (exact h2))))))
+(theorem kept_sp ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 4) (w64_add (reg c 4) (w64 8)))
+  (exact (And.left h)))
+(theorem kept_segs ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (Cpu.segs c2) (Cpu.segs c))
+  (exact (And.left (And.right h))))
+(theorem kept_rbx ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 3) (reg c 3))
+  (exact (And.left (And.right (And.right h)))))
+(theorem kept_rbp ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 5) (reg c 5))
+  (exact (And.left (And.right (And.right (And.right h))))))
+(theorem kept_r12 ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 12) (reg c 12))
+  (exact (And.left (And.right (And.right (And.right (And.right h)))))))
+(theorem kept_r13 ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 13) (reg c 13))
+  (exact (And.left (And.right (And.right (And.right (And.right (And.right h))))))))
+(theorem kept_r14 ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 14) (reg c 14))
+  (exact (And.left (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))
+(theorem kept_r15 ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (reg c2 15) (reg c 15))
+  (exact (And.right (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))
+;; a table in place in one state is in place in any state with the same mapping whose memory
+;; agrees with the first outside a range clear of the table's addresses
+(theorem code_in_after
+  ((c Cpu)
+   (c2 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (lo Nat)
+   (hi Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hsegs (= (Cpu.segs c2) (Cpu.segs c)))
+   (h (same_outside (Cpu.mem c) (Cpu.mem c2) lo hi))
+   (hclear (or (<= (+ chi 15) lo) (<= hi clo)))
+   (hc (code_in c tbl)))
+  (code_in c2 tbl)
+  (by
+    (intro a i len hs)
+    (show (= (decode (fetch (Cpu.segs c2) (Cpu.mem c2) a fifteen)) (some (Prod.mk i len))))
+    (rw hsegs)
+    (exact (code_in_same c (Cpu.mem c2) tbl clo chi lo hi hall h hclear hc a i len hs))))
+;; and in any state with the same mapping and the same memory
+(theorem code_in_of
+  ((c Cpu)
+   (c2 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (hsegs (= (Cpu.segs c2) (Cpu.segs c)))
+   (hmem (= (Cpu.mem c2) (Cpu.mem c)))
+   (hc (code_in c tbl)))
+  (code_in c2 tbl)
+  (by
+    (intro a i len hs)
+    (show (= (decode (fetch (Cpu.segs c2) (Cpu.mem c2) a fifteen)) (some (Prod.mk i len))))
+    (rw hsegs)
+    (rw hmem)
+    (exact (hc a i len hs))))

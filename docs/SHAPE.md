@@ -108,7 +108,7 @@ the development machine, one step after another, and about 38 in CI, its jobs si
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
-| `v3/models/x86/` | 3,700 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, and for two of them the contract of the code (§6) |
+| `v3/models/x86/` | 4,600 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, and for each of them the contract of its code (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -221,9 +221,10 @@ be built to is `COMPILE.md`.
   elsewhere;
 - a trial of low-level code as ordinary shard (`buffers.shard`, `COMPILE.md` §4): functions over
   buffers of machine words that take the evidence of each access's range, a listing for them
-  compiled by hand, and the contracts of the code of two of them, proven against the functions'
-  definitions: a sum of products, which writes nothing, and a sum written into the buffer it was
-  given, which changes no byte outside that buffer's words.
+  compiled by hand, and the contract of each one's code, proven against the functions'
+  definitions: a sum of products, which writes nothing; a sum written into the buffer it was
+  given, which changes no byte outside that buffer's words; and a caller of the two, which
+  changes no byte outside that buffer's words and three words of its own stack.
 
 **Assumed there:** six laws about the runtime's allocator and reference counts, stated as axioms.
 
@@ -232,9 +233,8 @@ be built to is `COMPILE.md`.
   programs;
 - proofs of the runtime's six laws;
 - a compiler from a program to a listing of the machine's model (`v3/models/x86`; its listings
-  are compiled by hand and their contracts proven by hand), the contract of a function that
-  calls another, and any link between the low-level language and what the present compiler
-  emits;
+  are compiled by hand and their contracts proven by hand), and any link between the low-level
+  language and what the present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.
 

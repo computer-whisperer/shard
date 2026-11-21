@@ -21,7 +21,7 @@ it.
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fourteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps |
 | `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file |
-| `buffers_facts.shard` | the contracts of the code of two of those functions, proven from the laws |
+| `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
 | `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
 
@@ -114,7 +114,12 @@ operation with an immediate, `mov` between registers, a conditional jump taken a
 `pop`, `call`, `ret`. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
 agree outside a range (`same_outside`) give the same word, the same fetched bytes and the same
-decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`).
+decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`). For code
+that calls: the word at the stack pointer after a push is the word pushed (`ret_addr_pushed`);
+what a callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …);
+code in place in any later state with the same mapping whose memory agrees outside a range
+clear of it (`code_in_after`); agreement outside two ranges, a buffer and a frame
+(`same_outside2`).
 
 **The trial** (`buffers.shard`, `buffers_facts.shard`; `docs/COMPILE.md` §4). Three functions
 written as ordinary shard: `dot`, the sum of the products of two buffers' words; `addto`, the
@@ -133,13 +138,23 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   clear of the code, of the second buffer and of the return address, the processor comes to a
   state at the return address in which the first buffer's memory holds the list `addto` returns,
   and every byte outside that buffer's counted words is as it was.
+- `both_contract`: from a state at `both`'s first instruction with the two buffers as for
+  `addto`, whose stack pointer stands 24 above an address `f` — the three words from `f` mapped
+  to write, those and the return address to read, the frame clear of the code and of both
+  buffers — the processor comes to a state at the return address with `both`'s value in `rax`,
+  the first buffer's memory holding the list `both` returns, `rbx` and `r12` as the caller had
+  them, and every byte outside the first buffer's counted words and the 24 bytes from `f` as it
+  was. Its proof takes `addto_contract` and `dot_contract_same` as they are stated, each in the
+  state the code calls from: what a callee is said to keep — the stack pointer, the mapping,
+  six registers — and what it is said to leave unwritten is all the caller's proof has of the
+  state the callee returns in. The proof is thirty lemmas and not one: K's recursion is
+  bounded in depth, and a proof of a hundred steps in one piece is refused (`OPEN.md` §3).
 
 Each rests on Lean's three axioms and on nothing else; each assumes that the processor decodes
 the listing's instructions at their addresses in the file (`code_in`), which is proven of no file.
 The evaluator's run of `both` on the buffers 3 5 7 and 2 4 6, the model's run of the listing's
-file and the processor's give one status, 19. Of `both`'s code nothing is proven: it calls, and
-keeps two registers on the stack; the rules for `push`, `pop`, `call` and `mov` are used by no
-contract yet. No compiler made the listing and no tool the proofs.
+file and the processor's give one status, 19. No compiler made the listing and no tool the
+proofs.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
@@ -157,8 +172,9 @@ hand.
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
 `mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
 `encode` for every instruction; the step from an assembled listing in a loaded file to what the
-processor then executes; a rule for every instruction form; the contract of code that calls; a
-compiler from a shard function to a listing and its contract.
+processor then executes; a rule for every instruction form; a contract of code whose frame
+holds variables of its own (there is no rule for an operand at the stack pointer and a
+displacement); a compiler from a shard function to a listing and its contract.
 
 ## From the command line
 
