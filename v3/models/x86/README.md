@@ -246,8 +246,8 @@ v3/bin/prove --root v3 --init $EXPORT --init-index $INDEX \
   v3/models/x86/buffers_tactic.shard v3/models/x86/buffers_facts.shard
 ```
 
-`x86_test.sh` holds that the library still derives the nine: on the binaries it runs `prove` on
-a copy of the model without the blocks, and the file written is the committed one byte for byte.
+`x86_derive_test.sh` holds that the library still derives the nine: it runs `prove` on a copy of
+the model without the blocks, and the file written is the committed one byte for byte.
 
 Nothing of the library is believed: K checks each block it answers, and a goal it does not
 understand it leaves unanswered. It writes a proof and no statement: the states a run passes
@@ -262,11 +262,12 @@ sign extension at its edge, memory through each form of operand, the stack, a ca
 and, on an x86-64 Linux machine, on the processor: where the model's run exits, the processor's
 exits with the same status. The status is one byte, so a program that checks a word reads it back
 a byte at a time, as eight programs. Twenty faults planted one at a time each failed the test:
-thirteen in the model's rules, two in the file's layout, one in the assembler, two in the trial (a
-function, its listing's table), one in the tactic library and one in a stored proof. A change to
-the model leaves every stored proof stale, which alone fails the test, so the stored proofs were
-derived again under each fault. That was checked with a tool outside the tree, on the test as it
-stood before the laws of a frame were added.
+thirteen in the model's rules, two in how a file is laid out and loaded, one in the assembler, two
+in the trial (a function, its listing's table), one in the tactic library and one in a stored
+proof. A change to the model leaves every stored proof stale, which alone fails the test, so the
+stored proofs were derived again under each fault. That was checked with a tool outside the tree,
+on the test as it stood before the laws of a frame were added, when it held the tactic library
+too (`x86_derive_test.sh` now).
 The assembler's bytes for three of the programs, written as listings, are the bytes assembled by
 hand.
 

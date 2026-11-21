@@ -15,11 +15,11 @@
 # processor. The trial of low-level code as shard (buffers.shard): its functions definitions,
 # the laws of the model (laws.shard) and of a function's stack frame (frame.shard), the contracts
 # of the three functions' code (buffers_facts.shard), a listing's code in place in its loaded
-# file (loaded.shard) and the
-# theorem that the trial's file exits with 19 (buffers_run.shard) accepted on Lean's axioms, and
-# its file's run by the model and by the processor exiting with what the evaluator computes of
-# the functions. The tactic library (derive.shard): loaded, its functions definitions, and on
-# the binaries the nine blocks it derived for the trial derived again, byte for byte.
+# file (loaded.shard) and the theorem that the trial's file exits with 19 (buffers_run.shard)
+# accepted on Lean's axioms, and its file's run by the model and by the processor exiting with
+# what the evaluator computes of the functions. Nine of the contracts' lemmas are blocks a tactic
+# library derived, replayed by the load; that the library still derives them is
+# x86_derive_test.sh's.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -147,9 +147,9 @@ fi
 # is in range — and a listing for them compiled by hand. Held here: every function is a definition;
 # the laws of the model and the contracts of the code of `dot`, of `addto` and of `both` — which
 # calls the two and keeps a frame on the stack, by the laws of a frame — are accepted; so is the
-# fact that the code of any
-# listing the assembler answers for is in place once its file is loaded (`listing_loaded`), and
-# through it and `both`'s contract that the trial's file exits with 19 (`buffers_exits`); all on
+# fact that the code of any listing the assembler answers for is in place once its file is loaded
+# (`listing_loaded`), and through it and `both`'s contract that the trial's file exits with 19
+# (`buffers_exits`); all on
 # no axiom but Lean's three (a stored word read back cites Init's lemmas on division, which rest
 # on `Classical.choice`); the evaluator's run of the functions, the model's run of the listing's
 # file and the processor's give that one status, 19.
@@ -173,32 +173,6 @@ checks=$((checks+1)); [ "$m" = "exit 19" ] || bad "the model's run of the trial'
 if [ $onchip = 1 ]; then
   checks=$((checks+1)); [ "$(chip "$OUT/buffers")" = "exit 19" ] || bad "the processor's run of the trial's file is $(chip "$OUT/buffers"), the model's exit 19"
 fi
-
-# ---- derived proofs (derive.shard, buffers_tactic.shard) -------------------------------------------
-# Nine of the trial's lemmas — the runs of instructions between a function's branch points — are
-# proven by a tactic library: their blocks stand in buffers_facts.auto.shard, which the load above
-# replayed. Held here: the library loads, every function of it a definition; and `prove`, run on
-# a copy of the model without that file, writes it again byte for byte, so the library still
-# derives each of the nine. The copy is a root of its own with the standard library and the
-# toolchain linked into it: the modules keep their names, and the entries their keys. On the
-# bootstrap the regeneration is skipped, and said so: it is the trial's load once more, with the
-# library run under the evaluator.
-"${LOAD[@]}" $M/buffers_tactic.shard > "$OUT/tac.txt" 2>&1; rc=$?
-checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the tactic library did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR' "$OUT/tac.txt" | head -5 | cut -c1-300; }
-checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn models.x86.\(derive\|buffers_tactic\)\.' "$OUT/tac.txt")" = 0 ] || bad "a function of the tactic library is a program without a definition"
-for f in derive.derive_block derive.walk derive.rule_of buffers_tactic.block; do
-  checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/tac.txt" || bad "models.x86.$f is not a definition with its equations"
-done
-case "$EVAL" in
-  *bin/eval)
-    R="$OUT/root"; mkdir -p "$R/models/x86"; ln -s "$PWD/v3/std" "$R/std"; ln -s "$PWD/v3/kernel" "$R/kernel"
-    for f in $M/*.shard; do case "$f" in *.auto.shard) ;; *) cp "$f" "$R/models/x86/" ;; esac; done
-    "$EVAL" direct v3/kernel/prove.shard --root "$R" --init "$EXPORT" --init-index "$INDEX" "$R/models/x86/buffers_tactic.shard" "$R/models/x86/buffers_facts.shard" > "$OUT/prove.txt" 2>&1
-    checks=$((checks+1)); grep -q 'proved 9  unsolved 0  sidecars written 1$' "$OUT/prove.txt" || { bad "prove did not derive the 9 blocks through the library"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/prove.txt" | head -5 | cut -c1-300; }
-    checks=$((checks+1)); cmp -s "$R/models/x86/buffers_facts.auto.shard" $M/buffers_facts.auto.shard || bad "the blocks the library derives are not the committed ones (buffers_facts.auto.shard)"
-    ;;
-  *) echo "x86_test: on the bootstrap the derived proofs are not derived again; the load replayed them" ;;
-esac
 
 echo "x86_test: $checks checks, $fail failed"
 exit $fail
