@@ -162,8 +162,6 @@
 (fn image_of ((code (List Nat)) (m Mem)) Image
   (MkImage elf_entry (put_bytes m elf_base (elf_exec code) (+ 120 (List.length code)))
     (cons (MkSeg elf_base (+ elf_base (+ 120 (List.length code))) 5) nil)))
-(theorem skip_zero ((bs (List Nat))) (= (skip bs 0) bs)
-  (by (cases bs ((nil () rfl) (cons (b r) rfl)))))
 (theorem load_ph_exec
   ((code (List Nat)) (m Mem) (hsize (<= (+ 4194424 (List.length code)) 140737488355328)))
   (= (load_ph (elf_exec code) 64 (MkImage elf_entry m nil)) (some (image_of code m)))
@@ -205,7 +203,6 @@
     (rw f40)
     (rw (elf_exec_length code))
     (rw hseg)
-    (rw (skip_zero (elf_exec code)))
     rfl))
 ;; the file of any code that fits below the top of a process's addresses loads to that image
 (theorem elf_load_exec
@@ -243,64 +240,28 @@
               (cases (Nat.decEq k 0)
                 ((isTrue (hk) (rw (if_pos hk)) (exact hb))
                  (isFalse (hk) (rw (if_neg hk)) (exact (ih (- k 1) hr)))))))))))))
-(theorem skipn_zero ((bs (List Nat))) (= (skipn 0 bs) bs)
-  (by (cases bs ((nil () rfl) (cons (b r) rfl)))))
-(theorem skipn_step ((bs (List Nat)))
+;; a list from an index is its element there and the list from the next
+(theorem drop_step ((bs (List Nat)))
   (forall ((k Nat))
-    (-> (< k (List.length bs)) (= (skipn k bs) (cons (byte_at bs k) (skipn (+ k 1) bs)))))
+    (-> (< k (List.length bs)) (= (List.drop k bs) (cons (byte_at bs k) (List.drop (+ k 1) bs)))))
   (by
     (induction bs
       ((nil () (intro k hk) (exact (absurd hk (Nat.not_lt_zero k))))
-       (cons (b r ih) (intro k hk) (have hk1 (Not (= (+ k 1) 0)) (arith))
-         (have h11 (<= 1 (+ k 1)) (arith))
-         (have e1 (= (- (+ k 1) 1) k) (arith (Nat.sub_add_cancel h11)))
-         (rw skipn.eq_2)
-         (rw skipn.eq_2)
-         (rw (if_neg hk1))
-         (rw e1)
-         (rw byte_at.eq_2)
+       (cons (b r ih) (intro k hk) (rw (list_drop_succ_cons Nat k b r)) (rw byte_at.eq_2)
          (cases (Nat.decEq k 0)
-           ((isTrue (h0) (rw (if_pos h0)) (rw (if_pos h0)) (rw h0) (rw (skipn_zero r)) rfl)
+           ((isTrue (h0) (rw (if_pos h0)) (rw h0) rfl)
             (isFalse (h0) (have h1 (<= 1 k) (exact (Nat.pos_of_ne_zero h0)))
               (have hl (< k (+ (List.length r) 1)) (exact hk))
               (have hk2 (< (- k 1) (List.length r)) (arith (Nat.sub_add_cancel h1)))
               (have e2 (= (+ (- k 1) 1) k) (exact (Nat.sub_add_cancel h1)))
+              (have hd (= (List.drop k (cons b r)) (List.drop (- k 1) r))
+                (rw (<- e2) (occ 1))
+                (exact (list_drop_succ_cons Nat (- k 1) b r)))
               (rw (if_neg h0))
-              (rw (if_neg h0))
+              (rw hd)
               (rw (ih (- k 1) hk2))
               (rw e2)
               rfl))))))))
-(theorem skipn_end ((bs (List Nat)))
-  (forall ((k Nat)) (-> (<= (List.length bs) k) (= (skipn k bs) nil)))
-  (by
-    (induction bs
-      ((nil () (intro k hk) rfl)
-       (cons (b r ih) (intro k hk) (have hl (<= (+ (List.length r) 1) k) (exact hk))
-         (have h0 (Not (= k 0)) (arith))
-         (have h1 (<= 1 k) (arith))
-         (have hk2 (<= (List.length r) (- k 1)) (arith (Nat.sub_add_cancel h1)))
-         (rw skipn.eq_2)
-         (rw (if_neg h0))
-         (exact (ih (- k 1) hk2)))))))
-(theorem skipn_add ((bs (List Nat)))
-  (forall ((a Nat) (k Nat)) (= (skipn a (skipn k bs)) (skipn (+ k a) bs)))
-  (by
-    (induction bs
-      ((nil () (intro a k) rfl)
-       (cons (b r ih) (intro a k)
-         (cases (Nat.decEq k 0)
-           ((isTrue (h0) (rw h0) (rw (skipn_zero (cons b r))) (rw (Nat.zero_add a)) rfl)
-            (isFalse (h0) (have h1 (<= 1 k) (exact (Nat.pos_of_ne_zero h0)))
-              (have hne (Not (= (+ k a) 0)) (arith))
-              (have h2 (<= 1 (+ k a)) (arith))
-              (have e (= (- (+ k a) 1) (+ (- k 1) a))
-                (arith (Nat.sub_add_cancel h1) (Nat.sub_add_cancel h2)))
-              (rw skipn.eq_2)
-              (rw (if_neg h0))
-              (rw skipn.eq_2)
-              (rw (if_neg hne))
-              (rw e)
-              (exact (ih a (- k 1)))))))))))
 ;; ---- the code in place --------------------------------------------------------------------------
 ;; what is mapped once the file is loaded, and the memory then
 (fn loaded_segs ((code (List Nat)) (stk Seg)) (List Seg)
@@ -320,7 +281,7 @@
   (forall ((k Nat))
     (-> (<= k (List.length code))
       (= (fetch (loaded_segs code stk) (loaded_mem code m) (+ 4194424 k) n)
-        (firstn n (skipn k code)))))
+        (firstn n (List.drop k code)))))
   (by
     (induction n
       ((FZ () (intro k hk) rfl)
@@ -357,8 +318,8 @@
                 (rw (elf_exec_at code k))
                 (exact (Nat.mod_eq_of_lt (byte_at_small code k hb))))
               (have hf
-                (= (firstn (FS n1) (cons (byte_at code k) (skipn (+ k 1) code)))
-                  (cons (byte_at code k) (firstn n1 (skipn (+ k 1) code))))
+                (= (firstn (FS n1) (cons (byte_at code k) (List.drop (+ k 1) code)))
+                  (cons (byte_at code k) (firstn n1 (List.drop (+ k 1) code))))
                 rfl)
               (have hk1 (<= (+ k 1) (List.length code)) (arith))
               (have eb (= (+ (+ 4194424 k) 1) (+ 4194424 (+ k 1))) (arith))
@@ -367,7 +328,7 @@
               (rw hbyte)
               (rw eb)
               (rw (ih (+ k 1) hk1))
-              (rw (skipn_step code k hlt))
+              (rw (drop_step code k hlt))
               (rw hf)
               rfl)
             (isFalse (hlt) (have hkl (= k (List.length code)) (arith))
@@ -400,7 +361,7 @@
               (rw hkl)
               (rw fetch.eq_2)
               (rw hmap)
-              (rw (skipn_end code (List.length code) (Nat.le_refl (List.length code))))
+              (rw (List.drop_eq_nil_of_le (Nat.le_refl (List.length code))))
               rfl))))))))
 ;; a listing's instructions by address, from the address of the first: each with the length of
 ;; its encoding
@@ -420,7 +381,7 @@
    (hstk (= (seg_holds stk (+ 4194424 (List.length code)) 1 1) false))
    (is (List Instr)))
   (forall ((k Nat) (a Nat) (i Instr) (len Nat))
-    (-> (= (decodes is (skipn k code)) true)
+    (-> (= (decodes is (List.drop k code)) true)
       (= (site (layout is (+ 4194424 k)) a) (some (Prod.mk i len)))
       (= (decode (fetch (loaded_segs code stk) (loaded_mem code m) a fifteen))
         (some (Prod.mk i len)))))
@@ -429,7 +390,7 @@
       ((nil () (intro k a i len hd hs) (have hn (= (site (layout nil (+ 4194424 k)) a) none) rfl)
          (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hs)) (Option.some_ne_none (Prod.mk i len)))))
        (cons (j r ih) (intro k a i len hd hs)
-         (cases (decodes_cons j r (skipn k code) hd)
+         (cases (decodes_cons j r (List.drop k code) hd)
            ((intro (h1 h2)
               (have hl
                 (= (layout (cons j r) (+ 4194424 k))
@@ -442,7 +403,7 @@
                    (have hnil (= (decode (firstn fifteen nil)) none) rfl)
                    (have h1b
                      (= (decode (firstn fifteen nil)) (some (Prod.mk j (List.length (encode j)))))
-                     (rw (<- (skipn_end code k hge)))
+                     (rw (<- (List.drop_eq_nil_of_le hge)))
                      (exact h1))
                    (exact
                      (absurd (Eq.symm (Eq.trans (Eq.symm hnil) h1b))
@@ -479,8 +440,9 @@
                             (some (Prod.mk i len)))
                           (rw (<- ea))
                           (exact hs3))
-                        (have h2b (= (decodes r (skipn (+ k (List.length (encode j))) code)) true)
-                          (rw (<- (skipn_add code (List.length (encode j)) k)))
+                        (have h2b
+                          (= (decodes r (List.drop (+ k (List.length (encode j))) code)) true)
+                          (rw (<- (@List.drop_drop Nat (List.length (encode j)) k code)))
                           (exact h2))
                         (exact (ih (+ k (List.length (encode j))) a i len h2b hs4))))))))))))))))
 ;; A listing's file, loaded. Where the assembler answers `code` for a listing, in the first state
@@ -505,8 +467,8 @@
                 ((intro (hd hb)
                    (have hsome (= (some is2) (some is)) (exact (Eq.trans (Eq.symm hr2) hr)))
                    (have he (= is2 is) (exact (Option.some.inj hsome)))
-                   (have hd0 (= (decodes is (skipn 0 code)) true)
-                     (rw (skipn_zero code))
+                   (have hd0 (= (decodes is (List.drop 0 code)) true)
+                     (rw (list_drop_zero Nat code))
                      (rw (<- he))
                      (exact hd))
                    (intro a i len hs)
