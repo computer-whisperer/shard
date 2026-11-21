@@ -435,47 +435,51 @@
 (fn int_of_nat_visible ((e El)) Bool (el_sees e (nm_int_of_nat)))
 
 ;; ---- terms -------------------------------------------------------------------------------
-(fn elab ((e El) (s SExpr) (expected (Option Expr))) ERes
-  (measure (struct s))
-  (match s
-    ((SNum k) (elab_num e k expected))
-    ;; a String literal is UTF-8 text: K reads it by decoding, and only on valid bytes is the
-    ;; encoding of the decoded text the bytes written
-    ((SStr bs)
-     (if (utf8_ok bs) (check_expected e (mk_lit (LitStr bs)) (mk_const (nm_string) nil) expected)
-     (EErr (sym "bad_string") (utf8 "a string literal's bytes are not UTF-8"))))
-    ((SSym x) (elab_sym e x nil false expected))
-    ((SSymU x ls) (elab_sym e x ls true expected))
-    ((SList nil) (EErr (sym "empty_application") (utf8 "()")))
-    ((SList (cons (SSym h) args))
-     (if (sym_eq h (sym "quote"))
-       (EErr (sym "no_quote") (utf8 "a symbol is written (sym \"x\"): there is no quote form"))
-     (if (sym_eq h (sym "fun")) (elab_binding e args true expected)
-     (if (sym_eq h (sym "forall")) (elab_binding e args false expected)
-     (if (sym_eq h (sym "->")) (elab_arrow e args expected)
-     (if (sym_eq h (sym "let")) (elab_let e args expected)
-     (if (sym_eq h (sym "Sort"))
-       (match args
-         ((cons l nil)
-          (match (elab_level e l)
-            ((some u) (check_expected e (mk_sort u) (mk_sort (LSucc u)) expected))
-            (none (EErr (sym "bad_level") (utf8 "(Sort LEVEL)")))))
-         (_ (EErr (sym "bad_shape") (utf8 "(Sort LEVEL)"))))
-     (if (sym_eq h (sym "Type"))
-       (match args
-         ((cons l nil)
-          (match (elab_level e l)
-            ((some u) (check_expected e (mk_sort (LSucc u)) (mk_sort (LSucc (LSucc u))) expected))
-            (none (EErr (sym "bad_level") (utf8 "(Type LEVEL)")))))
-         (_ (EErr (sym "bad_shape") (utf8 "(Type LEVEL)"))))
-     (if (sym_eq h (sym "proj")) (elab_proj e args expected)
-     (if (sym_eq h (sym "if")) (elab_if e args expected)
-     (if (sym_eq h (sym "dif")) (elab_dif e args expected)
-     (if (sym_eq h (sym "match")) (elab_match e args expected)
-     (if (sym_eq h (sym "list")) (elab_list e args expected)
-     (if (sym_eq h (sym "exists")) (elab_exists e args expected)
-     (elab_app e (SSym h) args expected)))))))))))))))
-    ((SList (cons h args)) (elab_app e h args expected))))
+(fn elab ((e El) (s SExpr) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 0 0)
+  (if (< depth 1)
+    (EErr (sym "term_depth")
+      (utf8
+        "the term is nested deeper than the elaborator reads — a list literal counts one level for each element: name a part of it in a definition"))
+    (match s
+      ((SNum k) (elab_num e k expected))
+      ;; a String literal is UTF-8 text: K reads it by decoding, and only on valid bytes is the
+      ;; encoding of the decoded text the bytes written
+      ((SStr bs)
+       (if (utf8_ok bs) (check_expected e (mk_lit (LitStr bs)) (mk_const (nm_string) nil) expected)
+       (EErr (sym "bad_string") (utf8 "a string literal's bytes are not UTF-8"))))
+      ((SSym x) (elab_sym e x nil false expected (- depth 1)))
+      ((SSymU x ls) (elab_sym e x ls true expected (- depth 1)))
+      ((SList nil) (EErr (sym "empty_application") (utf8 "()")))
+      ((SList (cons (SSym h) args))
+       (if (sym_eq h (sym "quote"))
+         (EErr (sym "no_quote") (utf8 "a symbol is written (sym \"x\"): there is no quote form"))
+       (if (sym_eq h (sym "fun")) (elab_binding e args true expected (- depth 1))
+       (if (sym_eq h (sym "forall")) (elab_binding e args false expected (- depth 1))
+       (if (sym_eq h (sym "->")) (elab_arrow e args expected (- depth 1))
+       (if (sym_eq h (sym "let")) (elab_let e args expected (- depth 1))
+       (if (sym_eq h (sym "Sort"))
+         (match args
+           ((cons l nil)
+            (match (elab_level e l)
+              ((some u) (check_expected e (mk_sort u) (mk_sort (LSucc u)) expected))
+              (none (EErr (sym "bad_level") (utf8 "(Sort LEVEL)")))))
+           (_ (EErr (sym "bad_shape") (utf8 "(Sort LEVEL)"))))
+       (if (sym_eq h (sym "Type"))
+         (match args
+           ((cons l nil)
+            (match (elab_level e l)
+              ((some u) (check_expected e (mk_sort (LSucc u)) (mk_sort (LSucc (LSucc u))) expected))
+              (none (EErr (sym "bad_level") (utf8 "(Type LEVEL)")))))
+           (_ (EErr (sym "bad_shape") (utf8 "(Type LEVEL)"))))
+       (if (sym_eq h (sym "proj")) (elab_proj e args expected (- depth 1))
+       (if (sym_eq h (sym "if")) (elab_if e args expected (- depth 1))
+       (if (sym_eq h (sym "dif")) (elab_dif e args expected (- depth 1))
+       (if (sym_eq h (sym "match")) (elab_match e args expected (- depth 1))
+       (if (sym_eq h (sym "list")) (elab_list e args expected (- depth 1))
+       (if (sym_eq h (sym "exists")) (elab_exists e args expected (- depth 1))
+       (elab_app e (SSym h) args expected (- depth 1))))))))))))))))
+      ((SList (cons h args)) (elab_app e h args expected (- depth 1))))))
 
 ;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (where Init's
 ;; Int.ofNat is in scope); else K's Nat literal
@@ -497,7 +501,10 @@
 
 ;; a symbol: Prop / Type, a bound name, a projection alias, else a constant with
 ;; its implicit arguments inserted (a bare `List.nil` is `@List.nil ?α`)
-(fn elab_sym ((e El) (x Symbol) (ls (List SExpr)) (has_univ Bool) (expected (Option Expr))) ERes
+(fn elab_sym
+  ((e El) (x Symbol) (ls (List SExpr)) (has_univ Bool) (expected (Option Expr)) (depth Int))
+  ERes
+  (measure (Int.natAbs depth) 4 0)
   (let ((explicit (sym_explicit x)) (x1 (sym_strip x)))
     (match (name_of_sym x1)
       (none (EErr (sym "bad_name") (chars_of_sym x1)))
@@ -522,7 +529,7 @@
                  (check_expected e (mk_sort (LSucc LZero)) (mk_sort (LSucc (LSucc LZero))) expected)
                  (match (elab_const e n ls has_univ expected)
                    ((EErr r m) (EErr r m))
-                   ((EOk e1 c cty) (elab_args e1 c cty nil explicit expected)))))))))))))
+                   ((EOk e1 c cty) (elab_args e1 c cty nil explicit expected depth)))))))))))))
 (fn assoc_alias ((n Name) (xs (List (Prod Name (Prod Int Expr))))) (Option (Prod Int Expr))
   (measure (struct xs))
   (match xs
@@ -651,14 +658,15 @@
 ;; ---- application -----------------------------------------------------------------------
 ;; an argument: source, or already elaborated (the operator and `if` paths)
 (type EArg (ASrc SExpr) (AVal Expr Expr))
-(fn elab_app ((e El) (h SExpr) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_app ((e El) (h SExpr) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 9 0)
   (match h
-    ((SSym x) (elab_app_sym e x nil false args expected))
-    ((SSymU x ls) (elab_app_sym e x ls true args expected))
+    ((SSym x) (elab_app_sym e x nil false args expected depth))
+    ((SSymU x ls) (elab_app_sym e x ls true args expected depth))
     (_
-      (match (elab e h none)
+      (match (elab e h none depth)
         ((EErr r m) (EErr r m))
-        ((EOk e1 f fty) (elab_args e1 f fty (srcs args) false expected))))))
+        ((EOk e1 f fty) (elab_args e1 f fty (srcs args) false expected depth))))))
 (fn srcs ((args (List SExpr))) (List EArg)
   (measure (struct args))
   (match args
@@ -666,8 +674,15 @@
     ((cons a r) (cons (ASrc a) (srcs r)))))
 ;; the head a symbol: a bound name, an operator spelling, else a constant
 (fn elab_app_sym
-  ((e El) (x Symbol) (ls (List SExpr)) (has_univ Bool) (args (List SExpr)) (expected (Option Expr)))
+  ((e El)
+   (x Symbol)
+   (ls (List SExpr))
+   (has_univ Bool)
+   (args (List SExpr))
+   (expected (Option Expr))
+   (depth Int))
   ERes
+  (measure (Int.natAbs depth) 8 0)
   (let ((explicit (sym_explicit x)) (x1 (sym_strip x)))
     (match (name_of_sym x1)
       (none (EErr (sym "bad_name") (chars_of_sym x1)))
@@ -675,7 +690,7 @@
        (match (cx_lookup (el_cx e) n)
          ((some fv)
           (match (w_local_type (el_w e) (fvar_id_of fv))
-            ((some ty) (elab_args e fv ty (srcs args) false expected))
+            ((some ty) (elab_args e fv ty (srcs args) false expected depth))
             (none (EErr (sym "bad_shape") (utf8 "a bound variable without a local")))))
          (none
            ;; an earlier field applied in a later field's type (a package's law over its operation)
@@ -683,16 +698,16 @@
              ((some (Prod.mk j ty))
               (match (cx_lookup (el_cx e) (self_name))
                 ((some fv)
-                 (elab_args e (mk_proj (alias_struct e) j fv) ty (srcs args) false expected))
+                 (elab_args e (mk_proj (alias_struct e) j fv) ty (srcs args) false expected depth))
                 (none (EErr (sym "bad_shape") (utf8 "a projection alias outside its structure")))))
              (none
                (if (bool_and (bool_not has_univ) (bool_or (is_operator x1) (renamed_spelling x1)))
                  (match (renamed_prim x1)
                    ((some new) (EErr (sym "renamed_primitive") (renamed_msg x1 new)))
-                   (none (elab_op e x1 args expected)))
+                   (none (elab_op e x1 args expected depth)))
                  (match (elab_const e n ls has_univ expected)
                    ((EErr r m) (EErr r m))
-                   ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected))))))))))))
+                   ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected depth))))))))))))
 
 ;; a slot of the telescope: an inserted metavariable, or an explicit argument
 ;; with the metavariable standing for it until it is elaborated
@@ -785,12 +800,19 @@
 ;; their binders, numerals last — each unified with its placeholder; then the
 ;; term and its type instantiated
 (fn elab_args
-  ((e El) (f Expr) (fty Expr) (args (List EArg)) (explicit Bool) (expected (Option Expr)))
+  ((e El)
+   (f Expr)
+   (fty Expr)
+   (args (List EArg))
+   (explicit Bool)
+   (expected (Option Expr))
+   (depth Int))
   ERes
+  (measure (Int.natAbs depth) 3 0)
   (match (tele e f fty args explicit nil 256)
     ((TlErr r m) (EErr r m))
     ((TlOk e1 fa rty slots)
-     (match (elab_slots e1 slots 0)
+     (match (elab_slots e1 slots 0 depth)
        ((EErr r m) (EErr r m))
        ((EOk e1b _ _)
         (let
@@ -801,10 +823,10 @@
                   ((some e3) e3)
                   (none e1b)))
                (none e1b))))
-          (match (elab_slots e2 slots 1)
+          (match (elab_slots e2 slots 1 depth)
             ((EErr r m) (EErr r m))
             ((EOk e3 _ _)
-             (match (elab_slots e3 slots 2)
+             (match (elab_slots e3 slots 2 depth)
                ((EErr r m) (EErr r m))
                ((EOk e4 _ _)
                 (match (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)
@@ -812,16 +834,16 @@
                   (other other))))))))))))
 ;; the explicit slots of one pass: 0 the bound variables and the elaborated
 ;; values, 1 the rest, 2 the numerals
-(fn elab_slots ((e El) (slots (List Slot)) (pass Int)) ERes
-  (measure (struct slots))
+(fn elab_slots ((e El) (slots (List Slot)) (pass Int) (depth Int)) ERes
+  (measure (Int.natAbs depth) 2 (List.length slots))
   (match slots
     (nil (EOk e (mk_sort LZero) (mk_sort LZero)))
-    ((cons (SImp _) r) (elab_slots e r pass))
+    ((cons (SImp _) r) (elab_slots e r pass depth))
     ((cons (SExp a m) r)
-     (if (bool_not (= (arg_pass e a) pass)) (elab_slots e r pass)
-     (match (elab_slot e a m)
+     (if (bool_not (= (arg_pass e a) pass)) (elab_slots e r pass depth)
+     (match (elab_slot e a m depth)
        ((EErr r2 m2) (EErr r2 m2))
-       ((EOk e1 _ _) (elab_slots e1 r pass)))))))
+       ((EOk e1 _ _) (elab_slots e1 r pass depth)))))))
 (fn arg_pass ((e El) (a EArg)) Int
   (match a
     ((ASrc (SNum _)) 2)
@@ -837,7 +859,8 @@
 ;; one explicit argument at its binder's type (the placeholder's), then the
 ;; placeholder is the argument — already assigned by the expected type, a
 ;; definitional check
-(fn elab_slot ((e El) (a EArg) (m Expr)) ERes
+(fn elab_slot ((e El) (a EArg) (m Expr) (depth Int)) ERes
+  (measure (Int.natAbs depth) 1 0)
   (let
     ((dom Expr
        (match (mvar_type e m)
@@ -846,7 +869,7 @@
     (let
       ((r ERes
          (match a
-           ((ASrc s) (elab e s (some dom)))
+           ((ASrc s) (elab e s (some dom) depth))
            ((AVal v vty) (check_expected e v vty (some dom))))))
       (match r
         ((EErr r1 msg) (EErr r1 msg))
@@ -869,7 +892,8 @@
 ;; ---- binders -----------------------------------------------------------------------------
 ;; (x TYPE) or (x TYPE implicit|strict|inst): the type elaborated and checked to be one
 (type BRes (BOk El Expr Level) (BErr Symbol (List Int)))
-(fn read_binder ((e El) (s SExpr)) BRes
+(fn read_binder ((e El) (s SExpr) (depth Int)) BRes
+  (measure (Int.natAbs depth) 2 0)
   (match s
     ((SList (cons (SSym x) (cons ty rest)))
      (match (name_of_sym x)
@@ -879,7 +903,7 @@
           (none
             (BErr (sym "bad_binder") (utf8 "a binder is (x TYPE) or (x TYPE implicit|strict|inst)")))
           ((some bi)
-           (match (elab_type e ty)
+           (match (elab_type e ty depth)
              ((EErr r m) (BErr r m))
              ((EOk e1 t s)
               (match (el_local e1 n t bi)
@@ -896,8 +920,9 @@
     (_ none)))
 ;; a term in a type position: its type must be a Sort; a metavariable left in
 ;; it is a refusal here (K's locals carry their types as written)
-(fn elab_type ((e El) (s SExpr)) ERes
-  (match (elab e (type_position e s) none)
+(fn elab_type ((e El) (s SExpr) (depth Int)) ERes
+  (measure (Int.natAbs depth) 1 0)
+  (match (elab e (type_position e s) none depth)
     ((EErr r m) (EErr r m))
     ((EOk e1 t tty)
      (match (el_finish e1 t)
@@ -917,18 +942,18 @@
 ;; order, and the sort levels of their types (a Pi's sort is imax over them)
 (fn read_binders ((e El) (bs (List SExpr)) (acc (List Expr)))
   (Prod (Option (Prod El (List Expr))) (List Int))
-  (match (read_binders_lv e bs acc nil)
+  (match (read_binders_lv e bs acc nil (budget_depth))
     ((Prod.mk none m) (Prod.mk none m))
     ((Prod.mk (some (Prod.mk e1 (Prod.mk fvars _))) _) (Prod.mk (some (Prod.mk e1 fvars)) nil))))
-(fn read_binders_lv ((e El) (bs (List SExpr)) (acc (List Expr)) (lvs (List Level)))
+(fn read_binders_lv ((e El) (bs (List SExpr)) (acc (List Expr)) (lvs (List Level)) (depth Int))
   (Prod (Option (Prod El (Prod (List Expr) (List Level)))) (List Int))
-  (measure (struct bs))
+  (measure (Int.natAbs depth) 3 (List.length bs))
   (match bs
     (nil (Prod.mk (some (Prod.mk e (Prod.mk (rev acc) (rev lvs)))) nil))
     ((cons b r)
-     (match (read_binder e b)
+     (match (read_binder e b depth)
        ((BErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
-       ((BOk e1 fv lv) (read_binders_lv e1 r (cons fv acc) (cons lv lvs)))))))
+       ((BOk e1 fv lv) (read_binders_lv e1 r (cons fv acc) (cons lv lvs) depth))))))
 (fn level_of_sort ((s Expr)) Level
   (match s
     ((Sort _ u) u)
@@ -942,21 +967,23 @@
     ((cons u r) (LIMax u (imax_fold r v)))))
 
 ;; (fun (BINDER…) BODY) / (forall (BINDER…) BODY)
-(fn elab_binding ((e El) (args (List SExpr)) (is_lam Bool) (expected (Option Expr))) ERes
+(fn elab_binding ((e El) (args (List SExpr)) (is_lam Bool) (expected (Option Expr)) (depth Int))
+  ERes
+  (measure (Int.natAbs depth) 4 0)
   (match args
     ((cons (SList bs) (cons body nil))
-     (match (read_binders_lv e bs nil nil)
+     (match (read_binders_lv e bs nil nil depth)
        ((Prod.mk none m) (EErr (sym "bad_binder") m))
        ((Prod.mk (some (Prod.mk e1 (Prod.mk fvars lvs))) _)
         (if is_lam
-          (match (elab e1 body (lam_body_expected e1 fvars expected))
+          (match (elab e1 body (lam_body_expected e1 fvars expected) depth)
             ((EErr r m) (EErr r m))
             ((EOk e2 v vty)
              (match (el_lams e2 fvars v)
                ((Prod.mk e3 lam)
                 (match (el_pis e3 fvars vty)
                   ((Prod.mk e4 pi) (check_expected (el_restore e4 e) lam pi expected)))))))
-          (match (elab_type e1 body)
+          (match (elab_type e1 body depth)
             ((EErr r m) (EErr r m))
             ((EOk e2 b s)
              (match (el_pis e2 fvars b)
@@ -982,35 +1009,36 @@
        (_ none)))))
 
 ;; (-> A … R): non-dependent Pi, right-nested; the binder is anonymous
-(fn elab_arrow ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_arrow ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 3 0)
   (match args
     (nil (EErr (sym "bad_shape") (utf8 "(-> TERM… TERM)")))
-    ((cons r nil) (elab e r expected))
+    ((cons r nil) (elab e r expected depth))
     (_
-      (match (arrow_locals e args nil nil)
+      (match (arrow_locals e args nil nil depth)
         ((Prod.mk none m) (EErr (sym "bad_binder") m))
         ((Prod.mk (some (Prod.mk (Prod.mk e1 fvars) (Prod.mk b s))) _)
          (match (el_pis e1 fvars b)
            ((Prod.mk e2 pi) (check_expected (el_restore e2 e) pi s expected))))))))
 ;; the locals of the domains, the body with its sort
-(fn arrow_locals ((e El) (args (List SExpr)) (acc (List Expr)) (lvs (List Level)))
+(fn arrow_locals ((e El) (args (List SExpr)) (acc (List Expr)) (lvs (List Level)) (depth Int))
   (Prod (Option (Prod (Prod El (List Expr)) (Prod Expr Expr))) (List Int))
-  (measure (struct args))
+  (measure (Int.natAbs depth) 2 (List.length args))
   (match args
     (nil (Prod.mk none (utf8 "(-> TERM… TERM)")))
     ((cons r nil)
-     (match (elab_type e r)
+     (match (elab_type e r depth)
        ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
        ((EOk e1 b s)
         (Prod.mk
           (some (Prod.mk (Prod.mk e1 (rev acc)) (Prod.mk b (pi_sort (rev lvs) (level_of_sort s)))))
           nil))))
     ((cons a rest)
-     (match (elab_type e a)
+     (match (elab_type e a depth)
        ((EErr r2 m) (Prod.mk none (append (chars_of_sym r2) (append (utf8 ": ") m))))
        ((EOk e1 d s)
         (match (el_local e1 Anon d BDefault)
-          ((Prod.mk e2 fv) (arrow_locals e2 rest (cons fv acc) (cons (level_of_sort s) lvs)))))))))
+          ((Prod.mk e2 fv) (arrow_locals e2 rest (cons fv acc) (cons (level_of_sort s) lvs) depth))))))))
 
 ;; a let's body, elaborated under the local `fv := val`, closed over it as a Let; the
 ;; context restored to e0's
@@ -1023,34 +1051,35 @@
         (match (w_subst (el_w e5) (el_zonk e5 bty) (fvar_id_of fv) val)
           ((Prod.mk w6 bty1) (EOk (el_restore (el_set_w e5 w6) e0) lb bty1))))))))
 ;; (let ((x TYPE TERM)…) BODY): sequential, one Let per binding
-(fn elab_let ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_let ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 3 0)
   (match args
-    ((cons (SList bs) (cons body nil)) (elab_lets e bs body expected))
+    ((cons (SList bs) (cons body nil)) (elab_lets e bs body expected depth))
     (_ (EErr (sym "bad_shape") (utf8 "(let ((x TYPE TERM)…) TERM)")))))
-(fn elab_lets ((e El) (bs (List SExpr)) (body SExpr) (expected (Option Expr))) ERes
-  (measure (struct bs))
+(fn elab_lets ((e El) (bs (List SExpr)) (body SExpr) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 2 (List.length bs))
   (match bs
-    (nil (elab e body expected))
+    (nil (elab e body expected depth))
     ((cons (SList (cons (SSym x) (cons ty (cons v nil)))) r)
      (match (name_of_sym x)
        (none (EErr (sym "bad_name") (chars_of_sym x)))
        ((some n)
-        (match (elab_type e ty)
+        (match (elab_type e ty depth)
           ((EErr r2 m) (EErr r2 m))
           ((EOk e1 t _)
-           (match (elab e1 v (some t))
+           (match (elab e1 v (some t) depth)
              ((EErr r2 m) (EErr r2 m))
              ((EOk e2 val _)
               (match (el_finish e2 val)
                 ((FinErr r2 m) (EErr r2 m))
                 ((FinOk val1)
                  (match (el_local_val e2 n t val1)
-                   ((Prod.mk e3 fv) (let_close e fv val1 (elab_lets e3 r body expected)))))))))))))
+                   ((Prod.mk e3 fv) (let_close e fv val1 (elab_lets e3 r body expected depth)))))))))))))
     ((cons (SList (cons (SSym x) (cons v nil))) r)  ; (x TERM): the type is the term's (a body's let)
      (match (name_of_sym x)
        (none (EErr (sym "bad_name") (chars_of_sym x)))
        ((some n)
-        (match (elab e v none)
+        (match (elab e v none depth)
           ((EErr r2 m) (EErr r2 m))
           ((EOk e1 val vty)
            (match (el_finish e1 vty)
@@ -1060,11 +1089,12 @@
                 ((FinErr r2 m) (EErr r2 m))
                 ((FinOk val1)
                  (match (el_local_val e1 n t val1)
-                   ((Prod.mk e3 fv) (let_close e fv val1 (elab_lets e3 r body expected)))))))))))))
+                   ((Prod.mk e3 fv) (let_close e fv val1 (elab_lets e3 r body expected depth)))))))))))))
     (_ (EErr (sym "bad_shape") (utf8 "a let binding is (x TYPE TERM) or (x TERM)")))))
 
 ;; (proj S i TERM)
-(fn elab_proj ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_proj ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 1 0)
   (match args
     ((cons (SSym sn) (cons (SNum i) (cons t nil)))
      (match (name_of_sym sn)
@@ -1072,7 +1102,7 @@
        ((some n)
         (match (resolve (el_cx e) n)
           ((RName k _)
-           (match (elab e t none)
+           (match (elab e t none depth)
              ((EErr r m) (EErr r m))
              ((EOk e1 x _) (proj_term e1 k i x expected))))
           ((RAmbiguous a b)
@@ -1119,71 +1149,78 @@
 (fulfills tele.dec_3 (by (intro p h x hx y hy e1 tyw hm hp) (apply natAbs_pred (arith))))
 ;; an operator is a term: inside an E-type position — a fn's `(Decidable (= a b))` — its
 ;; constants take their levels by unification, not the position's level 0
-(fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_op ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 7 0)
   (if (cx_etype (el_cx e))
-    (match (elab_op_at (el_with_etype e false) x args expected)
+    (match (elab_op_at (el_with_etype e false) x args expected depth)
       ((EErr r m) (EErr r m))
       ((EOk e1 v t) (EOk (el_with_etype e1 true) v t)))
-    (elab_op_at e x args expected)))
-(fn elab_op_at ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr))) ERes
-  (if (sym_eq x (sym "=")) (op_const e (nm_eq) args expected)
-  (if (sym_eq x (sym "!=")) (op_const e (n1 (sym "Ne")) args expected)
-  (if (sym_eq x (sym "iff")) (op_const e (n1 (sym "Iff")) args expected)
+    (elab_op_at e x args expected depth)))
+(fn elab_op_at ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 6 0)
+  (if (sym_eq x (sym "=")) (op_const e (nm_eq) args expected depth)
+  (if (sym_eq x (sym "!=")) (op_const e (n1 (sym "Ne")) args expected depth)
+  (if (sym_eq x (sym "iff")) (op_const e (n1 (sym "Iff")) args expected depth)
   (if (bool_or (sym_eq x (sym ">")) (sym_eq x (sym ">=")))
     (match args
       ((cons a (cons b nil))
-       (elab_op_at e (if (sym_eq x (sym ">")) (sym "<") (sym "<=")) (list b a) expected))
+       (elab_op_go e (if (sym_eq x (sym ">")) (sym "<") (sym "<=")) (list b a) expected depth))
       (_ (EErr (sym "bad_shape") (utf8 "(OP a b)"))))
-    (match args
-      ((cons a nil)
-       (if (sym_eq x (sym "not"))
-         (match (elab e a none)
-           ((EErr r m) (EErr r m))
-           ((EOk e1 av aty)
-            (match (el_whnf e1 aty)
-              ((Prod.mk e2 atyw)
-               (if (is_sort atyw) (op_apply e2 (n1 (sym "Not")) (list (AVal av aty)) expected)
-               (if (is_const_named atyw (nm_bool))
-                 (op_apply e2 (n2 (sym "Bool") (sym "not")) (list (AVal av aty)) expected)
-                 (EErr (sym "no_operator_identity") (append (utf8 "not at ") (show_expr atyw)))))))))
-         (EErr (sym "bad_shape") (utf8 "(OP a b)"))))
-      ((cons a (cons b nil))
-       (match (op_expected e x expected)
-         ((Prod.mk e0 (some id)) (op_apply e0 id (list (ASrc a) (ASrc b)) expected))
-         ((Prod.mk e0 none)
-          (if (bool_and (is_num_closed a) (bool_not (is_num_closed b)))
-            ;; the identity is the first operand's type's — of the first that is not numeric-closed
-            ;; (`(<= 48 c)` at c's Int; `(<= -5 x)` at x's): the closed operand is then read at
-            ;; the binder
-            (match (elab e0 b none)
-              ((EErr r m) (EErr r m))
-              ((EOk e1 bv bty)
-               (match (el_whnf e1 bty)
-                 ((Prod.mk e2 btyw)
-                  (match (op_identity x btyw)
-                    ((some id) (op_apply e2 id (list (ASrc a) (AVal bv bty)) expected))
-                    (none
-                      (EErr (sym "no_operator_identity")
-                        (append (chars_of_sym x)
-                          (append (utf8 " at ")
-                            (append (show_expr btyw)
-                              (utf8
-                                ": no naming-law identity at this type — the operator spellings are read at Nat and Int, `and` and `or` at a proposition and at Bool: write the type's own function")))))))))))
-            (match (elab e0 a none)
-              ((EErr r m) (EErr r m))
-              ((EOk e1 av aty)
-               (match (el_whnf e1 aty)
-                 ((Prod.mk e2 atyw)
-                  (match (op_identity x atyw)
-                    ((some id) (op_apply e2 id (list (AVal av aty) (ASrc b)) expected))
-                    (none
-                      (EErr (sym "no_operator_identity")
-                        (append (chars_of_sym x)
-                          (append (utf8 " at ")
-                            (append (show_expr atyw)
-                              (utf8
-                                ": no naming-law identity at this type — the operator spellings are read at Nat and Int, `and` and `or` at a proposition and at Bool: write the type's own function")))))))))))))))
-      (_ (EErr (sym "bad_shape") (utf8 "(OP a b)")))))))))
+    (elab_op_go e x args expected depth))))))
+;; an operator that is none of those on its operands: `not` on one, the others on two — `>`
+;; and `>=` arrive here as `<` and `<=` with their operands exchanged
+(fn elab_op_go ((e El) (x Symbol) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 5 0)
+  (match args
+    ((cons a nil)
+     (if (sym_eq x (sym "not"))
+       (match (elab e a none depth)
+         ((EErr r m) (EErr r m))
+         ((EOk e1 av aty)
+          (match (el_whnf e1 aty)
+            ((Prod.mk e2 atyw)
+             (if (is_sort atyw) (op_apply e2 (n1 (sym "Not")) (list (AVal av aty)) expected depth)
+             (if (is_const_named atyw (nm_bool))
+               (op_apply e2 (n2 (sym "Bool") (sym "not")) (list (AVal av aty)) expected depth)
+               (EErr (sym "no_operator_identity") (append (utf8 "not at ") (show_expr atyw)))))))))
+       (EErr (sym "bad_shape") (utf8 "(OP a b)"))))
+    ((cons a (cons b nil))
+     (match (op_expected e x expected)
+       ((Prod.mk e0 (some id)) (op_apply e0 id (list (ASrc a) (ASrc b)) expected depth))
+       ((Prod.mk e0 none)
+        (if (bool_and (is_num_closed a) (bool_not (is_num_closed b)))
+          ;; the identity is the first operand's type's — of the first that is not numeric-closed
+          ;; (`(<= 48 c)` at c's Int; `(<= -5 x)` at x's): the closed operand is then read at
+          ;; the binder
+          (match (elab e0 b none depth)
+            ((EErr r m) (EErr r m))
+            ((EOk e1 bv bty)
+             (match (el_whnf e1 bty)
+               ((Prod.mk e2 btyw)
+                (match (op_identity x btyw)
+                  ((some id) (op_apply e2 id (list (ASrc a) (AVal bv bty)) expected depth))
+                  (none
+                    (EErr (sym "no_operator_identity")
+                      (append (chars_of_sym x)
+                        (append (utf8 " at ")
+                          (append (show_expr btyw)
+                            (utf8
+                              ": no naming-law identity at this type — the operator spellings are read at Nat and Int, `and` and `or` at a proposition and at Bool: write the type's own function")))))))))))
+          (match (elab e0 a none depth)
+            ((EErr r m) (EErr r m))
+            ((EOk e1 av aty)
+             (match (el_whnf e1 aty)
+               ((Prod.mk e2 atyw)
+                (match (op_identity x atyw)
+                  ((some id) (op_apply e2 id (list (AVal av aty) (ASrc b)) expected depth))
+                  (none
+                    (EErr (sym "no_operator_identity")
+                      (append (chars_of_sym x)
+                        (append (utf8 " at ")
+                          (append (show_expr atyw)
+                            (utf8
+                              ": no naming-law identity at this type — the operator spellings are read at Nat and Int, `and` and `or` at a proposition and at Bool: write the type's own function")))))))))))))))
+    (_ (EErr (sym "bad_shape") (utf8 "(OP a b)")))))
 ;; an arithmetic operator under an expected type that is Nat or Int takes that type's identity
 ;; and reads both operands at it — `(- 1 2)` at Int is Int.sub, a Nat local under Int is cast
 ;; at the leaf — as Lean's binop% reads `(n + 1 : Int)`; chosen from an operand with the result
@@ -1222,14 +1259,16 @@
 (fulfills all_num_closed.dec_1 (by (intro xs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
 (fulfills all_num_closed.dec_2 (by (intro xs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
 ;; a constant applied to source arguments (Eq, Ne, Iff: the implicit type is theirs)
-(fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn op_const ((e El) (k Name) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 4 0)
   (match (elab_const e k nil false none)
     ((EErr r m) (EErr r m))
-    ((EOk e1 c cty) (elab_args e1 c cty (srcs args) false expected))))
-(fn op_apply ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
+    ((EOk e1 c cty) (elab_args e1 c cty (srcs args) false expected depth))))
+(fn op_apply ((e El) (k Name) (args (List EArg)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 4 0)
   (match (elab_const e k nil false none)
     ((EErr r m) (EErr r m))
-    ((EOk e1 c cty) (elab_args e1 c cty args false expected))))
+    ((EOk e1 c cty) (elab_args e1 c cty args false expected depth))))
 ;; the identity of a binary spelling at the first operand's type
 (fn op_identity ((x Symbol) (ty Expr)) (Option Name)
   (if (is_const_named ty (nm_nat)) (op_at (sym "Nat") x)
@@ -1273,10 +1312,11 @@
 ;; (Nat.lt/le → Nat.decLt/decLe, Eq at Nat/Int/Bool → decEq, Int likewise); a Bool C is the
 ;; proposition `C = true` with Bool's decidable equality (Lean's own elaboration); the
 ;; branches at the expected type
-(fn elab_if ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_if ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 5 0)
   (match args
     ((cons c (cons t (cons f nil)))
-     (match (elab e c none)
+     (match (elab e c none depth)
        ((EErr r m) (EErr r m))
        ((EOk e1 cv cty)
         (match (el_whnf e1 cty)
@@ -1293,12 +1333,13 @@
                        (AVal (bool_decision cv) (mk_app (mk_const (n1 (sym "Decidable")) nil) p))
                        (ASrc t)
                        (ASrc f))
-                     expected))))
+                     expected
+                     depth))))
              (match (two_ctors e2 ctyw)
                ((some (Prod.mk c1 c2))
                 ;; a value of a two-constructor inductive: the second constructor takes the
                 ;; then-branch — the match it abbreviates
-                (elab_if_cases e2 (el_zonk e2 cv) ctyw c1 c2 t f expected))
+                (elab_if_cases e2 (el_zonk e2 cv) ctyw c1 c2 t f expected depth))
                (none
                  (match (if_refusal e2 ctyw)
                    ((some (Prod.mk r m)) (EErr r m))
@@ -1310,7 +1351,8 @@
                             (AVal dec (mk_app (mk_const (n1 (sym "Decidable")) nil) cv))
                             (ASrc t)
                             (ASrc f))
-                          expected))
+                          expected
+                          depth))
                        ((Prod.mk _ none)
                         (no_decision e2 (el_zonk e2 cv)
                           (append (utf8 "the condition ")
@@ -1322,10 +1364,11 @@
 ;; `dite C dec (λ h:C. T) (λ h:¬C. F)`, Lean's elaboration of `if h : c then t else e`; C as an
 ;; if's condition (a proposition with a decision, or a Bool as `C = true`); each branch at the
 ;; form's expected type, else the then-branch's own; a two-constructor value is no condition here
-(fn elab_dif ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_dif ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 6 0)
   (match args
     ((cons (SSym hn) (cons c (cons t (cons f nil))))
-     (match (elab e c none)
+     (match (elab e c none depth)
        ((EErr r m) (EErr r m))
        ((EOk e1 cv cty)
         (match (el_whnf e1 cty)
@@ -1337,7 +1380,8 @@
                    (n1 (sym "dite"))
                    (n1 (sym "Not"))))
                ((some k) (EErr (sym "unknown_constant") (show_name k)))
-               (none (elab_dif_branches e2 hn (bool_is_true cv) (bool_decision cv) t f expected)))
+               (none
+                 (elab_dif_branches e2 hn (bool_is_true cv) (bool_decision cv) t f expected depth)))
              (match (two_ctors e2 ctyw)
                ((some _)
                 (EErr (sym "dif_type")
@@ -1354,7 +1398,7 @@
                        (none
                          (match (decision_of e2 (el_zonk e2 cv))
                            ((Prod.mk e3 (some dec))
-                            (elab_dif_branches e3 hn (el_zonk e3 cv) dec t f expected))
+                            (elab_dif_branches e3 hn (el_zonk e3 cv) dec t f expected depth))
                            ((Prod.mk _ none)
                             (no_decision e2 (el_zonk e2 cv)
                               (append (utf8 "the condition ")
@@ -1363,25 +1407,28 @@
     (_ (EErr (sym "bad_shape") (utf8 "(dif h C T F)")))))
 ;; the branches under their hypotheses, then `dite p dec lamT lamF` at the result type
 (fn elab_dif_branches
-  ((e El) (hn Symbol) (p Expr) (dec Expr) (t SExpr) (f SExpr) (expected (Option Expr)))
+  ((e El) (hn Symbol) (p Expr) (dec Expr) (t SExpr) (f SExpr) (expected (Option Expr)) (depth Int))
   ERes
-  (match (dif_branch e hn p t expected)
+  (measure (Int.natAbs depth) 5 0)
+  (match (dif_branch e hn p t expected depth)
     ((EErr r m) (EErr r m))
     ((EOk e1 lam_t ret)
-     (match (dif_branch e1 hn (mk_app (mk_const (n1 (sym "Not")) nil) p) f (some ret))
+     (match (dif_branch e1 hn (mk_app (mk_const (n1 (sym "Not")) nil) p) f (some ret) depth)
        ((EErr r m) (EErr r m))
        ((EOk e2 lam_f _)
         (op_apply_explicit e2 (n1 (sym "dite"))
           (list (AVal p (mk_sort LZero)) (AVal dec (mk_app (mk_const (n1 (sym "Decidable")) nil) p))
             (AVal lam_t (mk_pi_anon p ret))
             (AVal lam_f (mk_pi_anon (mk_app (mk_const (n1 (sym "Not")) nil) p) ret)))
-          expected))))))
+          expected
+          depth))))))
 ;; `λ h:hyp. BRANCH`; the result is the branch's type, closed over nothing (the hypothesis is a
 ;; proof, and the branch's type does not mention it: a dif's type is its position's)
-(fn dif_branch ((e El) (hn Symbol) (hyp Expr) (br SExpr) (expected (Option Expr))) ERes
+(fn dif_branch ((e El) (hn Symbol) (hyp Expr) (br SExpr) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 1 0)
   (match (el_local e (n1 hn) hyp BDefault)
     ((Prod.mk e1 h)
-     (match (elab e1 br expected)
+     (match (elab e1 br expected depth)
        ((EErr r m) (EErr r m))
        ((EOk e2 v vty)
         (match (el_lams e2 (list h) v)
@@ -1434,9 +1481,11 @@
    (c2 (Prod Name Int))
    (t SExpr)
    (f SExpr)
-   (expected (Option Expr)))
+   (expected (Option Expr))
+   (depth Int))
   ERes
-  (match (if_ret e t expected)
+  (measure (Int.natAbs depth) 2 0)
+  (match (if_ret e t expected depth)
     ((Prod.mk _ none)
      (EErr (sym "match_motive")
        (utf8 "an if takes its type from its position or its then-branch, and neither is determined")))
@@ -1463,7 +1512,8 @@
                        ls
                        (get_app_args ctyw)
                        f
-                       ret)
+                       ret
+                       depth)
                      ((EErr r m) (EErr r m))
                      ((EOk e4 m1 _)
                       (match
@@ -1473,7 +1523,8 @@
                           ls
                           (get_app_args ctyw)
                           t
-                          ret)
+                          ret
+                          depth)
                         ((EErr r m) (EErr r m))
                         ((EOk e5 m2 _)
                          (match (w_local (el_w e5) (n1 (sym "d")) ctyw)
@@ -1489,19 +1540,23 @@
              (_ (EErr (sym "if_type") (utf8 "an if on a value whose type is not an inductive")))))
           ((Prod.mk _ other) (EErr (sym "not_a_type") (show_expr other)))))))))
 ;; the if's type: the position's when determined, else the then-branch's own
-(fn if_ret ((e El) (t SExpr) (expected (Option Expr))) (Prod El (Option Expr))
+(fn if_ret ((e El) (t SExpr) (expected (Option Expr)) (depth Int)) (Prod El (Option Expr))
+  (measure (Int.natAbs depth) 1 0)
   (match (match_ret e expected)
     ((some r) (Prod.mk e (some r)))
     (none
-      (match (elab e t none)
+      (match (elab e t none depth)
         ((EErr _ _) (Prod.mk e none))
         ((EOk e1 _ ty)
          (match (el_finish e1 ty)
            ((FinOk r) (Prod.mk e (some r)))
            ((FinErr _ _) (Prod.mk e none))))))))
 ;; `λ fields . BRANCH` at the result type
-(fn if_minor ((e El) (c Name) (ls (List Level)) (params (List Expr)) (br SExpr) (ret Expr)) ERes
-  (match (elab e br (some ret))
+(fn if_minor
+  ((e El) (c Name) (ls (List Level)) (params (List Expr)) (br SExpr) (ret Expr) (depth Int))
+  ERes
+  (measure (Int.natAbs depth) 1 0)
+  (match (elab e br (some ret) depth)
     ((EErr r m) (EErr r m))
     ((EOk e1 v _)
      (match (mt_ctor_type (el_w e1) c ls params)
@@ -1534,7 +1589,8 @@
 (fn list_mismatch ((xw Expr)) ERes
   (EErr (sym "type_mismatch")
     (append (utf8 "a list literal where ") (append (show_expr xw) (utf8 " is expected")))))
-(fn elab_list ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_list ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 1 0)
   (match expected
     (none
       (EErr (sym "unsolved_implicit")
@@ -1546,7 +1602,8 @@
           ((some (Prod.mk (Prod.mk nl kn) (Prod.mk cs kc)))
            (if (bool_and (= kn 0) (= kc 2))
              (elab e1 (list_chain args (sym_of_chars (show_name nl)) (sym_of_chars (show_name cs)))
-               expected)
+               expected
+               depth)
              (list_mismatch xw)))
           (none (list_mismatch xw))))))))
 (fn list_chain ((args (List SExpr)) (nl Symbol) (cs Symbol)) SExpr
@@ -1555,13 +1612,14 @@
     (nil (SSym nl))
     ((cons a r) (SList (list (SSym cs) a (list_chain r nl cs))))))
 ;; the constant applied with every binder explicit but the leading implicit ones
-(fn op_apply_explicit ((e El) (k Name) (args (List EArg)) (expected (Option Expr))) ERes
+(fn op_apply_explicit ((e El) (k Name) (args (List EArg)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 4 0)
   (match (elab_const e k nil false none)
     ((EErr r m) (EErr r m))
     ((EOk e1 c cty)
      (match (tele e1 c cty nil false nil 16)  ; the leading implicits (α, u)
        ((TlErr r m) (EErr r m))
-       ((TlOk e2 ca cty1 _) (elab_args e2 ca cty1 args true expected))))))
+       ((TlOk e2 ca cty1 _) (elab_args e2 ca cty1 args true expected depth))))))
 (fn decision_of ((e El) (c Expr)) (Prod El (Option Expr))
   (let ((h (get_app_fn c)) (as (get_app_args c)))
     (match h
@@ -1651,17 +1709,18 @@
 ;; result whose type depends on the scrutinee is written row by row. The readings are tried
 ;; in order (match_try): with the locals whose types mention T generalized too, with RET
 ;; alone generalized, with the constant motive; what is refused is the first reading's error
-(fn elab_match ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_match ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 3 0)
   (match args
     ((cons scrut arms)
-     (if (has_numeral_row arms) (elab_match_lit e scrut arms expected)
+     (if (has_numeral_row arms) (elab_match_lit e scrut arms expected depth)
      (match (match_ret e expected)
        (none
          (EErr (sym "match_motive")
            (utf8
              "a match takes its type from its position: write it where the type is known — a definition's value, an argument, (let ((r TYPE (match …))) r)")))
        ((some ret)
-        (match (elab e scrut none)
+        (match (elab e scrut none depth)
           ((EErr r m) (EErr r m))
           ((EOk e1 sv sty)
            (match (el_finish e1 sty)
@@ -1692,12 +1751,12 @@
                             ((first ERes
                                (match deps
                                  (nil (EErr (sym "none") nil))
-                                 (_ (match_try e3 dty ret l sv1 deps svid arms expected)))))
+                                 (_ (match_try e3 dty ret l sv1 deps svid arms expected depth)))))
                             (match_live e3 dty arms
                               (match first
                                 ((EOk e4 v vt) (EOk e4 v vt))
                                 ((EErr r0 m0)
-                                 (match (match_try e3 dty ret l sv1 nil gen arms expected)
+                                 (match (match_try e3 dty ret l sv1 nil gen arms expected depth)
                                    ((EOk e4 v vt) (EOk e4 v vt))
                                    ((EErr r m)
                                     (match gen
@@ -1706,7 +1765,8 @@
                                           (nil (EErr r m))
                                           (_ (EErr r0 m0))))
                                       ((some _)
-                                       (match (match_try e3 dty ret l sv1 nil none arms expected)
+                                       (match
+                                         (match_try e3 dty ret l sv1 nil none arms expected depth)
                                          ((EOk e4 v vt) (EOk e4 v vt))
                                          ((EErr _ _)
                                           (match deps
@@ -1745,7 +1805,9 @@
     (nil true)
     ((cons (SList (cons (SNum _) (cons _ nil))) r) (all_numeral_rows r))
     (_ false)))
-(fn elab_match_lit ((e El) (scrut SExpr) (arms (List SExpr)) (expected (Option Expr))) ERes
+(fn elab_match_lit ((e El) (scrut SExpr) (arms (List SExpr)) (expected (Option Expr)) (depth Int))
+  ERes
+  (measure (Int.natAbs depth) 1 0)
   (match (lit_chain arms)
     (none
       (if (all_numeral_rows arms)
@@ -1755,7 +1817,7 @@
           (utf8
             "a literal match is numeral rows closed by one last row, `_` or a name: no constructor row beside them, no row after the catch-all"))))
     ((some chain)
-     (match (elab e scrut none)
+     (match (elab e scrut none depth)
        ((EErr r m) (EErr r m))
        ((EOk e1 sv sty)
         (match (el_finish e1 sty)
@@ -1779,12 +1841,13 @@
                       (match sv1
                         ;; a local scrutinee is its own name in the conditions; anything else is bound once
                         ((FVar _ _)
-                         (match (elab (el_set_cx e2 (cx_bind (el_cx e2) x sv1)) chain expected)
+                         (match
+                           (elab (el_set_cx e2 (cx_bind (el_cx e2) x sv1)) chain expected depth)
                            ((EErr r m) (EErr r m))
                            ((EOk e3 b bty) (EOk (el_restore e3 e) b bty))))
                         (_
                           (match (el_local_val e2 x dty sv1)
-                            ((Prod.mk e3 fv) (let_close e fv sv1 (elab e3 chain expected))))))))))))))))))))
+                            ((Prod.mk e3 fv) (let_close e fv sv1 (elab e3 chain expected depth))))))))))))))))))))
 ;; the expected type, when nothing in it is still to be solved
 (fn match_ret ((e El) (expected (Option Expr))) (Option Expr)
   (match expected
@@ -1808,10 +1871,12 @@
    (deps (List (Prod Name Expr)))
    (gen (Option Int))
    (arms (List SExpr))
-   (expected (Option Expr)))
+   (expected (Option Expr))
+   (depth Int))
   ERes
+  (measure (Int.natAbs depth) 2 0)
   (match deps
-    (nil (match_arms e dty ret l sv gen nil arms nil nil expected))
+    (nil (match_arms e dty ret l sv gen nil arms nil nil expected depth))
     (_
       (match (el_pis e (bound_fvars deps) ret)
         ((Prod.mk e1 ret2)
@@ -1820,7 +1885,7 @@
            ((Prod.mk e2 (some rs2))
             (match (el_whnf e2 rs2)
               ((Prod.mk e3 (Sort _ l2))
-               (match (match_arms e3 dty ret2 l2 sv gen (bound_names deps) arms nil nil none)
+               (match (match_arms e3 dty ret2 l2 sv gen (bound_names deps) arms nil nil none depth)
                  ((EErr r m) (EErr r m))
                  ((EOk e4 v _) (check_expected e4 (mk_app_n v (bound_fvars deps)) ret expected))))
               ((Prod.mk _ other)
@@ -1891,9 +1956,10 @@
    (arms (List SExpr))
    (rows (List (List MtPat)))
    (alts (List Expr))
-   (expected (Option Expr)))
+   (expected (Option Expr))
+   (depth Int))
   ERes
-  (measure (struct arms))
+  (measure (Int.natAbs depth) 1 (List.length arms))
   (match arms
     (nil (match_close e dty ret l sv gen (rev rows) (rev alts) expected))
     ((cons (SList (cons pat (cons body nil))) r)
@@ -1904,14 +1970,15 @@
           ((Prod.mk e1a ret1)
            (match (match_peel e1a ret1 dnames nil)
              ((Prod.mk e1b (Prod.mk dvars ret1b))
-              (match (elab e1b body (some ret1b))
+              (match (elab e1b body (some ret1b) depth)
                 ((EErr x m) (EErr x m))
                 ((EOk e2 v _)
                  (match (el_lams e2 (append vars dvars) v)
                    ((Prod.mk e3 alt)
                     (match_arms (el_restore e3 e) dty ret l sv gen dnames r (cons (list mp) rows)
                       (cons alt alts)
-                      expected))))))))))))
+                      expected
+                      depth))))))))))))
     (_ (EErr (sym "bad_shape") (utf8 "a match arm is (PATTERN BODY)")))))
 (fn match_close
   ((e El)
@@ -2154,10 +2221,351 @@
     (apply Prod.Lex.right (arith))))
 
 ;; (exists ((x TYPE)) P): Exists (fun (x : TYPE) => P)
-(fn elab_exists ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
-  (match (elab_binding e args true none)
+(fn elab_exists ((e El) (args (List SExpr)) (expected (Option Expr)) (depth Int)) ERes
+  (measure (Int.natAbs depth) 5 0)
+  (match (elab_binding e args true none depth)
     ((EErr r m) (EErr r m))
-    ((EOk e1 lam lty) (op_apply e1 (n1 (sym "Exists")) (list (AVal lam lty)) expected))))
+    ((EOk e1 lam lty) (op_apply e1 (n1 (sym "Exists")) (list (AVal lam lty)) expected depth))))
+(fulfills elab.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_5
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_6
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_7
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_8
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_9
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_10
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_11
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_12
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_13
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_14
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab_sym.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app.dec_3
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app.dec_4
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app_sym.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app_sym.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app_sym.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_app_sym.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_args.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_args.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_args.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_slots.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 hs)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_slots.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_slots.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 hs a9 a10 a11 a12)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_slots.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 hs a9)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_slot.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills read_binder.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_type.dec_1
+  (by (intro a1 a2 a3) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills read_binders_lv.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills read_binders_lv.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 hs a9 a10 a11)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_binding.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_binding.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_binding.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_arrow.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_arrow.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills arrow_locals.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills arrow_locals.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills arrow_locals.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 hs a9 a10 a11 a12 a13 a14)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_let.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_lets.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_lets.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_lets.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_lets.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 hs a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_lets.dec_5
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_lets.dec_6
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 hs a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_proj.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_at.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_at.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_at.dec_3
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_at.dec_4
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_at.dec_5
+  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_5
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_6
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_7
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_op_go.dec_8
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills op_const.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills op_apply.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif_branches.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif_branches.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_dif_branches.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills dif_branch.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if_cases.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if_cases.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_if_cases.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27 a28)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills if_ret.dec_1
+  (by (intro a1 a2 a3 a4 a5) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills if_minor.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_list.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills op_apply_explicit.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match.dec_4
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27 a28)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match.dec_5
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match_lit.dec_1
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match_lit.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_match_lit.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills match_try.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills match_try.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills match_arms.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27 a28 a29)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills match_arms.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 hs a17 a18 a19 a20 a21 a22 a23 a24 a25
+      a26 a27 a28 a29 a30 a31 a32 a33 a34 a35)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills elab_exists.dec_1
+  (by (intro a1 a2 a3 a4) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills elab_exists.dec_2
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 
 ;; the constants the elaborator constructs by name: the loader fetches them for every module
 (fn el_kit () (List Name)

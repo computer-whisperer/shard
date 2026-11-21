@@ -1253,21 +1253,24 @@
 ;; and `extern` are read by the classifier; `type` and `sig` gain their E
 ;; twins beside K's — a `type` over E's built-in types alone is E only
 ;; (type_is_e_only). K checks any L form in any file.
-(fn load_decl_at ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
+(fn load_decl_at ((l Load) (f Fx) (s SExpr) (depth Int)) (Prod Load Fx)
+  (measure (Int.natAbs depth) 2 0)
   (let ((sc (fx_scope l f)) (h (form_head s)))
     (load_decl_go
       (if (bool_and (fx_private f) (bool_or (sym_eq h (sym "fn")) (sym_eq h (sym "type"))))
         (ld_add_form l (form_name sc s) sc s)
         l)
       f
-      s)))
-(fn load_decl ((l0 Load) (f Fx) (s SExpr)) (Prod Load Fx)
+      s
+      depth)))
+(fn load_decl ((l0 Load) (f Fx) (s SExpr) (depth Int)) (Prod Load Fx)
+  (measure (Int.natAbs depth) 3 0)
   (let ((h (form_head s)))
     ;; a form other than a fn can change any reading the search for a group keeps (a type, a
     ;; proof, a derivation — which writes its table after the fns it generates): none is kept
     ;; across one
-    (if (sym_eq h (sym "fn")) (load_decl_at l0 f s)
-    (match (load_decl_at (ld_forget_all l0) f s)
+    (if (sym_eq h (sym "fn")) (load_decl_at l0 f s depth)
+    (match (load_decl_at (ld_forget_all l0) f s depth)
       ((Prod.mk l1 f1) (Prod.mk (ld_forget_all l1) f1))))))
 ;; under the driver's --unchecked a load reads programs, and a proof is no part of one: a
 ;; theorem and a fulfills are passed over, as the bootstrap's reader passes them. (A proof
@@ -1282,7 +1285,8 @@
   (match forms
     (nil nil)
     ((cons s r) (if (passed_over l (form_head s)) (forms_read l r) (cons s (forms_read l r))))))
-(fn load_decl_go ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
+(fn load_decl_go ((l Load) (f Fx) (s SExpr) (depth Int)) (Prod Load Fx)
+  (measure (Int.natAbs depth) 1 0)
   (let ((sc (fx_scope l f)) (h (form_head s)))
     (if
       (bool_and (Fx.view f)
@@ -1316,7 +1320,7 @@
           (if (bool_and (sym_eq h (sym "type")) (type_is_e_only (Load.etab l) sc (Load.env l) s))
             (load_e_form l f s)  ; E only (its namespace was opened at pre-registration, as every type's)
           (if (sym_eq h (sym "realize")) (Prod.mk (load_realize l f s) f)
-          (if (sym_eq h (sym "derive")) (load_derive l f s)
+          (if (sym_eq h (sym "derive")) (load_derive l f s depth)
           (if (sym_eq h (sym "fulfills"))
             (match (obligation_named l sc s)
               ((some (Prod.mk k proof)) (Prod.mk (load_discharge l f k proof) f))
@@ -1364,17 +1368,28 @@
 ;; end, their ordinary records — and the procedure is registered once K has its definition:
 ;; the table's entry and the DERIVE record. A generated function that was not defined (its own
 ;; record says why) registers nothing, and the capabilities after it are not attempted
-(fn load_derive ((l Load) (f Fx) (s SExpr)) (Prod Load Fx)
-  (match (derive_form (fx_scope l f) (Load.env l) s)
-    ((DvErr e m)
-     (Prod.mk (ld_rec l (RClassify (qualify (fx_scope l f) (n1 (sym "derive"))) e m)) f))
-    ((DvOk gens) (load_derived l f gens))))
-(fn load_derived ((l Load) (f Fx) (gens (List DvGen))) (Prod Load Fx)
-  (measure (struct gens))
+(fn load_derive ((l Load) (f Fx) (s SExpr) (depth Int)) (Prod Load Fx)
+  (measure (Int.natAbs depth) 0 0)
+  (if (< depth 1)
+    (Prod.mk
+      (ld_rec l
+        (RClassify (qualify (fx_scope l f) (n1 (sym "derive"))) (sym "derive_generated")
+          (utf8
+            "a derive among the forms a derivation generated: those forms are loaded once, and a derivation they ask for is not read")))
+      f)
+    (match (derive_form (fx_scope l f) (Load.env l) s)
+      ((DvErr e m)
+       (Prod.mk (ld_rec l (RClassify (qualify (fx_scope l f) (n1 (sym "derive"))) e m)) f))
+      ((DvOk gens) (load_derived l f gens (- depth 1))))))
+;; the depth a file's form is loaded at: a derivation's forms are loaded one below it, and a
+;; `derive` there is refused (load_derive) — no capability generates one
+(fn derive_depth () Int 1)
+(fn load_derived ((l Load) (f Fx) (gens (List DvGen)) (depth Int)) (Prod Load Fx)
+  (measure (Int.natAbs depth) 5 (List.length gens))
   (match gens
     (nil (Prod.mk l f))
     ((cons (DvGen ty cap p policy procs forms) r)
-     (match (load_derived_forms l f forms)
+     (match (load_derived_forms l f forms depth)
        ((Prod.mk (Prod.mk l1 f1) ok)
         (if (bool_and ok (derive_defined (Load.env l1) p (sym_eq policy (sym "by"))))
           (load_derived
@@ -1382,7 +1397,8 @@
               (with Load l1 (derived (cons (Derived ty cap p (Fx.module f1)) (Load.derived l1))))
               (RDerive p ty cap policy procs))
             (fx_mix f1 (name_key p))
-            r)
+            r
+            depth)
           (Prod.mk
             (ld_rec l1
               (RClassify p (sym "derive_failed")
@@ -1401,8 +1417,8 @@
 ;; False: a form's name is taken — a constant of the file's already bears it, which is never
 ;; the derivation's (else a hand-written `T.compare` is registered as the structural
 ;; ordering) — or its head could not be registered
-(fn load_derived_forms ((l Load) (f Fx) (forms (List SExpr))) (Prod (Prod Load Fx) Bool)
-  (measure (struct forms))
+(fn load_derived_forms ((l Load) (f Fx) (forms (List SExpr)) (depth Int)) (Prod (Prod Load Fx) Bool)
+  (measure (Int.natAbs depth) 4 (List.length forms))
   (match forms
     (nil (Prod.mk (Prod.mk l f) true))
     ((cons s r)
@@ -1419,8 +1435,8 @@
          (match (pre_register (Load.etab l) (fx_scope l f) (list s))
            ((PreErr e m) (Prod.mk (Prod.mk (ld_rec l (RClassify k e m)) f) false))
            ((PreOk es)
-            (match (load_decl (ld_with_e l es) f s)
-              ((Prod.mk l1 f1) (load_derived_forms l1 f1 r))))))))))
+            (match (load_decl (ld_with_e l es) f s depth)
+              ((Prod.mk l1 f1) (load_derived_forms l1 f1 r depth))))))))))
 
 ;; ---- a descent obligation discharged -------------------------------------------------------
 ;; (fulfills f.dec_N PROOF) after the function, outside a view: PROOF elaborated against the
@@ -4748,7 +4764,7 @@
               im)
             w))
         (n (discharge l im (sym "requirement") n s fuel w)))
-      (match (load_decl l (im_fx_view im) s)
+      (match (load_decl l (im_fx_view im) s (derive_depth))
         ((Prod.mk l2 f2) (Prod.mk (Prod.mk l2 (im_with_fx im f2)) w))))))))
 ;; (sig type (NAME …)) / (sig type NAME) / (sig fn NAME …): its kind and qualified name
 (fn sig_kind_name ((sc Scope) (s SExpr)) (Option (Prod Symbol Name))
@@ -4841,7 +4857,7 @@
     (match (form_of s)
       (FDecl
         (if (sym_eq h (sym "type"))
-          (match (load_decl l (im_fx_impl im) s)
+          (match (load_decl l (im_fx_impl im) s (derive_depth))
             ((Prod.mk l1 f1)
              (let ((n (form_name sc s)))
                (match (find_sig (Im.all im) sc (sym "type") n)
@@ -4898,7 +4914,7 @@
                   (ld_rec l (RReadErr (im_file im) (sym "bad_shape") (utf8 "(fulfills NAME PROOF)")))
                   im)
                 w)))
-          (match (load_decl l (im_fx_impl im) s)
+          (match (load_decl l (im_fx_impl im) s (derive_depth))
             ((Prod.mk l1 f1) (Prod.mk (Prod.mk l1 (im_with_fx im f1)) w)))))))
       (_
         (match (load_forms l (im_fx_impl im) (list s) fuel w)
@@ -5050,7 +5066,7 @@
 (fn refetches () Int 8)
 (fn load_decl_fetching ((l Load) (f Fx) (s SExpr) (fuel Int) (w World)) (Prod (Prod Load Fx) World)
   (measure fuel)
-  (match (load_decl l f s)
+  (match (load_decl l f s (derive_depth))
     ((Prod.mk l1 f1)
      (match (settle_missed l l1 f fuel w)
        ((Prod.mk (Prod.mk l2 true) w1) (load_decl_fetching l2 f s (- fuel 1) w1))
