@@ -105,7 +105,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is not yet a definition (`OPEN.md` §2); the loop over host calls is not written |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts, one file proven by them to exit as its functions compute |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -135,8 +135,14 @@ Proven there, by hand, from laws of the model stated once (`laws.shard`): the co
 of products over two buffers, which writes nothing; of a sum into the first of two buffers,
 which changes no byte outside that buffer's words; and of a function that calls the two and
 saves two registers on the stack, which changes no byte outside that buffer's words and three
-words of its stack. The caller's proof takes each callee's contract as it is stated. Not shown:
-a compiler that derives a contract; a frame that holds variables of its own; and anything for
+words of its stack. The caller's proof takes each callee's contract as it is stated. A contract
+assumes its code in place; that is proven once, of the first state of the file of any listing
+the assembler answers for (`loaded.shard`), and with it the system's statement of the trial's
+file: started as the model's runner starts it, the file exits with the low byte of what the
+functions compute (`buffers_run.shard` `buffers_exits`) — every hypothesis of the caller's
+contract met in the state the file's first instructions reach. Not shown:
+a compiler that derives a contract; a frame that holds variables of its own; a start whose
+stack is elsewhere; and anything for
 code not of this kind — lists, constructors, integers of any size.
 
 ## 5. The first instance: a binary

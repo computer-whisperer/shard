@@ -197,31 +197,44 @@
      false))))
 
 ;; ---- the assembler --------------------------------------------------------------------------
-;; a listing's bytes, where its labels resolve and the model decodes the bytes back to it
+;; whether every element is a byte: below 256
+(fn bytes_ok ((bs (List Nat))) Bool
+  (measure (struct bs))
+  (match bs
+    (nil true)
+    ((cons b r) (if (< b 256) (bytes_ok r) false))))
+;; a listing's bytes, where its labels resolve, every one of them is a byte, and the model
+;; decodes them back to the listing
 (fn checked ((is (List Instr)) (bs (List Nat))) (Option (List Nat))
-  (if (decodes is bs) (some bs) none))
+  (if (decodes is bs) (if (bytes_ok bs) (some bs) none) none))
 (fn assemble ((p (List Asm))) (Option (List Nat))
   (match (resolve p p 0)
     (none none)
     ((some is) (checked is (encode_all is)))))
 
 ;; ---- the assembler's fact -------------------------------------------------------------------
-;; what `checked` answers is the bytes it was given, and they decode
+;; what `checked` answers is the bytes it was given; they decode, and each is a byte
 (theorem checked_some
   ((is (List Instr)) (cs (List Nat)) (bs (List Nat)) (h (= (checked is cs) (some bs))))
-  (and (= cs bs) (= (decodes is bs) true))
+  (and (= cs bs) (and (= (decodes is bs) true) (= (bytes_ok bs) true)))
   (by
     (cases (decodes is cs) hd
       ((false () (have hx (= (checked is cs) none) (rw checked.eq_1) (rw hd) rfl)
          (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none bs))))
-       (true () (have hx (= (checked is cs) (some cs)) (rw checked.eq_1) (rw hd) rfl)
-         (have hs (= (some cs) (some bs)) (exact (Eq.trans (Eq.symm hx) h)))
-         (have hcb (= cs bs) (exact (Option.some.inj hs)))
-         (apply And.intro ((exact hcb)) ((rw (<- hcb)) (exact hd))))))))
-;; the bytes `assemble` answers with are the listing's instructions, its labels resolved, each
-;; decoded by the model at its place
+       (true ()
+         (cases (bytes_ok cs) hb
+           ((false () (have hx (= (checked is cs) none) (rw checked.eq_1) (rw hd) (rw hb) rfl)
+              (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none bs))))
+            (true () (have hx (= (checked is cs) (some cs)) (rw checked.eq_1) (rw hd) (rw hb) rfl)
+              (have hs (= (some cs) (some bs)) (exact (Eq.trans (Eq.symm hx) h)))
+              (have hcb (= cs bs) (exact (Option.some.inj hs)))
+              (apply And.intro ((exact hcb))
+                ((rw (<- hcb)) (apply And.intro ((exact hd)) ((exact hb)))))))))))))
+;; the bytes `assemble` answers with are bytes, and they are the listing's instructions, its
+;; labels resolved, each decoded by the model at its place
 (theorem assemble_decodes ((p (List Asm)) (bs (List Nat)) (h (= (assemble p) (some bs))))
-  (exists ((is (List Instr))) (and (= (resolve p p 0) (some is)) (= (decodes is bs) true)))
+  (exists ((is (List Instr)))
+    (and (= (resolve p p 0) (some is)) (and (= (decodes is bs) true) (= (bytes_ok bs) true))))
   (by
     (cases (resolve p p 0) hr
       ((none () (have hx (= (assemble p) none) (rw assemble.eq_1) (rw hr) rfl)

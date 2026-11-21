@@ -13,9 +13,11 @@
 # immediate too wide refused, and its bytes for three listings the bytes assembled by hand. The
 # demonstration (demo.shard): its theorems accepted, and its file run by the model and the
 # processor. The trial of low-level code as shard (buffers.shard): its functions definitions,
-# the laws of the model (laws.shard) and the contracts of two functions' code
-# (buffers_facts.shard) accepted on Lean's axioms, and its file's run by the model and by the
-# processor exiting with what the evaluator computes of the functions.
+# the laws of the model (laws.shard), the contracts of the three functions' code
+# (buffers_facts.shard), a listing's code in place in its loaded file (loaded.shard) and the
+# theorem that the trial's file exits with 19 (buffers_run.shard) accepted on Lean's axioms, and
+# its file's run by the model and by the processor exiting with what the evaluator computes of
+# the functions.
 # Exit code = the number of checks that failed.
 set -u
 cd "$(dirname "$0")/../../.."
@@ -136,23 +138,26 @@ if [ $onchip = 1 ]; then
   checks=$((checks+1)); [ "$(chip "$OUT/demo")" = "exit 20" ] || bad "the processor's run of the demonstration is $(chip "$OUT/demo"), the model's exit 20"
 fi
 
-# ---- low-level code as shard: the trial (buffers.shard, laws.shard, buffers_facts.shard) ----------
+# ---- low-level code as shard: the trial (buffers.shard, laws.shard, buffers_facts.shard, -----------
+# ---- loaded.shard, buffers_run.shard) ---------------------------------------------------------------
 # Three functions over buffers of machine words — each taking, beside its buffers and their count,
 # the evidence that each buffer holds that many words, and an access the evidence that its index
 # is in range — and a listing for them compiled by hand. Held here: every function is a definition;
 # the laws of the model and the contracts of the code of `dot`, of `addto` and of `both` — which
-# calls the two and keeps a frame on the stack — are accepted, on no axiom but Lean's three (a
-# stored word read back cites Init's lemmas on division, which rest on `Classical.choice`); the
-# evaluator's run of the functions, the model's run of the listing's file and the processor's
-# give one status, 19.
-"${LOAD[@]}" $M/buffers_facts.shard > "$OUT/buf.txt" 2>&1; rc=$?
+# calls the two and keeps a frame on the stack — are accepted; so is the fact that the code of any
+# listing the assembler answers for is in place once its file is loaded (`listing_loaded`), and
+# through it and `both`'s contract that the trial's file exits with 19 (`buffers_exits`); all on
+# no axiom but Lean's three (a stored word read back cites Init's lemmas on division, which rest
+# on `Classical.choice`); the evaluator's run of the functions, the model's run of the listing's
+# file and the processor's give that one status, 19.
+"${LOAD[@]}" $M/buffers_run.shard > "$OUT/buf.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the trial did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/buf.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/buf.txt" || { bad "the trial's summary is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/buf.txt"; }
 checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/buf.txt")" = 0 ] || { bad "a function of the trial is a program without a definition"; grep '^RUNNABLE fn ' "$OUT/buf.txt" | head -5 | cut -c1-200; }
-for f in buffers.word_at buffers.put_at buffers.dot_go buffers.dot buffers.addto_next buffers.addto_go buffers.addto buffers.both laws.steps; do
+for f in buffers.word_at buffers.put_at buffers.dot_go buffers.dot buffers.addto_next buffers.addto_go buffers.addto buffers.both laws.steps loaded.layout; do
   checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/buf.txt" || bad "models.x86.$f is not a definition with its equations"
 done
-for t in laws.reaches_step laws.reaches_trans laws.step_at laws.do_alu_rr laws.do_cmp_rr laws.do_alu_ri laws.do_mov_rr laws.do_jcc_not laws.do_jcc_taken laws.do_jmp laws.do_load_sib laws.do_imul_sib laws.do_add_m_sib laws.do_push laws.do_pop laws.do_call laws.do_ret laws.mem_put64_other laws.le64_put64_word laws.le64_same laws.fetch_same laws.code_in_same buffers_facts.holds_upd buffers_facts.holds_same buffers_facts.dot_loop buffers_facts.dot_contract buffers_facts.dot_contract_same buffers_facts.add_loop buffers_facts.addto_contract word.w64_sub_add word.w64_val_sub laws.same_outside2_of laws.same_outside2_put64 laws.le64_put64_other laws.ret_addr_pushed laws.code_in_after laws.code_in_of buffers.addto_length buffers.addto_room buffers_facts.both_enter buffers_facts.both_mid buffers_facts.both_leave buffers_facts.both_first buffers_facts.both_second buffers_facts.both_exit buffers_facts.both_foot buffers_facts.both_ret buffers_facts.both_kept buffers_facts.both_contract; do
+for t in laws.reaches_step laws.reaches_trans laws.step_at laws.do_alu_rr laws.do_cmp_rr laws.do_alu_ri laws.do_mov_rr laws.do_jcc_not laws.do_jcc_taken laws.do_jmp laws.do_load_sib laws.do_imul_sib laws.do_add_m_sib laws.do_push laws.do_pop laws.do_call laws.do_ret laws.mem_put64_other laws.le64_put64_word laws.le64_same laws.fetch_same laws.code_in_same buffers_facts.holds_upd buffers_facts.holds_same buffers_facts.dot_loop buffers_facts.dot_contract buffers_facts.dot_contract_same buffers_facts.add_loop buffers_facts.addto_contract word.w64_sub_add word.w64_val_sub laws.same_outside2_of laws.same_outside2_put64 laws.le64_put64_other laws.ret_addr_pushed laws.code_in_after laws.code_in_of buffers.addto_length buffers.addto_room buffers_facts.both_enter buffers_facts.both_mid buffers_facts.both_leave buffers_facts.both_first buffers_facts.both_second buffers_facts.both_exit buffers_facts.both_foot buffers_facts.both_ret buffers_facts.both_kept buffers_facts.both_contract laws.do_mov_ri32 laws.mapped_part laws.mapped_words_of laws.same_outside2_hull laws.run_of_steps laws.run_exit buffers_facts.holds_cons loaded.put_bytes_at loaded.elf_load_exec loaded.fetch_loaded loaded.layout_in loaded.listing_loaded loaded.run_file_exec buffers_run.buffers_assembled buffers_run.buffers_laid buffers_run.buffers_code_first buffers_run.buffers_startup buffers_run.su_code buffers_run.buffers_end buffers_run.buffers_exits; do
   checks=$((checks+1)); grep -q "^ACCEPT models.x86.$t " "$OUT/buf.txt" || bad "models.x86.$t is not accepted"
   axs=$(grep "^ACCEPT models.x86.$t " "$OUT/buf.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')

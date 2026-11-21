@@ -1,0 +1,387 @@
+;;; v3/models/x86/buffers_run.shard — the trial's file from end to end: the file `buffers.shard`
+;;; writes, started as the model's runner starts it, exits with 19 — the low byte of what `both`
+;;; computes of the two buffers the file's first instructions push. Proven through the contract
+;;; of `both`'s code, not by running the model: the listing's code is in place because the
+;;; assembler checked it (`loaded.shard`); the first instructions bring the processor to
+;;; `both`'s first instruction in a state that meets every hypothesis of `both_contract`; the
+;;; contract gives the state at the return; three instructions more and the process has exited.
+(import "buffers_facts.shard")
+(import "loaded.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.buffers)
+(use models.x86.buffers_facts)
+(use models.x86.elf)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Res)
+(use models.x86.linux.Start)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the listing, assembled -------------------------------------------------------------------
+;; the listing's code and its instructions with their labels resolved, as the assembler has them
+(fn buffers_code () (List Nat)
+  (match (assemble buffers_listing)
+    (none nil)
+    ((some code) code)))
+(fn buffers_instrs () (List Instr)
+  (match (resolve buffers_listing buffers_listing 0)
+    (none nil)
+    ((some is) is)))
+(theorem buffers_assembled () (= (assemble buffers_listing) (some buffers_code)) (by rfl))
+(theorem buffers_resolved () (= (resolve buffers_listing buffers_listing 0) (some buffers_instrs))
+  (by rfl))
+(theorem buffers_file_is () (= buffers_file (elf_exec buffers_code)) (by rfl))
+;; the table the contracts are stated over is the assembler's layout of the listing
+(theorem buffers_laid () (= (layout buffers_instrs 4194424) buffers_table) (by rfl))
+(theorem buffers_size () (<= (+ 4194424 (List.length buffers_code)) 140737488355328) (by decide))
+
+;; ---- the first state ----------------------------------------------------------------------------
+;; the process's first state, and the code in place in it
+(fn buffers_first ((r Regs) (f Flags) (m Mem)) Cpu
+  (boot (image_of buffers_code m) (runner_start r f m)))
+(theorem buffers_code_first ((r Regs) (f Flags) (m Mem))
+  (code_in (buffers_first r f m) buffers_table)
+  (by
+    (have hstk
+      (= (seg_holds (Start.stack (runner_start r f m)) (+ 4194424 (List.length buffers_code)) 1 1)
+        false)
+      (decide))
+    (rw (<- buffers_laid))
+    (exact
+      (listing_loaded buffers_listing buffers_code buffers_instrs (runner_start r f m)
+        buffers_assembled
+        buffers_resolved
+        hstk))))
+
+;; ---- the first instructions ---------------------------------------------------------------------
+;; a word moved into rdi and pushed
+(fn su_push ((c Cpu) (v Nat) (p1 Nat) (p2 Nat)) Cpu
+  (at_pc (pushed (x_mov_ri c 7 v (w64 p1)) (w64 v)) (w64 p2)))
+;; the first buffer pushed, 7 5 3, and its address kept in r14
+(fn su_a ((c Cpu)) Cpu
+  (x_mov_rr (su_push (su_push (su_push c 7 4194429 4194430) 5 4194435 4194436) 3 4194441 4194442) 14
+    4
+    (w64 4194445)))
+;; the second pushed, 6 4 2; the two addresses in rdi and rsi and the count in rdx
+(fn su_b ((c Cpu)) Cpu
+  (x_mov_ri
+    (x_mov_rr
+      (x_mov_rr
+        (su_push (su_push (su_push (su_a c) 6 4194450 4194451) 4 4194456 4194457) 2 4194462 4194463)
+        6
+        4
+        (w64 4194466))
+      7
+      14
+      (w64 4194469))
+    2
+    3
+    (w64 4194474)))
+;; the call's return address pushed: the state `both` is entered in, put at its first instruction
+(fn su_c ((c Cpu)) Cpu (pushed (su_b c) (w64 4194479)))
+(fn seventeen () Fuel
+  (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS FZ))))))))))))))))))
+;; seventeen steps from the first state, by the model's own run of them
+(theorem buffers_startup ((r Regs) (f Flags) (m Mem))
+  (= (steps seventeen (buffers_first r f m))
+    (some (at_pc (su_c (buffers_first r f m)) (w64 4194556))))
+  (by rfl))
+
+;; ---- the state `both` is entered in ---------------------------------------------------------------
+;; The stack pointer started at 140737488347136. The first buffer stands at 140737488347112, the
+;; second at 140737488347088, the return address at 140737488347080, and `both`'s frame is the
+;; three words from 140737488347056.
+(fn su_in ((r Regs) (f Flags) (m Mem)) Cpu (su_c (buffers_first r f m)))
+;; the code is in place there: the seven words pushed are clear of it
+(theorem su_code ((r Regs) (f Flags) (m Mem)) (code_in (su_in r f m) buffers_table)
+  (by
+    (have hso
+      (same_outside (Cpu.mem (buffers_first r f m)) (Cpu.mem (su_in r f m)) 140737488347080
+        140737488347136)
+      (show
+        (same_outside (Cpu.mem (buffers_first r f m))
+          (mem_put64
+            (mem_put64
+              (mem_put64
+                (mem_put64
+                  (mem_put64
+                    (mem_put64 (mem_put64 (Cpu.mem (buffers_first r f m)) 140737488347128 7)
+                      140737488347120
+                      5)
+                    140737488347112
+                    3)
+                  140737488347104
+                  6)
+                140737488347096
+                4)
+              140737488347088
+              2)
+            140737488347080
+            4194479)
+          140737488347080
+          140737488347136))
+      (apply same_outside_put64
+        ((apply same_outside_put64
+           ((apply same_outside_put64
+              ((apply same_outside_put64
+                 ((apply same_outside_put64
+                    ((apply same_outside_put64
+                       ((apply same_outside_put64
+                          ((exact
+                             (same_outside_refl (Cpu.mem (buffers_first r f m)) 140737488347080
+                               140737488347136)))
+                          ((decide))
+                          ((decide))))
+                       ((decide))
+                       ((decide))))
+                    ((decide))
+                    ((decide))))
+                 ((decide))
+                 ((decide))))
+              ((decide))
+              ((decide))))
+           ((decide))
+           ((decide))))
+        ((decide))
+        ((decide))))
+    (have hsegs (= (Cpu.segs (su_in r f m)) (Cpu.segs (buffers_first r f m))) rfl)
+    (have hclear (or (<= (+ 4194588 15) 140737488347080) (<= 140737488347136 4194424))
+      (apply Or.inl ((decide))))
+    (exact
+      (code_in_after (buffers_first r f m) (su_in r f m) buffers_table 4194424 4194588
+        140737488347080
+        140737488347136
+        table_within
+        hsegs
+        hso
+        hclear
+        (buffers_code_first r f m)))))
+;; the two buffers hold the sample's lists
+(theorem su_holds_x ((r Regs) (f Flags) (m Mem))
+  (holds (Cpu.mem (su_in r f m)) (w64_val (reg (su_in r f m) 7)) sample_xs)
+  (by
+    (show
+      (holds (Cpu.mem (su_in r f m)) 140737488347112
+        (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))))
+    (apply holds_cons (rfl)
+      ((apply holds_cons (rfl)
+         ((apply holds_cons (rfl)
+            ((exact (holds_nil (Cpu.mem (su_in r f m)) (+ (+ (+ 140737488347112 8) 8) 8)))))))))))
+(theorem su_holds_y ((r Regs) (f Flags) (m Mem))
+  (holds (Cpu.mem (su_in r f m)) (w64_val (reg (su_in r f m) 6)) sample_ys)
+  (by
+    (show
+      (holds (Cpu.mem (su_in r f m)) 140737488347088
+        (cons (w64 2) (cons (w64 4) (cons (w64 6) nil)))))
+    (apply holds_cons (rfl)
+      ((apply holds_cons (rfl)
+         ((apply holds_cons (rfl)
+            ((exact (holds_nil (Cpu.mem (su_in r f m)) (+ (+ (+ 140737488347088 8) 8) 8)))))))))))
+
+;; ---- from `both`'s return to the exit -----------------------------------------------------------
+;; the status the evaluator gives the functions is 19
+(theorem sample_is () (= (% (w64_val sample_value) 256) 19) (by decide))
+;; From any state `both`'s contract allows at its return — the value in rax, memory changed in
+;; the first buffer and the frame alone, the return as the caller needs it — three instructions
+;; end the process with the value's low byte.
+(theorem buffers_end
+  ((r Regs)
+   (f Flags)
+   (m Mem)
+   (c2 Cpu)
+   (hv (= (reg c2 0) sample_value))
+   (hso
+     (same_outside2 (Cpu.mem (su_in r f m)) (Cpu.mem c2) (w64_val (reg (su_in r f m) 7))
+       (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
+       140737488347056
+       (+ 140737488347056 24)))
+   (hret (returned (su_in r f m) c2)))
+  (exists ((n Fuel)) (= (run n c2) (RExit (% (w64_val sample_value) 256))))
+  (by
+    (have kp (kept (su_in r f m) c2) (exact (returned_kept (su_in r f m) c2 hret)))
+    (have hsegs (= (Cpu.segs c2) (Cpu.segs (su_in r f m))) (exact (kept_segs (su_in r f m) c2 kp)))
+    (have b1 (<= 140737488347056 (w64_val (reg (su_in r f m) 7))) (decide))
+    (have b2 (<= 140737488347056 140737488347056) (decide))
+    (have b3 (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 140737488347136)
+      (decide))
+    (have b4 (<= (+ 140737488347056 24) 140737488347136) (decide))
+    (have hull (same_outside (Cpu.mem (su_in r f m)) (Cpu.mem c2) 140737488347056 140737488347136)
+      (exact
+        (same_outside2_hull (Cpu.mem (su_in r f m)) (Cpu.mem c2) (w64_val (reg (su_in r f m) 7))
+          (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
+          140737488347056
+          (+ 140737488347056 24)
+          140737488347056
+          140737488347136
+          hso
+          b1
+          b2
+          b3
+          b4)))
+    (have hclear (or (<= (+ 4194588 15) 140737488347056) (<= 140737488347136 4194424))
+      (apply Or.inl ((decide))))
+    (have hcode2 (code_in c2 buffers_table)
+      (exact
+        (code_in_after (su_in r f m) c2 buffers_table 4194424 4194588 140737488347056
+          140737488347136
+          table_within
+          hsegs
+          hull
+          hclear
+          (su_code r f m))))
+    (have hra (= (ret_addr (su_in r f m)) (w64 4194479))
+      (exact (ret_addr_pushed (su_b (buffers_first r f m)) (w64 4194479))))
+    (have hrip2 (= (w64_val (Cpu.rip c2)) 4194479)
+      (rw (returned_at (su_in r f m) c2 hret))
+      (rw hra)
+      rfl)
+    (have hcode3 (code_in (x_mov_rr c2 7 0 (w64 4194482)) buffers_table) (exact hcode2))
+    (have hcode4
+      (code_in (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) buffers_table)
+      (exact hcode2))
+    (have hreach (reaches c2 (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))
+      (apply (do_mov_rr 4194479 7 0 3 4194482) ((exact hrip2))
+        ((exact
+           (hcode2 4194479 (MovRmR (RmReg 7) 0) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 0) 3))))))
+        (rfl)
+        ((apply (do_mov_ri32 4194482 0 60 5 4194487) (rfl)
+           ((exact (hcode3 4194482 (MovRI32 0 60) 5 (Eq.refl (some (Prod.mk (MovRI32 0 60) 5))))))
+           (rfl)
+           ((exact (reaches_refl (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))))))))
+    (have h60 (= (w64_val (reg (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) 0)) 60)
+      rfl)
+    (have hrip4
+      (= (w64_val (Cpu.rip (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))) 4194487)
+      rfl)
+    (have hexit
+      (= (run (FS FZ) (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))
+        (RExit (% (w64_val (reg c2 0)) 256)))
+      (exact
+        (run_exit (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) 4194487 2 hrip4
+          (hcode4 4194487 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+          h60)))
+    (cases hreach
+      ((intro (k hk)
+         (cases
+           (run_of_steps k c2 (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) (FS FZ)
+             hk)
+           ((intro (n2 hn)
+              (apply (Exists.intro n2)
+                ((show (= (run n2 c2) (RExit (% (w64_val sample_value) 256))))
+                 (rw hn)
+                 (rw hexit)
+                 (rw hv)
+                 rfl))))))))))
+
+;; ---- the file, end to end -------------------------------------------------------------------------
+;; The file `buffers.shard` writes, started as the model's runner starts it — whatever the
+;; registers but the stack pointer, the flags and the memory then hold — exits with 19.
+(theorem buffers_exits ((r Regs) (f Flags) (m Mem)) (exits buffers_file (runner_start r f m) 19)
+  (by
+    (have n0 (= (reg (su_in r f m) 2) (w64 3)) rfl)
+    (have hmxr
+      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 7)) (w64_val (w64 3)) 4)
+      (apply mapped_words_of (decide)))
+    (have hmxw
+      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 7)) (w64_val (w64 3)) 2)
+      (apply mapped_words_of (decide)))
+    (have hmy
+      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 6)) (w64_val (w64 3)) 4)
+      (apply mapped_words_of (decide)))
+    (have hwx (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
+      (decide))
+    (have hwy (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
+      (decide))
+    (have hf (= (w64_val (reg (su_in r f m) 4)) (+ 140737488347056 24)) (decide))
+    (have hfr (mapped_words (Cpu.segs (su_in r f m)) 140737488347056 4 4)
+      (apply mapped_words_of (decide)))
+    (have hfw (mapped_words (Cpu.segs (su_in r f m)) 140737488347056 3 2)
+      (apply mapped_words_of (decide)))
+    (have dcode
+      (or (<= 4194603 (w64_val (reg (su_in r f m) 7)))
+        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 4194424))
+      (apply Or.inl ((decide))))
+    (have dy
+      (or
+        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
+          (w64_val (reg (su_in r f m) 6)))
+        (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (List.length sample_ys)))
+          (w64_val (reg (su_in r f m) 7))))
+      (apply Or.inr ((decide))))
+    (have dfc (or (<= 4194603 140737488347056) (<= (+ 140737488347056 24) 4194424))
+      (apply Or.inl ((decide))))
+    (have dfx
+      (or (<= (+ 140737488347056 32) (w64_val (reg (su_in r f m) 7)))
+        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (List.length sample_xs))) 140737488347056))
+      (apply Or.inl ((decide))))
+    (have dfy
+      (or (<= (+ 140737488347056 24) (w64_val (reg (su_in r f m) 6)))
+        (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (List.length sample_ys))) 140737488347056))
+      (apply Or.inl ((decide))))
+    (cases
+      (both_contract sample_xs sample_ys (w64 3) sample_rx sample_ry (su_in r f m) 140737488347056
+        (su_code r f m)
+        n0
+        (su_holds_x r f m)
+        (su_holds_y r f m)
+        hmxr
+        hmxw
+        hmy
+        hwx
+        hwy
+        hf
+        hfr
+        hfw
+        dcode
+        dy
+        dfc
+        dfx
+        dfy)
+      ((intro (c2 h)
+         (cases h
+           ((intro (hreach2 h1)
+              (cases h1
+                ((intro (hv h2)
+                   (cases h2
+                     ((intro (hheld h3)
+                        (cases h3
+                          ((intro (hso hret)
+                             (have hstart
+                               (reaches (buffers_first r f m) (at_pc (su_in r f m) (w64 4194556)))
+                               (apply (Exists.intro seventeen) ((exact (buffers_startup r f m)))))
+                             (cases
+                               (reaches_trans (buffers_first r f m)
+                                 (at_pc (su_in r f m) (w64 4194556))
+                                 c2
+                                 hstart
+                                 hreach2)
+                               ((intro (k hk)
+                                  (cases (buffers_end r f m c2 hv hso hret)
+                                    ((intro (n hn)
+                                       (cases (run_of_steps k (buffers_first r f m) c2 n hk)
+                                         ((intro (n2 hn2)
+                                            (apply (Exists.intro n2)
+                                              ((show
+                                                 (= (run_file n2 buffers_file (runner_start r f m))
+                                                   (RExit 19)))
+                                               (rw buffers_file_is)
+                                               (rw
+                                                 (run_file_exec n2 buffers_code (runner_start r f m)
+                                                   buffers_size))
+                                               (show (= (run n2 (buffers_first r f m)) (RExit 19)))
+                                               (rw hn2)
+                                               (rw hn)
+                                               (rw sample_is)
+                                               rfl))))))))))))))))))))))))))))

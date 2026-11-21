@@ -1,0 +1,532 @@
+;;; v3/models/x86/loaded.shard — a listing's file, loaded: what `linux.shard` makes of the file
+;;; `elf.shard` writes for a listing's code, and the code in place in the process's first state —
+;;; the processor decodes each instruction of the listing at its address. Proven once, for every
+;;; listing the assembler answers for, from the assembler's own check (`asm.shard`
+;;; `assemble_decodes`): no instruction of a file is decoded again to know it.
+(import "../../std/list.shard")
+(import "asm.shard")
+(import "laws.shard")
+(import "linux.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.elf)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Image)
+(use models.x86.linux.Start)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- bytes laid in memory -----------------------------------------------------------------------
+;; bytes laid from an address leave what is below it
+(theorem put_bytes_below ((bs (List Nat)))
+  (forall ((m Mem) (a Nat) (n Nat) (x Nat))
+    (-> (< x a) (= (mem_get (put_bytes m a bs n) x) (mem_get m x))))
+  (by
+    (induction bs
+      ((nil () (intro m a n x hx) rfl)
+       (cons (b r ih) (intro m a n x hx)
+         (cases (Nat.decEq n 0)
+           ((isTrue (h0) (rw put_bytes.eq_2) (rw (if_pos h0)) rfl)
+            (isFalse (h0) (have hx1 (< x (+ a 1)) (arith)) (have hne (Not (= x a)) (arith))
+              (rw put_bytes.eq_2)
+              (rw (if_neg h0))
+              (rw (ih (mem_set m a b) (+ a 1) (- n 1) x hx1))
+              (exact (mem_set_other m a b x hne))))))))))
+;; and the byte at an index stands at that distance from the address
+(theorem put_bytes_at ((bs (List Nat)))
+  (forall ((m Mem) (a Nat) (n Nat) (i Nat))
+    (-> (< i n) (< i (List.length bs))
+      (= (mem_get (put_bytes m a bs n) (+ a i)) (% (byte_at bs i) 256))))
+  (by
+    (induction bs
+      ((nil () (intro m a n i hn hl) (exact (absurd hl (Nat.not_lt_zero i))))
+       (cons (b r ih) (intro m a n i hn hl) (have h0 (Not (= n 0)) (arith)) (rw put_bytes.eq_2)
+         (rw (if_neg h0))
+         (cases (Nat.decEq i 0)
+           ((isTrue (hi) (rw hi) (rw (Nat.add_zero a)) (have ha (< a (+ a 1)) (arith))
+              (rw (put_bytes_below r (mem_set m a b) (+ a 1) (- n 1) a ha))
+              (rw byte_at.eq_2)
+              (rw (if_pos (Eq.refl 0)))
+              (exact (mem_set_same m a b)))
+            (isFalse (hi) (have hi1 (<= 1 i) (exact (Nat.pos_of_ne_zero hi)))
+              (have hl1 (< i (+ (List.length r) 1)) (exact hl))
+              (have he (= (+ a i) (+ (+ a 1) (- i 1))) (arith (Nat.sub_add_cancel hi1)))
+              (have hn0 (<= 1 n) (arith))
+              (have hn1 (< (- i 1) (- n 1))
+                (arith (Nat.sub_add_cancel hi1) (Nat.sub_add_cancel hn0)))
+              (have hl2 (< (- i 1) (List.length r)) (arith (Nat.sub_add_cancel hi1)))
+              (rw he)
+              (rw (ih (mem_set m a b) (+ a 1) (- n 1) (- i 1) hn1 hl2))
+              (rw byte_at.eq_2)
+              (rw (if_neg hi))
+              rfl))))))))
+;; ---- a list after another -----------------------------------------------------------------------
+;; past the first of two lists joined, a byte is the second's
+(theorem byte_at_append ((xs (List Nat)))
+  (forall ((ys (List Nat)) (k Nat))
+    (= (byte_at (List.append xs ys) (+ (List.length xs) k)) (byte_at ys k)))
+  (by
+    (induction xs
+      ((nil () (intro ys k) (show (= (byte_at ys (+ 0 k)) (byte_at ys k))) (rw (Nat.zero_add k)) rfl)
+       (cons (x r ih) (intro ys k) (have hne (Not (= (+ (+ (List.length r) 1) k) 0)) (arith))
+         (have h1 (<= 1 (+ (+ (List.length r) 1) k)) (arith))
+         (have he (= (- (+ (+ (List.length r) 1) k) 1) (+ (List.length r) k))
+           (arith (Nat.sub_add_cancel h1)))
+         (show (= (byte_at (cons x (List.append r ys)) (+ (+ (List.length r) 1) k)) (byte_at ys k)))
+         (rw byte_at.eq_2)
+         (rw (if_neg hne))
+         (rw he)
+         (exact (ih ys k)))))))
+;; ---- the file of a listing's code ---------------------------------------------------------------
+(theorem elf_header_length ((n Nat)) (= (List.length (elf_header n)) 120) (by rfl))
+;; the code's bytes stand after the headers
+(theorem elf_exec_at ((code (List Nat)) (k Nat))
+  (= (byte_at (elf_exec code) (+ 120 k)) (byte_at code k))
+  (by
+    (have h
+      (=
+        (byte_at (List.append (elf_header (List.length code)) code)
+          (+ (List.length (elf_header (List.length code))) k))
+        (byte_at code k))
+      (exact (byte_at_append (elf_header (List.length code)) code k)))
+    (rw (<- (elf_header_length (List.length code))))
+    (exact h)))
+(theorem elf_exec_length ((code (List Nat)))
+  (= (List.length (elf_exec code)) (+ 120 (List.length code)))
+  (by
+    (show
+      (= (List.length (List.append (elf_header (List.length code)) code)) (+ 120 (List.length code))))
+    (rw (list_len_append Nat (elf_header (List.length code)) code))
+    (rw (elf_header_length (List.length code)))
+    rfl))
+;; ---- the file, loaded ---------------------------------------------------------------------------
+;; a number below 2^64 is the number its eight bytes are read as
+(theorem le4_value ((v Nat))
+  (=
+    (+ (+ (% v 256) (* 256 (% (/ v 256) 256)))
+      (* 65536 (+ (% (/ v 65536) 256) (* 256 (% (/ (/ v 65536) 256) 256)))))
+    (% v 4294967296))
+  (by
+    (have hb
+      (= (le32 (% v 256) (% (/ v 256) 256) (% (/ v 65536) 256) (% (/ v 16777216) 256))
+        (% v 4294967296))
+      (exact (bytes4 v)))
+    (have hu
+      (= (le32 (% v 256) (% (/ v 256) 256) (% (/ v 65536) 256) (% (/ v 16777216) 256))
+        (+ (% v 256)
+          (* 256
+            (+ (% (/ v 256) 256) (* 256 (+ (% (/ v 65536) 256) (* 256 (% (/ v 16777216) 256))))))))
+      rfl)
+    (have d3 (= (/ (/ v 65536) 256) (/ v 16777216)) (exact (Nat.div_div_eq_div_mul v 65536 256)))
+    (rw d3)
+    (arith hb hu)))
+(fn le8_value ((n Nat)) Nat (le64_at (le8 n) 0))
+(theorem le8_value_eq ((n Nat) (h (< n 18446744073709551616))) (= (le8_value n) n)
+  (by
+    (have h2 (< n (* 4294967296 4294967296)) (exact h))
+    (have hq (< (/ n 4294967296) 4294967296) (exact (Nat.div_lt_of_lt_mul h2)))
+    (show
+      (=
+        (+
+          (+ (+ (% n 256) (* 256 (% (/ n 256) 256)))
+            (* 65536 (+ (% (/ n 65536) 256) (* 256 (% (/ (/ n 65536) 256) 256)))))
+          (* 4294967296
+            (+ (+ (% (/ n 4294967296) 256) (* 256 (% (/ (/ n 4294967296) 256) 256)))
+              (* 65536
+                (+ (% (/ (/ n 4294967296) 65536) 256)
+                  (* 256 (% (/ (/ (/ n 4294967296) 65536) 256) 256)))))))
+        n))
+    (rw (le4_value n))
+    (rw (le4_value (/ n 4294967296)))
+    (rw (Nat.mod_eq_of_lt hq))
+    (exact (Nat.mod_add_div n 4294967296))))
+;; what the loader reads of the file's headers
+(theorem elf_exec_ok ((code (List Nat))) (= (elf_header_ok (elf_exec code)) true) (by rfl))
+(theorem elf_exec_entry ((code (List Nat))) (= (le64_at (elf_exec code) 24) elf_entry) (by decide))
+(theorem elf_exec_phoff ((code (List Nat))) (= (le64_at (elf_exec code) 32) 64) (by decide))
+(theorem elf_exec_phnum ((code (List Nat))) (= (le16_at (elf_exec code) 56) 1) (by decide))
+(theorem elf_exec_filesz ((code (List Nat)))
+  (= (le64_at (elf_exec code) 96) (le8_value (+ 120 (List.length code))))
+  (by rfl))
+(theorem elf_exec_memsz ((code (List Nat)))
+  (= (le64_at (elf_exec code) 104) (le8_value (+ 120 (List.length code))))
+  (by rfl))
+;; what the file loads to: its bytes from `elf_base`, mapped to read and execute
+(fn image_of ((code (List Nat)) (m Mem)) Image
+  (MkImage elf_entry (put_bytes m elf_base (elf_exec code) (+ 120 (List.length code)))
+    (cons (MkSeg elf_base (+ elf_base (+ 120 (List.length code))) 5) nil)))
+(theorem skip_zero ((bs (List Nat))) (= (skip bs 0) bs)
+  (by (cases bs ((nil () rfl) (cons (b r) rfl)))))
+(theorem load_ph_exec
+  ((code (List Nat)) (m Mem) (hsize (<= (+ 4194424 (List.length code)) 140737488355328)))
+  (= (load_ph (elf_exec code) 64 (MkImage elf_entry m nil)) (some (image_of code m)))
+  (by
+    (have hlt (< (+ 120 (List.length code)) 18446744073709551616) (arith))
+    (have h1 (= (le32_at (elf_exec code) 64) 1) (decide))
+    (have f4 (= (le32_at (elf_exec code) (+ 64 4)) 5) (decide))
+    (have f8 (= (le64_at (elf_exec code) (+ 64 8)) 0) (decide))
+    (have f16 (= (le64_at (elf_exec code) (+ 64 16)) 4194304) (decide))
+    (have f32 (= (le64_at (elf_exec code) (+ 64 32)) (+ 120 (List.length code)))
+      (rw (<- (le8_value_eq (+ 120 (List.length code)) hlt)))
+      (exact (elf_exec_filesz code)))
+    (have f40 (= (le64_at (elf_exec code) (+ 64 40)) (+ 120 (List.length code)))
+      (rw (<- (le8_value_eq (+ 120 (List.length code)) hlt)))
+      (exact (elf_exec_memsz code)))
+    (have a1 (<= (+ 0 (+ 120 (List.length code))) (+ 120 (List.length code))) (arith))
+    (have a2 (<= (+ 120 (List.length code)) (+ 120 (List.length code))) (arith))
+    (have a3 (= (% 4194304 4096) (% 0 4096)) (decide))
+    (have a4 (<= 65536 4194304) (decide))
+    (have a5 (<= (+ 4194304 (+ 120 (List.length code))) 140737488355328) (arith))
+    (have hseg
+      (=
+        (segment_ok (+ 120 (List.length code)) 0 4194304 (+ 120 (List.length code))
+          (+ 120 (List.length code)))
+        true)
+      (rw segment_ok.eq_1)
+      (rw (if_pos a1))
+      (rw (if_pos a2))
+      (rw (if_pos a3))
+      (rw (if_pos a4))
+      (rw (if_pos a5))
+      rfl)
+    (rw load_ph.eq_1)
+    (rw h1)
+    (rw f4)
+    (rw f8)
+    (rw f16)
+    (rw f32)
+    (rw f40)
+    (rw (elf_exec_length code))
+    (rw hseg)
+    (rw (skip_zero (elf_exec code)))
+    rfl))
+;; the file of any code that fits below the top of a process's addresses loads to that image
+(theorem elf_load_exec
+  ((code (List Nat)) (m Mem) (hsize (<= (+ 4194424 (List.length code)) 140737488355328)))
+  (= (elf_load (elf_exec code) m) (some (image_of code m)))
+  (by
+    (rw elf_load.eq_1)
+    (rw (elf_exec_ok code))
+    (rw (elf_exec_entry code))
+    (rw (elf_exec_phoff code))
+    (rw (elf_exec_phnum code))
+    (rw load_phs.eq_1)
+    (rw (load_ph_exec code m hsize))
+    (reduce)
+    (rw load_phs.eq_1)
+    rfl))
+;; ---- a list's bytes from an index -----------------------------------------------------------------
+(theorem byte_at_small ((bs (List Nat)))
+  (forall ((k Nat)) (-> (= (bytes_ok bs) true) (< (byte_at bs k) 256)))
+  (by
+    (induction bs
+      ((nil () (intro k h) (rw byte_at.eq_1) (decide))
+       (cons (b r ih) (intro k h)
+         (cases (Nat.decLt b 256)
+           ((isFalse (hb)
+              (have hx (= (bytes_ok (cons b r)) false) (rw bytes_ok.eq_2) (rw (if_neg hb)) rfl)
+              (exact (absurd (Eq.trans (Eq.symm hx) h) Bool.false_ne_true)))
+            (isTrue (hb)
+              (have hx (= (bytes_ok (cons b r)) (bytes_ok r))
+                (rw bytes_ok.eq_2)
+                (rw (if_pos hb))
+                rfl)
+              (have hr (= (bytes_ok r) true) (exact (Eq.trans (Eq.symm hx) h)))
+              (rw byte_at.eq_2)
+              (cases (Nat.decEq k 0)
+                ((isTrue (hk) (rw (if_pos hk)) (exact hb))
+                 (isFalse (hk) (rw (if_neg hk)) (exact (ih (- k 1) hr)))))))))))))
+(theorem skipn_zero ((bs (List Nat))) (= (skipn 0 bs) bs)
+  (by (cases bs ((nil () rfl) (cons (b r) rfl)))))
+(theorem skipn_step ((bs (List Nat)))
+  (forall ((k Nat))
+    (-> (< k (List.length bs)) (= (skipn k bs) (cons (byte_at bs k) (skipn (+ k 1) bs)))))
+  (by
+    (induction bs
+      ((nil () (intro k hk) (exact (absurd hk (Nat.not_lt_zero k))))
+       (cons (b r ih) (intro k hk) (have hk1 (Not (= (+ k 1) 0)) (arith))
+         (have h11 (<= 1 (+ k 1)) (arith))
+         (have e1 (= (- (+ k 1) 1) k) (arith (Nat.sub_add_cancel h11)))
+         (rw skipn.eq_2)
+         (rw skipn.eq_2)
+         (rw (if_neg hk1))
+         (rw e1)
+         (rw byte_at.eq_2)
+         (cases (Nat.decEq k 0)
+           ((isTrue (h0) (rw (if_pos h0)) (rw (if_pos h0)) (rw h0) (rw (skipn_zero r)) rfl)
+            (isFalse (h0) (have h1 (<= 1 k) (exact (Nat.pos_of_ne_zero h0)))
+              (have hl (< k (+ (List.length r) 1)) (exact hk))
+              (have hk2 (< (- k 1) (List.length r)) (arith (Nat.sub_add_cancel h1)))
+              (have e2 (= (+ (- k 1) 1) k) (exact (Nat.sub_add_cancel h1)))
+              (rw (if_neg h0))
+              (rw (if_neg h0))
+              (rw (ih (- k 1) hk2))
+              (rw e2)
+              rfl))))))))
+(theorem skipn_end ((bs (List Nat)))
+  (forall ((k Nat)) (-> (<= (List.length bs) k) (= (skipn k bs) nil)))
+  (by
+    (induction bs
+      ((nil () (intro k hk) rfl)
+       (cons (b r ih) (intro k hk) (have hl (<= (+ (List.length r) 1) k) (exact hk))
+         (have h0 (Not (= k 0)) (arith))
+         (have h1 (<= 1 k) (arith))
+         (have hk2 (<= (List.length r) (- k 1)) (arith (Nat.sub_add_cancel h1)))
+         (rw skipn.eq_2)
+         (rw (if_neg h0))
+         (exact (ih (- k 1) hk2)))))))
+(theorem skipn_add ((bs (List Nat)))
+  (forall ((a Nat) (k Nat)) (= (skipn a (skipn k bs)) (skipn (+ k a) bs)))
+  (by
+    (induction bs
+      ((nil () (intro a k) rfl)
+       (cons (b r ih) (intro a k)
+         (cases (Nat.decEq k 0)
+           ((isTrue (h0) (rw h0) (rw (skipn_zero (cons b r))) (rw (Nat.zero_add a)) rfl)
+            (isFalse (h0) (have h1 (<= 1 k) (exact (Nat.pos_of_ne_zero h0)))
+              (have hne (Not (= (+ k a) 0)) (arith))
+              (have h2 (<= 1 (+ k a)) (arith))
+              (have e (= (- (+ k a) 1) (+ (- k 1) a))
+                (arith (Nat.sub_add_cancel h1) (Nat.sub_add_cancel h2)))
+              (rw skipn.eq_2)
+              (rw (if_neg h0))
+              (rw skipn.eq_2)
+              (rw (if_neg hne))
+              (rw e)
+              (exact (ih a (- k 1)))))))))))
+;; ---- the code in place --------------------------------------------------------------------------
+;; what is mapped once the file is loaded, and the memory then
+(fn loaded_segs ((code (List Nat)) (stk Seg)) (List Seg)
+  (cons (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5) (cons stk nil)))
+(fn loaded_mem ((code (List Nat)) (m Mem)) Mem
+  (put_bytes m 4194304 (elf_exec code) (+ 120 (List.length code))))
+;; What the processor fetches at an index of the code is the code's bytes from that index: the
+;; code is mapped to execute and each of its bytes is a byte, and where the code ends nothing
+;; is fetched — the byte after the image is not the stack's to execute.
+(theorem fetch_loaded
+  ((code (List Nat))
+   (m Mem)
+   (stk Seg)
+   (hb (= (bytes_ok code) true))
+   (hstk (= (seg_holds stk (+ 4194424 (List.length code)) 1 1) false))
+   (n Fuel))
+  (forall ((k Nat))
+    (-> (<= k (List.length code))
+      (= (fetch (loaded_segs code stk) (loaded_mem code m) (+ 4194424 k) n)
+        (firstn n (skipn k code)))))
+  (by
+    (induction n
+      ((FZ () (intro k hk) rfl)
+       (FS (n1 ih) (intro k hk)
+         (cases (Nat.decLt k (List.length code))
+           ((isTrue (hlt) (have s1 (<= 4194304 (+ 4194424 k)) (arith))
+              (have s2 (<= (+ (+ 4194424 k) 1) (+ 4194304 (+ 120 (List.length code)))) (arith))
+              (have s3 (= (band 5 1) 1) (decide))
+              (have hmap (= (mapped (loaded_segs code stk) (+ 4194424 k) 1 1) true)
+                (exact
+                  (mapped_head (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5)
+                    (cons stk nil)
+                    (+ 4194424 k)
+                    1
+                    1
+                    (seg_holds_in 4194304 (+ 4194304 (+ 120 (List.length code))) 5 (+ 4194424 k) 1 1
+                      s1
+                      s2
+                      s3))))
+              (have ea (= (+ 4194424 k) (+ 4194304 (+ 120 k))) (arith))
+              (have i1 (< (+ 120 k) (+ 120 (List.length code))) (arith))
+              (have i2 (< (+ 120 k) (List.length (elf_exec code)))
+                (rw (elf_exec_length code))
+                (exact i1))
+              (have hbyte (= (mem_get (loaded_mem code m) (+ 4194424 k)) (byte_at code k))
+                (rw ea)
+                (show
+                  (=
+                    (mem_get (put_bytes m 4194304 (elf_exec code) (+ 120 (List.length code)))
+                      (+ 4194304 (+ 120 k)))
+                    (byte_at code k)))
+                (rw
+                  (put_bytes_at (elf_exec code) m 4194304 (+ 120 (List.length code)) (+ 120 k) i1 i2))
+                (rw (elf_exec_at code k))
+                (exact (Nat.mod_eq_of_lt (byte_at_small code k hb))))
+              (have hf
+                (= (firstn (FS n1) (cons (byte_at code k) (skipn (+ k 1) code)))
+                  (cons (byte_at code k) (firstn n1 (skipn (+ k 1) code))))
+                rfl)
+              (have hk1 (<= (+ k 1) (List.length code)) (arith))
+              (have eb (= (+ (+ 4194424 k) 1) (+ 4194424 (+ k 1))) (arith))
+              (rw fetch.eq_2)
+              (rw hmap)
+              (rw hbyte)
+              (rw eb)
+              (rw (ih (+ k 1) hk1))
+              (rw (skipn_step code k hlt))
+              (rw hf)
+              rfl)
+            (isFalse (hlt) (have hkl (= k (List.length code)) (arith))
+              (have p1
+                (< (+ 4194304 (+ 120 (List.length code))) (+ (+ 4194424 (List.length code)) 1))
+                (arith))
+              (have hmap
+                (= (mapped (loaded_segs code stk) (+ 4194424 (List.length code)) 1 1) false)
+                (show
+                  (=
+                    (mapped
+                      (cons (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5) (cons stk nil))
+                      (+ 4194424 (List.length code))
+                      1
+                      1)
+                    false))
+                (rw
+                  (mapped_skip (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5)
+                    (cons stk nil)
+                    (+ 4194424 (List.length code))
+                    1
+                    1
+                    (seg_holds_past 4194304 (+ 4194304 (+ 120 (List.length code))) 5
+                      (+ 4194424 (List.length code))
+                      1
+                      1
+                      p1)))
+                (rw (mapped_skip stk nil (+ 4194424 (List.length code)) 1 1 hstk))
+                rfl)
+              (rw hkl)
+              (rw fetch.eq_2)
+              (rw hmap)
+              (rw (skipn_end code (List.length code) (Nat.le_refl (List.length code))))
+              rfl))))))))
+;; a listing's instructions by address, from the address of the first: each with the length of
+;; its encoding
+(fn layout ((is (List Instr)) (a Nat)) (List (Prod Nat (Prod Instr Nat)))
+  (measure (struct is))
+  (match is
+    (nil nil)
+    ((cons i r)
+     (cons (Prod.mk a (Prod.mk i (List.length (encode i))))
+       (layout r (+ a (List.length (encode i))))))))
+;; instructions that decode from the code at an index are in place from that index's address
+(theorem layout_in
+  ((code (List Nat))
+   (m Mem)
+   (stk Seg)
+   (hb (= (bytes_ok code) true))
+   (hstk (= (seg_holds stk (+ 4194424 (List.length code)) 1 1) false))
+   (is (List Instr)))
+  (forall ((k Nat) (a Nat) (i Instr) (len Nat))
+    (-> (= (decodes is (skipn k code)) true)
+      (= (site (layout is (+ 4194424 k)) a) (some (Prod.mk i len)))
+      (= (decode (fetch (loaded_segs code stk) (loaded_mem code m) a fifteen))
+        (some (Prod.mk i len)))))
+  (by
+    (induction is
+      ((nil () (intro k a i len hd hs) (have hn (= (site (layout nil (+ 4194424 k)) a) none) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hs)) (Option.some_ne_none (Prod.mk i len)))))
+       (cons (j r ih) (intro k a i len hd hs)
+         (cases (decodes_cons j r (skipn k code) hd)
+           ((intro (h1 h2)
+              (have hl
+                (= (layout (cons j r) (+ 4194424 k))
+                  (cons (Prod.mk (+ 4194424 k) (Prod.mk j (List.length (encode j))))
+                    (layout r (+ (+ 4194424 k) (List.length (encode j))))))
+                (rw layout.eq_2)
+                rfl)
+              (cases (Nat.decLe k (List.length code))
+                ((isFalse (hle) (have hge (<= (List.length code) k) (arith))
+                   (have hnil (= (decode (firstn fifteen nil)) none) rfl)
+                   (have h1b
+                     (= (decode (firstn fifteen nil)) (some (Prod.mk j (List.length (encode j)))))
+                     (rw (<- (skipn_end code k hge)))
+                     (exact h1))
+                   (exact
+                     (absurd (Eq.symm (Eq.trans (Eq.symm hnil) h1b))
+                       (Option.some_ne_none (Prod.mk j (List.length (encode j)))))))
+                 (isTrue (hle)
+                   (cases (Nat.decEq (+ 4194424 k) a)
+                     ((isTrue (he)
+                        (have hs2
+                          (= (some (Prod.mk j (List.length (encode j)))) (some (Prod.mk i len)))
+                          (rw (<- hs))
+                          (rw hl)
+                          (rw site.eq_2)
+                          (rw (if_pos he))
+                          rfl)
+                        (rw (<- he))
+                        (rw (fetch_loaded code m stk hb hstk fifteen k hle))
+                        (rw h1)
+                        (exact hs2))
+                      (isFalse (hne)
+                        (have hs3
+                          (= (site (layout r (+ (+ 4194424 k) (List.length (encode j)))) a)
+                            (some (Prod.mk i len)))
+                          (rw (<- hs))
+                          (rw hl)
+                          (rw site.eq_2)
+                          (rw (if_neg hne))
+                          rfl)
+                        (have ea
+                          (= (+ (+ 4194424 k) (List.length (encode j)))
+                            (+ 4194424 (+ k (List.length (encode j)))))
+                          (arith))
+                        (have hs4
+                          (= (site (layout r (+ 4194424 (+ k (List.length (encode j))))) a)
+                            (some (Prod.mk i len)))
+                          (rw (<- ea))
+                          (exact hs3))
+                        (have h2b (= (decodes r (skipn (+ k (List.length (encode j))) code)) true)
+                          (rw (<- (skipn_add code (List.length (encode j)) k)))
+                          (exact h2))
+                        (exact (ih (+ k (List.length (encode j))) a i len h2b hs4))))))))))))))))
+;; A listing's file, loaded. Where the assembler answers `code` for a listing, in the first state
+;; of the process of that code's file the processor decodes each instruction of the listing, its
+;; labels resolved, at its address — provided the byte after the image is not the stack's to
+;; execute.
+(theorem listing_loaded
+  ((p (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (st Start)
+   (ha (= (assemble p) (some code)))
+   (hr (= (resolve p p 0) (some is)))
+   (hstk (= (seg_holds (Start.stack st) (+ 4194424 (List.length code)) 1 1) false)))
+  (code_in (boot (image_of code (Start.mem st)) st) (layout is 4194424))
+  (by
+    (cases (assemble_decodes p code ha)
+      ((intro (is2 h)
+         (cases h
+           ((intro (hr2 hdb)
+              (cases hdb
+                ((intro (hd hb)
+                   (have hsome (= (some is2) (some is)) (exact (Eq.trans (Eq.symm hr2) hr)))
+                   (have he (= is2 is) (exact (Option.some.inj hsome)))
+                   (have hd0 (= (decodes is (skipn 0 code)) true)
+                     (rw (skipn_zero code))
+                     (rw (<- he))
+                     (exact hd))
+                   (intro a i len hs)
+                   (have hs0 (= (site (layout is (+ 4194424 0)) a) (some (Prod.mk i len)))
+                     (exact hs))
+                   (show
+                     (=
+                       (decode
+                         (fetch (loaded_segs code (Start.stack st)) (loaded_mem code (Start.mem st))
+                           a
+                           fifteen))
+                       (some (Prod.mk i len))))
+                   (exact
+                     (layout_in code (Start.mem st) (Start.stack st) hb hstk is 0 a i len hd0 hs0)))))))))))))
+;; and a run of the file is a run from that state, where the code fits below the top of a
+;; process's addresses
+(theorem run_file_exec
+  ((n Fuel)
+   (code (List Nat))
+   (st Start)
+   (hsize (<= (+ 4194424 (List.length code)) 140737488355328)))
+  (= (run_file n (elf_exec code) st) (run n (boot (image_of code (Start.mem st)) st)))
+  (by (rw run_file.eq_1) (rw (elf_load_exec code (Start.mem st) hsize)) rfl))

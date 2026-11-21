@@ -13,15 +13,17 @@ it.
 |---|---|
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
-| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
+| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `runner_start`, the start the runner gives), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
-| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fourteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps |
+| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fifteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
+| `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
 | `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file |
 | `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
+| `buffers_run.shard` | that listing's file from end to end: started as the runner starts it, it exits with 19 (`buffers_exits`), by `both`'s contract |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
 | `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
 
@@ -79,12 +81,12 @@ four bytes, an index register in a SIB byte. A listing (`Asm`) is instructions, 
 label is always the form with four bytes of displacement, so every line's length is known before
 any label's place. `assemble` resolves the labels, encodes, and then has the model's `decode`
 read the bytes back: it answers only with bytes that decode, instruction by instruction and with
-nothing left over, to the listing. An instruction with no encoding here — an immediate too wide —
+nothing left over, to the listing, and each of which is a byte (below 256). An instruction with no encoding here — an immediate too wide —
 or a label no line declares makes it answer nothing.
 
 Nothing is proven of `encode`. The fact is made for each listing (`docs/COMPILE.md` §3, a
 certificate): `assemble_decodes` — where `assemble p` is the bytes `bs`, the listing's
-instructions decode from `bs` (`decodes`) — and `decodes_cons` opens that one instruction at a
+instructions decode from `bs` (`decodes`) and `bs` is bytes — and `decodes_cons` opens that one instruction at a
 time: the model decodes the first from the first fifteen bytes, with its encoding's length, and
 the rest stand after those bytes.
 
@@ -108,8 +110,9 @@ some count of steps, none a system call or stuck. A rule for an instruction form
 program counter is at `pc`, the processor decodes that instruction there (`code_at`), and an
 operand in memory is mapped, the state before the instruction reaches whatever the state after
 it reaches; the state after is written out, with its program counter a numeral. There are
-fourteen, for the forms the trial's listing uses: an operation between registers, `cmp`, an
-operation with an immediate, `mov` between registers, a conditional jump taken and not taken,
+fifteen, for the forms the trial's listing uses: an operation between registers, `cmp`, an
+operation with an immediate, `mov` between registers, `mov` of an immediate, a conditional jump
+taken and not taken,
 `jmp`, a load and an `imul` through an indexed operand, `add` into an indexed operand, `push`,
 `pop`, `call`, `ret`. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
@@ -119,7 +122,19 @@ that calls: the word at the stack pointer after a push is the word pushed (`ret_
 what a callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …);
 code in place in any later state with the same mapping whose memory agrees outside a range
 clear of it (`code_in_after`); agreement outside two ranges, a buffer and a frame
-(`same_outside2`).
+(`same_outside2`). Of what is mapped: a range mapped whole is mapped word by word
+(`mapped_words_of`). Of a run's end: a run from a state the processor comes to is a run from
+where it came (`run_of_steps`), and the system call `exit` ends the process with the low byte of
+`rdi` (`run_exit`).
+
+**A listing's file, loaded** (`loaded.shard`). `elf_load_exec`: the file `elf_exec` writes for
+any code that ends below the top of a process's addresses loads to one range, the file's bytes
+from 400000 (hexadecimal), mapped to read and execute. `listing_loaded`: where `assemble`
+answers `code` for a listing, in the first state of the process of that code's file the
+processor decodes each instruction of the listing, its labels resolved, at its address
+(`code_in` of `layout`, the instructions by address) — provided the byte after the image is not
+the stack's to execute. It is proven once, from the assembler's own check: no instruction of a
+file is decoded again to know it. `run_file_exec`: a run of the file is a run from that state.
 
 **The trial** (`buffers.shard`, `buffers_facts.shard`; `docs/COMPILE.md` §4). Three functions
 written as ordinary shard: `dot`, the sum of the products of two buffers' words; `addto`, the
@@ -153,11 +168,21 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   state the callee returns in. The proof is thirty lemmas and not one: K's recursion is
   bounded in depth, and a proof of a hundred steps in one piece is refused (`OPEN.md` §3).
 
-Each rests on Lean's three axioms and on nothing else; each assumes that the processor decodes
-the listing's instructions at their addresses in the file (`code_in`), which is proven of no file.
-The evaluator's run of `both` on the buffers 3 5 7 and 2 4 6, the model's run of the listing's
-file and the processor's give one status, 19. No compiler made the listing and no tool the
-proofs.
+- `buffers_exits` (`buffers_run.shard`): the listing's file, started as the runner starts it —
+  whatever the registers but the stack pointer, the flags and the memory then hold — exits with
+  19, the low byte of `both` of the buffers 3 5 7 and 2 4 6. The proof does not run the model
+  through the functions: the code is in place by `listing_loaded`; the seventeen instructions
+  before `both` are run by the model, and the state they end in is shown to meet each of
+  `both_contract`'s nineteen hypotheses; the contract gives the state at the return, and from
+  any state it allows three instructions more end the process. That the functions' value is 19
+  is the logic's own computation of `both`.
+
+Each rests on Lean's three axioms and on nothing else. A contract assumes that the processor
+decodes the listing's instructions at their addresses (`code_in`); `listing_loaded` proves that
+of the first state, and `buffers_exits` is the one statement here that assumes nothing of the
+code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`. The evaluator's
+run of `both`, the model's run of the listing's file and the processor's give that one status,
+19. No compiler made the listing and no tool the proofs.
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh`. It runs the first program's file and the programs of `test/*.hex` —
@@ -174,8 +199,8 @@ hand.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
 `mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
-`encode` for every instruction; the step from an assembled listing in a loaded file to what the
-processor then executes; a rule for every instruction form; a contract of code whose frame
+`encode` for every instruction; a start whose stack is anywhere but where the runner puts it,
+in a statement about a file; a rule for every instruction form; a contract of code whose frame
 holds variables of its own (there is no rule for an operand at the stack pointer and a
 displacement); a compiler from a shard function to a listing and its contract.
 
