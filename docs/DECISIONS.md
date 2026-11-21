@@ -1779,7 +1779,11 @@ measurements; measure again before building on one.
   the dev box before the push, by ruling 17 — the 29 binaries built in 260 s; the suite on
   the binaries, 245 s, 52 entrypoints, none failed; the loader's closure loaded checked, 58
   modules with none pending; the loader's pins 355 directories. The checked load of all 29
-  roots was not run on the dev box and is CI's.
+  roots was not run on the dev box and is CI's. On CI, #795 (`5af3295b`): `native` 4,348 s —
+  the build 594, all 29 roots loaded checked in 849, 148,660 declarations and none failed,
+  the byte-tie 37 minutes, of which the loader pins' harness under the bootstrap is 34 —,
+  `v3` 2,496, `replay` 1,931 with the replay itself 1,473 s and 57,977 accepted; the
+  pipeline 4,394.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
