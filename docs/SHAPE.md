@@ -96,8 +96,9 @@ test read them as programs alone and pass the proofs over. The files elsewhere c
 system.
 
 **Build and gates.** 52 test scripts run on both engines and their outputs are compared byte for
-byte. With the full replay of Init and the layout check, the whole gate takes about 45 minutes on
-the development machine, one step after another, and about 38 in CI, its jobs side by side.
+byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
+in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
+tie of the two engines' outputs is 42. It is not run whole on the development machine.
 
 ## 3. What is in the tree
 
@@ -166,9 +167,9 @@ host calls.
 *Cost.*
 - Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
   replay of Init takes 7 minutes natively and 76 on the bootstrap.
-- The full gate is 45 minutes in CI and about as long on the development machine. A change to
-  the toolchain is pushed after the checks it can move, minutes there, and the pipeline's verdict
-  on the whole follows it.
+- The full gate is 75 minutes in CI. A change to
+  the toolchain is pushed after the checks it can move, minutes on the development machine, and
+  the pipeline's verdict on the whole follows it.
 
 ## 5. Decisions most likely to be proposed again
 

@@ -1730,7 +1730,9 @@ measurements; measure again before building on one.
   obligations, read off the call graph; 279 descent proofs open by naming the tuple `p`.
 - Pipeline #785 (the elaborator, `bd2f2d88`): `native` 4,451 s, `v3` 2,527, `replay` 1,823,
   the pipeline 6,432 — `native` was 4,293 on #782. Pipeline #787 (the driver's lower units,
-  `748ccaa0`): `native` 4,440, `v3` 2,438, `replay` 1,836, the pipeline 6,949.
+  `748ccaa0`): `native` 4,440, `v3` 2,438, `replay` 1,836, the pipeline 6,949. Its `native`
+  job, 74 minutes, from the job's log: the build of the 29 binaries 514 s, the emit tie 53,
+  all 29 roots loaded checked 641, the byte-tie 42 minutes, the suite on the binaries 9.
 - K's structure eta on the major as written, and the loader's driver (2026-11-21). The
   change to K is three lines; `to_cnstr_when_structure`'s three descents name one more
   local. `tc_test` has 105 cases for 101: the four on the test structure's recursor, of
