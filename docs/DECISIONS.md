@@ -525,7 +525,29 @@ entries are explained under "Measured" at the end.
   elaborator (a depth its callers hand down, as the eraser's, or the size of its source
   with a weight that pays for the three forms it builds), the loader's re-entry (a bound
   on a derivation generating a derivation) and `run_loop` (a bound on a run's externs, a
-  fact about the machine's halt, or a program).
+  fact about the machine's halt, or a program). The owner, of the three and of the
+  definer's request below: "On your decisions: 1: depth handed down, 2: do it with the
+  elaborator, 3: leave it as a program, 4: do it before the elaborator, and do your
+  research first, but mirroring lean's approach is a decent prior." So the elaborator
+  takes a depth its callers hand down, the loader's re-entry is bounded with it, and
+  `run_loop` stays a program.
+- A function defined by a measure takes evidence about its parameters, and the recursion's
+  parameters are packed as Lean packs them where that is needed and as they were where it
+  is not. The definer nested the data parameters' types in `PProd` as written, so a type
+  that names an earlier parameter (`(hk (<= k n))`) left the tuple's type open — the
+  obligation over it was no closed statement (`fvar_in_type`) —, and a proposition among
+  the parameters did not fit a pair built at levels 1, 1 (`app_type_mismatch`). Now a pair
+  is `PSigma` over its first component where a later type names that component, `PProd`
+  where none does, and a proposition stands at level 0. Not `PSigma` at every pair, which
+  is Lean's whole packing: the term of every function defined by a measure would change,
+  and with it the obligations of 47 proofs in 11 files that spell `(proj PProd …)`, for
+  no function that takes it today; where no type names a parameter the tuple is the term
+  it was, held on the loader's closure (Measured). Not the evidence moved out of the tuple
+  into the result's type (`∀ evidence, RET`): it is not how Lean packs, the prior the
+  owner named, and it was not built to compare. Left as it was and written in `OPEN.md`
+  §1: a group of functions that call each other takes no evidence. Asked for by the
+  `compiler` branch for its buffer loops; the owner's word is the fourth above. Which
+  pairs are dependent and the levels are the builder's, on that prior.
 
 ## Programs and the back end
 
@@ -890,6 +912,11 @@ entries are explained under "Measured" at the end.
   (`parity_test.sh`); for a changed body, the build and the tests of its area, and for K the
   Init replay (`LAW.md` ruling 17; which checks count for which change is this file's reading
   of it).
+- The kernel's sources (`v3/kernel`) are changed in the main worktree, and the `compiler`
+  branch asks there for what it needs of them; not edited on both branches. The owner, to
+  that branch's session as it relayed them: "pass a message to the agent working in the
+  main branch on the toolchain fix. Let's treat that agent as the main kernel editor"; and
+  here: "I figured it would be best to concentrate kernel changes here".
 
 ## Layout
 
@@ -1559,6 +1586,21 @@ measurements; measure again before building on one.
   the table is the 42 —; the state's check, 36 checks, one commit before the last. The
   checked load of all 29 roots was not run on the dev box and is CI's. The Init replay was
   not run: nothing of K's directory changed.
+  On CI: #780 `native` 66.7 minutes for #778's 81.8, the checked load of all 29 roots in
+  it; `v3` 41.8, `replay` 32.0 (#778's `replay` 29.0).
+- Evidence among a measured function's parameters (2026-11-20). Probed before and after
+  with one form each: a measure and `(hk (<= k n))` beside `k` and `n` was
+  `definition_refused` (`fvar_in_type`), the same with the evidence between the data, and
+  a proposition that names no parameter `definition_refused` (`app_type_mismatch`); each
+  is a definition now, and so is a function of two parts. The loader's closure loaded
+  checked before and after: of 47,301 records, the 45,660 outside `define.shard`'s module
+  are the same with the requirement key left out — every hash the one it was —, and the
+  key differs in 1,663, where `define.shard` is seen. `define.shard` is 2,977 lines for
+  2,929. Checked on the dev box before the push, by ruling 17: the 29 binaries built in
+  416 s, the Init index the one before; the loader's closure loaded checked, 58 modules
+  with none pending; the suite on the binaries, 317 s, 52 entrypoints, the loader's pins
+  353 directories. The checked load of all 29 roots was not run on the dev box and is CI's.
+  The state's check and the Init replay were not run: nothing K runs changed.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the

@@ -777,7 +777,12 @@ that recurses fails —: a proof about one cites its equations (`(rw drain.eq_2)
 - *Statement.* A `<` at `Nat`, under every variable in scope at the call, outermost first: the
   function's type parameters, each under its own name (pin `measure_type_param`), then the data
   parameters — one stands under its own name, several stand as a single tuple `p :
-  PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, … —, then pattern variables and
+  PProd …` with components `(proj PProd 0 p)`, `(proj PProd 1 p)`, …; where a later parameter's
+  type names an earlier one — evidence about it, `(hk (<= k n))` beside `k` and `n` — the pair
+  is `PSigma` over the earlier, `p : (PSigma Nat (fun ((n Nat)) …))`, with components `(proj
+  PSigma 0 p)`, `(proj PSigma 1 p)`, so the body uses the evidence and a call hands on evidence
+  about its own arguments (pin `measure_evidence`; a group of functions that call each other
+  takes no evidence, `OPEN.md` §1) —, then pattern variables and
   `let`s, and the facts the enclosing branches give: under an `if`, `h : C` in the then-branch and
   `h : ¬C` in the else-branch; under a `match` row, `h : scrutinee = pattern`. Left out is what
   states the function's own values: a `let` bound to a recursive call, a `let` computed from one,
