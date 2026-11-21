@@ -125,7 +125,10 @@ clear of it (`code_in_after`); agreement outside two ranges, a buffer and a fram
 written as ordinary shard: `dot`, the sum of the products of two buffers' words; `addto`, the
 first buffer with the second's words added to it — in the logic a new list; and `both`, which
 calls the two, `dot` on one buffer as both operands. A buffer is a list of words; a read
-(`word_at`) and a write (`put_at`) take the evidence that the index is below the list's length.
+(`word_at`) and a write (`put_at`) take the evidence that the index is below the list's length,
+and each function takes, beside its two buffers and their count, the evidence that each buffer
+holds that many words: `both` hands `dot` the evidence that `addto`'s sum is as long as its
+first buffer was (`addto_room`).
 The listing is compiled by hand, an instruction or two for each operation of the source, with no
 check of an index; `addto`'s loop writes into the buffer it was given. Proven:
 

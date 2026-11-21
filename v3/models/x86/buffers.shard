@@ -75,74 +75,167 @@
     (rw hl)
     (exact hn)))
 
-;; ---- two buffers with their evidence ----------------------------------------------------------
-;; Two buffers and a count, with the evidence that each buffer holds that many words: one value,
-;; because a function with a measure takes no parameter whose type names another (`OPEN.md`).
-;; In a listing it is three registers: the two buffers' addresses and the count.
-(def TwoP () Type (Prod (List (BitVec 64)) (Prod (List (BitVec 64)) (BitVec 64))))
-(def two_ok ((p TwoP)) Prop
-  (And (<= (w64_val (Prod.snd (Prod.snd p))) (List.length (Prod.fst p)))
-    (<= (w64_val (Prod.snd (Prod.snd p))) (List.length (Prod.fst (Prod.snd p))))))
-(def Two () Type (@Subtype TwoP two_ok))
-(fn two_xs ((t Two)) (List (BitVec 64)) (Prod.fst (Subtype.val t)))
-(fn two_ys ((t Two)) (List (BitVec 64)) (Prod.fst (Prod.snd (Subtype.val t))))
-(fn two_n ((t Two)) (BitVec 64) (Prod.snd (Prod.snd (Subtype.val t))))
-(theorem two_hx ((t Two)) (<= (w64_val (two_n t)) (List.length (two_xs t)))
-  (exact (And.left (Subtype.property t))))
-(theorem two_hy ((t Two)) (<= (w64_val (two_n t)) (List.length (two_ys t)))
-  (exact (And.right (Subtype.property t))))
-(fn two_mk
+;; ---- the three functions ----------------------------------------------------------------------
+;; Each takes two buffers and a count, with the evidence that each buffer holds that many words.
+;; In a listing the evidence is nothing: three registers, the two addresses and the count.
+;; the sum of the products of the two buffers' words, from index i to the count, added to acc
+(fn dot_go
   ((xs (List (BitVec 64)))
    (ys (List (BitVec 64)))
    (n (BitVec 64))
-   (hx (<= (w64_val n) (List.length xs)))
-   (hy (<= (w64_val n) (List.length ys))))
-  Two
-  (Subtype.mk (Prod.mk xs (Prod.mk ys n)) (And.intro hx hy)))
-
-;; ---- the three functions ----------------------------------------------------------------------
-;; the sum of the products of the two buffers' words, from index i to the count, added to acc
-(fn dot_go ((t Two) (i (BitVec 64)) (acc (BitVec 64))) (BitVec 64)
-  (measure (- (w64_val (two_n t)) (w64_val i)))
-  (dif h (< (w64_val i) (w64_val (two_n t)))
-    (dot_go t (w64_add i (w64 1))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64))
+   (acc (BitVec 64)))
+  (BitVec 64)
+  (measure (- (w64_val n) (w64_val i)))
+  (dif h (< (w64_val i) (w64_val n))
+    (dot_go xs ys n rx ry (w64_add i (w64 1))
       (w64_add acc
-        (w64_mul (word_at (two_xs t) i (Nat.lt_of_lt_of_le h (two_hx t)))
-          (word_at (two_ys t) i (Nat.lt_of_lt_of_le h (two_hy t))))))
+        (w64_mul (word_at xs i (Nat.lt_of_lt_of_le h rx)) (word_at ys i (Nat.lt_of_lt_of_le h ry)))))
     acc))
 (fulfills dot_go.dec_1 (by (intro p h) (apply loop_descends (exact h))))
-(fn dot ((t Two)) (BitVec 64) (dot_go t (w64 0) (w64 0)))
+(fn dot
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys))))
+  (BitVec 64)
+  (dot_go xs ys n rx ry (w64 0) (w64 0)))
 
-;; the bundle after one word of the sum: the first buffer's word at index i the sum of that word
-;; and the second buffer's
-(fn addto_next ((t Two) (i (BitVec 64)) (h (< (w64_val i) (w64_val (two_n t))))) Two
-  (two_mk
-    (put_at (two_xs t) i
-      (w64_add (word_at (two_xs t) i (Nat.lt_of_lt_of_le h (two_hx t)))
-        (word_at (two_ys t) i (Nat.lt_of_lt_of_le h (two_hy t))))
-      (Nat.lt_of_lt_of_le h (two_hx t)))
-    (two_ys t)
-    (two_n t)
-    (put_at_room (two_xs t) i
-      (w64_add (word_at (two_xs t) i (Nat.lt_of_lt_of_le h (two_hx t)))
-        (word_at (two_ys t) i (Nat.lt_of_lt_of_le h (two_hy t))))
-      (Nat.lt_of_lt_of_le h (two_hx t))
-      (two_n t)
-      (two_hx t))
-    (two_hy t)))
+;; the first buffer after one word of the sum: its word at index i the sum of that word and the
+;; second buffer's
+(fn addto_next
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64))
+   (h (< (w64_val i) (w64_val n))))
+  (List (BitVec 64))
+  (put_at xs i
+    (w64_add (word_at xs i (Nat.lt_of_lt_of_le h rx)) (word_at ys i (Nat.lt_of_lt_of_le h ry)))
+    (Nat.lt_of_lt_of_le h rx)))
+;; the evidence carried past that write
+(theorem addto_next_room
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64))
+   (h (< (w64_val i) (w64_val n))))
+  (<= (w64_val n) (List.length (addto_next xs ys n rx ry i h)))
+  (exact
+    (put_at_room xs i
+      (w64_add (word_at xs i (Nat.lt_of_lt_of_le h rx)) (word_at ys i (Nat.lt_of_lt_of_le h ry)))
+      (Nat.lt_of_lt_of_le h rx)
+      n
+      rx)))
 ;; the first buffer with each word from index i to the count the sum of that word and the second
 ;; buffer's: a new list in the logic, the same buffer written in the listing
-(fn addto_go ((t Two) (i (BitVec 64))) Two
-  (measure (- (w64_val (two_n t)) (w64_val i)))
-  (dif h (< (w64_val i) (w64_val (two_n t))) (addto_go (addto_next t i h) (w64_add i (w64 1))) t))
+(fn addto_go
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64)))
+  (List (BitVec 64))
+  (measure (- (w64_val n) (w64_val i)))
+  (dif h (< (w64_val i) (w64_val n))
+    (addto_go (addto_next xs ys n rx ry i h) ys n (addto_next_room xs ys n rx ry i h) ry
+      (w64_add i (w64 1)))
+    xs))
 (fulfills addto_go.dec_1 (by (intro p h) (apply loop_descends (exact h))))
-(fn addto ((t Two)) Two (addto_go t (w64 0)))
+(fn addto
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys))))
+  (List (BitVec 64))
+  (addto_go xs ys n rx ry (w64 0)))
+;; the function's own two cases
+(theorem addto_go_turn
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64))
+   (h (< (w64_val i) (w64_val n))))
+  (= (addto_go xs ys n rx ry i)
+    (addto_go (addto_next xs ys n rx ry i h) ys n (addto_next_room xs ys n rx ry i h) ry
+      (w64_add i (w64 1))))
+  (by (rw addto_go.eq_1 (occ 1)) (rw (dif_pos h)) rfl))
+(theorem addto_go_done
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (i (BitVec 64))
+   (h (Not (< (w64_val i) (w64_val n)))))
+  (= (addto_go xs ys n rx ry i) xs)
+  (by (rw addto_go.eq_1) (rw (dif_neg h)) rfl))
+;; the sum is as long as the first buffer was, so the evidence about the first buffer holds of it
+(theorem addto_go_length
+  ((ys (List (BitVec 64))) (n (BitVec 64)) (ry (<= (w64_val n) (List.length ys))) (k Nat))
+  (forall ((xs (List (BitVec 64))) (rx (<= (w64_val n) (List.length xs))) (i (BitVec 64)))
+    (-> (= (- (w64_val n) (w64_val i)) k)
+      (= (List.length (addto_go xs ys n rx ry i)) (List.length xs))))
+  (by
+    (wf k k ih (intro xs rx i hk)
+      (cases (Nat.decLt (w64_val i) (w64_val n))
+        ((isFalse (h) (rw (addto_go_done xs ys n rx ry i h)) rfl)
+         (isTrue (h)
+           (have hdec (< (- (w64_val n) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact (loop_descends n i h)))
+           (rw (addto_go_turn xs ys n rx ry i h))
+           (rw
+             (ih (- (w64_val n) (w64_val (w64_add i (w64 1)))) hdec (addto_next xs ys n rx ry i h)
+               (addto_next_room xs ys n rx ry i h)
+               (w64_add i (w64 1))
+               (Eq.refl (- (w64_val n) (w64_val (w64_add i (w64 1)))))))
+           (exact
+             (upd_length xs (w64_val i)
+               (w64_add (word_at xs i (Nat.lt_of_lt_of_le h rx))
+                 (word_at ys i (Nat.lt_of_lt_of_le h ry)))))))))))
+(theorem addto_length
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys))))
+  (= (List.length (addto xs ys n rx ry)) (List.length xs))
+  (exact
+    (addto_go_length ys n ry (- (w64_val n) (w64_val (w64 0))) xs rx (w64 0)
+      (Eq.refl (- (w64_val n) (w64_val (w64 0)))))))
+(theorem addto_room
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys))))
+  (<= (w64_val n) (List.length (addto xs ys n rx ry)))
+  (by (rw (addto_length xs ys n rx ry)) (exact rx)))
 
-;; the first buffer of a bundle as both of another's
-(fn twice ((t Two)) Two (two_mk (two_xs t) (two_xs t) (two_n t) (two_hx t) (two_hx t)))
 ;; the second buffer added into the first, then the sum of the squares of the result — the one
-;; buffer read as both operands — with the buffers as they then are
-(fn both ((t Two)) (Prod (BitVec 64) Two) (let ((t2 (addto t))) (Prod.mk (dot (twice t2)) t2)))
+;; buffer read as both operands, on the evidence that the sum is as long as the first buffer
+;; was — with the first buffer as it then is
+(fn both
+  ((xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (n (BitVec 64))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys))))
+  (Prod (BitVec 64) (List (BitVec 64)))
+  (let ((s (addto xs ys n rx ry)))
+    (Prod.mk (dot s s n (addto_room xs ys n rx ry) (addto_room xs ys n rx ry)) s)))
 
 ;; ---- the listing, by hand ---------------------------------------------------------------------
 ;; A buffer is the address of its first word; the two addresses arrive in rdi and rsi and the
@@ -221,18 +314,15 @@
     ((some code) (elf_exec code))))
 
 ;; ---- the same, run in the logic ---------------------------------------------------------------
-;; the two buffers the file's first instructions push, and `both` of them
-(theorem three_le ((a (BitVec 64)) (b (BitVec 64)) (c (BitVec 64)))
-  (<= (w64_val (w64 3)) (List.length (cons a (cons b (cons c nil)))))
-  (by decide))
-(fn sample () Two
-  (two_mk (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))
-    (cons (w64 2) (cons (w64 4) (cons (w64 6) nil)))
-    (w64 3)
-    (three_le (w64 3) (w64 5) (w64 7))
-    (three_le (w64 2) (w64 4) (w64 6))))
-;; the file written to the path given; the status is the low byte of `both`'s result as the
-;; evaluator computes it, which is what the file's own run exits with
+;; the two buffers the file's first instructions push, the evidence about them, and the value of
+;; `both` of them
+(fn sample_xs () (List (BitVec 64)) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil))))
+(fn sample_ys () (List (BitVec 64)) (cons (w64 2) (cons (w64 4) (cons (w64 6) nil))))
+(theorem sample_rx () (<= (w64_val (w64 3)) (List.length sample_xs)) (by decide))
+(theorem sample_ry () (<= (w64_val (w64 3)) (List.length sample_ys)) (by decide))
+(fn sample_value () (BitVec 64) (Prod.fst (both sample_xs sample_ys (w64 3) sample_rx sample_ry)))
+;; the file written to the path given; the status is the low byte of that value as the evaluator
+;; computes it, which is what the file's own run exits with
 (fn main ((path ByteArray) (w World)) World
   (match (write_file path (Bytes.ofNats buffers_file) w)
-    ((Prod.mk ok w1) (exit (if ok (% (w64_val (Prod.fst (both sample))) 256) 1) w1))))
+    ((Prod.mk ok w1) (exit (if ok (% (w64_val sample_value) 256) 1) w1))))

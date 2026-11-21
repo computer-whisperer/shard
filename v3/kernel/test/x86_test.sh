@@ -137,8 +137,9 @@ if [ $onchip = 1 ]; then
 fi
 
 # ---- low-level code as shard: the trial (buffers.shard, laws.shard, buffers_facts.shard) ----------
-# Three functions over buffers of machine words, an access taking the evidence that its index is
-# in range, and a listing for them compiled by hand. Held here: every function is a definition;
+# Three functions over buffers of machine words — each taking, beside its buffers and their count,
+# the evidence that each buffer holds that many words, and an access the evidence that its index
+# is in range — and a listing for them compiled by hand. Held here: every function is a definition;
 # the laws of the model and the contracts of the code of `dot`, of `addto` and of `both` — which
 # calls the two and keeps a frame on the stack — are accepted, on no axiom but Lean's three (a
 # stored word read back cites Init's lemmas on division, which rest on `Classical.choice`); the
@@ -148,10 +149,10 @@ fi
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the trial did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/buf.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/buf.txt" || { bad "the trial's summary is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/buf.txt"; }
 checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/buf.txt")" = 0 ] || { bad "a function of the trial is a program without a definition"; grep '^RUNNABLE fn ' "$OUT/buf.txt" | head -5 | cut -c1-200; }
-for f in buffers.word_at buffers.put_at buffers.dot_go buffers.dot buffers.addto_go buffers.addto buffers.twice buffers.both laws.steps; do
+for f in buffers.word_at buffers.put_at buffers.dot_go buffers.dot buffers.addto_next buffers.addto_go buffers.addto buffers.both laws.steps; do
   checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/buf.txt" || bad "models.x86.$f is not a definition with its equations"
 done
-for t in laws.reaches_step laws.reaches_trans laws.step_at laws.do_alu_rr laws.do_cmp_rr laws.do_alu_ri laws.do_mov_rr laws.do_jcc_not laws.do_jcc_taken laws.do_jmp laws.do_load_sib laws.do_imul_sib laws.do_add_m_sib laws.do_push laws.do_pop laws.do_call laws.do_ret laws.mem_put64_other laws.le64_put64_word laws.le64_same laws.fetch_same laws.code_in_same buffers_facts.holds_upd buffers_facts.holds_same buffers_facts.dot_loop buffers_facts.dot_contract buffers_facts.dot_contract_same buffers_facts.add_loop buffers_facts.addto_contract word.w64_sub_add word.w64_val_sub laws.same_outside2_of laws.same_outside2_put64 laws.le64_put64_other laws.ret_addr_pushed laws.code_in_after laws.code_in_of buffers_facts.addto_n buffers_facts.addto_len buffers_facts.both_enter buffers_facts.both_mid buffers_facts.both_leave buffers_facts.both_first buffers_facts.both_second buffers_facts.both_exit buffers_facts.both_foot buffers_facts.both_ret buffers_facts.both_kept buffers_facts.both_contract; do
+for t in laws.reaches_step laws.reaches_trans laws.step_at laws.do_alu_rr laws.do_cmp_rr laws.do_alu_ri laws.do_mov_rr laws.do_jcc_not laws.do_jcc_taken laws.do_jmp laws.do_load_sib laws.do_imul_sib laws.do_add_m_sib laws.do_push laws.do_pop laws.do_call laws.do_ret laws.mem_put64_other laws.le64_put64_word laws.le64_same laws.fetch_same laws.code_in_same buffers_facts.holds_upd buffers_facts.holds_same buffers_facts.dot_loop buffers_facts.dot_contract buffers_facts.dot_contract_same buffers_facts.add_loop buffers_facts.addto_contract word.w64_sub_add word.w64_val_sub laws.same_outside2_of laws.same_outside2_put64 laws.le64_put64_other laws.ret_addr_pushed laws.code_in_after laws.code_in_of buffers.addto_length buffers.addto_room buffers_facts.both_enter buffers_facts.both_mid buffers_facts.both_leave buffers_facts.both_first buffers_facts.both_second buffers_facts.both_exit buffers_facts.both_foot buffers_facts.both_ret buffers_facts.both_kept buffers_facts.both_contract; do
   checks=$((checks+1)); grep -q "^ACCEPT models.x86.$t " "$OUT/buf.txt" || bad "models.x86.$t is not accepted"
   axs=$(grep "^ACCEPT models.x86.$t " "$OUT/buf.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')
