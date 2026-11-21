@@ -2884,7 +2884,7 @@
 ;; the parked looked at from the last one back: a closed set's lowest cycle, settled; then the
 ;; retry, and again
 (fn settle_groups ((l0 Load) (f Fx) (fuel Int)) (Prod Load Fx)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (if (< fuel 1) (Prod.mk l0 f)
   (match (Load.parked l0)
     (nil (Prod.mk (ld_forget_all l0) f))
@@ -3779,7 +3779,7 @@
 ;; a root-relative file as a module: once; a cycle refused; the records
 ;; of its forms; its MODULE record when its forms are done
 (fn load_module ((l Load) (rel (List (List Int))) (fuel Int) (w World)) (Prod Load World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 2)) 4 0)
   (if (base_reserved rel)
     (Prod.mk
       (ld_rec l
@@ -3801,12 +3801,21 @@
 ;; of Init. The E count is taken after both: the file's own declarations from here (rec_threads)
 ;; the base module in the load: as it stands, or loaded now
 (fn base_loaded ((l Load) (fuel Int) (w World)) (Prod (Prod Load (Option ForkPt)) World)
+  (measure (Int.natAbs (+ fuel 2)) 0 0)
   (match (ld_find_mod (Load.mods l) (base_module))
     ((some _) (Prod.mk (Prod.mk l none) w))
-    (none (load_source_module l (base_rel) (base_module) false (- fuel 1) (base_source) w))))
+    (none
+      ;; the base is read one below the file that asked. A file's forms are read one below the
+      ;; depth its import passed (load_file_module, which tests it), so the last file asks at
+      ;; -1; below that is a base that asks for itself
+      (if (< fuel -1)
+        (Prod.mk
+          (Prod.mk (ld_rec l (RLoadErr (join_path (base_rel)) (sym "import_depth") (utf8 ""))) none)
+          w)
+        (load_source_module l (base_rel) (base_module) false (- fuel 1) (base_source) w)))))
 (fn init_prepare_base ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World))
   (Prod (Prod Load (Option Fx)) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 2)) 1 0)
   ;; asked of the forms the load reads: a proof passed over asks for nothing (forms_read)
   (if (bool_not (uses_base (Load.unchecked l) (if (Load.unchecked l) (forms_read l forms) forms)))
     (init_prepare l (with Fx f (ecount (es_count (Load.etab l)))) forms w)
@@ -3821,7 +3830,7 @@
 (type ForkPt (ForkPt Load Fx (List SExpr)))
 (fn load_file_module ((l Load) (rel (List (List Int))) (mp Name) (view Bool) (fuel Int) (w World))
   (Prod (Prod Load (Option ForkPt)) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 2)) 0 0)
   (match (ld_find_mod (Load.mods l) mp)
     ((some m)
      (if (int_list_eq (Module.file m) (join_path rel)) (Prod.mk (Prod.mk l none) w)  ; loaded, or failed: the importer reads mod_ok
@@ -3849,13 +3858,13 @@
                    (join_path (append (Load.root l) rel))))
                none)
              w1))
-          ((Prod.mk (some src) w1) (load_source_module l rel mp view fuel src w1))))))))
+          ((Prod.mk (some src) w1) (load_source_module l rel mp view (- fuel 1) src w1))))))))
 ;; a module's text as the module `mp`: a file's that load_file_module read, or the base's
 ;; (base.shard), which no file holds
 (fn load_source_module
   ((l Load) (rel (List (List Int))) (mp Name) (view Bool) (fuel Int) (src (List Int)) (w1 World))
   (Prod (Prod Load (Option ForkPt)) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 2)) 8 0)
   (match (read_all src)
     ((RAErr e off)
      (Prod.mk
@@ -4601,10 +4610,12 @@
 ;; ---- directory modules ------------------------------------------------------------------
 ;; (import "DIR"): the view — DIR/mod.req/mod.req.shard, else DIR/mod.req.shard
 (fn load_dir ((l Load) (dir (List (List Int))) (fuel Int) (w World)) (Prod Load World)
+  (measure (Int.natAbs (+ fuel 2)) 3 0)
   (match (load_dir_view l dir fuel w)
     ((Prod.mk (Prod.mk l1 _) w1) (Prod.mk l1 w1))))
 (fn load_dir_view ((l Load) (dir (List (List Int))) (fuel Int) (w World))
   (Prod (Prod Load (Option ForkPt)) World)
+  (measure (Int.natAbs (+ fuel 2)) 2 0)
   (match (dir_module dir)
     ((MPOk mp) (load_view_candidates l dir mp (view_candidates dir) fuel w))
     ((MPBad m)
@@ -4616,7 +4627,7 @@
 (fn load_view_candidates
   ((l Load) (dir (List (List Int))) (mp Name) (cands (List (List (List Int)))) (fuel Int) (w World))
   (Prod (Prod Load (Option ForkPt)) World)
-  (measure (struct cands))
+  (measure (Int.natAbs (+ fuel 2)) 1 (List.length cands))
   (match cands
     (nil
       (Prod.mk
@@ -4743,7 +4754,7 @@
 
 ;; the view's forms in order, then the implementation's rest
 (fn impl_replay ((l Load) (im Im) (fuel Int) (w World)) (Prod (Prod Load Im) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0)
     (Prod.mk (Prod.mk (ld_rec l (RLoadErr (im_file im) (sym "import_depth") (utf8 ""))) im) w)
     (match (Im.view im)
@@ -4755,7 +4766,7 @@
              (match (replay_decl_fetching (ld_settled l) im1 s fuel (refetches) w)
                ((Prod.mk (Prod.mk l2 im2) w2) (impl_replay l2 im2 (- fuel 1) w2))))
            (_
-             (match (load_forms l (im_fx_view im1) (list s) fuel w)
+             (match (load_forms l (im_fx_view im1) (list s) (- fuel 1) w)
                ((Prod.mk (Prod.mk l2 (some f2)) w2)
                 (impl_replay l2 (im_with_fx im1 f2) (- fuel 1) w2))
                ((Prod.mk (Prod.mk l2 none) w2) (Prod.mk (Prod.mk l2 im1) w2))))))))))
@@ -4763,7 +4774,7 @@
 ;; of Init fetched into the fork (settle_missed)
 (fn replay_decl_fetching ((l Load) (im Im) (s SExpr) (fuel Int) (rf Int) (w World))
   (Prod (Prod Load Im) World)
-  (measure rf)
+  (measure (Int.natAbs rf))
   (match (replay_decl l im s fuel w)
     ((Prod.mk (Prod.mk l1 im1) w1)
      (match (settle_missed l l1 (im_fx_view im) rf w1)
@@ -4771,7 +4782,7 @@
        ((Prod.mk (Prod.mk l2 false) w2) (Prod.mk (Prod.mk l2 im1) w2))))))
 (fn impl_form_fetching ((l Load) (im Im) (s SExpr) (fuel Int) (rf Int) (w World))
   (Prod (Prod Load Im) World)
-  (measure rf)
+  (measure (Int.natAbs rf))
   (match (impl_form l im s fuel w)
     ((Prod.mk (Prod.mk l1 im1) w1)
      (match (settle_missed l l1 (im_fx_impl im) rf w1)
@@ -4850,7 +4861,7 @@
 ;; implements (k, n); every form consumed is processed as the implementation's
 (fn advance ((l Load) (im Im) (k Symbol) (n Name) (sig SExpr) (fuel Int) (w World))
   (Prod (Prod Load Im) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk (Prod.mk l im) w)
   (match (Im.impl im)
     (nil (Prod.mk (Prod.mk l im) w))
@@ -4868,7 +4879,7 @@
                (advance l2 im2 k n sig (- fuel 1) w1)))))))))))))
 ;; the implementation's remaining forms after the view's
 (fn impl_rest ((l Load) (im Im) (fuel Int) (w World)) (Prod (Prod Load Im) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 1)))
   (if (< fuel 0) (Prod.mk (Prod.mk l im) w)
   (match (Im.impl im)
     (nil (Prod.mk (Prod.mk l im) w))
@@ -4954,7 +4965,7 @@
           (match (load_decl l (im_fx_impl im) s (derive_depth))
             ((Prod.mk l1 f1) (Prod.mk (Prod.mk l1 (im_with_fx im f1)) w)))))))
       (_
-        (match (load_forms l (im_fx_impl im) (list s) fuel w)
+        (match (load_forms l (im_fx_impl im) (list s) (- fuel 1) w)
           ((Prod.mk (Prod.mk l1 (some f1)) w1) (Prod.mk (Prod.mk l1 (im_with_fx im f1)) w1))
           ((Prod.mk (Prod.mk l1 none) w1) (Prod.mk (Prod.mk l1 im) w1)))))))
 ;; the view's (sig K NAME …) / (requirement NAME …) form for (k, n)
@@ -5074,7 +5085,7 @@
 ;; the forms in order; None when the file's loading ended in an error
 (fn load_forms ((l Load) (f Fx) (forms (List SExpr)) (fuel Int) (w World))
   (Prod (Prod Load (Option Fx)) World)
-  (measure fuel)
+  (measure (Int.natAbs (+ fuel 2)) 7 (List.length forms))
   (match forms
     (nil
       (match (flush_fetching (ld_settled (ld_forget_all l)) f (refetches) w)  ; the fns parked on a forward reference that never came
@@ -5087,7 +5098,7 @@
        ((FUse p ms) (load_forms (ld_forget_all l) (fx_open f (open_of p ms)) r fuel w))
        ((FTrusts ns) (load_forms (ld_forget_all l) (fx_trust f ns) r fuel w))
        ((FImportFile p)
-        (match (import_file (ld_forget_all l) f p (- fuel 1) w)
+        (match (import_file (ld_forget_all l) f p fuel w)
           ((Prod.mk (Prod.mk l1 (some f1)) w1) (load_forms (ld_forget_all l1) f1 r fuel w1))
           ((Prod.mk (Prod.mk l1 none) w1) (Prod.mk (Prod.mk l1 none) w1))))
        (FDecl
@@ -5102,7 +5113,7 @@
 ;; refusals name, so a declaration settles in two or three
 (fn refetches () Int 8)
 (fn load_decl_fetching ((l Load) (f Fx) (s SExpr) (fuel Int) (w World)) (Prod (Prod Load Fx) World)
-  (measure fuel)
+  (measure (Int.natAbs fuel))
   (match (load_decl l f s (derive_depth))
     ((Prod.mk l1 f1)
      (match (settle_missed l l1 f fuel w)
@@ -5142,10 +5153,45 @@
 (fulfills flush_settle.dec_1 (by (intro p bad h1 h2) (apply natAbs_pred (arith))))
 (fulfills flush_fetching.dec_1
   (by (intro p l2 w1 h) (apply natAbs_pred (apply settle_missed_ok (exact h)))))
+(fulfills settle_groups.dec_1
+  (by (intro p h1 ps h2 l1 g h3 l2 f2 h4 l3 f3 h5) (apply natAbs_pred (arith))))
+(fulfills load_decl_at.dec_1
+  (by (intro l f s depth) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_decl.dec_1
+  (by (intro l f s depth h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_decl.dec_2
+  (by (intro l f s depth h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_decl_go.dec_1
+  (by
+    (intro l f s depth h1 h2 h3 h4 h5 h6 h7 h8 h9)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_derive.dec_1
+  (by (intro l f s depth h1 gens h2) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills load_derived.dec_1
+  (by
+    (intro l f gens depth ty cap p policy procs forms r hs)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_derived.dec_2
+  (by
+    (intro l f gens depth ty cap p policy procs forms r hs l1 f1 ok h2)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_derived_forms.dec_1
+  (by (intro l f forms depth s r hs h1 es h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_derived_forms.dec_2
+  (by
+    (intro l f forms depth s r hs h1 es h2 l1 f1)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_decl_fetching.dec_1
+  (by (intro p l1 f1 h1 l2 w1 h) (apply natAbs_pred (apply settle_missed_ok (exact h)))))
 
 ;; (import "PATH"): relative to the importing file's directory, under the root
 (fn import_file ((l Load) (f Fx) (p (List Int)) (fuel Int) (w World))
   (Prod (Prod Load (Option Fx)) World)
+  (measure (Int.natAbs (+ fuel 2)) 6 0)
   (match (starts_with_lit (utf8 "/") p)
     ((some _)
      (Prod.mk (Prod.mk (ld_rec l (RLoadErr (fx_file f) (sym "absolute_import") p)) none) w))
@@ -5235,6 +5281,7 @@
        ((Prod.mk none w1) (view_any l r w1))))))
 (fn import_loaded ((l Load) (f Fx) (rel (List (List Int))) (fuel Int) (w World))
   (Prod (Prod Load (Option Fx)) World)
+  (measure (Int.natAbs (+ fuel 2)) 5 0)
   (match (load_module l rel fuel w)
     ((Prod.mk l1 w1)
      (match (import_target rel)
@@ -5263,6 +5310,96 @@
         ((MPOk mp) (some mp))
         (_ none)))
     (_ none)))
+(fulfills load_module.dec_1
+  (by (intro l rel fuel w h1 h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_module.dec_2
+  (by (intro l rel fuel w h1 mp h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_module.dec_3
+  (by (intro l rel fuel w h1 mp h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills base_loaded.dec_1
+  (by (intro l fuel w h1 h2) (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills init_prepare_base.dec_1
+  (by (intro l f forms fuel w h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_file_module.dec_1
+  (by
+    (intro l rel mp view fuel w h1 h2 h3 src w1 h4)
+    (apply Prod.Lex.left (apply natAbs_lt (arith) (arith)))))
+(fulfills load_source_module.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_source_module.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_source_module.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27 a28 a29 a30 a31 a32 a33)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_dir.dec_1
+  (by (intro l dir fuel w) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_dir_view.dec_1
+  (by (intro l dir fuel w mp h1) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_view_candidates.dec_1
+  (by
+    (intro l dir k cands fuel w c r hs w1 h2)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_view_candidates.dec_2
+  (by
+    (intro l dir k cands fuel w c r hs src w1 h2)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_forms.dec_1
+  (by
+    (intro l f forms fuel w s r hs p ms h2)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_forms.dec_2
+  (by
+    (intro l f forms fuel w s r hs ns h2)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_forms.dec_3
+  (by (intro l f forms fuel w s r hs p h2) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills load_forms.dec_4
+  (by
+    (intro l f forms fuel w s r hs p h2 l1 f1 w1)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills load_forms.dec_5
+  (by
+    (intro l f forms fuel w s r hs h2 l1 f1 w1 h3 x h4)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills import_file.dec_1
+  (by
+    (intro l f p fuel w h1 rel h2 w1 h3 x h4 h5)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills import_file.dec_2
+  (by
+    (intro l f p fuel w h1 rel h2 w1 h3 x h4)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills import_loaded.dec_1
+  (by (intro l f p fuel w) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills impl_form_fetching.dec_1
+  (by (intro p l1 im1 w1 h1 l2 w2 h) (apply natAbs_pred (apply settle_missed_ok (exact h)))))
+(fulfills advance.dec_1
+  (by (intro p h1 s r h2 l1 im1 w1 h3 h4 x h5 l2 im2 h6 h7) (apply natAbs_lt (arith) (arith))))
+(fulfills impl_rest.dec_1
+  (by (intro p h1 s r h2 l1 im1 w1 h3 x h4) (apply natAbs_lt (arith) (arith))))
+(fulfills replay_decl_fetching.dec_1
+  (by (intro p l1 im1 w1 h1 l2 w2 h) (apply natAbs_pred (apply settle_missed_ok (exact h)))))
+(fulfills impl_replay.dec_1
+  (by (intro p h1 s r h2 h3 l2 im2 w2 h4) (apply natAbs_lt (arith) (arith))))
+(fulfills impl_replay.dec_2
+  (by (intro p h1 s r h2 x h3 l2 f2 w2 h4) (apply natAbs_lt (arith) (arith))))
 
 ;; ---- printing (the driver; the pins) --------------------------------------------------------
 (fn show_names_c ((ns (List Name))) (List Int)
