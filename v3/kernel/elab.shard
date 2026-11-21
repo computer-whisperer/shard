@@ -711,7 +711,9 @@
 
 ;; a slot of the telescope: an inserted metavariable, or an explicit argument
 ;; with the metavariable standing for it until it is elaborated
-(type Slot (SImp Expr) (SExp EArg Expr))
+;; a binder of the head: an implicit one's metavariable; an explicit one's written argument, its
+;; placeholder, and the pass that reads it (slots_order)
+(type Slot (SImp Expr) (SExp EArg Expr Int))
 (type TlRes (TlOk El Expr Expr (List Slot)) (TlErr Symbol (List Int)))
 ;; the instances of an application's own binders, by table (`el_solve_one`)
 (fn el_solve_slots ((e El) (slots (List Slot))) El
@@ -738,7 +740,8 @@
               ((Prod.mk e1 m)
                (match (w_inst1 (el_w e1) body m)
                  ((Prod.mk w2 body1)
-                  (tele (el_set_w e1 w2) (mk_app f m) body1 r explicit (cons (SExp a m) acc) (- d 1))))))))
+                  (tele (el_set_w e1 w2) (mk_app f m) body1 r explicit (cons (SExp a m 0) acc)
+                    (- d 1))))))))
          (match (el_fresh e n dom (if (bi_inst bi) (sym "inst") (sym "implicit")))
            ((Prod.mk e1 m)
             (match (w_inst1 (el_w e1) body m)
@@ -798,7 +801,8 @@
 ;; expected type then meets `?motive t` as a pattern, Lean's elabAsElim order);
 ;; the expected type propagated (best effort); the other explicit arguments at
 ;; their binders, numerals last — each unified with its placeholder; then the
-;; term and its type instantiated
+;; term and its type instantiated. An argument whose binder's type is stated over
+;; a parameter that was written out is read after that one (slots_order)
 (fn elab_args
   ((e El)
    (f Expr)
@@ -809,7 +813,7 @@
    (depth Int))
   ERes
   (measure (Int.natAbs depth) 3 0)
-  (match (tele e f fty args explicit nil 256)
+  (match (tele_ordered e f fty args explicit)
     ((TlErr r m) (EErr r m))
     ((TlOk e1 fa rty slots)
      (match (elab_slots e1 slots 0 depth)
@@ -832,18 +836,18 @@
                 (match (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)
                   ((EOk e5 v ty) (EOk (el_solve_slots e5 slots) v ty))  ; the binders' instances by table, once the expected type has had its say
                   (other other))))))))))))
-;; the explicit slots of one pass: 0 the bound variables and the elaborated
-;; values, 1 the rest, 2 the numerals
+;; the explicit slots of one pass, each in the pass slots_order gave it
 (fn elab_slots ((e El) (slots (List Slot)) (pass Int) (depth Int)) ERes
   (measure (Int.natAbs depth) 2 (List.length slots))
   (match slots
     (nil (EOk e (mk_sort LZero) (mk_sort LZero)))
     ((cons (SImp _) r) (elab_slots e r pass depth))
-    ((cons (SExp a m) r)
-     (if (bool_not (= (arg_pass e a) pass)) (elab_slots e r pass depth)
+    ((cons (SExp a m k) r)
+     (if (bool_not (= k pass)) (elab_slots e r pass depth)
      (match (elab_slot e a m depth)
        ((EErr r2 m2) (EErr r2 m2))
        ((EOk e1 _ _) (elab_slots e1 r pass depth)))))))
+;; an argument's own pass: 0 a bound variable or an elaborated value, 1 the rest, 2 a numeral
 (fn arg_pass ((e El) (a EArg)) Int
   (match a
     ((ASrc (SNum _)) 2)
@@ -856,6 +860,42 @@
        (none 1)))
     ((AVal _ _) 0)
     (_ 1)))
+;; the pass that reads each explicit slot: its argument's own, or a later one. Where a
+;; binder's type names the placeholder of a written argument that a later pass reads, the
+;; slot is read in that pass, after that argument: what was written for a parameter is read
+;; before an argument whose type is stated over it. Read first, a hypothesis about `c` would
+;; settle a parameter written as `(bump c)` to `c` wherever the two agree by unfolding, and
+;; the next argument about `(bump c)` be refused. A numeral whose own binder's type is still
+;; open is not waited for: read before what fixes its type it would be a `Nat`.
+;; `seen`: the placeholders of the explicit slots before, each with the pass to wait for
+(fn tele_ordered ((e El) (f Expr) (fty Expr) (args (List EArg)) (explicit Bool)) TlRes
+  (match (tele e f fty args explicit nil 256)
+    ((TlOk e1 fa rty slots) (TlOk e1 fa rty (slots_order e1 slots nil)))
+    (other other)))
+(fn slots_order ((e El) (slots (List Slot)) (seen (List (Prod Int Int)))) (List Slot)
+  (measure (struct slots))
+  (match slots
+    (nil nil)
+    ((cons (SExp a m _) r)
+     (let
+       ((ty Expr
+          (match (mvar_type e m)
+            ((some t) t)
+            (none (mk_sort LZero))))
+        (own (arg_pass e a)))
+       (let ((k (pass_after ty seen own)))
+         (cons (SExp a m k)
+           (slots_order e r
+             (match m
+               ((MVar _ i) (cons (Prod.mk i (if (bool_and (= own 2) (has_mvar ty)) 0 k)) seen))
+               (_ seen)))))))
+    ((cons s r) (cons s (slots_order e r seen)))))
+;; the latest pass among the written arguments a binder's type names
+(fn pass_after ((ty Expr) (seen (List (Prod Int Int))) (k Int)) Int
+  (measure (struct seen))
+  (match seen
+    (nil k)
+    ((cons (Prod.mk i ki) r) (pass_after ty r (if (bool_and (< k ki) (mvar_occurs i ty)) ki k)))))
 ;; one explicit argument at its binder's type (the placeholder's), then the
 ;; placeholder is the argument — already assigned by the expected type, a
 ;; definitional check
@@ -2319,16 +2359,16 @@
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills elab_slots.dec_2
-  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills elab_slots.dec_3
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 hs a9 a10 a11 a12)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 hs a10 a11 a12 a13)
     (rw hs)
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills elab_slots.dec_4
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 hs a9)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 hs a10)
     (rw hs)
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
