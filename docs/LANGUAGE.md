@@ -231,8 +231,8 @@ names opened by name (`(use Init.List cons nil)`). No rule reads them differentl
 file; two things about how they are written set them apart.
 
 - **All but eight of their functions are definitions.** The checker reads every one: of the
-  loader's closure, 8,993
-  functions — 4,792 of them the rows of a generated table —, it holds 8,985 as definitions. The
+  loader's closure, 8,996
+  functions — 4,792 of them the rows of a generated table —, it holds 8,988 as definitions. The
   other 8 are programs with the reason: a function that calls itself with no measure
   (`realize_recursion`: `ev.shard` `run_loop`, a program's run with effects), and the seven
   above it, each for a callee that is a program (`callee_runnable`). A type error in any of them is refused. None matches a numeral
@@ -601,7 +601,12 @@ so `(List.cons 0 nil)` at `(List Int)` reads `0` as an `Int`. An argument whose 
 stated over a parameter that was written out is read after that one: in `(lemma (f c) h)`, where
 the lemma states `h` about its first parameter, `(f c)` is read before `h`, so `h` may be a
 hypothesis about any term that agrees with `(f c)` by computation, and a numeral written for `j` is
-read before a hypothesis about `(+ j 1)` (pin `arg_written_first`). `@NAME` makes every binder explicit:
+read before a hypothesis about `(+ j 1)` (pin `arg_written_first`). The expected type settles the
+binders the elaborator fills and never a parameter that was written out: `(keep (bump p) q h)`,
+where `keep` concludes `(= (Prod.fst q) (Prod.fst p))`, is about `(bump p)` at a goal about
+`(Prod.fst p)` too, and its result meets the goal by computation (pin `arg_written_kept`). A written
+argument that the application's other arguments fix to another term is `argument_mismatch`, which
+names both (pin `elab_argument`). `@NAME` makes every binder explicit:
 `(@List.nil a)`. What the inputs do not determine is refused, never defaulted: `unsolved_implicit`
 (write the application with `@`), `unsolved_universe` (write `NAME.{…}`). Too many arguments is
 `function_expected`, which names the head as it was resolved — `the head resolved to Add — Init's

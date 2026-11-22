@@ -709,11 +709,11 @@
                    ((EErr r m) (EErr r m))
                    ((EOk e1 c cty) (elab_args e1 c cty (srcs args) explicit expected depth))))))))))))
 
-;; a slot of the telescope: an inserted metavariable, or an explicit argument
-;; with the metavariable standing for it until it is elaborated
 ;; a binder of the head: an implicit one's metavariable; an explicit one's written argument, its
-;; placeholder, and the pass that reads it (slots_order)
-(type Slot (SImp Expr) (SExp EArg Expr Int))
+;; placeholder — the metavariable that stands for it until it is elaborated —, the pass that
+;; reads it (slots_order), and what the expected type made of the parameter where it was held
+;; against the result type before the argument was read (expected_first)
+(type Slot (SImp Expr) (SExp EArg Expr Int (Option Expr)))
 (type TlRes (TlOk El Expr Expr (List Slot)) (TlErr Symbol (List Int)))
 ;; the instances of an application's own binders, by table (`el_solve_one`)
 (fn el_solve_slots ((e El) (slots (List Slot))) El
@@ -740,7 +740,7 @@
               ((Prod.mk e1 m)
                (match (w_inst1 (el_w e1) body m)
                  ((Prod.mk w2 body1)
-                  (tele (el_set_w e1 w2) (mk_app f m) body1 r explicit (cons (SExp a m 0) acc)
+                  (tele (el_set_w e1 w2) (mk_app f m) body1 r explicit (cons (SExp a m 0 none) acc)
                     (- d 1))))))))
          (match (el_fresh e n dom (if (bi_inst bi) (sym "inst") (sym "implicit")))
            ((Prod.mk e1 m)
@@ -799,7 +799,8 @@
 ;; the application: the telescope; the written arguments that are bare names
 ;; first (a variable or a constant: an eliminator's major premise, so the
 ;; expected type then meets `?motive t` as a pattern, Lean's elabAsElim order);
-;; the expected type propagated (best effort); the other explicit arguments at
+;; the expected type propagated (best effort, and to the binders the elaborator
+;; fills only: expected_first); the other explicit arguments at
 ;; their binders, numerals last — each unified with its placeholder; then the
 ;; term and its type instantiated. An argument whose binder's type is stated over
 ;; a parameter that was written out is read after that one (slots_order)
@@ -819,32 +820,63 @@
      (match (elab_slots e1 slots 0 depth)
        ((EErr r m) (EErr r m))
        ((EOk e1b _ _)
-        (let
-          ((e2 El
-             (match expected
-               ((some x)
-                (match (el_unify e1b rty x)
-                  ((some e3) e3)
-                  (none e1b)))
-               (none e1b))))
-          (match (elab_slots e2 slots 1 depth)
-            ((EErr r m) (EErr r m))
-            ((EOk e3 _ _)
-             (match (elab_slots e3 slots 2 depth)
-               ((EErr r m) (EErr r m))
-               ((EOk e4 _ _)
-                (match (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)
-                  ((EOk e5 v ty) (EOk (el_solve_slots e5 slots) v ty))  ; the binders' instances by table, once the expected type has had its say
-                  (other other))))))))))))
+        (match (expected_first e1b rty slots expected)
+          ((Prod.mk e2 slots1)
+           (match (elab_slots e2 slots1 1 depth)
+             ((EErr r m) (EErr r m))
+             ((EOk e3 _ _)
+              (match (elab_slots e3 slots1 2 depth)
+                ((EErr r m) (EErr r m))
+                ((EOk e4 _ _)
+                 (match (check_expected e4 (el_zonk e4 fa) (el_zonk e4 rty) expected)
+                   ((EOk e5 v ty) (EOk (el_solve_slots e5 slots) v ty))  ; the binders' instances by table, once the expected type has had its say
+                   (other other)))))))))))))
+;; the expected type against the result type, before the written arguments not yet read (best
+;; effort). It settles the binders the elaborator fills and never a parameter that was written
+;; out: for each such argument a metavariable of its own, the slot's stand-in, takes the
+;; placeholder's place in the result type and holds what the expected type makes of the
+;; parameter; it is compared with the argument when that is read (elab_slot). Settled by the
+;; expected type itself, a parameter written as `(bump p)` would be `p` wherever the result
+;; type states it under a function that takes the two to one value — first-order unification
+;; goes through a function as if it were one-to-one — and what was written be refused
+(fn expected_first ((e El) (rty Expr) (slots (List Slot)) (expected (Option Expr)))
+  (Prod El (List Slot))
+  (match expected
+    (none (Prod.mk e slots))
+    ((some x)
+     (match (stand_ins e slots (el_mc e))
+       ((Prod.mk (Prod.mk es sub) slots1)
+        (match (el_unify es (inst_mvars sub rty) x)
+          ((some e3) (Prod.mk e3 slots1))
+          (none (Prod.mk e slots))))))))
+;; a stand-in for each written argument not yet read; `sub` maps the placeholder to it
+(fn stand_ins ((e El) (slots (List Slot)) (sub MCtx)) (Prod (Prod El MCtx) (List Slot))
+  (measure (struct slots))
+  (match slots
+    (nil (Prod.mk (Prod.mk e sub) nil))
+    ((cons (SExp a (MVar h i) k st) r)
+     (match (mc_assigned (el_mc e) i)
+       ((some _) (slot_on (SExp a (MVar h i) k st) (stand_ins e r sub)))
+       (none
+         (match (mc_decl (el_mc e) i)
+           (none (slot_on (SExp a (MVar h i) k st) (stand_ins e r sub)))
+           ((some d)
+            (match (el_fresh e (md_name d) (inst_mvars sub (md_type d)) (md_kind d))
+              ((Prod.mk e1 m2)
+               (slot_on (SExp a (MVar h i) k (some m2)) (stand_ins e1 r (mc_set sub i m2))))))))))
+    ((cons s r) (slot_on s (stand_ins e r sub)))))
+(fn slot_on ((s Slot) (r (Prod (Prod El MCtx) (List Slot)))) (Prod (Prod El MCtx) (List Slot))
+  (match r
+    ((Prod.mk a slots) (Prod.mk a (cons s slots)))))
 ;; the explicit slots of one pass, each in the pass slots_order gave it
 (fn elab_slots ((e El) (slots (List Slot)) (pass Int) (depth Int)) ERes
   (measure (Int.natAbs depth) 2 (List.length slots))
   (match slots
     (nil (EOk e (mk_sort LZero) (mk_sort LZero)))
     ((cons (SImp _) r) (elab_slots e r pass depth))
-    ((cons (SExp a m k) r)
+    ((cons (SExp a m k st) r)
      (if (bool_not (= k pass)) (elab_slots e r pass depth)
-     (match (elab_slot e a m depth)
+     (match (elab_slot e a m st depth)
        ((EErr r2 m2) (EErr r2 m2))
        ((EOk e1 _ _) (elab_slots e1 r pass depth)))))))
 ;; an argument's own pass: 0 a bound variable or an elaborated value, 1 the rest, 2 a numeral
@@ -876,7 +908,7 @@
   (measure (struct slots))
   (match slots
     (nil nil)
-    ((cons (SExp a m _) r)
+    ((cons (SExp a m _ st) r)
      (let
        ((ty Expr
           (match (mvar_type e m)
@@ -884,7 +916,7 @@
             (none (mk_sort LZero))))
         (own (arg_pass e a)))
        (let ((k (pass_after ty seen own)))
-         (cons (SExp a m k)
+         (cons (SExp a m k st)
            (slots_order e r
              (match m
                ((MVar _ i) (cons (Prod.mk i (if (bool_and (= own 2) (has_mvar ty)) 0 k)) seen))
@@ -897,9 +929,11 @@
     (nil k)
     ((cons (Prod.mk i ki) r) (pass_after ty r (if (bool_and (< k ki) (mvar_occurs i ty)) ki k)))))
 ;; one explicit argument at its binder's type (the placeholder's), then the
-;; placeholder is the argument — already assigned by the expected type, a
-;; definitional check
-(fn elab_slot ((e El) (a EArg) (m Expr) (depth Int)) ERes
+;; placeholder is the argument — already assigned through another argument's
+;; type, a definitional check. `st`: what the expected type made of the parameter
+;; (expected_first), which then fills what the argument leaves open (best effort:
+;; where the two differ, the result type is compared with the expected one at the end)
+(fn elab_slot ((e El) (a EArg) (m Expr) (st (Option Expr)) (depth Int)) ERes
   (measure (Int.natAbs depth) 1 0)
   (let
     ((dom Expr
@@ -915,11 +949,20 @@
         ((EErr r1 msg) (EErr r1 msg))
         ((EOk e1 v vty)
          (match (el_unify_r e1 m v)
-           ((EUOk e2) (EOk e2 v vty))
+           ((EUOk e2)
+            (EOk
+              (match st
+                (none e2)
+                ((some x)
+                 (match (el_unify e2 x m)
+                   ((some e3) e3)
+                   (none e2))))
+              v
+              vty))
            (u
              (eu_refusal e1 u
                (EErr (sym "argument_mismatch")
-                 (append (utf8 "the expected type fixes this argument to ")
+                 (append (utf8 "the application's other arguments fix this one to ")
                    (append (show_expr (el_zonk e1 m)) (append (utf8 ", found ") (show_expr v)))))))))))))
 (fn mvar_type ((e El) (m Expr)) (Option Expr)
   (match m
@@ -2346,11 +2389,11 @@
     (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills elab_args.dec_2
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
     (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills elab_args.dec_3
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
     (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills elab_slots.dec_1
   (by
@@ -2359,21 +2402,23 @@
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills elab_slots.dec_2
-  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills elab_slots.dec_3
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 hs a10 a11 a12 a13)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 hs a11 a12 a13 a14)
     (rw hs)
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills elab_slots.dec_4
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 hs a10)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 hs a11)
     (rw hs)
     (rw List.length_cons)
     (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills elab_slot.dec_1
-  (by (intro a1 a2 a3 a4 a5 a6) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+  (by (intro a1 a2 a3 a4 a5 a6 a7) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills read_binder.dec_1
   (by
     (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)

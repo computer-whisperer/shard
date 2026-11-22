@@ -892,6 +892,29 @@ entries are explained under "Measured" at the end.
   arguments fix. A numeral whose own parameter's type is still open is not waited for: read
   first it would be a `Nat`. The owner, of the defect put to them with this fix and with
   its record alone: "Let's fix the order".
+- The expected type, held against an application's result type before the written arguments
+  not yet read, settles the binders the elaborator fills and never a parameter that was
+  written out: such an argument's placeholder is replaced in the result type by a
+  metavariable of its own, which takes what the expected type makes of the parameter and
+  is unified with the argument when that is read, best effort (`elab.shard`
+  `expected_first`, `elab_slot`); not every metavariable of the result type. First-order
+  unification goes through a function as if it were one-to-one: a lemma that states its
+  parameter under `Prod.fst` and is given `(bump p)`, at a goal about `(Prod.fst p)`, had
+  the parameter settled to `p` and the `(bump p)` that was written refused
+  (`argument_mismatch`; pin `arg_written_kept`). The order above uncovered it — a
+  hypothesis that is a bare name no longer settles the parameter first —, and with the
+  hypothesis a compound term the loader before that order refuses the proof too; reported
+  by the `compiler` session with a reproduction. Not Lean's rule, no propagation where the
+  result type names a written argument not yet read (`propagateExpectedType`): Lean
+  postpones what it cannot read yet, and here the expected type is what tells a
+  constructor from Init's class of its name under `(Eq.refl (Add …))` (pins
+  `ctor_expected`, `match_def`, refused under that rule). Not the metavariable without its
+  unification with the argument: an outer unknown that took the result type before the
+  argument was read is left over a metavariable nothing solves (`json.shard`
+  `parse_hex4_le`, `unify_stuck`). Not left as it is, with the fact stated by a `have` and
+  used by name: the next proof of the shape meets the refusal again. The owner, of the
+  rule put to them with what it moved in a scratch copy and with leaving it documented as
+  the alternative: "Go ahead and build the candidate".
 
 ## The checker K and the Init import
 
@@ -1812,7 +1835,27 @@ measurements; measure again before building on one.
   the dev box before the push, by ruling 17 — the 29 binaries built in 260 s; the suite on
   the binaries, 245 s, 52 entrypoints, none failed; the loader's closure loaded checked, 58
   modules with none pending; the loader's pins 355 directories. The checked load of all 29
-  roots was not run on the dev box and is CI's.
+  roots was not run on the dev box and is CI's. On CI, #795 (`5af3295b`): `native` 4,348 s —
+  the build 594, all 29 roots loaded checked in 849, 148,660 declarations and none failed,
+  the byte-tie 37 minutes, of which the loader pins' harness under the bootstrap is 34 —,
+  `v3` 2,496, `replay` 1,931 with the replay itself 1,473 s and 57,977 accepted; the
+  pipeline 4,394.
+- The expected type and a written parameter (2026-11-21). Three functions more in
+  `elab.shard` (2,681 lines for 2,636), each a definition: 8,996 functions, 8,988
+  definitions, 8 programs. Six descents of `elab_args`, `elab_slots` and `elab_slot` name
+  more locals. Of the pin `arg_written_kept`, the loader before refuses the proof with the
+  bare-name hypothesis (`argument_mismatch`) and the loader before the order above the one
+  with the compound hypothesis; the rule without the argument's unification refuses its
+  third (`unify_stuck`). Sixty-one files with proofs outside `v3/kernel` — the library,
+  the IMP model, the examples, the formatter —, each loaded as a root, end as under the
+  loader before: 59 load, 16,518 accepted, and two are sidecars, no roots under either.
+  Checked on the dev box before the push, by ruling 17 — the 29 binaries built in 304 s;
+  the suite on the binaries, 299 s, 52 entrypoints, none failed; the loader's closure
+  loaded checked, 58 modules with none pending; the loader's pins 357 directories. The
+  checked load of all 29 roots was not run on the dev box and is CI's. On CI, #798
+  (`6966cddc`): `native` 4,331 s — the build 584, all 29 roots loaded checked in 845,
+  148,696 declarations and none failed, the byte-tie 37 minutes —, `v3` 2,456, `replay`
+  1,926 with the replay itself 1,478 s and 57,977 accepted; the pipeline 4,379.
 - A pipeline's 88 minutes before the gate's work ran side by side (#725, read from the jobs'
   logs, whose lines carry their time): the `native` job 87 — the build of the 29 binaries 18
   (the C text of each produced under the bootstrap: 10,083 s summed, the compiler 2,711 s), the
