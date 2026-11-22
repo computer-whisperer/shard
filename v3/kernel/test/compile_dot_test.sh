@@ -17,7 +17,7 @@ C=v3/compile
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "dot's chain did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/dot.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/dot.txt" || { bad "the summary of dot's chain is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/dot.txt"; }
 checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/dot.txt")" = 0 ] || { bad "a function of dot's chain is a program without a definition"; grep '^RUNNABLE fn ' "$OUT/dot.txt" | head -5 | cut -c1-200; }
-for f in dot_lo.dot_lo_go x86.dot_file.label_at; do
+for f in dot_lo.dot_lo_go x86.startup.label_at; do
   checks=$((checks+1)); grep -q "^DEFINE compile.$f equations=." "$OUT/dot.txt" || bad "compile.$f is not a definition with its equations"
 done
 for t in lo.rd_word dot_lo.dot_lo_go_turn dot_lo.dot_lo_go_done dot_ir.dot_go_tie dot_ir.dot_prog_tie dot_mean.dot_lo_means dot_mean.dot_answer x86.seam_laws.kept_code x86.link.link_exits x86.module.module_realizes x86.dot_file.dot_compiled x86.dot_file.dot_laid x86.dot_file.dot_placed x86.dot_run.dot_code_realizes x86.dot_run.dot_file_exits; do

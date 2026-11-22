@@ -1,20 +1,21 @@
 ;;; v3/compile/x86/link.shard — LINKING (docs/COMPILE.md §5): a file is a start-up and then ANY
-;;; lines. The start-up pushes two sample buffers of three words, calls ONE function with their
-;;; addresses and the count, and exits with the word the function returns. Proven once, for any
-;;; lines after the start-up and any label its call names (`link_exits`): where code that
-;;; `realizes` an answer stands at the call's target, the file, started as the model's runner
-;;; starts it, exits with the low byte of the answer's word on the sample arguments. Nothing is
-;;; known here of the lines appended. What the assembler answers for the listing and the table
-;;; its instructions lay out to are hypotheses, which a concrete file meets by computation. So
-;;; the start-up's run is not computed either: it is derived, instruction by instruction, from
-;;; the table's first rows by the rules of `laws.shard`.
+;;; lines. The start-up (startup.shard) pushes two sample buffers of three words, calls ONE
+;;; function with their addresses and the count, and exits with the word the function returns.
+;;; Proven once, for any lines after the start-up and any label its call names (`link_exits`):
+;;; where code that `realizes` an answer stands at the call's target, the file, started as the
+;;; model's runner starts it, exits with the low byte of the answer's word on the sample
+;;; arguments. Nothing is known here of the lines appended. What the assembler answers for the
+;;; listing and the table its instructions lay out to are hypotheses, which a concrete file
+;;; meets by computation. So the start-up's run is not computed either: it is derived,
+;;; instruction by instruction, from the table's first rows by the rules of `laws.shard`.
 (import "seam_laws.shard")
+(import "startup.shard")
 (import "../../models/x86/loaded.shard")
 (use std.mem)
 (use compile.x86.seam)
 (use compile.x86.seam_laws)
+(use compile.x86.startup)
 (use models.x86.asm)
-(use models.x86.asm.Asm)
 (use models.x86.elf)
 (use models.x86.frame)
 (use models.x86.laws)
@@ -30,66 +31,6 @@
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
-
-;; ---- the listing and its table ------------------------------------------------------------------
-;; The start-up. The words 7 5 3 are pushed, so that the first buffer, 3 5 7, stands from the
-;; stack pointer up, and its address is kept in r14; then 6 4 2 for the second buffer, 2 4 6.
-;; The two addresses and the count go to rdi, rsi and rdx, the label l is called, and the word
-;; the call returns is the status of `exit`.
-(fn link_head ((l Nat)) (List Asm)
-  (list (AI (MovRI32 7 7)) (AI (Push 7)) (AI (MovRI32 7 5)) (AI (Push 7)) (AI (MovRI32 7 3))
-    (AI (Push 7))
-    (AI (MovRmR (RmReg 14) 4))
-    (AI (MovRI32 7 6))
-    (AI (Push 7))
-    (AI (MovRI32 7 4))
-    (AI (Push 7))
-    (AI (MovRI32 7 2))
-    (AI (Push 7))
-    (AI (MovRmR (RmReg 6) 4))
-    (AI (MovRmR (RmReg 7) 14))
-    (AI (MovRI32 2 3))
-    (ACall l)
-    (AI (MovRmR (RmReg 7) 0))
-    (AI (MovRI32 0 60))
-    (AI Syscall)))
-;; a file's listing: the start-up, then any lines
-(fn link_listing ((l Nat) (extra (List Asm))) (List Asm) (List.append (link_head l) extra))
-;; the start-up's instructions by address, its call's displacement d
-(fn link_head_table ((d Nat)) (List (Prod Nat (Prod Instr Nat)))
-  (list (Prod.mk 4194424 (Prod.mk (MovRI32 7 7) 5)) (Prod.mk 4194429 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194430 (Prod.mk (MovRI32 7 5) 5))
-    (Prod.mk 4194435 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194436 (Prod.mk (MovRI32 7 3) 5))
-    (Prod.mk 4194441 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194442 (Prod.mk (MovRmR (RmReg 14) 4) 3))
-    (Prod.mk 4194445 (Prod.mk (MovRI32 7 6) 5))
-    (Prod.mk 4194450 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194451 (Prod.mk (MovRI32 7 4) 5))
-    (Prod.mk 4194456 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194457 (Prod.mk (MovRI32 7 2) 5))
-    (Prod.mk 4194462 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194463 (Prod.mk (MovRmR (RmReg 6) 4) 3))
-    (Prod.mk 4194466 (Prod.mk (MovRmR (RmReg 7) 14) 3))
-    (Prod.mk 4194469 (Prod.mk (MovRI32 2 3) 5))
-    (Prod.mk 4194474 (Prod.mk (Call d) 5))
-    (Prod.mk 4194479 (Prod.mk (MovRmR (RmReg 7) 0) 3))
-    (Prod.mk 4194482 (Prod.mk (MovRI32 0 60) 5))
-    (Prod.mk 4194487 (Prod.mk Syscall 2))))
-;; a file's table: those twenty rows, then the rows xt of the lines appended, from 4194489 on
-(fn link_table ((d Nat) (xt (List (Prod Nat (Prod Instr Nat))))) (List (Prod Nat (Prod Instr Nat)))
-  (List.append (link_head_table d) xt))
-
-;; ---- what the start-up hands the function it calls ----------------------------------------------
-;; The runner's stack pointer starts at 140737488347136. The first buffer then stands at
-;; 140737488347112, the second at 140737488347088, the call's return address at 140737488347080.
-(fn link_xs () (List (BitVec 64)) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil))))
-(fn link_ys () (List (BitVec 64)) (cons (w64 2) (cons (w64 4) (cons (w64 6) nil))))
-;; the argument words: the two buffers' addresses and the count
-(fn link_args () (List (BitVec 64))
-  (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil))))
-;; the data ranges: the six words of the two buffers, to read and to write
-(fn link_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
 
 ;; ---- the states of the start-up's run -----------------------------------------------------------
 ;; the first state of the process of a code's file, started as the model's runner starts it

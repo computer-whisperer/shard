@@ -1,9 +1,9 @@
-# v3/kernel/test/x86_common.sh — what the tests of the x86-64 model (v3/models/x86) share:
-# x86_test.sh, x86_asm_test.sh, x86_trial_test.sh and x86_derive_test.sh each set NAME and source
-# it. The engine, the Init index, a scratch directory, the count of checks, the loader's command
-# line and the model runner's, a file's run by the processor, a .hex file's bytes. Not an
-# entrypoint: each of the four is one, so that the suite runs them side by side — on the
-# bootstrap the four together are the longest of the suite by far.
+# v3/kernel/test/x86_common.sh — what the tests of the x86-64 model (v3/models/x86) and of the
+# compile system (v3/compile) share: each x86_*_test.sh and compile_*_test.sh sets NAME and
+# sources it. The engine, the Init index, a scratch directory, the count of checks, the loader's
+# command line and the model runner's, a file's run by the processor, a .hex file's bytes. Not an
+# entrypoint: each of those is one, so that the suite runs them side by side — on the bootstrap
+# they are among the longest of the suite.
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
