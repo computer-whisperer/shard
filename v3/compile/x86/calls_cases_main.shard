@@ -1,0 +1,102 @@
+;;; v3/compile/x86/calls_cases_main.shard — the first program's module (../calls_ir.shard) run
+;;; one call at a time, to compare the pass's code with the intermediate machine: for a
+;;; function of two parameters and two words, a file of six instructions — the two argument
+;;; words, a call of the function, exit with the low byte of what it returned — and then the
+;;; module's instructions as the pass answers them at 4194449, the address after those six,
+;;; encoded by the assembler's `encode`.
+;;;
+;;;   load.shard --root v3 --init … --run compile.x86.calls_cases_main.main v3/compile/x86/calls_cases_main.shard -- PATH I A B …
+;;;
+;;; For each PATH I A B: the file for function I on the words A and B written to PATH, and a
+;;; line `I A B = V` printed, V the word the intermediate machine's run of that function
+;;; returns — whose low byte is what the file's own run exits with
+;;; (kernel/test/compile_calls_file_test.sh compares the three). Status 2 where a run has no
+;;; value or a file is not written.
+(import "../../std/bytes.shard")
+(import "../../std/derive.shard")
+(import "../../std/host.shard")
+(import "pass.shard")
+(import "../calls_ir.shard")
+(use std.bytes)
+(use std.derive)
+(use std.host)
+(use std.mem)
+(use compile.calls_ir)
+(use compile.ir)
+(use compile.ir.IFn)
+(use compile.x86.pass)
+(use models.x86.asm)
+(use models.x86.elf)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; function i of the module on the words a and b, as the intermediate machine runs it
+(fn case_value ((i Nat) (a Nat) (b Nat)) (Option Nat)
+  (match (fn_at calls_prog i)
+    (none none)
+    ((some g)
+     (match
+       (irun (fuel_of 10000) calls_prog no_ext nil (IFn.body g)
+         (enter g (cons (w64 a) (cons (w64 b) nil)))
+         mem_empty)
+       (none none)
+       ((some r) (some (w64_val (Prod.fst r))))))))
+;; the module compiled at 4194449: its instructions, and each function's entry and stack need
+(fn cases_listing () (List Instr)
+  (match (compile nil calls_prog 4194449)
+    (none nil)
+    ((some (Prod.mk l f)) l)))
+(fn cases_entries () (List (Prod Nat Nat))
+  (match (compile nil calls_prog 4194449)
+    (none nil)
+    ((some (Prod.mk l f)) f)))
+;; the file: function i of the module on the words a and b
+(fn case_file ((i Nat) (a Nat) (b Nat)) (List Nat)
+  (match (pair_at cases_entries i)
+    (none nil)
+    ((some en)
+     (elf_exec
+       (encode_all
+         (cons (MovRI32 7 a)
+           (cons (MovRI32 6 b)
+             (cons (Call (rel (Prod.fst en) 4194439))
+               (cons (MovRmR (RmReg 7) 0) (cons (MovRI32 0 60) (cons Syscall cases_listing)))))))))))
+;; decimal digits as a number
+(fn nat_of ((ds (List Nat)) (acc Nat)) Nat
+  (measure (struct ds))
+  (match ds
+    (nil acc)
+    ((cons d r) (nat_of r (+ (* 10 acc) (- d 48))))))
+(fn arg ((b ByteArray)) Nat (nat_of (Bytes.toNats b) 0))
+;; one file written and its line printed: `I A B = V`, V the word the intermediate machine's
+;; run of function I returns; false where that run has no value or the file is not written
+(fn put_one ((path ByteArray) (i Nat) (a Nat) (b Nat) (w World)) (Prod Bool World)
+  (match (case_value i a b)
+    (none (Prod.mk false w))
+    ((some v)
+     (match (write_file path (Bytes.ofNats (case_file i a b)) w)
+       ((Prod.mk ok w1)
+        (Prod.mk ok
+          (write_line
+            (Bytes.ofNats
+              (Nat.renderOnto i
+                (cons 32
+                  (Nat.renderOnto a
+                    (cons 32 (Nat.renderOnto b (cons 32 (cons 61 (cons 32 (Nat.renderOnto v nil))))))))))
+            w1)))))))
+(fn put_each ((args (List ByteArray)) (good Bool) (w World)) World
+  (measure (struct args))
+  (match args
+    ((cons path (cons i (cons a (cons b r))))
+     (match (put_one path (arg i) (arg a) (arg b) w)
+       ((Prod.mk ok w1) (put_each r (if ok good false) w1))))
+    (nil (exit (if good 0 2) w))
+    (_ (exit 2 w))))
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk args w1) (put_each args true w1))))

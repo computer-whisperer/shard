@@ -1,0 +1,101 @@
+;;; v3/compile/x86/calls_run.shard — the first program through every layer (docs/COMPILE.md §5,
+;;; §8): the file of calls_file.shard, started as the runner starts it, exits with the low byte
+;;; of what `calls_f5` (../calls_lo.shard) computes of the words the start-up hands over: 22.
+;;; The chain: the intermediate code of the six functions, written by hand, answers with the
+;;; functions' values, a call that returns by its callee's tie (../calls_ir.shard); the code the
+;;; pass answers for the module realizes each function's answer (`module_realizes`); and a file
+;;; with a function that realizes its answer exits as the answer says (`link_exits`).
+(import "calls_file.shard")
+(import "link.shard")
+(import "module.shard")
+(use std.mem)
+(use compile.calls_ir)
+(use compile.calls_lo)
+(use compile.ir)
+(use compile.x86.calls_file)
+(use compile.x86.link)
+(use compile.x86.module)
+(use compile.x86.pass)
+(use compile.x86.seam)
+(use compile.x86.startup)
+(use models.x86.elf)
+(use models.x86.frame)
+(use models.x86.linux)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the module's theorem, met by this file ---------------------------------------------------------
+;; every function of the module, at the entry the pass answered and with the need it answered,
+;; realizes the answer of its intermediate code, for any data ranges: the module calls nothing
+;; from outside
+(theorem calls_realizes
+  ((rs (List Seg))
+   (i Nat)
+   (g IFn)
+   (en (Prod Nat Nat))
+   (hf (= (fn_at calls_prog i) (some g)))
+   (he (= (pair_at calls_entries i) (some en))))
+  (realizes calls_tbl 4194424 calls_chi (Prod.fst en) (Prod.snd en) rs
+    (fn_ans calls_prog no_ext rs g))
+  (by
+    (have hx
+      (forall ((j Nat) (en0 (Prod Nat Nat)))
+        (-> (= (pair_at (@List.nil (Prod Nat Nat)) j) (some en0))
+          (realizes calls_tbl 4194424 calls_chi (Prod.fst en0) (Prod.snd en0) rs (ext_ans no_ext j))))
+      (intro j en0 h)
+      (have hn (= (@Option.none (Prod Nat Nat)) (some en0)) (exact h))
+      (exact (absurd (Eq.symm hn) (Option.some_ne_none en0))))
+    (exact
+      (module_realizes calls_prog no_ext rs calls_tbl 4194424 calls_chi nil 4194489 calls_listing
+        calls_entries calls_within calls_chi_word hx calls_compiled calls_placed i g en hf he))))
+;; function 5, the one the start-up calls
+(theorem calls_code_is () (= (fn_at calls_prog 5) (some calls_code5)) (by rfl))
+(theorem calls_code_realizes ((rs (List Seg)))
+  (realizes calls_tbl 4194424 calls_chi calls_at calls_need rs
+    (fn_ans calls_prog no_ext rs calls_code5))
+  (exact (calls_realizes rs 5 calls_code5 (Prod.mk calls_at calls_need) calls_code_is calls_entry)))
+
+;; ---- the file, end to end ---------------------------------------------------------------------------
+;; the answer of function 5's code on the words the start-up hands over: what `calls_f5`
+;; computes of them, on any memory; the two buffers are not read
+(theorem calls_sample
+  ((m0 Mem) (hx (holds m0 140737488347112 link_xs)) (hy (holds m0 140737488347088 link_ys)))
+  (exists ((m2 Mem))
+    (fn_ans calls_prog no_ext link_rs calls_code5 link_args m0
+      (calls_f5 (w64 140737488347112) (w64 140737488347088) (w64 3))
+      m2))
+  (exact
+    (Exists.intro m0
+      (calls_prog_tie no_ext link_rs m0 (w64 140737488347112) (w64 140737488347088) (w64 3)))))
+(theorem calls_file_exits ((r Regs) (f Flags) (m Mem))
+  (exits (elf_exec calls_image) (runner_start r f m) 22)
+  (by
+    (have hv (= (% (w64_val (calls_f5 (w64 140737488347112) (w64 140737488347088) (w64 3))) 256) 22)
+      (rw (sample_f5 (w64 140737488347112) (w64 140737488347088)))
+      (decide))
+    (have e
+      (exits (elf_exec calls_image) (runner_start r f m)
+        (% (w64_val (calls_f5 (w64 140737488347112) (w64 140737488347088) (w64 3))) 256))
+      (exact
+        (link_exits 1 calls_lines calls_image calls_instrs calls_d calls_xt calls_at calls_chi
+          calls_need
+          (fn_ans calls_prog no_ext link_rs calls_code5)
+          (calls_f5 (w64 140737488347112) (w64 140737488347088) (w64 3))
+          calls_assembled
+          calls_resolved
+          calls_laid
+          calls_target
+          calls_within
+          calls_size
+          calls_chi_stack
+          calls_need_fits
+          (calls_code_realizes link_rs)
+          calls_sample
+          r
+          f
+          m)))
+    (rw (<- hv))
+    (exact e)))

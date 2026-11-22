@@ -1,132 +1,18 @@
-;;; v3/compile/x86/inv.shard — what a run of a statement, and the pass's answer
-;;; for a statement, say of the statement's parts.
+;;; v3/compile/x86/inv.shard — what the pass's answer for a statement says of the statement's
+;;; parts.
 (import "pass.shard")
 (import "seam.shard")
 (import "../../models/x86/loaded.shard")
-(use std.mem)
 (use compile.ir)
-(use compile.ir.ICallee)
 (use compile.ir.IStm)
 (use compile.x86.pass)
 (use models.x86.asm)
-(use models.x86.word)
-(use models.x86.words)
 (use models.x86.x86)
-(use models.x86.x86.Fuel)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
-
-;; a pair of a word and a memory is its parts
-(theorem pair_inj
-  ((a (BitVec 64)) (b Mem) (c (BitVec 64)) (d Mem) (h (= (Prod.mk a b) (Prod.mk c d))))
-  (and (= a c) (= b d))
-  (by
-    (have e1 (= (Prod.fst (Prod.mk a b)) (Prod.fst (Prod.mk c d))) (rw h) rfl)
-    (have e2 (= (Prod.snd (Prod.mk a b)) (Prod.snd (Prod.mk c d))) (rw h) rfl)
-    (exact (And.intro e1 e2))))
-
-;; ---- a run ------------------------------------------------------------------------------------
-(theorem irun_ret_inv
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (n1 Fuel)
-   (e IExp)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (v (BitVec 64))
-   (m2 Mem)
-   (h (= (irun (FS n1) p ext rs (SRet e) ls m) (some (Prod.mk v m2)))))
-  (and (= (ieval rs ls m e) (some v)) (= m2 m))
-  (by
-    (have g
-      (-> (= (irun (FS n1) p ext rs (SRet e) ls m) (some (Prod.mk v m2)))
-        (and (= (ieval rs ls m e) (some v)) (= m2 m)))
-      (unfold irun)
-      (reduce)
-      (cases (ieval rs ls m e) he
-        ((none () (reduce) (intro h0)
-           (exact (absurd (Eq.symm h0) (Option.some_ne_none (Prod.mk v m2)))))
-         (some (x) (reduce) (intro h0)
-           (have hp (= (Prod.mk x m) (Prod.mk v m2)) (exact (Option.some.inj h0)))
-           (cases (pair_inj x m v m2 hp)
-             ((intro (e1 e2) (apply And.intro ((rw e1) rfl) ((exact (Eq.symm e2)))))))))))
-    (exact (g h))))
-(theorem irun_let_inv
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (n1 Fuel)
-   (x Nat)
-   (e IExp)
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (r (Prod (BitVec 64) Mem))
-   (h (= (irun (FS n1) p ext rs (SLet x e k) ls m) (some r))))
-  (exists ((w (BitVec 64)))
-    (and (= (ieval rs ls m e) (some w)) (= (irun n1 p ext rs k (upd ls x w) m) (some r))))
-  (by
-    (have g
-      (-> (= (irun (FS n1) p ext rs (SLet x e k) ls m) (some r))
-        (exists ((w (BitVec 64)))
-          (and (= (ieval rs ls m e) (some w)) (= (irun n1 p ext rs k (upd ls x w) m) (some r)))))
-      (unfold irun)
-      (reduce)
-      (cases (ieval rs ls m e) he
-        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-         (some (w1) (reduce) (intro h0)
-           (apply (Exists.intro w1) ((apply And.intro (rfl) ((exact h0)))))))))
-    (exact (g h))))
-
-;; a store: its address and its word, the address mapped to write, the rest on the memory after
-(theorem irun_store_inv
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (n1 Fuel)
-   (a IExp)
-   (e IExp)
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (r (Prod (BitVec 64) Mem))
-   (h (= (irun (FS n1) p ext rs (SStore a e k) ls m) (some r))))
-  (exists ((q (BitVec 64)))
-    (exists ((w (BitVec 64)))
-      (and (= (ieval rs ls m a) (some q))
-        (and (= (ieval rs ls m e) (some w))
-          (and (= (mapped rs (w64_val q) 8 2) true)
-            (= (irun n1 p ext rs k ls (mem_put64 m (w64_val q) (w64_val w))) (some r)))))))
-  (by
-    (have g
-      (-> (= (irun (FS n1) p ext rs (SStore a e k) ls m) (some r))
-        (exists ((q (BitVec 64)))
-          (exists ((w (BitVec 64)))
-            (and (= (ieval rs ls m a) (some q))
-              (and (= (ieval rs ls m e) (some w))
-                (and (= (mapped rs (w64_val q) 8 2) true)
-                  (= (irun n1 p ext rs k ls (mem_put64 m (w64_val q) (w64_val w))) (some r))))))))
-      (unfold irun)
-      (reduce)
-      (cases (ieval rs ls m a) ha
-        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-         (some (q1) (reduce)
-           (cases (ieval rs ls m e) he
-             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-              (some (w1) (reduce)
-                (cases (mapped rs (w64_val q1) 8 2) hm
-                  ((false () (reduce) (intro h0)
-                     (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-                   (true () (reduce) (intro h0)
-                     (apply (Exists.intro q1)
-                       ((apply (Exists.intro w1)
-                          ((apply And.intro (rfl)
-                             ((apply And.intro (rfl) ((apply And.intro ((exact hm)) ((exact h0)))))))))))))))))))))
-    (exact (g h))))
 ;; ---- the pass ---------------------------------------------------------------------------------
 (theorem cstm_ret_inv
   ((xs (List (Prod Nat Nat)))
@@ -275,62 +161,6 @@
       rfl)
     (have g2 (<= (mx (+ (Prod.snd en) 1) (sneed xs fs ts p k)) d) (rw (<- e)) (exact hs))
     (exact (mx_le (+ (Prod.snd en) 1) (sneed xs fs ts p k) d g2))))
-;; arguments' words, one list element at a time
-(theorem ievals_nil_inv
-  ((rs (List Seg))
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (vs (List (BitVec 64)))
-   (h (= (ievals rs ls m nil) (some vs))))
-  (= vs nil)
-  (by
-    (have g (= (some (@List.nil (BitVec 64))) (some vs)) (exact h))
-    (exact (Eq.symm (Option.some.inj g)))))
-(theorem ievals_cons_inv
-  ((rs (List Seg))
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (e IExp)
-   (r (List IExp))
-   (vs (List (BitVec 64)))
-   (h (= (ievals rs ls m (cons e r)) (some vs))))
-  (exists ((v1 (BitVec 64)))
-    (exists ((vr (List (BitVec 64))))
-      (and (= (ieval rs ls m e) (some v1))
-        (and (= (ievals rs ls m r) (some vr)) (= vs (cons v1 vr))))))
-  (by
-    (have g
-      (-> (= (ievals rs ls m (cons e r)) (some vs))
-        (exists ((v1 (BitVec 64)))
-          (exists ((vr (List (BitVec 64))))
-            (and (= (ieval rs ls m e) (some v1))
-              (and (= (ievals rs ls m r) (some vr)) (= vs (cons v1 vr)))))))
-      (rw ievals.eq_2)
-      (cases (ieval rs ls m e) hv
-        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none vs))))
-         (some (v0) (reduce)
-           (cases (ievals rs ls m r) hr
-             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none vs))))
-              (some (vr0) (reduce) (intro h0)
-                (apply (Exists.intro v0)
-                  ((apply (Exists.intro vr0)
-                     ((apply And.intro (rfl)
-                        ((apply And.intro (rfl) ((exact (Eq.symm (Option.some.inj h0))))))))))))))))))
-    (exact (g h))))
-(theorem ievals_len ((rs (List Seg)) (ls (List (BitVec 64))) (m Mem) (es (List IExp)))
-  (forall ((vs (List (BitVec 64))))
-    (-> (= (ievals rs ls m es) (some vs)) (= (List.length vs) (List.length es))))
-  (by
-    (induction es
-      ((nil () (intro vs h) (rw (ievals_nil_inv rs ls m vs h)) rfl)
-       (cons (e r ih) (intro vs h)
-         (cases (ievals_cons_inv rs ls m e r vs h)
-           ((intro (v1 g1)
-              (cases g1
-                ((intro (vr g2) (rw (And.right (And.right g2)))
-                   (show (= (+ (List.length vr) 1) (+ (List.length r) 1)))
-                   (rw (ih vr (And.left (And.right g2))))
-                   rfl)))))))))))
 (theorem cargs_nil_inv ((i Nat) (nl Nat) (ca (List Instr)) (h (= (cargs nil i nl) (some ca))))
   (= ca nil)
   (by
@@ -373,90 +203,6 @@
                           ((apply (Exists.intro ir0)
                              ((apply And.intro (rfl)
                                 ((apply And.intro (rfl) ((exact (Eq.symm (Option.some.inj h0)))))))))))))))))))))))
-    (exact (g h))))
-;; a callee's run, as a statement's run takes it: an external's answer, or the run of a
-;; function's body on the fuel below
-(def fn_run
-  ((n Fuel)
-   (p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (og (Option IFn))
-   (vs (List (BitVec 64)))
-   (m Mem))
-  (Option (Prod (BitVec 64) Mem))
-  (match og
-    (none none)
-    ((some g) (irun n p ext rs (IFn.body g) (enter g vs) m))))
-(def cal_run
-  ((n Fuel)
-   (p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (cal ICallee)
-   (vs (List (BitVec 64)))
-   (m Mem))
-  (Option (Prod (BitVec 64) Mem))
-  (match cal
-    ((CExt j) (ext j vs m))
-    ((CFn i) (fn_run n p ext rs (fn_at p i) vs m))))
-(theorem irun_call_inv
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (n1 Fuel)
-   (x Nat)
-   (cal ICallee)
-   (es (List IExp))
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (r (Prod (BitVec 64) Mem))
-   (h (= (irun (FS n1) p ext rs (SCall x cal es k) ls m) (some r))))
-  (exists ((vs (List (BitVec 64))))
-    (and (= (ievals rs ls m es) (some vs))
-      (exists ((q (Prod (BitVec 64) Mem)))
-        (and (= (cal_run n1 p ext rs cal vs m) (some q))
-          (= (irun n1 p ext rs k (upd ls x (Prod.fst q)) (Prod.snd q)) (some r))))))
-  (by
-    (have g
-      (-> (= (irun (FS n1) p ext rs (SCall x cal es k) ls m) (some r))
-        (exists ((vs (List (BitVec 64))))
-          (and (= (ievals rs ls m es) (some vs))
-            (exists ((q (Prod (BitVec 64) Mem)))
-              (and (= (cal_run n1 p ext rs cal vs m) (some q))
-                (= (irun n1 p ext rs k (upd ls x (Prod.fst q)) (Prod.snd q)) (some r)))))))
-      (unfold irun)
-      (reduce)
-      (cases (ievals rs ls m es) hvs
-        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-         (some (vs0) (reduce)
-           (cases cal
-             ((CFn (i) (reduce)
-                (cases (fn_at p i) hf
-                  ((none () (reduce) (intro h0)
-                     (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-                   (some (g0) (reduce)
-                     (cases (irun n1 p ext rs (IFn.body g0) (enter g0 vs0) m) hb
-                       ((none () (reduce) (intro h0)
-                          (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-                        (some (q0) (reduce) (intro h0)
-                          (apply (Exists.intro vs0)
-                            ((apply And.intro (rfl)
-                               ((apply (Exists.intro q0)
-                                  ((apply And.intro
-                                     ((show (= (fn_run n1 p ext rs (fn_at p i) vs0 m) (some q0)))
-                                      (rw hf)
-                                      (exact hb))
-                                     ((exact h0))))))))))))))))
-              (CExt (j) (reduce)
-                (cases (ext j vs0 m) hx
-                  ((none () (reduce) (intro h0)
-                     (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-                   (some (q0) (reduce) (intro h0)
-                     (apply (Exists.intro vs0)
-                       ((apply And.intro (rfl)
-                          ((apply (Exists.intro q0) ((apply And.intro ((exact hx)) ((exact h0)))))))))))))))))))
     (exact (g h))))
 (theorem cstm_call_inv
   ((xs (List (Prod Nat Nat)))
@@ -521,46 +267,7 @@
                                            ((apply And.intro ((exact hk))
                                               ((exact (Eq.symm (Option.some.inj h0))))))))))))))))))))))))))))))
     (exact (g h))))
-
-
 ;; ---- a tail call ----------------------------------------------------------------------------------
-(theorem irun_tail_inv
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (n1 Fuel)
-   (cal ICallee)
-   (es (List IExp))
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (r (Prod (BitVec 64) Mem))
-   (h (= (irun (FS n1) p ext rs (STail cal es) ls m) (some r))))
-  (exists ((vs (List (BitVec 64))))
-    (and (= (ievals rs ls m es) (some vs)) (= (cal_run n1 p ext rs cal vs m) (some r))))
-  (by
-    (have g
-      (-> (= (irun (FS n1) p ext rs (STail cal es) ls m) (some r))
-        (exists ((vs (List (BitVec 64))))
-          (and (= (ievals rs ls m es) (some vs)) (= (cal_run n1 p ext rs cal vs m) (some r)))))
-      (unfold irun)
-      (reduce)
-      (cases (ievals rs ls m es) hvs
-        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-         (some (vs0) (reduce)
-           (cases cal
-             ((CFn (i) (reduce)
-                (cases (fn_at p i) hf
-                  ((none () (reduce) (intro h0)
-                     (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
-                   (some (g0) (reduce) (intro h0)
-                     (apply (Exists.intro vs0)
-                       ((apply And.intro (rfl)
-                          ((show (= (fn_run n1 p ext rs (fn_at p i) vs0 m) (some r)))
-                           (rw hf)
-                           (exact h0)))))))))
-              (CExt (j) (reduce) (intro h0)
-                (apply (Exists.intro vs0) ((apply And.intro (rfl) ((exact h0))))))))))))
-    (exact (g h))))
 (theorem cstm_tail_inv
   ((xs (List (Prod Nat Nat)))
    (fs (List (Prod Nat Nat)))

@@ -1,0 +1,50 @@
+;;; v3/compile/calls_lo.shard — the first program (docs/COMPILE.md §8): six functions over
+;;; machine words with calls, a test and a loop. An integer that fits a word has one
+;;; representation, so each function is its meaning and its low form at once (docs/COMPILE.md
+;;; §5): no memory, no evidence. The loop counts a word down; its one equation at each side of
+;;; its test stands below it.
+(import "../models/x86/word.shard")
+(use models.x86.word)
+
+;; ---- the functions ------------------------------------------------------------------------------
+;; f0(a, b) = a + (b + b)
+(fn calls_f0 ((a (BitVec 64)) (b (BitVec 64))) (BitVec 64) (w64_add a (w64_add b b)))
+;; f1(a, b) = ((a - b) xor 5) and 255
+(fn calls_f1 ((a (BitVec 64)) (b (BitVec 64))) (BitVec 64)
+  (w64_and (w64_xor (w64_sub a b) (w64 5)) (w64 255)))
+;; f2(a, b) = if a < b then f0(b, a) + 1 else f1(a, b) or 1024
+(fn calls_f2 ((a (BitVec 64)) (b (BitVec 64))) (BitVec 64)
+  (if (w64_ltu a b) (w64_add (calls_f0 b a) (w64 1)) (w64_or (calls_f1 a b) (w64 1024))))
+;; a count that is not below 1 falls when 1 is taken from it
+(theorem count_descends ((n (BitVec 64)) (h (Not (< (w64_val n) 1))))
+  (< (w64_val (w64_sub n (w64 1))) (w64_val n))
+  (by
+    (have hle (<= 1 (w64_val n)) (exact (Nat.le_of_not_lt h)))
+    (have he (= (w64_val n) (+ (- (w64_val n) 1) 1)) (exact (Eq.symm (Nat.sub_add_cancel hle))))
+    (have hk (< 1 18446744073709551616) (decide))
+    (rw (w64_val_sub n (- (w64_val n) 1) 1 he hk))
+    (arith (Nat.sub_add_cancel hle))))
+;; f3(n, acc) = if n < 1 then acc else f3(n - 1, acc + n): acc and the numbers from 1 to n
+(fn calls_f3 ((n (BitVec 64)) (acc (BitVec 64))) (BitVec 64)
+  (measure (w64_val n))
+  (dif h (< (w64_val n) 1) acc (calls_f3 (w64_sub n (w64 1)) (w64_add acc n))))
+(fulfills calls_f3.dec_1 (by (intro p h) (apply count_descends (exact h))))
+;; f4(a, b) = f0(b, a)
+(fn calls_f4 ((a (BitVec 64)) (b (BitVec 64))) (BitVec 64) (calls_f0 b a))
+;; f5(x, y, n) = f2(f3(n, 0), f4(n, n)): the function a file's start-up calls, on the three
+;; words a start-up hands over; the first two are not used
+(fn calls_f5 ((x (BitVec 64)) (y (BitVec 64)) (n (BitVec 64))) (BitVec 64)
+  (calls_f2 (calls_f3 n (w64 0)) (calls_f4 n n)))
+
+;; ---- the loop's two cases -------------------------------------------------------------------------
+(theorem calls_f3_done ((n (BitVec 64)) (acc (BitVec 64)) (h (< (w64_val n) 1)))
+  (= (calls_f3 n acc) acc)
+  (by (rw calls_f3.eq_1) (rw (dif_pos h)) rfl))
+(theorem calls_f3_turn ((n (BitVec 64)) (acc (BitVec 64)) (h (Not (< (w64_val n) 1))))
+  (= (calls_f3 n acc) (calls_f3 (w64_sub n (w64 1)) (w64_add acc n)))
+  (by (rw calls_f3.eq_1 (occ 1)) (rw (dif_neg h)) rfl))
+
+;; ---- a closed sample ------------------------------------------------------------------------------
+;; f5 on the count 3: f3(3, 0) = 6, f4(3, 3) = 9, f2(6, 9) = 9 + 12 + 1
+(theorem sample_f5 ((x (BitVec 64)) (y (BitVec 64))) (= (w64_val (calls_f5 x y (w64 3))) 22)
+  (by decide))

@@ -1,0 +1,192 @@
+;;; v3/compile/calls_ir.shard — the intermediate code of the six functions of calls_lo.shard,
+;;; written by hand from their bodies, and the tie for each (docs/COMPILE.md §5, the front
+;;; step): the code's answer under `ir.shard` is the function's value, on any memory, which the
+;;; code leaves as it was. The code is in the shape the pass takes (`x86/pass.shard`): a call's
+;;; arguments are locals or numbers. A function is tied in any program that has its callees
+;;; where its code calls them, from the tie of each callee and nothing else about it; a call
+;;; that returns by `iends_call`, the loop by induction on the function's own measure.
+(import "calls_lo.shard")
+(import "ir_laws.shard")
+(use std.mem)
+(use compile.calls_lo)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.ir_laws)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code -----------------------------------------------------------------------------------
+;; Locals are a function's parameters in order, then the words it sets. Function i of the
+;; program is fi.
+(fn calls_code0 () IFn
+  (MkIFn 2 1 (SLet 2 (EOp OAdd (EVar 1) (EVar 1)) (SRet (EOp OAdd (EVar 0) (EVar 2))))))
+(fn calls_code1 () IFn
+  (MkIFn 2 0
+    (SLet 0 (EOp OSub (EVar 0) (EVar 1))
+      (SLet 0 (EOp OXor (EVar 0) (ENum (w64 5))) (SRet (EOp OAnd (EVar 0) (ENum (w64 255))))))))
+(fn calls_code2 () IFn
+  (MkIFn 2 1
+    (SIf (EVar 0) CLtu (EVar 1)
+      (SCall 2 (CFn 0) (list (EVar 1) (EVar 0)) (SRet (EOp OAdd (EVar 2) (ENum (w64 1)))))
+      (SCall 2 (CFn 1) (list (EVar 0) (EVar 1)) (SRet (EOp OOr (EVar 2) (ENum (w64 1024))))))))
+;; the loop: the sum is set before the count, which it reads; then a tail call of itself
+(fn calls_code3 () IFn
+  (MkIFn 2 0
+    (SIf (EVar 0) CLtu (ENum (w64 1)) (SRet (EVar 1))
+      (SLet 1 (EOp OAdd (EVar 1) (EVar 0))
+        (SLet 0 (EOp OSub (EVar 0) (ENum (w64 1))) (STail (CFn 3) (list (EVar 0) (EVar 1))))))))
+(fn calls_code4 () IFn (MkIFn 2 0 (STail (CFn 0) (list (EVar 1) (EVar 0)))))
+(fn calls_code5 () IFn
+  (MkIFn 3 2
+    (SCall 3 (CFn 3) (list (EVar 2) (ENum (w64 0)))
+      (SCall 4 (CFn 4) (list (EVar 2) (EVar 2)) (STail (CFn 2) (list (EVar 3) (EVar 4)))))))
+(fn calls_prog () (List IFn)
+  (list calls_code0 calls_code1 calls_code2 calls_code3 calls_code4 calls_code5))
+
+;; ---- the ties -----------------------------------------------------------------------------------
+;; straight-line code: a rule of the machine for each statement
+(theorem calls_tie0
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (a (BitVec 64))
+   (b (BitVec 64)))
+  (fn_ans p ext rs calls_code0 (cons a (cons b nil)) m (calls_f0 a b) m)
+  (by (apply And.intro (rfl) ((apply (iends_let (w64_add b b)) (rfl) ((apply iends_ret (rfl))))))))
+(theorem calls_tie1
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (a (BitVec 64))
+   (b (BitVec 64)))
+  (fn_ans p ext rs calls_code1 (cons a (cons b nil)) m (calls_f1 a b) m)
+  (by
+    (apply And.intro (rfl)
+      ((apply (iends_let (w64_sub a b)) (rfl)
+         ((apply (iends_let (w64_xor (w64_sub a b) (w64 5))) (rfl) ((apply iends_ret (rfl))))))))))
+;; a test and, each way, a call that returns: the callee's tie gives the call's word
+(theorem calls_tie2
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (a (BitVec 64))
+   (b (BitVec 64))
+   (h0 (= (fn_at p 0) (some calls_code0)))
+   (h1 (= (fn_at p 1) (some calls_code1))))
+  (fn_ans p ext rs calls_code2 (cons a (cons b nil)) m (calls_f2 a b) m)
+  (by
+    (unfold calls_f2)
+    (cases (w64_ltu a b) hb
+      ((true ()
+         (apply And.intro (rfl)
+           ((apply iends_if_true (rfl) (rfl) ((exact hb))
+              ((apply (iends_call calls_code0 (cons b (cons a nil)) (calls_f0 b a) m) (rfl)
+                 ((exact h0))
+                 ((exact (calls_tie0 p ext rs m b a)))
+                 ((apply iends_ret (rfl)))))))))
+       (false ()
+         (apply And.intro (rfl)
+           ((apply iends_if_false (rfl) (rfl) ((exact hb))
+              ((apply (iends_call calls_code1 (cons a (cons b nil)) (calls_f1 a b) m) (rfl)
+                 ((exact h1))
+                 ((exact (calls_tie1 p ext rs m a b)))
+                 ((apply iends_ret (rfl)))))))))))))
+;; the loop, in any program that has it at index 3: by induction on the function's own
+;; measure, a case at the test, the function's equation for that case, then a rule for each
+;; statement; at the tail call the function's own descent and the induction hypothesis
+(theorem calls_tie3
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (h3 (= (fn_at p 3) (some calls_code3)))
+   (k Nat))
+  (forall ((n (BitVec 64)) (acc (BitVec 64)))
+    (-> (= (w64_val n) k) (fn_ans p ext rs calls_code3 (cons n (cons acc nil)) m (calls_f3 n acc) m)))
+  (by
+    (wf k k ih (intro n acc hk)
+      (cases (Nat.decLt (w64_val n) 1)
+        ((isTrue (h) (rw (calls_f3_done n acc h))
+           (apply And.intro (rfl)
+             ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true n (w64 1) h)))
+                ((apply iends_ret (rfl)))))))
+         (isFalse (h) (rw (calls_f3_turn n acc h))
+           (have hdec (< (w64_val (w64_sub n (w64 1))) k) (rw (<- hk)) (exact (count_descends n h)))
+           (apply And.intro (rfl)
+             ((apply iends_if_false (rfl) (rfl) ((exact (icmp_ltu_false n (w64 1) h)))
+                ((apply (iends_let (w64_add acc n)) (rfl)
+                   ((apply (iends_let (w64_sub n (w64 1))) (rfl)
+                      ((apply
+                         (iends_tail calls_code3
+                           (cons (w64_sub n (w64 1)) (cons (w64_add acc n) nil)))
+                         (rfl)
+                         ((exact h3))
+                         ((exact
+                            (ih (w64_val (w64_sub n (w64 1))) hdec (w64_sub n (w64 1))
+                              (w64_add acc n)
+                              (Eq.refl (w64_val (w64_sub n (w64 1))))))))))))))))))))))
+;; a tail call of another function: its tie is the statement's
+(theorem calls_tie4
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (a (BitVec 64))
+   (b (BitVec 64))
+   (h0 (= (fn_at p 0) (some calls_code0))))
+  (fn_ans p ext rs calls_code4 (cons a (cons b nil)) m (calls_f4 a b) m)
+  (by
+    (apply And.intro (rfl)
+      ((apply (iends_tail calls_code0 (cons b (cons a nil))) (rfl) ((exact h0))
+         ((exact (calls_tie0 p ext rs m b a))))))))
+;; two calls that return, then a tail call on their words
+(theorem calls_tie5
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (x (BitVec 64))
+   (y (BitVec 64))
+   (n (BitVec 64))
+   (h0 (= (fn_at p 0) (some calls_code0)))
+   (h1 (= (fn_at p 1) (some calls_code1)))
+   (h2 (= (fn_at p 2) (some calls_code2)))
+   (h3 (= (fn_at p 3) (some calls_code3)))
+   (h4 (= (fn_at p 4) (some calls_code4))))
+  (fn_ans p ext rs calls_code5 (cons x (cons y (cons n nil))) m (calls_f5 x y n) m)
+  (by
+    (apply And.intro (rfl)
+      ((apply (iends_call calls_code3 (cons n (cons (w64 0) nil)) (calls_f3 n (w64 0)) m) (rfl)
+         ((exact h3))
+         ((exact (calls_tie3 p ext rs m h3 (w64_val n) n (w64 0) (Eq.refl (w64_val n)))))
+         ((apply (iends_call calls_code4 (cons n (cons n nil)) (calls_f4 n n) m) (rfl) ((exact h4))
+            ((exact (calls_tie4 p ext rs m n n h0)))
+            ((apply (iends_tail calls_code2 (cons (calls_f3 n (w64 0)) (cons (calls_f4 n n) nil)))
+               (rfl)
+               ((exact h2))
+               ((exact (calls_tie2 p ext rs m (calls_f3 n (w64 0)) (calls_f4 n n) h0 h1))))))))))))
+;; the six as one program: the answer of its function 5 is `calls_f5`
+(theorem calls_prog_tie
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (x (BitVec 64))
+   (y (BitVec 64))
+   (n (BitVec 64)))
+  (fn_ans calls_prog ext rs calls_code5 (cons x (cons y (cons n nil))) m (calls_f5 x y n) m)
+  (exact
+    (calls_tie5 calls_prog ext rs m x y n (Eq.refl (some calls_code0)) (Eq.refl (some calls_code1))
+      (Eq.refl (some calls_code2))
+      (Eq.refl (some calls_code3))
+      (Eq.refl (some calls_code4)))))
