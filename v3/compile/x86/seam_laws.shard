@@ -1,13 +1,17 @@
-;;; v3/compile/x86/seam_laws.shard — what a caller needs of the seam's statement (`seam.shard`)
-;;; beside the statement itself, proven once and for any code: a table in place stays in place
-;;; where memory agrees on the code's bytes; the data ranges map no byte of the code; and so,
-;;; after a call of code that `realizes` an answer, the caller's code is still in place
-;;; (`kept_code`).
+;;; v3/compile/x86/seam_laws.shard — what stands beside the seam's statement (`seam.shard`),
+;;; proven once and for any code, whoever wrote it: memories that agree on a range, and a table
+;;; in place where memory agrees on the code's bytes; the data ranges map no byte of the code; a
+;;; word read from the data ranges is the same in two memories that agree on them; after a call
+;;; of code that `realizes` an answer, the caller's code is still in place (`kept_code`); and
+;;; code that realizes an answer realizes every answer that says no more (`realizes_sub`), in
+;;; every table that has its rows (`realizes_part`).
 (import "seam.shard")
+(import "../../models/x86/part.shard")
 (use std.mem)
 (use compile.x86.seam)
 (use models.x86.frame)
 (use models.x86.laws)
+(use models.x86.part)
 (use models.x86.x86)
 (use models.x86.x86.Fuel)
 (use Init.Bool false true)
@@ -32,6 +36,67 @@
          (rw (h x h1 o0))
          (rw (ih (+ x 1) o1 o2))
          rfl)))))
+;; and so are a word of four bytes, a word of eight, and a list of words that lie inside it
+(theorem le32_on
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (x Nat)
+   (h (same_on m m2 lo hi))
+   (h1 (<= lo x))
+   (h2 (<= (+ x 4) hi)))
+  (= (mem_le32 m2 x) (mem_le32 m x))
+  (by
+    (have a0 (< x hi) (arith))
+    (have b1 (<= lo (+ x 1)) (arith))
+    (have a1 (< (+ x 1) hi) (arith))
+    (have b2 (<= lo (+ x 2)) (arith))
+    (have a2 (< (+ x 2) hi) (arith))
+    (have b3 (<= lo (+ x 3)) (arith))
+    (have a3 (< (+ x 3) hi) (arith))
+    (unfold mem_le32)
+    (rw (h x h1 a0))
+    (rw (h (+ x 1) b1 a1))
+    (rw (h (+ x 2) b2 a2))
+    (rw (h (+ x 3) b3 a3))
+    rfl))
+(theorem le64_on
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (x Nat)
+   (h (same_on m m2 lo hi))
+   (h1 (<= lo x))
+   (h2 (<= (+ x 8) hi)))
+  (= (mem_le64 m2 x) (mem_le64 m x))
+  (by
+    (have c1 (<= (+ x 4) hi) (arith))
+    (have c2 (<= lo (+ x 4)) (arith))
+    (have c3 (<= (+ (+ x 4) 4) hi) (arith))
+    (unfold mem_le64)
+    (rw (le32_on m m2 lo hi x h h1 c1))
+    (rw (le32_on m m2 lo hi (+ x 4) h c2 c3))
+    rfl))
+(theorem holds_on
+  ((m Mem)
+   (m2 Mem)
+   (lo Nat)
+   (hi Nat)
+   (q Nat)
+   (ys (List (BitVec 64)))
+   (h (holds m q ys))
+   (hso (same_on m m2 lo hi))
+   (h1 (<= lo q))
+   (h2 (<= (+ q (* 8 (List.length ys))) hi)))
+  (holds m2 q ys)
+  (by
+    (intro j hj)
+    (have b1 (<= lo (+ q (* 8 j))) (arith))
+    (have b2 (<= (+ (+ q (* 8 j)) 8) hi) (arith))
+    (rw (le64_on m m2 lo hi (+ q (* 8 j)) hso b1 b2))
+    (exact (h j hj))))
 ;; a table in place is in place in a state with the same mapping whose memory agrees on the
 ;; code's bytes
 (theorem code_in_on
@@ -81,6 +146,38 @@
            ((inl (a) (have hf False (arith)) (exact (False.elim hf)))
             (inr (b) (have hf False (arith)) (exact (False.elim hf))))))))))
 
+;; ---- memories that agree on the data ranges -------------------------------------------------------
+;; memories that agree on the data ranges agree on a range the data ranges map
+(theorem agree_on
+  ((rs (List Seg))
+   (m Mem)
+   (mc Mem)
+   (a Nat)
+   (n Nat)
+   (need Nat)
+   (h (agree rs m mc))
+   (hm (= (mapped rs a n need) true)))
+  (same_on m mc a (+ a n))
+  (by
+    (intro x h1 h2)
+    (have h3 (<= (+ x 1) (+ a n)) (arith))
+    (exact (h x need (mapped_part rs a n x 1 need h1 h3 hm)))))
+;; so a word read there is the same in both
+(theorem agree_le64
+  ((rs (List Seg))
+   (m Mem)
+   (mc Mem)
+   (a Nat)
+   (need Nat)
+   (h (agree rs m mc))
+   (hm (= (mapped rs a 8 need) true)))
+  (= (mem_le64 mc a) (mem_le64 m a))
+  (exact
+    (le64_on m mc a (+ a 8) a (agree_on rs m mc a 8 need h hm) (Nat.le_refl a) (Nat.le_refl (+ a 8)))))
+;; a memory is kept as itself
+(theorem kept_refl ((rs (List Seg)) (f Nat) (k Nat) (m Mem)) (kept_mem rs f k m m)
+  (by (intro x hx hm) rfl))
+
 ;; ---- after a call ---------------------------------------------------------------------------------
 ;; AFTER A CALL OF CODE THAT REALIZES AN ANSWER THE CALLER'S CODE IS IN PLACE. Of the state c the
 ;; callee was entered in, the caller met the statement's hypotheses (`room`, `data_ok`); of the
@@ -114,3 +211,41 @@
       (have hm (= (mapped rs x 1 2) false) (exact (code_not_data c rs clo chi f k hdata x 2 h1 h2)))
       (exact (hkm x o hm)))
     (exact (code_in_on c c2 tbl clo chi hall (kept_segs c c2 kp) son hc))))
+
+;; ---- one statement, another answer or another table -----------------------------------------------
+;; CODE THAT REALIZES AN ANSWER REALIZES EVERY ANSWER THAT SAYS NO MORE: where whatever `ans2`
+;; says `ans` says too. So code proven against one form of its answer — a run of intermediate
+;; code, a contract over lists — stands for a caller that runs with another
+(theorem realizes_sub
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (ans2 (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (hs
+     (forall ((vs (List (BitVec 64))) (m Mem) (v (BitVec 64)) (m2 Mem))
+       (-> (ans2 vs m v m2) (ans vs m v m2))))
+   (hr (realizes tbl clo chi entry k rs ans)))
+  (realizes tbl clo chi entry k rs ans2)
+  (by
+    (intro c vs v m m2 f hcode hargs hroom hdata hag hans)
+    (exact (hr c vs v m m2 f hcode hargs hroom hdata hag (hs vs m v m2 hans)))))
+;; CODE THAT REALIZES AN ANSWER OVER ITS OWN ROWS REALIZES IT IN ANY TABLE THAT HAS THOSE ROWS
+(theorem realizes_part
+  ((sub (List (Prod Nat (Prod Instr Nat))))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (hp (= (table_part sub tbl) true))
+   (hr (realizes sub clo chi entry k rs ans)))
+  (realizes tbl clo chi entry k rs ans)
+  (by
+    (intro c vs v m m2 f hcode hargs hroom hdata hag hans)
+    (exact (hr c vs v m m2 f (code_in_part c sub tbl hp hcode) hargs hroom hdata hag hans))))

@@ -20,7 +20,7 @@ checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/pass.txt")" = 0 ] || { 
 for f in ir.ieval ir.ievals x86.seam.regs_of x86.pass.cexp x86.pass.cargs x86.pass.cstm x86.pass.cfn x86.pass.cmod x86.pass.compile x86.code.placedb; do
   checks=$((checks+1)); grep -q "^DEFINE compile.$f equations=." "$OUT/pass.txt" || bad "compile.$f is not a definition with its equations"
 done
-for t in ir.irun ir_laws.irun_call_inv ir_laws.irun_more ir_laws.iends_ret ir_laws.iends_let ir_laws.iends_if_true ir_laws.iends_if_false ir_laws.iends_tail ir_laws.iends_call x86.code.placedb_ok x86.mem.framed_back_kept x86.call.call_law x86.tail.tail_law x86.expr.cexp_all x86.stmt_store.sim_store x86.function.sim_all x86.function.cfn_ok x86.module.module_realizes x86.module.fn_realizes_ext; do
+for t in ir.irun ir_laws.irun_call_inv ir_laws.irun_more ir_laws.iends_ret ir_laws.iends_let ir_laws.iends_if_true ir_laws.iends_if_false ir_laws.iends_tail ir_laws.iends_call ir_laws.iends_call_ext x86.seam_laws.realizes_sub x86.seam_laws.realizes_part x86.code.placedb_ok x86.mem.framed_back_kept x86.call.call_law x86.tail.tail_law x86.expr.cexp_all x86.stmt_store.sim_store x86.function.sim_all x86.function.cfn_ok x86.module.module_realizes x86.module.fn_realizes_ext x86.module.pair_at_one; do
   checks=$((checks+1)); grep -q "^ACCEPT compile.$t " "$OUT/pass.txt" || bad "compile.$t is not accepted"
   axs=$(grep "^ACCEPT compile.$t " "$OUT/pass.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')

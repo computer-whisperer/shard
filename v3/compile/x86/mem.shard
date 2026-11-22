@@ -1,10 +1,9 @@
-;;; v3/compile/x86/mem.shard — memories that agree on a range; what the data ranges are clear
-;;; of; the frame law of a callee that `realizes` an answer: after it returns, the caller's
-;;; description holds again; and a word read from the data ranges, a word stored in them, and
-;;; the frame law of a store.
+;;; v3/compile/x86/mem.shard — what the data ranges are clear of; the frame law of a callee that
+;;; `realizes` an answer: after it returns, the caller's description holds again; a word stored
+;;; in the data ranges, and the frame law of a store. Memories that agree on a range or on the
+;;; data ranges are seam_laws.shard's.
 (import "pass.shard")
 (import "seam_laws.shard")
-(import "../../models/x86/loaded.shard")
 (use std.mem)
 (use compile.x86.seam)
 (use compile.x86.seam_laws)
@@ -15,68 +14,6 @@
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
-
-;; ---- two memories that agree inside a range (`same_on`, seam_laws.shard) ----------------------------
-(theorem le32_on
-  ((m Mem)
-   (m2 Mem)
-   (lo Nat)
-   (hi Nat)
-   (x Nat)
-   (h (same_on m m2 lo hi))
-   (h1 (<= lo x))
-   (h2 (<= (+ x 4) hi)))
-  (= (mem_le32 m2 x) (mem_le32 m x))
-  (by
-    (have a0 (< x hi) (arith))
-    (have b1 (<= lo (+ x 1)) (arith))
-    (have a1 (< (+ x 1) hi) (arith))
-    (have b2 (<= lo (+ x 2)) (arith))
-    (have a2 (< (+ x 2) hi) (arith))
-    (have b3 (<= lo (+ x 3)) (arith))
-    (have a3 (< (+ x 3) hi) (arith))
-    (unfold mem_le32)
-    (rw (h x h1 a0))
-    (rw (h (+ x 1) b1 a1))
-    (rw (h (+ x 2) b2 a2))
-    (rw (h (+ x 3) b3 a3))
-    rfl))
-(theorem le64_on
-  ((m Mem)
-   (m2 Mem)
-   (lo Nat)
-   (hi Nat)
-   (x Nat)
-   (h (same_on m m2 lo hi))
-   (h1 (<= lo x))
-   (h2 (<= (+ x 8) hi)))
-  (= (mem_le64 m2 x) (mem_le64 m x))
-  (by
-    (have c1 (<= (+ x 4) hi) (arith))
-    (have c2 (<= lo (+ x 4)) (arith))
-    (have c3 (<= (+ (+ x 4) 4) hi) (arith))
-    (unfold mem_le64)
-    (rw (le32_on m m2 lo hi x h h1 c1))
-    (rw (le32_on m m2 lo hi (+ x 4) h c2 c3))
-    rfl))
-(theorem holds_on
-  ((m Mem)
-   (m2 Mem)
-   (lo Nat)
-   (hi Nat)
-   (q Nat)
-   (ys (List (BitVec 64)))
-   (h (holds m q ys))
-   (hso (same_on m m2 lo hi))
-   (h1 (<= lo q))
-   (h2 (<= (+ q (* 8 (List.length ys))) hi)))
-  (holds m2 q ys)
-  (by
-    (intro j hj)
-    (have b1 (<= lo (+ q (* 8 j))) (arith))
-    (have b2 (<= (+ (+ q (* 8 j)) 8) hi) (arith))
-    (rw (le64_on m m2 lo hi (+ q (* 8 j)) hso b1 b2))
-    (exact (h j hj))))
 ;; ---- what the data ranges are clear of ----------------------------------------------------------
 ;; no byte of the frame's words or of the return address is a byte of the data ranges
 (theorem frame_not_data
@@ -121,8 +58,6 @@
          (exact (hag x need h)))
        (inr (b) (have o (or (< x f) (<= (+ f (* 8 k)) x)) (apply Or.inr ((arith)))) (rw (hso x o))
          (exact (hag x need h)))))))
-(theorem kept_refl ((rs (List Seg)) (f Nat) (k Nat) (m Mem)) (kept_mem rs f k m m)
-  (by (intro x hx hm) rfl))
 ;; what was kept, then the frame's words changed
 (theorem kept_frame
   ((rs (List Seg))
@@ -299,35 +234,7 @@
     (exact
       (framed_up h (kept_segs c c2 kp) (kept_sp c c2 kp) hh hc2
         (same_outside_refl (Cpu.mem c2) f (+ f (* 8 k)))))))
-
-;; ---- a load and a store in the data ranges ------------------------------------------------------
-;; memories that agree on the data ranges agree on a range the data ranges map
-(theorem agree_on
-  ((rs (List Seg))
-   (m Mem)
-   (mc Mem)
-   (a Nat)
-   (n Nat)
-   (need Nat)
-   (h (agree rs m mc))
-   (hm (= (mapped rs a n need) true)))
-  (same_on m mc a (+ a n))
-  (by
-    (intro x h1 h2)
-    (have h3 (<= (+ x 1) (+ a n)) (arith))
-    (exact (h x need (mapped_part rs a n x 1 need h1 h3 hm)))))
-;; so a word read there is the same in both
-(theorem agree_le64
-  ((rs (List Seg))
-   (m Mem)
-   (mc Mem)
-   (a Nat)
-   (need Nat)
-   (h (agree rs m mc))
-   (hm (= (mapped rs a 8 need) true)))
-  (= (mem_le64 mc a) (mem_le64 m a))
-  (exact
-    (le64_on m mc a (+ a 8) a (agree_on rs m mc a 8 need h hm) (Nat.le_refl a) (Nat.le_refl (+ a 8)))))
+;; ---- a store in the data ranges --------------------------------------------------------------------
 ;; a byte two memories agree on, they agree on after the same store: of a byte, of four, of eight
 (theorem set_agree ((m Mem) (mc Mem) (k Nat) (v Nat) (x Nat) (h (= (mem_get mc x) (mem_get m x))))
   (= (mem_get (mem_set mc k v) x) (mem_get (mem_set m k v) x))

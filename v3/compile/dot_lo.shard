@@ -2,16 +2,20 @@
 ;;; (v3/models/x86/buffers.shard; docs/COMPILE.md §5): the ranges, the memory, the two addresses
 ;;; and the count as words, and the evidence about the two buffers; each read through `rd64`
 ;;; with the evidence that its address is in the ranges. Then the loop's one equation at each
-;;; side of its test, and a closed sample: two buffers of three words where a start-up's pushes
-;;; leave them, at the top of the stack.
+;;; side of its test; the low form as the answer of a function called from outside (`dot_ext`,
+;;; `dot_ans`), which is what a caller's intermediate code runs with and what `dot`'s code is
+;;; proven to realize, whoever wrote it; and a closed sample: two buffers of three words where
+;;; a start-up's pushes leave them, at the top of the stack.
 (import "lo.shard")
 (use std.mem)
 (use compile.lo)
 (use models.x86.laws)
 (use models.x86.word)
+(use models.x86.words)
 (use models.x86.x86)
 (use models.x86.x86.Seg)
 (use Init.List cons nil)
+(use Init.Option none some)
 
 ;; ---- the low form ------------------------------------------------------------------------------
 (fn dot_lo_go
@@ -75,6 +79,67 @@
    (h (Not (< (w64_val i) (w64_val n)))))
   (= (dot_lo_go rs m px py n ex ey i acc) acc)
   (by (rw dot_lo_go.eq_1) (rw (dif_neg h)) rfl))
+
+;; ---- the low form as the answer of a function called from outside --------------------------------
+;; what the low form asks of the argument words: three of them, and the evidence about each
+;; buffer
+(def dot_ok ((rs (List Seg)) (vs (List (BitVec 64)))) Prop
+  (and (= vs (cons (nth vs 0) (cons (nth vs 1) (cons (nth vs 2) nil))))
+    (and (buf_ok rs (nth vs 0) (nth vs 2) 4) (buf_ok rs (nth vs 1) (nth vs 2) 4))))
+;; the answer: where that holds, the low form's value, and the memory as it was
+(def dot_ext ((rs (List Seg)) (vs (List (BitVec 64))) (m Mem)) (Option (Prod (BitVec 64) Mem))
+  (ans_on (dot_ok rs vs)
+    (fun ((h (dot_ok rs vs)))
+      (Prod.mk
+        (dot_lo rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right h))
+          (And.right (And.right h)))
+        m))))
+;; the same as a relation, which is what code realizes (`x86/seam.shard`)
+(def dot_ans ((rs (List Seg)) (vs (List (BitVec 64))) (m Mem) (v (BitVec 64)) (m2 Mem)) Prop
+  (= (dot_ext rs vs m) (some (Prod.mk v m2))))
+;; on two addresses and a count, with the evidence, it is the low form
+(theorem dot_ext_is
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (= (dot_ext rs (cons px (cons py (cons n nil))) m) (some (Prod.mk (dot_lo rs m px py n ex ey) m)))
+  (exact
+    (ans_on_pos (dot_ok rs (cons px (cons py (cons n nil))))
+      (fun ((h (dot_ok rs (cons px (cons py (cons n nil))))))
+        (Prod.mk (dot_lo rs m px py n (And.left (And.right h)) (And.right (And.right h))) m))
+      (And.intro (Eq.refl (cons px (cons py (cons n nil)))) (And.intro ex ey)))))
+;; and whatever it answers is the low form's value on three words that have the evidence
+(theorem dot_ans_inv
+  ((rs (List Seg))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (dot_ans rs vs m v m2)))
+  (exists ((ok (dot_ok rs vs)))
+    (and
+      (= v
+        (dot_lo rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right ok))
+          (And.right (And.right ok))))
+      (= m2 m)))
+  (by
+    (cases
+      (ans_on_inv (dot_ok rs vs)
+        (fun ((h (dot_ok rs vs)))
+          (Prod.mk
+            (dot_lo rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right h))
+              (And.right (And.right h)))
+            m))
+        (Prod.mk v m2)
+        h)
+      ((intro (ok e)
+         (apply (Exists.intro ok)
+           ((apply And.intro ((exact (congrArg (fun ((q (Prod (BitVec 64) Mem))) (Prod.fst q)) e)))
+              ((exact (congrArg (fun ((q (Prod (BitVec 64) Mem))) (Prod.snd q)) e)))))))))))
 
 ;; ---- a closed sample ---------------------------------------------------------------------------
 ;; One range of six words mapped to read and write, the last 48 bytes below 140737488347136:
