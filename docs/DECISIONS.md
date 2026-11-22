@@ -800,6 +800,36 @@ entries are explained under "Measured" at the end.
   `Int.ediv` at `Int`, and `Int.tmod` (21 and 2 uses rewritten): at a zero divisor those
   are total where the bare ones were stuck. Init's two shifts at `Int` written by name are
   read as the bare operators, by all three readers.
+- One statement crosses a module's seam for a function, the same for compiled and for hand-written
+  code, and it takes the function's answer on any memory the machine's agrees with on the data
+  ranges (`COMPILE.md` §5; the form to build — the tree holds none of it); not the answer taken on
+  the machine's own memory, as it was first stated — a compiled caller knows its callee's answer
+  on the memory of its own run, which differs from the machine's in the caller's stack frame, and
+  the pass's proof of a call did not go through (a callee whose answer is 0 where no word of
+  memory is R, met by code that returns 1 when its return address is R, makes the first statement
+  false of a compiled caller); not three statements for a function with its contract proven on
+  intermediate code, as first proposed — an author would prove on a second language (`LAW.md`
+  ruling 19), and every implementation would prove the contract again, where a low form is proven
+  against its meaning once; not the low form left out for hand-written code alone — a compiled
+  caller needs its callee's answer as a function. Assent, on the report of a trial outside the
+  tree: "Good -- this looks good to be the paradigm."
+- Chosen in that trial, not put to the owner one by one. The intermediate has no loop statement:
+  every path of a body ends in a return or a tail call, and a loop is a function's tail call of
+  itself; not `while` — a low form's loop is a function that calls itself last, and with the two
+  in one shape the proof that intermediate code computes its low form came out the same for the
+  three loops tried, which a `while` would have asked an invariant of each for. A call takes its
+  callee's answer and runs no body, so hand-written code needs no intermediate form. The pass's
+  theorem is for a module at a time and assumes the seam's statement of each function called from
+  outside; not for a whole program. The convention at a seam is the one the trial's hand-written
+  code follows (System V: six argument registers, the result in rax, six registers kept); inside a
+  module nothing is fixed.
+- Nothing an author writes names anything in a file a tool wrote beside the source (`COMPILE.md`
+  §5, `LAW.md` ruling 21); not a module of generated lemma statements that sources import — a
+  reader would have to trust the generator to know what a theorem says, and making the file again
+  would rename what authors cite. A statement an author's text cites comes from a form in the
+  source with a fixed name. Assent: "yes, this matches my intent." Not decided with it: a file
+  kept or made again by each build — making three stored proofs again cost 2.0 s against 0.4 s to
+  replay them, and gave the same bytes (Measured).
 
 ## Proofs and automation
 
@@ -1798,3 +1828,28 @@ measurements; measure again before building on one.
   the byte-tie 8, the suite on the binaries 7). The three start together; in #728 itself
   `native` waited 29 minutes for a place behind an older pipeline, which made it 57. The next
   pipeline, #729, on an idle runner: 31 minutes, its three gate jobs 30, 29 and 30.
+- The trial of `COMPILE.md` §5's form: scratch files outside the repository, each loaded with the
+  tree's loader, no `sorry`; single measurements. *Front step*, three loops (a sum of products
+  over two buffers, a sum into the first of two, a third chosen to differ): the proof that a
+  loop's intermediate code computes its low form is 64 to 87 lines by hand, its statement among
+  them, and holds no arithmetic fact; one tactic library of 530 lines wrote all three, each
+  accepted on `prove`'s first run; the three replayed from their sidecars add 0.4 s to a load of
+  7.4 s, and made again add 2.0 s and give the same bytes. The two case lemmas of a loop — its
+  equation at each side of its test — were stated by hand, some 30 lines a loop: a tactic library
+  states no lemma. Meaning to low form by hand: 59 lines for the sum of products, 145 for the sum
+  into a buffer (its invariant, and that the buffers lie apart). The intermediate code itself was
+  written by hand from each low form: no tool is handed a definition. *The pass*: locals in the
+  six registers a caller keeps, add, subtract and the three bit operations, `if` on an unsigned
+  comparison, calls of functions outside the module and of lower functions of it, tail calls;
+  2,060 lines of statements and 2,940 of proof — a call 890 and 370 of frame law, a branch 570, a
+  local 270, 700 of them lemmas that read the pass's output back —, 14 CPU seconds in K. Not in
+  it: loads and stores, multiply, a seventh local, a call of itself that is not a tail call. *One
+  file*: the hand-written sum of products and a compiled module whose `main` calls it, proven to
+  exit with 175 for the arguments the file passes, and exiting with 175 on the processor; the
+  hand-written function's statement at the seam from its existing contract in 177 lines and 149 of
+  lemmas; thirteen facts of the file, each a closed computation; a changed instruction in the file
+  refused 2 s after the imports, a program changed after it was compiled in 0.2 s. `main`'s answer
+  was proven for those arguments and not for all. *Pointers*: a linked list summed and reversed in
+  place, 2,040 lines; what made it statable is the ranges an object stands in as a value;
+  apartness stated pair by pair takes w(n−w) + w(w−1)/2 hypotheses for n objects of which w are
+  written.
