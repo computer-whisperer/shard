@@ -8,10 +8,9 @@
 # realizes its answer exits as the answer says (x86/link.shard `link_exits`); and so the file —
 # a start-up that pushes two buffers of three words, then the compiled code — exits with what
 # `dot` computes of them (`dot_file_exits`), all on no axiom but Lean's three. The file's run
-# by the model and by the processor gives the status the evaluator computes of `dot`: 68.
+# by the model and by the processor is compile_dot_file_test.sh's.
 # Exit code = the number of checks that failed.
 NAME=compile_dot_test; . "$(dirname "$0")/x86_common.sh"
-no_chip
 C=v3/compile
 
 "${LOAD[@]}" $C/x86/dot_run.shard > "$OUT/dot.txt" 2>&1; rc=$?
@@ -27,13 +26,6 @@ for t in lo.rd_word dot_lo.dot_lo_go_turn dot_lo.dot_lo_go_done dot_ir.dot_go_ti
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')
   checks=$((checks+1)); [ -z "${other// /}" ] || bad "compile.$t rests on $other"
 done
-"${LOAD[@]}" --run compile.x86.dot_main.main $C/x86/dot_main.shard -- "$OUT/dot" > "$OUT/dotrun.txt" 2>&1; rc=$?
-checks=$((checks+1)); [ "$rc" = 68 ] && [ -s "$OUT/dot" ] || { bad "dot's file was not written, or the evaluator's status of dot is not 68 (exit $rc)"; tail -3 "$OUT/dotrun.txt" | cut -c1-200; }
-m=$("${RUN[@]}" run 2000 "$OUT/dot" 2>&1 | tail -1)
-checks=$((checks+1)); [ "$m" = "exit 68" ] || bad "the model's run of dot's file is not exit 68: $m"
-if [ $onchip = 1 ]; then
-  checks=$((checks+1)); [ "$(chip "$OUT/dot")" = "exit 68" ] || bad "the processor's run of dot's file is $(chip "$OUT/dot"), the model's exit 68"
-fi
 
 echo "$NAME: $checks checks, $fail failed"
 exit $fail

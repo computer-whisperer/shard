@@ -1920,12 +1920,12 @@ measurements; measure again before building on one.
   first proven in, and loads in 11 s. `dot`'s front — its low form, its intermediate code and the
   two proofs above the pass — is 500 lines by hand, the tie 71 of them with no arithmetic fact,
   and loads in 12 s; the file's twelve facts and its two theorems are 190 lines, and the whole
-  chain loads in 30 s. The two tests take 41 and 65 s. Faults planted by hand in copies, one at a
-  time, each loaded once: five in the pass (a jump that drops a branch, the wrong condition, a
-  local set from the wrong register, two pops exchanged, a stack need one word short) and two in
-  its new parts (a load at a displacement of 8, a multiply emitted as an add) are refused by the
-  pass's proof in 21 to 32 s; a wrong start in `dot`'s low form, a wrong step in its code, an
-  instruction dropped from the file, a call one byte off and a wrong exit status claimed are
-  refused at their own facts in 22 to 40 s. Not every wrong low form is refused quickly: with the
-  two reads of the product exchanged, K takes 231 s and 12 GB to refuse the tie (`OPEN.md` §1, a
-  comparison between two calls of one function defined by a measure).
+  chain loads in 30 s. Faults planted by hand in copies, one at a time, each loaded once: five in
+  the pass (a jump that drops a branch, the wrong condition, a local set from the wrong register,
+  two pops exchanged, a stack need one word short) and two in its new parts (a load at a
+  displacement of 8, a multiply emitted as an add) are refused by the pass's proof in 21 to 32 s;
+  a wrong start in `dot`'s low form, a wrong step in its code, an instruction dropped from the
+  file, a call one byte off and a wrong exit status claimed are refused at their own facts in 22
+  to 40 s. Not every wrong low form is refused quickly: with the two reads of the product
+  exchanged, K takes 231 s and 12 GB to refuse the tie (`OPEN.md` §1, a comparison between two
+  calls of one function defined by a measure).

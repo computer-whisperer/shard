@@ -80,13 +80,13 @@ at these addresses — are closed computations (`rfl`, `decide`): twelve in `x86
 
 ## Tests
 
-`v3/kernel/test/compile_pass_test.sh` (the pass and its theorem; the module of calls, eight
-calls compared between the intermediate machine, the model and the processor) and
-`compile_dot_test.sh` (`dot`'s chain accepted, its file's run by the model and the processor).
-Natively about 40 and 65 seconds:
+Four entrypoints of the suite, in `v3/kernel/test/`: `compile_pass_test.sh` (the pass and its
+theorem accepted; its hypotheses met by the module of calls), `compile_calls_test.sh` (that
+module's file: eight calls compared between the intermediate machine, the model and the
+processor), `compile_dot_test.sh` (`dot`'s chain accepted) and `compile_dot_file_test.sh`
+(`dot`'s file run by the model and the processor). Natively each takes under a minute:
 
 ```sh
-EVAL=v3/bin/eval v3/kernel/test/compile_pass_test.sh
 EVAL=v3/bin/eval v3/kernel/test/compile_dot_test.sh
 ```
 

@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 57 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 59 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
