@@ -203,32 +203,6 @@
        (reduce)
        (rw he)
        rfl))))
-(theorem iends_let
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (x Nat)
-   (e IExp)
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (w (BitVec 64))
-   (v (BitVec 64))
-   (m2 Mem)
-   (he (= (ieval rs ls m e) (some w)))
-   (hr (iends p ext rs k (upd ls x w) m v m2)))
-  (iends p ext rs (SLet x e k) ls m v m2)
-  (by
-    (cases hr
-      ((intro (n hn)
-         (apply (Exists.intro (FS n))
-           ((show (= (irun (FS n) p ext rs (SLet x e k) ls m) (some (Prod.mk v m2))))
-            (unfold irun)
-            (reduce)
-            (rw he)
-            (reduce)
-            (exact hn))))))))
-
 ;; an expression's word, one node at a time
 (theorem ieval_op
   ((rs (List Seg))
@@ -253,21 +227,6 @@
    (hm (= (mapped rs (w64_val q) 8 4) true)))
   (= (ieval rs ls m (ELoad a)) (some (w64 (mem_le64 m (w64_val q)))))
   (by (unfold ieval) (reduce) (rw ha) (reduce) (rw hm) rfl))
-(theorem ievals_nil ((rs (List Seg)) (ls (List (BitVec 64))) (m Mem))
-  (= (ievals rs ls m nil) (some nil))
-  (by rfl))
-(theorem ievals_cons
-  ((rs (List Seg))
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (e IExp)
-   (r (List IExp))
-   (v (BitVec 64))
-   (vs (List (BitVec 64)))
-   (he (= (ieval rs ls m e) (some v)))
-   (hr (= (ievals rs ls m r) (some vs))))
-  (= (ievals rs ls m (cons e r)) (some (cons v vs)))
-  (by (unfold ievals) (reduce) (rw he) (reduce) (rw hr) rfl))
 ;; a comparison, from the fact a low form's test states
 (theorem icmp_ltu_true ((a (BitVec 64)) (b (BitVec 64)) (h (< (w64_val a) (w64_val b))))
   (= (icmp CLtu a b) true)
@@ -344,8 +303,8 @@
             (rw hc)
             (reduce)
             (exact hn))))))))
-;; a local set: `iends_let` with the word given and everything the goal fixes left out
-(theorem iends_let_w
+;; a local set: the word given, everything the goal fixes left out
+(theorem iends_let
   ((p (List IFn) implicit)
    (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))) implicit)
    (rs (List Seg) implicit)
@@ -360,38 +319,14 @@
    (he (= (ieval rs ls m e) (some w)))
    (hr (iends p ext rs k (upd ls x w) m v m2)))
   (iends p ext rs (SLet x e k) ls m v m2)
-  (exact (iends_let p ext rs x e k ls m w v m2 he hr)))
-;; a store: its address mapped to write
-(theorem iends_store
-  ((p (List IFn) implicit)
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))) implicit)
-   (rs (List Seg) implicit)
-   (a IExp implicit)
-   (e IExp implicit)
-   (k IStm implicit)
-   (ls (List (BitVec 64)) implicit)
-   (m Mem implicit)
-   (v (BitVec 64) implicit)
-   (m2 Mem implicit)
-   (q (BitVec 64))
-   (w (BitVec 64))
-   (ha (= (ieval rs ls m a) (some q)))
-   (he (= (ieval rs ls m e) (some w)))
-   (hm (= (mapped rs (w64_val q) 8 2) true))
-   (hr (iends p ext rs k ls (mem_put64 m (w64_val q) (w64_val w)) v m2)))
-  (iends p ext rs (SStore a e k) ls m v m2)
   (by
     (cases hr
       ((intro (n hn)
          (apply (Exists.intro (FS n))
-           ((show (= (irun (FS n) p ext rs (SStore a e k) ls m) (some (Prod.mk v m2))))
+           ((show (= (irun (FS n) p ext rs (SLet x e k) ls m) (some (Prod.mk v m2))))
             (unfold irun)
             (reduce)
-            (rw ha)
-            (reduce)
             (rw he)
-            (reduce)
-            (rw hm)
             (reduce)
             (exact hn))))))))
 ;; a tail call to a function of the program: the callee's answer is the statement's
@@ -426,29 +361,6 @@
                  (reduce)
                  (exact hn)))))))))))
 
-;; ---- a first run -------------------------------------------------------------------------------
-;; f0(a, b) = if a < b then f1(b, a) + 1 else a - b ;  f1(a, b) = a + (b + b)
+;; ---- a run with nothing outside ----------------------------------------------------------------
+;; no external answers
 (fn no_ext ((j Nat) (vs (List (BitVec 64))) (m Mem)) (Option (Prod (BitVec 64) Mem)) none)
-(fn demo_prog () (List IFn)
-  (cons
-    (make IFn (params 2) (extra 1)
-      (body
-        (SIf (EVar 0) CLtu (EVar 1)
-          (SCall 2 (CFn 1) (cons (EVar 1) (cons (EVar 0) nil))
-            (SRet (EOp OAdd (EVar 2) (ENum (w64 1)))))
-          (SRet (EOp OSub (EVar 0) (EVar 1))))))
-    (cons
-      (make IFn (params 2) (extra 0) (body (SRet (EOp OAdd (EVar 0) (EOp OAdd (EVar 1) (EVar 1))))))
-      nil)))
-(fn demo_val ((a Nat) (b Nat)) Nat
-  (match (fn_at demo_prog 0)
-    (none 98)
-    ((some g)
-     (match
-       (irun (fuel_of 10) demo_prog no_ext nil (IFn.body g)
-         (enter g (cons (w64 a) (cons (w64 b) nil)))
-         mem_empty)
-       (none 99)
-       ((some r) (w64_val (Prod.fst r)))))))
-(theorem demo_one () (= (demo_val 3 5) 12) (by decide))
-(theorem demo_two () (= (demo_val 9 5) 4) (by decide))

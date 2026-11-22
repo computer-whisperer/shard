@@ -1,0 +1,376 @@
+;;; v3/compile/x86/stmt_store.shard — the statement-level case of a store: the address's code
+;;; for rax, the word's for rcx, the store's instruction, and the rest of the statement on the
+;;; memory after, the frame's description held through the store.
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.IStm)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(import "stmt.shard")
+(use compile.x86.expr)
+(use compile.x86.entry)
+(use compile.x86.stmt)
+
+;; the state after a store's instruction at pc: the word v at the number of the word q
+(fn st_out ((c Cpu) (q (BitVec 64)) (v (BitVec 64)) (pc Nat)) Cpu
+  (at_pc (mem_to c (mem_put64 (Cpu.mem c) (w64_val q) (w64_val v))) (w64 (+ pc 3))))
+;; the machine's part: the address's code leaves the address in rax, the word's code the word in
+;; rcx and rax as it was, and the store's instruction writes where the data ranges map to write
+(theorem store_run
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (q IExp)
+   (e IExp)
+   (c Cpu)
+   (a Nat)
+   (cq (List Instr))
+   (ce (List Instr))
+   (qa (BitVec 64))
+   (va (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hnl (<= nl 6))
+   (hq (= (ieval rs ls mi q) (some qa)))
+   (he (= (ieval rs ls mi e) (some va)))
+   (hm (= (mapped rs (w64_val qa) 8 2) true))
+   (hcq (= (cexp 0 q nl) (some cq)))
+   (hce (= (cexp 1 e nl) (some ce)))
+   (p1 (placed tbl a cq))
+   (p2 (placed tbl (+ a (isize cq)) ce))
+   (s3 (= (site tbl (+ (+ a (isize cq)) (isize ce))) (some (Prod.mk (MovRmR (RmMem 0 0) 1) 3))))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (hst (est tbl rs ls mi nl c)))
+  (exists ((c2 Cpu))
+    (and (reaches c (st_out c2 qa va (+ (+ a (isize cq)) (isize ce)))) (scratch c c2)))
+  (by
+    (cases (cexp_at tbl clo chi rs ls mi nl 0 c a q cq qa hall hchi hnl hcq hq p1 hrip hst)
+      ((intro (c1 g1) (have r1 (reaches c c1) (exact (And.left g1)))
+         (have v1 (= (reg c1 (treg 0)) qa) (exact (And.left (And.right g1))))
+         (have rip1 (= (Cpu.rip c1) (w64 (+ a (isize cq))))
+           (exact (And.left (And.right (And.right g1)))))
+         (have t1 (tstep 0 c c1) (exact (And.right (And.right (And.right g1)))))
+         (have st1 (est tbl rs ls mi nl c1)
+           (exact (est_scratch tbl rs ls mi nl c c1 hst (tstep_scratch 0 c c1 t1))))
+         (cases
+           (cexp_at tbl clo chi rs ls mi nl 1 c1 (+ a (isize cq)) e ce va hall hchi hnl hce he p2
+             rip1
+             st1)
+           ((intro (c2 g2) (have r2 (reaches c1 c2) (exact (And.left g2)))
+              (have v2 (= (reg c2 1) va) (exact (And.left (And.right g2))))
+              (have rip2 (= (Cpu.rip c2) (w64 (+ (+ a (isize cq)) (isize ce))))
+                (exact (And.left (And.right (And.right g2)))))
+              (have t2 (tstep 1 c1 c2) (exact (And.right (And.right (And.right g2)))))
+              (have h01 (< 0 1) decide)
+              (have v3 (= (reg c2 0) qa) (exact (Eq.trans (tstep_low 1 c1 c2 0 t2 h01) v1)))
+              (have st2 (est tbl rs ls mi nl c2)
+                (exact (est_scratch tbl rs ls mi nl c1 c2 st1 (tstep_scratch 1 c1 c2 t2))))
+              (have hcode2 (code_in c2 tbl) (exact (And.left st2)))
+              (have hmp
+                (forall ((x Nat) (n Nat) (need Nat))
+                  (-> (= (mapped rs x n need) true) (= (mapped (Cpu.segs c2) x n need) true)))
+                (exact (And.right (And.right (And.right st2)))))
+              (have r3 (reaches c2 (st_out c2 qa va (+ (+ a (isize cq)) (isize ce))))
+                (apply (t_store tbl clo chi (+ (+ a (isize cq)) (isize ce)) 0 1 3 qa va)
+                  ((exact hall))
+                  ((exact hchi))
+                  ((exact hcode2))
+                  ((exact rip2))
+                  ((exact s3))
+                  ((exact v3))
+                  ((exact v2))
+                  ((exact (hmp (w64_val qa) 8 2 hm)))
+                  ((exact (reaches_refl (st_out c2 qa va (+ (+ a (isize cq)) (isize ce))))))))
+              (apply (Exists.intro c2)
+                ((apply And.intro
+                   ((exact
+                      (reaches_trans c c1 (st_out c2 qa va (+ (+ a (isize cq)) (isize ce))) r1
+                        (reaches_trans c1 c2 (st_out c2 qa va (+ (+ a (isize cq)) (isize ce))) r2 r3))))
+                   ((exact
+                      (scratch_trans c c1 c2 (tstep_scratch 0 c c1 t1) (tstep_scratch 1 c1 c2 t2)))))))))))))))
+;; the store done, the rest of the statement by the fact for runs of the fuel below: the frame
+;; is described after the store, the machine's memory is the run's on the data ranges, and a
+;; byte the data ranges do not map to write is as it was
+(theorem store_rest
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (c2 Cpu)
+   (pc Nat)
+   (ck (List Instr))
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (qa (BitVec 64))
+   (va (BitVec 64))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hm (= (mapped rs (w64_val qa) 8 2) true))
+   (hrk (= (irun n1 p ext rs k ls (mem_put64 mi (w64_val qa) (w64_val va))) (some (Prod.mk v m2))))
+   (hck (= (cstm xs fs ts p nl (+ pc 3) k) (some ck)))
+   (p3 (placed tbl (+ pc 3) ck))
+   (hsn (<= (sneed xs fs ts p k) d))
+   (hsc (scratch c c2))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 (st_out c2 qa va pc) v m2)
+  (by
+    (have w2 (framed c0 tbl clo chi f (+ d 6) m0 c2 d (saved c0))
+      (exact (framed_scratch c0 tbl clo chi f (+ d 6) m0 c d (saved c0) c2 w hsc)))
+    (have w3
+      (framed c0 tbl clo chi f (+ d 6) (mem_put64 (Cpu.mem c2) (w64_val qa) (w64_val va))
+        (st_out c2 qa va pc)
+        d
+        (saved c0))
+      (exact
+        (framed_store c0 tbl clo chi f (+ d 6) m0 c2 d (saved c0) rs (w64_val qa) (w64_val va)
+          (w64 (+ pc 3))
+          w2
+          hdo
+          hm)))
+    (have hls2 (= ls (List.take nl (regs6 c2))) (rw (scratch_regs c c2 hsc)) (exact hls))
+    (have hls3 (= ls (List.take nl (regs6 (st_out c2 qa va pc)))) (exact hls2))
+    (have hagc (agree rs mi (Cpu.mem c2))
+      (exact (agree_frame c0 rs clo chi f (+ d 6) mi m0 (Cpu.mem c2) hdo hag (framed_mem w2))))
+    (have hag3
+      (agree rs (mem_put64 mi (w64_val qa) (w64_val va))
+        (mem_put64 (Cpu.mem c2) (w64_val qa) (w64_val va)))
+      (exact (agree_put64 rs mi (Cpu.mem c2) (w64_val qa) (w64_val va) hagc)))
+    (have hkc (kept_mem rs f (+ d 6) (Cpu.mem c0) (Cpu.mem c2))
+      (exact (kept_frame rs f (+ d 6) (Cpu.mem c0) m0 (Cpu.mem c2) hkm (framed_mem w2))))
+    (have hkm3
+      (kept_mem rs f (+ d 6) (Cpu.mem c0) (mem_put64 (Cpu.mem c2) (w64_val qa) (w64_val va)))
+      (exact (kept_put64 rs f (+ d 6) (Cpu.mem c0) (Cpu.mem c2) (w64_val qa) (w64_val va) hkc hm)))
+    (have hrip3 (= (Cpu.rip (st_out c2 qa va pc)) (w64 (+ pc 3))) rfl)
+    (exact
+      (ih k ls (mem_put64 mi (w64_val qa) (w64_val va)) v m2 (st_out c2 qa va pc) (+ pc 3) ck c0 f d
+        nl
+        (mem_put64 (Cpu.mem c2) (w64_val qa) (w64_val va))
+        hrk
+        hck
+        p3
+        hsn
+        hrip3
+        w3
+        hls3
+        hnl
+        hag3
+        hkm3
+        hdo))))
+;; ---- a store ------------------------------------------------------------------------------------
+(theorem store_core
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (q IExp)
+   (e IExp)
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (a Nat)
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (qa (BitVec 64))
+   (va (BitVec 64))
+   (cq (List Instr))
+   (ce (List Instr))
+   (ck (List Instr))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hq (= (ieval rs ls mi q) (some qa)))
+   (he (= (ieval rs ls mi e) (some va)))
+   (hm (= (mapped rs (w64_val qa) 8 2) true))
+   (hrk (= (irun n1 p ext rs k ls (mem_put64 mi (w64_val qa) (w64_val va))) (some (Prod.mk v m2))))
+   (hcq (= (cexp 0 q nl) (some cq)))
+   (hce (= (cexp 1 e nl) (some ce)))
+   (hck (= (cstm xs fs ts p nl (+ a (+ (+ (isize cq) (isize ce)) 3)) k) (some ck)))
+   (hpl (placed tbl a (List.append cq (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)))))
+   (hsn (<= (sneed xs fs ts p k) d))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 c v m2)
+  (by
+    (have p1 (placed tbl a cq)
+      (exact (And.left (placed_app tbl cq a (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)) hpl))))
+    (have p23 (placed tbl (+ a (isize cq)) (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)))
+      (exact (And.right (placed_app tbl cq a (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)) hpl))))
+    (have p2 (placed tbl (+ a (isize cq)) ce)
+      (exact (And.left (placed_app tbl ce (+ a (isize cq)) (cons (MovRmR (RmMem 0 0) 1) ck) p23))))
+    (have p3c (placed tbl (+ (+ a (isize cq)) (isize ce)) (cons (MovRmR (RmMem 0 0) 1) ck))
+      (exact (And.right (placed_app tbl ce (+ a (isize cq)) (cons (MovRmR (RmMem 0 0) 1) ck) p23))))
+    (have s3
+      (= (site tbl (+ (+ a (isize cq)) (isize ce))) (some (Prod.mk (MovRmR (RmMem 0 0) 1) 3)))
+      (exact (And.left p3c)))
+    (have p3 (placed tbl (+ (+ (+ a (isize cq)) (isize ce)) 3) ck) (exact (And.right p3c)))
+    (have ea (= (+ a (+ (+ (isize cq) (isize ce)) 3)) (+ (+ (+ a (isize cq)) (isize ce)) 3))
+      (arith))
+    (have hck2 (= (cstm xs fs ts p nl (+ (+ (+ a (isize cq)) (isize ce)) 3) k) (some ck))
+      (rw (<- ea))
+      (exact hck))
+    (have hst (est tbl rs ls mi nl c)
+      (exact (est_framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0) rs ls mi nl w hls hag hdo)))
+    (cases
+      (store_run tbl clo chi rs ls mi nl q e c a cq ce qa va hall hchi hnl hq he hm hcq hce p1 p2 s3
+        hrip hst)
+      ((intro (c2 g)
+         (exact
+           (done_from rs f (+ d 6) c0 c (st_out c2 qa va (+ (+ a (isize cq)) (isize ce))) v m2
+             (And.left g)
+             (store_rest p ext rs tbl clo chi xs fs ts n1 k ls mi v m2 c c2
+               (+ (+ a (isize cq)) (isize ce))
+               ck
+               c0
+               f
+               d
+               nl
+               m0
+               qa
+               va
+               ih
+               hm
+               hrk
+               hck2
+               p3
+               hsn
+               (And.right g)
+               w
+               hls
+               hnl
+               hag
+               hkm
+               hdo))))))))
+;; a store, from the pass's answer and the run's
+(theorem sim_store
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (q IExp)
+   (e IExp)
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (a Nat)
+   (code (List Instr))
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hrun (= (irun (FS n1) p ext rs (SStore q e k) ls mi) (some (Prod.mk v m2))))
+   (hcs (= (cstm xs fs ts p nl a (SStore q e k)) (some code)))
+   (hpl (placed tbl a code))
+   (hsn (<= (sneed xs fs ts p (SStore q e k)) d))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 c v m2)
+  (by
+    (have hsn2 (<= (sneed xs fs ts p k) d) (exact hsn))
+    (cases (irun_store_inv p ext rs n1 q e k ls mi (Prod.mk v m2) hrun)
+      ((intro (qa g0)
+         (cases g0
+           ((intro (va g1) (have hq (= (ieval rs ls mi q) (some qa)) (exact (And.left g1)))
+              (have he (= (ieval rs ls mi e) (some va)) (exact (And.left (And.right g1))))
+              (have hm (= (mapped rs (w64_val qa) 8 2) true)
+                (exact (And.left (And.right (And.right g1)))))
+              (have hrk
+                (= (irun n1 p ext rs k ls (mem_put64 mi (w64_val qa) (w64_val va)))
+                  (some (Prod.mk v m2)))
+                (exact (And.right (And.right (And.right g1)))))
+              (cases (cstm_store_inv xs fs ts p nl a q e k code hcs)
+                ((intro (cq g2) (have hcq (= (cexp 0 q nl) (some cq)) (exact (And.left g2)))
+                   (cases (And.right g2)
+                     ((intro (ce g3) (have hce (= (cexp 1 e nl) (some ce)) (exact (And.left g3)))
+                        (cases (And.right g3)
+                          ((intro (ck g4)
+                             (have hck
+                               (= (cstm xs fs ts p nl (+ a (+ (+ (isize cq) (isize ce)) 3)) k)
+                                 (some ck))
+                               (exact (And.left g4)))
+                             (have hpl2
+                               (placed tbl a
+                                 (List.append cq (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck))))
+                               (rw (<- (And.right g4)))
+                               (exact hpl))
+                             (exact
+                               (store_core p ext rs tbl clo chi xs fs ts n1 q e k ls mi v m2 c a c0
+                                 f d nl m0 qa va cq ce ck hall hchi ih hq he hm hrk hcq hce hck hpl2
+                                 hsn2 hrip w hls hnl hag hkm hdo)))))))))))))))))))

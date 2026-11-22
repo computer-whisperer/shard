@@ -4,18 +4,12 @@
 (use std.mem)
 (use compile.ir)
 (use compile.ir.ICallee)
-(use compile.ir.ICmp)
-(use compile.ir.IExp)
-(use compile.ir.IFn)
-(use compile.ir.IOp)
 (use compile.ir.IStm)
 (use compile.x86.pass)
-(use compile.x86.seam)
 (use models.x86.asm)
 (use models.x86.word)
 (use models.x86.words)
 (use models.x86.x86)
-(use models.x86.x86.Bop)
 (use models.x86.x86.Fuel)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
@@ -31,22 +25,6 @@
     (have e1 (= (Prod.fst (Prod.mk a b)) (Prod.fst (Prod.mk c d))) (rw h) rfl)
     (have e2 (= (Prod.snd (Prod.mk a b)) (Prod.snd (Prod.mk c d))) (rw h) rfl)
     (exact (And.intro e1 e2))))
-;; an operation the pass takes is the processor's own
-(theorem bop_res ((o IOp) (bo Bop) (x (BitVec 64)) (y (BitVec 64)))
-  (-> (= (iop_bop o) (some bo)) (and (= (alu_writes bo) true) (= (alu_res bo x y) (iop o x y))))
-  (by
-    (cases o
-      ((OAdd () (unfold iop_bop) (intro h) (rw (<- (Option.some.inj h)))
-         (apply And.intro (rfl) (rfl)))
-       (OSub () (unfold iop_bop) (intro h) (rw (<- (Option.some.inj h)))
-         (apply And.intro (rfl) (rfl)))
-       (OMul () (unfold iop_bop) (intro h) (exact (absurd (Eq.symm h) (Option.some_ne_none bo))))
-       (OAnd () (unfold iop_bop) (intro h) (rw (<- (Option.some.inj h)))
-         (apply And.intro (rfl) (rfl)))
-       (OOr () (unfold iop_bop) (intro h) (rw (<- (Option.some.inj h)))
-         (apply And.intro (rfl) (rfl)))
-       (OXor () (unfold iop_bop) (intro h) (rw (<- (Option.some.inj h)))
-         (apply And.intro (rfl) (rfl)))))))
 
 ;; ---- a run ------------------------------------------------------------------------------------
 (theorem irun_ret_inv
@@ -102,6 +80,51 @@
            (apply (Exists.intro w1) ((apply And.intro (rfl) ((exact h0)))))))))
     (exact (g h))))
 
+;; a store: its address and its word, the address mapped to write, the rest on the memory after
+(theorem irun_store_inv
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (n1 Fuel)
+   (a IExp)
+   (e IExp)
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (r (Prod (BitVec 64) Mem))
+   (h (= (irun (FS n1) p ext rs (SStore a e k) ls m) (some r))))
+  (exists ((q (BitVec 64)))
+    (exists ((w (BitVec 64)))
+      (and (= (ieval rs ls m a) (some q))
+        (and (= (ieval rs ls m e) (some w))
+          (and (= (mapped rs (w64_val q) 8 2) true)
+            (= (irun n1 p ext rs k ls (mem_put64 m (w64_val q) (w64_val w))) (some r)))))))
+  (by
+    (have g
+      (-> (= (irun (FS n1) p ext rs (SStore a e k) ls m) (some r))
+        (exists ((q (BitVec 64)))
+          (exists ((w (BitVec 64)))
+            (and (= (ieval rs ls m a) (some q))
+              (and (= (ieval rs ls m e) (some w))
+                (and (= (mapped rs (w64_val q) 8 2) true)
+                  (= (irun n1 p ext rs k ls (mem_put64 m (w64_val q) (w64_val w))) (some r))))))))
+      (unfold irun)
+      (reduce)
+      (cases (ieval rs ls m a) ha
+        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
+         (some (q1) (reduce)
+           (cases (ieval rs ls m e) he
+             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
+              (some (w1) (reduce)
+                (cases (mapped rs (w64_val q1) 8 2) hm
+                  ((false () (reduce) (intro h0)
+                     (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
+                   (true () (reduce) (intro h0)
+                     (apply (Exists.intro q1)
+                       ((apply (Exists.intro w1)
+                          ((apply And.intro (rfl)
+                             ((apply And.intro (rfl) ((apply And.intro ((exact hm)) ((exact h0)))))))))))))))))))))
+    (exact (g h))))
 ;; ---- the pass ---------------------------------------------------------------------------------
 (theorem cstm_ret_inv
   ((xs (List (Prod Nat Nat)))
@@ -113,13 +136,13 @@
    (e IExp)
    (code (List Instr))
    (h (= (cstm xs fs ts p nl a (SRet e)) (some code))))
-  (exists ((ce (List Instr))) (and (= (cexp e nl) (some ce)) (= code (List.append ce epi))))
+  (exists ((ce (List Instr))) (and (= (cexp 0 e nl) (some ce)) (= code (List.append ce epi))))
   (by
     (have g
       (-> (= (cstm xs fs ts p nl a (SRet e)) (some code))
-        (exists ((ce (List Instr))) (and (= (cexp e nl) (some ce)) (= code (List.append ce epi)))))
+        (exists ((ce (List Instr))) (and (= (cexp 0 e nl) (some ce)) (= code (List.append ce epi)))))
       (unfold cstm)
-      (cases (cexp e nl) hc
+      (cases (cexp 0 e nl) hc
         ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
          (some (ce1) (reduce) (intro h0)
            (apply (Exists.intro ce1)
@@ -139,7 +162,7 @@
    (h (= (cstm xs fs ts p nl a (SLet x e k)) (some code))))
   (and (< x nl)
     (exists ((ce (List Instr)))
-      (and (= (cexp e nl) (some ce))
+      (and (= (cexp 0 e nl) (some ce))
         (exists ((ck (List Instr)))
           (and (= (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k) (some ck))
             (= code (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck))))))))
@@ -148,7 +171,7 @@
       (-> (= (cstm xs fs ts p nl a (SLet x e k)) (some code))
         (and (< x nl)
           (exists ((ce (List Instr)))
-            (and (= (cexp e nl) (some ce))
+            (and (= (cexp 0 e nl) (some ce))
               (exists ((ck (List Instr)))
                 (and (= (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k) (some ck))
                   (= code (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck)))))))))
@@ -157,7 +180,7 @@
         ((isFalse (hx) (rw (if_neg hx)) (intro h0)
            (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
          (isTrue (hx) (rw (if_pos hx))
-           (cases (cexp e nl) hc
+           (cases (cexp 0 e nl) hc
              ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
               (some (ce1) (reduce)
                 (cases (cstm xs fs ts p nl (+ a (+ (isize ce1) 3)) k) hk
@@ -172,6 +195,55 @@
                                    ((exact (Eq.symm (Option.some.inj h0)))))))))))))))))))))))
     (exact (g h))))
 
+;; a store's code: the address into rax, the word into rcx, the store, the rest
+(theorem cstm_store_inv
+  ((xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (p (List IFn))
+   (nl Nat)
+   (a Nat)
+   (q IExp)
+   (e IExp)
+   (k IStm)
+   (code (List Instr))
+   (h (= (cstm xs fs ts p nl a (SStore q e k)) (some code))))
+  (exists ((cq (List Instr)))
+    (and (= (cexp 0 q nl) (some cq))
+      (exists ((ce (List Instr)))
+        (and (= (cexp 1 e nl) (some ce))
+          (exists ((ck (List Instr)))
+            (and (= (cstm xs fs ts p nl (+ a (+ (+ (isize cq) (isize ce)) 3)) k) (some ck))
+              (= code (List.append cq (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck))))))))))
+  (by
+    (have g
+      (-> (= (cstm xs fs ts p nl a (SStore q e k)) (some code))
+        (exists ((cq (List Instr)))
+          (and (= (cexp 0 q nl) (some cq))
+            (exists ((ce (List Instr)))
+              (and (= (cexp 1 e nl) (some ce))
+                (exists ((ck (List Instr)))
+                  (and (= (cstm xs fs ts p nl (+ a (+ (+ (isize cq) (isize ce)) 3)) k) (some ck))
+                    (= code (List.append cq (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)))))))))))
+      (unfold cstm)
+      (cases (cexp 0 q nl) hq
+        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+         (some (cq1) (reduce)
+           (cases (cexp 1 e nl) he
+             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+              (some (ce1) (reduce)
+                (cases (cstm xs fs ts p nl (+ a (+ (+ (isize cq1) (isize ce1)) 3)) k) hk
+                  ((none () (reduce) (intro h0)
+                     (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+                   (some (ck1) (reduce) (intro h0)
+                     (apply (Exists.intro cq1)
+                       ((apply And.intro (rfl)
+                          ((apply (Exists.intro ce1)
+                             ((apply And.intro (rfl)
+                                ((apply (Exists.intro ck1)
+                                   ((apply And.intro ((exact hk))
+                                      ((exact (Eq.symm (Option.some.inj h0)))))))))))))))))))))))))
+    (exact (g h))))
 ;; ---- a call -------------------------------------------------------------------------------------
 (theorem mx_le ((a Nat) (b Nat) (d Nat)) (-> (<= (mx a b) d) (and (<= a d) (<= b d)))
   (by

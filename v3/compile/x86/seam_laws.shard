@@ -1,0 +1,116 @@
+;;; v3/compile/x86/seam_laws.shard — what a caller needs of the seam's statement (`seam.shard`)
+;;; beside the statement itself, proven once and for any code: a table in place stays in place
+;;; where memory agrees on the code's bytes; the data ranges map no byte of the code; and so,
+;;; after a call of code that `realizes` an answer, the caller's code is still in place
+;;; (`kept_code`).
+(import "seam.shard")
+(use std.mem)
+(use compile.x86.seam)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use Init.Bool false true)
+(use Init.Option none some)
+
+;; ---- two memories that agree inside a range -----------------------------------------------------
+(def same_on ((m Mem) (m2 Mem) (lo Nat) (hi Nat)) Prop
+  (forall ((x Nat)) (-> (<= lo x) (< x hi) (= (mem_get m2 x) (mem_get m x)))))
+;; the bytes fetched inside the range are the same in both
+(theorem fetch_on
+  ((segs (List Seg)) (m Mem) (m2 Mem) (lo Nat) (hi Nat) (h (same_on m m2 lo hi)) (n Fuel))
+  (forall ((x Nat))
+    (-> (<= lo x) (<= (+ x (fuel_len n)) hi) (= (fetch segs m2 x n) (fetch segs m x n))))
+  (by
+    (induction n
+      ((FZ () (intro x h1 h2) rfl)
+       (FS (n1 ih) (intro x h1 h2) (have o0 (< x hi) (arith (fuel_len.eq_2 n1)))
+         (have o1 (<= lo (+ x 1)) (arith))
+         (have o2 (<= (+ (+ x 1) (fuel_len n1)) hi) (arith (fuel_len.eq_2 n1)))
+         (rw fetch.eq_2)
+         (rw fetch.eq_2)
+         (rw (h x h1 o0))
+         (rw (ih (+ x 1) o1 o2))
+         rfl)))))
+;; a table in place is in place in a state with the same mapping whose memory agrees on the
+;; code's bytes
+(theorem code_in_on
+  ((c Cpu)
+   (c2 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hsegs (= (Cpu.segs c2) (Cpu.segs c)))
+   (h (same_on (Cpu.mem c) (Cpu.mem c2) clo (+ chi 15)))
+   (hc (code_in c tbl)))
+  (code_in c2 tbl)
+  (by
+    (intro a i len hs)
+    (cases (site_within tbl clo chi a (Prod.mk i len) hall hs)
+      ((intro (h1 h2)
+         (have h3 (<= (+ a (fuel_len fifteen)) (+ chi 15)) (show (<= (+ a 15) (+ chi 15))) (arith))
+         (have hf
+           (= (fetch (Cpu.segs c) (Cpu.mem c2) a fifteen) (fetch (Cpu.segs c) (Cpu.mem c) a fifteen))
+           (exact (fetch_on (Cpu.segs c) (Cpu.mem c) (Cpu.mem c2) clo (+ chi 15) h fifteen a h1 h3)))
+         (show (= (decode (fetch (Cpu.segs c2) (Cpu.mem c2) a fifteen)) (some (Prod.mk i len))))
+         (rw hsegs)
+         (rw hf)
+         (exact (hc a i len hs)))))))
+
+;; ---- what the data ranges are clear of ----------------------------------------------------------
+;; no byte the code is read from is a byte of the data ranges
+(theorem code_not_data
+  ((c Cpu)
+   (rs (List Seg))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (hdo (data_ok c rs clo chi f k))
+   (x Nat)
+   (need Nat)
+   (h1 (<= clo x))
+   (h2 (< x (+ chi 15))))
+  (= (mapped rs x 1 need) false)
+  (by
+    (cases (mapped rs x 1 need) hm
+      ((false () rfl)
+       (true ()
+         (cases (And.right (And.right (hdo x 1 need hm)))
+           ((inl (a) (have hf False (arith)) (exact (False.elim hf)))
+            (inr (b) (have hf False (arith)) (exact (False.elim hf))))))))))
+
+;; ---- after a call ---------------------------------------------------------------------------------
+;; AFTER A CALL OF CODE THAT REALIZES AN ANSWER THE CALLER'S CODE IS IN PLACE. Of the state c the
+;; callee was entered in, the caller met the statement's hypotheses (`room`, `data_ok`); of the
+;; state c2 it returned in, the statement gives `kept_mem` and `returned`. The code's bytes are
+;; neither among the callee's k words nor mapped to write by the data ranges, so they are as
+;; they were.
+(theorem kept_code
+  ((c Cpu)
+   (c2 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (rs (List Seg))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hroom (room c clo chi f k))
+   (hdata (data_ok c rs clo chi f k))
+   (hkm (kept_mem rs f k (Cpu.mem c) (Cpu.mem c2)))
+   (hret (returned c c2))
+   (hc (code_in c tbl)))
+  (code_in c2 tbl)
+  (by
+    (have kp (kept c c2) (exact (returned_kept c c2 hret)))
+    (have hclear (or (<= (+ chi 15) f) (<= (+ f (* 8 k)) clo))
+      (exact (And.right (And.right (And.right hroom)))))
+    (have son (same_on (Cpu.mem c) (Cpu.mem c2) clo (+ chi 15))
+      (intro x h1 h2)
+      (have o (or (< x f) (<= (+ f (* 8 k)) x))
+        (cases hclear ((inl (a) (apply Or.inl ((arith)))) (inr (b) (apply Or.inr ((arith)))))))
+      (have hm (= (mapped rs x 1 2) false) (exact (code_not_data c rs clo chi f k hdata x 2 h1 h2)))
+      (exact (hkm x o hm)))
+    (exact (code_in_on c c2 tbl clo chi hall (kept_segs c c2 kp) son hc))))

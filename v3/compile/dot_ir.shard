@@ -1,0 +1,150 @@
+;;; v3/compile/dot_ir.shard — the intermediate code of `dot_lo` and of its loop `dot_lo_go`
+;;; (`dot_lo.shard`), written by hand from their bodies, and the tie (docs/COMPILE.md §5, the
+;;; front step): the code's answer under `ir.shard` is the low form's value. The code is in the
+;;; shape the pass takes (`x86/pass.shard`): a tail call's arguments and a test's operands are
+;;; locals or numbers, so the loop sets its locals and then calls itself with them.
+(import "dot_lo.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.lo)
+(use compile.dot_lo)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code ----------------------------------------------------------------------------------
+;; Locals are the low form's parameters in order, the evidence left out. The loop: 0 px, 1 py,
+;; 2 n, 3 i, 4 acc; the sum is set before the index, which it reads. The loop is function 0 of
+;; the program, `dot` function 1.
+(fn dot_go_code () IFn
+  (MkIFn 5 0
+    (SIf (EVar 3) CLtu (EVar 2)
+      (SLet 4
+        (EOp OAdd (EVar 4)
+          (EOp OMul (ELoad (EOp OAdd (EVar 0) (EOp OMul (ENum (w64 8)) (EVar 3))))
+            (ELoad (EOp OAdd (EVar 1) (EOp OMul (ENum (w64 8)) (EVar 3))))))
+        (SLet 3 (EOp OAdd (EVar 3) (ENum (w64 1)))
+          (STail (CFn 0) (list (EVar 0) (EVar 1) (EVar 2) (EVar 3) (EVar 4)))))
+      (SRet (EVar 4)))))
+(fn dot_code () IFn
+  (MkIFn 3 0 (STail (CFn 0) (list (EVar 0) (EVar 1) (EVar 2) (ENum (w64 0)) (ENum (w64 0))))))
+(fn dot_prog () (List IFn) (list dot_go_code dot_code))
+
+;; ---- the tie -----------------------------------------------------------------------------------
+;; The loop, in any program that has it at index 0: by induction on the low form's own measure,
+;; a case at the test, the low form's equation for that case, then a rule of the machine for
+;; each statement; at the tail call the low form's own descent and the induction hypothesis.
+(theorem dot_go_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (hp (= (fn_at p 0) (some dot_go_code)))
+   (k Nat))
+  (forall ((i (BitVec 64)) (acc (BitVec 64)))
+    (-> (= (- (w64_val n) (w64_val i)) k)
+      (fn_ans p ext rs dot_go_code (cons px (cons py (cons n (cons i (cons acc nil))))) m
+        (dot_lo_go rs m px py n ex ey i acc)
+        m)))
+  (by
+    (wf k k ih (intro i acc hk)
+      (cases (Nat.decLt (w64_val i) (w64_val n))
+        ((isFalse (h) (rw (dot_lo_go_done rs m px py n ex ey i acc h))
+           (apply And.intro (rfl)
+             ((apply iends_if_false (rfl) (rfl) ((exact (icmp_ltu_false i n h)))
+                ((apply iends_ret (rfl)))))))
+         (isTrue (h) (rw (dot_lo_go_turn rs m px py n ex ey i acc h))
+           (have hdec (< (- (w64_val n) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact
+               (dot_lo_go.dec_1.proof
+                 (PSigma.mk rs
+                   (PProd.mk m
+                     (PSigma.mk px
+                       (PSigma.mk py (PSigma.mk n (PProd.mk ex (PProd.mk ey (PProd.mk i acc))))))))
+                 h)))
+           (apply And.intro (rfl)
+             ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true i n h)))
+                ((apply
+                   (iends_let
+                     (w64_add acc
+                       (w64_mul
+                         (rd64 rs m (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+                         (rd64 rs m (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h)))))
+                   ((apply ieval_op (rfl)
+                      ((apply ieval_op ((apply ieval_rd (rfl))) ((apply ieval_rd (rfl)))))))
+                   ((apply (iends_let (w64_add i (w64 1))) (rfl)
+                      ((apply
+                         (iends_tail dot_go_code
+                           (cons px
+                             (cons py
+                               (cons n
+                                 (cons (w64_add i (w64 1))
+                                   (cons
+                                     (w64_add acc
+                                       (w64_mul
+                                         (rd64 rs m (w64_add px (w64_mul (w64 8) i))
+                                           (at8_ok rs px n 4 i ex h))
+                                         (rd64 rs m (w64_add py (w64_mul (w64 8) i))
+                                           (at8_ok rs py n 4 i ey h))))
+                                     nil))))))
+                         (rfl)
+                         ((exact hp))
+                         ((exact
+                            (ih (- (w64_val n) (w64_val (w64_add i (w64 1)))) hdec
+                              (w64_add i (w64 1))
+                              (w64_add acc
+                                (w64_mul
+                                  (rd64 rs m (w64_add px (w64_mul (w64 8) i))
+                                    (at8_ok rs px n 4 i ex h))
+                                  (rd64 rs m (w64_add py (w64_mul (w64 8) i))
+                                    (at8_ok rs py n 4 i ey h))))
+                              (Eq.refl (- (w64_val n) (w64_val (w64_add i (w64 1)))))))))))))))))))))))
+
+;; the entry: a tail call of the loop at index and sum 0
+(theorem dot_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (hp (= (fn_at p 0) (some dot_go_code))))
+  (fn_ans p ext rs dot_code (cons px (cons py (cons n nil))) m (dot_lo rs m px py n ex ey) m)
+  (by
+    (apply And.intro (rfl)
+      ((apply
+         (iends_tail dot_go_code (cons px (cons py (cons n (cons (w64 0) (cons (w64 0) nil))))))
+         (rfl)
+         ((exact hp))
+         ((exact
+            (dot_go_tie p ext rs m px py n ex ey hp (- (w64_val n) (w64_val (w64 0))) (w64 0)
+              (w64 0)
+              (Eq.refl (- (w64_val n) (w64_val (w64 0))))))))))))
+;; the two functions as one program: the answer of its function 1 is `dot_lo`
+(theorem dot_prog_tie
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (fn_ans dot_prog ext rs dot_code (cons px (cons py (cons n nil))) m (dot_lo rs m px py n ex ey) m)
+  (exact (dot_tie dot_prog ext rs m px py n ex ey (Eq.refl (some dot_go_code)))))

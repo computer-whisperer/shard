@@ -1,27 +1,13 @@
 ;;; v3/compile/x86/code.shard — instructions in place in a table at addresses that are
-;;; variables, each instruction's rule stated for such a table, and a listing's place in a table
-;;; as a decision K evaluates.
+;;; variables, each instruction's rule stated for such a table — with the rules of four forms
+;;; the model's laws have none for —, and a listing's place in a table as a decision K evaluates.
 (import "pass.shard")
-(use std.mem)
-(use compile.ir)
-(use compile.ir.ICallee)
-(use compile.ir.ICmp)
-(use compile.ir.IExp)
-(use compile.ir.IFn)
-(use compile.ir.IOp)
-(use compile.ir.IStm)
 (use compile.x86.pass)
-(use compile.x86.seam)
 (use models.x86.asm)
-(use models.x86.frame)
 (use models.x86.laws)
-(use models.x86.loaded)
 (use models.x86.word)
-(use models.x86.words)
 (use models.x86.x86)
 (use models.x86.x86.Bop)
-(use models.x86.x86.Cpu)
-(use models.x86.x86.Fuel)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
 (use Init.Bool false true)
@@ -70,6 +56,18 @@
                  (rw ea)
                  (exact g2)))))))))))
 
+;; the bytes of two listings one after the other
+(theorem isize_app ((xs (List Instr)))
+  (forall ((ys (List Instr))) (= (isize (List.append xs ys)) (+ (isize xs) (isize ys))))
+  (by
+    (induction xs
+      ((nil () (intro ys) (show (= (isize ys) (+ 0 (isize ys)))) (rw (Nat.zero_add (isize ys))) rfl)
+       (cons (i r ih) (intro ys)
+         (show
+           (= (+ (List.length (encode i)) (isize (List.append r ys)))
+             (+ (+ (List.length (encode i)) (isize r)) (isize ys))))
+         (rw (ih ys))
+         (arith))))))
 ;; ---- words -------------------------------------------------------------------------------------
 (theorem w64_add_w64 ((a Nat) (b Nat)) (= (w64_add (w64 a) (w64 b)) (w64 (+ a b)))
   (by
@@ -135,30 +133,6 @@
    (hs (= (site tbl pc) (some il))))
   (< pc 18446744073709551616)
   (by (cases (site_within tbl clo chi pc il hall hs) ((intro (h1 h2) (arith))))))
-
-;; ---- mov r64, imm64: the rule the model's laws lacked -------------------------------------------
-(theorem do_mov_ri64
-  ((c Cpu implicit)
-   (c2 Cpu implicit)
-   (pc Nat)
-   (r Nat)
-   (v Nat)
-   (len Nat)
-   (next Nat)
-   (hrip (= (w64_val (Cpu.rip c)) pc))
-   (hc (code_at c pc (MovRI64 r v) len))
-   (hnext (= (+ pc len) next))
-   (hr (reaches (x_mov_ri c r v (w64 next)) c2)))
-  (reaches c c2)
-  (by
-    (have hnr (= (next_rip c len) (w64 next))
-      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
-      (rw hrip)
-      (rw hnext)
-      rfl)
-    (apply (reaches_step c (x_mov_ri c r v (w64 next)) c2)
-      ((rw (step_at c pc (MovRI64 r v) len hrip hc)) (rw (<- hnr)) rfl)
-      ((exact hr)))))
 
 ;; ---- each instruction's rule, for a table --------------------------------------------------------
 ;; Where the program counter is the word of an address pc of the table and the table holds the
@@ -441,6 +415,116 @@
     (have hc (code_at c pc (Call d) len) (exact (hcode pc (Call d) len hs)))
     (exact (do_call pc len d (+ pc len) target hn hc hm (Eq.refl (+ pc len)) htgt hr))))
 
+;; a load through a base register that holds the word q: the word at q's number
+(theorem t_load
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (pc Nat)
+   (r Nat)
+   (b Nat)
+   (len Nat)
+   (q (BitVec 64))
+   (w (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hs (= (site tbl pc) (some (Prod.mk (MovRRm r (RmMem b 0)) len))))
+   (hq (= (reg c b) q))
+   (hm (= (mapped (Cpu.segs c) (w64_val q) 8 4) true))
+   (hv (= (w64 (mem_le64 (Cpu.mem c) (w64_val q))) w))
+   (hr (reaches (at_pc (set_reg c r w) (w64 (+ pc len))) c2)))
+  (reaches c c2)
+  (by
+    (have hm2 (= (mapped (Cpu.segs c) (w64_val (reg c b)) 8 4) true) (rw hq) (exact hm))
+    (have hr2 (reaches (x_load_b c r b (w64 (+ pc len))) c2)
+      (show
+        (reaches
+          (at_pc (set_reg c r (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c b))))) (w64 (+ pc len)))
+          c2))
+      (rw hq)
+      (rw hv)
+      (exact hr))
+    (have hn (= (w64_val (Cpu.rip c)) pc)
+      (exact (rip_at tbl clo chi c pc (Prod.mk (MovRRm r (RmMem b 0)) len) hall hchi hrip hs)))
+    (have hc (code_at c pc (MovRRm r (RmMem b 0)) len)
+      (exact (hcode pc (MovRRm r (RmMem b 0)) len hs)))
+    (exact (do_load_b pc r b len (+ pc len) hn hc hm2 (Eq.refl (+ pc len)) hr2))))
+;; a store through a base register that holds the word q, of a register that holds v
+(theorem t_store
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (pc Nat)
+   (b Nat)
+   (r Nat)
+   (len Nat)
+   (q (BitVec 64))
+   (v (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hs (= (site tbl pc) (some (Prod.mk (MovRmR (RmMem b 0) r) len))))
+   (hq (= (reg c b) q))
+   (hv (= (reg c r) v))
+   (hm (= (mapped (Cpu.segs c) (w64_val q) 8 2) true))
+   (hr
+     (reaches (at_pc (mem_to c (mem_put64 (Cpu.mem c) (w64_val q) (w64_val v))) (w64 (+ pc len))) c2)))
+  (reaches c c2)
+  (by
+    (have hm2 (= (mapped (Cpu.segs c) (w64_val (reg c b)) 8 2) true) (rw hq) (exact hm))
+    (have hr2 (reaches (x_store_b c b r (w64 (+ pc len))) c2)
+      (show
+        (reaches
+          (at_pc (mem_to c (mem_put64 (Cpu.mem c) (w64_val (reg c b)) (w64_val (reg c r))))
+            (w64 (+ pc len)))
+          c2))
+      (rw hq)
+      (rw hv)
+      (exact hr))
+    (have hn (= (w64_val (Cpu.rip c)) pc)
+      (exact (rip_at tbl clo chi c pc (Prod.mk (MovRmR (RmMem b 0) r) len) hall hchi hrip hs)))
+    (have hc (code_at c pc (MovRmR (RmMem b 0) r) len)
+      (exact (hcode pc (MovRmR (RmMem b 0) r) len hs)))
+    (exact (do_store_b pc b r len (+ pc len) hn hc hm2 (Eq.refl (+ pc len)) hr2))))
+(theorem t_imul
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (pc Nat)
+   (a Nat)
+   (b Nat)
+   (len Nat)
+   (w (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hs (= (site tbl pc) (some (Prod.mk (ImulRRm a (RmReg b)) len))))
+   (hv (= (w64_mul (reg c a) (reg c b)) w))
+   (hr (reaches (at_pc (set_reg (set_flags c flags_none) a w) (w64 (+ pc len))) c2)))
+  (reaches c c2)
+  (by
+    (have hr2 (reaches (x_imul_rr c a b (w64 (+ pc len))) c2)
+      (show
+        (reaches
+          (at_pc (set_reg (set_flags c flags_none) a (w64_mul (reg c a) (reg c b))) (w64 (+ pc len)))
+          c2))
+      (rw hv)
+      (exact hr))
+    (have hn (= (w64_val (Cpu.rip c)) pc)
+      (exact (rip_at tbl clo chi c pc (Prod.mk (ImulRRm a (RmReg b)) len) hall hchi hrip hs)))
+    (have hc (code_at c pc (ImulRRm a (RmReg b)) len)
+      (exact (hcode pc (ImulRRm a (RmReg b)) len hs)))
+    (exact (do_imul_rr pc a b len (+ pc len) hn hc (Eq.refl (+ pc len)) hr2))))
 (theorem site_lt15
   ((tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)

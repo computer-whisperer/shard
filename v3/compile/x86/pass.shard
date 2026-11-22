@@ -1,31 +1,25 @@
 ;;; v3/compile/x86/pass.shard — a pass from the intermediate machine
 ;;; (`ir.shard`) to x86 instructions, the simplest whose proof is honest. Local i lives in the
 ;;; i-th register a callee keeps (rbx rbp r12 r13 r14 r15), so a function has at most six locals.
-;;; Every function pushes all six on entry and pops them before it returns. An expression goes
-;;; through rax (and rcx for a second operand). The pass emits model instructions with the
-;;; displacements it computes from absolute addresses: it is given the address of the code it
-;;; writes and, for each callee, its entry and its stack need.
+;;; Every function pushes all six on entry and pops them before it returns. An expression is
+;;; evaluated on a stack of nine temporaries, the registers a caller does not keep (rax rcx rdx
+;;; rsi rdi r8 r9 r10 r11): an operation's left operand in one, its right operand in the next;
+;;; an expression too deep for them is refused. A store's address goes to the first temporary
+;;; and its word to the second. The pass emits model instructions with the displacements it
+;;; computes from absolute addresses: it is given the address of the code it writes and, for
+;;; each callee, its entry and its stack need.
 (import "seam.shard")
 (import "../../models/x86/loaded.shard")
-(use std.mem)
 (use compile.ir)
 (use compile.ir.ICallee)
 (use compile.ir.ICmp)
 (use compile.ir.IExp)
-(use compile.ir.IFn)
 (use compile.ir.IOp)
 (use compile.ir.IStm)
-(use compile.x86.seam)
 (use models.x86.asm)
-(use models.x86.frame)
-(use models.x86.laws)
-(use models.x86.loaded)
 (use models.x86.word)
-(use models.x86.words)
 (use models.x86.x86)
 (use models.x86.x86.Bop)
-(use models.x86.x86.Cpu)
-(use models.x86.x86.Fuel)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
 (use Init.Bool false true)
@@ -59,14 +53,28 @@
     ((cons i r) (+ (List.length (encode i)) (isize r)))))
 
 ;; ---- expressions ------------------------------------------------------------------------------
-(fn iop_bop ((o IOp)) (Option Bop)
+;; the register of temporary k: rax rcx rdx rsi rdi r8 r9 r10 r11
+(fn treg ((k Nat)) Nat
+  (match k
+    (0 0)
+    (1 1)
+    (2 2)
+    (3 6)
+    (4 7)
+    (5 8)
+    (6 9)
+    (7 10)
+    (_ 11)))
+;; an operation's instruction: the register ra holds the left operand and takes the result,
+;; rb holds the right operand
+(fn op_ins ((o IOp) (ra Nat) (rb Nat)) Instr
   (match o
-    (OAdd (some BAdd))
-    (OSub (some BSub))
-    (OMul none)
-    (OAnd (some BAnd))
-    (OOr (some BOr))
-    (OXor (some BXor))))
+    (OAdd (AluRmR BAdd (RmReg ra) rb))
+    (OSub (AluRmR BSub (RmReg ra) rb))
+    (OMul (ImulRRm ra (RmReg rb)))
+    (OAnd (AluRmR BAnd (RmReg ra) rb))
+    (OOr (AluRmR BOr (RmReg ra) rb))
+    (OXor (AluRmR BXor (RmReg ra) rb))))
 ;; an atom into the register r: a constant, or a local among the nl the function has
 (fn ld_atom ((r Nat) (e IExp) (nl Nat)) (Option Instr)
   (match e
@@ -74,22 +82,31 @@
     ((EVar i) (if (< i nl) (some (MovRmR (RmReg r) (kreg i))) none))
     ((EOp _ _ _) none)
     ((ELoad _) none)))
-;; an expression into rax: an atom, or an operation over two atoms (the second through rcx)
-(fn cexp ((e IExp) (nl Nat)) (Option (List Instr))
+;; An expression into temporary k, the temporaries below k left as they are: an operation's
+;; left operand into k, its right operand into k + 1, the operation on the two; a load's
+;; address into k, the word there into k. Nothing where a temporary past the ninth is wanted.
+(fn cexp ((k Nat) (e IExp) (nl Nat)) (Option (List Instr))
+  (measure (struct e))
   (match e
+    ((ENum w) (if (< k 9) (some (cons (MovRI64 (treg k) (w64_val w)) nil)) none))
+    ((EVar i)
+     (if (< k 9) (if (< i nl) (some (cons (MovRmR (RmReg (treg k)) (kreg i)) nil)) none) none))
     ((EOp o a b)
-     (match (iop_bop o)
-       (none none)
-       ((some bo)
-        (match (ld_atom 0 a nl)
-          (none none)
-          ((some ia)
-           (match (ld_atom 1 b nl)
-             (none none)
-             ((some ib) (some (cons ia (cons ib (cons (AluRmR bo (RmReg 0) 1) nil)))))))))))
-    ((ENum w) (some (cons (MovRI64 0 (w64_val w)) nil)))
-    ((EVar i) (if (< i nl) (some (cons (MovRmR (RmReg 0) (kreg i)) nil)) none))
-    ((ELoad _) none)))
+     (if (< (+ k 1) 9)
+       (match (cexp k a nl)
+         (none none)
+         ((some ca)
+          (match (cexp (+ k 1) b nl)
+            (none none)
+            ((some cb)
+             (some (List.append ca (List.append cb (cons (op_ins o (treg k) (treg (+ k 1))) nil))))))))
+       none))
+    ((ELoad a)
+     (if (< k 9)
+       (match (cexp k a nl)
+         (none none)
+         ((some ca) (some (List.append ca (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))))
+       none))))
 ;; a call's arguments, atoms, into the argument registers from the i-th on
 (fn cargs ((es (List IExp)) (i Nat) (nl Nat)) (Option (List Instr))
   (measure (struct es))
@@ -186,14 +203,23 @@
   (match s
     ((SLet x e k)
      (if (< x nl)
-       (match (cexp e nl)
+       (match (cexp 0 e nl)
          (none none)
          ((some ce)
           (match (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k)
             (none none)
             ((some ck) (some (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck)))))))
        none))
-    ((SStore q e k) none)
+    ((SStore q e k)
+     (match (cexp 0 q nl)
+       (none none)
+       ((some cq)
+        (match (cexp 1 e nl)
+          (none none)
+          ((some ce)
+           (match (cstm xs fs ts p nl (+ a (+ (+ (isize cq) (isize ce)) 3)) k)
+             (none none)
+             ((some ck) (some (List.append cq (List.append ce (cons (MovRmR (RmMem 0 0) 1) ck)))))))))))
     ((SCall x cal es k)
      (if (< x nl)
        (match (callee_at xs fs p cal (List.length es))
@@ -239,7 +265,7 @@
                           (cons (AluRmR BCmp (RmReg 0) 1)
                             (cons (Jcc j (isize ct)) (List.append ct ce)))))))))))))))))
     ((SRet e)
-     (match (cexp e nl)
+     (match (cexp 0 e nl)
        (none none)
        ((some ce) (some (List.append ce epi)))))
     ((STail cal es)

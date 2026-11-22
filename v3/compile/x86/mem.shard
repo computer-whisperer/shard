@@ -1,36 +1,21 @@
 ;;; v3/compile/x86/mem.shard — memories that agree on a range; what the data ranges are clear
-;;; of; and the frame law of a callee that `realizes` an answer: after it
-;;; returns, the caller's description holds again.
+;;; of; the frame law of a callee that `realizes` an answer: after it returns, the caller's
+;;; description holds again; and a word read from the data ranges, a word stored in them, and
+;;; the frame law of a store.
 (import "pass.shard")
+(import "seam_laws.shard")
 (use std.mem)
-(use compile.ir)
-(use compile.ir.ICallee)
-(use compile.ir.ICmp)
-(use compile.ir.IExp)
-(use compile.ir.IFn)
-(use compile.ir.IOp)
-(use compile.ir.IStm)
-(use compile.x86.pass)
 (use compile.x86.seam)
-(use models.x86.asm)
+(use compile.x86.seam_laws)
 (use models.x86.frame)
 (use models.x86.laws)
-(use models.x86.loaded)
 (use models.x86.word)
-(use models.x86.words)
 (use models.x86.x86)
-(use models.x86.x86.Bop)
-(use models.x86.x86.Cpu)
-(use models.x86.x86.Fuel)
-(use models.x86.x86.Instr)
-(use models.x86.x86.Rm)
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
 
-;; ---- two memories that agree inside a range -----------------------------------------------------
-(def same_on ((m Mem) (m2 Mem) (lo Nat) (hi Nat)) Prop
-  (forall ((x Nat)) (-> (<= lo x) (< x hi) (= (mem_get m2 x) (mem_get m x)))))
+;; ---- two memories that agree inside a range (`same_on`, seam_laws.shard) ----------------------------
 (theorem le32_on
   ((m Mem)
    (m2 Mem)
@@ -91,47 +76,6 @@
     (have b2 (<= (+ (+ q (* 8 j)) 8) hi) (arith))
     (rw (le64_on m m2 lo hi (+ q (* 8 j)) hso b1 b2))
     (exact (h j hj))))
-(theorem fetch_on
-  ((segs (List Seg)) (m Mem) (m2 Mem) (lo Nat) (hi Nat) (h (same_on m m2 lo hi)) (n Fuel))
-  (forall ((x Nat))
-    (-> (<= lo x) (<= (+ x (fuel_len n)) hi) (= (fetch segs m2 x n) (fetch segs m x n))))
-  (by
-    (induction n
-      ((FZ () (intro x h1 h2) rfl)
-       (FS (n1 ih) (intro x h1 h2) (have o0 (< x hi) (arith (fuel_len.eq_2 n1)))
-         (have o1 (<= lo (+ x 1)) (arith))
-         (have o2 (<= (+ (+ x 1) (fuel_len n1)) hi) (arith (fuel_len.eq_2 n1)))
-         (rw fetch.eq_2)
-         (rw fetch.eq_2)
-         (rw (h x h1 o0))
-         (rw (ih (+ x 1) o1 o2))
-         rfl)))))
-;; a table in place is in place in a state with the same mapping whose memory agrees on the
-;; code's bytes
-(theorem code_in_on
-  ((c Cpu)
-   (c2 Cpu)
-   (tbl (List (Prod Nat (Prod Instr Nat))))
-   (clo Nat)
-   (chi Nat)
-   (hall (= (all_within tbl clo chi) true))
-   (hsegs (= (Cpu.segs c2) (Cpu.segs c)))
-   (h (same_on (Cpu.mem c) (Cpu.mem c2) clo (+ chi 15)))
-   (hc (code_in c tbl)))
-  (code_in c2 tbl)
-  (by
-    (intro a i len hs)
-    (cases (site_within tbl clo chi a (Prod.mk i len) hall hs)
-      ((intro (h1 h2)
-         (have h3 (<= (+ a (fuel_len fifteen)) (+ chi 15)) (show (<= (+ a 15) (+ chi 15))) (arith))
-         (have hf
-           (= (fetch (Cpu.segs c) (Cpu.mem c2) a fifteen) (fetch (Cpu.segs c) (Cpu.mem c) a fifteen))
-           (exact (fetch_on (Cpu.segs c) (Cpu.mem c) (Cpu.mem c2) clo (+ chi 15) h fifteen a h1 h3)))
-         (show (= (decode (fetch (Cpu.segs c2) (Cpu.mem c2) a fifteen)) (some (Prod.mk i len))))
-         (rw hsegs)
-         (rw hf)
-         (exact (hc a i len hs)))))))
-
 ;; ---- what the data ranges are clear of ----------------------------------------------------------
 ;; no byte of the frame's words or of the return address is a byte of the data ranges
 (theorem frame_not_data
@@ -152,27 +96,6 @@
       ((false () rfl)
        (true ()
          (cases (And.left (And.right (hdo x 1 need hm)))
-           ((inl (a) (have hf False (arith)) (exact (False.elim hf)))
-            (inr (b) (have hf False (arith)) (exact (False.elim hf))))))))))
-;; nor is a byte the code is read from
-(theorem code_not_data
-  ((c Cpu)
-   (rs (List Seg))
-   (clo Nat)
-   (chi Nat)
-   (f Nat)
-   (k Nat)
-   (hdo (data_ok c rs clo chi f k))
-   (x Nat)
-   (need Nat)
-   (h1 (<= clo x))
-   (h2 (< x (+ chi 15))))
-  (= (mapped rs x 1 need) false)
-  (by
-    (cases (mapped rs x 1 need) hm
-      ((false () rfl)
-       (true ()
-         (cases (And.right (And.right (hdo x 1 need hm)))
            ((inl (a) (have hf False (arith)) (exact (False.elim hf)))
             (inr (b) (have hf False (arith)) (exact (False.elim hf))))))))))
 ;; a memory that agrees with m on the data ranges, changed in the frame's words alone, agrees
@@ -375,3 +298,156 @@
     (exact
       (framed_up h (kept_segs c c2 kp) (kept_sp c c2 kp) hh hc2
         (same_outside_refl (Cpu.mem c2) f (+ f (* 8 k)))))))
+
+;; ---- a load and a store in the data ranges ------------------------------------------------------
+;; memories that agree on the data ranges agree on a range the data ranges map
+(theorem agree_on
+  ((rs (List Seg))
+   (m Mem)
+   (mc Mem)
+   (a Nat)
+   (n Nat)
+   (need Nat)
+   (h (agree rs m mc))
+   (hm (= (mapped rs a n need) true)))
+  (same_on m mc a (+ a n))
+  (by
+    (intro x h1 h2)
+    (have h3 (<= (+ x 1) (+ a n)) (arith))
+    (exact (h x need (mapped_part rs a n x 1 need h1 h3 hm)))))
+;; so a word read there is the same in both
+(theorem agree_le64
+  ((rs (List Seg))
+   (m Mem)
+   (mc Mem)
+   (a Nat)
+   (need Nat)
+   (h (agree rs m mc))
+   (hm (= (mapped rs a 8 need) true)))
+  (= (mem_le64 mc a) (mem_le64 m a))
+  (exact
+    (le64_on m mc a (+ a 8) a (agree_on rs m mc a 8 need h hm) (Nat.le_refl a) (Nat.le_refl (+ a 8)))))
+;; a byte two memories agree on, they agree on after the same store: of a byte, of four, of eight
+(theorem set_agree ((m Mem) (mc Mem) (k Nat) (v Nat) (x Nat) (h (= (mem_get mc x) (mem_get m x))))
+  (= (mem_get (mem_set mc k v) x) (mem_get (mem_set m k v) x))
+  (by
+    (cases (Nat.decEq x k)
+      ((isTrue (e) (rw e) (rw (mem_set_same mc k v)) (rw (mem_set_same m k v)) rfl)
+       (isFalse (ne) (rw (mem_set_other mc k v x ne)) (rw (mem_set_other m k v x ne)) (exact h))))))
+(theorem put32_agree ((m Mem) (mc Mem) (a Nat) (v Nat) (x Nat) (h (= (mem_get mc x) (mem_get m x))))
+  (= (mem_get (mem_put32 mc a v) x) (mem_get (mem_put32 m a v) x))
+  (by
+    (unfold mem_put32)
+    (exact
+      (set_agree (mem_set (mem_set (mem_set m a v) (+ a 1) (/ v 256)) (+ a 2) (/ v 65536))
+        (mem_set (mem_set (mem_set mc a v) (+ a 1) (/ v 256)) (+ a 2) (/ v 65536))
+        (+ a 3)
+        (/ v 16777216)
+        x
+        (set_agree (mem_set (mem_set m a v) (+ a 1) (/ v 256))
+          (mem_set (mem_set mc a v) (+ a 1) (/ v 256))
+          (+ a 2)
+          (/ v 65536)
+          x
+          (set_agree (mem_set m a v) (mem_set mc a v) (+ a 1) (/ v 256) x (set_agree m mc a v x h)))))))
+(theorem put64_agree ((m Mem) (mc Mem) (a Nat) (v Nat) (x Nat) (h (= (mem_get mc x) (mem_get m x))))
+  (= (mem_get (mem_put64 mc a v) x) (mem_get (mem_put64 m a v) x))
+  (by
+    (unfold mem_put64)
+    (exact
+      (put32_agree (mem_put32 m a v) (mem_put32 mc a v) (+ a 4) (/ v 4294967296) x
+        (put32_agree m mc a v x h)))))
+;; a word stored in each of two memories that agree on the data ranges: they agree
+(theorem agree_put64 ((rs (List Seg)) (m Mem) (mc Mem) (a Nat) (v Nat) (h (agree rs m mc)))
+  (agree rs (mem_put64 m a v) (mem_put64 mc a v))
+  (by (intro x need hm) (exact (put64_agree m mc a v x (h x need hm)))))
+;; what was kept, then a word stored where the data ranges map to write
+(theorem kept_put64
+  ((rs (List Seg))
+   (f Nat)
+   (k Nat)
+   (m1 Mem)
+   (mc Mem)
+   (a Nat)
+   (v Nat)
+   (hk (kept_mem rs f k m1 mc))
+   (hm (= (mapped rs a 8 2) true)))
+  (kept_mem rs f k m1 (mem_put64 mc a v))
+  (by
+    (intro x hx hf)
+    (have ho (or (< x a) (<= (+ a 8) x))
+      (cases (Nat.decLt x a)
+        ((isTrue (h1) (apply Or.inl ((exact h1))))
+         (isFalse (h1)
+           (cases (Nat.decLe (+ a 8) x)
+             ((isTrue (h2) (apply Or.inr ((exact h2))))
+              (isFalse (h2) (have g1 (<= a x) (arith)) (have g2 (<= (+ x 1) (+ a 8)) (arith))
+                (have ht (= (mapped rs x 1 2) true) (exact (mapped_part rs a 8 x 1 2 g1 g2 hm)))
+                (exact (absurd (Eq.trans (Eq.symm hf) ht) Bool.false_ne_true)))))))))
+    (rw (mem_put64_other mc a v x ho))
+    (exact (hk x hx hf))))
+
+;; ---- THE FRAME LAW OF A STORE -------------------------------------------------------------------
+;; A word stored, in the described state c, where the data ranges map to write: the state after
+;; is described as c was, and the base memory is its own. The data ranges are clear of the
+;; frame's words and of the code.
+(theorem framed_store
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (rs (List Seg))
+   (q Nat)
+   (v Nat)
+   (pc (BitVec 64))
+   (h (framed c0 tbl clo chi f k m0 c j ws))
+   (hdo (data_ok c0 rs clo chi f k))
+   (hm (= (mapped rs q 8 2) true)))
+  (framed c0 tbl clo chi f k (mem_put64 (Cpu.mem c) q v)
+    (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc)
+    j
+    ws)
+  (by
+    (have hl (= (+ j (List.length ws)) (+ k 1)) (exact (framed_len h)))
+    (have hso (same_outside (Cpu.mem c) (mem_put64 (Cpu.mem c) q v) q (+ q 8))
+      (exact
+        (same_outside_put64 (Cpu.mem c) (Cpu.mem c) q (+ q 8) q v
+          (same_outside_refl (Cpu.mem c) q (+ q 8))
+          (Nat.le_refl q)
+          (Nat.le_refl (+ q 8)))))
+    (have hcl (or (<= (+ (+ f (* 8 j)) (* 8 (List.length ws))) q) (<= (+ q 8) (+ f (* 8 j))))
+      (cases (And.left (And.right (hdo q 8 2 hm)))
+        ((inl (a) (apply Or.inr ((arith)))) (inr (b) (apply Or.inl ((arith hl)))))))
+    (have g3 (holds (Cpu.mem (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc)) (+ f (* 8 j)) ws)
+      (exact
+        (holds_same (Cpu.mem c) (mem_put64 (Cpu.mem c) q v) q (+ q 8) (+ f (* 8 j)) ws
+          (framed_holds h)
+          hso
+          hcl)))
+    (have hcc (or (<= (+ chi 15) q) (<= (+ q 8) clo))
+      (cases (And.right (And.right (hdo q 8 2 hm)))
+        ((inl (a) (apply Or.inr ((exact a)))) (inr (b) (apply Or.inl ((exact b)))))))
+    (have g4 (code_in (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc) tbl)
+      (exact
+        (code_in_same c (mem_put64 (Cpu.mem c) q v) tbl clo chi q (+ q 8) (framed_all h) hso hcc
+          (framed_code h))))
+    (have g1 (= (Cpu.segs (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc)) (Cpu.segs c0))
+      (exact (framed_segs h)))
+    (have g2 (= (w64_val (reg (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc) 4)) (+ f (* 8 j)))
+      (exact (framed_sp h)))
+    (have g5
+      (same_outside (mem_put64 (Cpu.mem c) q v)
+        (Cpu.mem (at_pc (mem_to c (mem_put64 (Cpu.mem c) q v)) pc))
+        f
+        (+ f (* 8 k)))
+      (exact (same_outside_refl (mem_put64 (Cpu.mem c) q v) f (+ f (* 8 k)))))
+    (exact
+      (And.intro (framed_room h)
+        (And.intro (framed_all h)
+          (And.intro g1 (And.intro g2 (And.intro g3 (And.intro hl (And.intro g4 g5))))))))))

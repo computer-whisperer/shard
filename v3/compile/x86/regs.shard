@@ -1,5 +1,6 @@
-;;; v3/compile/x86/regs.shard — the six registers the locals live in, and what a
-;;; move into one of them, or into an argument register, leaves as it was.
+;;; v3/compile/x86/regs.shard — the six registers the locals live in and the nine temporaries
+;;; an expression goes through, and what a move into one of them, or into an argument register,
+;;; leaves as it was.
 (import "pass.shard")
 (import "lists.shard")
 (use std.mem)
@@ -12,8 +13,6 @@
 (use models.x86.word)
 (use models.x86.words)
 (use models.x86.x86)
-(use models.x86.x86.Cpu)
-(use models.x86.x86.Instr)
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
@@ -205,6 +204,173 @@
           (And.intro g1 (And.intro g2 (And.intro g3 (And.intro (framed_len w) (And.intro g4 g5))))))))))
 (theorem scratch_regs ((c Cpu) (c1 Cpu) (h (scratch c c1))) (= (regs6 c1) (regs6 c))
   (exact (And.right (And.right (And.right h)))))
+(theorem scratch_trans ((c Cpu) (c1 Cpu) (c2 Cpu) (h1 (scratch c c1)) (h2 (scratch c1 c2)))
+  (scratch c c2)
+  (by
+    (have g1 (= (Cpu.segs c2) (Cpu.segs c)) (exact (Eq.trans (And.left h2) (And.left h1))))
+    (have g2 (= (Cpu.mem c2) (Cpu.mem c))
+      (exact (Eq.trans (And.left (And.right h2)) (And.left (And.right h1)))))
+    (have g3 (= (reg c2 4) (reg c 4))
+      (exact (Eq.trans (And.left (And.right (And.right h2))) (And.left (And.right (And.right h1))))))
+    (have g4 (= (regs6 c2) (regs6 c))
+      (exact (Eq.trans (scratch_regs c1 c2 h2) (scratch_regs c c1 h1))))
+    (exact (And.intro g1 (And.intro g2 (And.intro g3 g4))))))
+
+;; ---- the nine temporaries -----------------------------------------------------------------------
+;; a fact of each number below nine is a fact of every number below nine
+(theorem nine_all
+  ((P (-> Nat Prop))
+   (h0 (P 0))
+   (h1 (P 1))
+   (h2 (P 2))
+   (h3 (P 3))
+   (h4 (P 4))
+   (h5 (P 5))
+   (h6 (P 6))
+   (h7 (P 7))
+   (h8 (P 8))
+   (x Nat)
+   (h (< x 9)))
+  (P x)
+  (by
+    (cases x
+      ((zero () (exact h0))
+       (succ (x1)
+         (cases x1
+           ((zero () (exact h1))
+            (succ (x2)
+              (cases x2
+                ((zero () (exact h2))
+                 (succ (x3) (have hx (< x3 6) (arith h))
+                   (exact (six_all (fun ((y Nat)) (P (+ (+ (+ y 1) 1) 1))) h3 h4 h5 h6 h7 h8 x3 hx)))))))))))))
+;; the words of the temporaries, in the temporaries' order
+(fn tregs ((c Cpu)) (List (BitVec 64))
+  (cons (reg c 0)
+    (cons (reg c 1)
+      (cons (reg c 2)
+        (cons (reg c 6)
+          (cons (reg c 7) (cons (reg c 8) (cons (reg c 9) (cons (reg c 10) (cons (reg c 11) nil))))))))))
+(theorem treg_nth ((c Cpu) (j Nat) (h (< j 9))) (= (nth (tregs c) j) (reg c (treg j)))
+  (by
+    (apply (nine_all (fun ((j Nat)) (= (nth (tregs c) j) (reg c (treg j))))) (rfl) (rfl) (rfl) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+;; a temporary set: it holds the word; the temporaries below it, the stack pointer and the six
+;; registers of the locals are as they were
+(theorem tset_self ((c Cpu) (k Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< k 9)))
+  (= (reg (at_pc (set_reg c (treg k) w) pc) (treg k)) w)
+  (by
+    (apply (nine_all (fun ((k Nat)) (= (reg (at_pc (set_reg c (treg k) w) pc) (treg k)) w))) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+(theorem tset_take ((c Cpu) (k Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< k 9)))
+  (= (List.take k (tregs (at_pc (set_reg c (treg k) w) pc))) (List.take k (tregs c)))
+  (by
+    (apply
+      (nine_all
+        (fun ((k Nat))
+          (= (List.take k (tregs (at_pc (set_reg c (treg k) w) pc))) (List.take k (tregs c)))))
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+(theorem tset_low
+  ((c Cpu) (k Nat) (j Nat) (w (BitVec 64)) (pc (BitVec 64)) (hk (< k 9)) (hj (< j k)))
+  (= (reg (at_pc (set_reg c (treg k) w) pc) (treg j)) (reg c (treg j)))
+  (by
+    (have hj9 (< j 9) (arith))
+    (have e1
+      (= (nth (List.take k (tregs (at_pc (set_reg c (treg k) w) pc))) j)
+        (nth (tregs (at_pc (set_reg c (treg k) w) pc)) j))
+      (exact (nth_take (tregs (at_pc (set_reg c (treg k) w) pc)) k j hj)))
+    (have e2 (= (nth (List.take k (tregs c)) j) (nth (tregs c) j))
+      (exact (nth_take (tregs c) k j hj)))
+    (rw (<- (treg_nth (at_pc (set_reg c (treg k) w) pc) j hj9)))
+    (rw (<- (treg_nth c j hj9)))
+    (rw (<- e1))
+    (rw (<- e2))
+    (rw (tset_take c k w pc hk))
+    rfl))
+(theorem tset_sp ((c Cpu) (k Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< k 9)))
+  (= (reg (at_pc (set_reg c (treg k) w) pc) 4) (reg c 4))
+  (by
+    (apply (nine_all (fun ((k Nat)) (= (reg (at_pc (set_reg c (treg k) w) pc) 4) (reg c 4)))) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+(theorem tset_regs ((c Cpu) (k Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< k 9)))
+  (= (regs6 (at_pc (set_reg c (treg k) w) pc)) (regs6 c))
+  (by
+    (apply (nine_all (fun ((k Nat)) (= (regs6 (at_pc (set_reg c (treg k) w) pc)) (regs6 c)))) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+
+;; ---- a state that differs in the temporaries from k on, flags and program counter alone ---------
+(def tstep ((k Nat) (c Cpu) (c1 Cpu)) Prop
+  (and (scratch c c1) (forall ((j Nat)) (-> (< j k) (= (reg c1 (treg j)) (reg c (treg j)))))))
+(theorem tstep_scratch ((k Nat) (c Cpu) (c1 Cpu) (h (tstep k c c1))) (scratch c c1)
+  (exact (And.left h)))
+(theorem tstep_low ((k Nat) (c Cpu) (c1 Cpu) (j Nat) (h (tstep k c c1)) (hj (< j k)))
+  (= (reg c1 (treg j)) (reg c (treg j)))
+  (by
+    (have hl (forall ((i Nat)) (-> (< i k) (= (reg c1 (treg i)) (reg c (treg i)))))
+      (exact (And.right h)))
+    (exact (hl j hj))))
+(theorem tstep_trans ((k Nat) (c Cpu) (c1 Cpu) (c2 Cpu) (h1 (tstep k c c1)) (h2 (tstep k c1 c2)))
+  (tstep k c c2)
+  (by
+    (apply And.intro ((exact (scratch_trans c c1 c2 (And.left h1) (And.left h2))))
+      ((intro j hj) (exact (Eq.trans (tstep_low k c1 c2 j h2 hj) (tstep_low k c c1 j h1 hj)))))))
+;; what leaves the temporaries below k + 1 leaves those below k
+(theorem tstep_down ((k Nat) (c Cpu) (c1 Cpu) (h (tstep (+ k 1) c c1))) (tstep k c c1)
+  (by
+    (apply And.intro ((exact (And.left h)))
+      ((intro j hj) (have hj1 (< j (+ k 1)) (arith)) (exact (tstep_low (+ k 1) c c1 j h hj1))))))
+(theorem tstep_set ((k Nat) (c Cpu) (w (BitVec 64)) (pc (BitVec 64)) (h (< k 9)))
+  (tstep k c (at_pc (set_reg c (treg k) w) pc))
+  (by
+    (have s1 (= (Cpu.segs (at_pc (set_reg c (treg k) w) pc)) (Cpu.segs c)) rfl)
+    (have s2 (= (Cpu.mem (at_pc (set_reg c (treg k) w) pc)) (Cpu.mem c)) rfl)
+    (apply And.intro
+      ((exact (And.intro s1 (And.intro s2 (And.intro (tset_sp c k w pc h) (tset_regs c k w pc h))))))
+      ((intro j hj) (exact (tset_low c k j w pc h hj))))))
+(theorem tstep_flags ((k Nat) (c Cpu) (fl Flags)) (tstep k c (set_flags c fl))
+  (by
+    (have s1 (= (Cpu.segs (set_flags c fl)) (Cpu.segs c)) rfl)
+    (have s2 (= (Cpu.mem (set_flags c fl)) (Cpu.mem c)) rfl)
+    (have s3 (= (reg (set_flags c fl) 4) (reg c 4)) rfl)
+    (have s4 (= (regs6 (set_flags c fl)) (regs6 c)) rfl)
+    (apply And.intro ((exact (And.intro s1 (And.intro s2 (And.intro s3 s4))))) ((intro j hj) rfl))))
 ;; a description at an index that is the same number
 (theorem framed_idx
   ((c0 Cpu)

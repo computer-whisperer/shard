@@ -1,0 +1,100 @@
+;;; v3/compile/lo.shard — what a low form is written with (docs/COMPILE.md §5). A low form is a
+;;; shard function over machine words and a memory of bytes: addresses appear, and each read
+;;; takes the evidence that it lies in the ranges `rs` the function was given. `rd64` is the
+;;; read; `buf_ok` is the evidence a caller has about a buffer of n words at an address, and
+;;; `at8_ok` turns it into the evidence one read needs. Two facts tie the read to what stands on
+;;; either side of a low form: where memory holds a list of words (`holds`,
+;;; v3/models/x86/frame.shard) the read of word i is the list's word at i (`rd_word`), and a
+;;; load of the intermediate machine (`ir.shard`) is the read (`ieval_rd`).
+(import "ir.shard")
+(import "../models/x86/frame.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.ir.IExp)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.Option none some)
+
+;; the word at the address a, on the evidence that its eight bytes are in a range mapped to read
+(fn rd64 ((rs (List Seg)) (m Mem) (a (BitVec 64)) (h (= (mapped rs (w64_val a) 8 4) true)))
+  (BitVec 64)
+  (w64 (mem_le64 m (w64_val a))))
+
+;; n words from the address p are mapped for `need` in the ranges rs, and end below 2^64
+(def buf_ok ((rs (List Seg)) (p (BitVec 64)) (n (BitVec 64)) (need Nat)) Prop
+  (and (mapped_words rs (w64_val p) (w64_val n) need)
+    (<= (+ (w64_val p) (* 8 (w64_val n))) 18446744073709551616)))
+
+;; the address of word i of such a buffer, as the machine computes it, does not wrap
+(theorem at8_val
+  ((rs (List Seg))
+   (p (BitVec 64))
+   (n (BitVec 64))
+   (need Nat)
+   (i (BitVec 64))
+   (hb (buf_ok rs p n need))
+   (h (< (w64_val i) (w64_val n))))
+  (= (w64_val (w64_add p (w64_mul (w64 8) i))) (+ (w64_val p) (* 8 (w64_val i))))
+  (by
+    (have hw (<= (+ (w64_val p) (* 8 (w64_val n))) 18446744073709551616) (exact (And.right hb)))
+    (have h1 (< (* 8 (w64_val i)) 18446744073709551616) (arith))
+    (have h2 (< (+ (w64_val p) (* 8 (w64_val i))) 18446744073709551616) (arith))
+    (show
+      (=
+        (Nat.mod (+ (w64_val p) (Nat.mod (* 8 (w64_val i)) 18446744073709551616))
+          18446744073709551616)
+        (+ (w64_val p) (* 8 (w64_val i)))))
+    (rw (Nat.mod_eq_of_lt h1))
+    (exact (Nat.mod_eq_of_lt h2))))
+;; and is mapped: the evidence one read of the buffer takes
+(theorem at8_ok
+  ((rs (List Seg))
+   (p (BitVec 64))
+   (n (BitVec 64))
+   (need Nat)
+   (i (BitVec 64))
+   (hb (buf_ok rs p n need))
+   (h (< (w64_val i) (w64_val n))))
+  (= (mapped rs (w64_val (w64_add p (w64_mul (w64 8) i))) 8 need) true)
+  (by
+    (have hm (mapped_words rs (w64_val p) (w64_val n) need) (exact (And.left hb)))
+    (rw (at8_val rs p n need i hb h))
+    (exact (hm (w64_val i) h))))
+
+;; a read of word i of a buffer that holds xs is the word of xs at i
+(theorem rd_word
+  ((rs (List Seg))
+   (m Mem)
+   (p (BitVec 64))
+   (n (BitVec 64))
+   (need Nat)
+   (i (BitVec 64))
+   (xs (List (BitVec 64)))
+   (hb (buf_ok rs p n need))
+   (h (< (w64_val i) (w64_val n)))
+   (hx (holds m (w64_val p) xs))
+   (hl (< (w64_val i) (List.length xs)))
+   (hm (= (mapped rs (w64_val (w64_add p (w64_mul (w64 8) i))) 8 4) true)))
+  (= (rd64 rs m (w64_add p (w64_mul (w64 8) i)) hm) (word_at xs i hl))
+  (by
+    (show (= (w64 (mem_le64 m (w64_val (w64_add p (w64_mul (w64 8) i))))) (word_at xs i hl)))
+    (rw (at8_val rs p n need i hb h))
+    (rw (word_at_nth xs i hl))
+    (exact (hx (w64_val i) hl))))
+
+;; a load of the intermediate machine is the read, on the evidence the read carries: everything
+;; but the address's word is fixed by the goal
+(theorem ieval_rd
+  ((rs (List Seg) implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (a IExp implicit)
+   (q (BitVec 64) implicit)
+   (hm (= (mapped rs (w64_val q) 8 4) true) implicit)
+   (ha (= (ieval rs ls m a) (some q))))
+  (= (ieval rs ls m (ELoad a)) (some (rd64 rs m q hm)))
+  (exact (ieval_load rs ls m a q ha hm)))

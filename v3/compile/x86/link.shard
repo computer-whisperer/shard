@@ -1,0 +1,805 @@
+;;; v3/compile/x86/link.shard — LINKING (docs/COMPILE.md §5): a file is a start-up and then ANY
+;;; lines. The start-up pushes two sample buffers of three words, calls ONE function with their
+;;; addresses and the count, and exits with the word the function returns. Proven once, for any
+;;; lines after the start-up and any label its call names (`link_exits`): where code that
+;;; `realizes` an answer stands at the call's target, the file, started as the model's runner
+;;; starts it, exits with the low byte of the answer's word on the sample arguments. Nothing is
+;;; known here of the lines appended. What the assembler answers for the listing and the table
+;;; its instructions lay out to are hypotheses, which a concrete file meets by computation. So
+;;; the start-up's run is not computed either: it is derived, instruction by instruction, from
+;;; the table's first rows by the rules of `laws.shard`.
+(import "seam_laws.shard")
+(import "../../models/x86/loaded.shard")
+(use std.mem)
+(use compile.x86.seam)
+(use compile.x86.seam_laws)
+(use models.x86.asm)
+(use models.x86.asm.Asm)
+(use models.x86.elf)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Res)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the listing and its table ------------------------------------------------------------------
+;; The start-up. The words 7 5 3 are pushed, so that the first buffer, 3 5 7, stands from the
+;; stack pointer up, and its address is kept in r14; then 6 4 2 for the second buffer, 2 4 6.
+;; The two addresses and the count go to rdi, rsi and rdx, the label l is called, and the word
+;; the call returns is the status of `exit`.
+(fn link_head ((l Nat)) (List Asm)
+  (list (AI (MovRI32 7 7)) (AI (Push 7)) (AI (MovRI32 7 5)) (AI (Push 7)) (AI (MovRI32 7 3))
+    (AI (Push 7))
+    (AI (MovRmR (RmReg 14) 4))
+    (AI (MovRI32 7 6))
+    (AI (Push 7))
+    (AI (MovRI32 7 4))
+    (AI (Push 7))
+    (AI (MovRI32 7 2))
+    (AI (Push 7))
+    (AI (MovRmR (RmReg 6) 4))
+    (AI (MovRmR (RmReg 7) 14))
+    (AI (MovRI32 2 3))
+    (ACall l)
+    (AI (MovRmR (RmReg 7) 0))
+    (AI (MovRI32 0 60))
+    (AI Syscall)))
+;; a file's listing: the start-up, then any lines
+(fn link_listing ((l Nat) (extra (List Asm))) (List Asm) (List.append (link_head l) extra))
+;; the start-up's instructions by address, its call's displacement d
+(fn link_head_table ((d Nat)) (List (Prod Nat (Prod Instr Nat)))
+  (list (Prod.mk 4194424 (Prod.mk (MovRI32 7 7) 5)) (Prod.mk 4194429 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194430 (Prod.mk (MovRI32 7 5) 5))
+    (Prod.mk 4194435 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194436 (Prod.mk (MovRI32 7 3) 5))
+    (Prod.mk 4194441 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194442 (Prod.mk (MovRmR (RmReg 14) 4) 3))
+    (Prod.mk 4194445 (Prod.mk (MovRI32 7 6) 5))
+    (Prod.mk 4194450 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194451 (Prod.mk (MovRI32 7 4) 5))
+    (Prod.mk 4194456 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194457 (Prod.mk (MovRI32 7 2) 5))
+    (Prod.mk 4194462 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194463 (Prod.mk (MovRmR (RmReg 6) 4) 3))
+    (Prod.mk 4194466 (Prod.mk (MovRmR (RmReg 7) 14) 3))
+    (Prod.mk 4194469 (Prod.mk (MovRI32 2 3) 5))
+    (Prod.mk 4194474 (Prod.mk (Call d) 5))
+    (Prod.mk 4194479 (Prod.mk (MovRmR (RmReg 7) 0) 3))
+    (Prod.mk 4194482 (Prod.mk (MovRI32 0 60) 5))
+    (Prod.mk 4194487 (Prod.mk Syscall 2))))
+;; a file's table: those twenty rows, then the rows xt of the lines appended, from 4194489 on
+(fn link_table ((d Nat) (xt (List (Prod Nat (Prod Instr Nat))))) (List (Prod Nat (Prod Instr Nat)))
+  (List.append (link_head_table d) xt))
+
+;; ---- what the start-up hands the function it calls ----------------------------------------------
+;; The runner's stack pointer starts at 140737488347136. The first buffer then stands at
+;; 140737488347112, the second at 140737488347088, the call's return address at 140737488347080.
+(fn link_xs () (List (BitVec 64)) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil))))
+(fn link_ys () (List (BitVec 64)) (cons (w64 2) (cons (w64 4) (cons (w64 6) nil))))
+;; the argument words: the two buffers' addresses and the count
+(fn link_args () (List (BitVec 64))
+  (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil))))
+;; the data ranges: the six words of the two buffers, to read and to write
+(fn link_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
+
+;; ---- the states of the start-up's run -----------------------------------------------------------
+;; the first state of the process of a code's file, started as the model's runner starts it
+(fn link_first ((code (List Nat)) (r Regs) (f Flags) (m Mem)) Cpu
+  (boot (image_of code m) (runner_start r f m)))
+;; `mov edi, v` then `push rdi`: a word pushed, the program counter after each instruction
+(fn lk_push ((c Cpu) (v Nat) (p1 Nat) (p2 Nat)) Cpu
+  (at_pc (pushed (x_mov_ri c 7 v (w64 p1)) (w64 v)) (w64 p2)))
+;; from the first state c: the first buffer's words pushed, the last first, and its address
+;; kept in r14
+(fn lk_x7 ((c Cpu)) Cpu (lk_push c 7 4194429 4194430))
+(fn lk_x5 ((c Cpu)) Cpu (lk_push (lk_x7 c) 5 4194435 4194436))
+(fn lk_x3 ((c Cpu)) Cpu (lk_push (lk_x5 c) 3 4194441 4194442))
+(fn lk_x ((c Cpu)) Cpu (x_mov_rr (lk_x3 c) 14 4 (w64 4194445)))
+;; the second buffer's words pushed
+(fn lk_y6 ((c Cpu)) Cpu (lk_push (lk_x c) 6 4194450 4194451))
+(fn lk_y4 ((c Cpu)) Cpu (lk_push (lk_y6 c) 4 4194456 4194457))
+(fn lk_y2 ((c Cpu)) Cpu (lk_push (lk_y4 c) 2 4194462 4194463))
+;; the arguments: the second buffer's address in rsi, the first's in rdi, the count in rdx
+(fn lk_rsi ((c Cpu)) Cpu (x_mov_rr (lk_y2 c) 6 4 (w64 4194466)))
+(fn lk_rdi ((c Cpu)) Cpu (x_mov_rr (lk_rsi c) 7 14 (w64 4194469)))
+(fn lk_rdx ((c Cpu)) Cpu (x_mov_ri (lk_rdi c) 2 3 (w64 4194474)))
+;; the call's return address pushed: the state the function is entered in
+(fn link_in ((code (List Nat)) (r Regs) (f Flags) (m Mem)) Cpu
+  (pushed (lk_rdx (link_first code r f m)) (w64 4194479)))
+
+;; ---- what is mapped, and the table in place -----------------------------------------------------
+;; where a code's file is loaded under the runner's stack and the code ends below the stack, an
+;; access inside the stack's range, of a kind the stack permits, is mapped
+(theorem stack_mapped
+  ((code (List Nat))
+   (a Nat)
+   (n Nat)
+   (need Nat)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (h1 (<= 140737479962624 a))
+   (h2 (<= (+ a n) 140737488351232))
+   (h3 (= (band 6 need) need)))
+  (= (mapped (loaded_segs code (MkSeg 140737479962624 140737488351232 6)) a n need) true)
+  (by
+    (have hlt (< (+ 4194304 (+ 120 (List.length code))) (+ a n)) (arith))
+    (show
+      (=
+        (mapped
+          (cons (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5)
+            (cons (MkSeg 140737479962624 140737488351232 6) nil))
+          a
+          n
+          need)
+        true))
+    (rw
+      (mapped_skip (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5)
+        (cons (MkSeg 140737479962624 140737488351232 6) nil)
+        a
+        n
+        need
+        (seg_holds_past 4194304 (+ 4194304 (+ 120 (List.length code))) 5 a n need hlt)))
+    (exact
+      (mapped_head (MkSeg 140737479962624 140737488351232 6) nil a n need
+        (seg_holds_in 140737479962624 140737488351232 6 a n need h1 h2 h3)))))
+;; so a push is mapped, in a state with that mapping whose stack pointer stands in the stack
+(theorem push_mapped
+  ((code (List Nat))
+   (c Cpu)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hsegs (= (Cpu.segs c) (loaded_segs code (MkSeg 140737479962624 140737488351232 6))))
+   (h1 (<= 140737479962624 (push_at c)))
+   (h2 (<= (+ (push_at c) 8) 140737488351232)))
+  (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+  (by
+    (have b2 (= (band 6 2) 2) (decide))
+    (rw hsegs)
+    (exact (stack_mapped code (push_at c) 8 2 hsz h1 h2 b2))))
+;; a push leaves a table in place where the word pushed lies in the stack and the code ends
+;; below the stack
+(theorem code_in_pushed
+  ((c Cpu)
+   (v (BitVec 64))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (chi Nat)
+   (hall (= (all_within tbl 4194424 chi) true))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (ha (<= 140737479962624 (push_at c)))
+   (hc (code_in c tbl)))
+  (code_in (pushed c v) tbl)
+  (by
+    (have hso (same_outside (Cpu.mem c) (Cpu.mem (pushed c v)) (push_at c) (+ (push_at c) 8))
+      (show
+        (same_outside (Cpu.mem c) (mem_put64 (Cpu.mem c) (push_at c) (w64_val v)) (push_at c)
+          (+ (push_at c) 8)))
+      (exact
+        (same_outside_put64 (Cpu.mem c) (Cpu.mem c) (push_at c) (+ (push_at c) 8) (push_at c)
+          (w64_val v)
+          (same_outside_refl (Cpu.mem c) (push_at c) (+ (push_at c) 8))
+          (Nat.le_refl (push_at c))
+          (Nat.le_refl (+ (push_at c) 8)))))
+    (have hsegs (= (Cpu.segs (pushed c v)) (Cpu.segs c)) rfl)
+    (have hclear (or (<= (+ chi 15) (push_at c)) (<= (+ (push_at c) 8) 4194424))
+      (apply Or.inl ((arith))))
+    (exact
+      (code_in_after c (pushed c v) tbl 4194424 chi (push_at c) (+ (push_at c) 8) hall hsegs hso
+        hclear
+        hc))))
+;; `mov edi, v` then `push rdi` leave a table in place
+(theorem lk_push_code
+  ((c Cpu)
+   (v Nat)
+   (p1 Nat)
+   (p2 Nat)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (chi Nat)
+   (hall (= (all_within tbl 4194424 chi) true))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (ha (<= 140737479962624 (push_at c)))
+   (hc (code_in c tbl)))
+  (code_in (lk_push c v p1 p2) tbl)
+  (by
+    (have hc1 (code_in (x_mov_ri c 7 v (w64 p1)) tbl) (exact hc))
+    (have ha1 (<= 140737479962624 (push_at (x_mov_ri c 7 v (w64 p1)))) (exact ha))
+    (have hc2 (code_in (pushed (x_mov_ri c 7 v (w64 p1)) (w64 v)) tbl)
+      (exact (code_in_pushed (x_mov_ri c 7 v (w64 p1)) (w64 v) tbl chi hall hchi ha1 hc1)))
+    (exact hc2)))
+;; and are two steps of the processor, where the table has the two instructions at the program
+;; counter and the push is mapped
+(theorem lk_push_reach
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (pc Nat)
+   (v Nat)
+   (p1 Nat)
+   (p2 Nat)
+   (hc (code_in c tbl))
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hs1 (= (site tbl pc) (some (Prod.mk (MovRI32 7 v) 5))))
+   (hs2 (= (site tbl p1) (some (Prod.mk (Push 7) 1))))
+   (hm (= (mapped (Cpu.segs c) (push_at c) 8 2) true))
+   (h1 (= (+ pc 5) p1))
+   (h2 (= (+ p1 1) p2))
+   (hp1 (= (w64_val (w64 p1)) p1))
+   (hr (reaches (lk_push c v p1 p2) c2)))
+  (reaches c c2)
+  (by
+    (have hm2
+      (= (mapped (Cpu.segs (x_mov_ri c 7 v (w64 p1))) (push_at (x_mov_ri c 7 v (w64 p1))) 8 2) true)
+      (exact hm))
+    (have hc3 (code_at (x_mov_ri c 7 v (w64 p1)) p1 (Push 7) 1) (exact (hc p1 (Push 7) 1 hs2)))
+    (have hrip2 (= (w64_val (Cpu.rip (x_mov_ri c 7 v (w64 p1)))) p1) (exact hp1))
+    (have hr2
+      (reaches (at_pc (pushed (x_mov_ri c 7 v (w64 p1)) (reg (x_mov_ri c 7 v (w64 p1)) 7)) (w64 p2))
+        c2)
+      (exact hr))
+    (apply (do_mov_ri32 pc 7 v 5 p1) ((exact hrip)) ((exact (hc pc (MovRI32 7 v) 5 hs1)))
+      ((exact h1))
+      ((apply (do_push p1 7 1 p2) ((exact hrip2)) ((exact hc3)) ((exact hm2)) ((exact h2))
+         ((exact hr2)))))))
+;; the table in place in the first state: the assembler answered `code` for the listing, and
+;; the code ends below the stack
+(theorem link_code_first
+  ((l Nat)
+   (extra (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (ha (= (assemble (link_listing l extra)) (some code)))
+   (hr (= (resolve (link_listing l extra) (link_listing l extra) 0) (some is)))
+   (hl (= (layout is 4194424) (link_table d xt)))
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (r Regs)
+   (f Flags)
+   (m Mem))
+  (code_in (link_first code r f m) (link_table d xt))
+  (by
+    (have hstk
+      (= (seg_holds (Start.stack (runner_start r f m)) (+ 4194424 (List.length code)) 1 1) false)
+      (exact
+        (seg_holds_before 140737479962624 140737488351232 6 (+ 4194424 (List.length code)) 1 1 hsz)))
+    (rw (<- hl))
+    (exact (listing_loaded (link_listing l extra) code is (runner_start r f m) ha hr hstk))))
+
+;; ---- the start-up's run -------------------------------------------------------------------------
+;; From the first state of the process of ANY code's file where the table is in place: the
+;; first buffer's three words are pushed and its address is kept, by the rules, and the table
+;; is still in place. Every fact of a state is computed by K and then used as it is written.
+(theorem link_start_x
+  ((code (List Nat))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (chi Nat)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hw (= (all_within (link_table d xt) 4194424 chi) true))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (hc0 (code_in (link_first code r f m) (link_table d xt))))
+  (and (reaches (link_first code r f m) (lk_x (link_first code r f m)))
+    (code_in (lk_x (link_first code r f m)) (link_table d xt)))
+  (by
+    (have a1 (<= 140737479962624 (push_at (link_first code r f m))) (decide))
+    (have a2 (<= 140737479962624 (push_at (lk_x7 (link_first code r f m)))) (decide))
+    (have a3 (<= 140737479962624 (push_at (lk_x5 (link_first code r f m)))) (decide))
+    (have m1
+      (= (mapped (Cpu.segs (link_first code r f m)) (push_at (link_first code r f m)) 8 2) true)
+      (apply (push_mapped code (link_first code r f m) hsz) (rfl) ((exact a1)) (decide)))
+    (have m2
+      (=
+        (mapped (Cpu.segs (lk_x7 (link_first code r f m))) (push_at (lk_x7 (link_first code r f m)))
+          8
+          2)
+        true)
+      (apply (push_mapped code (lk_x7 (link_first code r f m)) hsz) (rfl) ((exact a2)) (decide)))
+    (have m3
+      (=
+        (mapped (Cpu.segs (lk_x5 (link_first code r f m))) (push_at (lk_x5 (link_first code r f m)))
+          8
+          2)
+        true)
+      (apply (push_mapped code (lk_x5 (link_first code r f m)) hsz) (rfl) ((exact a3)) (decide)))
+    (have c1 (code_in (lk_x7 (link_first code r f m)) (link_table d xt))
+      (exact
+        (lk_push_code (link_first code r f m) 7 4194429 4194430 (link_table d xt) chi hw hchi a1 hc0)))
+    (have c2 (code_in (lk_x5 (link_first code r f m)) (link_table d xt))
+      (exact
+        (lk_push_code (lk_x7 (link_first code r f m)) 5 4194435 4194436 (link_table d xt) chi hw
+          hchi
+          a2
+          c1)))
+    (have c3 (code_in (lk_x3 (link_first code r f m)) (link_table d xt))
+      (exact
+        (lk_push_code (lk_x5 (link_first code r f m)) 3 4194441 4194442 (link_table d xt) chi hw
+          hchi
+          a3
+          c2)))
+    (have c4 (code_in (lk_x (link_first code r f m)) (link_table d xt))
+      (exact
+        (code_in_mov_rr (lk_x3 (link_first code r f m)) 14 4 (w64 4194445) (link_table d xt) c3)))
+    (have hr (reaches (link_first code r f m) (lk_x (link_first code r f m)))
+      (apply (lk_push_reach (link_table d xt) 4194424 7 4194429 4194430) ((exact hc0)) (decide)
+        (rfl)
+        (rfl)
+        ((exact m1))
+        (decide)
+        (decide)
+        (decide)
+        ((apply (lk_push_reach (link_table d xt) 4194430 5 4194435 4194436) ((exact c1)) (decide)
+           (rfl)
+           (rfl)
+           ((exact m2))
+           (decide)
+           (decide)
+           (decide)
+           ((apply (lk_push_reach (link_table d xt) 4194436 3 4194441 4194442) ((exact c2)) (decide)
+              (rfl)
+              (rfl)
+              ((exact m3))
+              (decide)
+              (decide)
+              (decide)
+              ((apply (do_mov_rr 4194442 14 4 3 4194445) (decide)
+                 ((exact
+                    (c3 4194442 (MovRmR (RmReg 14) 4) 3
+                      (Eq.refl (some (Prod.mk (MovRmR (RmReg 14) 4) 3))))))
+                 (decide)
+                 ((exact (reaches_refl (lk_x (link_first code r f m)))))))))))))
+    (exact (And.intro hr c4))))
+;; THE START-UP'S RUN. From there the second buffer's three words are pushed, the arguments are
+;; moved to their registers and the call is made: the processor has come from the first state
+;; to the call's target, in the state the function is entered in, the table in place.
+(theorem link_start
+  ((code (List Nat))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (chi Nat)
+   (entry Nat)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hw (= (all_within (link_table d xt) 4194424 chi) true))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (he (= (w64_add (w64 4194479) (w64 d)) (w64 entry)))
+   (hc0 (code_in (link_first code r f m) (link_table d xt))))
+  (and (reaches (link_first code r f m) (at_pc (link_in code r f m) (w64 entry)))
+    (code_in (link_in code r f m) (link_table d xt)))
+  (by
+    (cases (link_start_x code r f m d xt chi hsz hw hchi hc0)
+      ((intro (hrx hcx)
+         (have a4 (<= 140737479962624 (push_at (lk_x (link_first code r f m)))) (decide))
+         (have a5 (<= 140737479962624 (push_at (lk_y6 (link_first code r f m)))) (decide))
+         (have a6 (<= 140737479962624 (push_at (lk_y4 (link_first code r f m)))) (decide))
+         (have a7 (<= 140737479962624 (push_at (lk_rdx (link_first code r f m)))) (decide))
+         (have m4
+           (=
+             (mapped (Cpu.segs (lk_x (link_first code r f m)))
+               (push_at (lk_x (link_first code r f m)))
+               8
+               2)
+             true)
+           (apply (push_mapped code (lk_x (link_first code r f m)) hsz) (rfl) ((exact a4)) (decide)))
+         (have m5
+           (=
+             (mapped (Cpu.segs (lk_y6 (link_first code r f m)))
+               (push_at (lk_y6 (link_first code r f m)))
+               8
+               2)
+             true)
+           (apply (push_mapped code (lk_y6 (link_first code r f m)) hsz) (rfl) ((exact a5)) (decide)))
+         (have m6
+           (=
+             (mapped (Cpu.segs (lk_y4 (link_first code r f m)))
+               (push_at (lk_y4 (link_first code r f m)))
+               8
+               2)
+             true)
+           (apply (push_mapped code (lk_y4 (link_first code r f m)) hsz) (rfl) ((exact a6)) (decide)))
+         (have m7
+           (=
+             (mapped (Cpu.segs (lk_rdx (link_first code r f m)))
+               (push_at (lk_rdx (link_first code r f m)))
+               8
+               2)
+             true)
+           (apply (push_mapped code (lk_rdx (link_first code r f m)) hsz) (rfl) ((exact a7))
+             (decide)))
+         (have c5 (code_in (lk_y6 (link_first code r f m)) (link_table d xt))
+           (exact
+             (lk_push_code (lk_x (link_first code r f m)) 6 4194450 4194451 (link_table d xt) chi hw
+               hchi
+               a4
+               hcx)))
+         (have c6 (code_in (lk_y4 (link_first code r f m)) (link_table d xt))
+           (exact
+             (lk_push_code (lk_y6 (link_first code r f m)) 4 4194456 4194457 (link_table d xt) chi
+               hw
+               hchi
+               a5
+               c5)))
+         (have c7 (code_in (lk_y2 (link_first code r f m)) (link_table d xt))
+           (exact
+             (lk_push_code (lk_y4 (link_first code r f m)) 2 4194462 4194463 (link_table d xt) chi
+               hw
+               hchi
+               a6
+               c6)))
+         (have c8 (code_in (lk_rsi (link_first code r f m)) (link_table d xt))
+           (exact
+             (code_in_mov_rr (lk_y2 (link_first code r f m)) 6 4 (w64 4194466) (link_table d xt) c7)))
+         (have c9 (code_in (lk_rdi (link_first code r f m)) (link_table d xt))
+           (exact
+             (code_in_mov_rr (lk_rsi (link_first code r f m)) 7 14 (w64 4194469) (link_table d xt)
+               c8)))
+         (have cd (code_in (lk_rdx (link_first code r f m)) (link_table d xt))
+           (exact
+             (code_in_mov_ri (lk_rdi (link_first code r f m)) 2 3 (w64 4194474) (link_table d xt) c9)))
+         (have ci (code_in (link_in code r f m) (link_table d xt))
+           (exact
+             (code_in_pushed (lk_rdx (link_first code r f m)) (w64 4194479) (link_table d xt) chi hw
+               hchi
+               a7
+               cd)))
+         (have hr (reaches (lk_x (link_first code r f m)) (at_pc (link_in code r f m) (w64 entry)))
+           (apply (lk_push_reach (link_table d xt) 4194445 6 4194450 4194451) ((exact hcx)) (decide)
+             (rfl)
+             (rfl)
+             ((exact m4))
+             (decide)
+             (decide)
+             (decide)
+             ((apply (lk_push_reach (link_table d xt) 4194451 4 4194456 4194457) ((exact c5))
+                (decide)
+                (rfl)
+                (rfl)
+                ((exact m5))
+                (decide)
+                (decide)
+                (decide)
+                ((apply (lk_push_reach (link_table d xt) 4194457 2 4194462 4194463) ((exact c6))
+                   (decide)
+                   (rfl)
+                   (rfl)
+                   ((exact m6))
+                   (decide)
+                   (decide)
+                   (decide)
+                   ((apply (do_mov_rr 4194463 6 4 3 4194466) (decide)
+                      ((exact
+                         (c7 4194463 (MovRmR (RmReg 6) 4) 3
+                           (Eq.refl (some (Prod.mk (MovRmR (RmReg 6) 4) 3))))))
+                      (decide)
+                      ((apply (do_mov_rr 4194466 7 14 3 4194469) (decide)
+                         ((exact
+                            (c8 4194466 (MovRmR (RmReg 7) 14) 3
+                              (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 14) 3))))))
+                         (decide)
+                         ((apply (do_mov_ri32 4194469 2 3 5 4194474) (decide)
+                            ((exact
+                               (c9 4194469 (MovRI32 2 3) 5
+                                 (Eq.refl (some (Prod.mk (MovRI32 2 3) 5))))))
+                            (decide)
+                            ((apply (do_call 4194474 5 d 4194479 entry) (decide)
+                               ((exact (cd 4194474 (Call d) 5 (Eq.refl (some (Prod.mk (Call d) 5))))))
+                               ((exact m7))
+                               (decide)
+                               ((exact he))
+                               ((exact (reaches_refl (at_pc (link_in code r f m) (w64 entry)))))))))))))))))))
+         (exact
+           (And.intro
+             (reaches_trans (link_first code r f m) (lk_x (link_first code r f m))
+               (at_pc (link_in code r f m) (w64 entry))
+               hrx
+               hr)
+             ci)))))))
+
+;; ---- the state the function is entered in -------------------------------------------------------
+;; The hypotheses of `realizes`, met: the arguments, the room, the data ranges; and what the
+;; start-up knows of the memory it hands over.
+;; what is mapped: the file's image, and the runner's stack
+(theorem link_segs ((code (List Nat)) (r Regs) (f Flags) (m Mem))
+  (= (Cpu.segs (link_in code r f m)) (loaded_segs code (MkSeg 140737479962624 140737488351232 6)))
+  (by rfl))
+;; THE ARGUMENTS in their registers
+(theorem link_args_in ((code (List Nat)) (r Regs) (f Flags) (m Mem))
+  (args_in (link_in code r f m) link_args)
+  (by
+    (have v7 (= (w64_val (reg (link_in code r f m) 7)) 140737488347112) (decide))
+    (have v6 (= (w64_val (reg (link_in code r f m) 6)) 140737488347088) (decide))
+    (have v2 (= (w64_val (reg (link_in code r f m) 2)) 3) (decide))
+    (have e7 (= (reg (link_in code r f m) 7) (w64 140737488347112))
+      (exact (w64_eq_of_val (reg (link_in code r f m) 7) 140737488347112 v7)))
+    (have e6 (= (reg (link_in code r f m) 6) (w64 140737488347088))
+      (exact (w64_eq_of_val (reg (link_in code r f m) 6) 140737488347088 v6)))
+    (have e2 (= (reg (link_in code r f m) 2) (w64 3))
+      (exact (w64_eq_of_val (reg (link_in code r f m) 2) 3 v2)))
+    (apply And.intro (decide)
+      ((show
+         (= (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil)))
+           (cons (reg (link_in code r f m) 7)
+             (cons (reg (link_in code r f m) 6) (cons (reg (link_in code r f m) 2) nil)))))
+       (rw e7)
+       (rw e6)
+       (rw e2)
+       rfl))))
+;; ROOM for a frame of k words under the return address, f0 the lowest address of the k words:
+;; for every k the runner's stack has
+(theorem link_room
+  ((code (List Nat))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (chi Nat)
+   (f0 Nat)
+   (k Nat)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (hf (= (+ f0 (* 8 k)) 140737488347080))
+   (hlo (<= 140737479962624 f0)))
+  (room (link_in code r f m) 4194424 chi f0 k)
+  (by
+    (have hsp (= (w64_val (reg (link_in code r f m) 4)) 140737488347080) (decide))
+    (have b4 (= (band 6 4) 4) (decide))
+    (have b2 (= (band 6 2) 2) (decide))
+    (have hs (= (w64_val (reg (link_in code r f m) 4)) (+ f0 (* 8 k))) (rw hf) (exact hsp))
+    (have hrd (mapped_words (Cpu.segs (link_in code r f m)) f0 (+ k 1) 4)
+      (intro j hj)
+      (have h1 (<= 140737479962624 (+ f0 (* 8 j))) (arith))
+      (have h2 (<= (+ (+ f0 (* 8 j)) 8) 140737488351232) (arith))
+      (rw (link_segs code r f m))
+      (exact (stack_mapped code (+ f0 (* 8 j)) 8 4 hsz h1 h2 b4)))
+    (have hwr (mapped_words (Cpu.segs (link_in code r f m)) f0 k 2)
+      (intro j hj)
+      (have h1 (<= 140737479962624 (+ f0 (* 8 j))) (arith))
+      (have h2 (<= (+ (+ f0 (* 8 j)) 8) 140737488351232) (arith))
+      (rw (link_segs code r f m))
+      (exact (stack_mapped code (+ f0 (* 8 j)) 8 2 hsz h1 h2 b2)))
+    (have hc (or (<= (+ chi 15) f0) (<= (+ f0 (* 8 k)) 4194424)) (apply Or.inl ((arith))))
+    (exact (And.intro hs (And.intro hrd (And.intro hwr hc))))))
+;; THE DATA RANGES: mapped as asked, above the return address, clear of the code
+(theorem link_data
+  ((code (List Nat))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (chi Nat)
+   (f0 Nat)
+   (k Nat)
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (hf (= (+ f0 (* 8 k)) 140737488347080)))
+  (data_ok (link_in code r f m) link_rs 4194424 chi f0 k)
+  (by
+    (intro a n need hm)
+    (cases (seg_holds (MkSeg 140737488347088 140737488347136 6) a n need) hs
+      ((false ()
+         (have hx (= (mapped link_rs a n need) false)
+           (show (= (mapped (cons (MkSeg 140737488347088 140737488347136 6) nil) a n need) false))
+           (rw (mapped_skip (MkSeg 140737488347088 140737488347136 6) nil a n need hs))
+           rfl)
+         (exact (absurd (Eq.trans (Eq.symm hx) hm) Bool.false_ne_true)))
+       (true ()
+         (cases (seg_holds_true (MkSeg 140737488347088 140737488347136 6) a n need hs)
+           ((intro (g1 g23)
+              (cases g23
+                ((intro (g2 g3) (have k1 (<= 140737488347088 a) (exact g1))
+                   (have k2 (<= (+ a n) 140737488347136) (exact g2))
+                   (have k3 (= (band 6 need) need) (exact g3))
+                   (have h1 (<= 140737479962624 a) (arith))
+                   (have h2 (<= (+ a n) 140737488351232) (arith))
+                   (apply And.intro
+                     ((rw (link_segs code r f m)) (exact (stack_mapped code a n need hsz h1 h2 k3)))
+                     ((apply And.intro ((apply Or.inr ((arith)))) ((apply Or.inr ((arith))))))))))))))))))
+;; THE TWO BUFFERS hold the sample lists
+(theorem link_holds_xs ((code (List Nat)) (r Regs) (f Flags) (m Mem))
+  (holds (Cpu.mem (link_in code r f m)) 140737488347112 link_xs)
+  (by
+    (have q0 (= (mem_le64 (Cpu.mem (link_in code r f m)) 140737488347112) 3) (decide))
+    (have q1 (= (mem_le64 (Cpu.mem (link_in code r f m)) (+ 140737488347112 8)) 5) (decide))
+    (have q2 (= (mem_le64 (Cpu.mem (link_in code r f m)) (+ (+ 140737488347112 8) 8)) 7) (decide))
+    (show
+      (holds (Cpu.mem (link_in code r f m)) 140737488347112
+        (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))))
+    (apply holds_cons ((rw q0) rfl)
+      ((apply holds_cons ((rw q1) rfl)
+         ((apply holds_cons ((rw q2) rfl)
+            ((exact (holds_nil (Cpu.mem (link_in code r f m)) (+ (+ (+ 140737488347112 8) 8) 8)))))))))))
+(theorem link_holds_ys ((code (List Nat)) (r Regs) (f Flags) (m Mem))
+  (holds (Cpu.mem (link_in code r f m)) 140737488347088 link_ys)
+  (by
+    (have q0 (= (mem_le64 (Cpu.mem (link_in code r f m)) 140737488347088) 2) (decide))
+    (have q1 (= (mem_le64 (Cpu.mem (link_in code r f m)) (+ 140737488347088 8)) 4) (decide))
+    (have q2 (= (mem_le64 (Cpu.mem (link_in code r f m)) (+ (+ 140737488347088 8) 8)) 6) (decide))
+    (show
+      (holds (Cpu.mem (link_in code r f m)) 140737488347088
+        (cons (w64 2) (cons (w64 4) (cons (w64 6) nil)))))
+    (apply holds_cons ((rw q0) rfl)
+      ((apply holds_cons ((rw q1) rfl)
+         ((apply holds_cons ((rw q2) rfl)
+            ((exact (holds_nil (Cpu.mem (link_in code r f m)) (+ (+ (+ 140737488347088 8) 8) 8)))))))))))
+
+;; ---- from the function's return to the exit -----------------------------------------------------
+;; From any state c2 the file's run comes to that has returned from the call, the word v in rax
+;; and the table still in place: three instructions more, and the process has exited with v's
+;; low byte.
+(theorem link_end
+  ((code (List Nat))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (c2 Cpu)
+   (v (BitVec 64))
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hrun (reaches (link_first code r f m) c2))
+   (hv (= (reg c2 0) v))
+   (hcode2 (code_in c2 (link_table d xt)))
+   (hret (returned (link_in code r f m) c2)))
+  (exits (elf_exec code) (runner_start r f m) (% (w64_val v) 256))
+  (by
+    (have hsize (<= (+ 4194424 (List.length code)) 140737488355328) (arith))
+    (have hra (= (ret_addr (link_in code r f m)) (w64 4194479))
+      (exact (ret_addr_pushed (lk_rdx (link_first code r f m)) (w64 4194479))))
+    (have hrip2 (= (w64_val (Cpu.rip c2)) 4194479)
+      (rw (returned_at (link_in code r f m) c2 hret))
+      (rw hra)
+      rfl)
+    (have hcode3 (code_in (x_mov_rr c2 7 0 (w64 4194482)) (link_table d xt)) (exact hcode2))
+    (have hcode4
+      (code_in (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) (link_table d xt))
+      (exact hcode2))
+    (have hreach (reaches c2 (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))
+      (apply (do_mov_rr 4194479 7 0 3 4194482) ((exact hrip2))
+        ((exact
+           (hcode2 4194479 (MovRmR (RmReg 7) 0) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 0) 3))))))
+        (rfl)
+        ((apply (do_mov_ri32 4194482 0 60 5 4194487) (rfl)
+           ((exact (hcode3 4194482 (MovRI32 0 60) 5 (Eq.refl (some (Prod.mk (MovRI32 0 60) 5))))))
+           (rfl)
+           ((exact (reaches_refl (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))))))))
+    (have h60 (= (w64_val (reg (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) 0)) 60)
+      rfl)
+    (have hrip4
+      (= (w64_val (Cpu.rip (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))) 4194487)
+      rfl)
+    (have hexit
+      (= (run (FS FZ) (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)))
+        (RExit (% (w64_val (reg c2 0)) 256)))
+      (exact
+        (run_exit (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) 4194487 2 hrip4
+          (hcode4 4194487 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+          h60)))
+    (cases
+      (reaches_trans (link_first code r f m) c2
+        (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487))
+        hrun
+        hreach)
+      ((intro (j hj)
+         (cases
+           (run_of_steps j (link_first code r f m)
+             (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487))
+             (FS FZ)
+             hj)
+           ((intro (n hn)
+              (apply (Exists.intro n)
+                ((show
+                   (= (run_file n (elf_exec code) (runner_start r f m)) (RExit (% (w64_val v) 256))))
+                 (rw (run_file_exec n code (runner_start r f m) hsize))
+                 (show (= (run n (link_first code r f m)) (RExit (% (w64_val v) 256))))
+                 (rw hn)
+                 (rw hexit)
+                 (rw hv)
+                 rfl))))))))))
+
+;; ---- THE LINK -------------------------------------------------------------------------------------
+;; For ANY lines `extra` after the start-up and any label l its call names. Where the assembler
+;; answers `code` for the listing and its instructions lay out to the table with the start-up's
+;; rows first (three facts a concrete file gives by computation), the call's displacement leads
+;; to `entry`, the table lies in [4194424, chi) and the code ends below the runner's stack:
+;; whatever code realizes an answer at `entry` over that table, for the data ranges the start-up
+;; hands over and with a stack need of k words — every k up to the 1,048,057 words the runner's
+;; stack has under the return address —, if the answer gives the word v on the sample arguments
+;; in any memory that holds the two sample buffers, the code's file exits with v's low byte.
+;; The answer is taken on the machine's own memory, which agrees with itself. That the
+;; start-up's code is still in place after the call follows from the statement's own memory
+;; clause (`kept_code`).
+(theorem link_exits
+  ((l Nat)
+   (extra (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (entry Nat)
+   (chi Nat)
+   (k Nat)
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (v (BitVec 64))
+   (ha (= (assemble (link_listing l extra)) (some code)))
+   (hr (= (resolve (link_listing l extra) (link_listing l extra) 0) (some is)))
+   (hl (= (layout is 4194424) (link_table d xt)))
+   (he (= (w64_add (w64 4194479) (w64 d)) (w64 entry)))
+   (hw (= (all_within (link_table d xt) 4194424 chi) true))
+   (hsz (< (+ 4194424 (List.length code)) 140737479962624))
+   (hchi (<= (+ chi 15) 140737479962624))
+   (hk (<= k 1048057))
+   (hreal (realizes (link_table d xt) 4194424 chi entry k link_rs ans))
+   (hans
+     (forall ((m0 Mem))
+       (-> (holds m0 140737488347112 link_xs) (holds m0 140737488347088 link_ys)
+         (exists ((m2 Mem)) (ans link_args m0 v m2)))))
+   (r Regs)
+   (f Flags)
+   (m Mem))
+  (exits (elf_exec code) (runner_start r f m) (% (w64_val v) 256))
+  (by
+    (have hc0 (code_in (link_first code r f m) (link_table d xt))
+      (exact (link_code_first l extra code is d xt ha hr hl hsz r f m)))
+    ;; the function's k words end where the return address stands: the lowest of them is at
+    ;; 140737488347080 - 8k
+    (have hle (<= (* 8 k) 140737488347080) (arith))
+    (have hf (= (+ (- 140737488347080 (* 8 k)) (* 8 k)) 140737488347080)
+      (exact (Nat.sub_add_cancel hle)))
+    (have hlo (<= 140737479962624 (- 140737488347080 (* 8 k))) (arith hf))
+    (have hroom (room (link_in code r f m) 4194424 chi (- 140737488347080 (* 8 k)) k)
+      (exact (link_room code r f m chi (- 140737488347080 (* 8 k)) k hsz hchi hf hlo)))
+    (have hdata (data_ok (link_in code r f m) link_rs 4194424 chi (- 140737488347080 (* 8 k)) k)
+      (exact (link_data code r f m chi (- 140737488347080 (* 8 k)) k hsz hchi hf)))
+    (have hag (agree link_rs (Cpu.mem (link_in code r f m)) (Cpu.mem (link_in code r f m)))
+      (intro x need h)
+      rfl)
+    (cases (link_start code r f m d xt chi entry hsz hw hchi he hc0)
+      ((intro (hstart hcode)
+         (cases
+           (hans (Cpu.mem (link_in code r f m)) (link_holds_xs code r f m)
+             (link_holds_ys code r f m))
+           ((intro (m2 hma)
+              (cases
+                (hreal (link_in code r f m) link_args v (Cpu.mem (link_in code r f m)) m2
+                  (- 140737488347080 (* 8 k))
+                  hcode
+                  (link_args_in code r f m)
+                  hroom
+                  hdata
+                  hag
+                  hma)
+                ((intro (c2 h)
+                   (have hrun (reaches (link_first code r f m) c2)
+                     (exact
+                       (reaches_trans (link_first code r f m)
+                         (at_pc (link_in code r f m) (w64 entry))
+                         c2
+                         hstart
+                         (And.left h))))
+                   (have hv (= (reg c2 0) v) (exact (And.left (And.right h))))
+                   (have hkm
+                     (kept_mem link_rs (- 140737488347080 (* 8 k)) k (Cpu.mem (link_in code r f m))
+                       (Cpu.mem c2))
+                     (exact (And.left (And.right (And.right (And.right h))))))
+                   (have hret (returned (link_in code r f m) c2)
+                     (exact (And.right (And.right (And.right (And.right h))))))
+                   (have hcode2 (code_in c2 (link_table d xt))
+                     (exact
+                       (kept_code (link_in code r f m) c2 (link_table d xt) link_rs 4194424 chi
+                         (- 140737488347080 (* 8 k))
+                         k
+                         hw
+                         hroom
+                         hdata
+                         hkm
+                         hret
+                         hcode)))
+                   (exact (link_end code r f m d xt c2 v hsz hrun hv hcode2 hret)))))))))))))

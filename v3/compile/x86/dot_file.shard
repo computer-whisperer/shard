@@ -1,0 +1,90 @@
+;;; v3/compile/x86/dot_file.shard — `dot` compiled, and the file it runs in. The two functions
+;;; of dot_ir.shard go through the pass at 4194489, the address after link.shard's start-up; the
+;;; file's lines are the start-up, its call going to label 1, and the compiled instructions with
+;;; label 1 before the one at `dot`'s entry. Here are the listing, the table, the file's bytes,
+;;; and every fact of the assembled file that the theorems ask for, each closed by computation.
+;;; That the file exits with `dot`'s value is dot_run.shard's.
+(import "pass.shard")
+(import "code.shard")
+(import "link.shard")
+(import "../dot_ir.shard")
+(use compile.dot_ir)
+(use compile.x86.code)
+(use compile.x86.link)
+(use compile.x86.pass)
+(use models.x86.asm)
+(use models.x86.asm.Asm)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- compiled -----------------------------------------------------------------------------------
+(fn dot_listing () (List Instr)
+  (match (compile nil dot_prog 4194489)
+    (none nil)
+    ((some (Prod.mk l f)) l)))
+;; each function's entry and its stack need
+(fn dot_entries () (List (Prod Nat Nat))
+  (match (compile nil dot_prog 4194489)
+    (none nil)
+    ((some (Prod.mk l f)) f)))
+(theorem dot_compiled () (= (compile nil dot_prog 4194489) (some (Prod.mk dot_listing dot_entries)))
+  (by rfl))
+;; `dot`'s entry as the pass answered it, and the words of stack it needs
+(fn dot_at () Nat
+  (match (pair_at dot_entries 1)
+    (none 0)
+    ((some en) (Prod.fst en))))
+(fn dot_need () Nat
+  (match (pair_at dot_entries 1)
+    (none 0)
+    ((some en) (Prod.snd en))))
+(theorem dot_entry () (= (pair_at dot_entries 1) (some (Prod.mk dot_at dot_need))) (by rfl))
+(theorem dot_need_fits () (<= dot_need 1048057) (by decide))
+
+;; ---- the file's lines -----------------------------------------------------------------------------
+;; instructions as lines, from the address a, the label l before the one that stands at `at`
+(fn label_at ((is (List Instr)) (a Nat) (at Nat) (l Nat)) (List Asm)
+  (measure (struct is))
+  (match is
+    (nil nil)
+    ((cons i r)
+     (if (= a at) (cons (ALabel l) (cons (AI i) (label_at r (+ a (List.length (encode i))) at l)))
+     (cons (AI i) (label_at r (+ a (List.length (encode i))) at l))))))
+(fn dot_lines () (List Asm) (label_at dot_listing 4194489 dot_at 1))
+;; the file's table: the start-up's rows, its call's displacement d, then the compiled
+;; instructions laid out from 4194489
+(fn dot_d () Nat (rel dot_at 4194479))
+(fn dot_xt () (List (Prod Nat (Prod Instr Nat))) (layout dot_listing 4194489))
+(fn dot_tbl () (List (Prod Nat (Prod Instr Nat))) (link_table dot_d dot_xt))
+(fn dot_chi () Nat (+ 4194489 (isize dot_listing)))
+
+;; ---- assembled: the facts of the file, each by computation ----------------------------------------
+(fn dot_image () (List Nat)
+  (match (assemble (link_listing 1 dot_lines))
+    (none nil)
+    ((some code) code)))
+(fn dot_instrs () (List Instr)
+  (match (resolve (link_listing 1 dot_lines) (link_listing 1 dot_lines) 0)
+    (none nil)
+    ((some is) is)))
+(theorem dot_assembled () (= (assemble (link_listing 1 dot_lines)) (some dot_image)) (by rfl))
+(theorem dot_resolved ()
+  (= (resolve (link_listing 1 dot_lines) (link_listing 1 dot_lines) 0) (some dot_instrs))
+  (by rfl))
+;; the assembler's instructions lay out to the table: the start-up's call reaches `dot`, and the
+;; lines after it are the compiled listing, instruction for instruction
+(theorem dot_laid () (= (layout dot_instrs 4194424) dot_tbl) (by rfl))
+(theorem dot_target () (= (w64_add (w64 4194479) (w64 dot_d)) (w64 dot_at)) (by rfl))
+(theorem dot_within () (= (all_within dot_tbl 4194424 dot_chi) true) (by rfl))
+(theorem dot_size () (< (+ 4194424 (List.length dot_image)) 140737479962624) (by decide))
+(theorem dot_chi_stack () (<= (+ dot_chi 15) 140737479962624) (by decide))
+(theorem dot_chi_word () (<= (+ dot_chi 15) 18446744073709551616) (by decide))
+;; the compiled listing stands in the table at 4194489
+(theorem dot_placedb () (= (placedb dot_tbl 4194489 dot_listing) true) (by decide))
+(theorem dot_placed () (placed dot_tbl 4194489 dot_listing)
+  (exact (placedb_ok dot_tbl dot_listing 4194489 dot_placedb)))

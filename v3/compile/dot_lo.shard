@@ -1,0 +1,116 @@
+;;; v3/compile/dot_lo.shard — the low form of `dot` and of its loop `dot_go`
+;;; (v3/models/x86/buffers.shard; docs/COMPILE.md §5): the ranges, the memory, the two addresses
+;;; and the count as words, and the evidence about the two buffers; each read through `rd64`
+;;; with the evidence that its address is in the ranges. Then the loop's one equation at each
+;;; side of its test, and a closed sample: two buffers of three words where a start-up's pushes
+;;; leave them, at the top of the stack.
+(import "lo.shard")
+(use std.mem)
+(use compile.lo)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Seg)
+(use Init.List cons nil)
+
+;; ---- the low form ------------------------------------------------------------------------------
+(fn dot_lo_go
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (i (BitVec 64))
+   (acc (BitVec 64)))
+  (BitVec 64)
+  (measure (- (w64_val n) (w64_val i)))
+  (dif h (< (w64_val i) (w64_val n))
+    (dot_lo_go rs m px py n ex ey (w64_add i (w64 1))
+      (w64_add acc
+        (w64_mul (rd64 rs m (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+          (rd64 rs m (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h)))))
+    acc))
+(fulfills dot_lo_go.dec_1 (by (intro p h) (apply loop_descends (exact h))))
+(fn dot_lo
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (BitVec 64)
+  (dot_lo_go rs m px py n ex ey (w64 0) (w64 0)))
+
+;; ---- the loop's two cases: its one equation, at each side of its test -----------------------------
+(theorem dot_lo_go_turn
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (i (BitVec 64))
+   (acc (BitVec 64))
+   (h (< (w64_val i) (w64_val n))))
+  (= (dot_lo_go rs m px py n ex ey i acc)
+    (dot_lo_go rs m px py n ex ey (w64_add i (w64 1))
+      (w64_add acc
+        (w64_mul (rd64 rs m (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+          (rd64 rs m (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h))))))
+  (by (rw dot_lo_go.eq_1 (occ 1)) (rw (dif_pos h)) rfl))
+(theorem dot_lo_go_done
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (i (BitVec 64))
+   (acc (BitVec 64))
+   (h (Not (< (w64_val i) (w64_val n)))))
+  (= (dot_lo_go rs m px py n ex ey i acc) acc)
+  (by (rw dot_lo_go.eq_1) (rw (dif_neg h)) rfl))
+
+;; ---- a closed sample ---------------------------------------------------------------------------
+;; One range of six words mapped to read and write, the last 48 bytes below 140737488347136:
+;; the words 3 5 7 at 140737488347112 and 2 4 6 at 140737488347088.
+(fn sample_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
+(fn sample_m () Mem
+  (mem_put64
+    (mem_put64
+      (mem_put64
+        (mem_put64 (mem_put64 (mem_put64 mem_empty 140737488347112 3) 140737488347120 5)
+          140737488347128
+          7)
+        140737488347088
+        2)
+      140737488347096
+      4)
+    140737488347104
+    6))
+;; the evidence about each buffer, by computation
+(theorem sample_ex () (buf_ok sample_rs (w64 140737488347112) (w64 3) 4)
+  (by
+    (apply And.intro
+      ((apply (mapped_words_of sample_rs (w64_val (w64 140737488347112)) (w64_val (w64 3)) 4)
+         (decide)))
+      ((decide)))))
+(theorem sample_ey () (buf_ok sample_rs (w64 140737488347088) (w64 3) 4)
+  (by
+    (apply And.intro
+      ((apply (mapped_words_of sample_rs (w64_val (w64 140737488347088)) (w64_val (w64 3)) 4)
+         (decide)))
+      ((decide)))))
+;; the low form on that memory, by evaluation: 3*2 + 5*4 + 7*6
+(theorem sample_dot_lo ()
+  (=
+    (w64_val
+      (dot_lo sample_rs sample_m (w64 140737488347112) (w64 140737488347088) (w64 3) sample_ex
+        sample_ey))
+    68)
+  (by decide))
