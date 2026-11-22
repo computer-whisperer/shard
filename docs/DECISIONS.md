@@ -868,6 +868,33 @@ entries are explained under "Measured" at the end.
   machine (`ir_laws.shard`), since the fuel's law is proven from it. `ir.shard` and
   `x86/startup.shard` hold no proof: the pass reads none, and a file's definitions do not
   import the link theorem.
+- Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `dot_lo.shard`,
+  `x86/dot_hand.shard`, `sqdiff_ir.shard`), not put to the owner one by one. The answer of a
+  function called from outside its module is its low form: the function of the argument words
+  and the memory that the intermediate machine's run takes for it is the low form's value where
+  the low form's evidence exists, and no answer elsewhere (`ans_on`). Whether evidence exists is
+  decided by no program — the definition rests on `Classical.choice`, one of the three axioms a
+  theorem here may rest on —, so the evaluator does not run a caller's intermediate code against
+  such an answer. Not a function that decides the evidence by computing — a decision would be
+  written and proven complete for every form of evidence, and a low form that follows pointers
+  takes parameters no code holds (`COMPILE.md` §8), whose existence nothing computed from the
+  words decides; not the lists read back out of memory with the meaning applied to them, the
+  form tried outside the tree — the hand-written code and the compiled code would be proven
+  against two answers, and a caller against one of them. Code proven against another form of
+  its answer is brought to this one by a law of the statement (`realizes_sub`: code that
+  realizes an answer realizes every answer that says no more): the hand-written `dot` from its
+  author's contract over two lists — the lists read out of the machine's memory, the low form's
+  value on that memory their meaning's, and the same on any memory that agrees on the ranges —,
+  the compiled `dot` from its run, by its tie. A caller's tie is stated for any outside
+  functions whose function at the index answers as that answer does, as it is for any program
+  with its callees at their indices. `dot`'s contract is stated over its own ten rows, and a
+  part of a table is in place where the whole is (`models/x86/part.shard`); the rows keep the
+  addresses they were written for — a contract at any address is `dot`'s proof over a variable
+  base, and placement is open (`COMPILE.md` §8). The caller is a new function and not the
+  trial's `both`: `both` calls `addto`, which writes into its buffer, and no hand-written
+  function that writes is at the seam yet. In the file of two compiled modules each goes
+  through the pass on its own, the second handed the entry and the stack need the pass answered
+  for the first; nothing joins two modules' intermediate code.
 
 ## Proofs and automation
 
@@ -1967,3 +1994,23 @@ measurements; measure again before building on one.
   entering another function and a wrong exit status claimed, at the file's facts, in 23 to
   40 s. With a file's start-up apart from the link theorem, the load of `dot`'s writer fell
   from 17 s to 15 s.
+- Hand-written code joined through the seam (`v3/compile`, 12,100 lines; natively, CPU seconds,
+  single measurements). The hand-written `dot` against the seam's statement is 230 lines
+  (`x86/dot_hand.shard`), 50 of them that the low form's value is the same on memories that
+  agree on the ranges; stating its contract over its own rows changed seven names in its proof
+  and added three lines at its caller, and that a part of a table is in place where the whole
+  is, is 75 lines once. An answer where evidence exists is 30 lines; `dot`'s answer with its two
+  facts 65; the rule for a call of an outside function 35; the statement's two laws 40. The
+  caller's meaning, low form and first fact are 65 lines, its code and tie 120, the tie's proof
+  10. A file's facts and theorems are 215 lines with the hand-written `dot` and 245 with the
+  compiled one, `dot`'s file's with the names changed and one fact more. The chain with the
+  hand-written `dot` loads in 34 s, with the compiled one in 40 s. The file with the
+  hand-written `dot` is 313 bytes, the other 531. Ten faults planted by hand in copies, each
+  loaded once, all refused in 7 to 55 s: a hand-written line changed in the file, at the file's
+  layout fact; the line changed together with its row, at its author's proof, the tactic
+  deriving no block for it; the caller's code with a wrong argument, or its operands exchanged,
+  at the tie, in 15 s; the caller's meaning changed, at the first fact; the compiled `dot` given
+  no stack, and the hand-written one entered past its first instruction, at the file's fact
+  about its outside function; a wrong exit status, at the file's theorem; the law of a smaller
+  answer turned round, and the outside call's rule with the rest run on the memory before the
+  call, at their own proofs.

@@ -2,8 +2,9 @@
 
 Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18), and to §5 as the
 form a function has between the two ends (`LAW.md` §6, 20). Of it the tree holds a machine's model
-and a trial of low-level code (§4, `v3/models/x86`), and of §5 a first pass with its theorem and
-the two programs of §8 through every layer (`v3/compile`); no build. It fixes one
+and a trial of low-level code (§4, `v3/models/x86`), and of §5 a first pass with its theorem,
+the two programs of §8 through every layer, and a compiled caller of a hand-written function
+through the seam's statement (`v3/compile`); no build. It fixes one
 statement, the two ends of the first chain and what crosses from one module to another, and leaves
 the rest of the middle open on purpose (§8).
 
@@ -108,7 +109,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts of code written by hand and one file proven by them to exit as its functions compute; one file of compiled code proven so (§5) |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -160,11 +161,17 @@ The owner agreed to this form after it was tried outside the tree (`LAW.md` §6,
 trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the tree holds
 (`v3/compile`, its README): the intermediate; the seam's statement on the x86 model; the pass and
 its theorem, for six locals in registers, expressions of word operations and loads, stores,
-`if`, calls and tail calls; the link theorem for one fixed start-up; and two programs, each
-with its levels and its facts, proven to the exit status of its file: six functions over words
-with calls, a test and a loop, and a sum of products over two buffers. It does not hold: a front
+`if`, calls and tail calls; the link theorem for one fixed start-up; two programs, each with
+its levels and its facts, proven to the exit status of its file: six functions over words with
+calls, a test and a loop, and a sum of products over two buffers; and a caller of that sum
+compiled as a module of its own and linked in two files, one with the sum's hand-written
+instructions and one with its compiled module, each proven to the file's exit status from one
+proof of the caller and one statement of the sum. There the answer at the seam is the sum's
+low form, given where the low form's evidence exists; the hand-written code meets it from its
+author's contract over lists, and the compiled code from its run. It does not hold: a front
 step that is a tool — each function's low form, its intermediate code and the certificate are
-written by hand —; hand-written code met through the seam's statement; a build.
+written by hand —; a hand-written function that writes memory or keeps a frame, at the seam; a
+build.
 
 A module is the unit that is compiled, and a function is what crosses from one module to another.
 
@@ -289,6 +296,12 @@ enters is called by the one start-up the tree has, on that start-up's three word
 that calls another is tied to its definition from the callee's tie alone, by a rule of the
 intermediate machine for a call that returns.
 
+Beside them stands a caller of the second program's function across a seam: its module holds
+none of the callee's code, and it is linked against the callee's hand-written instructions and
+against the callee's compiled module, the faults at that joint refused when planted by hand — a
+hand-written line that differs from the proven one, a wrong entry or stack need given for the
+callee.
+
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
 exact form; events and their prefixes at the Linux boundary; registers; floats; a second target;
@@ -302,8 +315,10 @@ Open in §5's form, each found by the trial or by the review before it:
   in. A low form that follows pointers takes two parameters that no code holds — the list a chain
   of cells stands for, by which its recursion descends, and the ranges it may touch — and nothing
   in the language marks such a parameter;
-- placement: hand-written code is proven at the addresses of one file, and a module has no place
-  for constants;
+- placement: hand-written code is proven over its own instructions at the addresses it was
+  written for, so a file has it there or not at all; and a module has no place for constants;
+- an answer at a seam that a program can compute: the low form where its evidence exists is
+  decided by no program, so a caller's intermediate code is not run against it by evaluation;
 - values narrower than a word; the processor's features; the stack's alignment;
 - a witness, for each statement at a seam, that its hypotheses can be met;
 - which end §6's fact names once a chain is built as §5 has it;
