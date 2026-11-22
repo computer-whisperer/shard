@@ -1040,15 +1040,18 @@ measurements; measure again before building on one.
 - K evaluating a closed call through a measured definition by `rfl` (a probe, not in the tree):
   depth 40 in 2.4 s, 200 in 7.8 s, 1,000 over 120 s, 4,000 `unify_exhausted`.
 - Proof-layer budgets: `reduce` 2,000 rewrites and 64 unfoldings; `simp_only` 256 rewrites; `arith`
-  512 derived rows; templates 1,024 instances per load. The longest real run is 906 rewrites.
-- `(reduce (using …))` on the model proofs: `len.shard` 56,452 to 25,921 bytes, `app.shard` 181,204
-  to 55,387; their closures check slower, 29.3 s against 23.6 and 34.5 against 30.9.
+  512 derived rows; templates 1,024 instances per load. The longest run measured: 906 rewrites,
+  a run lemma of the imp model (the previous generation's intermediate machine, `V2.md` §5, as
+  `v3/models/imp` held it).
+- `(reduce (using …))` on the imp model's two proofs: `len.shard` 56,452 to 25,921 bytes,
+  `app.shard` 181,204 to 55,387; their closures check slower, 29.3 s against 23.6 and 34.5
+  against 30.9.
 - A 906-rewrite proof is 4.05 million nodes as a tree, 50 thousand distinct. Each structure built
-  once at K's raw entry: the model root 33.2 to 26.8 s, peak 8.3 to 3.3 GB; 11.2 million node
+  once at K's raw entry: the imp model's root 33.2 to 26.8 s, peak 8.3 to 3.3 GB; 11.2 million node
   visits remain. Sharing read from submitted ids instead: 62% of nodes carry none; 17.0 to 23.6 s.
 - A case step forced at an open discriminant: ten minutes and 69 GB; waiting at it: 15 s.
-- Largest roots, native load: the model root (`models/imp`, 896 accepted) 28–31 s; the std root
-  (ten files) ~6 s, ~92 s on the bootstrap; the formatter's contract ~3 s.
+- Roots, native load: the std root (ten files) ~6 s, ~92 s on the bootstrap; the formatter's
+  contract ~3 s.
 - Linking a program: native 4.4 ms at 1,000 functions, 24 ms at 5,000 (linear), an invocation
   0.02 ms; bootstrap 33 ms and 0.1 ms. One tactic-library step: 1.3 ms link, 2.5 ms run.
 - Back end: the loader's own closure (9,174 declarations) loads, lowers and generates in
@@ -1066,7 +1069,7 @@ measurements; measure again before building on one.
   reads and are converted (`utf8`). Over the 29 roots 372 functions are definitions, 305
   before those were read; a load of a one-function file takes the same 2 s and 26 s.
 - The two readings (`load --both`) over what the examples, the library, the formatter and the
-  model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
+  imp model write — 473 functions, the 65 lambdas they lift, 12 supplied `realize` bodies: 550
   programs, each one text both ways. Over the pins' 341: 340, and one the classifier does not
   read (a package's field at its constant). Of the 473 functions alone, as the classifier came
   to read more: 341 the same, 10 different and 122 not read; 370, none and 103 once it took
@@ -1078,7 +1081,7 @@ measurements; measure again before building on one.
   canonical text, the formatter's two directories linked on both sides; 773 lines: 705
   functions, 62 types, 6 externs): 501 lines the same, none different, 272 functions not read
   — 80 instances, 65 lifted lambdas and the 76 functions that call a template; the 43 functions
-  derivations write and 8 that call one. 51 of the 59 roots read whole, the model's 174
+  derivations write and 8 that call one. 51 of the 59 roots read whole, the imp model's 174
   declarations and the formatter's binary, 173, among them. calc's closure, 59 declarations:
   read and run over five inputs in 4 ms, where the loader's load of it takes 39 s on the
   bootstrap. Over the 29 toolchain roots, 146,322 declarations, its text is the loader's; it

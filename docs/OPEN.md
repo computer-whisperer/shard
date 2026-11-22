@@ -47,8 +47,7 @@ These are what the compile system has to replace or supply (`SHAPE.md` §6).
 |---|---|
 | a proven compiler | lowering to C, unproven; compared with the evaluator on the tests |
 | a proven step from a definition to its program | the erasure, trusted by review |
-| proofs of the runtime's laws | six axioms in `v3/models/imp/rtlaw.shard`; nothing stated about `init` and `dec` |
-| a compiler as a function, and a theorem over all programs | two compiled forms entered by hand |
+| a compiler as a function, and a theorem over all programs | the listings of `v3/models/x86`, each compiled by hand |
 | a machine model | begun: `v3/models/x86` decodes and executes fifteen instructions over 64-bit words, loads an executable file and knows `exit`, and is held to the processor by `x86_test.sh` on programs assembled by hand; its assembler answers with bytes the model's decoder reads back (a fact made per listing; nothing is proven of the encoder for every instruction). Laws of the model are proven once (`laws.shard`): fifteen rules, for the instruction forms the trial's listing uses (none for an operand at a base and a displacement), what a store leaves, code unmoved by a store elsewhere, the system call `exit`; and once for every listing the assembler answers for, that its code is in place when its file is loaded (`loaded.shard`). Three programs are proven of: two to exit as stated, by evaluation, and the code of three functions over buffers — one a caller of the other two — to meet its contract against the functions' definitions, and their file to exit with the functions' value by that contract (`COMPILE.md` §4). Missing: a statement about a file for a start whose stack is not where the runner puts it; a system call that returns; a compiler to a listing (every listing is compiled by hand, and every contract proven by hand but for its runs of instructions between branch points, which a tactic library derives: `models/x86/derive.shard`). Its README says what has no rule |
 | a large computed result as a theorem | K's evaluation through a measured function gives out at depth 40 to 200; the rewriting step stops at 64 unfoldings. Through a function measured in several parts it does not get past a recursive call: `(= (drain 0 (cons 5 nil)) 5)` by `rfl` fails where `(= (drain 0 nil) 0)` holds (the function of pin `measure_parts`). Not looked into further; the descents there are proven through `Prod.Lex.right'` and `arith`. A proof cites the function's equations |
 | packed byte buffers and machine words | bytes and strings are lists; every number is an arbitrary-size integer |
@@ -148,9 +147,9 @@ Each is a rule of `LAW.md`, or follows from one, with no test behind it.
   `(List Int)`).
 - The Rust evaluator reads every closure as the classifier does (`KERNEL.md`, The two
   engines): `parity_test.sh` holds it to the loader's text on every toolchain root, and
-  `plain_test.sh` on six ordinary closures. Over the 59 roots of the examples, the library, the
-  formatter and the model nothing holds it; measured there (`DECISIONS.md`, Measured), 51 read
-  whole and no line differs. What it does not read, each named on standard error and left out
+  `plain_test.sh` on six ordinary closures. Over the roots of the examples, the library, the
+  formatter and the model nothing holds it; measured once, over the 59 such roots the tree then
+  had (`DECISIONS.md`, Measured), 51 read whole and no line differed. What it does not read, each named on standard error and left out
   of the program: a call of a template — so no lifted lambda and no instance; a `derive` that
   writes functions and what calls one, `=` at a derived equality among them (a `(derive T
   size)` writes definitions with no program and is passed over); a `(realize NAME (view))`. It refuses nothing the loader refuses, and links a view to whatever implementation

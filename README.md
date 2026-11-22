@@ -31,7 +31,7 @@ generation's tree and every document written before the cleanup) and `v2-kernel-
 |---|---|
 | `v3/kernel/` | the toolchain, written in shard: the checker (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler; its tests in `test/` |
 | `v3/std/` | the library beyond Lean's `Init` |
-| `v3/models/imp/` | a model of a low-level language and runtime, with two functions proven against their compiled forms |
+| `v3/models/x86/` | a model of the x86-64 processor under Linux, begun, and a trial of low-level code: three functions over buffers, their listing compiled by hand, its contracts proven |
 | `v3/examples/` | `calc` and small worked examples of each feature |
 | `v3/tools/shardfmt/` | the source formatter |
 | `v3/pins/` | small sources, each stating the outcome it expects |

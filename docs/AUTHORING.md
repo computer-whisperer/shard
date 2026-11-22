@@ -272,9 +272,9 @@ speaks of rests on building it from the file the contract imports. The contract
 | close `n / k < n`, `k` a numeral above 1 | `(apply Nat.div_lt_self (arith) (decide))`: `0 < n`, then `1 < k` | — |
 | use a truncated subtraction in arithmetic, where `(- n 2)` is an atom to `arith` | `(have hs (= (+ (- n 2) 2) n) (apply Nat.sub_add_cancel (arith)))`, then `(arith FACT… hs)` | — |
 | find a lemma of Init and read its statement | section 15 | |
-| give a witness; open one | `(apply (Exists.intro W) ((exact h)))`; `(cases h ((intro (x hx) STEP…)))` | `models/imp/app.shard` |
+| give a witness; open one | `(apply (Exists.intro W) ((exact h)))`; `(cases h ((intro (x hx) STEP…)))` | `models/x86/exit42.shard`; `models/x86/laws.shard` `reaches_step` |
 | restate the goal, then rewrite backwards | `(show G) (rw (<- h))` | `layout.shard` `opt_trail_rest` |
-| run a function over given facts | `(reduce lhs (using ht len_ipfn.eq_1 (if_pos hd)))` | `models/imp/len.shard` |
+| run a function over given facts | `(reduce lhs (using hb h))`; with a lemma given its premise, `(reduce lhs (using (if_pos h)))` | `pins/loader/reduce_using` |
 | leave a goal open, or hand it to the search | `sorry`: the theorem is `PENDING NAME sorry` and admits nothing; as a step, `(by … sorry)` also prints the goal it stands at. `auto`: `prove.shard` writes the steps into `FILE.auto.shard`; it works for a `theorem` and for a function's obligation, `(fulfills F.dec_K auto)`. Inside the implementation of a view too, a requirement's `fulfills` among them: give `prove` the directory, and the sidecar is `D/D.auto.shard` | `pins/loader/by_sorry`; `examples/auto`; `pins/loader/auto_fulfills`, `auto_impl` |
 
 ## 11. What goes wrong

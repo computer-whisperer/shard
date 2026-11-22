@@ -15,8 +15,8 @@ comparison is the proposition `(<= a b)`; `/` and `%` at `Int` are the Euclidean
 | `derive.shard` | `std.derive` | equality, ordering and rendering for the basic types | `derive_test.sh` |
 | `fresh.shard` | `std.fresh` | a supply of fresh names | `define_test.sh` |
 | `host.shard` | `std.host` | the `World` and the host calls | `define_test.sh`, `bin_test.sh` |
-| `map.shard` | `std.map` | a finite map over `Nat` keys | `imp_test.sh` |
-| `mem.shard` | `std.mem` | a byte memory | `imp_test.sh` |
+| `map.shard` | `std.map` | a finite map over `Nat` keys | `std_test.sh`, `x86_test.sh` |
+| `mem.shard` | `std.mem` | a byte memory | `std_test.sh`, `x86_test.sh`, `plain_test.sh` |
 | `facts.shard` | `std.facts` | division, shift and bitwise facts | `std_test.sh` |
 | `bits.shard` | `std.bits` | powers of two, masks, shifts and bounds at `Nat` | `std_test.sh` |
 | `migration.shard` | `std.migration` | what each operator and constructor spelling means; small arithmetic lemmas | `std_test.sh` |
@@ -117,8 +117,10 @@ An insert prepends and a lookup takes the first match, so facts about a map are 
 
 `Mem` is one unbounded byte memory over the map: `mem_empty`, `mem_get m a` (the last store at `a`
 mod 256; 0 where nothing was stored), `mem_set m a v`, and the little-endian words `load_le w m a`
-and `store_le w m a v` of `w` bytes. No bounds and no traps. The laws of `load_le` over `store_le`
-are not stated here; `v3/models/imp/cell.shard` proves the ones it needs.
+and `store_le w m a v` of `w` bytes. No bounds and no traps. No law of the memory is stated here.
+`v3/models/x86/laws.shard` proves those of a stored byte (`mem_set_same`, `mem_set_other`) and of
+the 64-bit words the model reads and writes by functions of its own; of `load_le` over `store_le`,
+which the model does not call, none is proven.
 
 ## `facts.shard`, `bits.shard`, `migration.shard`
 

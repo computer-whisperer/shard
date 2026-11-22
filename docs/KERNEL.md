@@ -852,7 +852,6 @@ Some shell tests keep a scratch root under `v3/` (`v3/NAME_XXXXXX`) and remove i
 | `derive_test.sh` | `derive`: the library's procedures register; a program over derived equality runs |
 | `engine_test.sh` | the proof engine: sidecars replay and regenerate identically; an obligation delegated with `auto` is proved, entered under its name and discharged; `auto` inside an implementation is proved into the sidecar beside the implementation file and replayed; its reach over calc |
 | `handle_cost_test.sh` | only `prepare` links; no other file names a handle's internals |
-| `imp_test.sh` | the imp machine model loads and its theorems are accepted |
 | `x86_test.sh` | the x86-64 model loads, its first theorem is accepted, and its runs of programs assembled by hand are the processor's (on an x86-64 Linux machine). It and the three below are entrypoints of their own so that the suite runs them side by side; what they share is `x86_common.sh` |
 | `x86_asm_test.sh` | the model's assembler: its fact accepted, two listings refused, its bytes for three listings the bytes assembled by hand; the demonstration's theorems accepted and its file run by the model and the processor |
 | `x86_trial_test.sh` | the trial of low-level code as shard: the model's laws and those of a function's frame (`frame.shard`), the contracts of the trial's code (`models/x86/buffers_facts.shard`), a listing's code in place in its loaded file and the theorem that the trial's file exits with 19 (`buffers_run.shard`) are accepted, and the trial's file runs to what the evaluator computes |
@@ -912,7 +911,7 @@ closure equal to Lean's own (`v3/t0_axioms_cmp.sh`); and all 20 accelerator cand
 
 The three gate jobs run side by side on one machine, each held to 32 of its 64 cores by the
 runner; the work inside a job is processes of one thread each, so a job's time is its longest
-single process — in `v3`, one load of the imp model under the bootstrap.
+single process — in `v3`, the suite's longest entrypoint under the bootstrap.
 
 *Documents-only pushes.* When every file a push changed ends in `.md`, `v3`, `replay`, `native`
 and `suite_tie` print `DOCUMENTATION-ONLY PUSH` and end green in seconds

@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 56 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 55 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
@@ -105,10 +105,9 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 59 files | the test scripts and drivers |
+| `v3/kernel/test/` | 64 files | the test scripts and drivers |
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
-| `v3/models/imp/` | 5,800 lines | a model of a low-level language with a reference-counting runtime, and two functions proven against their compiled forms (§6) |
 | `v3/models/x86/` | 6,400 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
@@ -166,8 +165,9 @@ host calls.
 - An unfinished proof never fails a load by itself. Only a binary's contract does.
 
 *Cost.*
-- Checking is slow where proofs are long: the model's two proofs load in about 30 seconds; the full
-  replay of Init takes 7 minutes natively and 76 on the bootstrap.
+- Checking is slow where proofs are long: the x86 trial's proofs load in about 20 seconds
+  natively (`v3/models/x86/buffers_run.shard`, 1,680 declarations with what they rest on); the
+  full replay of Init takes 7 minutes natively and 76 on the bootstrap.
 - The full gate is 75 minutes in CI. A change to
   the toolchain is pushed after the checks it can move, minutes on the development machine, and
   the pipeline's verdict on the whole follows it.
@@ -204,14 +204,6 @@ The goal (`LAW.md` §1) is a compiler from programs to machine code that comes w
 what exists towards it and what does not. The design is not written; the statement it is to
 be built to is `COMPILE.md`.
 
-**Exists** (`v3/models/imp/`):
-- a small low-level language (locals, byte and word loads and stores, branches, loops, calls) with
-  an evaluator in the logic;
-- a reference-counting runtime written in that language, and a description of the heap it keeps;
-- two list functions, `len` and `app`, each with its compiled form entered by hand and a theorem
-  that the compiled form computes what the source does, or fails in a declared way (out of memory,
-  overflow, call depth).
-
 **Exists** (`v3/models/x86/`, its README):
 - the machine's model: a program is bytes, a step decodes one instruction at the program counter
   and executes it; an assembler whose bytes the model's decoder reads back; the model held to the
@@ -235,18 +227,14 @@ be built to is `COMPILE.md`.
 - a tactic library (`derive.shard`) that writes the proof of a run of a listing's instructions
   from the listing's table; nine of the trial's lemmas are proven by it.
 
-**Assumed there:** six laws about the runtime's allocator and reference counts, stated as axioms.
-
 **Does not exist:**
-- a compiler as a function. The two compiled forms are literal values; no theorem ranges over
-  programs;
-- proofs of the runtime's six laws;
-- a compiler from a program to a listing of the machine's model (`v3/models/x86`; its listings
-  are compiled by hand and their contracts proven by hand, the runs of instructions apart), and
-  any link between the low-level
-  language and what the present compiler emits;
+- a compiler as a function, from a program to a listing of the machine's model (the model's
+  listings are compiled by hand and their contracts proven by hand, the runs of instructions
+  apart); no theorem ranges over programs;
+- any link between the machine's model and what the present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.
 
-The previous generation finished two of these in its own logic (the machine theorem and the
-runtime's laws) and left its plan and its machine model at a tag: `V2.md` §5 and §6.
+The previous generation finished two parts of its compile proof in its own logic (the theorem from
+its intermediate machine to x86, and its runtime's laws) and left its plan and its machine model
+at a tag: `V2.md` §5 and §6.
