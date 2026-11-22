@@ -14,7 +14,7 @@ NAME=x86_derive_test; . "$(dirname "$0")/x86_common.sh"
 "${LOAD[@]}" $M/buffers_tactic.shard > "$OUT/tac.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the tactic library did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR' "$OUT/tac.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn models.x86.\(derive\|buffers_tactic\)\.' "$OUT/tac.txt")" = 0 ] || bad "a function of the tactic library is a program without a definition"
-for f in derive.derive_block derive.walk derive.rule_of buffers_tactic.block; do
+for f in derive.derive_block derive.walk derive.rule_of buffers_tactic.block buffers_tactic.block_dot; do
   checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/tac.txt" || bad "models.x86.$f is not a definition with its equations"
 done
 

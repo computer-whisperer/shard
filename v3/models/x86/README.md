@@ -21,11 +21,12 @@ it.
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of nineteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
-| `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
+| `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
+| `part.shard` | a part of a table of instructions is in place where the whole is: `table_part`, a computation, and `code_in_part` |
 | `derive.shard` | a tactic library: `derive_block`, the proof of a run of a listing's instructions by the laws' rules, read off the listing's table |
-| `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file, its instructions by address (`buffers_table`) |
-| `buffers_tactic.shard` | the tactic the trial's lemmas name: `derive_block` over the trial's table |
+| `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file, its instructions by address (`buffers_table`); `dot`'s own lines and rows of them (`dot_asm`, `dot_rows`) |
+| `buffers_tactic.shard` | the tactics the trial's lemmas name: `derive_block` over the trial's table (`block`), and over `dot`'s own rows (`block_dot`) |
 | `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
 | `buffers_run.shard` | that listing's file from end to end: started as the runner starts it, it exits with 19 (`buffers_exits`), by `both`'s contract |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
@@ -188,7 +189,11 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   of two buffers and a count, with the buffers' words in memory and mapped to read, the processor
   comes to a state at the return address with `dot`'s value in `rax`, the stack pointer above the
   address, the callee's registers kept, and memory as it was. `dot_contract_same`: the same where
-  the two addresses are one.
+  the two addresses are one. It is stated over `dot`'s own ten rows (`dot_rows`), not over the
+  trial's table, so it holds in any file whose table has those rows at those addresses
+  (`part.shard` `code_in_part`); `both` uses it by that (`dot_rows_in`). From it the compile
+  system proves that these instructions meet its statement at a module's seam, and links a
+  compiled caller against them (`v3/compile/x86/dot_hand.shard`, `v3/compile/README.md`).
 - `addto_contract`: from such a state, the first buffer mapped to write and its counted words
   clear of the code, of the second buffer and of the return address, the processor comes to a
   state at the return address in which the first buffer's memory holds the list `addto` returns,
@@ -234,8 +239,8 @@ and what else the rule asks — an operand mapped, the outcome of the comparison
 the code still in place after a store — taken from the statement's hypotheses by their shape.
 It follows a jump, and ends where B's program counter is reached, after a `ret`, after a `call`,
 or after a number of instructions a hint gives. A function of the listing's own hands it the
-table (`buffers_tactic.shard` `block`), and a theorem names that function: `(auto (tactic
-models.x86.buffers_tactic.block))`. Nine theorems of the trial are proven so — `dot_turn`,
+table (`buffers_tactic.shard` `block`; `block_dot` hands it `dot`'s own rows), and a theorem
+names that function: `(auto (tactic models.x86.buffers_tactic.block))`. Nine theorems of the trial are proven so — `dot_turn`,
 `dot_leave`, `dot_enter`, `add_turn`, `add_leave`, `add_enter`, `both_enter`, `both_mid`,
 `both_leave` — their blocks in `buffers_facts.auto.shard`, which `prove` writes and a load
 replays. No file of the

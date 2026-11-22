@@ -1,0 +1,76 @@
+;;; v3/models/x86/part.shard — a part of a table of instructions is in place where the whole is.
+;;; A function's contract is stated over the function's own rows; a file's table that has those
+;;; rows at those addresses (`table_part`, a computation) gives the contract its code
+;;; (`code_in_part`).
+(import "asm.shard")
+(import "laws.shard")
+(use models.x86.asm)
+(use models.x86.laws)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; whether every row of `sub` is the row `tbl` has at that address
+(fn table_part ((sub (List (Prod Nat (Prod Instr Nat)))) (tbl (List (Prod Nat (Prod Instr Nat)))))
+  Bool
+  (measure (struct sub))
+  (match sub
+    (nil true)
+    ((cons (Prod.mk a (Prod.mk i n)) r)
+     (if (same_decode (site tbl a) i n) (table_part r tbl) false))))
+;; then what `sub` has at an address, `tbl` has there
+(theorem site_part
+  ((sub (List (Prod Nat (Prod Instr Nat)))) (tbl (List (Prod Nat (Prod Instr Nat)))))
+  (forall ((a Nat) (il (Prod Instr Nat)))
+    (-> (= (table_part sub tbl) true) (= (site sub a) (some il)) (= (site tbl a) (some il))))
+  (by
+    (induction sub
+      ((nil () (intro a il hp hs) (have hn (= (site nil a) none) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hs)) (Option.some_ne_none il))))
+       (cons (e r ih) (intro a il)
+         (cases e
+           ((mk (a1 il1)
+              (cases il1
+                ((mk (i1 n1) (intro hp hs)
+                   (cases (same_decode (site tbl a1) i1 n1) hd
+                     ((false ()
+                        (have hx (= (table_part (cons (Prod.mk a1 (Prod.mk i1 n1)) r) tbl) false)
+                          (rw table_part.eq_2)
+                          (rw hd)
+                          rfl)
+                        (exact (absurd (Eq.trans (Eq.symm hx) hp) Bool.false_ne_true)))
+                      (true ()
+                        (have hx
+                          (= (table_part (cons (Prod.mk a1 (Prod.mk i1 n1)) r) tbl)
+                            (table_part r tbl))
+                          (rw table_part.eq_2)
+                          (rw hd)
+                          rfl)
+                        (have hr (= (table_part r tbl) true) (exact (Eq.trans (Eq.symm hx) hp)))
+                        (cases (Nat.decEq a1 a)
+                          ((isTrue (he)
+                             (have hs2 (= (some (Prod.mk i1 n1)) (some il))
+                               (rw (<- hs))
+                               (rw site.eq_2)
+                               (rw (if_pos he))
+                               rfl)
+                             (rw (<- hs2))
+                             (rw (<- he))
+                             (exact (same_decode_true (site tbl a1) i1 n1 hd)))
+                           (isFalse (hne)
+                             (have hs2 (= (site r a) (some il))
+                               (rw (<- hs))
+                               (rw site.eq_2)
+                               (rw (if_neg hne))
+                               rfl)
+                             (exact (ih a il hr hs2)))))))))))))))))))
+;; A PART OF A TABLE IS IN PLACE WHERE THE WHOLE IS
+(theorem code_in_part
+  ((c Cpu)
+   (sub (List (Prod Nat (Prod Instr Nat))))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (hp (= (table_part sub tbl) true))
+   (hc (code_in c tbl)))
+  (code_in c sub)
+  (by (intro a i len hs) (exact (hc a i len (site_part sub tbl a (Prod.mk i len) hp hs)))))
