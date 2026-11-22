@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 59 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 61 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
@@ -105,11 +105,11 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 66 files | the test scripts and drivers |
+| `v3/kernel/test/` | 68 files | the test scripts and drivers |
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/x86/` | 6,500 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
-| `v3/compile/` | 10,300 lines | the compile system's first pieces (§6): an intermediate machine, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, and one function proven from its definition to the exit status of its file |
+| `v3/compile/` | 11,000 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, and two programs proven from their definitions to the exit status of their files |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -230,7 +230,10 @@ be built to is `COMPILE.md`.
 
 **Exists** (`v3/compile/`, its README; the form is `COMPILE.md` §5):
 - an intermediate machine a little above x86 (`ir.shard`): local words, word operations, loads
-  and stores, `if`, calls, and a return or a tail call at the end of every path;
+  and stores, `if`, calls, and a return or a tail call at the end of every path; and its laws
+  (`ir_laws.shard`), among them that a run given more fuel answers the same, and by it a rule
+  for a call that returns: a function that calls another is tied to its definition from the
+  callee's tie alone;
 - the one statement about a function's code that crosses a module's seam (`x86/seam.shard`
   `realizes`), the same for compiled and for hand-written code;
 - a pass, a function from a module's intermediate code to instructions of the model
@@ -240,10 +243,11 @@ be built to is `COMPILE.md`.
   operations and loads, stores, `if` on an unsigned comparison, calls, tail calls;
 - a link theorem (`x86/link.shard` `link_exits`): a file of a fixed start-up and any lines
   exits as the answer of the function it calls says, where that function meets the statement;
-- one function through every layer: `dot`, a sum of products over two buffers, from its
-  definition over lists to the exit status of an executable file (`x86/dot_run.shard`
-  `dot_file_exits`), with its low form, its intermediate code and the two proofs above the
-  pass written by hand.
+- two programs through every layer, each from its definition to the exit status of an
+  executable file: six functions over words with calls, a test and a loop
+  (`x86/calls_run.shard` `calls_file_exits`), and `dot`, a sum of products over two buffers,
+  from its definition over lists (`x86/dot_run.shard` `dot_file_exits`). The low form, the
+  intermediate code and the proofs above the pass are written by hand.
 
 **Does not exist:**
 - the step from a definition to intermediate code: no tool reads a definition, and the proofs

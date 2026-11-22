@@ -847,6 +847,27 @@ entries are explained under "Measured" at the end.
   function's low form, its code and the proofs above the pass) stand above `x86/`; the
   intermediate still takes its words and its mapped ranges from the x86 model's files, since no
   general form of a machine is designed before a second one exists (`COMPILE.md` §4).
+- Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
+  `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
+  (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
+  pass's theorem realizes — and the run of what follows the call; the two are given on two
+  fuels, and the statement runs both on one, so the rule takes the sum of the two and a run
+  given more fuel answers the same (`irun_more`, by induction on the fuel, a case for each
+  statement form). Not a run that hands the callee and the rest a fuel each — the run would
+  have to split its fuel, and the pass's proof, which is by induction on the one fuel, would be
+  proven again; not a run stated as a relation with no fuel — the run is a function, which K
+  and the evaluator compute, and a test compares it with the processor. A function's tie is
+  stated for any program that has its callees at the indices its code names, so it names no
+  program and is used unchanged where the module grows. The first program's functions are
+  over `(BitVec 64)` and are meaning and low form at once; not over `Nat` with bounds — how an
+  integer of any size is represented is open on purpose (`COMPILE.md` §8). The function its
+  file enters takes three words, two of them addresses it does not use, because the one
+  start-up hands those over (`x86/startup.shard`); not a second start-up — the linking rule's
+  form is open, and a second fixed start-up would be proven again as the first was. What a
+  run of a statement says of its parts stood in the pass's proof and now stands with the
+  machine (`ir_laws.shard`), since the fuel's law is proven from it. `ir.shard` and
+  `x86/startup.shard` hold no proof: the pass reads none, and a file's definitions do not
+  import the link theorem.
 
 ## Proofs and automation
 
@@ -1929,3 +1950,20 @@ measurements; measure again before building on one.
   to 40 s. Not every wrong low form is refused quickly: with the two reads of the product
   exchanged, K takes 231 s and 12 GB to refuse the tie (`OPEN.md` §1, a comparison between two
   calls of one function defined by a measure).
+- The first program closed (`v3/compile`, 11,000 lines; natively, CPU seconds, single
+  measurements). The rule of a call that returns is 290 new lines in `ir_laws.shard`: a
+  statement's run from its parts, 110; more fuel changes no answer, 130; the rule, 50; K checks
+  the file in 5 s. The six functions are 50 lines, their intermediate code and the six ties 190
+  — the tie of the function with a test and two calls 26 lines, of the one with two calls and
+  a tail call 20 —, and load in 5 s; no tie needed an arithmetic fact beyond the loop's
+  descent. The file's twelve facts and its theorems are 185 lines, a copy of `dot`'s with the
+  names changed; the whole chain loads in 37 s, against 30 s for `dot`'s, the difference being
+  the facts of a listing of six functions. Ten faults planted by hand in copies, each loaded
+  once, all refused: in a function (a term dropped, a test turned) at the function's closed
+  sample and at its tie; in the code (the wrong callee, a call's arguments exchanged, a call's
+  result in the wrong local, the loop's two statements exchanged) at the tie, in 5 s; the rule
+  stated with the rest run on the memory before the call, at the rule's own proof; in the pass
+  (a call's result taken from another register) at the pass's proof, in 13 s; the file
+  entering another function and a wrong exit status claimed, at the file's facts, in 23 to
+  40 s. With a file's start-up apart from the link theorem, the load of `dot`'s writer fell
+  from 17 s to 15 s.

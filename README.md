@@ -12,7 +12,7 @@ and a program that runs. The goal is programs whose behaviour is proven down to 
 | [`docs/SHAPE.md`](docs/SHAPE.md) | the system as it stands: its parts, what is solid, what is weak. Start here. |
 | [`docs/LAW.md`](docs/LAW.md) | the rules the system and the work are held to; the trust base; the owner's rulings |
 | [`docs/OPEN.md`](docs/OPEN.md) | known defects, what is missing, and who needs it |
-| [`docs/COMPILE.md`](docs/COMPILE.md) | the statement the compile system is to be built to; of it the tree holds a machine's model, a trial of low-level code, and a first pass with one function through every layer |
+| [`docs/COMPILE.md`](docs/COMPILE.md) | the statement the compile system is to be built to; of it the tree holds a machine's model, a trial of low-level code, and a first pass with two programs through every layer |
 | [`docs/AUTHORING.md`](docs/AUTHORING.md) | how to write a program and prove something about it |
 | [`docs/LANGUAGE.md`](docs/LANGUAGE.md) | reference: every form, every proof step, every record the loader prints |
 | [`docs/KERNEL.md`](docs/KERNEL.md) | reference: the toolchain's files, the checker, the trust base in detail, build and gates |
@@ -32,7 +32,7 @@ generation's tree and every document written before the cleanup) and `v2-kernel-
 | `v3/kernel/` | the toolchain, written in shard: the checker (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler; its tests in `test/` |
 | `v3/std/` | the library beyond Lean's `Init` |
 | `v3/models/x86/` | a model of the x86-64 processor under Linux, begun, and a trial of low-level code: three functions over buffers, their listing compiled by hand, its contracts proven |
-| `v3/compile/` | the compile system's first pieces: an intermediate machine, a pass to x86-64 instructions with its theorem, one function proven from its definition to its file's exit status |
+| `v3/compile/` | the compile system's first pieces: an intermediate machine, a pass to x86-64 instructions with its theorem, two programs proven from their definitions to their files' exit status |
 | `v3/examples/` | `calc` and small worked examples of each feature |
 | `v3/tools/shardfmt/` | the source formatter |
 | `v3/pins/` | small sources, each stating the outcome it expects |
