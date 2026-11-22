@@ -20,7 +20,7 @@ it.
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
-| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of fifteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
+| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of nineteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
 | `derive.shard` | a tactic library: `derive_block`, the proof of a run of a listing's instructions by the laws' rules, read off the listing's table |
@@ -112,25 +112,25 @@ the statement.
 **The laws** (`laws.shard`). `(reaches c c2)`: from the state `c` the processor comes to `c2` in
 some count of steps, none a system call or stuck. A rule for an instruction form says: where the
 program counter is at `pc`, the processor decodes that instruction there (`code_at`), and an
-operand in memory is mapped, the state before the instruction reaches whatever the state after
-it reaches; the state after is written out, with its program counter a numeral. There are
-fifteen, for the forms the trial's listing uses: an operation between registers, `cmp`, an
+operand in memory is mapped, the state before the instruction reaches whatever the state after it
+reaches; the state after is written out, with its program counter a numeral. There are nineteen.
+Fifteen are for the forms the trial's listing uses: an operation between registers, `cmp`, an
 operation with an immediate, `mov` between registers, `mov` of an immediate, a conditional jump
-taken and not taken,
-`jmp`, a load and an `imul` through an indexed operand, `add` into an indexed operand, `push`,
-`pop`, `call`, `ret`. Of memory: bytes stored leave every other address as it was
+taken and not taken, `jmp`, a load and an `imul` through an indexed operand, `add` into an indexed
+operand, `push`, `pop`, `call`, `ret`. Four are for forms the compile system's pass emits
+(`v3/compile/x86/pass.shard`): `mov` of a 64-bit immediate, a load and a store through a base
+register, an `imul` of two registers. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
 agree outside a range (`same_outside`) give the same word, the same fetched bytes and the same
-decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`). For code
-that calls: the word at the stack pointer after a push is the word pushed (`ret_addr_pushed`);
-what a callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …);
-code in place in any later state with the same mapping whose memory agrees outside a range
-clear of it (`code_in_after`); agreement outside two ranges, a buffer and a frame
-(`same_outside2`), composed of a caller's writes to its frame around a callee's to a buffer
-(`same_outside2_around`). Of what is mapped: a range mapped whole is mapped word by word
-(`mapped_words_of`). Of a run's end: a run from a state the processor comes to is a run from
-where it came (`run_of_steps`), and the system call `exit` ends the process with the low byte of
-`rdi` (`run_exit`).
+decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`). For code that
+calls: the word at the stack pointer after a push is the word pushed (`ret_addr_pushed`); what a
+callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …); code in
+place in any later state with the same mapping whose memory agrees outside a range clear of it
+(`code_in_after`); agreement outside two ranges, a buffer and a frame (`same_outside2`), composed
+of a caller's writes to its frame around a callee's to a buffer (`same_outside2_around`). Of what
+is mapped: a range mapped whole is mapped word by word (`mapped_words_of`). Of a run's end: a run
+from a state the processor comes to is a run from where it came (`run_of_steps`), and the system
+call `exit` ends the process with the low byte of `rdi` (`run_exit`).
 
 **A function's frame** (`frame.shard`). `(holds m p ws)`: the words `ws` stand in the memory
 `m` from the address `p`, eight bytes each — a buffer a function was handed, or the words a

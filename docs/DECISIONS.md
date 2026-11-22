@@ -830,6 +830,23 @@ entries are explained under "Measured" at the end.
   source with a fixed name. Assent: "yes, this matches my intent." Not decided with it: a file
   kept or made again by each build — making three stored proofs again cost 2.0 s against 0.4 s to
   replay them, and gave the same bytes (Measured).
+- Chosen in building the first pass (`v3/compile/x86/pass.shard`), not put to the owner one by
+  one. A local lives in one of the six registers a callee keeps, and an expression is evaluated on
+  a stack of nine temporary registers — every register a caller does not keep —, the left operand
+  in temporary k and the right in k+1; a seventh local and a tenth temporary are refused. Not
+  stack slots for locals — a frame with variables of its own needs a rule for an operand at the
+  stack pointer and a displacement, and a frame's description (`models/x86/frame.shard`) holds
+  return addresses and saved registers only; not a push and a pop around each operand — a
+  function's stack need would then depend on how deep its expressions are. The argument registers
+  are among the temporaries, which is sound because a call's arguments are constants and locals,
+  moved in after every expression before them has been evaluated; the theorem proves it. Every
+  function pushes all six registers and pops them, whatever it uses. A compiled file's data is
+  what its start-up pushes (`x86/link.shard`: two buffers of three words); not a data segment —
+  the loaded file's model has one segment, read and executed, and the stack
+  (`models/x86/loaded.shard`). The files that state nothing of a target (`ir.shard`, `lo.shard`, a
+  function's low form, its code and the proofs above the pass) stand above `x86/`; the
+  intermediate still takes its words and its mapped ranges from the x86 model's files, since no
+  general form of a machine is designed before a second one exists (`COMPILE.md` §4).
 
 ## Proofs and automation
 
@@ -1896,3 +1913,19 @@ measurements; measure again before building on one.
   place, 2,040 lines; what made it statable is the ranges an object stands in as a value;
   apartness stated pair by pair takes w(n−w) + w(w−1)/2 hypotheses for n objects of which w are
   written.
+- `v3/compile` as it first stood in the tree (natively, CPU seconds, single measurements): 10,300
+  lines. The pass and its proof are 8,050 of them, about 1,100 more than the fragment tried
+  outside the tree had: nested expressions on the temporaries, multiply, loads and stores; K
+  checks the proof in 20 s. The link theorem is 920 lines, against 2,020 in the three files it was
+  first proven in, and loads in 11 s. `dot`'s front — its low form, its intermediate code and the
+  two proofs above the pass — is 500 lines by hand, the tie 71 of them with no arithmetic fact,
+  and loads in 12 s; the file's twelve facts and its two theorems are 190 lines, and the whole
+  chain loads in 30 s. The two tests take 41 and 65 s. Faults planted by hand in copies, one at a
+  time, each loaded once: five in the pass (a jump that drops a branch, the wrong condition, a
+  local set from the wrong register, two pops exchanged, a stack need one word short) and two in
+  its new parts (a load at a displacement of 8, a multiply emitted as an add) are refused by the
+  pass's proof in 21 to 32 s; a wrong start in `dot`'s low form, a wrong step in its code, an
+  instruction dropped from the file, a call one byte off and a wrong exit status claimed are
+  refused at their own facts in 22 to 40 s. Not every wrong low form is refused quickly: with the
+  two reads of the product exchanged, K takes 231 s and 12 GB to refuse the tie (`OPEN.md` §1, a
+  comparison between two calls of one function defined by a measure).

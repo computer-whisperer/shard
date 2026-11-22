@@ -2,7 +2,8 @@
 
 Status: the owner agreed to it as the statement to build to (`LAW.md` §6, 18), and to §5 as the
 form a function has between the two ends (`LAW.md` §6, 20). Of it the tree holds a machine's model
-and a trial of low-level code (§4, `v3/models/x86`); no compiler, and nothing of §5. It fixes one
+and a trial of low-level code (§4, `v3/models/x86`), and of §5 a first pass with its theorem and
+one function through every layer (`v3/compile`); no build. It fixes one
 statement, the two ends of the first chain and what crosses from one module to another, and leaves
 the rest of the middle open on purpose (§8).
 
@@ -107,7 +108,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts, one file proven by them to exit as its functions compute |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts of code written by hand and one file proven by them to exit as its functions compute; one file of compiled code proven so (§5) |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -155,8 +156,15 @@ code not of this kind — lists, constructors, integers of any size.
 
 ## 5. A function at a module's seam
 
-The owner agreed to this form after it was tried outside the tree (`LAW.md` §6, 20). The tree
-holds none of it. What the trial proved and what it cost is in `DECISIONS.md` ("Measured").
+The owner agreed to this form after it was tried outside the tree (`LAW.md` §6, 20). What that
+trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the tree holds
+(`v3/compile`, its README): the intermediate; the seam's statement on the x86 model; the pass and
+its theorem, for six locals in registers, expressions of word operations and loads, stores,
+`if`, calls and tail calls; the link theorem for one fixed start-up; and one function, a sum of
+products over two buffers, with its three levels and its two facts, proven to the exit status of
+its file. It does not hold: a front step that is a tool — that function's low form, its
+intermediate code and the certificate are written by hand —; hand-written code met through the
+seam's statement; a build.
 
 A module is the unit that is compiled, and a function is what crosses from one module to another.
 
@@ -273,6 +281,12 @@ it rests on; the build is a shard program that reads the `bin` form; and a fault
 joint — a wrong byte, a wrong instruction, a pass that drops a branch, an undeclared failure — is
 refused. After that the chain widens by what `calc`, `shardfmt` and the loader refuse; a refusal
 is a defect of the compiler.
+
+Of the two programs the second stands in the tree from its definition to its file's exit
+status, the fault at each joint refused when planted by hand (`v3/compile/README.md`); its
+front step is by hand and nothing reads a `bin` form. The first has its pass — calls and `if`
+are in the fragment — and no file proven: a call that returns has no rule in the intermediate
+machine's run yet, so a caller's code is not tied to a low form.
 
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
