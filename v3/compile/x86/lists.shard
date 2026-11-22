@@ -1,0 +1,122 @@
+;;; v3/compile/x86/lists.shard — facts of lists of words the pass's proof uses.
+(import "../ir.shard")
+(use compile.ir)
+(use models.x86.word)
+(use models.x86.words)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; the word at an index below n is the same in the first n words
+(theorem nth_take ((xs (List (BitVec 64))))
+  (forall ((n Nat) (i Nat)) (-> (< i n) (= (nth (List.take n xs) i) (nth xs i))))
+  (by
+    (induction xs
+      ((nil () (intro n i h) (rw (@List.take_nil (BitVec 64) n)) rfl)
+       (cons (x r ih) (intro n i h)
+         (cases n
+           ((zero () (exact (absurd h (Nat.not_lt_zero i))))
+            (succ (n1) (show (= (nth (cons x (List.take n1 r)) i) (nth (cons x r) i)))
+              (cases (Nat.decEq i 0)
+                ((isTrue (h0) (rw nth.eq_2) (rw nth.eq_2) (rw (if_pos h0)) (rw (if_pos h0)) rfl)
+                 (isFalse (h0) (have h1 (<= 1 i) (exact (Nat.pos_of_ne_zero h0)))
+                   (have h2 (< (- i 1) n1) (arith (Nat.sub_add_cancel h1)))
+                   (rw nth.eq_2)
+                   (rw nth.eq_2)
+                   (rw (if_neg h0))
+                   (rw (if_neg h0))
+                   (exact (ih n1 (- i 1) h2)))))))))))))
+;; a word replaced, then the first n words: the first n words, then the word replaced
+(theorem take_upd ((xs (List (BitVec 64))))
+  (forall ((n Nat) (k Nat) (v (BitVec 64)))
+    (= (List.take n (upd xs k v)) (upd (List.take n xs) k v)))
+  (by
+    (induction xs
+      ((nil () (intro n k v)
+         (show
+           (= (List.take n (@List.nil (BitVec 64))) (upd (List.take n (@List.nil (BitVec 64))) k v)))
+         (rw (@List.take_nil (BitVec 64) n))
+         rfl)
+       (cons (x r ih) (intro n k v)
+         (cases n
+           ((zero () rfl)
+            (succ (n1)
+              (cases (Nat.decEq k 0)
+                ((isTrue (h0)
+                   (show
+                     (= (List.take (+ n1 1) (upd (cons x r) k v))
+                       (upd (cons x (List.take n1 r)) k v)))
+                   (rw upd.eq_2)
+                   (rw upd.eq_2)
+                   (rw (if_pos h0))
+                   (rw (if_pos h0))
+                   rfl)
+                 (isFalse (h0)
+                   (show
+                     (= (List.take (+ n1 1) (upd (cons x r) k v))
+                       (upd (cons x (List.take n1 r)) k v)))
+                   (rw upd.eq_2)
+                   (rw upd.eq_2)
+                   (rw (if_neg h0))
+                   (rw (if_neg h0))
+                   (show
+                     (= (cons x (List.take n1 (upd r (- k 1) v)))
+                       (cons x (upd (List.take n1 r) (- k 1) v))))
+                   (rw (ih n1 (- k 1) v))
+                   rfl)))))))))))
+(theorem app_nil ((xs (List (BitVec 64)))) (= (app xs nil) xs)
+  (by
+    (induction xs
+      ((nil () rfl) (cons (x r ih) (show (= (cons x (app r nil)) (cons x r))) (rw ih) rfl)))))
+(theorem app_snoc ((xs (List (BitVec 64))))
+  (forall ((v (BitVec 64)) (ys (List (BitVec 64))))
+    (= (app (app xs (cons v nil)) ys) (app xs (cons v ys))))
+  (by
+    (induction xs
+      ((nil () (intro v ys) rfl)
+       (cons (x r ih) (intro v ys)
+         (show (= (cons x (app (app r (cons v nil)) ys)) (cons x (app r (cons v ys)))))
+         (rw (ih v ys))
+         rfl)))))
+(theorem zeros_zero () (= (zeros 0) nil) (by (rw (zeros.eq_1 0)) rfl))
+(theorem zeros_succ ((n Nat)) (= (zeros (+ n 1)) (cons (w64 0) (zeros n)))
+  (by
+    (have hn (Not (= (+ n 1) 0)) (exact (Nat.succ_ne_zero n)))
+    (rw (zeros.eq_1 (+ n 1)))
+    (rw (if_neg hn))
+    rfl))
+(theorem take_zeros ((e Nat)) (forall ((z Nat)) (-> (<= e z) (= (List.take e (zeros z)) (zeros e))))
+  (by
+    (induction e
+      ((zero () (intro z h) (show (= (@List.nil (BitVec 64)) (zeros 0))) (rw zeros_zero) rfl)
+       (succ (e1 ih) (intro z h) (have h1 (<= 1 z) (arith h))
+         (have hz (= (+ (- z 1) 1) z) (exact (Nat.sub_add_cancel h1)))
+         (have hle (<= e1 (- z 1)) (arith h hz))
+         (rw (<- hz))
+         (show (= (List.take (+ e1 1) (zeros (+ (- z 1) 1))) (zeros (+ e1 1))))
+         (rw (zeros_succ (- z 1)))
+         (rw (zeros_succ e1))
+         (show (= (cons (w64 0) (List.take e1 (zeros (- z 1)))) (cons (w64 0) (zeros e1))))
+         (rw (ih (- z 1) hle))
+         rfl)))))
+(theorem take_app ((vs (List (BitVec 64))))
+  (forall ((e Nat) (ys (List (BitVec 64))))
+    (= (List.take (+ (List.length vs) e) (app vs ys)) (app vs (List.take e ys))))
+  (by
+    (induction vs
+      ((nil () (intro e ys) (show (= (List.take (+ 0 e) ys) (List.take e ys))) (rw (Nat.zero_add e))
+         rfl)
+       (cons (x r ih) (intro e ys)
+         (have ea (= (+ (List.length (cons x r)) e) (+ (+ (List.length r) e) 1))
+           (show (= (+ (+ (List.length r) 1) e) (+ (+ (List.length r) e) 1)))
+           (arith))
+         (rw ea)
+         (show
+           (= (cons x (List.take (+ (List.length r) e) (app r ys)))
+             (cons x (app r (List.take e ys)))))
+         (rw (ih e ys))
+         rfl)))))
+;; a function's locals at entry are the first of its arguments followed by zeros
+(theorem enter_take ((vs (List (BitVec 64))) (e Nat) (z Nat) (h (<= e z)))
+  (= (List.take (+ (List.length vs) e) (app vs (zeros z))) (app vs (zeros e)))
+  (by (rw (take_app vs e (zeros z))) (rw (take_zeros e z h)) rfl))

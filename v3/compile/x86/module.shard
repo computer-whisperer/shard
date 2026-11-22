@@ -1,0 +1,423 @@
+;;; v3/compile/x86/module.shard — a call of a function of lower index, and THE MODULE'S THEOREM:
+;;; every function of a compiled module realizes its answer, given that each function the
+;;; module calls from outside realizes its own (`module_realizes`).
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.x86.lists)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(import "stmt.shard")
+(import "call.shard")
+(import "function.shard")
+(use compile.x86.function)
+(use compile.x86.call)
+(use compile.x86.stmt)
+
+;; ---- lists of entries -------------------------------------------------------------------------------
+(theorem pair_inj2
+  ((a (List Instr))
+   (b (List (Prod Nat Nat)))
+   (c (List Instr))
+   (d (List (Prod Nat Nat)))
+   (h (= (Prod.mk a b) (Prod.mk c d))))
+  (and (= a c) (= b d))
+  (by
+    (have e1 (= (Prod.fst (Prod.mk a b)) (Prod.fst (Prod.mk c d))) (rw h) rfl)
+    (have e2 (= (Prod.snd (Prod.mk a b)) (Prod.snd (Prod.mk c d))) (rw h) rfl)
+    (exact (And.intro e1 e2))))
+(theorem len_snoc ((fs (List (Prod Nat Nat))) (x (Prod Nat Nat)))
+  (= (List.length (List.append fs (cons x nil))) (+ (List.length fs) 1))
+  (by
+    (induction fs
+      ((nil () rfl)
+       (cons (y r ih)
+         (show (= (+ (List.length (List.append r (cons x nil))) 1) (+ (+ (List.length r) 1) 1)))
+         (rw ih)
+         rfl)))))
+
+;; ---- the functions compiled so far --------------------------------------------------------------------
+;; every function with an entry in fs realizes its answer there
+(def fs_ok
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (fs (List (Prod Nat Nat))))
+  Prop
+  (forall ((i Nat) (g IFn) (en (Prod Nat Nat)))
+    (-> (= (fn_at p i) (some g)) (= (pair_at fs i) (some en))
+      (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (fn_ans p ext rs g)))))
+;; the functions gs are the program p from the index k on
+(def suffix_at ((p (List IFn)) (k Nat) (gs (List IFn))) Prop
+  (forall ((i Nat) (g IFn)) (-> (= (fn_at gs i) (some g)) (= (fn_at p (+ k i)) (some g)))))
+;; A CALL OF A FUNCTION OF THE MODULE: with the externals and the functions compiled so far
+;; realized, every callee the pass has an entry for realizes what a statement's run takes
+;; from it
+(theorem env_of
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (hx
+     (forall ((j Nat) (en (Prod Nat Nat)))
+       (-> (= (pair_at xs j) (some en))
+         (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)))))
+   (hfs (fs_ok p ext rs tbl clo chi fs)))
+  (env_ok p ext rs tbl clo chi xs fs)
+  (by
+    (intro cal n en)
+    (cases cal
+      ((CFn (i) (unfold callee_at)
+         (cases (fn_at p i) hf
+           ((none () (reduce) (intro h)
+              (have hn (= (@Option.none (Prod Nat Nat)) (some en)) (exact h))
+              (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+            (some (g) (reduce)
+              (cases (Nat.decEq (IFn.params g) n)
+                ((isFalse (e) (intro h)
+                   (have hn (= (@Option.none (Prod Nat Nat)) (some en))
+                     (rw (<- h))
+                     (rw (if_neg e))
+                     rfl)
+                   (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+                 (isTrue (e) (intro h)
+                   (have hp (= (pair_at fs i) (some en)) (rw (<- h)) (rw (if_pos e)) rfl)
+                   (apply
+                     (realizes_mono tbl clo chi (Prod.fst en) (Prod.snd en) rs (fn_ans p ext rs g)
+                       (cal_ans p ext rs (CFn i) n))
+                     ((intro vs m v m2 ha)
+                      (cases (And.right ha)
+                        ((intro (n1 hn)
+                           (have hl (= (List.length vs) (IFn.params g))
+                             (rw e)
+                             (exact (And.left ha)))
+                           (have hr2 (= (fn_run n1 p ext rs (some g) vs m) (some (Prod.mk v m2)))
+                             (rw (<- hf))
+                             (exact hn))
+                           (have hr
+                             (= (irun n1 p ext rs (IFn.body g) (enter g vs) m) (some (Prod.mk v m2)))
+                             (exact hr2))
+                           (show
+                             (and (= (List.length vs) (IFn.params g))
+                               (iends p ext rs (IFn.body g) (enter g vs) m v m2)))
+                           (apply And.intro ((exact hl)) ((apply (Exists.intro n1) ((exact hr)))))))))
+                     ((exact (hfs i g en hf hp)))))))))))
+       (CExt (j) (intro h) (have hj (= (pair_at xs j) (some en)) (exact h))
+         (apply
+           (realizes_mono tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)
+             (cal_ans p ext rs (CExt j) n))
+           ((intro vs m v m2 ha) (cases (And.right ha) ((intro (n1 hn) (exact hn)))))
+           ((exact (hx j en hj)))))))))
+
+;; ---- the module ---------------------------------------------------------------------------------------
+(theorem cmod_nil
+  ((xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (p (List IFn))
+   (a Nat)
+   (code (List Instr))
+   (fo (List (Prod Nat Nat)))
+   (h (= (cmod xs fs p a nil) (some (Prod.mk code fo)))))
+  (= fo fs)
+  (by
+    (have g (= (some (Prod.mk (@List.nil Instr) fs)) (some (Prod.mk code fo))) (exact h))
+    (have hp (= (Prod.mk (@List.nil Instr) fs) (Prod.mk code fo)) (exact (Option.some.inj g)))
+    (exact (Eq.symm (And.right (pair_inj2 nil fs code fo hp))))))
+(theorem cmod_cons_inv
+  ((xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (p (List IFn))
+   (a Nat)
+   (g IFn)
+   (r (List IFn))
+   (code (List Instr))
+   (fo (List (Prod Nat Nat)))
+   (h (= (cmod xs fs p a (cons g r)) (some (Prod.mk code fo)))))
+  (exists ((cg (List Instr)))
+    (and (= (cfn xs fs p a g) (some cg))
+      (exists ((cr (List Instr)))
+        (and
+          (=
+            (cmod xs (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)) p (+ a (isize cg)) r)
+            (some (Prod.mk cr fo)))
+          (= code (List.append cg cr))))))
+  (by
+    (have g0
+      (-> (= (cmod xs fs p a (cons g r)) (some (Prod.mk code fo)))
+        (exists ((cg (List Instr)))
+          (and (= (cfn xs fs p a g) (some cg))
+            (exists ((cr (List Instr)))
+              (and
+                (=
+                  (cmod xs (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)) p
+                    (+ a (isize cg))
+                    r)
+                  (some (Prod.mk cr fo)))
+                (= code (List.append cg cr)))))))
+      (rw cmod.eq_2)
+      (cases (cfn xs fs p a g) hc
+        ((none () (reduce) (intro h0)
+           (exact (absurd (Eq.symm h0) (Option.some_ne_none (Prod.mk code fo)))))
+         (some (cg1) (reduce)
+           (cases
+             (cmod xs (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)) p (+ a (isize cg1))
+               r)
+             hm
+             ((none () (reduce) (intro h0)
+                (exact (absurd (Eq.symm h0) (Option.some_ne_none (Prod.mk code fo)))))
+              (some (q)
+                (cases q
+                  ((mk (cr1 fr1) (reduce) (intro h0)
+                     (have hp (= (Prod.mk (List.append cg1 cr1) fr1) (Prod.mk code fo))
+                       (exact (Option.some.inj h0)))
+                     (have e1 (= (List.append cg1 cr1) code)
+                       (exact (And.left (pair_inj2 (List.append cg1 cr1) fr1 code fo hp))))
+                     (have e2 (= fr1 fo)
+                       (exact (And.right (pair_inj2 (List.append cg1 cr1) fr1 code fo hp))))
+                     (apply (Exists.intro cg1)
+                       ((apply And.intro (rfl)
+                          ((apply (Exists.intro cr1)
+                             ((apply And.intro ((rw (<- e2)) (exact hm)) ((exact (Eq.symm e1))))))))))))))))))))
+    (exact (g0 h))))
+;; The functions gs, compiled from the address a after functions with the entries fs: where the
+;; code stands in the table, gs are the program from the index |fs| on, and the functions
+;; before them are realized, every function of the answer's entries is.
+(def mod_fact
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (gs (List IFn)))
+  Prop
+  (forall ((fs (List (Prod Nat Nat))) (a Nat) (code (List Instr)) (fo (List (Prod Nat Nat))))
+    (-> (= (cmod xs fs p a gs) (some (Prod.mk code fo))) (placed tbl a code)
+      (suffix_at p (List.length fs) gs)
+      (fs_ok p ext rs tbl clo chi fs)
+      (fs_ok p ext rs tbl clo chi fo))))
+(theorem mod_step
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (g IFn)
+   (r (List IFn))
+   (fs (List (Prod Nat Nat)))
+   (a Nat)
+   (code (List Instr))
+   (fo (List (Prod Nat Nat)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hx
+     (forall ((j Nat) (en (Prod Nat Nat)))
+       (-> (= (pair_at xs j) (some en))
+         (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)))))
+   (ih (mod_fact p ext rs tbl clo chi xs r))
+   (h (= (cmod xs fs p a (cons g r)) (some (Prod.mk code fo))))
+   (hp (placed tbl a code))
+   (hsuf (suffix_at p (List.length fs) (cons g r)))
+   (hfs (fs_ok p ext rs tbl clo chi fs)))
+  (fs_ok p ext rs tbl clo chi fo)
+  (by
+    (cases (cmod_cons_inv xs fs p a g r code fo h)
+      ((intro (cg g1) (have hcg (= (cfn xs fs p a g) (some cg)) (exact (And.left g1)))
+         (cases (And.right g1)
+           ((intro (cr g2)
+              (have hcr
+                (=
+                  (cmod xs (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)) p
+                    (+ a (isize cg))
+                    r)
+                  (some (Prod.mk cr fo)))
+                (exact (And.left g2)))
+              (have hp2 (placed tbl a (List.append cg cr)) (rw (<- (And.right g2))) (exact hp))
+              (have p1 (placed tbl a cg) (exact (And.left (placed_app tbl cg a cr hp2))))
+              (have p2 (placed tbl (+ a (isize cg)) cr)
+                (exact (And.right (placed_app tbl cg a cr hp2))))
+              (have h0 (= (fn_at (cons g r) 0) (some g)) rfl)
+              (have hg0 (= (fn_at p (List.length fs)) (some g)) (exact (hsuf 0 g h0)))
+              (have hreal (realizes tbl clo chi a (fneed xs fs p g) rs (fn_ans p ext rs g))
+                (exact
+                  (cfn_ok p ext rs tbl clo chi xs fs a g cg hall hchi
+                    (env_of p ext rs tbl clo chi xs fs hx hfs)
+                    hg0
+                    hcg
+                    p1)))
+              (have hfs2
+                (fs_ok p ext rs tbl clo chi
+                  (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)))
+                (intro i g2x en hf hpa)
+                (cases (pair_at_snoc fs (Prod.mk a (fneed xs fs p g)) i en hpa)
+                  ((inl (hold) (exact (hfs i g2x en hf hold)))
+                   (inr (hnew) (have ei (= i (List.length fs)) (exact (And.left hnew)))
+                     (have een (= en (Prod.mk a (fneed xs fs p g))) (exact (And.right hnew)))
+                     (have hf2 (= (fn_at p (List.length fs)) (some g2x)) (rw (<- ei)) (exact hf))
+                     (have hgg (= (some g) (some g2x)) (exact (Eq.trans (Eq.symm hg0) hf2)))
+                     (have eg (= g g2x) (exact (Option.some.inj hgg)))
+                     (rw een)
+                     (rw (<- eg))
+                     (exact hreal)))))
+              (have hsuf2
+                (suffix_at p (List.length (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)))
+                  r)
+                (intro i g2x hf)
+                (have h1 (= (fn_at (cons g r) (+ i 1)) (some g2x))
+                  (have hne (Not (= (+ i 1) 0)) (exact (Nat.succ_ne_zero i)))
+                  (rw fn_at.eq_2)
+                  (rw (if_neg hne))
+                  (show (= (fn_at r i) (some g2x)))
+                  (exact hf))
+                (have e2
+                  (= (+ (List.length (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil))) i)
+                    (+ (List.length fs) (+ i 1)))
+                  (rw (len_snoc fs (Prod.mk a (fneed xs fs p g))))
+                  (arith))
+                (rw e2)
+                (exact (hsuf (+ i 1) g2x h1)))
+              (exact
+                (ih (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)) (+ a (isize cg)) cr fo
+                  hcr
+                  p2
+                  hsuf2
+                  hfs2))))))))))
+(theorem mod_all
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hx
+     (forall ((j Nat) (en (Prod Nat Nat)))
+       (-> (= (pair_at xs j) (some en))
+         (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)))))
+   (gs (List IFn)))
+  (mod_fact p ext rs tbl clo chi xs gs)
+  (by
+    (induction gs
+      ((nil () (intro fs a code fo h hp hsuf hfs) (rw (cmod_nil xs fs p a code fo h)) (exact hfs))
+       (cons (g r ih) (intro fs a code fo h hp hsuf hfs)
+         (exact (mod_step p ext rs tbl clo chi xs g r fs a code fo hall hchi hx ih h hp hsuf hfs)))))))
+;; THE MODULE'S THEOREM. A program p compiled from the address base, given each external's
+;; entry and need (xs): where the pass answers a listing and the functions' entries and needs
+;; (fo), the listing stands in a table that lies in [clo, chi) below 2^64, and every external
+;; realizes its answer at its entry with its need, every function i of p realizes its answer
+;; at its entry with its need.
+(theorem module_realizes
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (base Nat)
+   (listing (List Instr))
+   (fo (List (Prod Nat Nat)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hx
+     (forall ((j Nat) (en (Prod Nat Nat)))
+       (-> (= (pair_at xs j) (some en))
+         (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)))))
+   (hc (= (compile xs p base) (some (Prod.mk listing fo))))
+   (hpl (placed tbl base listing)))
+  (forall ((i Nat) (g IFn) (en (Prod Nat Nat)))
+    (-> (= (fn_at p i) (some g)) (= (pair_at fo i) (some en))
+      (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (fn_ans p ext rs g))))
+  (by
+    (have hc2 (= (cmod xs nil p base p) (some (Prod.mk listing fo))) (exact hc))
+    (have hsuf (suffix_at p (List.length (@List.nil (Prod Nat Nat))) p)
+      (intro i g h)
+      (show (= (fn_at p (+ 0 i)) (some g)))
+      (rw (Nat.zero_add i))
+      (exact h))
+    (have hfs0 (fs_ok p ext rs tbl clo chi nil)
+      (intro i g en hf hpa)
+      (have hn (= (@Option.none (Prod Nat Nat)) (some en)) (exact hpa))
+      (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+    (exact (mod_all p ext rs tbl clo chi xs hall hchi hx p nil base listing fo hc2 hpl hsuf hfs0))))
+
+
+;; ---- one function alone: its callees are externals -----------------------------------------------
+;; The first function of a program, compiled with no function before it, its code in the table
+;; at a: where every external realizes its answer, the function realizes its own. Its calls are
+;; of externals; its tail calls of externals or of itself.
+(theorem fn_realizes_ext
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (a Nat)
+   (g IFn)
+   (code (List Instr))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hx
+     (forall ((j Nat) (en (Prod Nat Nat)))
+       (-> (= (pair_at xs j) (some en))
+         (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (ext_ans ext j)))))
+   (hself (= (fn_at p 0) (some g)))
+   (hc (= (cfn xs nil p a g) (some code)))
+   (hpl (placed tbl a code)))
+  (realizes tbl clo chi a (fneed xs nil p g) rs (fn_ans p ext rs g))
+  (by
+    (have hfs0 (fs_ok p ext rs tbl clo chi nil)
+      (intro i g0 en hf hpa)
+      (have hn (= (@Option.none (Prod Nat Nat)) (some en)) (exact hpa))
+      (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+    (have hs (= (fn_at p (List.length (@List.nil (Prod Nat Nat)))) (some g)) (exact hself))
+    (exact
+      (cfn_ok p ext rs tbl clo chi xs nil a g code hall hchi
+        (env_of p ext rs tbl clo chi xs nil hx hfs0)
+        hs
+        hc
+        hpl))))

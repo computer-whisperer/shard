@@ -1,0 +1,96 @@
+;;; v3/compile/x86/seam.shard — what crosses a module's seam for a function, stated on the x86
+;;; model (docs/COMPILE.md §5). A function's ANSWER is a relation: from the argument words and a
+;;; memory, the word returned and the memory after. Code REALIZES an answer when, called by the
+;;; convention with room for k words of stack, it returns what the answer says, leaves the data
+;;; ranges as the answer's memory has them, and leaves every other byte outside those k words
+;;; as it was. The statement is the same whether a pass wrote the code or an author did, and
+;;; whether the answer is a run of intermediate code or a shard function; what is assumed of a
+;;; callee and what is proven of a function are this one statement.
+(import "../ir.shard")
+(import "../../models/x86/frame.shard")
+(use std.mem)
+(use compile.ir)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Instr)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; the registers the arguments arrive in, in order (System V): rdi rsi rdx rcx r8 r9
+(fn arg_regs () (List Nat) (cons 7 (cons 6 (cons 2 (cons 1 (cons 8 (cons 9 nil)))))))
+;; the words of a state's registers, for a list of register numbers
+(fn regs_of ((c Cpu) (rg (List Nat))) (List (BitVec 64))
+  (measure (struct rg))
+  (match rg
+    (nil nil)
+    ((cons r t) (cons (reg c r) (regs_of c t)))))
+;; the state c holds the arguments vs: at most six, in the argument registers in order
+(def args_in ((c Cpu) (vs (List (BitVec 64)))) Prop
+  (and (<= (List.length vs) 6) (= vs (regs_of c (List.take (List.length vs) arg_regs)))))
+
+;; The data ranges rs an answer may read and write, as the state c has them: each is mapped in
+;; c with the permission asked, and lies clear of the k words of stack above f with the return
+;; address over them, and clear of the code in [clo, chi) (which is read fifteen bytes past an
+;; instruction's address).
+(def data_ok ((c Cpu) (rs (List Seg)) (clo Nat) (chi Nat) (f Nat) (k Nat)) Prop
+  (forall ((a Nat) (n Nat) (need Nat))
+    (-> (= (mapped rs a n need) true)
+      (and (= (mapped (Cpu.segs c) a n need) true)
+        (and (or (<= (+ a n) f) (<= (+ f (* 8 (+ k 1))) a)) (or (<= (+ a n) clo) (<= (+ chi 15) a)))))))
+
+
+;; an external's answer as a relation
+(def ext_ans
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (j Nat)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem))
+  Prop
+  (= (ext j vs m) (some (Prod.mk v m2))))
+
+;; ---- the statement ------------------------------------------------------------------------------
+;; The answer is taken on ANY memory m that the machine's agrees with on the data ranges, not on
+;; the machine's own: a compiled caller knows its callee's answer on the memory of its own run,
+;; and the machine's memory differs from that one in the caller's frame. Of the machine's memory
+;; the statement says what the code left: the data ranges as the answer's memory has them, and
+;; every other byte outside the k words as it was.
+;; two memories agree on every byte the data ranges map
+(def agree ((rs (List Seg)) (m Mem) (mc Mem)) Prop
+  (forall ((x Nat) (need Nat)) (-> (= (mapped rs x 1 need) true) (= (mem_get mc x) (mem_get m x)))))
+;; m2 is m1 at every byte outside the k words from f that the data ranges do not map to write
+(def kept_mem ((rs (List Seg)) (f Nat) (k Nat) (m1 Mem) (m2 Mem)) Prop
+  (forall ((x Nat))
+    (-> (or (< x f) (<= (+ f (* 8 k)) x)) (= (mapped rs x 1 2) false)
+      (= (mem_get m2 x) (mem_get m1 x)))))
+;; The code of the table tbl, in [clo, chi), realizes the answer `ans` at the address `entry`
+;; with a stack need of k words: from a state c with the code in place, the arguments in their
+;; registers, room for k words above f and the data ranges as `data_ok` asks, and for any memory
+;; m that c's memory agrees with on the data ranges: whenever the answer on m is the word v and
+;; the memory m2, the processor comes from `entry` to a state that has returned to c's caller
+;; with v in rax, whose memory agrees with m2 on the data ranges and is c's at every other byte
+;; outside the k words.
+(def realizes
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop)))
+  Prop
+  (forall ((c Cpu) (vs (List (BitVec 64))) (v (BitVec 64)) (m Mem) (m2 Mem) (f Nat))
+    (-> (code_in c tbl) (args_in c vs) (room c clo chi f k) (data_ok c rs clo chi f k)
+      (agree rs m (Cpu.mem c))
+      (ans vs m v m2)
+      (exists ((c2 Cpu))
+        (and (reaches (at_pc c (w64 entry)) c2)
+          (and (= (reg c2 0) v)
+            (and (agree rs m2 (Cpu.mem c2))
+              (and (kept_mem rs f k (Cpu.mem c) (Cpu.mem c2)) (returned c c2)))))))))

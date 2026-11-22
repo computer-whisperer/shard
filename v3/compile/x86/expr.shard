@@ -1,0 +1,353 @@
+;;; v3/compile/x86/expr.shard — an atom into a register, an expression into rax.
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.x86.lists)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; an atom's instruction, where it stands in the table at the program counter, puts the atom's
+;; word in its register
+(theorem ld_ok
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (c Cpu)
+   (pc Nat)
+   (r Nat)
+   (e IExp)
+   (ia Instr)
+   (w (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6)))
+  (-> (= (ld_atom r e nl) (some ia)) (= (ieval rs ls mi e) (some w))
+    (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia)))))
+    (reaches c (at_pc (set_reg c r w) (w64 (+ pc (List.length (encode ia)))))))
+  (by
+    (cases e
+      ((ENum (n) (unfold ld_atom) (unfold ieval) (intro h1 h2) (rw (<- (Option.some.inj h1)))
+         (rw (<- (Option.some.inj h2)))
+         (intro hs)
+         (apply
+           (t_ri64 tbl clo chi pc r (w64_val n) (List.length (encode (MovRI64 r (w64_val n)))) n)
+           ((exact hall))
+           ((exact hchi))
+           ((exact hcode))
+           ((exact hrip))
+           ((exact hs))
+           ((exact (w64_of_val n)))
+           ((exact
+              (reaches_refl
+                (at_pc (set_reg c r n) (w64 (+ pc (List.length (encode (MovRI64 r (w64_val n))))))))))))
+       (EVar (i) (unfold ld_atom) (unfold ieval)
+         (cases (Nat.decLt i nl)
+           ((isFalse (hi) (rw (if_neg hi)) (intro h1)
+              (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
+            (isTrue (hi) (rw (if_pos hi)) (intro h1 h2) (rw (<- (Option.some.inj h1)))
+              (rw (<- (Option.some.inj h2)))
+              (intro hs)
+              (apply
+                (t_mov tbl clo chi pc r (kreg i) (List.length (encode (MovRmR (RmReg r) (kreg i))))
+                  (nth ls i))
+                ((exact hall))
+                ((exact hchi))
+                ((exact hcode))
+                ((exact hrip))
+                ((exact hs))
+                ((exact (loc_reg c ls nl i hls hi hnl)))
+                ((exact
+                   (reaches_refl
+                     (at_pc (set_reg c r (nth ls i))
+                       (w64 (+ pc (List.length (encode (MovRmR (RmReg r) (kreg i)))))))))))))))
+       (EOp (o a b) (unfold ld_atom) (intro h1)
+         (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
+       (ELoad (q) (unfold ld_atom) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))))))
+;; an atom into rax
+(theorem atom_ok
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (c Cpu)
+   (pc Nat)
+   (e IExp)
+   (ia Instr)
+   (w (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (h1 (= (ld_atom 0 e nl) (some ia)))
+   (h2 (= (ieval rs ls mi e) (some w)))
+   (hp (placed tbl pc (cons ia nil))))
+  (exists ((c1 Cpu))
+    (and (reaches c c1)
+      (and (= (reg c1 0) w) (and (= (Cpu.rip c1) (w64 (+ pc (isize (cons ia nil))))) (scratch c c1)))))
+  (by
+    (have hs (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia))))) (exact (And.left hp)))
+    (have hr (reaches c (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia))))))
+      (exact (ld_ok tbl clo chi rs ls mi nl c pc 0 e ia w hall hchi hcode hrip hls hnl h1 h2 hs)))
+    (have s1
+      (= (Cpu.segs (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia)))))) (Cpu.segs c))
+      rfl)
+    (have s2
+      (= (Cpu.mem (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia)))))) (Cpu.mem c))
+      rfl)
+    (have s3 (= (reg (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia))))) 4) (reg c 4))
+      rfl)
+    (have s4 (= (regs6 (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia)))))) (regs6 c))
+      rfl)
+    (apply (Exists.intro (at_pc (set_reg c 0 w) (w64 (+ pc (List.length (encode ia))))))
+      ((apply And.intro ((exact hr))
+         ((apply And.intro (rfl)
+            ((apply And.intro (rfl) ((exact (And.intro s1 (And.intro s2 (And.intro s3 s4))))))))))))))
+;; the states an operation's code passes through: the first atom in rax, the second in rcx, the
+;; result in rax
+(fn o_s1 ((c Cpu) (x (BitVec 64)) (pc Nat) (ia Instr)) Cpu
+  (at_pc (set_reg c 0 x) (w64 (+ pc (List.length (encode ia))))))
+(fn o_s2 ((c Cpu) (x (BitVec 64)) (y (BitVec 64)) (pc Nat) (ia Instr) (ib Instr)) Cpu
+  (at_pc (set_reg (o_s1 c x pc ia) 1 y)
+    (w64 (+ (+ pc (List.length (encode ia))) (List.length (encode ib))))))
+(fn o_s3 ((c Cpu) (o IOp) (bo Bop) (x (BitVec 64)) (y (BitVec 64)) (pc Nat) (ia Instr) (ib Instr))
+  Cpu
+  (at_pc
+    (set_reg
+      (set_flags (o_s2 c x y pc ia ib)
+        (alu_flags bo (reg (o_s2 c x y pc ia ib) 0) (reg (o_s2 c x y pc ia ib) 1)))
+      0
+      (iop o x y))
+    (w64
+      (+ (+ (+ pc (List.length (encode ia))) (List.length (encode ib)))
+        (List.length (encode (AluRmR bo (RmReg 0) 1)))))))
+;; an operation over two atoms into rax, the second through rcx
+(theorem op_ok
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (c Cpu)
+   (pc Nat)
+   (o IOp)
+   (a IExp)
+   (b IExp)
+   (bo Bop)
+   (ia Instr)
+   (ib Instr)
+   (x (BitVec 64))
+   (y (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hb (= (iop_bop o) (some bo)))
+   (ha (= (ld_atom 0 a nl) (some ia)))
+   (hb2 (= (ld_atom 1 b nl) (some ib)))
+   (hx (= (ieval rs ls mi a) (some x)))
+   (hy (= (ieval rs ls mi b) (some y)))
+   (hp (placed tbl pc (cons ia (cons ib (cons (AluRmR bo (RmReg 0) 1) nil))))))
+  (exists ((c1 Cpu))
+    (and (reaches c c1)
+      (and (= (reg c1 0) (iop o x y))
+        (and
+          (= (Cpu.rip c1)
+            (w64 (+ pc (isize (cons ia (cons ib (cons (AluRmR bo (RmReg 0) 1) nil)))))))
+          (scratch c c1)))))
+  (by
+    (have s1 (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia))))) (exact (And.left hp)))
+    (have r1 (reaches c (o_s1 c x pc ia))
+      (exact (ld_ok tbl clo chi rs ls mi nl c pc 0 a ia x hall hchi hcode hrip hls hnl ha hx s1)))
+    (have hc1 (code_in (o_s1 c x pc ia) tbl) (exact hcode))
+    (have hrip1 (= (Cpu.rip (o_s1 c x pc ia)) (w64 (+ pc (List.length (encode ia))))) rfl)
+    (have hls1 (= ls (List.take nl (regs6 (o_s1 c x pc ia)))) (exact hls))
+    (have s2
+      (= (site tbl (+ pc (List.length (encode ia)))) (some (Prod.mk ib (List.length (encode ib)))))
+      (exact (And.left (And.right hp))))
+    (have r2 (reaches (o_s1 c x pc ia) (o_s2 c x y pc ia ib))
+      (exact
+        (ld_ok tbl clo chi rs ls mi nl (o_s1 c x pc ia) (+ pc (List.length (encode ia))) 1 b ib y
+          hall
+          hchi
+          hc1
+          hrip1
+          hls1
+          hnl
+          hb2
+          hy
+          s2)))
+    (have s3
+      (= (site tbl (+ (+ pc (List.length (encode ia))) (List.length (encode ib))))
+        (some (Prod.mk (AluRmR bo (RmReg 0) 1) (List.length (encode (AluRmR bo (RmReg 0) 1))))))
+      (exact (And.left (And.right (And.right hp)))))
+    (have hw (= (alu_writes bo) true) (exact (And.left (bop_res o bo x y hb))))
+    (have hv
+      (= (alu_res bo (reg (o_s2 c x y pc ia ib) 0) (reg (o_s2 c x y pc ia ib) 1)) (iop o x y))
+      (exact (And.right (bop_res o bo x y hb))))
+    (have r3 (reaches (o_s2 c x y pc ia ib) (o_s3 c o bo x y pc ia ib))
+      (apply
+        (t_alu tbl clo chi (+ (+ pc (List.length (encode ia))) (List.length (encode ib))) bo 0 1
+          (List.length (encode (AluRmR bo (RmReg 0) 1)))
+          (iop o x y))
+        ((exact hall))
+        ((exact hchi))
+        ((exact hcode))
+        (rfl)
+        ((exact s3))
+        ((exact hw))
+        ((exact hv))
+        ((exact (reaches_refl (o_s3 c o bo x y pc ia ib))))))
+    (have ea
+      (= (+ pc (isize (cons ia (cons ib (cons (AluRmR bo (RmReg 0) 1) nil)))))
+        (+ (+ (+ pc (List.length (encode ia))) (List.length (encode ib)))
+          (List.length (encode (AluRmR bo (RmReg 0) 1)))))
+      (show
+        (=
+          (+ pc
+            (+ (List.length (encode ia))
+              (+ (List.length (encode ib)) (+ (List.length (encode (AluRmR bo (RmReg 0) 1))) 0))))
+          (+ (+ (+ pc (List.length (encode ia))) (List.length (encode ib)))
+            (List.length (encode (AluRmR bo (RmReg 0) 1))))))
+      (arith))
+    (have g3
+      (= (Cpu.rip (o_s3 c o bo x y pc ia ib))
+        (w64 (+ pc (isize (cons ia (cons ib (cons (AluRmR bo (RmReg 0) 1) nil)))))))
+      (rw ea)
+      rfl)
+    (have t1 (= (Cpu.segs (o_s3 c o bo x y pc ia ib)) (Cpu.segs c)) rfl)
+    (have t2 (= (Cpu.mem (o_s3 c o bo x y pc ia ib)) (Cpu.mem c)) rfl)
+    (have t3 (= (reg (o_s3 c o bo x y pc ia ib) 4) (reg c 4)) rfl)
+    (have t4 (= (regs6 (o_s3 c o bo x y pc ia ib)) (regs6 c)) rfl)
+    (apply (Exists.intro (o_s3 c o bo x y pc ia ib))
+      ((apply And.intro
+         ((exact
+            (reaches_trans c (o_s1 c x pc ia) (o_s3 c o bo x y pc ia ib) r1
+              (reaches_trans (o_s1 c x pc ia) (o_s2 c x y pc ia ib) (o_s3 c o bo x y pc ia ib) r2 r3))))
+         ((apply And.intro (rfl)
+            ((apply And.intro ((exact g3)) ((exact (And.intro t1 (And.intro t2 (And.intro t3 t4))))))))))))))
+;; an expression's code, where it stands in the table at the program counter, puts the
+;; expression's word in rax and changes scratch registers alone
+(theorem cexp_ok
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (c Cpu)
+   (pc Nat)
+   (e IExp)
+   (ce (List Instr))
+   (w (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6)))
+  (-> (= (cexp e nl) (some ce)) (= (ieval rs ls mi e) (some w)) (placed tbl pc ce)
+    (exists ((c1 Cpu))
+      (and (reaches c c1)
+        (and (= (reg c1 0) w) (and (= (Cpu.rip c1) (w64 (+ pc (isize ce)))) (scratch c c1))))))
+  (by
+    (cases e
+      ((ENum (n) (unfold cexp) (intro h1) (rw (<- (Option.some.inj h1))) (intro h2 hp)
+         (have hl (= (ld_atom 0 (ENum n) nl) (some (MovRI64 0 (w64_val n)))) rfl)
+         (exact
+           (atom_ok tbl clo chi rs ls mi nl c pc (ENum n) (MovRI64 0 (w64_val n)) w hall hchi hcode
+             hrip
+             hls
+             hnl
+             hl
+             h2
+             hp)))
+       (EVar (i) (unfold cexp)
+         (cases (Nat.decLt i nl)
+           ((isFalse (hi) (rw (if_neg hi)) (intro h1)
+              (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+            (isTrue (hi) (rw (if_pos hi)) (intro h1) (rw (<- (Option.some.inj h1))) (intro h2 hp)
+              (have hl (= (ld_atom 0 (EVar i) nl) (some (MovRmR (RmReg 0) (kreg i))))
+                (unfold ld_atom)
+                (rw (if_pos hi))
+                rfl)
+              (exact
+                (atom_ok tbl clo chi rs ls mi nl c pc (EVar i) (MovRmR (RmReg 0) (kreg i)) w hall
+                  hchi
+                  hcode
+                  hrip
+                  hls
+                  hnl
+                  hl
+                  h2
+                  hp))))))
+       (EOp (o a b) (unfold cexp) (unfold ieval)
+         (cases (iop_bop o) hb
+           ((none () (reduce) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+            (some (bo) (reduce)
+              (cases (ld_atom 0 a nl) ha
+                ((none () (reduce) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+                 (some (ia) (reduce)
+                   (cases (ld_atom 1 b nl) hb2
+                     ((none () (reduce) (intro h1)
+                        (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+                      (some (ib) (reduce) (intro h1) (rw (<- (Option.some.inj h1)))
+                        (cases (ieval rs ls mi a) hx
+                          ((none () (reduce) (intro h2)
+                             (exact (absurd (Eq.symm h2) (Option.some_ne_none w))))
+                           (some (x) (reduce)
+                             (cases (ieval rs ls mi b) hy
+                               ((none () (reduce) (intro h2)
+                                  (exact (absurd (Eq.symm h2) (Option.some_ne_none w))))
+                                (some (y) (reduce) (intro h2) (rw (<- (Option.some.inj h2)))
+                                  (intro hp)
+                                  (exact
+                                    (op_ok tbl clo chi rs ls mi nl c pc o a b bo ia ib x y hall hchi
+                                      hcode hrip hls hnl hb ha hb2 hx hy hp))))))))))))))))))
+       (ELoad (q) (unfold cexp) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))))))

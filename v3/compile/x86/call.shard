@@ -1,0 +1,438 @@
+;;; v3/compile/x86/call.shard — a call. The arguments into their registers; THE LAW OF
+;;; A CALL from inside a described frame to code that `realizes` an answer; and the statement-level
+;;; case of a call, for a callee of which nothing is known but that.
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.x86.lists)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(import "stmt.shard")
+(use compile.x86.expr)
+(use compile.x86.entry)
+(use compile.x86.stmt)
+
+;; ---- what the callees are -----------------------------------------------------------------------
+;; a callee's answer on n arguments: what a statement's run takes from it, on some fuel
+(def cal_ans
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (cal ICallee)
+   (n Nat)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem))
+  Prop
+  (and (= (List.length vs) n)
+    (exists ((n1 Fuel)) (= (cal_run n1 p ext rs cal vs m) (some (Prod.mk v m2))))))
+;; every callee the pass has an entry and a need for realizes its answer there
+(def env_ok
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat))))
+  Prop
+  (forall ((cal ICallee) (n Nat) (en (Prod Nat Nat)))
+    (-> (= (callee_at xs fs p cal n) (some en))
+      (realizes tbl clo chi (Prod.fst en) (Prod.snd en) rs (cal_ans p ext rs cal n)))))
+
+;; ---- the arguments ------------------------------------------------------------------------------
+;; The code of the arguments es from the i-th argument register on: from a state whose first i
+;; argument registers hold `pre`, the processor comes to one whose first i + |es| hold `pre`
+;; and the arguments' words, having changed argument registers alone.
+(def args_fact
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (es (List IExp)))
+  Prop
+  (forall
+    ((i Nat) (c Cpu) (pc Nat) (ca (List Instr)) (vs (List (BitVec 64))) (pre (List (BitVec 64))))
+    (-> (= (cargs es i nl) (some ca)) (= (ievals rs ls mi es) (some vs)) (placed tbl pc ca)
+      (code_in c tbl)
+      (= (Cpu.rip c) (w64 pc))
+      (= ls (List.take nl (regs6 c)))
+      (<= i 6)
+      (= (regs_of c (List.take i arg_regs)) pre)
+      (exists ((c1 Cpu))
+        (and (reaches c c1)
+          (and (= (Cpu.rip c1) (w64 (+ pc (isize ca))))
+            (and (scratch c c1)
+              (and (<= (+ i (List.length vs)) 6)
+                (= (regs_of c1 (List.take (+ i (List.length vs)) arg_regs)) (app pre vs))))))))))
+(theorem cargs_step
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (e IExp)
+   (r (List IExp))
+   (i Nat)
+   (c Cpu)
+   (pc Nat)
+   (pre (List (BitVec 64)))
+   (ia Instr)
+   (ir (List Instr))
+   (v1 (BitVec 64))
+   (vr (List (BitVec 64)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hnl (<= nl 6))
+   (ih (args_fact tbl rs ls mi nl r))
+   (h6 (< i 6))
+   (hl (= (ld_atom (areg i) e nl) (some ia)))
+   (hc (= (cargs r (+ i 1) nl) (some ir)))
+   (hv (= (ieval rs ls mi e) (some v1)))
+   (hvs (= (ievals rs ls mi r) (some vr)))
+   (hp (placed tbl pc (cons ia ir)))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hpre (= (regs_of c (List.take i arg_regs)) pre)))
+  (exists ((c1 Cpu))
+    (and (reaches c c1)
+      (and (= (Cpu.rip c1) (w64 (+ pc (isize (cons ia ir)))))
+        (and (scratch c c1)
+          (and (<= (+ i (List.length (cons v1 vr))) 6)
+            (= (regs_of c1 (List.take (+ i (List.length (cons v1 vr))) arg_regs))
+              (app pre (cons v1 vr))))))))
+  (by
+    (have s (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia))))) (exact (And.left hp)))
+    (have r1 (reaches c (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))))
+      (exact
+        (ld_ok tbl clo chi rs ls mi nl c pc (areg i) e ia v1 hall hchi hcode hrip hls hnl hl hv s)))
+    (have hc1 (code_in (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))) tbl)
+      (exact hcode))
+    (have hrip1
+      (= (Cpu.rip (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))))
+        (w64 (+ pc (List.length (encode ia)))))
+      rfl)
+    (have hls1
+      (= ls
+        (List.take nl (regs6 (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))))))
+      (rw (aset_regs c i v1 (w64 (+ pc (List.length (encode ia)))) h6))
+      (exact hls))
+    (have hpre1
+      (=
+        (regs_of (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia)))))
+          (List.take (+ i 1) arg_regs))
+        (app pre (cons v1 nil)))
+      (rw (aset_args c i v1 (w64 (+ pc (List.length (encode ia)))) h6))
+      (rw hpre)
+      rfl)
+    (have p2 (placed tbl (+ pc (List.length (encode ia))) ir) (exact (And.right hp)))
+    (have hi1 (<= (+ i 1) 6) (arith))
+    (cases
+      (ih (+ i 1) (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia)))))
+        (+ pc (List.length (encode ia)))
+        ir
+        vr
+        (app pre (cons v1 nil))
+        hc
+        hvs
+        p2
+        hc1
+        hrip1
+        hls1
+        hi1
+        hpre1)
+      ((intro (c2 g)
+         (have r2
+           (reaches (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))) c2)
+           (exact (And.left g)))
+         (have hrip2 (= (Cpu.rip c2) (w64 (+ (+ pc (List.length (encode ia))) (isize ir))))
+           (exact (And.left (And.right g))))
+         (have hsc2
+           (scratch (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia))))) c2)
+           (exact (And.left (And.right (And.right g)))))
+         (have hle2 (<= (+ (+ i 1) (List.length vr)) 6)
+           (exact (And.left (And.right (And.right (And.right g))))))
+         (have hreg2
+           (= (regs_of c2 (List.take (+ (+ i 1) (List.length vr)) arg_regs))
+             (app (app pre (cons v1 nil)) vr))
+           (exact (And.right (And.right (And.right (And.right g))))))
+         (have ea (= (+ pc (isize (cons ia ir))) (+ (+ pc (List.length (encode ia))) (isize ir)))
+           (show
+             (= (+ pc (+ (List.length (encode ia)) (isize ir)))
+               (+ (+ pc (List.length (encode ia))) (isize ir))))
+           (arith))
+         (have g2 (= (Cpu.rip c2) (w64 (+ pc (isize (cons ia ir))))) (rw ea) (exact hrip2))
+         (have t1 (= (Cpu.segs c2) (Cpu.segs c)) (exact (And.left hsc2)))
+         (have t2 (= (Cpu.mem c2) (Cpu.mem c)) (exact (And.left (And.right hsc2))))
+         (have t3 (= (reg c2 4) (reg c 4))
+           (rw (<- (aset_sp c i v1 (w64 (+ pc (List.length (encode ia)))) h6)))
+           (exact (And.left (And.right (And.right hsc2)))))
+         (have t4 (= (regs6 c2) (regs6 c))
+           (rw (<- (aset_regs c i v1 (w64 (+ pc (List.length (encode ia)))) h6)))
+           (exact (And.right (And.right (And.right hsc2)))))
+         (have el (= (+ i (List.length (cons v1 vr))) (+ (+ i 1) (List.length vr)))
+           (show (= (+ i (+ (List.length vr) 1)) (+ (+ i 1) (List.length vr))))
+           (arith))
+         (have g5
+           (= (regs_of c2 (List.take (+ i (List.length (cons v1 vr))) arg_regs))
+             (app pre (cons v1 vr)))
+           (rw el)
+           (rw hreg2)
+           (exact (app_snoc pre v1 vr)))
+         (have g4 (<= (+ i (List.length (cons v1 vr))) 6) (rw el) (exact hle2))
+         (apply (Exists.intro c2)
+           ((apply And.intro
+              ((exact
+                 (reaches_trans c
+                   (at_pc (set_reg c (areg i) v1) (w64 (+ pc (List.length (encode ia)))))
+                   c2
+                   r1
+                   r2)))
+              ((apply And.intro ((exact g2))
+                 ((apply And.intro ((exact (And.intro t1 (And.intro t2 (And.intro t3 t4)))))
+                    ((apply And.intro ((exact g4)) ((exact g5))))))))))))))))
+(theorem cargs_ok
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hnl (<= nl 6))
+   (es (List IExp)))
+  (args_fact tbl rs ls mi nl es)
+  (by
+    (induction es
+      ((nil () (intro i c pc ca vs pre h1 h2 hp hcode hrip hls hi hpre)
+         (have eca (= ca nil) (exact (cargs_nil_inv i nl ca h1)))
+         (have evs (= vs nil) (exact (ievals_nil_inv rs ls mi vs h2)))
+         (rw eca)
+         (rw evs)
+         (apply (Exists.intro c)
+           ((apply And.intro ((exact (reaches_refl c)))
+              ((apply And.intro ((exact hrip))
+                 ((apply And.intro
+                    ((exact
+                       (And.intro (Eq.refl (Cpu.segs c))
+                         (And.intro (Eq.refl (Cpu.mem c))
+                           (And.intro (Eq.refl (reg c 4)) (Eq.refl (regs6 c)))))))
+                    ((apply And.intro ((exact hi)) ((rw (app_nil pre)) (exact hpre))))))))))))
+       (cons (e r ih) (intro i c pc ca vs pre h1 h2 hp hcode hrip hls hi hpre)
+         (have h6 (< i 6) (exact (And.left (cargs_cons_inv e r i nl ca h1))))
+         (cases (And.right (cargs_cons_inv e r i nl ca h1))
+           ((intro (ia g1)
+              (cases g1
+                ((intro (ir g2)
+                   (cases (ievals_cons_inv rs ls mi e r vs h2)
+                     ((intro (v1 g3)
+                        (cases g3
+                          ((intro (vr g4)
+                             (have hp2 (placed tbl pc (cons ia ir))
+                               (rw (<- (And.right (And.right g2))))
+                               (exact hp))
+                             (rw (And.right (And.right g2)))
+                             (rw (And.right (And.right g4)))
+                             (exact
+                               (cargs_step tbl clo chi rs ls mi nl e r i c pc pre ia ir v1 vr hall
+                                 hchi
+                                 hnl
+                                 ih
+                                 h6
+                                 (And.left g2)
+                                 (And.left (And.right g2))
+                                 (And.left g4)
+                                 (And.left (And.right g4))
+                                 hp2
+                                 hcode
+                                 hrip
+                                 hls
+                                 hpre)))))))))))))))))))
+
+;; ---- THE LAW OF A CALL --------------------------------------------------------------------------
+;; A state c1 inside a function, described j + 1 words up, stands at a call instruction whose
+;; target is the entry of code that realizes the answer A with a need of kc words, kc no more
+;; than j. The state holds the arguments vs; the base memory m0 is the caller's run's memory mi
+;; on the data ranges; and A, on vs and mi, is the word v1 and the memory m1. Then the processor
+;; comes to a state c6 at the instruction after the call with v1 in rax, what a callee keeps
+;; kept, described as c1 was with its own memory as the base, that memory as m1 on the data
+;; ranges and as the function's entry memory wherever the run may not write.
+(theorem call_law
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c1 Cpu)
+   (j Nat)
+   (w (BitVec 64))
+   (ws (List (BitVec 64)))
+   (rs (List Seg))
+   (mi Mem)
+   (vs (List (BitVec 64)))
+   (v1 (BitVec 64))
+   (m1 Mem)
+   (ea Nat)
+   (kc Nat)
+   (A (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (pc Nat)
+   (dd Nat)
+   (len Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (w1 (framed c0 tbl clo chi f k m0 c1 (+ j 1) (cons w ws)))
+   (hdo (data_ok c0 rs clo chi f k))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f k (Cpu.mem c0) m0))
+   (hreal (realizes tbl clo chi ea kc rs A))
+   (hans (A vs mi v1 m1))
+   (hargs (args_in c1 vs))
+   (hkc (<= kc j))
+   (hrip1 (= (Cpu.rip c1) (w64 pc)))
+   (hs (= (site tbl pc) (some (Prod.mk (Call dd) len))))
+   (htgt (= (w64_add (w64 (+ pc len)) (w64 dd)) (w64 ea))))
+  (exists ((c6 Cpu))
+    (and (reaches c1 c6)
+      (and (= (Cpu.rip c6) (w64 (+ pc len)))
+        (and (= (reg c6 0) v1)
+          (and (kept (pushed c1 (w64 (+ pc len))) c6)
+            (and (framed c0 tbl clo chi f k (Cpu.mem c6) c6 (+ j 1) (cons w ws))
+              (and (agree rs m1 (Cpu.mem c6)) (kept_mem rs f k (Cpu.mem c0) (Cpu.mem c6)))))))))
+  (by
+    (have w2
+      (framed c0 tbl clo chi f k m0 (pushed c1 (w64 (+ pc len))) j
+        (cons (w64 (+ pc len)) (cons w ws)))
+      (exact (framed_push_eq j (w64 (+ pc len)) w1 (Eq.refl (+ j 1)))))
+    (have mpush (= (mapped (Cpu.segs c1) (push_at c1) 8 2) true)
+      (exact (framed_push_ok_eq j w1 (Eq.refl (+ j 1)))))
+    (have ee (= (+ (- j kc) kc) j) (exact (Nat.sub_add_cancel hkc)))
+    (have hf2 (= (+ (+ f (* 8 (- j kc))) (* 8 kc)) (+ f (* 8 j))) (arith ee))
+    (have hlo (<= f (+ f (* 8 (- j kc)))) (arith))
+    (have hroom2 (room (pushed c1 (w64 (+ pc len))) clo chi (+ f (* 8 (- j kc))) kc)
+      (exact
+        (room_sub c0 tbl clo chi f k m0 (pushed c1 (w64 (+ pc len))) j (w64 (+ pc len)) (cons w ws)
+          (+ f (* 8 (- j kc)))
+          kc
+          w2
+          hf2
+          hlo)))
+    (have hl (= (+ j (+ (+ (List.length ws) 1) 1)) (+ k 1)) (exact (framed_len w2)))
+    (have hhi (<= (+ (+ f (* 8 (- j kc))) (* 8 (+ kc 1))) (+ f (* 8 (+ k 1)))) (arith ee hl))
+    (have hdo2 (data_ok (pushed c1 (w64 (+ pc len))) rs clo chi (+ f (* 8 (- j kc))) kc)
+      (exact
+        (data_sub c0 (pushed c1 (w64 (+ pc len))) rs clo chi f k (+ f (* 8 (- j kc))) kc hdo
+          (framed_segs w2)
+          hlo
+          hhi)))
+    (have ha
+      (= (regs_of (pushed c1 (w64 (+ pc len))) (List.take (List.length vs) arg_regs))
+        (regs_of c1 (List.take (List.length vs) arg_regs)))
+      (rw (regs_of_take (pushed c1 (w64 (+ pc len))) arg_regs (List.length vs)))
+      (rw (regs_of_take c1 arg_regs (List.length vs)))
+      rfl)
+    (have hx (= vs (regs_of (pushed c1 (w64 (+ pc len))) (List.take (List.length vs) arg_regs)))
+      (rw ha)
+      (exact (And.right hargs)))
+    (have hargs2 (args_in (pushed c1 (w64 (+ pc len))) vs) (exact (And.intro (And.left hargs) hx)))
+    (have hag2 (agree rs mi (Cpu.mem (pushed c1 (w64 (+ pc len)))))
+      (exact
+        (agree_frame c0 rs clo chi f k mi m0 (Cpu.mem (pushed c1 (w64 (+ pc len)))) hdo hag
+          (framed_mem w2))))
+    (cases
+      (hreal (pushed c1 (w64 (+ pc len))) vs v1 mi m1 (+ f (* 8 (- j kc))) (framed_code w2) hargs2
+        hroom2
+        hdo2
+        hag2
+        hans)
+      ((intro (c6 g)
+         (have r6 (reaches (at_pc (pushed c1 (w64 (+ pc len))) (w64 ea)) c6) (exact (And.left g)))
+         (have hv6 (= (reg c6 0) v1) (exact (And.left (And.right g))))
+         (have hag6 (agree rs m1 (Cpu.mem c6)) (exact (And.left (And.right (And.right g)))))
+         (have hkm6
+           (kept_mem rs (+ f (* 8 (- j kc))) kc (Cpu.mem (pushed c1 (w64 (+ pc len)))) (Cpu.mem c6))
+           (exact (And.left (And.right (And.right (And.right g))))))
+         (have hret6 (returned (pushed c1 (w64 (+ pc len))) c6)
+           (exact (And.right (And.right (And.right (And.right g))))))
+         (have w6 (framed c0 tbl clo chi f k (Cpu.mem c6) c6 (+ j 1) (cons w ws))
+           (exact
+             (framed_back_kept c0 tbl clo chi f k m0 (pushed c1 (w64 (+ pc len))) j (w64 (+ pc len))
+               w
+               ws
+               c6
+               rs
+               (+ f (* 8 (- j kc)))
+               kc
+               w2
+               hdo
+               hret6
+               hkm6
+               hf2
+               hlo)))
+         (have hrip6 (= (Cpu.rip c6) (w64 (+ pc len))) (exact (framed_back_at w2 hret6)))
+         (have hhi2 (<= (+ (+ f (* 8 (- j kc))) (* 8 kc)) (+ f (* 8 k))) (arith ee hl))
+         (have hkm7 (kept_mem rs f k (Cpu.mem c0) (Cpu.mem c6))
+           (exact
+             (kept_call rs f k (+ f (* 8 (- j kc))) kc (Cpu.mem c0)
+               (Cpu.mem (pushed c1 (w64 (+ pc len))))
+               (Cpu.mem c6)
+               (kept_frame rs f k (Cpu.mem c0) m0 (Cpu.mem (pushed c1 (w64 (+ pc len)))) hkm
+                 (framed_mem w2))
+               hkm6
+               hlo
+               hhi2)))
+         (have rr (reaches c1 c6)
+           (apply (t_call tbl clo chi pc dd len ea) ((exact hall)) ((exact hchi))
+             ((exact (framed_code w1)))
+             ((exact hrip1))
+             ((exact hs))
+             ((exact mpush))
+             ((exact htgt))
+             ((exact r6))))
+         (apply (Exists.intro c6)
+           ((apply And.intro ((exact rr))
+              ((apply And.intro ((exact hrip6))
+                 ((apply And.intro ((exact hv6))
+                    ((apply And.intro
+                       ((exact (returned_kept (pushed c1 (w64 (+ pc len))) c6 hret6)))
+                       ((apply And.intro ((exact w6))
+                          ((apply And.intro ((exact hag6)) ((exact hkm7))))))))))))))))))))

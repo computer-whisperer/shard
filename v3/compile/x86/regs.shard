@@ -1,0 +1,338 @@
+;;; v3/compile/x86/regs.shard — the six registers the locals live in, and what a
+;;; move into one of them, or into an argument register, leaves as it was.
+(import "pass.shard")
+(import "lists.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.x86.lists)
+(use compile.x86.pass)
+(use compile.x86.seam)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Instr)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; a fact of each number below six is a fact of every number below six
+(theorem six_all
+  ((P (-> Nat Prop))
+   (h0 (P 0))
+   (h1 (P 1))
+   (h2 (P 2))
+   (h3 (P 3))
+   (h4 (P 4))
+   (h5 (P 5))
+   (x Nat)
+   (h (< x 6)))
+  (P x)
+  (by
+    (cases x
+      ((zero () (exact h0))
+       (succ (x1)
+         (cases x1
+           ((zero () (exact h1))
+            (succ (x2)
+              (cases x2
+                ((zero () (exact h2))
+                 (succ (x3)
+                   (cases x3
+                     ((zero () (exact h3))
+                      (succ (x4)
+                        (cases x4
+                          ((zero () (exact h4))
+                           (succ (x5)
+                             (cases x5
+                               ((zero () (exact h5))
+                                (succ (x6) (have hf False (arith h)) (exact (False.elim hf))))))))))))))))))))))
+;; the words of the six registers of the locals, in the locals' order
+(fn regs6 ((c Cpu)) (List (BitVec 64))
+  (cons (reg c 3)
+    (cons (reg c 5) (cons (reg c 12) (cons (reg c 13) (cons (reg c 14) (cons (reg c 15) nil)))))))
+(theorem reg_k ((c Cpu) (i Nat) (h (< i 6))) (= (nth (regs6 c) i) (reg c (kreg i)))
+  (by
+    (apply (six_all (fun ((i Nat)) (= (nth (regs6 c) i) (reg c (kreg i))))) (rfl) (rfl) (rfl) (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+;; a local's register holds the local
+(theorem loc_reg
+  ((c Cpu)
+   (ls (List (BitVec 64)))
+   (nl Nat)
+   (i Nat)
+   (hls (= ls (List.take nl (regs6 c))))
+   (hi (< i nl))
+   (hnl (<= nl 6)))
+  (= (reg c (kreg i)) (nth ls i))
+  (by
+    (have h6 (< i 6) (arith))
+    (rw hls)
+    (rw (nth_take (regs6 c) nl i hi))
+    (exact (Eq.symm (reg_k c i h6)))))
+;; a local's register set: the six words with that one replaced
+(theorem kset_regs ((c Cpu) (x Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< x 6)))
+  (= (regs6 (at_pc (set_reg c (kreg x) w) pc)) (upd (regs6 c) x w))
+  (by
+    (apply
+      (six_all (fun ((x Nat)) (= (regs6 (at_pc (set_reg c (kreg x) w) pc)) (upd (regs6 c) x w))))
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+;; and the frame's description stands
+(theorem framed_kset
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (x Nat)
+   (v (BitVec 64))
+   (pc (BitVec 64))
+   (hx (< x 6))
+   (w (framed c0 tbl clo chi f k m0 c j ws)))
+  (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (kreg x) v) pc) j ws)
+  (by
+    (apply
+      (six_all (fun ((x Nat)) (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (kreg x) v) pc) j ws)))
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact hx))))
+;; an argument register set: the six words as they were, the description too, and the argument
+;; registers up to it hold one word more
+(theorem aset_regs ((c Cpu) (i Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< i 6)))
+  (= (regs6 (at_pc (set_reg c (areg i) w) pc)) (regs6 c))
+  (by
+    (apply (six_all (fun ((i Nat)) (= (regs6 (at_pc (set_reg c (areg i) w) pc)) (regs6 c)))) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+(theorem framed_aset
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (i Nat)
+   (v (BitVec 64))
+   (pc (BitVec 64))
+   (hi (< i 6))
+   (w (framed c0 tbl clo chi f k m0 c j ws)))
+  (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (areg i) v) pc) j ws)
+  (by
+    (apply
+      (six_all (fun ((i Nat)) (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (areg i) v) pc) j ws)))
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact w)
+      (exact hi))))
+(theorem aset_args ((c Cpu) (i Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< i 6)))
+  (= (regs_of (at_pc (set_reg c (areg i) w) pc) (List.take (+ i 1) arg_regs))
+    (app (regs_of c (List.take i arg_regs)) (cons w nil)))
+  (by
+    (apply
+      (six_all
+        (fun ((i Nat))
+          (= (regs_of (at_pc (set_reg c (areg i) w) pc) (List.take (+ i 1) arg_regs))
+            (app (regs_of c (List.take i arg_regs)) (cons w nil)))))
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+
+;; ---- a state that differs in scratch registers, flags and program counter alone -----------------
+(def scratch ((c Cpu) (c1 Cpu)) Prop
+  (and (= (Cpu.segs c1) (Cpu.segs c))
+    (and (= (Cpu.mem c1) (Cpu.mem c)) (and (= (reg c1 4) (reg c 4)) (= (regs6 c1) (regs6 c))))))
+(theorem framed_scratch
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (c1 Cpu)
+   (w (framed c0 tbl clo chi f k m0 c j ws))
+   (h (scratch c c1)))
+  (framed c0 tbl clo chi f k m0 c1 j ws)
+  (by
+    (have hsegs (= (Cpu.segs c1) (Cpu.segs c)) (exact (And.left h)))
+    (have hmem (= (Cpu.mem c1) (Cpu.mem c)) (exact (And.left (And.right h))))
+    (have hsp (= (reg c1 4) (reg c 4)) (exact (And.left (And.right (And.right h)))))
+    (have g1 (= (Cpu.segs c1) (Cpu.segs c0)) (exact (Eq.trans hsegs (framed_segs w))))
+    (have g2 (= (w64_val (reg c1 4)) (+ f (* 8 j))) (rw hsp) (exact (framed_sp w)))
+    (have g3 (holds (Cpu.mem c1) (+ f (* 8 j)) ws) (rw hmem) (exact (framed_holds w)))
+    (have g4 (code_in c1 tbl) (exact (code_in_of c c1 tbl hsegs hmem (framed_code w))))
+    (have g5 (same_outside m0 (Cpu.mem c1) f (+ f (* 8 k))) (rw hmem) (exact (framed_mem w)))
+    (exact
+      (And.intro (framed_room w)
+        (And.intro (framed_all w)
+          (And.intro g1 (And.intro g2 (And.intro g3 (And.intro (framed_len w) (And.intro g4 g5))))))))))
+(theorem scratch_regs ((c Cpu) (c1 Cpu) (h (scratch c c1))) (= (regs6 c1) (regs6 c))
+  (exact (And.right (And.right (And.right h)))))
+;; a description at an index that is the same number
+(theorem framed_idx
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (j2 Nat)
+   (w (framed c0 tbl clo chi f k m0 c j ws))
+   (e (= j j2)))
+  (framed c0 tbl clo chi f k m0 c j2 ws)
+  (by (rw (<- e)) (exact w)))
+
+;; ---- a function's entry -------------------------------------------------------------------------
+;; local i as the prologue sets it: the i-th argument, or zero
+(fn ival ((i Nat) (np Nat) (c Cpu)) (BitVec 64) (if (< i np) (reg c (areg i)) (w64 0)))
+(theorem ivals ((c Cpu) (np Nat) (h (<= np 6)))
+  (=
+    (cons (ival 0 np c)
+      (cons (ival 1 np c)
+        (cons (ival 2 np c) (cons (ival 3 np c) (cons (ival 4 np c) (cons (ival 5 np c) nil))))))
+    (app (regs_of c (List.take np arg_regs)) (zeros (- 6 np))))
+  (by
+    (cases np
+      ((zero () (reduce) rfl)
+       (succ (n1)
+         (cases n1
+           ((zero () (reduce) rfl)
+            (succ (n2)
+              (cases n2
+                ((zero () (reduce) rfl)
+                 (succ (n3)
+                   (cases n3
+                     ((zero () (reduce) rfl)
+                      (succ (n4)
+                        (cases n4
+                          ((zero () (reduce) rfl)
+                           (succ (n5)
+                             (cases n5
+                               ((zero () (reduce) rfl)
+                                (succ (n6)
+                                  (cases n6
+                                    ((zero () (reduce) rfl)
+                                     (succ (n7) (have hf False (arith h)) (exact (False.elim hf)))))))))))))))))))))))))
+;; the words a function saves, as they stand from the stack pointer after its six pushes
+(fn saved ((c Cpu)) (List (BitVec 64))
+  (cons (reg c 15)
+    (cons (reg c 14)
+      (cons (reg c 13) (cons (reg c 12) (cons (reg c 5) (cons (reg c 3) (cons (ret_addr c) nil))))))))
+
+;; ---- what a statement's code comes to -----------------------------------------------------------
+;; from the state c inside a function entered in c0 with room for k words above f: the
+;; processor comes to a state that has returned to c0's caller with v in rax, the data ranges
+;; as m2 has them, and every other byte outside the k words as c0 had it
+(def done ((rs (List Seg)) (f Nat) (k Nat) (c0 Cpu) (c Cpu) (v (BitVec 64)) (m2 Mem)) Prop
+  (exists ((c2 Cpu))
+    (and (reaches c c2)
+      (and (= (reg c2 0) v)
+        (and (agree rs m2 (Cpu.mem c2))
+          (and (kept_mem rs f k (Cpu.mem c0) (Cpu.mem c2)) (returned c0 c2)))))))
+(theorem done_from
+  ((rs (List Seg))
+   (f Nat)
+   (k Nat)
+   (c0 Cpu)
+   (c Cpu)
+   (c1 Cpu)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (reaches c c1))
+   (g (done rs f k c0 c1 v m2)))
+  (done rs f k c0 c v m2)
+  (by
+    (cases g
+      ((intro (c2 g2)
+         (apply (Exists.intro c2)
+           ((apply And.intro ((exact (reaches_trans c c1 c2 h (And.left g2))))
+              ((exact (And.right g2)))))))))))
+
+;; ---- more of the argument registers, for a call -------------------------------------------------
+(theorem aset_sp ((c Cpu) (i Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< i 6)))
+  (= (reg (at_pc (set_reg c (areg i) w) pc) 4) (reg c 4))
+  (by
+    (apply (six_all (fun ((i Nat)) (= (reg (at_pc (set_reg c (areg i) w) pc) 4) (reg c 4)))) (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (rfl)
+      (exact h))))
+;; the words of the first n registers of a list are the first n words of the list's
+(theorem regs_of_take ((c Cpu) (l (List Nat)))
+  (forall ((n Nat)) (= (regs_of c (List.take n l)) (List.take n (regs_of c l))))
+  (by
+    (induction l
+      ((nil () (intro n) (rw (@List.take_nil Nat n))
+         (show (= (@List.nil (BitVec 64)) (List.take n (@List.nil (BitVec 64)))))
+         (rw (@List.take_nil (BitVec 64) n))
+         rfl)
+       (cons (x r ih) (intro n)
+         (cases n
+           ((zero () rfl)
+            (succ (n1)
+              (show
+                (= (cons (reg c x) (regs_of c (List.take n1 r)))
+                  (cons (reg c x) (List.take n1 (regs_of c r)))))
+              (rw (ih n1))
+              rfl))))))))
+;; a callee keeps the six registers of the locals
+(theorem kept_regs6 ((c Cpu) (c2 Cpu) (h (kept c c2))) (= (regs6 c2) (regs6 c))
+  (by
+    (show
+      (=
+        (cons (reg c2 3)
+          (cons (reg c2 5)
+            (cons (reg c2 12) (cons (reg c2 13) (cons (reg c2 14) (cons (reg c2 15) nil))))))
+        (cons (reg c 3)
+          (cons (reg c 5)
+            (cons (reg c 12) (cons (reg c 13) (cons (reg c 14) (cons (reg c 15) nil))))))))
+    (rw (kept_rbx c c2 h))
+    (rw (kept_rbp c c2 h))
+    (rw (kept_r12 c c2 h))
+    (rw (kept_r13 c c2 h))
+    (rw (kept_r14 c c2 h))
+    (rw (kept_r15 c c2 h))
+    rfl))

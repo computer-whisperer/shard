@@ -1,0 +1,949 @@
+;;; v3/compile/x86/stmt_if.shard — the statement-level case of a two-way branch.
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.x86.lists)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(import "stmt.shard")
+(use compile.x86.expr)
+(use compile.x86.entry)
+(use compile.x86.stmt)
+
+;; ---- the parts of a branch ----------------------------------------------------------------------
+(theorem irun_if_inv
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (n1 Fuel)
+   (x IExp)
+   (cc ICmp)
+   (y IExp)
+   (t IStm)
+   (e IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (r (Prod (BitVec 64) Mem))
+   (h (= (irun (FS n1) p ext rs (SIf x cc y t e) ls m) (some r))))
+  (exists ((vx (BitVec 64)))
+    (exists ((vy (BitVec 64)))
+      (and (= (ieval rs ls m x) (some vx))
+        (and (= (ieval rs ls m y) (some vy))
+          (= (irun n1 p ext rs (if (icmp cc vx vy) t e) ls m) (some r))))))
+  (by
+    (have g
+      (-> (= (irun (FS n1) p ext rs (SIf x cc y t e) ls m) (some r))
+        (exists ((vx (BitVec 64)))
+          (exists ((vy (BitVec 64)))
+            (and (= (ieval rs ls m x) (some vx))
+              (and (= (ieval rs ls m y) (some vy))
+                (= (irun n1 p ext rs (if (icmp cc vx vy) t e) ls m) (some r)))))))
+      (unfold irun)
+      (reduce)
+      (cases (ieval rs ls m x) hx
+        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
+         (some (vx0) (reduce)
+           (cases (ieval rs ls m y) hy
+             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none r))))
+              (some (vy0) (reduce) (intro h0)
+                (apply (Exists.intro vx0)
+                  ((apply (Exists.intro vy0)
+                     ((apply And.intro (rfl) ((apply And.intro (rfl) ((exact h0))))))))))))))))
+    (exact (g h))))
+(theorem cstm_if_inv
+  ((xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (p (List IFn))
+   (nl Nat)
+   (a Nat)
+   (x IExp)
+   (cc ICmp)
+   (y IExp)
+   (t IStm)
+   (e IStm)
+   (code (List Instr))
+   (h (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code))))
+  (exists ((j Nat))
+    (and (= (jcc_not cc) (some j))
+      (exists ((ix Instr))
+        (and (= (ld_atom 0 x nl) (some ix))
+          (exists ((iy Instr))
+            (and (= (ld_atom 1 y nl) (some iy))
+              (exists ((ct (List Instr)))
+                (and
+                  (=
+                    (cstm xs fs ts p nl
+                      (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                      t)
+                    (some ct))
+                  (exists ((ce (List Instr)))
+                    (and
+                      (=
+                        (cstm xs fs ts p nl
+                          (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                            (isize ct))
+                          e)
+                        (some ce))
+                      (= code
+                        (cons ix
+                          (cons iy
+                            (cons (AluRmR BCmp (RmReg 0) 1)
+                              (cons (Jcc j (isize ct)) (List.append ct ce))))))))))))))))
+  (by
+    (have g
+      (-> (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code))
+        (exists ((j Nat))
+          (and (= (jcc_not cc) (some j))
+            (exists ((ix Instr))
+              (and (= (ld_atom 0 x nl) (some ix))
+                (exists ((iy Instr))
+                  (and (= (ld_atom 1 y nl) (some iy))
+                    (exists ((ct (List Instr)))
+                      (and
+                        (=
+                          (cstm xs fs ts p nl
+                            (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                            t)
+                          (some ct))
+                        (exists ((ce (List Instr)))
+                          (and
+                            (=
+                              (cstm xs fs ts p nl
+                                (+
+                                  (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                                  (isize ct))
+                                e)
+                              (some ce))
+                            (= code
+                              (cons ix
+                                (cons iy
+                                  (cons (AluRmR BCmp (RmReg 0) 1)
+                                    (cons (Jcc j (isize ct)) (List.append ct ce)))))))))))))))))
+      (unfold cstm)
+      (cases (jcc_not cc) hj
+        ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+         (some (j1) (reduce)
+           (cases (ld_atom 0 x nl) hix
+             ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+              (some (ix1) (reduce)
+                (cases (ld_atom 1 y nl) hiy
+                  ((none () (reduce) (intro h0)
+                     (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+                   (some (iy1) (reduce)
+                     (cases
+                       (cstm xs fs ts p nl
+                         (+ a (+ (+ (List.length (encode ix1)) (List.length (encode iy1))) 9))
+                         t)
+                       hct
+                       ((none () (reduce) (intro h0)
+                          (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+                        (some (ct1) (reduce)
+                          (cases
+                            (cstm xs fs ts p nl
+                              (+
+                                (+ a (+ (+ (List.length (encode ix1)) (List.length (encode iy1))) 9))
+                                (isize ct1))
+                              e)
+                            hce
+                            ((none () (reduce) (intro h0)
+                               (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+                             (some (ce1) (reduce) (intro h0)
+                               (apply (Exists.intro j1)
+                                 ((apply And.intro (rfl)
+                                    ((apply (Exists.intro ix1)
+                                       ((apply And.intro (rfl)
+                                          ((apply (Exists.intro iy1)
+                                             ((apply And.intro (rfl)
+                                                ((apply (Exists.intro ct1)
+                                                   ((apply And.intro ((exact hct))
+                                                      ((apply (Exists.intro ce1)
+                                                         ((apply And.intro ((exact hce))
+                                                            ((exact (Eq.symm (Option.some.inj h0)))))))))))))))))))))))))))))))))))))))
+    (exact (g h))))
+;; after cmp r_a, r_b the condition `b` (2) holds where r_a is below r_b, and does not where it
+;; is not
+(theorem cmp_b_yes
+  ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64)) (h (< (w64_val (reg c a)) (w64_val (reg c b)))))
+  (= (cc_holds 2 (Cpu.flags (x_cmp_rr c a b pc))) (some true))
+  (by
+    (show (= (some (if (< (w64_val (reg c a)) (w64_val (reg c b))) true false)) (some true)))
+    (rw (if_pos h))
+    rfl))
+(theorem cmp_b_no
+  ((c Cpu) (a Nat) (b Nat) (pc (BitVec 64)) (h (Not (< (w64_val (reg c a)) (w64_val (reg c b))))))
+  (= (cc_holds 2 (Cpu.flags (x_cmp_rr c a b pc))) (some false))
+  (by
+    (show (= (some (if (< (w64_val (reg c a)) (w64_val (reg c b))) true false)) (some false)))
+    (rw (if_neg h))
+    rfl))
+
+;; ---- one branch ---------------------------------------------------------------------------------
+;; from a state C at the jump: where the jump's rule leads to the branch's code at ab, the
+;; branch's run is the statement's
+(theorem if_branch
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (sb IStm)
+   (cb (List Instr))
+   (ab Nat)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (C Cpu)
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hj (forall ((c2 Cpu)) (-> (reaches (at_pc C (w64 ab)) c2) (reaches C c2))))
+   (hrb (= (irun n1 p ext rs sb ls mi) (some (Prod.mk v m2))))
+   (hcb (= (cstm xs fs ts p nl ab sb) (some cb)))
+   (hpb (placed tbl ab cb))
+   (hsn (<= (sneed xs fs ts p sb) d))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 C d (saved c0)))
+   (hls (= ls (List.take nl (regs6 C))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 C v m2)
+  (by
+    (have w2 (framed c0 tbl clo chi f (+ d 6) m0 (at_pc C (w64 ab)) d (saved c0)) (exact w))
+    (have hls2 (= ls (List.take nl (regs6 (at_pc C (w64 ab))))) (exact hls))
+    (have hrip2 (= (Cpu.rip (at_pc C (w64 ab))) (w64 ab)) rfl)
+    (cases
+      (ih sb ls mi v m2 (at_pc C (w64 ab)) ab cb c0 f d nl m0 hrb hcb hpb hsn hrip2 w2 hls2 hnl hag
+        hkm
+        hdo)
+      ((intro (c2 g2)
+         (apply (Exists.intro c2)
+           ((apply And.intro ((exact (hj c2 (And.left g2)))) ((exact (And.right g2)))))))))))
+;; ---- the comparison -----------------------------------------------------------------------------
+;; the state after the two atoms are in rax and rcx and compared
+(fn i_s3 ((c Cpu) (vx (BitVec 64)) (vy (BitVec 64)) (a Nat) (ix Instr) (iy Instr)) Cpu
+  (x_cmp_rr
+    (at_pc (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+      (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+    0
+    1
+    (w64 (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))))
+(theorem if_head
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (c Cpu)
+   (a Nat)
+   (x IExp)
+   (y IExp)
+   (ix Instr)
+   (iy Instr)
+   (vx (BitVec 64))
+   (vy (BitVec 64))
+   (rest (List Instr))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hcode (code_in c tbl))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hix (= (ld_atom 0 x nl) (some ix)))
+   (hiy (= (ld_atom 1 y nl) (some iy)))
+   (hvx (= (ieval rs ls mi x) (some vx)))
+   (hvy (= (ieval rs ls mi y) (some vy)))
+   (hpl (placed tbl a (cons ix (cons iy (cons (AluRmR BCmp (RmReg 0) 1) rest))))))
+  (reaches c (i_s3 c vx vy a ix iy))
+  (by
+    (have s1 (= (site tbl a) (some (Prod.mk ix (List.length (encode ix))))) (exact (And.left hpl)))
+    (have r1 (reaches c (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))
+      (exact (ld_ok tbl clo chi rs ls mi nl c a 0 x ix vx hall hchi hcode hrip hls hnl hix hvx s1)))
+    (have hc1 (code_in (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) tbl)
+      (exact hcode))
+    (have hrip1
+      (= (Cpu.rip (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))
+        (w64 (+ a (List.length (encode ix)))))
+      rfl)
+    (have hls1
+      (= ls (List.take nl (regs6 (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))))
+      (exact hls))
+    (have s2
+      (= (site tbl (+ a (List.length (encode ix)))) (some (Prod.mk iy (List.length (encode iy)))))
+      (exact (And.left (And.right hpl))))
+    (have r2
+      (reaches (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))
+        (at_pc (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy))))))
+      (exact
+        (ld_ok tbl clo chi rs ls mi nl
+          (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))
+          (+ a (List.length (encode ix)))
+          1
+          y
+          iy
+          vy
+          hall
+          hchi
+          hc1
+          hrip1
+          hls1
+          hnl
+          hiy
+          hvy
+          s2)))
+    (have s3
+      (= (site tbl (+ (+ a (List.length (encode ix))) (List.length (encode iy))))
+        (some (Prod.mk (AluRmR BCmp (RmReg 0) 1) 3)))
+      (exact (And.left (And.right (And.right hpl)))))
+    (have r3
+      (reaches
+        (at_pc (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+        (i_s3 c vx vy a ix iy))
+      (apply (t_cmp tbl clo chi (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 0 1 3)
+        ((exact hall))
+        ((exact hchi))
+        ((exact hcode))
+        (rfl)
+        ((exact s3))
+        ((exact (reaches_refl (i_s3 c vx vy a ix iy))))))
+    (exact
+      (reaches_trans c (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))
+        (i_s3 c vx vy a ix iy)
+        r1
+        (reaches_trans (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))
+          (at_pc (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+            (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+          (i_s3 c vx vy a ix iy)
+          r2
+          r3)))))
+;; ---- the machine's part of a branch -------------------------------------------------------------
+(theorem if_core
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (x IExp)
+   (cc ICmp)
+   (y IExp)
+   (t IStm)
+   (e IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (a Nat)
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (vx (BitVec 64))
+   (vy (BitVec 64))
+   (j Nat)
+   (ix Instr)
+   (iy Instr)
+   (ct (List Instr))
+   (ce (List Instr))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hvx (= (ieval rs ls mi x) (some vx)))
+   (hvy (= (ieval rs ls mi y) (some vy)))
+   (hrb (= (irun n1 p ext rs (if (icmp cc vx vy) t e) ls mi) (some (Prod.mk v m2))))
+   (hj (= (jcc_not cc) (some j)))
+   (hix (= (ld_atom 0 x nl) (some ix)))
+   (hiy (= (ld_atom 1 y nl) (some iy)))
+   (hct
+     (= (cstm xs fs ts p nl (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9)) t)
+       (some ct)))
+   (hce
+     (=
+       (cstm xs fs ts p nl
+         (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9)) (isize ct))
+         e)
+       (some ce)))
+   (hpl
+     (placed tbl a
+       (cons ix
+         (cons iy (cons (AluRmR BCmp (RmReg 0) 1) (cons (Jcc j (isize ct)) (List.append ct ce)))))))
+   (hsnt (<= (sneed xs fs ts p t) d))
+   (hsne (<= (sneed xs fs ts p e) d))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 c v m2)
+  (by
+    (have r03 (reaches c (i_s3 c vx vy a ix iy))
+      (exact
+        (if_head tbl clo chi rs ls mi nl c a x y ix iy vx vy
+          (cons (Jcc j (isize ct)) (List.append ct ce))
+          hall
+          hchi
+          (framed_code w)
+          hrip
+          hls
+          hnl
+          hix
+          hiy
+          hvx
+          hvy
+          hpl)))
+    (have w3 (framed c0 tbl clo chi f (+ d 6) m0 (i_s3 c vx vy a ix iy) d (saved c0)) (exact w))
+    (have hls3 (= ls (List.take nl (regs6 (i_s3 c vx vy a ix iy)))) (exact hls))
+    (have s4
+      (= (site tbl (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
+        (some (Prod.mk (Jcc j (isize ct)) 6)))
+      (exact (And.left (And.right (And.right (And.right hpl))))))
+    (have pte
+      (placed tbl (+ (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3) 6)
+        (List.append ct ce))
+      (exact (And.right (And.right (And.right (And.right hpl))))))
+    (have eA
+      (= (+ (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3) 6)
+        (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9)))
+      (arith))
+    (have ptt2 (placed tbl (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9)) ct)
+      (rw (<- eA))
+      (exact
+        (And.left
+          (placed_app tbl ct
+            (+ (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3) 6)
+            ce
+            pte))))
+    (have pee2
+      (placed tbl (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9)) (isize ct))
+        ce)
+      (rw (<- eA))
+      (exact
+        (And.right
+          (placed_app tbl ct
+            (+ (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3) 6)
+            ce
+            pte))))
+    (cases (Nat.decLt (w64_val vx) (w64_val vy))
+      ((isTrue (hlt)
+         (cases cc
+           ((CLtu () (have hjx (= (some 3) (some j)) (exact hj))
+              (have hj3 (= j 3) (exact (Eq.symm (Option.some.inj hjx))))
+              (have hl2
+                (<
+                  (w64_val
+                    (reg
+                      (at_pc
+                        (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                        (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                      0))
+                  (w64_val
+                    (reg
+                      (at_pc
+                        (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                        (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                      1)))
+                (exact hlt))
+              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
+                (rw hj3)
+                (exact
+                  (cmp_below
+                    (at_pc
+                      (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                      (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                    0
+                    1
+                    (w64 (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
+                    hl2)))
+              (have eb (= (icmp CLtu vx vy) true)
+                (show (= (if (< (w64_val vx) (w64_val vy)) true false) true))
+                (rw (if_pos hlt))
+                rfl)
+              (have e2 (= (if (icmp CLtu vx vy) t e) t) (rw eb) rfl)
+              (have hrx (= (irun n1 p ext rs t ls mi) (some (Prod.mk v m2)))
+                (rw (<- e2))
+                (exact hrb))
+              (have hjmp
+                (forall ((c2 Cpu))
+                  (->
+                    (reaches
+                      (at_pc (i_s3 c vx vy a ix iy)
+                        (w64 (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))))
+                      c2)
+                    (reaches (i_s3 c vx vy a ix iy) c2)))
+                (intro c2 hr)
+                (apply
+                  (t_jcc_not tbl clo chi
+                    (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
+                    j
+                    (isize ct)
+                    6)
+                  ((exact hall))
+                  ((exact hchi))
+                  ((exact (framed_code w3)))
+                  (rfl)
+                  ((exact s4))
+                  ((exact hcc))
+                  ((rw eA) (exact hr))))
+              (exact
+                (done_from rs f (+ d 6) c0 c (i_s3 c vx vy a ix iy) v m2 r03
+                  (if_branch p ext rs tbl clo chi xs fs ts n1 t ct
+                    (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                    ls
+                    mi
+                    v
+                    m2
+                    (i_s3 c vx vy a ix iy)
+                    c0
+                    f
+                    d
+                    nl
+                    m0
+                    ih
+                    hjmp
+                    hrx
+                    hct
+                    ptt2
+                    hsnt
+                    w3
+                    hls3
+                    hnl
+                    hag
+                    hkm
+                    hdo))))
+            (CGeu () (have hjx (= (some 2) (some j)) (exact hj))
+              (have hj3 (= j 2) (exact (Eq.symm (Option.some.inj hjx))))
+              (have hl2
+                (<
+                  (w64_val
+                    (reg
+                      (at_pc
+                        (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                        (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                      0))
+                  (w64_val
+                    (reg
+                      (at_pc
+                        (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                        (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                      1)))
+                (exact hlt))
+              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
+                (rw hj3)
+                (exact
+                  (cmp_b_yes
+                    (at_pc
+                      (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                      (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                    0
+                    1
+                    (w64 (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
+                    hl2)))
+              (have eb (= (icmp CGeu vx vy) false)
+                (show (= (if (if (< (w64_val vx) (w64_val vy)) true false) false true) false))
+                (rw (if_pos hlt))
+                rfl)
+              (have e2 (= (if (icmp CGeu vx vy) t e) e) (rw eb) rfl)
+              (have hrx (= (irun n1 p ext rs e ls mi) (some (Prod.mk v m2)))
+                (rw (<- e2))
+                (exact hrb))
+              (have hjmp
+                (forall ((c2 Cpu))
+                  (->
+                    (reaches
+                      (at_pc (i_s3 c vx vy a ix iy)
+                        (w64
+                          (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                            (isize ct))))
+                      c2)
+                    (reaches (i_s3 c vx vy a ix iy) c2)))
+                (intro c2 hr)
+                (apply
+                  (t_jcc_taken tbl clo chi
+                    (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
+                    j
+                    (isize ct)
+                    6)
+                  ((exact hall))
+                  ((exact hchi))
+                  ((exact (framed_code w3)))
+                  (rfl)
+                  ((exact s4))
+                  ((exact hcc))
+                  ((rw eA) (exact hr))))
+              (exact
+                (done_from rs f (+ d 6) c0 c (i_s3 c vx vy a ix iy) v m2 r03
+                  (if_branch p ext rs tbl clo chi xs fs ts n1 e ce
+                    (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                      (isize ct))
+                    ls
+                    mi
+                    v
+                    m2
+                    (i_s3 c vx vy a ix iy)
+                    c0
+                    f
+                    d
+                    nl
+                    m0
+                    ih
+                    hjmp
+                    hrx
+                    hce
+                    pee2
+                    hsne
+                    w3
+                    hls3
+                    hnl
+                    hag
+                    hkm
+                    hdo))))
+            (CEq () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j))))
+            (CNe () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j)))))))
+       (isFalse (hge)
+         (cases cc
+           ((CLtu () (have hjx (= (some 3) (some j)) (exact hj))
+              (have hj3 (= j 3) (exact (Eq.symm (Option.some.inj hjx))))
+              (have hl2
+                (Not
+                  (<
+                    (w64_val
+                      (reg
+                        (at_pc
+                          (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1
+                            vy)
+                          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                        0))
+                    (w64_val
+                      (reg
+                        (at_pc
+                          (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1
+                            vy)
+                          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                        1))))
+                (exact hge))
+              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
+                (rw hj3)
+                (exact
+                  (cmp_not_below
+                    (at_pc
+                      (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                      (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                    0
+                    1
+                    (w64 (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
+                    hl2)))
+              (have eb (= (icmp CLtu vx vy) false)
+                (show (= (if (< (w64_val vx) (w64_val vy)) true false) false))
+                (rw (if_neg hge))
+                rfl)
+              (have e2 (= (if (icmp CLtu vx vy) t e) e) (rw eb) rfl)
+              (have hrx (= (irun n1 p ext rs e ls mi) (some (Prod.mk v m2)))
+                (rw (<- e2))
+                (exact hrb))
+              (have hjmp
+                (forall ((c2 Cpu))
+                  (->
+                    (reaches
+                      (at_pc (i_s3 c vx vy a ix iy)
+                        (w64
+                          (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                            (isize ct))))
+                      c2)
+                    (reaches (i_s3 c vx vy a ix iy) c2)))
+                (intro c2 hr)
+                (apply
+                  (t_jcc_taken tbl clo chi
+                    (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
+                    j
+                    (isize ct)
+                    6)
+                  ((exact hall))
+                  ((exact hchi))
+                  ((exact (framed_code w3)))
+                  (rfl)
+                  ((exact s4))
+                  ((exact hcc))
+                  ((rw eA) (exact hr))))
+              (exact
+                (done_from rs f (+ d 6) c0 c (i_s3 c vx vy a ix iy) v m2 r03
+                  (if_branch p ext rs tbl clo chi xs fs ts n1 e ce
+                    (+ (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                      (isize ct))
+                    ls
+                    mi
+                    v
+                    m2
+                    (i_s3 c vx vy a ix iy)
+                    c0
+                    f
+                    d
+                    nl
+                    m0
+                    ih
+                    hjmp
+                    hrx
+                    hce
+                    pee2
+                    hsne
+                    w3
+                    hls3
+                    hnl
+                    hag
+                    hkm
+                    hdo))))
+            (CGeu () (have hjx (= (some 2) (some j)) (exact hj))
+              (have hj3 (= j 2) (exact (Eq.symm (Option.some.inj hjx))))
+              (have hl2
+                (Not
+                  (<
+                    (w64_val
+                      (reg
+                        (at_pc
+                          (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1
+                            vy)
+                          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                        0))
+                    (w64_val
+                      (reg
+                        (at_pc
+                          (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1
+                            vy)
+                          (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                        1))))
+                (exact hge))
+              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
+                (rw hj3)
+                (exact
+                  (cmp_b_no
+                    (at_pc
+                      (set_reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 1 vy)
+                      (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
+                    0
+                    1
+                    (w64 (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
+                    hl2)))
+              (have eb (= (icmp CGeu vx vy) true)
+                (show (= (if (if (< (w64_val vx) (w64_val vy)) true false) false true) true))
+                (rw (if_neg hge))
+                rfl)
+              (have e2 (= (if (icmp CGeu vx vy) t e) t) (rw eb) rfl)
+              (have hrx (= (irun n1 p ext rs t ls mi) (some (Prod.mk v m2)))
+                (rw (<- e2))
+                (exact hrb))
+              (have hjmp
+                (forall ((c2 Cpu))
+                  (->
+                    (reaches
+                      (at_pc (i_s3 c vx vy a ix iy)
+                        (w64 (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))))
+                      c2)
+                    (reaches (i_s3 c vx vy a ix iy) c2)))
+                (intro c2 hr)
+                (apply
+                  (t_jcc_not tbl clo chi
+                    (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
+                    j
+                    (isize ct)
+                    6)
+                  ((exact hall))
+                  ((exact hchi))
+                  ((exact (framed_code w3)))
+                  (rfl)
+                  ((exact s4))
+                  ((exact hcc))
+                  ((rw eA) (exact hr))))
+              (exact
+                (done_from rs f (+ d 6) c0 c (i_s3 c vx vy a ix iy) v m2 r03
+                  (if_branch p ext rs tbl clo chi xs fs ts n1 t ct
+                    (+ a (+ (+ (List.length (encode ix)) (List.length (encode iy))) 9))
+                    ls
+                    mi
+                    v
+                    m2
+                    (i_s3 c vx vy a ix iy)
+                    c0
+                    f
+                    d
+                    nl
+                    m0
+                    ih
+                    hjmp
+                    hrx
+                    hct
+                    ptt2
+                    hsnt
+                    w3
+                    hls3
+                    hnl
+                    hag
+                    hkm
+                    hdo))))
+            (CEq () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j))))
+            (CNe () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j)))))))))))
+;; ---- a branch -----------------------------------------------------------------------------------
+(theorem sim_if
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (x IExp)
+   (cc ICmp)
+   (y IExp)
+   (t IStm)
+   (e IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (a Nat)
+   (code (List Instr))
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hrun (= (irun (FS n1) p ext rs (SIf x cc y t e) ls mi) (some (Prod.mk v m2))))
+   (hcs (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code)))
+   (hpl (placed tbl a code))
+   (hsn (<= (sneed xs fs ts p (SIf x cc y t e)) d))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
+   (hls (= ls (List.take nl (regs6 c))))
+   (hnl (<= nl 6))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 c v m2)
+  (by
+    (have hm (<= (mx (sneed xs fs ts p t) (sneed xs fs ts p e)) d) (exact hsn))
+    (have hsnt (<= (sneed xs fs ts p t) d)
+      (exact (And.left (mx_le (sneed xs fs ts p t) (sneed xs fs ts p e) d hm))))
+    (have hsne (<= (sneed xs fs ts p e) d)
+      (exact (And.right (mx_le (sneed xs fs ts p t) (sneed xs fs ts p e) d hm))))
+    (cases (irun_if_inv p ext rs n1 x cc y t e ls mi (Prod.mk v m2) hrun)
+      ((intro (vx g0)
+         (cases g0
+           ((intro (vy g1)
+              (cases (cstm_if_inv xs fs ts p nl a x cc y t e code hcs)
+                ((intro (j g2)
+                   (cases (And.right g2)
+                     ((intro (ix g3)
+                        (cases (And.right g3)
+                          ((intro (iy g4)
+                             (cases (And.right g4)
+                               ((intro (ct g5)
+                                  (cases (And.right g5)
+                                    ((intro (ce g6)
+                                       (have hpl2
+                                         (placed tbl a
+                                           (cons ix
+                                             (cons iy
+                                               (cons (AluRmR BCmp (RmReg 0) 1)
+                                                 (cons (Jcc j (isize ct)) (List.append ct ce))))))
+                                         (rw (<- (And.right g6)))
+                                         (exact hpl))
+                                       (exact
+                                         (if_core p ext rs tbl clo chi xs fs ts n1 x cc y t e ls mi
+                                           v
+                                           m2
+                                           c
+                                           a
+                                           c0
+                                           f
+                                           d
+                                           nl
+                                           m0
+                                           vx
+                                           vy
+                                           j
+                                           ix
+                                           iy
+                                           ct
+                                           ce
+                                           hall
+                                           hchi
+                                           ih
+                                           (And.left g1)
+                                           (And.left (And.right g1))
+                                           (And.right (And.right g1))
+                                           (And.left g2)
+                                           (And.left g3)
+                                           (And.left g4)
+                                           (And.left g5)
+                                           (And.left g6)
+                                           hpl2
+                                           hsnt
+                                           hsne
+                                           hrip
+                                           w
+                                           hls
+                                           hnl
+                                           hag
+                                           hkm
+                                           hdo)))))))))))))))))))))))))

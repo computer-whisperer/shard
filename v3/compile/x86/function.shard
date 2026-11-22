@@ -1,0 +1,551 @@
+;;; v3/compile/x86/function.shard — the statement-level fact for every fuel, and a compiled
+;;; function: THE FUNCTION'S THEOREM.
+(import "pass.shard")
+(import "lists.shard")
+(import "code.shard")
+(import "mem.shard")
+(import "regs.shard")
+(import "inv.shard")
+(use std.mem)
+(use compile.x86.code)
+(use compile.x86.inv)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.x86.lists)
+(use compile.x86.mem)
+(use compile.x86.pass)
+(use compile.x86.regs)
+(use compile.x86.seam)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(import "stmt.shard")
+(import "call.shard")
+(import "stmt_call.shard")
+(import "stmt_if.shard")
+(import "tail.shard")
+(use compile.x86.call)
+(use compile.x86.stmt_call)
+(use compile.x86.expr)
+(use compile.x86.stmt_if)
+(use compile.x86.entry)
+(use compile.x86.stmt)
+(use compile.x86.tail)
+
+;; ---- every statement of the fragment, every fuel -------------------------------------------------
+;; given every callee of a call realized, and the callees of tail calls known for a fuel
+;; wherever statements are known for it
+(theorem sim_all
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (henv (env_ok p ext rs tbl clo chi xs fs))
+   (htl
+     (forall ((n Fuel))
+       (-> (sim p ext rs tbl clo chi xs fs ts n) (tenv_ok p ext rs tbl clo chi xs ts n))))
+   (n Fuel))
+  (sim p ext rs tbl clo chi xs fs ts n)
+  (by
+    (induction n
+      ((FZ () (intro s ls mi v m2 c a code c0 f d nl m0 hrun)
+         (have hn (= (irun FZ p ext rs s ls mi) (@Option.none (Prod (BitVec 64) Mem))) rfl)
+         (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hrun)) (Option.some_ne_none (Prod.mk v m2)))))
+       (FS (n1 ih) (intro s)
+         (cases s
+           ((SLet (x e k)
+              (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)
+              (exact
+                (sim_let p ext rs tbl clo chi xs fs ts n1 x e k ls mi v m2 c a code c0 f d nl m0
+                  hall hchi ih hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)))
+            (SStore (q e k) (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs)
+              (have hn (= (cstm xs fs ts p nl a (SStore q e k)) (@Option.none (List Instr))) rfl)
+              (exact (absurd (Eq.symm (Eq.trans (Eq.symm hn) hcs)) (Option.some_ne_none code))))
+            (SCall (x cal es k)
+              (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)
+              (exact
+                (sim_call p ext rs tbl clo chi xs fs ts n1 x cal es k ls mi v m2 c a code c0 f d nl
+                  m0 hall hchi henv ih hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)))
+            (SIf (x cc y t e)
+              (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)
+              (exact
+                (sim_if p ext rs tbl clo chi xs fs ts n1 x cc y t e ls mi v m2 c a code c0 f d nl m0
+                  hall hchi ih hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)))
+            (SRet (e)
+              (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)
+              (exact
+                (sim_ret p ext rs tbl clo chi xs fs ts n1 e ls mi v m2 c a code c0 f d nl m0 hall
+                  hchi hrun hcs hpl hrip w hls hnl hag hkm hdo)))
+            (STail (cal es)
+              (intro ls mi v m2 c a code c0 f d nl m0 hrun hcs hpl hsn hrip w hls hnl hag hkm hdo)
+              (exact
+                (sim_tail p ext rs tbl clo chi xs fs ts n1 cal es ls mi v m2 c a code c0 f d nl m0
+                  hall
+                  hchi
+                  (htl n1 ih)
+                  hrun
+                  hcs
+                  hpl
+                  hsn
+                  hrip
+                  w
+                  hls
+                  hnl
+                  hag
+                  hkm
+                  hdo))))))))))
+
+;; ---- a function -----------------------------------------------------------------------------------
+(theorem cfn_inv
+  ((xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (p (List IFn))
+   (a Nat)
+   (g IFn)
+   (code (List Instr))
+   (h (= (cfn xs fs p a g) (some code))))
+  (and (<= (+ (IFn.params g) (IFn.extra g)) 6)
+    (and (<= (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g))
+      (exists ((cb (List Instr)))
+        (and
+          (=
+            (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
+              (+ a (isize (pro (IFn.params g))))
+              (IFn.body g))
+            (some cb))
+          (= code (List.append (pro (IFn.params g)) cb))))))
+  (by
+    (have g0
+      (-> (= (cfn xs fs p a g) (some code))
+        (and (<= (+ (IFn.params g) (IFn.extra g)) 6)
+          (and (<= (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g))
+            (exists ((cb (List Instr)))
+              (and
+                (=
+                  (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
+                    (+ a (isize (pro (IFn.params g))))
+                    (IFn.body g))
+                  (some cb))
+                (= code (List.append (pro (IFn.params g)) cb)))))))
+      (unfold cfn)
+      (cases (Nat.decLe (+ (IFn.params g) (IFn.extra g)) 6)
+        ((isFalse (h6) (rw (if_neg h6)) (intro h0)
+           (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+         (isTrue (h6) (rw (if_pos h6))
+           (cases (Nat.decLe (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g))
+             ((isFalse (hk) (rw (if_neg hk)) (intro h0)
+                (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+              (isTrue (hk) (rw (if_pos hk))
+                (cases
+                  (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
+                    (+ a (isize (pro (IFn.params g))))
+                    (IFn.body g))
+                  hc
+                  ((none () (reduce) (intro h0)
+                     (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
+                   (some (cb1) (reduce) (intro h0)
+                     (apply And.intro ((exact h6))
+                       ((apply And.intro ((exact hk))
+                          ((apply (Exists.intro cb1)
+                             ((apply And.intro (rfl) ((exact (Eq.symm (Option.some.inj h0)))))))))))))))))))))
+    (exact (g0 h))))
+;; the address after a function's first twelve instructions
+(theorem pro_end ((a Nat) (np Nat)) (= (b6 (pa a) np) (+ a (isize (pro np))))
+  (by
+    (show
+      (=
+        (+
+          (+
+            (+
+              (+
+                (+ (+ (+ (+ (+ (+ (+ (+ a 1) 1) 2) 2) 2) 2) (List.length (encode (init 0 np))))
+                  (List.length (encode (init 1 np))))
+                (List.length (encode (init 2 np))))
+              (List.length (encode (init 3 np))))
+            (List.length (encode (init 4 np))))
+          (List.length (encode (init 5 np))))
+        (+ a
+          (+ 1
+            (+ 1
+              (+ 2
+                (+ 2
+                  (+ 2
+                    (+ 2
+                      (+ (List.length (encode (init 0 np)))
+                        (+ (List.length (encode (init 1 np)))
+                          (+ (List.length (encode (init 2 np)))
+                            (+ (List.length (encode (init 3 np)))
+                              (+ (List.length (encode (init 4 np)))
+                                (+ (List.length (encode (init 5 np))) 0)))))))))))))))
+    (arith)))
+;; A function's code from its first instruction, in a frame of d + 6 words, d no less than its
+;; body needs: where its body's statement-level fact holds for the fuel of the run.
+(theorem fn_core
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n Fuel)
+   (g IFn)
+   (a Nat)
+   (cb (List Instr))
+   (c Cpu)
+   (vs (List (BitVec 64)))
+   (v (BitVec 64))
+   (m Mem)
+   (m2 Mem)
+   (f Nat)
+   (d Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hsim (sim p ext rs tbl clo chi xs fs ts n))
+   (hcode (code_in c tbl))
+   (hargs (args_in c vs))
+   (hroom (room c clo chi f (+ d 6)))
+   (hdo (data_ok c rs clo chi f (+ d 6)))
+   (hag (agree rs m (Cpu.mem c)))
+   (hlen (= (List.length vs) (IFn.params g)))
+   (hn (= (irun n p ext rs (IFn.body g) (enter g vs) m) (some (Prod.mk v m2))))
+   (h6 (<= (+ (IFn.params g) (IFn.extra g)) 6))
+   (hchk (<= (sneed xs fs ts p (IFn.body g)) d))
+   (hcb
+     (=
+       (cstm xs fs ts p (+ (IFn.params g) (IFn.extra g)) (+ a (isize (pro (IFn.params g))))
+         (IFn.body g))
+       (some cb)))
+   (hpl (placed tbl a (List.append (pro (IFn.params g)) cb))))
+  (done rs f (+ d 6) c (at_pc c (w64 a)) v m2)
+  (by
+    (have pp1 (placed tbl a (pro (IFn.params g)))
+      (exact (And.left (placed_app tbl (pro (IFn.params g)) a cb hpl))))
+    (have pp2 (placed tbl (+ a (isize (pro (IFn.params g)))) cb)
+      (exact (And.right (placed_app tbl (pro (IFn.params g)) a cb hpl))))
+    (have rA (reaches (at_pc c (w64 a)) (q6 c a))
+      (exact (And.left (pro_push tbl clo chi c a f d (IFn.params g) hall hchi hcode hroom pp1))))
+    (have wA (framed c tbl clo chi f (+ d 6) (Cpu.mem c) (q6 c a) d (saved c))
+      (exact (And.right (pro_push tbl clo chi c a f d (IFn.params g) hall hchi hcode hroom pp1))))
+    (have hplI
+      (placed tbl (pa a)
+        (cons (init 0 (IFn.params g))
+          (cons (init 1 (IFn.params g))
+            (cons (init 2 (IFn.params g))
+              (cons (init 3 (IFn.params g))
+                (cons (init 4 (IFn.params g)) (cons (init 5 (IFn.params g)) nil)))))))
+      (exact (And.right (And.right (And.right (And.right (And.right (And.right pp1))))))))
+    (have hripA (= (Cpu.rip (q6 c a)) (w64 (pa a))) rfl)
+    (have rB (reaches (q6 c a) (r6 (q6 c a) (IFn.params g) (pa a)))
+      (exact
+        (pro_init tbl clo chi (q6 c a) (pa a) (IFn.params g) hall hchi (framed_code wA) hripA hplI)))
+    (have wB
+      (framed c tbl clo chi f (+ d 6) (Cpu.mem c) (r6 (q6 c a) (IFn.params g) (pa a)) d (saved c))
+      (exact wA))
+    (have hr6
+      (= (regs6 (r6 (q6 c a) (IFn.params g) (pa a)))
+        (cons (ival 0 (IFn.params g) c)
+          (cons (ival 1 (IFn.params g) c)
+            (cons (ival 2 (IFn.params g) c)
+              (cons (ival 3 (IFn.params g) c)
+                (cons (ival 4 (IFn.params g) c) (cons (ival 5 (IFn.params g) c) nil)))))))
+      rfl)
+    (have hnp6 (<= (IFn.params g) 6) (arith h6))
+    (have hl6 (<= (List.length vs) 6) (exact (And.left hargs)))
+    (have hv (= (regs_of c (List.take (IFn.params g) arg_regs)) vs)
+      (rw (<- hlen))
+      (exact (Eq.symm (And.right hargs))))
+    (have hs (= (+ (- 6 (List.length vs)) (List.length vs)) 6) (exact (Nat.sub_add_cancel hl6)))
+    (have hle (<= (IFn.extra g) (- 6 (List.length vs))) (arith h6 hlen hs))
+    (have hls
+      (= (enter g vs)
+        (List.take (+ (IFn.params g) (IFn.extra g)) (regs6 (r6 (q6 c a) (IFn.params g) (pa a)))))
+      (rw hr6)
+      (rw (ivals c (IFn.params g) hnp6))
+      (rw hv)
+      (rw (<- hlen))
+      (rw (enter_take vs (IFn.extra g) (- 6 (List.length vs)) hle))
+      rfl)
+    (have hripB
+      (= (Cpu.rip (r6 (q6 c a) (IFn.params g) (pa a))) (w64 (+ a (isize (pro (IFn.params g))))))
+      (rw (<- (pro_end a (IFn.params g))))
+      rfl)
+    (exact
+      (done_from rs f (+ d 6) c (at_pc c (w64 a)) (r6 (q6 c a) (IFn.params g) (pa a)) v m2
+        (reaches_trans (at_pc c (w64 a)) (q6 c a) (r6 (q6 c a) (IFn.params g) (pa a)) rA rB)
+        (hsim (IFn.body g) (enter g vs) m v m2 (r6 (q6 c a) (IFn.params g) (pa a))
+          (+ a (isize (pro (IFn.params g))))
+          cb
+          c
+          f
+          d
+          (+ (IFn.params g) (IFn.extra g))
+          (Cpu.mem c)
+          hn
+          hcb
+          pp2
+          hchk
+          hripB
+          wB
+          hls
+          h6
+          hag
+          (kept_refl rs f (+ d 6) (Cpu.mem c))
+          hdo)))))
+;; an entry of a list with one more at its end is an entry of the list, or the one more
+(theorem pair_at_snoc ((fs (List (Prod Nat Nat))) (x (Prod Nat Nat)))
+  (forall ((i Nat) (en (Prod Nat Nat)))
+    (-> (= (pair_at (List.append fs (cons x nil)) i) (some en))
+      (or (= (pair_at fs i) (some en)) (and (= i (List.length fs)) (= en x)))))
+  (by
+    (induction fs
+      ((nil () (intro i en)
+         (show
+           (-> (= (pair_at (cons x nil) i) (some en))
+             (or (= (pair_at nil i) (some en)) (and (= i 0) (= en x)))))
+         (rw pair_at.eq_2)
+         (cases (Nat.decEq i 0)
+           ((isTrue (h0) (rw (if_pos h0)) (intro h)
+              (apply Or.inr ((apply And.intro ((exact h0)) ((exact (Eq.symm (Option.some.inj h))))))))
+            (isFalse (h0) (rw (if_neg h0)) (intro h)
+              (have hn (= (@Option.none (Prod Nat Nat)) (some en)) (exact h))
+              (exact (absurd (Eq.symm hn) (Option.some_ne_none en)))))))
+       (cons (y r ih) (intro i en)
+         (show
+           (-> (= (pair_at (cons y (List.append r (cons x nil))) i) (some en))
+             (or (= (pair_at (cons y r) i) (some en)) (and (= i (+ (List.length r) 1)) (= en x)))))
+         (rw pair_at.eq_2)
+         (rw pair_at.eq_2)
+         (cases (Nat.decEq i 0)
+           ((isTrue (h0) (rw (if_pos h0)) (rw (if_pos h0)) (intro h) (apply Or.inl ((exact h))))
+            (isFalse (h0) (rw (if_neg h0)) (rw (if_neg h0)) (intro h)
+              (have h1 (<= 1 i) (exact (Nat.pos_of_ne_zero h0)))
+              (cases (ih (- i 1) en h)
+                ((inl (ho) (apply Or.inl ((exact ho))))
+                 (inr (hn)
+                   (apply Or.inr
+                     ((apply And.intro ((arith (And.left hn) (Nat.sub_add_cancel h1)))
+                        ((exact (And.right hn)))))))))))))))))
+;; The callees of a function's tail calls, for a fuel its statements are known for: an
+;; external and a function before it by what they realize; the function itself by its own code
+;; from its first instruction.
+(theorem tenv_fn
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (a Nat)
+   (g IFn)
+   (cb (List Instr))
+   (n Fuel)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (henv (env_ok p ext rs tbl clo chi xs fs))
+   (hself (= (fn_at p (List.length fs)) (some g)))
+   (hsim (sim p ext rs tbl clo chi xs fs (fts xs fs p a g) n))
+   (h6 (<= (+ (IFn.params g) (IFn.extra g)) 6))
+   (hchk (<= (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g)))
+   (hcb
+     (=
+       (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
+         (+ a (isize (pro (IFn.params g))))
+         (IFn.body g))
+       (some cb)))
+   (hpl (placed tbl a (List.append (pro (IFn.params g)) cb))))
+  (tenv_ok p ext rs tbl clo chi xs (fts xs fs p a g) n)
+  (by
+    (intro cal na en)
+    (cases cal
+      ((CFn (i) (unfold callee_at)
+         (cases (fn_at p i) hf
+           ((none () (reduce) (intro h)
+              (have hn (= (@Option.none (Prod Nat Nat)) (some en)) (exact h))
+              (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+            (some (g2) (reduce)
+              (cases (Nat.decEq (IFn.params g2) na)
+                ((isFalse (e) (intro h)
+                   (have hn (= (@Option.none (Prod Nat Nat)) (some en))
+                     (rw (<- h))
+                     (rw (if_neg e))
+                     rfl)
+                   (exact (absurd (Eq.symm hn) (Option.some_ne_none en))))
+                 (isTrue (e) (intro h)
+                   (have hp (= (pair_at (fts xs fs p a g) i) (some en))
+                     (rw (<- h))
+                     (rw (if_pos e))
+                     rfl)
+                   (have hp2
+                     (= (pair_at (List.append fs (cons (Prod.mk a (+ (fd0 xs fs p g) 6)) nil)) i)
+                       (some en))
+                     (exact hp))
+                   (cases (pair_at_snoc fs (Prod.mk a (+ (fd0 xs fs p g) 6)) i en hp2)
+                     ((inl (hold)
+                        (have hc2 (= (callee_at xs fs p (CFn i) na) (some en))
+                          (unfold callee_at)
+                          (rw hf)
+                          (show (= (if (= (IFn.params g2) na) (pair_at fs i) none) (some en)))
+                          (rw (if_pos e))
+                          (exact hold))
+                        (exact
+                          (tail_of_real p ext rs tbl clo chi (CFn i) na (Prod.fst en) (Prod.snd en)
+                            n
+                            (henv (CFn i) na en hc2))))
+                      (inr (hnew) (have ei (= i (List.length fs)) (exact (And.left hnew)))
+                        (have een (= en (Prod.mk a (+ (fd0 xs fs p g) 6))) (exact (And.right hnew)))
+                        (have hf2 (= (fn_at p (List.length fs)) (some g2)) (rw (<- ei)) (exact hf))
+                        (have hgg (= (some g) (some g2)) (exact (Eq.trans (Eq.symm hself) hf2)))
+                        (have eg (= g g2) (exact (Option.some.inj hgg)))
+                        (rw een)
+                        (intro c vs v m m2 f hcode hargs hroom hdo hag hlen hq)
+                        (have hq2 (= (fn_run n p ext rs (some g2) vs m) (some (Prod.mk v m2)))
+                          (rw (<- hf))
+                          (exact hq))
+                        (have hn
+                          (= (irun n p ext rs (IFn.body g) (enter g vs) m) (some (Prod.mk v m2)))
+                          (rw eg)
+                          (exact hq2))
+                        (have hlen2 (= (List.length vs) (IFn.params g)) (rw eg) (rw e) (exact hlen))
+                        (have hroom2 (room c clo chi f (+ (fd0 xs fs p g) 6)) (exact hroom))
+                        (have hdo2 (data_ok c rs clo chi f (+ (fd0 xs fs p g) 6)) (exact hdo))
+                        (exact
+                          (fn_core p ext rs tbl clo chi xs fs (fts xs fs p a g) n g a cb c vs v m m2
+                            f
+                            (fd0 xs fs p g)
+                            hall
+                            hchi
+                            hsim
+                            hcode
+                            hargs
+                            hroom2
+                            hdo2
+                            hag
+                            hlen2
+                            hn
+                            h6
+                            hchk
+                            hcb
+                            hpl))))))))))))
+       (CExt (j) (intro h) (have hc2 (= (callee_at xs fs p (CExt j) na) (some en)) (exact h))
+         (exact
+           (tail_of_real p ext rs tbl clo chi (CExt j) na (Prod.fst en) (Prod.snd en) n
+             (henv (CExt j) na en hc2))))))))
+;; THE FUNCTION'S THEOREM: where every callee the pass was given realizes its answer, a compiled
+;; function — the function of p after those with the entries fs — its code in the table at a,
+;; realizes its own answer at a with the need the pass computes
+(theorem cfn_ok
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (a Nat)
+   (g IFn)
+   (code (List Instr))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (henv (env_ok p ext rs tbl clo chi xs fs))
+   (hself (= (fn_at p (List.length fs)) (some g)))
+   (hc (= (cfn xs fs p a g) (some code)))
+   (hpl (placed tbl a code)))
+  (realizes tbl clo chi a (fneed xs fs p g) rs (fn_ans p ext rs g))
+  (by
+    (intro c vs v m m2 f hcode hargs hroom hdo hag hans)
+    (have hlen (= (List.length vs) (IFn.params g)) (exact (And.left hans)))
+    (have h6 (<= (+ (IFn.params g) (IFn.extra g)) 6)
+      (exact (And.left (cfn_inv xs fs p a g code hc))))
+    (have hchk (<= (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g))
+      (exact (And.left (And.right (cfn_inv xs fs p a g code hc)))))
+    (have hroom2 (room c clo chi f (+ (fd0 xs fs p g) 6)) (exact hroom))
+    (have hdo2 (data_ok c rs clo chi f (+ (fd0 xs fs p g) 6)) (exact hdo))
+    (cases (And.right hans)
+      ((intro (n hn)
+         (cases (And.right (And.right (cfn_inv xs fs p a g code hc)))
+           ((intro (cb g1)
+              (have hcb
+                (=
+                  (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
+                    (+ a (isize (pro (IFn.params g))))
+                    (IFn.body g))
+                  (some cb))
+                (exact (And.left g1)))
+              (have hpl2 (placed tbl a (List.append (pro (IFn.params g)) cb))
+                (rw (<- (And.right g1)))
+                (exact hpl))
+              (have htl
+                (forall ((n0 Fuel))
+                  (-> (sim p ext rs tbl clo chi xs fs (fts xs fs p a g) n0)
+                    (tenv_ok p ext rs tbl clo chi xs (fts xs fs p a g) n0)))
+                (intro n0 hs)
+                (exact
+                  (tenv_fn p ext rs tbl clo chi xs fs a g cb n0 hall hchi henv hself hs h6 hchk hcb
+                    hpl2)))
+              (exact
+                (fn_core p ext rs tbl clo chi xs fs (fts xs fs p a g) n g a cb c vs v m m2 f
+                  (fd0 xs fs p g)
+                  hall
+                  hchi
+                  (sim_all p ext rs tbl clo chi xs fs (fts xs fs p a g) hall hchi henv htl n)
+                  hcode
+                  hargs
+                  hroom2
+                  hdo2
+                  hag
+                  hlen
+                  hn
+                  h6
+                  hchk
+                  hcb
+                  hpl2))))))))))
+
+;; ---- externals ------------------------------------------------------------------------------------
+;; code that realizes an answer realizes every answer that holds only where that one does
+(theorem realizes_mono
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (ans2 (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (hm
+     (forall ((vs (List (BitVec 64))) (m Mem) (v (BitVec 64)) (m2 Mem))
+       (-> (ans2 vs m v m2) (ans vs m v m2))))
+   (hr (realizes tbl clo chi entry k rs ans)))
+  (realizes tbl clo chi entry k rs ans2)
+  (by
+    (intro c vs v m m2 f hcode hargs hroom hdo hag hans)
+    (exact (hr c vs v m m2 f hcode hargs hroom hdo hag (hm vs m v m2 hans)))))
