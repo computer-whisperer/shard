@@ -123,7 +123,8 @@ operand, `push`, `pop`, `call`, `ret`. Four are for forms the compile system's p
 register, an `imul` of two registers. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
 agree outside a range (`same_outside`) give the same word, the same fetched bytes and the same
-decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`). For code that
+decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`); two that
+agree inside a range (`same_on`) give the same word inside it (`le64_on`). For code that
 calls: the word at the stack pointer after a push is the word pushed (`ret_addr_pushed`); what a
 callee's `returned` says, one part at a time (`returned_at`, `kept_sp`, `kept_rbx`, …); code in
 place in any later state with the same mapping whose memory agrees outside a range clear of it

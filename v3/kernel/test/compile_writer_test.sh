@@ -35,7 +35,7 @@ for f in models.x86.buffers.addto models.x86.buffers.both compile.total_src.tota
 done
 # what rests on no view: the laws used, the file's computed facts, the sample — accepted on no
 # axiom but Lean's three
-for t in compile.ir_laws.iends_store compile.upd.upd_ext_is compile.upd.upd_ans_inv compile.upd.upd_ans_tie compile.upd.rd_same compile.upd.holds_kept compile.x86.module.module_realizes compile.x86.module.pair_at_two compile.x86.link.link_exits compile.total_src.sample_total compile.total.sample_ew compile.total.sample_ea compile.x86.total_file.tt_ad_compiled compile.x86.total_file.tt_bo_compiled compile.x86.total_file.tt_compiled compile.x86.total_file.tt_laid compile.x86.total_file.tt_ad_placed compile.x86.total_file.tt_bo_placed compile.x86.total_file.tt_placed compile.x86.total_file.tt_dot_rows; do
+for t in compile.ir_laws.iends_store compile.upd.upd_ext_is compile.upd.upd_ans_inv compile.upd.upd_ans_tie compile.upd.rd_same compile.upd.kept_apart compile.two.reads_on models.x86.frame.holds_read_on compile.x86.module.module_realizes compile.x86.module.pair_at_two compile.x86.link.link_exits compile.total_src.sample_total compile.total.sample_ew compile.total.sample_ea compile.x86.total_file.tt_ad_compiled compile.x86.total_file.tt_bo_compiled compile.x86.total_file.tt_compiled compile.x86.total_file.tt_laid compile.x86.total_file.tt_ad_placed compile.x86.total_file.tt_bo_placed compile.x86.total_file.tt_placed compile.x86.total_file.tt_dot_rows; do
   checks=$((checks+1)); grep -q "^ACCEPT $t " "$OUT/m.txt" || bad "$t is not accepted"
   axs=$(grep "^ACCEPT $t " "$OUT/m.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')

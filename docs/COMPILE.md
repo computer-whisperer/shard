@@ -204,8 +204,11 @@ every byte outside the written buffer is as it was. The first fact says what the
 buffer holds after: the list the meaning returns. A caller above it asks the same evidence of
 its own caller and states the same law of itself, each from the view below; so a function
 deep in a chain that comes to write another buffer changes the view of every function above
-it. What a caller knew of a buffer before such a call it proves again after it, from the law
-of what was left alone and the evidence that the buffers lie apart.
+it. What a reading function gave of a buffer before such a call it gives after it: the law
+of what was left alone and the evidence that the buffers lie apart make the memory before and
+the memory after agree on that buffer, and a reader's value is one in memories that agree on
+its buffers. No view states what its function reads: that follows from a reader's first fact,
+which gives its value for whatever lists stand at its addresses, and is proven once.
 
 **Three levels, all shard.** Each function a module exports has:
 
@@ -370,10 +373,8 @@ Open in §5's form, each found by the trial or by the review before it:
 - what a view states of a function that writes memory: the tree has one form (§5, "A function
   that writes"), which the owner has not agreed to, tried on one written buffer named by an
   argument. Not tried: two functions of a chain that write different buffers; a function that
-  writes what no argument names; what a view states of what a function reads, by which a
-  caller would know a value again after a write elsewhere without proving it again; a second
-  implementation of such a view. And what a view states of a function whose low form follows
-  pointers;
+  writes what no argument names; a second implementation of such a view. And what a view
+  states of a function whose low form follows pointers;
 - the answer at a seam is stated once for each shape of signature the tree has — two buffers
   read, two buffers of which the first is written —, not once for any;
 - values narrower than a word; the processor's features; the stack's alignment;

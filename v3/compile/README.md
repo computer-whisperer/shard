@@ -143,11 +143,14 @@ above a reader:
 - what is left alone. `both_lo_keeps` and `total_lo_keeps` are `addto`'s law, each proven from
   the law of the view below.
 
-What a caller knew before a call that writes, it proves again after it. `total` reads the
-second buffer after the call: by `both_lo_keeps` and the evidence that the buffers lie apart,
-the second buffer's words as read out of the memory before stand in the memory after
-(`upd.shard` `holds_kept`), and `dot`'s first fact, on those words in both memories, gives one
-value before and after.
+What a reading function gave of a buffer before a call that writes elsewhere, it gives after
+it. `total` reads the second buffer after the call: by `both_lo_keeps` and the evidence that
+the buffers lie apart, the memory before and the memory after agree on the second buffer's
+words (`upd.shard` `kept_apart`); and `dot`'s value is one in any two memories that agree on
+its buffers' words (`two.shard` `reads_on`). That is no law of `dot`'s view. It follows from
+the first fact of any function that only reads — its value is the meaning's of whatever lists
+stand at its addresses, so of the words read out of either memory — and is proven once, for
+the signature: `sqdiff` and `gap` have it as they stand.
 
 One file has the four functions (`x86/total_file.shard`): the hand-written `dot`, then the
 modules of `addto`, `both` and `total`, each compiled on its own; it exits with 75, the low
@@ -166,8 +169,8 @@ the owner.
 | `ir_laws.shard` | the machine's laws: what a run of a statement says of its parts (`irun_let_inv` and its like), a run of a statement from its parts, that a run given more fuel answers the same (`irun_more`), and a rule of `iends` for each statement form a proof above the pass uses: a return, a local set, a branch each way, a tail call, a store (`iends_store`), a call that returns (`iends_call`), whose two runs — the callee's and what follows — are brought to one fuel, and a call of an outside function (`iends_call_ext`), by that function's answer |
 | `lo.shard` | what a low form is written with: a read with its evidence (`rd64`), a write with its evidence (`wr64`), a buffer in the ranges (`buf_ok`), the evidence at an index (`at8_ok`), a read's word against a list held in memory (`rd_word`); and an answer given where evidence exists (`ans_on`), by which a low form is the answer of a function called from outside |
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
-| `two.shard` | functions of two buffers of one count that only read: the type of such a low form (`Reads2`), and such a function as the answer of a function called from outside — `two_ext`, `two_ans`, on words that have the evidence (`two_ext_is`), whatever it answers (`two_ans_inv`), and that code whose run answers the function's value answers what the answer says (`two_ans_tie`) |
-| `upd.shard` | functions of two buffers of one count that write the first: that two buffers lie apart (`apart`), the type of such a low form (`Upd2`), and such a function as the answer of a function called from outside — `upd_ext`, `upd_ans`, `upd_ext_is`, `upd_ans_inv`, `upd_ans_tie`, as `two.shard`'s —; and across a call that writes: a read clear of what was written reads the same (`rd_same`), and a buffer apart from the written one holds the words it held (`holds_kept`) |
+| `two.shard` | functions of two buffers of one count that only read: the type of such a low form (`Reads2`), and such a function as the answer of a function called from outside — `two_ext`, `two_ans`, on words that have the evidence (`two_ext_is`), whatever it answers (`two_ans_inv`), and that code whose run answers the function's value answers what the answer says (`two_ans_tie`); and what such a function reads, from its first fact: its value is one in two memories that agree on the two buffers' words (`Means2`, `reads_on`) |
+| `upd.shard` | functions of two buffers of one count that write the first: that two buffers lie apart (`apart`), the type of such a low form (`Upd2`), and such a function as the answer of a function called from outside — `upd_ext`, `upd_ans`, `upd_ext_is`, `upd_ans_inv`, `upd_ans_tie`, as `two.shard`'s —; and across a call that writes: a read clear of what was written reads the same (`rd_same`), and the memories before and after agree on a buffer apart from the written one (`kept_apart`) |
 | `sample.shard` | the two buffers the fixed start-up pushes, as a function's arguments see them: the data range, a memory that holds them, the evidence about each |
 | `dot_obj.shard`, `sqdiff_obj.shard`, `gap_obj.shard`, `addto_obj.shard`, `both_obj.shard`, `total_obj.shard` | each module's intermediate code, by hand: the code as data. `sqdiff`'s calls `dot`, `gap`'s `sqdiff`, `both`'s `addto` and `dot`, and `total`'s `both` and `dot`, each as a function outside its module. `addto`'s loop has a store |
 | `sqdiff_src.shard`, `gap_src.shard`, `total_src.shard` | the meanings of `sqdiff`, `gap` and `total`, functions over two lists, and their values on the sample |
@@ -236,8 +239,9 @@ stands in it —, in `x86/gap_file.shard` those for two compiled modules and the
   are in their own form, over the trial's one table, and `addto`'s leaves the result register
   as the loop left it, where the low form's word is 0;
 - a second implementation of a writer's view, proven from the view alone;
-- two functions in one chain that write different buffers, a function that writes what its
-  arguments do not name, and a view that states what a function reads;
+- two functions in one chain that write different buffers, and a function that writes what its
+  arguments do not name;
+- what a function that writes reads, as a fact: `reads_on` is for a function that only reads;
 - a low form that follows pointers, whose evidence names values no code holds;
 - hand-written code at another address: `dot`'s contract is over its own rows, at the addresses
   it was written for, so a file has it at 4194489 or not at all;
