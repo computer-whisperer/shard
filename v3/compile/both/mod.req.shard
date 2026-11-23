@@ -1,0 +1,157 @@
+;;; v3/compile/both — the module of `both`, a caller of `addto` and of `dot`: the second buffer
+;;; added into the first, then the sum of the squares of the first as it then is (`both`,
+;;; models/x86/buffers.shard). The view: the low form as a signature, with the evidence `addto`
+;;; asks for, which it hands on; and its facts as laws — the word is the meaning's and the memory
+;;; after holds the meaning's list at the first address; every byte outside the first buffer's
+;;; words is as it was; and the run of the module's intermediate code (../both_obj.shard) answers
+;;; the low form with any outside functions whose function 0 answers as `addto`'s low form and
+;;; function 1 as `dot`'s. Of `addto` and `dot`, this view and the module behind it have their
+;;; views and nothing else.
+(import "../addto")
+(import "../dot")
+(import "../two.shard")
+(import "../upd.shard")
+(import "../both_obj.shard")
+(import "../../models/x86/buffers.shard")
+(import "../../models/x86/frame.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.lo)
+(use compile.two)
+(use compile.upd)
+(use compile.addto)
+(use compile.dot)
+(use compile.both_obj)
+(use models.x86.buffers)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the low form -------------------------------------------------------------------------------
+(sig fn both_lo
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n)))
+  (Prod (BitVec 64) Mem))
+
+;; ---- the first fact -------------------------------------------------------------------------------
+;; where two lists stand in memory at the two addresses: the word is the meaning's, and the
+;; meaning's list stands at the first address after
+(requirement both_lo_means
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n))
+   (xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (hx (holds m (w64_val px) xs))
+   (hy (holds m (w64_val py) ys)))
+  (and (= (Prod.fst (both_lo rs m px py n ex ew ey ea)) (Prod.fst (both xs ys n rx ry)))
+    (holds (Prod.snd (both_lo rs m px py n ex ew ey ea)) (w64_val px)
+      (Prod.snd (both xs ys n rx ry)))))
+;; ---- what it leaves alone -------------------------------------------------------------------------
+(requirement both_lo_keeps
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n)))
+  (same_outside m (Prod.snd (both_lo rs m px py n ex ew ey ea)) (w64_val px)
+    (+ (w64_val px) (* 8 (w64_val n)))))
+
+;; ---- the second fact's front step -----------------------------------------------------------------
+;; in any program, with any outside functions whose function 0 answers as `addto`'s low form and
+;; function 1 as `dot`'s
+(requirement both_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n))
+   (ha (forall ((vs (List (BitVec 64))) (m1 Mem)) (= (ext 0 vs m1) (upd_ext addto_lo rs vs m1))))
+   (hd (forall ((vs (List (BitVec 64))) (m1 Mem)) (= (ext 1 vs m1) (two_ext dot_lo rs vs m1)))))
+  (fn_ans p ext rs both_code (cons px (cons py (cons n nil))) m
+    (Prod.fst (both_lo rs m px py n ex ew ey ea))
+    (Prod.snd (both_lo rs m px py n ex ew ey ea))))
+;; the functions the module calls from outside, by their answers
+(def both_ext ((rs (List Seg)) (j Nat) (vs (List (BitVec 64))) (m Mem))
+  (Option (Prod (BitVec 64) Mem))
+  (if (= j 0) (upd_ext addto_lo rs vs m)
+  (if (= j 1) (two_ext dot_lo rs vs m)
+  none)))
+(theorem both_prog_tie
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n)))
+  (fn_ans both_prog (both_ext rs) rs both_code (cons px (cons py (cons n nil))) m
+    (Prod.fst (both_lo rs m px py n ex ew ey ea))
+    (Prod.snd (both_lo rs m px py n ex ew ey ea)))
+  (by
+    (have ha
+      (forall ((vs (List (BitVec 64))) (m1 Mem))
+        (= (both_ext rs 0 vs m1) (upd_ext addto_lo rs vs m1)))
+      (intro vs m1)
+      rfl)
+    (have hd
+      (forall ((vs (List (BitVec 64))) (m1 Mem))
+        (= (both_ext rs 1 vs m1) (two_ext dot_lo rs vs m1)))
+      (intro vs m1)
+      rfl)
+    (exact (both_tie both_prog (both_ext rs) rs m px py n ex ew ey ea ha hd))))
+(theorem both_ans_tie
+  ((rs (List Seg))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (upd_ans both_lo rs vs m v m2)))
+  (fn_ans both_prog (both_ext rs) rs both_code vs m v m2)
+  (exact
+    (upd_ans_tie both_lo both_prog (both_ext rs) rs both_code
+      (fun
+        ((m1 Mem)
+         (px (BitVec 64))
+         (py (BitVec 64))
+         (n (BitVec 64))
+         (ex (buf_ok rs px n 4))
+         (ew (buf_ok rs px n 2))
+         (ey (buf_ok rs py n 4))
+         (ea (apart px py n)))
+        (both_prog_tie rs m1 px py n ex ew ey ea))
+      vs
+      m
+      v
+      m2
+      h)))

@@ -925,6 +925,36 @@ entries are explained under "Measured" at the end.
   function that writes is at the seam yet. In the file of two compiled modules each goes
   through the pass on its own, the second handed the entry and the stack need the pass answered
   for the first; nothing joins two modules' intermediate code.
+- Chosen for a function at a seam that writes memory (`v3/compile/upd.shard`, the views
+  `addto/`, `both/`, `total/`), and not ruled by the owner: tried outside the tree, reported
+  with these four named as the owner's to rule on, and moved into the tree on "Go ahead and
+  move it in" — a go for the move and no ruling on the four. (1) The low form's value is a
+  pair, the result word and the memory after — the type the intermediate machine's run takes
+  for an outside function's answer, so the answer is the low form with nothing between. Not
+  two functions, one for the word and one for the memory — a view would state two signatures
+  for one computation; not the memory alone where there is no value — the seam's statement has
+  a word in every answer, and there would be two shapes of writer. (2) A function with no
+  value returns the word 0. Not any word — the answer is a function of the arguments, which
+  every code that realizes it agrees with; so the trial's hand-written `addto`, which leaves in
+  the result register what its loop left there, does not meet this answer as it stands. (3)
+  That the written buffer lies apart from the one read beside it is evidence in the signature.
+  Not a hypothesis of the first fact alone — the answer at a seam is the low form wherever its
+  evidence exists, so with apartness outside the evidence every implementation would have to
+  give this low form's bytes on buffers that overlap, where the meaning says nothing; and a
+  caller that passes one buffer twice is refused at the call and not at its own first fact.
+  (4) The view states what the function leaves alone as a law of its own: every byte outside
+  the written buffer's words is as it was (`same_outside`), under no hypothesis about what
+  memory holds; and the first fact says what the written buffer holds after (`holds`). These
+  are the two forms the hand-written contracts on the model are stated with. Not one equation
+  giving the memory after — it would name a function that writes a list into a memory, which
+  the model does not have. A caller's view states both again of itself, and asks the same
+  evidence of its caller: what the view below asks and says of memory passes up through every
+  view above it. A caller that reads, after such a call, a buffer the call did not write
+  proves again what it knew: `total` has the second buffer's words, as read out of the memory
+  before, standing in the memory after (`holds_kept`), and `dot`'s first fact on those words in
+  both memories. Not from the list it was given — that list may be longer than the count, and
+  beyond the count it may lie in the written buffer. Not tried: a view that states what a
+  function reads, from which the same would follow with no list.
 
 ## Proofs and automation
 
@@ -2068,3 +2098,25 @@ measurements; measure again before building on one.
   bottom function, at the file's theorems; no directory given — nothing refused and no record
   of the link; the bottom directory left out — the theorem linked on `dot`'s two parameters. In
   none is there a record of the file's theorem with no parameter.
+- A function that writes, behind a view (2026-11-23; natively, CPU seconds, single
+  measurements). No change to the loader or to K. `addto`'s view is 119 lines and 408 behind
+  it, for `dot`'s 142 and 299: the loop against the meaning and what it leaves alone are 172
+  for 57. The answer of a writing function of two buffers, stated once, with the two laws a
+  caller uses across the call, 210 (`upd.shard`). The two callers' views are 157 and 223 lines
+  and 84 and 118 behind them, for a reader's callers' 160 and 57; of `total`'s 118, 40 are the
+  second buffer's value known again after the call. The file's facts are 149 lines and its
+  theorems 220. One load of the file's theorem and the four directories is 39 s, and 52 s with
+  the link, which enters 23 declarations; the readers' three-deep file, measured beside it, 33 s
+  and 41 s. The file is 666 bytes. Twelve faults planted by hand in copies, each loaded once
+  with the link: a low form that writes the second buffer, a caller that reads after the call
+  on what held before it, and a caller that passes one buffer twice, refused where written;
+  `addto`'s view claiming one word written and not the count — its law of what it leaves
+  alone is not proven, nor is `both`'s above it —, the same claimed by `both`'s view — not
+  proven by `both`, and `total`'s two proofs that use it refused —, `addto`'s body and code
+  storing the second buffer's word in place of the sum, its code storing into the second
+  buffer, `both` leaving the call out, `total`'s code with the buffers exchanged — in each a
+  law of a view is not discharged, and the file's theorem rests on one in the linked
+  environment; a wrong exit
+  status, at the file's theorem; no directory given — nothing refused and no record of the
+  link; `addto`'s directory left out — the theorem linked on `addto`'s four parameters. In none
+  is there a record of the file's theorem with no parameter.

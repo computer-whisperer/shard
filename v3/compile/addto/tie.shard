@@ -1,0 +1,101 @@
+;;; v3/compile/addto/tie.shard — the tie: the answer of the module's intermediate code
+;;; (`../addto_obj.shard`) is the low form's word and memory.
+(import "low.shard")
+(import "../addto_obj.shard")
+(import "../ir_laws.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.ir_laws)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.lo)
+(use compile.addto_obj)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; The loop, in any program that has it at index 0: by induction on the low form's own measure,
+;; a case at the test, the low form's equation for that case, then a rule of the machine for
+;; each statement — at the store the evidence the low form's write carries.
+(theorem addto_go_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (hp (= (fn_at p 0) (some addto_go_code)))
+   (k Nat))
+  (forall ((m Mem) (i (BitVec 64)))
+    (-> (= (- (w64_val n) (w64_val i)) k)
+      (fn_ans p ext rs addto_go_code (cons px (cons py (cons n (cons i nil)))) m (w64 0)
+        (addto_lo_go rs m px py n ex ew ey i))))
+  (by
+    (wf k k ih (intro m i hk)
+      (cases (Nat.decLt (w64_val i) (w64_val n))
+        ((isFalse (h) (rw (addto_lo_go_done rs m px py n ex ew ey i h))
+           (apply And.intro (rfl)
+             ((apply iends_if_false (rfl) (rfl) ((exact (icmp_ltu_false i n h)))
+                ((apply iends_ret (rfl)))))))
+         (isTrue (h) (rw (addto_lo_go_turn rs m px py n ex ew ey i h))
+           (have hdec (< (- (w64_val n) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact (loop_descends n i h)))
+           (apply And.intro (rfl)
+             ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true i n h)))
+                ((apply
+                   (iends_store (w64_add px (w64_mul (w64 8) i))
+                     (w64_add (rd64 rs m (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+                       (rd64 rs m (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h))))
+                   (rfl)
+                   ((apply ieval_op ((apply ieval_rd (rfl))) ((apply ieval_rd (rfl)))))
+                   ((exact (at8_ok rs px n 2 i ew h)))
+                   ((apply (iends_let (w64_add i (w64 1))) (rfl)
+                      ((apply
+                         (iends_tail addto_go_code
+                           (cons px (cons py (cons n (cons (w64_add i (w64 1)) nil)))))
+                         (rfl)
+                         ((exact hp))
+                         ((exact
+                            (ih (- (w64_val n) (w64_val (w64_add i (w64 1)))) hdec
+                              (wr64 rs m (w64_add px (w64_mul (w64 8) i))
+                                (w64_add
+                                  (rd64 rs m (w64_add px (w64_mul (w64 8) i))
+                                    (at8_ok rs px n 4 i ex h))
+                                  (rd64 rs m (w64_add py (w64_mul (w64 8) i))
+                                    (at8_ok rs py n 4 i ey h)))
+                                (at8_ok rs px n 2 i ew h))
+                              (w64_add i (w64 1))
+                              (Eq.refl (- (w64_val n) (w64_val (w64_add i (w64 1)))))))))))))))))))))))
+
+;; the entry: a tail call of the loop at index 0
+(theorem addto_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (hp (= (fn_at p 0) (some addto_go_code))))
+  (fn_ans p ext rs addto_code (cons px (cons py (cons n nil))) m (w64 0)
+    (addto_lo_go rs m px py n ex ew ey (w64 0)))
+  (by
+    (apply And.intro (rfl)
+      ((apply (iends_tail addto_go_code (cons px (cons py (cons n (cons (w64 0) nil))))) (rfl)
+         ((exact hp))
+         ((exact
+            (addto_go_tie p ext rs px py n ex ew ey hp (- (w64_val n) (w64_val (w64 0))) m (w64 0)
+              (Eq.refl (- (w64_val n) (w64_val (w64 0))))))))))))

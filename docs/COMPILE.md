@@ -170,9 +170,12 @@ proof of the caller and one statement of the sum; and a caller of that caller, t
 deep in one file. There the answer at the seam is the callee's low form, given where the low
 form's evidence exists; the hand-written code meets it from its author's contract over lists,
 and the compiled code from its run. The sum and its two callers are each a module behind a
-view (below, "A function as a module"). It does not hold: a front step that is a tool — each
-function's low form, its intermediate code and the certificate are written by hand —; a
-function at a seam that writes memory or keeps a frame; a build.
+view (below, "A function as a module"). So are a function that writes into a buffer it is
+given and two callers above it, compiled and in one file, proven to that file's exit status;
+the form of that function's view is the tree's and not agreed by the owner (below, "A function
+that writes"). It does not hold: a front step that is a tool — each function's low form, its
+intermediate code and the certificate are written by hand —; hand-written code at a seam that
+writes memory or keeps a frame; a build.
 
 A module is the unit that is compiled, and a function is what crosses from one module to another.
 
@@ -191,7 +194,18 @@ environment where each parameter is the implementation's constant, and there it 
 parameter. What passes up a chain of calls is what a view states and no more: the evidence a
 low form asks of its arguments, which a caller has or asks of its own caller; the stack need,
 one number a function, which the pass adds; and — for a function that writes — what it leaves
-of memory, which no view here states yet.
+of memory.
+
+**A function that writes.** In the tree, and not agreed by the owner as the form: the low form
+of a function that writes returns the result word and the memory after. Its view asks, as
+evidence, that the buffer it writes may be written and that it lies apart from each buffer the
+function reads beside it; and states, beside the two facts, a law of what it leaves alone —
+every byte outside the written buffer is as it was. The first fact says what the written
+buffer holds after: the list the meaning returns. A caller above it asks the same evidence of
+its own caller and states the same law of itself, each from the view below; so a function
+deep in a chain that comes to write another buffer changes the view of every function above
+it. What a caller knew of a buffer before such a call it proves again after it, from the law
+of what was left alone and the evidence that the buffers lie apart.
 
 **Three levels, all shard.** Each function a module exports has:
 
@@ -328,6 +342,14 @@ by the view; a body that breaks its law, a caller that passes the wrong buffer a
 differs from its low form leave a law undischarged, and the file's theorem then rests on that
 law in the linked environment; so does one loaded without a module's directory.
 
+And a function that writes, with two callers above it, the three compiled and in one file with
+the second program's hand-written instructions: the file's exit status is another if the write
+is not made. Planted by hand there: a low form that writes a buffer it has no evidence for, a
+caller that reads after the call on what it knew before it, and a caller that passes one
+buffer twice are refused where they are written; a view that claims less written than its
+function writes, code that stores elsewhere and a caller that leaves the call out leave a law
+undischarged.
+
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
 exact form; events and their prefixes at the Linux boundary; registers; floats; a second target;
@@ -345,10 +367,15 @@ Open in §5's form, each found by the trial or by the review before it:
   written for, so a file has it there or not at all; and a module has no place for constants;
 - an answer at a seam that a program can compute: the low form where its evidence exists is
   decided by no program, so a caller's intermediate code is not run against it by evaluation;
-- what a view states of a function that writes memory — what it wrote and what it left alone,
-  from which a caller knows again what it knew before the call — and of one whose low form
-  follows pointers: the answer at a seam is stated for functions of two buffers that only
-  read;
+- what a view states of a function that writes memory: the tree has one form (§5, "A function
+  that writes"), which the owner has not agreed to, tried on one written buffer named by an
+  argument. Not tried: two functions of a chain that write different buffers; a function that
+  writes what no argument names; what a view states of what a function reads, by which a
+  caller would know a value again after a write elsewhere without proving it again; a second
+  implementation of such a view. And what a view states of a function whose low form follows
+  pointers;
+- the answer at a seam is stated once for each shape of signature the tree has — two buffers
+  read, two buffers of which the first is written —, not once for any;
 - values narrower than a word; the processor's features; the stack's alignment;
 - a witness, for each statement at a seam, that its hypotheses can be met;
 - which end §6's fact names once a chain is built as §5 has it;

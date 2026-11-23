@@ -1,0 +1,172 @@
+;;; v3/compile/addto/mean.shard — the loop against the meaning, and what the loop leaves alone.
+;;; Where the first buffer holds a list and the second, as the memory was at the start, holds
+;;; another, and the two lie apart: the memory after holds at the first address the list `addto`
+;;; returns. And every byte outside the first buffer's n words is as it was.
+(import "low.shard")
+(import "../upd.shard")
+(import "../../models/x86/buffers.shard")
+(import "../../models/x86/frame.shard")
+(use std.mem)
+(use compile.lo)
+(use compile.upd)
+(use models.x86.buffers)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; the loop from any index, on any memory mi that is the first memory outside the first buffer
+;; and holds a list xi there: by induction on the loop's measure
+(theorem addto_lo_go_means
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (ea (apart px py n))
+   (ys (List (BitVec 64)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (hy (holds m (w64_val py) ys))
+   (k Nat))
+  (forall ((mi Mem) (xi (List (BitVec 64))) (rxi (<= (w64_val n) (List.length xi))) (i (BitVec 64)))
+    (-> (= (- (w64_val n) (w64_val i)) k)
+      (same_outside m mi (w64_val px) (+ (w64_val px) (* 8 (w64_val n))))
+      (holds mi (w64_val px) xi)
+      (holds (addto_lo_go rs mi px py n ex ew ey i) (w64_val px) (addto_go xi ys n rxi ry i))))
+  (by
+    (wf k k ih (intro mi xi rxi i hk hso hxi)
+      (cases (Nat.decLt (w64_val i) (w64_val n))
+        ((isFalse (h) (rw (addto_lo_go_done rs mi px py n ex ew ey i h))
+           (rw (addto_go_done xi ys n rxi ry i h))
+           (exact hxi))
+         (isTrue (h)
+           (have hdec (< (- (w64_val n) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact (loop_descends n i h)))
+           (have hA
+             (= (w64_val (w64_add px (w64_mul (w64 8) i))) (+ (w64_val px) (* 8 (w64_val i))))
+             (exact (at8_val rs px n 4 i ex h)))
+           (have hclr
+             (or (<= (+ (w64_val (w64_add py (w64_mul (w64 8) i))) 8) (w64_val px))
+               (<= (+ (w64_val px) (* 8 (w64_val n))) (w64_val (w64_add py (w64_mul (w64 8) i)))))
+             (rw (at8_val rs py n 4 i ey h))
+             (cases ea ((inl (ha) (apply Or.inr ((arith)))) (inr (ha) (apply Or.inl ((arith)))))))
+           (rw (addto_lo_go_turn rs mi px py n ex ew ey i h))
+           (rw (addto_go_turn xi ys n rxi ry i h))
+           (rw
+             (rd_word rs mi px n 4 i xi ex h hxi (Nat.lt_of_lt_of_le h rxi)
+               (at8_ok rs px n 4 i ex h)))
+           (rw
+             (rd_same rs m mi (w64_val px) (+ (w64_val px) (* 8 (w64_val n)))
+               (w64_add py (w64_mul (w64 8) i))
+               (at8_ok rs py n 4 i ey h)
+               hso
+               hclr))
+           (rw
+             (rd_word rs m py n 4 i ys ey h hy (Nat.lt_of_lt_of_le h ry) (at8_ok rs py n 4 i ey h)))
+           (apply
+             (ih (- (w64_val n) (w64_val (w64_add i (w64 1)))) hdec
+               (wr64 rs mi (w64_add px (w64_mul (w64 8) i))
+                 (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                   (word_at ys i (Nat.lt_of_lt_of_le h ry)))
+                 (at8_ok rs px n 2 i ew h))
+               (addto_next xi ys n rxi ry i h)
+               (addto_next_room xi ys n rxi ry i h)
+               (w64_add i (w64 1))
+               (Eq.refl (- (w64_val n) (w64_val (w64_add i (w64 1))))))
+             ((show
+                (same_outside m
+                  (mem_put64 mi (w64_val (w64_add px (w64_mul (w64 8) i)))
+                    (w64_val
+                      (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                        (word_at ys i (Nat.lt_of_lt_of_le h ry)))))
+                  (w64_val px)
+                  (+ (w64_val px) (* 8 (w64_val n)))))
+              (apply
+                (same_outside_put64 m mi (w64_val px) (+ (w64_val px) (* 8 (w64_val n)))
+                  (w64_val (w64_add px (w64_mul (w64 8) i)))
+                  (w64_val
+                    (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                      (word_at ys i (Nat.lt_of_lt_of_le h ry))))
+                  hso)
+                ((rw hA) (arith))
+                ((rw hA) (arith))))
+             ((show
+                (holds
+                  (mem_put64 mi (w64_val (w64_add px (w64_mul (w64 8) i)))
+                    (w64_val
+                      (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                        (word_at ys i (Nat.lt_of_lt_of_le h ry)))))
+                  (w64_val px)
+                  (upd xi (w64_val i)
+                    (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                      (word_at ys i (Nat.lt_of_lt_of_le h ry))))))
+              (rw hA)
+              (exact
+                (holds_upd mi (w64_val px) xi (w64_val i)
+                  (w64_add (word_at xi i (Nat.lt_of_lt_of_le h rxi))
+                    (word_at ys i (Nat.lt_of_lt_of_le h ry)))
+                  hxi
+                  (Nat.lt_of_lt_of_le h rxi)))))))))))
+
+;; what the loop leaves alone: from any memory mi that is m outside the first buffer's n words,
+;; the memory after is m there too
+(theorem addto_lo_go_keeps
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ew (buf_ok rs px n 2))
+   (ey (buf_ok rs py n 4))
+   (k Nat))
+  (forall ((mi Mem) (i (BitVec 64)))
+    (-> (= (- (w64_val n) (w64_val i)) k)
+      (same_outside m mi (w64_val px) (+ (w64_val px) (* 8 (w64_val n))))
+      (same_outside m (addto_lo_go rs mi px py n ex ew ey i) (w64_val px)
+        (+ (w64_val px) (* 8 (w64_val n))))))
+  (by
+    (wf k k ih (intro mi i hk hso)
+      (cases (Nat.decLt (w64_val i) (w64_val n))
+        ((isFalse (h) (rw (addto_lo_go_done rs mi px py n ex ew ey i h)) (exact hso))
+         (isTrue (h)
+           (have hdec (< (- (w64_val n) (w64_val (w64_add i (w64 1)))) k)
+             (rw (<- hk))
+             (exact (loop_descends n i h)))
+           (have hA
+             (= (w64_val (w64_add px (w64_mul (w64 8) i))) (+ (w64_val px) (* 8 (w64_val i))))
+             (exact (at8_val rs px n 4 i ex h)))
+           (rw (addto_lo_go_turn rs mi px py n ex ew ey i h))
+           (apply
+             (ih (- (w64_val n) (w64_val (w64_add i (w64 1)))) hdec
+               (wr64 rs mi (w64_add px (w64_mul (w64 8) i))
+                 (w64_add (rd64 rs mi (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+                   (rd64 rs mi (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h)))
+                 (at8_ok rs px n 2 i ew h))
+               (w64_add i (w64 1))
+               (Eq.refl (- (w64_val n) (w64_val (w64_add i (w64 1))))))
+             ((show
+                (same_outside m
+                  (mem_put64 mi (w64_val (w64_add px (w64_mul (w64 8) i)))
+                    (w64_val
+                      (w64_add
+                        (rd64 rs mi (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+                        (rd64 rs mi (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h)))))
+                  (w64_val px)
+                  (+ (w64_val px) (* 8 (w64_val n)))))
+              (apply
+                (same_outside_put64 m mi (w64_val px) (+ (w64_val px) (* 8 (w64_val n)))
+                  (w64_val (w64_add px (w64_mul (w64 8) i)))
+                  (w64_val
+                    (w64_add (rd64 rs mi (w64_add px (w64_mul (w64 8) i)) (at8_ok rs px n 4 i ex h))
+                      (rd64 rs mi (w64_add py (w64_mul (w64 8) i)) (at8_ok rs py n 4 i ey h))))
+                  hso)
+                ((rw hA) (arith))
+                ((rw hA) (arith)))))))))))
