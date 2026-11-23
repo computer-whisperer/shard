@@ -88,7 +88,9 @@ to is `COMPILE.md`.
 
 18. A consumer knows a module only through its view: signatures and requirements. No definition and
     no defining equation crosses a view, so a module may change inside without touching its
-    consumers.
+    consumers. What a consumer proved against a view and what an implementation proved in its
+    own check are joined by K and by nothing else: the link checks the consumer's declarations
+    in an environment where each parameter is the implementation's constant.
 19. Identity is the qualified name together with the content. A hash is a fingerprint for reports
     and never an authority. Types never merge because they look or are spelled alike.
 20. The assumption policy is checked at every acceptance. Each accepted result lists what it rests
@@ -317,8 +319,22 @@ admitted that the logic does not derive.
     call: it returns the value of the callee's low form, and leaves memory as the low form
     says, whenever the arguments meet what the low form demands; whether they meet it is a
     question in the logic, not a check any program runs —: "Ratify it". (Stated in
-    `COMPILE.md` §5. Not settled by it: whether a caller's proof may open the callee's body;
-    how it extends to a low form whose demands name values no code holds.)
+    `COMPILE.md` §5. Not settled by it: how it extends to a low form whose demands name values
+    no code holds.)
+23. *A function as a module, and the link.* On the report of a trial of the three functions
+    behind views — a caller's proof rests on the view of what it calls and on nothing below,
+    and the views fell short in two places: a signature could carry no evidence, and nothing
+    in K joined a consumer's theorem to the implementations' discharges —: "I would lean
+    towards extending the loader in both cases now. The main worktree has not made much
+    progress there yet. Take the time to design the changes properly based on what is needed."
+    On the design then put to them — a signature's proof parameters read as a function's; a
+    discharge checked by K to be of the view's own type, a defect found on the way (an
+    implementation recorded as proving a law of which it had proved another reading); and
+    after the roots K's check, once more, of what rests on a parameter, in an environment where
+    each parameter is its implementation —: "Proceed with building it as designed, including
+    the link." (Rule 18; `LANGUAGE.md`, "Views"; `v3/compile/README.md`, "A function as a
+    module". That the link is asked for by a flag is the builder's, for the cost to the
+    toolchain's own loads.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

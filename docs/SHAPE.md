@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 65 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 64 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
@@ -105,11 +105,11 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 72 files | the test scripts and drivers |
+| `v3/kernel/test/` | 71 files | the test scripts and drivers |
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
 | `v3/models/x86/` | 6,600 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
-| `v3/compile/` | 12,100 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, and a compiled caller linked against a hand-written function and against the compiled one |
+| `v3/compile/` | 12,900 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -254,7 +254,16 @@ be built to is `COMPILE.md`.
   `dot_hand_realizes`) —, and so does `dot`'s compiled module. A caller compiled as a module of
   its own is tied to its definition once, and is linked in one file with the hand-written
   instructions and in another with the compiled module, each proven to exit with the caller's
-  value (`x86/sqdiff_hand_run.shard`, `x86/sqdiff_comp_run.shard`).
+  value (`x86/sqdiff_hand_run.shard`, `x86/sqdiff_comp_run.shard`);
+- a function as a module behind a view (`dot/`, `sqdiff/`, `gap/`): the view states the low
+  form's signature, with the evidence it asks for, and the two facts as laws; the body and the
+  proofs are the directory's own. A caller's proofs, the hand-written instructions' proof and a
+  file's theorem are checked against views, and K lists what each rests on: a caller's on the
+  view of what it calls and on nothing below it. Three functions deep in one file
+  (`x86/gap_run.shard` `gap_file_exits`);
+- the link (`load.shard --link`; `LANGUAGE.md`, "The link"): what was proven against views is
+  accepted by K once more in an environment where each parameter is its implementation's
+  constant. The four files' theorems rest there on no parameter and on Lean's three axioms.
 
 **Does not exist:**
 - the step from a definition to intermediate code: no tool reads a definition, and the proofs
@@ -263,9 +272,10 @@ be built to is `COMPILE.md`.
   start-up does is fixed, and its data is what the start-up pushes;
 - in the pass: more than six locals, a function's call of itself that is not a tail call, a
   host call, a declared failure;
-- at the seam, a hand-written function that writes memory or keeps a frame — the trial's other
-  two contracts are in their own form —, and hand-written code at an address other than the one
-  it was written for;
+- at the seam, a function that writes memory or keeps a frame — the answer is stated for
+  functions that only read, and the trial's other two contracts are in their own form —, a low
+  form that follows pointers, and hand-written code at an address other than the one it was
+  written for;
 - any link between the machine's model and what the present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.

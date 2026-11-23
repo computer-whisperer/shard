@@ -163,17 +163,35 @@ trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the
 its theorem, for six locals in registers, expressions of word operations and loads, stores,
 `if`, calls and tail calls; the link theorem for one fixed start-up; two programs, each with
 its levels and its facts, proven to the exit status of its file: six functions over words with
-calls, a test and a loop, and a sum of products over two buffers; and a caller of that sum
+calls, a test and a loop, and a sum of products over two buffers; a caller of that sum
 compiled as a module of its own and linked in two files, one with the sum's hand-written
 instructions and one with its compiled module, each proven to the file's exit status from one
-proof of the caller and one statement of the sum. There the answer at the seam is the sum's
-low form, given where the low form's evidence exists; the hand-written code meets it from its
-author's contract over lists, and the compiled code from its run. It does not hold: a front
-step that is a tool — each function's low form, its intermediate code and the certificate are
-written by hand —; a hand-written function that writes memory or keeps a frame, at the seam; a
-build.
+proof of the caller and one statement of the sum; and a caller of that caller, three functions
+deep in one file. There the answer at the seam is the callee's low form, given where the low
+form's evidence exists; the hand-written code meets it from its author's contract over lists,
+and the compiled code from its run. The sum and its two callers are each a module behind a
+view (below, "A function as a module"). It does not hold: a front step that is a tool — each
+function's low form, its intermediate code and the certificate are written by hand —; a
+function at a seam that writes memory or keeps a frame; a build.
 
 A module is the unit that is compiled, and a function is what crosses from one module to another.
+
+**A function as a module.** What a module publishes of a function it exports is a view
+(`LANGUAGE.md`, "Views"; the owner's direction, `LAW.md` §6, 22 and 23): the low form's
+signature, with the evidence it asks for, and the two facts below as laws. The low form's body
+and the proofs of the laws are the module's own. A caller — its low form, its two facts —, the
+author of hand-written instructions for the function, and a file that links the code are
+checked against the view: the checker holds the signature and the laws as constants with a type
+and no value, so no proof step reaches the body, and each proof is listed with what it rests
+on. A caller's proofs rest on the view of what it calls and on nothing below it: the callee's
+callee is the callee's own matter. The meaning and the code as data are not behind the view —
+a file's theorem is stated with the one, and the pass reads the other. A file's theorem,
+proven against the views, is closed by the link: the checker accepts it once more in an
+environment where each parameter is the implementation's constant, and there it rests on no
+parameter. What passes up a chain of calls is what a view states and no more: the evidence a
+low form asks of its arguments, which a caller has or asks of its own caller; the stack need,
+one number a function, which the pass adds; and — for a function that writes — what it leaves
+of memory, which no view here states yet.
 
 **Three levels, all shard.** Each function a module exports has:
 
@@ -304,7 +322,11 @@ Beside them stands a caller of the second program's function across a seam: its 
 none of the callee's code, and it is linked against the callee's hand-written instructions and
 against the callee's compiled module, the faults at that joint refused when planted by hand — a
 hand-written line that differs from the proven one, a wrong entry or stack need given for the
-callee.
+callee. And a caller of that caller: three functions, each a module behind a view, in one
+file. Planted by hand there: a caller's proof that opens the body of what it calls is refused
+by the view; a body that breaks its law, a caller that passes the wrong buffer and code that
+differs from its low form leave a law undischarged, and the file's theorem then rests on that
+law in the linked environment; so does one loaded without a module's directory.
 
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
@@ -323,6 +345,10 @@ Open in §5's form, each found by the trial or by the review before it:
   written for, so a file has it there or not at all; and a module has no place for constants;
 - an answer at a seam that a program can compute: the low form where its evidence exists is
   decided by no program, so a caller's intermediate code is not run against it by evaluation;
+- what a view states of a function that writes memory — what it wrote and what it left alone,
+  from which a caller knows again what it knew before the call — and of one whose low form
+  follows pointers: the answer at a seam is stated for functions of two buffers that only
+  read;
 - values narrower than a word; the processor's features; the stack's alignment;
 - a witness, for each statement at a seam, that its hypotheses can be met;
 - which end §6's fact names once a chain is built as §5 has it;

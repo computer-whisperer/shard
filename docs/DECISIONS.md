@@ -68,6 +68,33 @@ entries are explained under "Measured" at the end.
   two same-named declarations with a lookup preference — K holds one declaration per name.
 - A file in a directory that has a view is private (`private_module`) and carries the directory's
   path; not a facade of wrappers — a wrapper can lend a function the view's identity, never a type.
+- ★ A view's signature may take evidence: a binder whose type is a proposition is part of the
+  parameter's type and no part of the program's signature, as a `fn`'s is; not the words and
+  their evidence packed into one structure so that a signature names no earlier parameter —
+  tried outside the tree (`Two`), it puts a wrapper before every low form and a constructor at
+  every call.
+- ★ A discharge is of the view's own type, by K: the fork hands K a constant of the parameter's
+  type, as the main line holds it, whose value is the implementation's constant. Not the
+  program signatures alone — evidence is no part of one —; not the requirement's text read
+  again and believed: read under the names the implementation opens, `zero` was another
+  constant, the implementation proved another statement and the load recorded the discharge
+  (`v3/pins/loader/view_statement`); not a comparison of the two terms by the loader — an id
+  and a hash are no authority across two lineages.
+- ★ The join of a consumer's `params=` with an implementation's `DISCHARGE` is K's check in a
+  linked environment (`--link`, `LINK` records), built from the constants the load's
+  environments already hold: the same terms, each discharged parameter's name the
+  implementation's. Not a record printed where every parameter has a discharge — no
+  environment of K would hold the closed theorem, the claim would rest on the loader's own
+  comparisons, and two implementations proved from each other's laws each pass their check
+  (`view_link_cycle`); not the consumer read again against the implementations — it could then
+  use what the view hides; not copies under other names in an extension of the main
+  environment — a renaming of proof terms outside K; not the parameters abstracted so that
+  linking is an application — every declaration form would be generalized; not one
+  environment with K told not to unfold — K is Lean's kernel, and opacity is by not loading
+  the body.
+- The link is asked for (`--link`); not run by every load that checks an implementation — K's
+  own directory is a view, and every checked load of the toolchain with it as a root would
+  check the toolchain's closure twice.
 - K's seal is the directory `kernel/k` behind one view; not a view over the environment type —
   exporting the operations that build environments lets a forged one in through the API.
 - An `axiom` is admitted only under `(trusts NAME)` in its own file and is a declared parameter
@@ -2015,3 +2042,23 @@ measurements; measure again before building on one.
   about its outside function; a wrong exit status, at the file's theorem; the law of a smaller
   answer turned round, and the outside call's rule with the rest run on the memory before the
   call, at their own proofs.
+- Views that carry evidence, and the link (2026-11-23; natively, CPU seconds, single
+  measurements). The loader is 6,049 lines for 5,647: the K-checked type of a discharge 30
+  lines, the link 325 — its walk one function on a fuel, four descents, each closed by the
+  counter's lemma. Its own sources load checked with K's directory as a root in 261 s and 10 GB,
+  none pending, the same eight programs. The three modules: `dot`'s view 142 lines and 300
+  behind it; each caller's view 160 and 57 behind it; the answer of a reading function of two
+  buffers, stated once, 121 (`two.shard`). The hand-written `dot`'s proof is 190 lines for 230:
+  from the view's first fact on the answer's memory, without the 50 that the low form reads the
+  ranges alone. The three-deep file's facts are 129 lines and its theorems 163. One load of the
+  four files' theorems and the three directories is 43 s, and 57 s with the link, which
+  enters 35 declarations; the three-deep file alone 30 s, and 38 s with it. The pinned cases are 363, each loaded twice, in
+  53 s. Ten faults planted by hand in copies, each loaded once with the link: a caller's proof
+  that rewrites by the callee's equation, and a consumer's `rfl` through a signature, refused
+  where written; the callee's loop changed with its lemmas, a caller passing the wrong buffer,
+  the top's code with its operands exchanged — a law of the view is not discharged, and the
+  file's theorem rests on it in the linked environment; an implementation asking for other
+  evidence than its signature, `impl_signature`; a wrong exit status and a wrong entry for the
+  bottom function, at the file's theorems; no directory given — nothing refused and no record
+  of the link; the bottom directory left out — the theorem linked on `dot`'s two parameters. In
+  none is there a record of the file's theorem with no parameter.
