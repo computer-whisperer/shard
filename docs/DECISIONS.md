@@ -895,9 +895,9 @@ entries are explained under "Measured" at the end.
   machine (`ir_laws.shard`), since the fuel's law is proven from it. `ir.shard` and
   `x86/startup.shard` hold no proof: the pass reads none, and a file's definitions do not
   import the link theorem.
-- Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `dot_lo.shard`,
-  `x86/dot_hand.shard`, `sqdiff_ir.shard`), not put to the owner one by one; the first of
-  them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
+- Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `two.shard`,
+  `x86/dot_hand.shard`, the views `dot/` and `sqdiff/`), not put to the owner one by one; the
+  first of them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
   function called from outside its module is its low form: the function of the argument words
   and the memory that the intermediate machine's run takes for it is the low form's value where
   the low form's evidence exists, and no answer elsewhere (`ans_on`). Whether evidence exists is
@@ -911,9 +911,11 @@ entries are explained under "Measured" at the end.
   against two answers, and a caller against one of them. Code proven against another form of
   its answer is brought to this one by a law of the statement (`realizes_sub`: code that
   realizes an answer realizes every answer that says no more): the hand-written `dot` from its
-  author's contract over two lists — the lists read out of the machine's memory, the low form's
-  value on that memory their meaning's, and the same on any memory that agrees on the ranges —,
-  the compiled `dot` from its run, by its tie. A caller's tie is stated for any outside
+  author's contract over two lists — the lists read out of the machine's memory, which stand
+  in the answer's memory too since the buffers are in the ranges, and the low form's value
+  there their meaning's by the view's first fact; not by a proof that the low form reads the
+  ranges alone, which opens the low form's body —, the compiled `dot` from its run, by its
+  tie. A caller's tie is stated for any outside
   functions whose function at the index answers as that answer does, as it is for any program
   with its callees at their indices. `dot`'s contract is stated over its own ten rows, and a
   part of a table is in place where the whole is (`models/x86/part.shard`); the rows keep the
