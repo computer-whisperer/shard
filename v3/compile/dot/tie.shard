@@ -1,10 +1,8 @@
-;;; v3/compile/dot_ir.shard — the intermediate code of `dot_lo` and of its loop `dot_lo_go`
-;;; (`dot_lo.shard`), written by hand from their bodies, and the tie (docs/COMPILE.md §5, the
-;;; front step): the code's answer under `ir.shard` is the low form's value. The code is in the
-;;; shape the pass takes (`x86/pass.shard`): a tail call's arguments and a test's operands are
-;;; locals or numbers, so the loop sets its locals and then calls itself with them.
-(import "dot_lo.shard")
-(import "ir_laws.shard")
+;;; v3/compile/dot/tie.shard — the tie (docs/COMPILE.md §5, the front step): the answer of the
+;;; module's intermediate code (`../dot_obj.shard`) under `ir.shard` is the low form's value.
+(import "low.shard")
+(import "../dot_obj.shard")
+(import "../ir_laws.shard")
 (use std.mem)
 (use compile.ir)
 (use compile.ir_laws)
@@ -15,30 +13,12 @@
 (use compile.ir.IOp)
 (use compile.ir.IStm)
 (use compile.lo)
-(use compile.dot_lo)
+(use compile.dot_obj)
 (use models.x86.word)
 (use models.x86.words)
 (use models.x86.x86)
 (use Init.List cons nil)
 (use Init.Option none some)
-
-;; ---- the code ----------------------------------------------------------------------------------
-;; Locals are the low form's parameters in order, the evidence left out. The loop: 0 px, 1 py,
-;; 2 n, 3 i, 4 acc; the sum is set before the index, which it reads. The loop is function 0 of
-;; the program, `dot` function 1.
-(fn dot_go_code () IFn
-  (MkIFn 5 0
-    (SIf (EVar 3) CLtu (EVar 2)
-      (SLet 4
-        (EOp OAdd (EVar 4)
-          (EOp OMul (ELoad (EOp OAdd (EVar 0) (EOp OMul (ENum (w64 8)) (EVar 3))))
-            (ELoad (EOp OAdd (EVar 1) (EOp OMul (ENum (w64 8)) (EVar 3))))))
-        (SLet 3 (EOp OAdd (EVar 3) (ENum (w64 1)))
-          (STail (CFn 0) (list (EVar 0) (EVar 1) (EVar 2) (EVar 3) (EVar 4)))))
-      (SRet (EVar 4)))))
-(fn dot_code () IFn
-  (MkIFn 3 0 (STail (CFn 0) (list (EVar 0) (EVar 1) (EVar 2) (ENum (w64 0)) (ENum (w64 0))))))
-(fn dot_prog () (List IFn) (list dot_go_code dot_code))
 
 ;; ---- the tie -----------------------------------------------------------------------------------
 ;; The loop, in any program that has it at index 0: by induction on the low form's own measure,
@@ -128,7 +108,9 @@
    (ex (buf_ok rs px n 4))
    (ey (buf_ok rs py n 4))
    (hp (= (fn_at p 0) (some dot_go_code))))
-  (fn_ans p ext rs dot_code (cons px (cons py (cons n nil))) m (dot_lo rs m px py n ex ey) m)
+  (fn_ans p ext rs dot_code (cons px (cons py (cons n nil))) m
+    (dot_lo_go rs m px py n ex ey (w64 0) (w64 0))
+    m)
   (by
     (apply And.intro (rfl)
       ((apply
@@ -139,36 +121,3 @@
             (dot_go_tie p ext rs m px py n ex ey hp (- (w64_val n) (w64_val (w64 0))) (w64 0)
               (w64 0)
               (Eq.refl (- (w64_val n) (w64_val (w64 0))))))))))))
-;; the two functions as one program: the answer of its function 1 is `dot_lo`
-(theorem dot_prog_tie
-  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (m Mem)
-   (px (BitVec 64))
-   (py (BitVec 64))
-   (n (BitVec 64))
-   (ex (buf_ok rs px n 4))
-   (ey (buf_ok rs py n 4)))
-  (fn_ans dot_prog ext rs dot_code (cons px (cons py (cons n nil))) m (dot_lo rs m px py n ex ey) m)
-  (exact (dot_tie dot_prog ext rs m px py n ex ey (Eq.refl (some dot_go_code)))))
-
-;; ---- the code in place of a function called from outside ------------------------------------------
-;; `dot` is the program's second function
-(theorem dot_code_is () (= (fn_at dot_prog 1) (some dot_code)) (by rfl))
-;; whatever `dot_ans` says (`dot_lo.shard`), the code's run answers: so code that realizes the
-;; run's answer realizes `dot_ans`, the answer a caller outside the module runs with
-(theorem dot_ans_tie
-  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (vs (List (BitVec 64)))
-   (m Mem)
-   (v (BitVec 64))
-   (m2 Mem)
-   (h (dot_ans rs vs m v m2)))
-  (fn_ans dot_prog ext rs dot_code vs m v m2)
-  (by
-    (cases (dot_ans_inv rs vs m v m2 h)
-      ((intro (ok hh) (rw (And.left hh)) (rw (And.right hh)) (rw (And.left ok) (occ 1))
-         (exact
-           (dot_prog_tie ext rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right ok))
-             (And.right (And.right ok)))))))))

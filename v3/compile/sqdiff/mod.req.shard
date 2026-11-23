@@ -1,0 +1,162 @@
+;;; v3/compile/sqdiff — the module of `sqdiff`, a caller of `dot`: the difference of two buffers' sums of
+;;; squares
+;;; (docs/COMPILE.md §5). This view is the whole of what any other file knows of it: the low
+;;; form as a signature, and the two facts as laws the module proves — the low form's value is
+;;; the meaning's (`sqdiff`, ../sqdiff_src.shard), and the run of the module's intermediate code
+;;; (../sqdiff_obj.shard) answers the low form's value with any outside functions whose
+;;; function 0 answers as `dot`'s low form does (`two_ext dot_lo`, ../two.shard). Of
+;;; `dot`, this view and the module behind it have `dot`'s view and nothing else.
+(import "../dot")
+(import "../two.shard")
+(import "../sample.shard")
+(import "../sqdiff_src.shard")
+(import "../sqdiff_obj.shard")
+(import "../../models/x86/frame.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.lo)
+(use compile.two)
+(use compile.sample)
+(use models.x86.buffers)
+(use compile.dot)
+(use compile.sqdiff_src)
+(use compile.sqdiff_obj)
+(use models.x86.frame)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the low form -------------------------------------------------------------------------------
+(sig fn sqdiff_lo
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (BitVec 64))
+
+;; ---- the first fact: the low form's value is the meaning's ----------------------------------------
+;; where two lists stand in memory at the two addresses
+(requirement sqdiff_lo_means
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (hx (holds m (w64_val px) xs))
+   (hy (holds m (w64_val py) ys)))
+  (= (sqdiff_lo rs m px py n ex ey) (sqdiff xs ys n rx ry)))
+
+;; ---- the second fact's front step: the code's run answers the low form's value --------------------
+;; in any program, with any outside functions whose function 0 answers as `dot`'s low form
+(requirement sqdiff_tie
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (hd (forall ((vs (List (BitVec 64))) (m1 Mem)) (= (ext 0 vs m1) (two_ext dot_lo rs vs m1)))))
+  (fn_ans p ext rs sqdiff_code (cons px (cons py (cons n nil))) m (sqdiff_lo rs m px py n ex ey) m))
+;; the functions the module calls from outside, by their answers: one, `dot`
+(def sqdiff_ext ((rs (List Seg)) (j Nat) (vs (List (BitVec 64))) (m Mem))
+  (Option (Prod (BitVec 64) Mem))
+  (if (= j 0) (two_ext dot_lo rs vs m) none))
+;; the module, with its own outside functions
+(theorem sqdiff_prog_tie
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (fn_ans sqdiff_prog (sqdiff_ext rs) rs sqdiff_code (cons px (cons py (cons n nil))) m
+    (sqdiff_lo rs m px py n ex ey)
+    m)
+  (by
+    (have hd
+      (forall ((vs (List (BitVec 64))) (m1 Mem))
+        (= (sqdiff_ext rs 0 vs m1) (two_ext dot_lo rs vs m1)))
+      (intro vs m1)
+      rfl)
+    (exact (sqdiff_tie sqdiff_prog (sqdiff_ext rs) rs m px py n ex ey hd))))
+;; whatever the low form's answer says (`two_ans`), the code's run answers: so code that
+;; realizes the run's answer realizes the answer a caller outside the module runs with
+(theorem sqdiff_ans_tie
+  ((rs (List Seg))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (two_ans sqdiff_lo rs vs m v m2)))
+  (fn_ans sqdiff_prog (sqdiff_ext rs) rs sqdiff_code vs m v m2)
+  (exact
+    (two_ans_tie sqdiff_lo sqdiff_prog (sqdiff_ext rs) rs sqdiff_code
+      (fun
+        ((m1 Mem)
+         (px (BitVec 64))
+         (py (BitVec 64))
+         (n (BitVec 64))
+         (ex (buf_ok rs px n 4))
+         (ey (buf_ok rs py n 4)))
+        (sqdiff_prog_tie rs m1 px py n ex ey))
+      vs
+      m
+      v
+      m2
+      h)))
+
+;; ---- the code's answer is the meaning's value -----------------------------------------------------
+;; the two facts together: in a memory that holds xs and ys at px and py, the code answers
+;; `sqdiff xs ys` and leaves the memory as it was
+(theorem sqdiff_answer
+  ((rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4))
+   (xs (List (BitVec 64)))
+   (ys (List (BitVec 64)))
+   (rx (<= (w64_val n) (List.length xs)))
+   (ry (<= (w64_val n) (List.length ys)))
+   (hx (holds m (w64_val px) xs))
+   (hy (holds m (w64_val py) ys)))
+  (fn_ans sqdiff_prog (sqdiff_ext rs) rs sqdiff_code (cons px (cons py (cons n nil))) m
+    (sqdiff xs ys n rx ry)
+    m)
+  (by
+    (rw (<- (sqdiff_lo_means rs m px py n ex ey xs ys rx ry hx hy)))
+    (exact (sqdiff_prog_tie rs m px py n ex ey))))
+
+;; on the sample arguments (../sample.shard), in any memory that holds the two sample buffers
+(theorem sample_sqdiff_answer
+  ((m Mem) (hx (holds m 140737488347112 sample_xs)) (hy (holds m 140737488347088 sample_ys)))
+  (fn_ans sqdiff_prog (sqdiff_ext sample_rs) sample_rs sqdiff_code
+    (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil)))
+    m
+    (sqdiff sample_xs sample_ys (w64 3) sample_rx sample_ry)
+    m)
+  (exact
+    (sqdiff_answer sample_rs m (w64 140737488347112) (w64 140737488347088) (w64 3) sample_ex
+      sample_ey
+      sample_xs
+      sample_ys
+      sample_rx
+      sample_ry
+      hx
+      hy)))

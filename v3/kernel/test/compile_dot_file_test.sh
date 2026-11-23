@@ -4,7 +4,7 @@
 # words, then the instructions the compile system's pass answers for `dot`'s intermediate code.
 # Held here: the evaluator's status of `dot` — the function over two lists — on those buffers,
 # the model's run of the file and the processor's run of it are one status, 68. That the
-# file's run exits with it is a theorem, and compile_dot_test.sh's.
+# file's run exits with it is a theorem, and compile_modules_test.sh's.
 # Exit code = the number of checks that failed.
 NAME=compile_dot_file_test; . "$(dirname "$0")/x86_common.sh"
 no_chip

@@ -8,7 +8,7 @@
 # with nothing refused and nothing pending, the intermediate machine and the pass are
 # definitions, and the theorem and the laws it is proven from are accepted on no axiom but
 # Lean's three. The theorem's hypotheses met by a module are compile_calls_test.sh's and
-# compile_dot_test.sh's.
+# compile_modules_test.sh's.
 # Exit code = the number of checks that failed.
 NAME=compile_pass_test; . "$(dirname "$0")/x86_common.sh"
 C=v3/compile

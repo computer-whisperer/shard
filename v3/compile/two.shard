@@ -1,0 +1,121 @@
+;;; v3/compile/two.shard — functions of two buffers of one count that only read (`dot` and its
+;;; callers): the type of a low form over them — the data ranges, the memory, the two addresses
+;;; and the count as words, and the evidence that each buffer is in the ranges to read — and such
+;;; a function as the answer of a function called from outside its module (docs/COMPILE.md §5):
+;;; its value where the argument words have the evidence, the memory as it was, and no answer
+;;; elsewhere. Stated once for every such low form.
+(import "lo.shard")
+(use std.mem)
+(use compile.ir)
+(use compile.lo)
+(use models.x86.laws)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+(abbrev Reads2 () Type
+  (forall
+    ((rs (List Seg))
+     (m Mem)
+     (px (BitVec 64))
+     (py (BitVec 64))
+     (n (BitVec 64))
+     (ex (buf_ok rs px n 4))
+     (ey (buf_ok rs py n 4)))
+    (BitVec 64)))
+
+;; ---- a reading function as the answer of a function called from outside ---------------------------
+;; what such a low form asks of the argument words: three of them, and the evidence about each
+;; buffer
+(def two_ok ((rs (List Seg)) (vs (List (BitVec 64)))) Prop
+  (and (= vs (cons (nth vs 0) (cons (nth vs 1) (cons (nth vs 2) nil))))
+    (and (buf_ok rs (nth vs 0) (nth vs 2) 4) (buf_ok rs (nth vs 1) (nth vs 2) 4))))
+;; the answer: where that holds, the function's value, and the memory as it was
+(def two_ext ((f Reads2) (rs (List Seg)) (vs (List (BitVec 64))) (m Mem))
+  (Option (Prod (BitVec 64) Mem))
+  (ans_on (two_ok rs vs)
+    (fun ((h (two_ok rs vs)))
+      (Prod.mk
+        (f rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right h)) (And.right (And.right h)))
+        m))))
+;; the same as a relation, which is what code realizes (`x86/seam.shard`)
+(def two_ans ((f Reads2) (rs (List Seg)) (vs (List (BitVec 64))) (m Mem) (v (BitVec 64)) (m2 Mem))
+  Prop
+  (= (two_ext f rs vs m) (some (Prod.mk v m2))))
+;; on two addresses and a count, with the evidence, it is the function
+(theorem two_ext_is
+  ((f Reads2)
+   (rs (List Seg))
+   (m Mem)
+   (px (BitVec 64))
+   (py (BitVec 64))
+   (n (BitVec 64))
+   (ex (buf_ok rs px n 4))
+   (ey (buf_ok rs py n 4)))
+  (= (two_ext f rs (cons px (cons py (cons n nil))) m) (some (Prod.mk (f rs m px py n ex ey) m)))
+  (exact
+    (ans_on_pos (two_ok rs (cons px (cons py (cons n nil))))
+      (fun ((h (two_ok rs (cons px (cons py (cons n nil))))))
+        (Prod.mk (f rs m px py n (And.left (And.right h)) (And.right (And.right h))) m))
+      (And.intro (Eq.refl (cons px (cons py (cons n nil)))) (And.intro ex ey)))))
+;; and whatever it answers is the function's value on three words that have the evidence
+(theorem two_ans_inv
+  ((f Reads2)
+   (rs (List Seg))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (two_ans f rs vs m v m2)))
+  (exists ((ok (two_ok rs vs)))
+    (and
+      (= v
+        (f rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right ok))
+          (And.right (And.right ok))))
+      (= m2 m)))
+  (by
+    (cases
+      (ans_on_inv (two_ok rs vs)
+        (fun ((h (two_ok rs vs)))
+          (Prod.mk
+            (f rs m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right h))
+              (And.right (And.right h)))
+            m))
+        (Prod.mk v m2)
+        h)
+      ((intro (ok e)
+         (apply (Exists.intro ok)
+           ((apply And.intro ((exact (congrArg (fun ((q (Prod (BitVec 64) Mem))) (Prod.fst q)) e)))
+              ((exact (congrArg (fun ((q (Prod (BitVec 64) Mem))) (Prod.snd q)) e)))))))))))
+;; code whose run answers the function's value on every two addresses and count that have the
+;; evidence answers whatever the answer says: so code that realizes the run's answer realizes
+;; `two_ans`, the answer a caller outside the module runs with
+(theorem two_ans_tie
+  ((f Reads2)
+   (p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (g IFn)
+   (ht
+     (forall
+       ((m Mem)
+        (px (BitVec 64))
+        (py (BitVec 64))
+        (n (BitVec 64))
+        (ex (buf_ok rs px n 4))
+        (ey (buf_ok rs py n 4)))
+       (fn_ans p ext rs g (cons px (cons py (cons n nil))) m (f rs m px py n ex ey) m)))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (h (two_ans f rs vs m v m2)))
+  (fn_ans p ext rs g vs m v m2)
+  (by
+    (cases (two_ans_inv f rs vs m v m2 h)
+      ((intro (ok hh) (rw (And.left hh)) (rw (And.right hh)) (rw (And.left ok) (occ 1))
+         (exact
+           (ht m (nth vs 0) (nth vs 1) (nth vs 2) (And.left (And.right ok))
+             (And.right (And.right ok)))))))))

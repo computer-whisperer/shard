@@ -6,7 +6,7 @@
 # Held here: the evaluator's status of `sqdiff` — the function over two lists — on the buffers
 # the start-up pushes, the model's run of the file and the processor's run of it are one
 # status, 27. That the file's run exits with it is a theorem, and
-# compile_sqdiff_hand_test.sh's.
+# compile_modules_test.sh's.
 # Exit code = the number of checks that failed.
 NAME=compile_sqdiff_hand_file_test; . "$(dirname "$0")/x86_common.sh"
 no_chip
