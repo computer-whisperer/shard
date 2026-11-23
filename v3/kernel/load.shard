@@ -5,7 +5,7 @@
 ;;;   eval direct v3/kernel/load.shard COMMON --run MODULE.FN [--fuel N] [--trace FILE]
 ;;;     [--lowered] FILE… [-- ARG…]
 ;;;   COMMON = --root DIR [--init EXPORT --init-index INDEX] [--instance-budget N] [--state]
-;;;            [--facts OUT] [--unchecked]
+;;;            [--facts OUT] [--unchecked] [--link]
 ;;; loads each FILE (under DIR, spelled from the same base) as a module with
 ;;; its imports (loader.shard) and prints the records (docs/LANGUAGE.md "What
 ;;; the loader prints") — one line per module and declaration —
@@ -17,6 +17,11 @@
 ;;; none loads no file (`init_unavailable`).
 ;;; `--state`: each function that takes or returns the checker's state is
 ;;; judged as well (STATE records).
+;;; `--link`: after the files, the link (loader.shard `link_load`): every declaration that rests on a
+;;; view's parameter whose implementation was among the files is checked by K once more, in an
+;;; environment where each such parameter's name is its implementation (LINK records; a refusal
+;;; is LINK-ERROR and an error of the load). Where the records are printed; without the flag a
+;;; load prints none of it and checks nothing twice.
 ;;; `--unchecked`: every `fn` is read as a program alone (`RUNNABLE fn F why=unchecked
 ;;; route=e_first`): nothing checks its types and it has no definition, so a type error is not
 ;;; refused. A `theorem` and a `fulfills` are passed over: the functions they speak of have no
@@ -100,7 +105,8 @@
   (state Bool)  ; the state check
   (lowered Bool)  ; the lowered run
   (both Bool)  ; the two readings' comparison
-  (unchecked Bool))  ; every fn a program alone
+  (unchecked Bool)  ; every fn a program alone
+  (link Bool))  ; the link after the files
 (fn parse_args ((args (List (List Int))) (a Args)) Args
   (measure (struct args))
   (match args
@@ -110,13 +116,14 @@
      (if (int_list_eq x (utf8 "--state")) (parse_args r (with Args a (state true)))
      (if (int_list_eq x (utf8 "--both")) (parse_args r (with Args a (both true)))
      (if (int_list_eq x (utf8 "--unchecked")) (parse_args r (with Args a (unchecked true)))
+     (if (int_list_eq x (utf8 "--link")) (parse_args r (with Args a (link true)))
      (if (int_list_eq x (utf8 "--dump")) (parse_args r (with Args a (dump true)))
      (if (int_list_eq x (utf8 "--lowered")) (parse_args r (with Args a (lowered true)))
      (if (valued_flag x)
        (match r
          ((cons v r2) (parse_args r2 (flag_value a x v)))
          (nil (parse_args nil a)))
-       (parse_args r (with Args a (files (cons x (Args.files a)))))))))))))))
+       (parse_args r (with Args a (files (cons x (Args.files a))))))))))))))))
 ;; the flags that take the argument after them
 (fn valued_flag ((x (List Int))) Bool
   (bool_or (int_list_eq x (utf8 "--root"))
@@ -169,7 +176,8 @@
               (state false)
               (lowered false)
               (both false)
-              (unchecked false)))))
+              (unchecked false)
+              (link false)))))
        (match (parts_of (Args.root a))
          (none (exit 2 (write_line (utf8 "load: --root DIR is required") w1)))
          ((some rootp)
@@ -181,7 +189,7 @@
             (if (Args.dump a) (main_dump l0 (Args.files a) (Args.facts a) w1)
             (if (< 0 (len (Args.emit a))) (main_emit l0 (Args.files a) (Args.emit a) w1)
             (match (Args.run a)
-              (none (main_records l0 (Args.files a) (Args.facts a) w1))
+              (none (main_records l0 (Args.files a) (Args.facts a) (Args.link a) w1))
               ((some entry)
                (main_run l0 (Args.files a) entry (Args.argv a) (Args.fuel a) (Args.trace a)
                  (Args.lowered a)
@@ -299,11 +307,11 @@
          ((Prod.mk false w2) (Prod.mk (some path) w2)))))))
 ;; the records and the counts; the exit code is refused + errors; a clean load's facts under
 ;; --facts
-(fn main_records ((l0 Load) (files (List (List Int))) (facts (List Int)) (w World)) World
+(fn main_records ((l0 Load) (files (List (List Int))) (facts (List Int)) (lnk Bool) (w World)) World
   (match
     (load_files l0 files (write_line (append (utf8 "LOAD root=") (join_path (Load.root l0))) w))
-    ((Prod.mk l w2)
-     (let ((cs (rec_counts (ld_recs l) (zero_counts))))
+    ((Prod.mk lr w2)
+     (let ((l Load (if lnk (link_load lr) lr)) (cs (rec_counts (ld_recs l) (zero_counts))))
        (exit (load_failures cs)
          (write_line (append (utf8 "LOAD: ") (show_counts_load cs))
            (print_recs (ld_recs l) (if (< 0 (load_failures cs)) w2 (write_facts l facts w2)))))))))

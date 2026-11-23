@@ -296,6 +296,8 @@
   (RDischarge Name Symbol)  ; the implementation check: a parameter discharged (type / fn / proved) or pending
   (RImplErr Name Symbol (List Int))  ; the implementation check: a parameter without its implementation, a mismatch
   (RImplRec Rec)  ; a record of the implementation's fork (its own declarations)
+  (RLink Name (List Name) (List Name))  ; the link: a declaration K accepted in the linked environment, its axiom closure there, the view parameters it still rests on
+  (RLinkErr Name Symbol (List Int))  ; the link: a declaration that did not enter the linked environment — the reason, the constant it stopped at
   (RReadErr (List Int) Symbol (List Int))  ; file, reason, message — the file's reading ends here
   (RLoadErr (List Int) Symbol (List Int))  ; file, reason, detail — the file's loading ends here
   (RUnused Name (List Name))  ; the file's `use` lines no citation could need: module, prefixes
@@ -397,6 +399,7 @@
   (unchecked Bool)  ; the driver's --unchecked: a fn is read as a program alone and never enters the typed route — nothing checks its types or defines it (load_e_form)
   (cited (List Name))  ; every candidate the loaded files' tokens asked the export for (init_demand), found or not: what the driver's --facts prints the facts of (facts.shard)
   (linked (List Load))  ; the fork of each implementation checked, as it ended: the main line merges its programs and drops the rest, and --facts prints the facts those programs are read by, which rest on what the fork fetched of Init
+  (pre (Option CheckedEnv))  ; the environment as it stood before the main line's first view parameter: where the linked environment starts (link)
   (states (Option (IntMap (List (Prod Name Int))))))  ; the state's check (thread.shard): None in a plain load; under the driver's --state the modes of the functions judged so far
 (fn load0 ((root (List (List Int)))) Load
   (make Load (root root) (env (env_empty)) (memo (memos_empty)) (mods nil) (init InitNone)
@@ -428,6 +431,7 @@
     (unchecked false)
     (cited nil)
     (linked nil)
+    (pre none)
     (states none)))
 ;; a fresh root load from a load's Init state: the Init load carried — the
 ;; base's environment of Init alone, its records and ordinals, the export and index handle;
@@ -700,6 +704,11 @@
     (nil false)
     ((cons c r) (if (= c 46) true (has_dot r)))))
 (fn ld_settled ((l Load)) Load (with Load l (missed nil)))
+;; the environment before the first view parameter, kept once
+(fn ld_keep_pre ((l Load) (env0 CheckedEnv)) Load
+  (match (Load.pre l)
+    ((some _) l)
+    (none (with Load l (pre (some env0))))))
 (fn ld_add_param ((l Load) (n Name)) Load
   (with Load l (params (cons n (Load.params l))) (pset (names_add (Load.pset l) n))))
 (fn ld_with_e ((l Load) (es ESt)) Load (with Load l (etab es)))
@@ -3217,6 +3226,10 @@
 (fulfills gather_types.dec_1 (by (intro p hf n r ht hw s hb) (apply natAbs_pred (arith))))
 (fulfills gather_types.dec_2 (by (intro p hf n r ht hw) (apply natAbs_pred (arith))))
 ;; the E twin of an admitted type / sig fn / sig type
+;; a signature K admitted is read with its proofs known for proofs (classify.shard
+;; classify_checked): a binder whose type is a proposition is no parameter of the program
+(fn classify_twin ((es ESt) (sc Scope) (env CheckedEnv) (s SExpr)) CRes
+  (if (sym_eq (form_head s) (sym "sig")) (classify_checked es sc env s) (classify_form es sc env s)))
 (fn add_e_twin ((l Load) (f Fx) (s SExpr)) Load
   (let ((h (form_head s)))
     (if (bool_or (sym_eq h (sym "type")) (sym_eq h (sym "sig")))
@@ -3227,7 +3240,7 @@
       l)))
 (fn add_e_twin_now ((l0 Load) (f Fx) (s SExpr)) Load
   (let ((l (scan_form l0 f s)))
-    (match (classify_form (Load.etab l) (fx_scope l f) (Load.env l) s)
+    (match (classify_twin (Load.etab l) (fx_scope l f) (Load.env l) s)
       ((CErr e m) (ld_rec l (RLoadErr (fx_file f) e m)))
       ((COk d) (ld_with_e l (es_add_decl (Load.etab l) d)))
       ((COkT _ _ _)
@@ -3254,7 +3267,8 @@
        (Prod.mk
          (ld_rec
            (ld_add_param
-             (ld_with_tbl (ld_with_env l env1 (Load.memo l)) (tbl_add (Load.tbl l) n (Fx.module f)))
+             (ld_with_tbl (ld_with_env (ld_keep_pre l (Load.env l)) env1 (Load.memo l))
+               (tbl_add (Load.tbl l) n (Fx.module f)))
              n)
            (RParam n kind arity))
          (fx_mix f
@@ -4700,7 +4714,8 @@
                                 (impl_replay lf1
                                   (make Im (view rest) (impl iforms) (done nil) (fx f0) (file ifile)
                                     (vparts (Fx.parts f))
-                                    (all rest))
+                                    (all rest)
+                                    (main (Load.env l1)))
                                   (import_depth)
                                   w2d)
                                 ((Prod.mk (Prod.mk lf2 im) w3)
@@ -4731,11 +4746,13 @@
 
 ;; the implementation check's state: the view's forms still to replay, the
 ;; implementation's forms not yet consumed (file order), the parameters
-;; discharged so far, the fork's file context, the implementation file, the view's
+;; discharged so far, the fork's file context, the implementation file, the view's, the
+;; view's forms entire, and the main line's environment, where the parameters are parameters
 (record Im (view (List SExpr)) (impl (List SExpr)) (done (List (Prod Symbol Name))) (fx Fx)
   (file (List (List Int)))
   (vparts (List (List Int)))
-  (all (List SExpr)))
+  (all (List SExpr))
+  (main CheckedEnv))
 (fn im_file ((i Im)) (List Int) (join_path (Im.file i)))
 ;; the fork's file context for a form of the implementation file, and for a form of the view
 ;; replayed: a record names the file its form stands in, and an import resolves from there
@@ -4851,7 +4868,7 @@
   (match (form_for l n)
     (none (Prod.mk l im))
     ((some (Prod.mk _ _))
-     (if (sym_eq k (sym "type")) (Prod.mk (check_arity l n sig) (im_mark im (sym "type") n))
+     (if (sym_eq k (sym "type")) (Prod.mk (check_arity l im n sig) (im_mark im (sym "type") n))
      (check_signature l im sig n))))))
 (fn missing_reason ((k Symbol)) Symbol
   (if (sym_eq k (sym "type")) (sym "impl_missing_type")
@@ -4916,7 +4933,8 @@
                     ((some (RLoadErr _ _ _)) (Prod.mk (Prod.mk l1 (im_with_fx im f1)) w))
                     (_
                       (Prod.mk
-                        (Prod.mk (check_arity l1 n sig) (im_mark (im_with_fx im f1) (sym "type") n))
+                        (Prod.mk (check_arity l1 im n sig)
+                          (im_mark (im_with_fx im f1) (sym "type") n))
                         w))))))))
         (if (sym_eq h (sym "fn"))
           (let ((n (form_name sc s)))
@@ -4983,10 +5001,35 @@
        (if (bool_and (sym_eq h (sym "requirement")) (sym_eq k (sym "requirement")))
          (if (name_eq (form_name sc s) n) (some s) (find_sig r sc k n))
          (find_sig r sc k n)))))))
+;; A DISCHARGE IS OF THE CONSUMER'S OWN STATEMENT. The implementation's declaration under a
+;; parameter's name must have, in the fork, the type the main line gave the parameter: K is
+;; handed `NAME.<same> : T := NAME` against the fork's environment — T the parameter's type as
+;; the main line holds it — and the environment K answers with is dropped. K accepts exactly
+;; where the implementation's type is T there. So a signature's evidence, which the program's
+;; signature does not carry, and a requirement's statement, which is read again from its text
+;; under the implementation's opened names, are the view's own or the check fails; the loader
+;; compares no term itself. True where the main line holds no constant of the name (a
+;; signature over E-only types) or the fork none (a fn that is a program only).
+(fn same_in_fork ((l Load) (im Im) (n Name)) Bool
+  (match (env_find (Im.main im) n)
+    (none true)
+    ((some p)
+     (match (env_find (Load.env l) n)
+       (none true)
+       ((some _)
+        (let ((nm (Str n (sym "the view's type"))))
+          (match
+            (check (Load.env l) (st_init)
+              (OpaqueDecl (ConstantVal nm (ci_lparams p) (ci_type p))
+                (mk_const n (lparam_levels (ci_lparams p)))
+                false
+                (list nm)))
+            ((Accepted _) true)
+            (_ false))))))))
 ;; (sig type (NAME T…)) against the implementation's (type (NAME T…) …): the parameter count
 ;; — of the admitted inductive, or of the E-only type where the fields cite a built-in with no
 ;; L constant in scope: such a type is an E parameter, as the sealed types of K are
-(fn check_arity ((l Load) (n Name) (sig SExpr)) Load
+(fn check_arity ((l Load) (im Im) (n Name) (sig SExpr)) Load
   (match sig
     ((SList (cons _ (cons _ (cons hd _))))
      (let
@@ -4996,11 +5039,16 @@
             (_ 0))))
        (match (impl_type_arity (Load.env l) (Load.etab l) n)
          ((some np)
-          (if (= np want) (ld_rec l (RDischarge n (sym "type")))
-          (ld_rec l
-            (RImplErr n (sym "impl_type_arity")
-              (append (utf8 "the view's ")
-                (append (show_nat want) (append (utf8 ", the implementation's ") (show_nat np))))))))
+          (if (= np want)
+            (if (same_in_fork l im n) (ld_rec l (RDischarge n (sym "type")))
+            (ld_rec l
+              (RImplErr n (sym "impl_type")
+                (utf8
+                  "the implementation's type has not the kind the view's sig type gives the parameter"))))
+            (ld_rec l
+              (RImplErr n (sym "impl_type_arity")
+                (append (utf8 "the view's ")
+                  (append (show_nat want) (append (utf8 ", the implementation's ") (show_nat np))))))))
          (none l))))
     (_ l)))
 (fn impl_type_arity ((env CheckedEnv) (es ESt) (n Name)) (Option Int)
@@ -5010,13 +5058,19 @@
       (match (es_info es n)
         ((some (EIInd np _)) (some np))
         (_ none)))))
+;; a signature in the fork: read as a parameter's twin (classify_twin) where K reads it there —
+;; its proofs then known for proofs —, alone where K does not (a signature over E-only types)
+(fn classify_sig ((es ESt) (sc Scope) (env CheckedEnv) (sig SExpr)) CRes
+  (match (read_decl sc env sig)
+    ((RDParam _ _ _) (classify_twin es sc env sig))
+    (_ (classify_form es sc env sig))))
 ;; (sig fn NAME BINDERS RET) against the implementation's fn: the E signatures — the sig's,
 ;; classified here in the fork where the sealed types are concrete, and the fn's E declaration
 ;; (the implementation file's, just loaded; a private file's, loaded by an import) — then the
 ;; parameter admitted to K where K can read the signature, an E parameter only where it cannot
 (fn check_signature ((l Load) (im Im) (sig SExpr) (n Name)) (Prod Load Im)
   (let ((sc (fx_scope l (im_fx_impl im))))
-    (match (classify_form (Load.etab l) sc (Load.env l) sig)
+    (match (classify_sig (Load.etab l) sc (Load.env l) sig)
       ((CErr e m) (Prod.mk (ld_rec l (RReadErr (im_file im) e m)) im))
       ((COk (ESig _ snt sps srt))
        (match (es_find_decl (Load.etab l) n)
@@ -5025,8 +5079,15 @@
             (match (read_decl sc (Load.env l) sig)
               ((RDParam d k a)
                (match (env_find (Load.env l) n)
-                 ((some _)
-                  (Prod.mk (ld_rec l (RDischarge n (sym "defined"))) (im_mark im (sym "fn") n)))  ; the implementation's definition stands in the parameter's place
+                 ((some _)  ; the implementation's definition stands in the parameter's place, where it has the parameter's type
+                  (if (same_in_fork l im n)
+                    (Prod.mk (ld_rec l (RDischarge n (sym "defined"))) (im_mark im (sym "fn") n))
+                    (Prod.mk
+                      (ld_rec l
+                        (RImplErr n (sym "impl_signature")
+                          (utf8
+                            "the implementation's definition has not the type the view's signature gives the parameter")))
+                      (im_mark im (sym "fn") n))))
                  (none
                    (match (admit_param l (im_fx_view im) d k a)
                      ((Prod.mk l1 f1)
@@ -5071,15 +5132,20 @@
                 (Prod.mk (ld_rec (ld_with_env l (Load.env l) (memos_empty)) (RPolicy nn out))
                   (im_mark im (sym "requirement") n)))
                ((PolOk memo1 recs)
-                (Prod.mk
-                  (ld_rec
-                    (recs_add
-                      (ld_with_tbl (ld_with_env l env1 memo1)
-                        (tbl_add_all (Load.tbl l) (decls_declare env1 ds)
-                          (Fx.module (im_fx_impl im))))
-                      recs)
-                    (RDischarge n (sym "proved")))
-                  (im_mark (im_with_fx im (mix_recs (im_fx_impl im) recs)) (sym "requirement") n)))))))
+                (let
+                  ((l2 Load
+                     (recs_add
+                       (ld_with_tbl (ld_with_env l env1 memo1)
+                         (tbl_add_all (Load.tbl l) (decls_declare env1 ds)
+                           (Fx.module (im_fx_impl im))))
+                       recs)))
+                  (Prod.mk
+                    (ld_rec l2
+                      (if (same_in_fork l2 im n) (RDischarge n (sym "proved"))
+                      (RImplErr n (sym "impl_statement")
+                        (utf8
+                          "what the implementation proved is not the statement the view gives its consumers: the requirement reads differently under the implementation's opened names"))))
+                    (im_mark (im_with_fx im (mix_recs (im_fx_impl im) recs)) (sym "requirement") n))))))))
          (_ (Prod.mk l im)))))))
 
 ;; the forms in order; None when the file's loading ended in an error
@@ -5401,6 +5467,332 @@
 (fulfills impl_replay.dec_2
   (by (intro p h1 s r h2 x h3 l2 f2 w2 h4) (apply natAbs_lt (arith) (arith))))
 
+;; ---- THE LINK ----------------------------------------------------------------------------------
+;; A consumer of a directory module is checked against the view alone: K holds each `sig` and
+;; `requirement` as a constant with a type and no value, and what a consumer proves rests on
+;; them (`params=`). An implementation is checked in a fork, which ends with K's constants for
+;; the same names: a definition, a theorem, a type. The link puts the two together under K. It
+;; builds one environment in which each discharged parameter's name is its implementation and
+;; has K check there every declaration of the main line that rests on such a parameter — the
+;; same terms, read out of the environments that hold them; nothing is read from a source
+;; again and no proof step runs. What K accepts is recorded, `LINK NAME axioms=… params=…`:
+;; the declaration's closure in an environment where those parameters are parameters no more.
+;;
+;; The linked environment starts from the main line's as it stood before its first view
+;; parameter (Load.pre). A constant enters on demand, after every constant its type and value
+;; cite (K's direct edges, `ci_used`), read from the first of: the fork that discharged it,
+;; where it is a parameter an implementation of this load proved, defined or declared; the
+;; main line's environment; a fork's. So a parameter with no implementation here enters as the
+;; parameter it is, and what rests on it rests on it still. The loader chooses the
+;; environment a constant is read from and compares nothing: what is claimed is K's check in
+;; the linked environment and no more. A constant asked for while it is itself entering is a
+;; circle — two modules each proved from the other's laws — and no link.
+(record Lk (el CheckedEnv) (main CheckedEnv) (forks (List CheckedEnv))
+  (impl (IntMap (List (Prod Name CheckedEnv))))  ; a discharged parameter → its fork's environment
+  (busy (IntMap (List Name)))  ; the constants entering: asked for, their citations not all in
+  (bad (Option (Prod Name (Prod Symbol (List Int))))))  ; the first constant that did not enter, and why
+(fn link_fuel () Int 1000000000)
+(fn lk_fail ((lk Lk) (n Name) (e Symbol) (m (List Int))) Lk
+  (with Lk lk (bad (some (Prod.mk n (Prod.mk e m))))))
+(fn impl_env ((m (IntMap (List (Prod Name CheckedEnv)))) (n Name)) (Option CheckedEnv)
+  (match (im_find m (name_key n))
+    (none none)
+    ((some b) (impl_assoc b n))))
+(fn impl_assoc ((b (List (Prod Name CheckedEnv))) (n Name)) (Option CheckedEnv)
+  (measure (struct b))
+  (match b
+    (nil none)
+    ((cons (Prod.mk k e) r) (if (name_eq k n) (some e) (impl_assoc r n)))))
+(fn impl_add ((m (IntMap (List (Prod Name CheckedEnv)))) (n Name) (e CheckedEnv))
+  (IntMap (List (Prod Name CheckedEnv)))
+  (let ((h (name_key n)))
+    (im_insert m h
+      (cons (Prod.mk n e)
+        (match (im_find m h)
+          ((some b) b)
+          (none nil))))))
+;; the parameters the forks discharged with a constant of K: proved, defined, or a type
+(fn link_impls ((fs (List Load)) (m (IntMap (List (Prod Name CheckedEnv)))))
+  (IntMap (List (Prod Name CheckedEnv)))
+  (measure (struct fs))
+  (match fs
+    (nil m)
+    ((cons f r) (link_impls r (impls_of (Load.env f) (Load.recs f) m)))))
+(fn impls_of ((env CheckedEnv) (rs (List Rec)) (m (IntMap (List (Prod Name CheckedEnv)))))
+  (IntMap (List (Prod Name CheckedEnv)))
+  (measure (struct rs))
+  (match rs
+    (nil m)
+    ((cons (RDischarge n k) r)
+     (impls_of env r
+       (if
+         (bool_or (sym_eq k (sym "proved"))
+           (bool_or (sym_eq k (sym "defined")) (sym_eq k (sym "type"))))
+         (match (env_find env n)
+           ((some _) (impl_add m n env))
+           (none m))
+         m)))
+    ((cons _ r) (impls_of env r m))))
+(fn fork_envs ((fs (List Load))) (List CheckedEnv)
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons f r) (cons (Load.env f) (fork_envs r)))))
+;; where a constant is read from
+(fn link_find ((lk Lk) (n Name)) (Option (Prod CheckedEnv ConstantInfo))
+  (match (impl_env (Lk.impl lk) n)
+    ((some fe)
+     (match (env_find fe n)
+       ((some i) (some (Prod.mk fe i)))
+       (none (link_find_plain lk n))))
+    (none (link_find_plain lk n))))
+(fn link_find_plain ((lk Lk) (n Name)) (Option (Prod CheckedEnv ConstantInfo))
+  (match (env_find (Lk.main lk) n)
+    ((some i) (some (Prod.mk (Lk.main lk) i)))
+    (none (find_in_envs (Lk.forks lk) n))))
+(fn find_in_envs ((es (List CheckedEnv)) (n Name)) (Option (Prod CheckedEnv ConstantInfo))
+  (measure (struct es))
+  (match es
+    (nil none)
+    ((cons e r)
+     (match (env_find e n)
+       ((some i) (some (Prod.mk e i)))
+       (none (find_in_envs r n))))))
+;; the name a constant enters under: an inductive block's first type for a type of it, and
+;; for a constructor or a recursor the type it belongs to (whose turn gives the block's)
+(fn link_head ((i ConstantInfo)) Name
+  (match i
+    ((InductInfo _ _ _ all _ _ _ _ _)
+     (match all
+       ((cons h _) h)
+       (nil (ci_name i))))
+    ((CtorInfo _ ind _ _ _ _) ind)
+    ((RecInfo _ all _ _ _ _ _ _ _)
+     (match all
+       ((cons h _) h)
+       (nil (ci_name i))))
+    (_ (ci_name i))))
+;; the declaration K checked to make a constant, for another environment: an axiom, a
+;; definition, a theorem or an opaque constant as it stands, an inductive block from its
+;; types and their constructors as `env` holds them
+(fn link_decl ((env CheckedEnv) (i ConstantInfo)) (Option Declaration)
+  (match i
+    ((AxiomInfo cv u) (some (AxiomDecl cv u)))
+    ((DefnInfo cv v h sf all) (some (DefnDecl cv v h sf all)))
+    ((ThmInfo cv v all) (some (ThmDecl cv v all)))
+    ((OpaqueInfo cv v u all) (some (OpaqueDecl cv v u all)))
+    ((QuotInfo _ _) (some QuotDecl))
+    ((InductInfo (ConstantVal _ lps _) np _ all _ _ _ us _)
+     (match (lk_block_types env all)
+       ((some ts) (some (InductDecl lps np ts us)))
+       (none none)))
+    (_ none)))
+(fn lk_block_types ((env CheckedEnv) (all (List Name))) (Option (List InductiveType))
+  (measure (struct all))
+  (match all
+    (nil (some nil))
+    ((cons t r)
+     (match (env_find env t)
+       ((some (InductInfo (ConstantVal _ _ ty) _ _ _ ctors _ _ _ _))
+        (match (lk_block_ctors env ctors)
+          ((some cs)
+           (match (lk_block_types env r)
+             ((some ts) (some (cons (InductiveType t ty cs) ts)))
+             (none none)))
+          (none none)))
+       (_ none)))))
+(fn lk_block_ctors ((env CheckedEnv) (cs (List Name))) (Option (List Constructor))
+  (measure (struct cs))
+  (match cs
+    (nil (some nil))
+    ((cons c r)
+     (match (env_find env c)
+       ((some (CtorInfo (ConstantVal _ _ ty) _ _ _ _ _))
+        (match (lk_block_ctors env r)
+          ((some x) (some (cons (Constructor c ty) x)))
+          (none none)))
+       (_ none)))))
+;; what a constant's declaration cites, less its own names: a block's types and constructors
+;; cite one another
+(fn link_cites ((env CheckedEnv) (i ConstantInfo)) (List Name)
+  (match i
+    ((InductInfo _ _ _ all _ _ _ _ _)
+     (names_less (block_cites env all) (append all (block_ctor_names env all))))
+    (_ (names_less (ci_used i) (list (ci_name i))))))
+(fn block_cites ((env CheckedEnv) (all (List Name))) (List Name)
+  (measure (struct all))
+  (match all
+    (nil nil)
+    ((cons t r)
+     (match (env_find env t)
+       ((some (InductInfo cv a b c ctors d e f g))
+        (append (ci_used (InductInfo cv a b c ctors d e f g))
+          (append (ctors_cite env ctors) (block_cites env r))))
+       (_ (block_cites env r))))))
+(fn ctors_cite ((env CheckedEnv) (cs (List Name))) (List Name)
+  (measure (struct cs))
+  (match cs
+    (nil nil)
+    ((cons c r)
+     (match (env_find env c)
+       ((some i) (append (ci_used i) (ctors_cite env r)))
+       (none (ctors_cite env r))))))
+(fn block_ctor_names ((env CheckedEnv) (all (List Name))) (List Name)
+  (measure (struct all))
+  (match all
+    (nil nil)
+    ((cons t r)
+     (match (env_find env t)
+       ((some (InductInfo _ _ _ _ ctors _ _ _ _)) (append ctors (block_ctor_names env r)))
+       (_ (block_ctor_names env r))))))
+(fn names_less ((ns (List Name)) (own (List Name))) (List Name)
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons n r) (if (mem_name n own) (names_less r own) (cons n (names_less r own))))))
+;; a constant's declaration into the linked environment: K's check, and its refusal the link's
+(fn link_admit ((lk Lk) (env CheckedEnv) (i ConstantInfo)) Lk
+  (match (link_decl env i)
+    (none
+      (lk_fail lk (ci_name i) (sym "link_shape")
+        (utf8 "no declaration is rebuilt from this constant")))
+    ((some d)
+     (match (check (Lk.el lk) (st_init) d)
+       ((Accepted e2) (with Lk lk (el e2)))
+       ((Rejected reason subject) (lk_fail lk subject (reason_of reason) nil))
+       ((Exhausted res site) (lk_fail lk (ci_name i) (exhausted_sym res site) nil))))))
+(fn link_frames ((ns (List Name)) (rest (List (Prod Name Bool)))) (List (Prod Name Bool))
+  (measure (struct ns))
+  (match ns
+    (nil rest)
+    ((cons n r) (cons (Prod.mk n false) (link_frames r rest)))))
+;; The walk. A frame is a constant to enter and whether what it cites has been asked for: at
+;; its first turn its citations go above it, at its second its declaration goes to K. A
+;; constant met at a first turn while it is entering is a circle.
+(fn link_walk ((lk Lk) (stack (List (Prod Name Bool))) (fuel Int)) Lk
+  (measure (Int.natAbs fuel))
+  (if (< fuel 1) (lk_fail lk Anon (sym "link_fuel") nil)
+  (match (Lk.bad lk)
+    ((some _) lk)
+    (none
+      (match stack
+        (nil lk)
+        ((cons (Prod.mk n ready) rest)
+         (match (env_find (Lk.el lk) n)
+           ((some _) (link_walk lk rest (- fuel 1)))
+           (none
+             (match (link_find lk n)
+               (none
+                 (lk_fail lk n (sym "link_unknown") (utf8 "no environment of the load holds it")))
+               ((some (Prod.mk env i))
+                (if (bool_not (name_eq (link_head i) n))
+                  (link_walk lk (cons (Prod.mk (link_head i) false) rest) (- fuel 1))
+                (if ready (link_walk (link_admit lk env i) rest (- fuel 1))
+                (if (names_have (Lk.busy lk) n)
+                  (lk_fail lk n (sym "link_cycle")
+                    (utf8
+                      "it is cited by what it rests on: implementations proved from each other's parameters"))
+                  (link_walk (with Lk lk (busy (names_add (Lk.busy lk) n)))
+                    (link_frames (link_cites env i) (cons (Prod.mk n true) rest))
+                    (- fuel 1)))))))))))))))
+;; a closure with every obligation the load or a fork proved replaced by what its proof rests
+;; on (discharge_axs, each account in turn, as many rounds as there are accounts and one)
+(fn link_discharged ((ds (List Dis)) (axs (List Name)) (rounds Int)) (List Name)
+  (measure (Int.natAbs rounds))
+  (if (< rounds 1) axs (link_discharged ds (discharge_each ds axs) (- rounds 1))))
+(fn discharge_each ((ds (List Dis)) (axs (List Name))) (List Name)
+  (measure (struct ds))
+  (match ds
+    (nil axs)
+    ((cons d r) (discharge_each r (discharge_axs d axs (+ 1 (dis_count d)))))))
+(fn fork_dis ((fs (List Load))) (List Dis)
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons f r) (cons (Load.discharged f) (fork_dis r)))))
+(fn fork_psets ((fs (List Load))) (List (IntMap (List Name)))
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons f r) (cons (Load.pset f) (fork_psets r)))))
+;; the parameters among a closure: the main line's and each fork's
+(fn link_params ((ps (List (IntMap (List Name)))) (axs (List Name))) (List Name)
+  (measure (struct axs))
+  (match axs
+    (nil nil)
+    ((cons a r) (if (in_psets ps a) (cons a (link_params ps r)) (link_params ps r)))))
+(fn in_psets ((ps (List (IntMap (List Name)))) (a Name)) Bool
+  (measure (struct ps))
+  (match ps
+    (nil false)
+    ((cons p r) (if (names_have p a) true (in_psets r a)))))
+(fn any_linked ((m (IntMap (List (Prod Name CheckedEnv)))) (ps (List Name))) Bool
+  (measure (struct ps))
+  (match ps
+    (nil false)
+    ((cons p r)
+     (match (impl_env m p)
+       ((some _) true)
+       (none (any_linked m r))))))
+;; a linked declaration's record: its closure in the linked environment
+(fn link_record ((l Load) (lk Lk) (ax AxMemo) (n Name)) (Prod AxMemo Rec)
+  (match (axioms_of (Lk.el lk) ax n)
+    ((Prod.mk ax1 none) (Prod.mk ax1 (RLinkErr n (sym "closure_bound") nil)))
+    ((Prod.mk ax1 (some axs0))
+     (let
+       ((axs
+          (link_discharged (cons (Load.discharged l) (fork_dis (Load.linked l))) axs0
+            (+ 2 (len (Load.linked l))))))
+       (Prod.mk ax1
+         (RLink n axs (link_params (cons (Load.pset l) (fork_psets (Load.linked l))) axs)))))))
+;; each declaration the main line accepted on a parameter that an implementation of this load
+;; stands for, in the main line's order: into the linked environment, and its record
+(fn link_targets ((l Load) (lk Lk) (ax AxMemo) (rs (List Rec))) Load
+  (measure (struct rs))
+  (match rs
+    (nil l)
+    ((cons (RAccept n _ _ _ ps _) r)
+     (if (any_linked (Lk.impl lk) ps)
+       (let
+         ((lk1
+            (link_walk (with Lk lk (busy IMEmpty) (bad none)) (list (Prod.mk n false)) (link_fuel))))
+         (match (Lk.bad lk1)
+           ((some (Prod.mk at (Prod.mk e m)))
+            (link_targets
+              (ld_rec l
+                (RLinkErr n e
+                  (append (utf8 "at ")
+                    (append (show_name at) (if (= (len m) 0) nil (append (utf8 " — ") m))))))
+              lk1
+              ax
+              r))
+           (none
+             (match (link_record l lk1 ax n)
+               ((Prod.mk ax1 x) (link_targets (ld_rec l x) lk1 ax1 r))))))
+       (link_targets l lk ax r)))
+    ((cons _ r) (link_targets l lk ax r))))
+;; the link of a load: nothing where the main line met no view parameter or no fork left a
+;; constant for one
+(fn link_load ((l Load)) Load
+  (match (Load.pre l)
+    (none l)
+    ((some pre)
+     (link_targets l
+       (make Lk (el pre) (main (Load.env l)) (forks (fork_envs (Load.linked l)))
+         (impl (link_impls (Load.linked l) IMEmpty))
+         (busy IMEmpty)
+         (bad none))
+       (ax_memo_empty)
+       (ld_recs l)))))
+(fulfills link_walk.dec_1 (by (intro p h hb n ready rest hs w he) (apply natAbs_pred (arith))))
+(fulfills link_walk.dec_2
+  (by (intro p h hb n ready rest hs he env i hf hh hr hz) (apply natAbs_pred (arith))))
+(fulfills link_walk.dec_3
+  (by (intro p h hb n ready rest hs he env i hf hh hr) (apply natAbs_pred (arith))))
+(fulfills link_walk.dec_4
+  (by (intro p h hb n ready rest hs he env i hf hh) (apply natAbs_pred (arith))))
+(fulfills link_discharged.dec_1 (by (intro p h) (apply natAbs_pred (arith))))
+
 ;; ---- printing (the driver; the pins) --------------------------------------------------------
 (fn show_names_c ((ns (List Name))) (List Int)
   (measure (struct ns))
@@ -5446,6 +5838,14 @@
      (append (utf8 "IMPL-ERROR ")
        (append (show_name n) (append (utf8 " ") (append (chars_of_sym e) (append (utf8 ": ") m))))))
     ((RImplRec y) (append (utf8 "IMPL ") (show_rec y)))
+    ((RLink n axs ps)
+     (append (utf8 "LINK ")
+       (append (show_name n)
+         (append (utf8 " axioms=")
+           (append (show_names_c axs) (append (utf8 " params=") (show_names_c ps)))))))
+    ((RLinkErr n e m)
+     (append (utf8 "LINK-ERROR ")
+       (append (show_name n) (append (utf8 " ") (append (chars_of_sym e) (append (utf8 ": ") m))))))
     ((RRefuse n r)
      (append (utf8 "REFUSE ") (append (show_name n) (append (utf8 " ") (chars_of_sym r)))))
     ((RPolicy n out)
@@ -5605,6 +6005,8 @@
        ((RDischarge _ _) acc)
        ((RImplErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RImplRec y) (rec_count y acc))
+       ((RLink _ _ _) acc)
+       ((RLinkErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RReadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RLoadErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RUnused _ _) acc)

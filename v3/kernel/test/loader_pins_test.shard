@@ -446,7 +446,15 @@
       "impl_init_demand"
       "init_late_file_import"
       "init_use_late"
-      "init_fetch_second")))
+      "init_fetch_second"
+      ;; a view's signature that takes evidence; a discharge is of the view's own type and
+      ;; statement; the link, a circle of two implementations, a link with one module of two
+      "view_evidence"
+      "view_evidence_differs"
+      "view_statement"
+      "view_link"
+      "view_link_cycle"
+      "view_link_partial")))
 
 ;; the outcome of a load: its first record that is not a module, an Init
 ;; load, an acceptance, a parameter or a discharge (the implementation's
@@ -475,6 +483,7 @@
     ((RRecon _ _ _) true)
     ((RTactic _ _ _) true)
     ((RBin _ _ _ _ _ _) true)
+    ((RLink _ _ _) true)
     ((RImplRec y) (rec_ok y))
     (_ false)))
 (fn unwrap_impl ((x Rec)) Rec
@@ -582,8 +591,31 @@
          (bool_and (int_list_eq (join_words rest) (utf8 "ok")) (has_bin rs name)))
      (if (int_list_eq kind (utf8 "bad-bin"))  ; some record is the bin NAME's failure REASON — not necessarily the first bad one (a PENDING requirement stands before its UNMET): unmet, unthreaded, bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
        (has_bin_err rs name (join_words rest))
-       false)))))))))))
+     (if (int_list_eq kind (utf8 "linked"))  ; every record accepted, and NAME's record of the link rests on the parameters named (`closed`: on none)
+       (bool_and
+         (match (first_bad rs)
+           (none true)
+           (_ false))
+         (has_link rs name (join_words rest)))
+     (if (int_list_eq kind (utf8 "link-error"))
+       (match (first_bad rs)
+         ((some (RLinkErr n e _))
+          (bool_and (int_list_eq (show_name n) name)
+            (int_list_eq (chars_of_sym e) (join_words rest))))
+         (_ false))
+       false)))))))))))))
     (_ false)))
+(fn has_link ((rs (List Rec)) (name (List Int)) (on (List Int))) Bool
+  (measure (struct rs))
+  (match rs
+    (nil false)
+    ((cons (RLink n _ ps) r)
+     (if
+       (bool_and (int_list_eq (show_name n) name)
+         (if (int_list_eq on (utf8 "closed")) (= (len ps) 0) (int_list_eq (show_names_c ps) on)))
+       true
+       (has_link r name on)))
+    ((cons _ r) (has_link r name on))))
 (fn has_load_error ((rs (List Rec)) (code (List Int))) Bool
   (measure (struct rs))
   (match rs
@@ -681,23 +713,28 @@
            ((some rootp)
             (match
               (load_all (ld_with_budget (ld_reroot l0 rootp) (case_budget c)) (root_files c src) w1)
-              ((Prod.mk l w2)
-               (Prod.mk
-                 (if (matches ws (ld_recs l))
-                   (Ran l true
-                     (append (utf8 "PASS ") (append c (append (utf8 " — ") (show_words ws))))
-                     (recs_text (ld_recs l)))
-                   (Ran l false
-                     (append (utf8 "FAIL ")
-                       (append c
-                         (append (utf8 " expected ")
-                           (append (show_words ws)
-                             (append (utf8 " got ")
-                               (match (first_bad (ld_recs l))
-                                 ((some x) (show_rec x))
-                                 (none (utf8 "all accepted"))))))))
-                     (recs_text (ld_recs l))))
-                 w2))))))))))
+              ((Prod.mk lr w2)
+               (let
+                 ((l Load
+                    (match (header_words (utf8 ";; link:") src)
+                      (nil lr)
+                      (_ (link_load lr)))))
+                 (Prod.mk
+                   (if (matches ws (ld_recs l))
+                     (Ran l true
+                       (append (utf8 "PASS ") (append c (append (utf8 " — ") (show_words ws))))
+                       (recs_text (ld_recs l)))
+                     (Ran l false
+                       (append (utf8 "FAIL ")
+                         (append c
+                           (append (utf8 " expected ")
+                             (append (show_words ws)
+                               (append (utf8 " got ")
+                                 (match (first_bad (ld_recs l))
+                                   ((some x) (show_rec x))
+                                   (none (utf8 "all accepted"))))))))
+                       (recs_text (ld_recs l))))
+                   w2)))))))))))
 (fn recs_text ((rs (List Rec))) (List Int)
   (measure (struct rs))
   (match rs

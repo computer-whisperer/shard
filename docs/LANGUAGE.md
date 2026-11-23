@@ -393,7 +393,7 @@ DIR's. The **implementation** is `DIR/BASE.shard`, BASE being DIR's last compone
 | Form | Declares | In a consumer |
 |---|---|---|
 | `(sig type NAME)`, `(sig type (NAME T…))` | an opaque type and its number of type parameters | `PARAM DIR.NAME type arity=N`; no constructor exists |
-| `(sig fn NAME BINDERS RET)` | a function's signature, without a body | `PARAM DIR.NAME fn`; the checker cannot unfold it |
+| `(sig fn NAME BINDERS RET)` | a function's signature, without a body. A binder whose type is a proposition is evidence, as a `fn`'s is — `(sig fn before ((n Nat) (h (< 0 n))) Nat)`: written at a call, part of the parameter's type, no parameter of the program (`v3/pins/loader/view_evidence`) | `PARAM DIR.NAME fn`; the checker cannot unfold it |
 | `(requirement NAME BINDERS PROP)` | a law the implementation must prove | `PARAM DIR.NAME requirement`; cited like a theorem |
 | `(theorem NAME BINDERS PROP PROOF)` | a public lemma, proved from what the view declares | an accepted theorem |
 | `type`, `def`, `abbrev`, `opaque`, `structure`, `inductive`, a trusted `axiom` | themselves, in full | as declared: a consumer's function matches on the `type`'s constructors, and its definitions and theorems over the others are accepted |
@@ -441,29 +441,72 @@ the rest follow.
 
 | View form | Implemented by | Compared | Record |
 |---|---|---|---|
-| `sig type` | `(type NAME …)` | the number of type parameters | `DISCHARGE NAME type` |
-| `sig fn` | `(fn NAME …)` | the program signatures: type parameters, parameter types, result type | `DISCHARGE NAME defined` when the fn has a definition, which takes the parameter's place in the fork; `DISCHARGE NAME fn` when it is a program only — linked, nothing proved through it |
-| `requirement` | `(fulfills NAME PROOF)` | PROOF against the statement, re-read in the fork where the sig types are the implementation's | `DISCHARGE NAME proved`; or `IMPL PENDING NAME …` and `DISCHARGE NAME pending` |
+| `sig type` | `(type NAME …)` | the number of type parameters; by K, the type's kind | `DISCHARGE NAME type` |
+| `sig fn` | `(fn NAME …)` | the program signatures: type parameters, parameter types, result type; by K, the definition's type | `DISCHARGE NAME defined` when the fn has a definition, which takes the parameter's place in the fork; `DISCHARGE NAME fn` when it is a program only — linked, nothing proved through it |
+| `requirement` | `(fulfills NAME PROOF)` | PROOF against the statement, re-read in the fork where the sig types are the implementation's; by K, the statement proved | `DISCHARGE NAME proved`; or `IMPL PENDING NAME …` and `DISCHARGE NAME pending` |
 | `theorem` | — | not checked again | — |
 
+**A discharge is of the view's own type.** What stands under a parameter's name in the fork — the
+implementation's definition, its theorem, its type — must have there the type the consumers were
+given: K is handed a constant of the parameter's type, as the main line holds it, whose value is
+the implementation's constant, and accepts it exactly where the two types are one. The loader
+compares no term itself. So an implementation that asks for other evidence than its signature
+(one program signature, two types) is `impl_signature` (`v3/pins/loader/view_evidence_differs`),
+and a requirement whose text reads differently under the names the implementation opens — the
+fork reads it again, in the implementation's scope — is `impl_statement`
+(`v3/pins/loader/view_statement`); no `DISCHARGE` is recorded for either.
+
 A failure is `IMPL-ERROR NAME REASON: …`, an error of the load: `impl_missing_type`,
-`impl_missing_fn`, `impl_missing_fulfills`, `impl_type_arity`, `impl_signature`, and
-`fulfills_unknown` for a `fulfills` that names neither a requirement nor an obligation of one of the
-implementation's own functions. The implementation's own declarations print as their usual records
+`impl_missing_fn`, `impl_missing_fulfills`, `impl_type_arity`, `impl_type`, `impl_signature`,
+`impl_statement`, and `fulfills_unknown` for a `fulfills` that names neither a requirement nor an
+obligation of one of the implementation's own functions. The implementation's own declarations print as their usual records
 behind `IMPL `: `IMPL DEFINE lib.push equations=lib.push.eq_1`. A record of a form of the
 implementation names the implementation's file — `IMPL READ-ERROR lib/lib.shard …`, `IMPL
 LOAD-ERROR lib/lib.shard …` (`v3/pins/loader/impl_read_error`, `impl_load_error`) — and an import
 written there resolves from the implementation's directory, also where the view is in the
 directory form (`view_dir_form_private`).
 
-The fork's environment is dropped when the check ends: in the main load the parameters stay
+The fork's environment never becomes the main line's: in the main load the parameters stay
 parameters (`PARAM lib.stack_refl requirement` is still there after `DISCHARGE … proved`). Only the
-fork's programs are merged, each implementing `fn` in the place of its `sig fn`. That merge is what
+fork's programs are merged, each implementing `fn` in the place of its `sig fn`; its constants are
+read again by the link alone (below). That merge is what
 lets `--run`, `--dump` and `--emit` execute a consumer: without the directory as a root, a
 consumer's program is stuck at the `sig fn` (`unlinked`).
 
-Limit: no record joins a consumer's `params=` to an implementation's `DISCHARGE` lines. A consumer's
-theorem stays conditional on the parameters it names; reading the two together is left to the reader.
+### The link
+
+A consumer's theorem rests on the parameters it names (`params=`), and a `DISCHARGE` says that an
+implementation met a parameter in its own fork. Under `--link` the loader puts the two together
+by K's check, after the roots: it builds one environment in which each parameter that an
+implementation of this load proved, defined or declared is that implementation's constant, and
+has K check there every declaration of the main line that rests on such a parameter.
+
+```
+LINK main.two_next axioms=propext params=
+```
+
+is K's acceptance of `main.two_next` in that environment, with its closure there: the axioms the
+implementation's proofs rest on in place of the parameters, and the parameters that are
+parameters still. The linked environment starts from the main line's as it stood before its first
+view parameter. A constant enters on demand, after every constant its type and value cite, read
+from the fork that discharged it where it is such a parameter, else from the main line's
+environment, else from a fork's. Nothing is read from a source again and no proof step runs: the
+terms are those elaborated against the views, so what a consumer could not see it still has not
+used.
+
+| | |
+|---|---|
+| a parameter whose directory was not a root, or whose discharge is `pending`, `fn` or refused | enters as the parameter it is; what rests on it lists it in the record's `params=` (`v3/pins/loader/view_link_partial`) |
+| K refuses a declaration in the linked environment | `LINK-ERROR NAME REASON: at CONSTANT`, an error of the load |
+| two implementations each proved from the other's parameters | every discharge is recorded — each check passes in its own fork — and no environment holds both: `LINK-ERROR NAME link_cycle` (`v3/pins/loader/view_link_cycle`) |
+| a load without `--link`, or one where no implementation was checked | no `LINK` record, and nothing is checked twice: a theorem stays conditional on its parameters |
+
+A `LINK` record with `params=` empty is the closed fact: the declaration is a theorem of K in an
+environment that holds no parameter under it. A test that needs it asks for that line — a load
+that leaves a directory out prints none. The cost is K's check, a second time, of what rests on
+a parameter, of the implementations behind those parameters, and of whatever else in their
+closures the main line loaded after its first view; a file that imports its views last pays for
+the first two alone.
 
 ## Declarations
 
@@ -1832,6 +1875,7 @@ evaluator, `v3/bin/load ARG…` as a native binary.
 | `--instance-budget N` | how many instances of one template the load may build (default 1,024) |
 | `--state` | also judge each function that takes or returns the checker's state (`STATE` records) |
 | `--both` | also read each `fn` and each supplied `realize` the typed route gave a program as a program alone, and compare the two, and the lambdas each reading lifted (`BOTH` records) |
+| `--link` | after the roots, the link (above, "The link"): every declaration that rests on a view's parameter whose implementation was among the roots is checked by K once more, in an environment where the parameter's name is its implementation (`LINK` records) |
 | `--unchecked` | read every `fn` as a program alone (`RUNNABLE fn F why=unchecked route=e_first`): nothing checks its types and it has no definition, so a type error is not refused. A `fn` that writes a proof is refused (`unchecked_proof`): nothing reads it. A `theorem` and a `fulfills` are passed over: the functions they speak of have no definition there, and no program is made of a proof. The reading of a build of the toolchain (`v3/build.sh`); the check of the same sources is a load without the flag |
 | `--facts OUT` | after a clean load, also write to OUT what the reading of programs alone takes from K about the constants of Init the loaded files cite — each one's kind, its binders written or not and run or not, an inductive's constructors (`v3/kernel/facts.shard` states the format) — and the same for the files of each implementation the load linked. The Rust evaluator reads what a closure cites of Init by that table (`eval dump --root DIR --facts OUT FILE`) |
 | `--dump` | after a clean load, print the loaded program as canonical text, and nothing else |
@@ -1882,6 +1926,8 @@ trusted because two fingerprints agree.
 | `DISCHARGE` | `N KIND` | a view parameter met by the implementation (`type`, `fn`, `defined`, `proved`, `pending`), or an obligation proved by a `fulfills` (`proved`) | — |
 | `IMPL-ERROR` | `N REASON: MESSAGE` | the implementation check failed at the parameter N | errors |
 | `IMPL` | another record | a record from the implementation's fork | as that record |
+| `LINK` | `N axioms=A,… params=P,…` | under `--link`: K accepted N in the linked environment, where each discharged parameter is its implementation; its closure there, and the view parameters still in it | — |
+| `LINK-ERROR` | `N REASON: at C[ — MESSAGE]` | under `--link`: N did not enter the linked environment; K's reason at the constant C, or `link_cycle`, `link_unknown`, `link_shape`, `link_fuel`, `closure_bound` | errors |
 | `READ-ERROR` | `FILE REASON: MESSAGE` | a form could not be read | errors |
 | `LOAD-ERROR` | `FILE REASON: MESSAGE` | the file could not be loaded: imports, module names, directives, the sidecar | errors |
 | `UNUSED` | `M use=P,…` | `use` lines of M that no name in it needs | — |

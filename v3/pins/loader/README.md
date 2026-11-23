@@ -40,10 +40,13 @@ program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape
 | `;; expect: NAME bin ok` | every record accepted, and the bin `NAME` has every requirement met |
 | `;; expect: NAME bad-bin REASON` | some record is the bin's failure: `unmet`, `unthreaded`, `bad_entry`, `extern_outside`, `untrusted` |
 | `;; expect: NAME impl-error REASON` | a view's implementation fails its check |
+| `;; expect: NAME linked closed` | every record accepted, and the link's record of `NAME` rests on no view parameter; `linked P,Q` — on those |
+| `;; expect: NAME link-error REASON` | the first record that is not an acceptance is the link's refusal of `NAME` for `REASON` |
 | `;; expect: read-error REASON` | a file's reading ends in `REASON` |
 | `;; expect: load-error REASON` | the loader refuses; `load-error-after REASON` when another bad record stands before it |
 | `;; roots: FILE…` | what the loader is given, in order (default `main.shard`); a directory is its view, then its implementation checked |
 | `;; root: DIR` | the package root (default the case's directory) |
+| `;; link: yes` | the link after the roots (`load.shard --link`) |
 
 ## The cases
 
@@ -79,6 +82,9 @@ the reason its name spells, less a leading `by_`.
 | `view_missing_type`, `view_missing_fn`, `view_missing_fulfills`, `view_signature`, `view_arity`, `view_fulfills_unknown` (each an `impl-error`) | each way an implementation can fail its view |
 | refused: `view_form`; `view_no_interface` (`missing_interface`), `view_sig_outside` (`sig_outside_view`), `view_req_scope` (`req_scope`) | the view file's own errors |
 | refused: `view_eq_hidden` (`unknown_constant`), `view_rfl` (`type_mismatch`) | a consumer cannot cite an implementation's equation or compute through its body |
+| `view_evidence`; `view_evidence_differs` (`impl-error impl_signature`) | a signature with a parameter that is evidence about an earlier one: written at a call, no parameter of the program; an implementation asking for other evidence is one program signature and another type, which K refuses |
+| `view_statement` (`impl-error impl_statement`) | a requirement whose text reads differently under the names the implementation opens: what the implementation proved is not what the consumer was given, and no discharge is recorded |
+| `view_link` (`linked closed`), `view_link_partial` (`linked c.fc_is,c.fc`), `view_link_cycle` (`link-error link_cycle`) | the link: a consumer's theorem accepted by K where the parameters are the implementation's constants; with one module of two, resting on the other's parameters still; two implementations each proved from the other's law, every discharge recorded and no linked environment |
 | `private_inside`, `sealed_module`; refused: `private_module`, `private_dir` (`private_module`) | files behind a view are private to their directory, which is one module across its files; so is a directory module nested behind it |
 | `impl_e_only`, `match_in_impl`; `route_sig_callee` (`runnable no_l_meaning`); refused: `if_private` (`private_if`), `derive_sig` (`derive_type`) | a runtime-only implementation type; a matcher inside an implementation; a view function with no logical reading as a callee; an `if` and a derivation on a view's type |
 | refused: `k_client_reach` (`function_expected`), `k_client_admit`, `k_client_transfer` (`unknown_head`) | a client of the checker's view cannot name what the view does not export |
