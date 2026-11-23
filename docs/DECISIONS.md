@@ -2118,7 +2118,12 @@ measurements; measure again before building on one.
   `reads_on`). The file's facts are 149 lines and its theorems 220. One load of the file's
   theorem and the four directories is 39 s, and 52 s with the link, which enters 23
   declarations; the readers' three-deep file, measured beside it, 33 s and 41 s. The file is 666
-  bytes. Twelve faults planted by hand in copies, each loaded once with the link: a low form
+  bytes. On CI (pipeline 809) that load with the link is 2,754 s on the bootstrap and 273 s
+  natively, and the test of the file's run 1,528 s and 166 s; the readers' load is still the
+  suite's longest entrypoint on the bootstrap, 3,221 s, so the bootstrap suite's wall is 3,221 s
+  for 3,184 and its entrypoint time 45,846 s for 41,088, `v3` 3,371 s for 3,335; `native` is
+  4,468 s for 4,441, and a pipeline is 75 minutes, as it was.
+  Twelve faults planted by hand in copies, each loaded once with the link: a low form
   that writes the second buffer, a caller that reads after the call on what held before it, and
   a caller that passes one buffer twice, refused where written; `addto`'s view claiming one word
   written and not the count — its law of what it leaves alone is not proven, nor is `both`'s
