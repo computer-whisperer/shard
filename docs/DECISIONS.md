@@ -2054,8 +2054,12 @@ measurements; measure again before building on one.
   from the view's first fact on the answer's memory, without the 50 that the low form reads the
   ranges alone. The three-deep file's facts are 129 lines and its theorems 163. One load of the
   four files' theorems and the three directories is 43 s, and 57 s with the link, which
-  enters 35 declarations; the three-deep file alone 30 s, and 38 s with it. The pinned cases are 363, each loaded twice, in
-  53 s. Ten faults planted by hand in copies, each loaded once with the link: a caller's proof
+  enters 35 declarations; the three-deep file alone 30 s, and 38 s with it. The pinned cases
+  are 363, each loaded twice, in 53 s. On CI (pipeline 807) that one load with the link is the
+  suite's longest entrypoint on the bootstrap, 3,183 s, and 305 s natively: the bootstrap
+  suite's wall is 3,184 s for 2,584 and its entrypoint time 41,088 s for 42,680, `v3` 3,336 s
+  for 2,736; `native` is 4,442 s for 4,426, so a pipeline is 75 minutes, as it was.
+  Ten faults planted by hand in copies, each loaded once with the link: a caller's proof
   that rewrites by the callee's equation, and a consumer's `rfl` through a signature, refused
   where written; the callee's loop changed with its lemmas, a caller passing the wrong buffer,
   the top's code with its operands exchanged — a law of the view is not discharged, and the
