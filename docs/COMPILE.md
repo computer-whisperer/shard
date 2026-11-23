@@ -208,9 +208,13 @@ on any memory the machine's agrees with, and not on the machine's own: a compile
 its callee's answer on the memory of its own run, and the machine's memory differs from that one
 in the caller's stack frame.
 
-A compiled function's answer is its low form. A hand-written function's answer may be stated
-from its meaning, under the way memory holds its arguments; a caller that is compiled, or written
-in shard, needs the answer as a function.
+The answer a caller's proof is given of a function outside its module is that function's low
+form: the call returns the low form's value and leaves memory as the low form says, whenever the
+arguments meet what the low form demands; whether they meet it is a question in the logic, which
+no program decides (the owner's ruling, `LAW.md` §6, 22). A compiled function's code meets that
+answer by its tie. A hand-written function's author may state its contract from its meaning,
+under the way memory holds its arguments; a law of the statement brings code proven so to the
+low form's answer.
 
 **The intermediate is inside the second fact.** Between a low form and its code stands a language
 a little above the machine and common to targets: local words, the word operations, loads and

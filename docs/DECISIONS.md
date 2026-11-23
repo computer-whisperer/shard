@@ -869,7 +869,8 @@ entries are explained under "Measured" at the end.
   `x86/startup.shard` hold no proof: the pass reads none, and a file's definitions do not
   import the link theorem.
 - Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `dot_lo.shard`,
-  `x86/dot_hand.shard`, `sqdiff_ir.shard`), not put to the owner one by one. The answer of a
+  `x86/dot_hand.shard`, `sqdiff_ir.shard`), not put to the owner one by one; the first of
+  them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
   function called from outside its module is its low form: the function of the argument words
   and the memory that the intermediate machine's run takes for it is the low form's value where
   the low form's evidence exists, and no answer elsewhere (`ans_on`). Whether evidence exists is

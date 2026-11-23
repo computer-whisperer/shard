@@ -304,6 +304,21 @@ admitted that the logic does not derive.
     matches my intent." (Rule 16 has the file beside the source; the rule is stated in
     `COMPILE.md` §5 and is in no rule's text here. What else a tool may write there, and
     whether it is kept or made again by each build, is not ruled.)
+22. *The answer at a seam.* On what a caller's proof is given of a function outside its
+    module, first what it must not become: "my main thought is how this will scale with
+    program complexity. The hope has been for modules to establish their own proofs on their
+    own, relying on published facts of modules they call, rather than having to rederive
+    detailed consequences of the exact implementations used downstream. I see that some of
+    this is unavoidable (the execution of the callee is part of the execution of the caller),
+    but we need to do whatever we can to stop this from propogating (do we then need to
+    investigate the callee's callee?) and limit the complexity of cross-module reasoning."
+    Then, asking "What exactly am I ratifying?", of the sentence put to them — when a compiled
+    function calls a function outside its module, the caller's proof is given this about the
+    call: it returns the value of the callee's low form, and leaves memory as the low form
+    says, whenever the arguments meet what the low form demands; whether they meet it is a
+    question in the logic, not a check any program runs —: "Ratify it". (Stated in
+    `COMPILE.md` §5. Not settled by it: whether a caller's proof may open the callee's body;
+    how it extends to a low form whose demands name values no code holds.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 
