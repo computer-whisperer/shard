@@ -868,7 +868,7 @@ entries are explained under "Measured" at the end.
   are among the temporaries, which is sound because a call's arguments are constants and locals,
   moved in after every expression before them has been evaluated; the theorem proves it. Every
   function pushes all six registers and pops them, whatever it uses. A compiled file's data is
-  what its start-up pushes (`x86/link.shard`: two buffers of three words); not a data segment —
+  what its start-up pushes (`x86/startup.shard`: the words of a description); not a data segment —
   the loaded file's model has one segment, read and executed, and the stack
   (`models/x86/loaded.shard`). The files that state nothing of a target (`ir.shard`, `lo.shard`, a
   function's low form, its code and the proofs above the pass) stand above `x86/`; the
@@ -888,13 +888,34 @@ entries are explained under "Measured" at the end.
   program and is used unchanged where the module grows. The first program's functions are
   over `(BitVec 64)` and are meaning and low form at once; not over `Nat` with bounds — how an
   integer of any size is represented is open on purpose (`COMPILE.md` §8). The function its
-  file enters takes three words, two of them addresses it does not use, because the one
-  start-up hands those over (`x86/startup.shard`); not a second start-up — the linking rule's
-  form is open, and a second fixed start-up would be proven again as the first was. What a
+  file enters takes three words, two of them addresses it does not use, because the sample
+  the tree's files share hands those over (`x86/startup.shard`). What a
   run of a statement says of its parts stood in the pass's proof and now stands with the
   machine (`ir_laws.shard`), since the fuel's law is proven from it. `ir.shard` and
   `x86/startup.shard` hold no proof: the pass reads none, and a file's definitions do not
   import the link theorem.
+- The start-up as data (`v3/compile/x86/startup.shard`, `link.shard`; on the owner's ruling,
+  `LAW.md` §6, 24; the choices inside it not put to the owner one by one). A file's start-up
+  is two values: the words `data` it pushes, the last first, so that the list stands in memory
+  with its head lowest; and at most six arguments, each a word or the address of one of the
+  data's words. A buffer is a stretch of the data, spare memory a stretch of zeros, a count a
+  word: which stretch is which buffer is the file's to say, and the link theorem
+  (`start_exits`) knows two lists — not a description of typed buffers, whose theorem would be
+  an induction within an induction for the same files. The theorem is by induction on the data
+  and on the arguments, over a table known from an address on (`tail_at`): a row is found first
+  match first, so the start-up's rows are found whatever the lines appended lay out to. An
+  address is taken from the stack pointer when the start-up runs (a move, and eight times the
+  index added); not a constant computed from where the model's runner starts the stack
+  pointer, as first built — K accepted that start-up's theorem, the model's run exited with the
+  status, and the processor's run was killed: the model's start fixes the stack pointer
+  (`v3/models/x86/README.md`, what is not here) and a kernel does not. The theorem is still of
+  the model's start. Every word is moved by the ten-byte form, one length for any word; the
+  start-up is not tuned for size. `link_exits`, the theorem for the sample of the tree's files,
+  is a corollary. The hand-written `dot` stands at one address, its contract being over its own
+  rows: it moved with the start-up's length, from 4194489 to 4194547, and the model's trial,
+  whose rows they are, has 58 bytes that are never run after its own start-up so that its
+  functions stand there; not hand-written code proven for any address, which is the trial's
+  proofs written again.
 - Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `two.shard`,
   `x86/dot_hand.shard`, the views `dot/` and `sqdiff/`), not put to the owner one by one; the
   first of them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
@@ -2135,3 +2156,10 @@ measurements; measure again before building on one.
   directory given — nothing refused and no record of the link; `addto`'s directory left out —
   the theorem linked on `addto`'s four parameters. In none is there a record of the file's
   theorem with no parameter.
+- The start-up as data (2026-11-25; natively, CPU seconds, single measurements). `x86/link.shard`
+  is 1,629 lines for 746, of which the two inductions and the one argument's three
+  instructions are 600, and `startup.shard` 165 for 85; the link file's load is 15 s for 12.
+  The sample's start-up is 123 bytes for 65 — a word pushed is 11 bytes for 6, an address 16
+  for 3 —, so `dot`'s file is 498 bytes for 440 and the writer's 724 for 666. One load with the
+  link of the five files' theorems, the first program's and the six directories is 110 s. The
+  fourteen x86 and compile entrypoints pass natively, the processor's runs among them.

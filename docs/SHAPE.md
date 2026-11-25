@@ -241,8 +241,10 @@ be built to is `COMPILE.md`.
   each function the module calls from outside meets the seam's statement, each function of the
   compiled module meets it. Its fragment: six locals in registers, expressions of word
   operations and loads, stores, `if` on an unsigned comparison, calls, tail calls;
-- a link theorem (`x86/link.shard` `link_exits`): a file of a fixed start-up and any lines
-  exits as the answer of the function it calls says, where that function meets the statement;
+- a link theorem (`x86/link.shard` `start_exits`): a file of a start-up and any lines exits as
+  the answer of the function it calls says, where that function meets the statement. The
+  start-up is data: the words it pushes, and at most six arguments, each a word or the address
+  of one of those words;
 - two programs through every layer, each from its definition to the exit status of an
   executable file: six functions over words with calls, a test and a loop
   (`x86/calls_run.shard` `calls_file_exits`), and `dot`, a sum of products over two buffers,
@@ -268,8 +270,8 @@ be built to is `COMPILE.md`.
 **Does not exist:**
 - the step from a definition to intermediate code: no tool reads a definition, and the proofs
   above the pass are written by hand, a function at a time;
-- a build: nothing reads a `bin` form and assembles a file's facts; what a compiled file's
-  start-up does is fixed, and its data is what the start-up pushes;
+- a build: nothing reads a `bin` form and assembles a file's facts; a compiled file's data is
+  what its start-up pushes, and the tree's files share one sample;
 - in the pass: more than six locals, a function's call of itself that is not a tail call, a
   host call, a declared failure;
 - at the seam, a function that writes memory or keeps a frame — the answer is stated for

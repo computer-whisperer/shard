@@ -171,7 +171,7 @@ the owner.
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
 | `two.shard` | functions of two buffers of one count that only read: the type of such a low form (`Reads2`), and such a function as the answer of a function called from outside — `two_ext`, `two_ans`, on words that have the evidence (`two_ext_is`), whatever it answers (`two_ans_inv`), and that code whose run answers the function's value answers what the answer says (`two_ans_tie`); and what such a function reads, from its first fact: its value is one in two memories that agree on the two buffers' words (`Means2`, `reads_on`) |
 | `upd.shard` | functions of two buffers of one count that write the first: that two buffers lie apart (`apart`), the type of such a low form (`Upd2`), and such a function as the answer of a function called from outside — `upd_ext`, `upd_ans`, `upd_ext_is`, `upd_ans_inv`, `upd_ans_tie`, as `two.shard`'s —; and across a call that writes: a read clear of what was written reads the same (`rd_same`), and the memories before and after agree on a buffer apart from the written one (`kept_apart`) |
-| `sample.shard` | the two buffers the fixed start-up pushes, as a function's arguments see them: the data range, a memory that holds them, the evidence about each |
+| `sample.shard` | the two buffers the sample's start-up pushes, as a function's arguments see them: the data range, a memory that holds them, the evidence about each |
 | `dot_obj.shard`, `sqdiff_obj.shard`, `gap_obj.shard`, `addto_obj.shard`, `both_obj.shard`, `total_obj.shard` | each module's intermediate code, by hand: the code as data. `sqdiff`'s calls `dot`, `gap`'s `sqdiff`, `both`'s `addto` and `dot`, and `total`'s `both` and `dot`, each as a function outside its module. `addto`'s loop has a store |
 | `sqdiff_src.shard`, `gap_src.shard`, `total_src.shard` | the meanings of `sqdiff`, `gap` and `total`, functions over two lists, and their values on the sample |
 | `dot/` | `dot`'s module. `mod.req.shard`, the view: the signature `dot_lo`, the laws `dot_lo_means` and `dot_prog_tie`, and from them that the code's run answers whatever the low form's answer says (`dot_ans_tie`) and answers the meaning's value (`dot_answer`). Behind it: `low.shard` the loop with its two cases, `mean.shard` the loop against the meaning, `tie.shard` the loop's code against the loop, `dot.shard` the low form and the two laws' proofs |
@@ -185,8 +185,8 @@ the owner.
 | `x86/lists.shard` `code.shard` `mem.shard` `regs.shard` `inv.shard` | what the proof stands on: lists of words; a listing in place in a table (`placed`, and `placedb`, the same as a decision) and each instruction's rule for a table; memories and a frame's description across a callee's return and across a store; the registers of locals and temporaries; what the pass's answer for a statement says of its parts |
 | `x86/expr.shard` `entry.shard` `stmt.shard` `stmt_store.shard` `call.shard` `stmt_call.shard` `stmt_if.shard` `tail.shard` | the proof by cases: an expression (`cexp_all`), into a function and out of it, a local set and a return, a store, the law of a call and a call as a statement, a branch, a tail call |
 | `x86/function.shard` `module.shard` | the statement for every statement (`sim_all`), a compiled function (`cfn_ok`), the module's theorem (`module_realizes`), and what a list of one outside function, and of two, has at an index (`pair_at_one`, `pair_at_two`) |
-| `x86/startup.shard` | a file's start-up of twenty instructions, as a listing and as a table — two buffers of three words pushed, their addresses and the count in the argument registers, a call, exit with the low byte of rax —, what it hands the function it calls, and a compiled listing as lines with a label at one entry. No proof: a file's writer reads this file |
-| `x86/link.shard` | `link_exits`: for the start-up followed by any lines, where the function called realizes an answer, the file exits as the answer says |
+| `x86/startup.shard` | a file's start-up as data: the words `data` it pushes, the last first, and at most six arguments (`Arg`), each a word or the address of one of the data's words, taken from the stack pointer when the start-up runs; then a call, and exit with the low byte of rax. The listing (`start_listing`) and the table its instructions lay out to (`start_table`), what the start-up hands the function it calls (`start_base`, `start_rs`, `arg_words`), the sample the tree's files share — two buffers of three words and their count —, and a compiled listing as lines with a label at one entry. No proof: a file's writer reads this file |
+| `x86/link.shard` | `start_exits`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer, the file exits as the answer says. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`: a memory that holds the data holds each stretch of it. `link_exits`: the theorem for the sample |
 | `x86/calls_file.shard` `calls_run.shard` `calls_main.shard` | the first program compiled and its file; the module's theorem met by it and the theorem that the file exits with 22; the file written |
 | `x86/calls_cases_main.shard` | the same module run one call at a time: a file of six first instructions for a function of two parameters on two given words, and the word the intermediate machine's run returns, for a test to compare |
 | `x86/dot_file.shard` `dot_run.shard` `dot_main.shard` | `dot` compiled and its file; the two theorems above; the file written |
@@ -218,9 +218,13 @@ local, an expression deeper than the temporaries, a comparison other than unsign
 below, a call's argument that is not a constant or a local, a call of itself that is not a tail
 call).
 
-`link_exits` (`x86/link.shard`): for the start-up's listing with any lines after it, assembled,
-where the function the start-up calls realizes an answer and that answer has a value on the two
-buffers, the file exits with the value's low byte.
+`start_exits` (`x86/link.shard`): for the listing of any start-up — any data, any arguments —
+with any lines after it, assembled, where the function the start-up calls realizes an answer
+and that answer has a value on the arguments' words in any memory that holds the data, the file
+exits with the value's low byte. `link_exits` is that theorem for the sample: two buffers of
+three words and their count. The theorem is of the model's start, which fixes the stack pointer
+(`v3/models/x86/README.md`, what is not here); the start-up's instructions take the stack
+pointer as they find it.
 
 A file's own facts — the pass answers this listing, the assembler these bytes, the listing lies
 at these addresses — are closed computations (`rfl`, `decide`): twelve in `x86/dot_file.shard`,
@@ -244,12 +248,14 @@ stands in it —, in `x86/gap_file.shard` those for two compiled modules and the
 - what a function that writes reads, as a fact: `reads_on` is for a function that only reads;
 - a low form that follows pointers, whose evidence names values no code holds;
 - hand-written code at another address: `dot`'s contract is over its own rows, at the addresses
-  it was written for, so a file has it at 4194489 or not at all;
+  it was written for, so a file has it at 4194547 — where the lines after the sample's
+  start-up stand — or not at all;
 - an outside function's answer that a program computes: `ans_on` is decided by no program, so
   the evaluator does not run a caller's intermediate code against it;
-- a start-up other than the one of `x86/startup.shard`: the function a file enters takes its
-  three words, so the first program's entry takes two addresses it does not use; a file whose
-  data is not pushed by its start-up, a host call, a declared failure;
+- a file of the tree with a start-up other than the sample's: the function each of the seven
+  enters takes the sample's three words, so the first program's entry takes two addresses it
+  does not use; a file whose data is not pushed by its start-up, a host call, a declared
+  failure;
 - a file's facts stated once for any module: each of the six files states its own;
 - one statement of the answer of a low form called from outside, for any signature: `two.shard`
   and `upd.shard` state it for a signature each;

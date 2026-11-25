@@ -335,6 +335,20 @@ admitted that the logic does not derive.
     the link." (Rule 18; `LANGUAGE.md`, "Views"; `v3/compile/README.md`, "A function as a
     module". That the link is asked for by a flag is the builder's, for the cost to the
     toolchain's own loads.)
+24. *Where memory comes from, and a program's entry.* On four questions, each put with a
+    lean — where a function gets memory that no argument of it names; what the compiler does
+    where the licence to write in place does not close; what happens when memory runs out; and
+    the order of the work on a program's entry —: "1: agreed with 1, 2: 1, 3: that sounds fine,
+    4: your lean sounds reasonable." The leans as put: (1) such a function is given the memory
+    by its caller — a region is an argument like any buffer and the interface states the need;
+    the entry receives the regions from the start-up; a heap, later, is a library over a
+    region; (2) the compiler copies, and runs the in-place code on the copy — a separate
+    destination for a writer is a later optimisation of one function; (3) the need is a formula
+    in the arguments' sizes and a proof obligation, with no check inside a function: one
+    comparison at the entry when the sizes are known, and a reserved exit code; (4) the
+    start-up as data, then command-line arguments, then output and files, the limit of six
+    words a function lifted beside the first. (Each a short assent to a stated lean. Built of
+    it in the tree: the start-up as data, `DECISIONS.md`, "Programs and the back end".)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

@@ -161,7 +161,7 @@ The owner agreed to this form after it was tried outside the tree (`LAW.md` §6,
 trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the tree holds
 (`v3/compile`, its README): the intermediate; the seam's statement on the x86 model; the pass and
 its theorem, for six locals in registers, expressions of word operations and loads, stores,
-`if`, calls and tail calls; the link theorem for one fixed start-up; two programs, each with
+`if`, calls and tail calls; the link theorem, for a start-up given as data; two programs, each with
 its levels and its facts, proven to the exit status of its file: six functions over words with
 calls, a test and a loop, and a sum of products over two buffers; a caller of that sum
 compiled as a module of its own and linked in two files, one with the sum's hand-written
@@ -331,7 +331,7 @@ is a defect of the compiler.
 Both programs stand in the tree from their definitions to their files' exit status, the fault
 at each joint refused when planted by hand (`v3/compile/README.md`). For both the front step is
 by hand and nothing reads a `bin` form. The first is six functions over words; what the file
-enters is called by the one start-up the tree has, on that start-up's three words. A function
+enters is called by the start-up of the tree's one sample, on that sample's three words. A function
 that calls another is tied to its definition from the callee's tie alone, by a rule of the
 intermediate machine for a call that returns.
 

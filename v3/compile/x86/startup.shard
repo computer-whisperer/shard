@@ -1,78 +1,158 @@
-;;; v3/compile/x86/startup.shard — the start-up of a file (docs/COMPILE.md §5, linking), as a
-;;; listing and as the table its instructions lay out to: it pushes two sample buffers of three
-;;; words, calls one function with their addresses and the count, and exits with the low byte
-;;; of the word the function returns. Then what it hands the function it calls, and a compiled
-;;; listing as lines with a label at one entry. That a file so started exits as the function's
-;;; answer says is link.shard's.
+;;; v3/compile/x86/startup.shard — the start-up of a file (docs/COMPILE.md §5, linking), as data:
+;;; the words `data` and the arguments `args`. The data is what stands in memory, from the stack
+;;; pointer up, when the function is entered: the start-up pushes its words, the last first. An
+;;; argument, of at most six, is a word as it is or the address of one of the data's words —
+;;; taken from the stack pointer when the start-up runs, since where a kernel puts a process's
+;;; stack is not the file's to know. The start-up then calls ONE function and exits with the low
+;;; byte of the word it returns. A buffer is a stretch of the data; spare memory is a stretch of
+;;; zeros. Here are the listing and the table its instructions lay out to, what the start-up
+;;; hands the function, the sample the tree's files share, and a compiled listing as lines with
+;;; a label at one entry. That a file so started exits as the function's answer says is
+;;; link.shard's. Every word is moved by the ten-byte form: the start-up is not tuned for size.
+(import "pass.shard")
 (import "../../models/x86/asm.shard")
+(use compile.x86.pass)
 (use models.x86.asm)
 (use models.x86.asm.Asm)
 (use models.x86.word)
 (use models.x86.x86)
+(use models.x86.x86.Bop)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
 (use models.x86.x86.Seg)
 (use Init.Bool false true)
 (use Init.List cons nil)
 
-;; ---- the listing and its table ------------------------------------------------------------------
-;; The start-up. The words 7 5 3 are pushed, so that the first buffer, 3 5 7, stands from the
-;; stack pointer up, and its address is kept in r14; then 6 4 2 for the second buffer, 2 4 6.
-;; The two addresses and the count go to rdi, rsi and rdx, the label l is called, and the word
-;; the call returns is the status of `exit`.
-(fn link_head ((l Nat)) (List Asm)
-  (list (AI (MovRI32 7 7)) (AI (Push 7)) (AI (MovRI32 7 5)) (AI (Push 7)) (AI (MovRI32 7 3))
-    (AI (Push 7))
-    (AI (MovRmR (RmReg 14) 4))
-    (AI (MovRI32 7 6))
-    (AI (Push 7))
-    (AI (MovRI32 7 4))
-    (AI (Push 7))
-    (AI (MovRI32 7 2))
-    (AI (Push 7))
-    (AI (MovRmR (RmReg 6) 4))
-    (AI (MovRmR (RmReg 7) 14))
-    (AI (MovRI32 2 3))
-    (ACall l)
-    (AI (MovRmR (RmReg 7) 0))
-    (AI (MovRI32 0 60))
-    (AI Syscall)))
+;; ---- the listing ----------------------------------------------------------------------------------
+;; the data pushed, a word by `mov rax, x` and `push rax`: of the list x :: r the words of r
+;; first, so the list stands in memory with its head at the lowest address
+(fn push_lines ((xs (List (BitVec 64))) (rest (List Asm))) (List Asm)
+  (measure (struct xs))
+  (match xs
+    (nil rest)
+    ((cons x r) (push_lines r (cons (AI (MovRI64 0 (w64_val x))) (cons (AI (Push 0)) rest))))))
+;; an argument: a word, or the address of the data's word k
+(type Arg (AWord (BitVec 64)) (AAddr Nat))
+;; the arguments moved to their registers, from argument i on: a word by `mov ARG, w`; an
+;; address by `mov ARG, rsp`, `mov rax, 8k`, `add ARG, rax`
+(fn arg_lines ((vs (List Arg)) (i Nat) (rest (List Asm))) (List Asm)
+  (measure (struct vs))
+  (match vs
+    (nil rest)
+    ((cons a r)
+     (match a
+       ((AWord w) (cons (AI (MovRI64 (areg i) (w64_val w))) (arg_lines r (+ i 1) rest)))
+       ((AAddr k)
+        (cons (AI (MovRmR (RmReg (areg i)) 4))
+          (cons (AI (MovRI64 0 (* 8 k)))
+            (cons (AI (AluRmR BAdd (RmReg (areg i)) 0)) (arg_lines r (+ i 1) rest)))))))))
+;; the call of the label l, and the word it returns as the status of `exit`
+(fn exit_lines ((l Nat) (extra (List Asm))) (List Asm)
+  (cons (ACall l)
+    (cons (AI (MovRmR (RmReg 7) 0)) (cons (AI (MovRI32 0 60)) (cons (AI Syscall) extra)))))
 ;; a file's listing: the start-up, then any lines
-(fn link_listing ((l Nat) (extra (List Asm))) (List Asm) (List.append (link_head l) extra))
-;; the start-up's instructions by address, its call's displacement d
-(fn link_head_table ((d Nat)) (List (Prod Nat (Prod Instr Nat)))
-  (list (Prod.mk 4194424 (Prod.mk (MovRI32 7 7) 5)) (Prod.mk 4194429 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194430 (Prod.mk (MovRI32 7 5) 5))
-    (Prod.mk 4194435 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194436 (Prod.mk (MovRI32 7 3) 5))
-    (Prod.mk 4194441 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194442 (Prod.mk (MovRmR (RmReg 14) 4) 3))
-    (Prod.mk 4194445 (Prod.mk (MovRI32 7 6) 5))
-    (Prod.mk 4194450 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194451 (Prod.mk (MovRI32 7 4) 5))
-    (Prod.mk 4194456 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194457 (Prod.mk (MovRI32 7 2) 5))
-    (Prod.mk 4194462 (Prod.mk (Push 7) 1))
-    (Prod.mk 4194463 (Prod.mk (MovRmR (RmReg 6) 4) 3))
-    (Prod.mk 4194466 (Prod.mk (MovRmR (RmReg 7) 14) 3))
-    (Prod.mk 4194469 (Prod.mk (MovRI32 2 3) 5))
-    (Prod.mk 4194474 (Prod.mk (Call d) 5))
-    (Prod.mk 4194479 (Prod.mk (MovRmR (RmReg 7) 0) 3))
-    (Prod.mk 4194482 (Prod.mk (MovRI32 0 60) 5))
-    (Prod.mk 4194487 (Prod.mk Syscall 2))))
-;; a file's table: those twenty rows, then the rows xt of the lines appended, from 4194489 on
-(fn link_table ((d Nat) (xt (List (Prod Nat (Prod Instr Nat))))) (List (Prod Nat (Prod Instr Nat)))
-  (List.append (link_head_table d) xt))
+(fn start_listing ((data (List (BitVec 64))) (args (List Arg)) (l Nat) (extra (List Asm)))
+  (List Asm)
+  (push_lines data (arg_lines args 0 (exit_lines l extra))))
+
+;; ---- the table ------------------------------------------------------------------------------------
+;; the start-up's instructions by address. The two rows of one word's push at the address p,
+;; eleven bytes
+(fn push_pair ((x (BitVec 64)) (p Nat) (rest (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (cons (Prod.mk p (Prod.mk (MovRI64 0 (w64_val x)) 10))
+    (cons (Prod.mk (+ p 10) (Prod.mk (Push 0) 1)) rest)))
+;; the rows of the data's pushes from the address pc
+(fn push_rows ((xs (List (BitVec 64))) (pc Nat) (rest (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (measure (struct xs))
+  (match xs
+    (nil rest)
+    ((cons x r) (push_rows r pc (push_pair x (+ pc (* 11 (List.length r))) rest)))))
+;; the bytes an argument's instructions take, and the rows of one argument's at the address pc
+(fn arg_size ((a Arg)) Nat
+  (match a
+    ((AWord _) 10)
+    ((AAddr _) 16)))
+(fn arg_row ((a Arg) (i Nat) (pc Nat) (rest (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (match a
+    ((AWord w) (cons (Prod.mk pc (Prod.mk (MovRI64 (areg i) (w64_val w)) 10)) rest))
+    ((AAddr k)
+     (cons (Prod.mk pc (Prod.mk (MovRmR (RmReg (areg i)) 4) 3))
+       (cons (Prod.mk (+ pc 3) (Prod.mk (MovRI64 0 (* 8 k)) 10))
+         (cons (Prod.mk (+ pc 13) (Prod.mk (AluRmR BAdd (RmReg (areg i)) 0) 3)) rest))))))
+(fn args_size ((vs (List Arg))) Nat
+  (measure (struct vs))
+  (match vs
+    (nil 0)
+    ((cons a r) (+ (arg_size a) (args_size r)))))
+;; the rows of the arguments' moves
+(fn arg_rows ((vs (List Arg)) (i Nat) (pc Nat) (rest (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (measure (struct vs))
+  (match vs
+    (nil rest)
+    ((cons a r) (arg_row a i pc (arg_rows r (+ i 1) (+ pc (arg_size a)) rest)))))
+;; the call's row, its displacement d, and the three rows of the exit
+(fn exit_rows ((pc Nat) (d Nat) (xt (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (cons (Prod.mk pc (Prod.mk (Call d) 5))
+    (cons (Prod.mk (+ pc 5) (Prod.mk (MovRmR (RmReg 7) 0) 3))
+      (cons (Prod.mk (+ pc 8) (Prod.mk (MovRI32 0 60) 5))
+        (cons (Prod.mk (+ pc 13) (Prod.mk Syscall 2)) xt)))))
+;; where the arguments' moves begin, where the call stands, the address it returns to, and the
+;; first address after the start-up
+(fn start_moves ((data (List (BitVec 64)))) Nat (+ 4194424 (* 11 (List.length data))))
+(fn start_call ((data (List (BitVec 64))) (args (List Arg))) Nat
+  (+ (start_moves data) (args_size args)))
+(fn start_ret ((data (List (BitVec 64))) (args (List Arg))) Nat (+ (start_call data args) 5))
+(fn start_end ((data (List (BitVec 64))) (args (List Arg))) Nat (+ (start_call data args) 15))
+;; a file's table: the start-up's rows, then the rows xt of the lines appended, from `start_end`
+(fn start_table
+  ((data (List (BitVec 64))) (args (List Arg)) (d Nat) (xt (List (Prod Nat (Prod Instr Nat)))))
+  (List (Prod Nat (Prod Instr Nat)))
+  (push_rows data 4194424
+    (arg_rows args 0 (start_moves data) (exit_rows (start_call data args) d xt))))
+
 ;; ---- what the start-up hands the function it calls ----------------------------------------------
-;; The runner's stack pointer starts at 140737488347136. The first buffer then stands at
-;; 140737488347112, the second at 140737488347088, the call's return address at 140737488347080.
+;; The model's runner starts the stack pointer at 140737488347136: there the data stands under
+;; it, from `start_base`. (The start-up's instructions take the stack pointer as they find it.)
+(fn start_base ((data (List (BitVec 64)))) Nat (- 140737488347136 (* 8 (List.length data))))
+;; the data ranges: the data's words, to read and to write
+(fn start_rs ((data (List (BitVec 64)))) (List Seg)
+  (cons (MkSeg (start_base data) 140737488347136 6) nil))
+;; the argument words, where the data stands at the word sp
+(fn arg_word ((sp (BitVec 64)) (a Arg)) (BitVec 64)
+  (match a
+    ((AWord w) w)
+    ((AAddr k) (w64_add sp (w64 (* 8 k))))))
+(fn arg_words ((sp (BitVec 64)) (vs (List Arg))) (List (BitVec 64))
+  (measure (struct vs))
+  (match vs
+    (nil nil)
+    ((cons a r) (cons (arg_word sp a) (arg_words sp r)))))
+
+;; ---- the sample -----------------------------------------------------------------------------------
+;; Two buffers of three words and their count: the second buffer, 2 4 6, from the data's
+;; address, the first, 3 5 7, three words above it; the arguments are the first's address, the
+;; second's and the count. Under the model's runner the buffers stand at 140737488347112 and
+;; 140737488347088; the call returns to 4194537 and the lines after the start-up stand from
+;; 4194547.
 (fn link_xs () (List (BitVec 64)) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil))))
 (fn link_ys () (List (BitVec 64)) (cons (w64 2) (cons (w64 4) (cons (w64 6) nil))))
-;; the argument words: the two buffers' addresses and the count
+(fn link_data () (List (BitVec 64))
+  (cons (w64 2) (cons (w64 4) (cons (w64 6) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))))))
+(fn link_argd () (List Arg) (cons (AAddr 3) (cons (AAddr 0) (cons (AWord (w64 3)) nil))))
+;; the argument words under the model's runner: the two buffers' addresses and the count
 (fn link_args () (List (BitVec 64))
   (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil))))
-;; the data ranges: the six words of the two buffers, to read and to write
+;; the data ranges: the six words of the two buffers
 (fn link_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
+(fn link_listing ((l Nat) (extra (List Asm))) (List Asm)
+  (start_listing link_data link_argd l extra))
+(fn link_table ((d Nat) (xt (List (Prod Nat (Prod Instr Nat))))) (List (Prod Nat (Prod Instr Nat)))
+  (start_table link_data link_argd d xt))
 
 ;; ---- the lines after the start-up ----------------------------------------------------------------
 ;; instructions as lines, from the address a, the label l before the one that stands at `at`

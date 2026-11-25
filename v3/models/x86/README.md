@@ -222,6 +222,10 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   `both_contract`'s nineteen hypotheses; the contract gives the state at the return, and from
   any state it allows three instructions more end the process. That the functions' value is 19
   is the logic's own computation of `both`.
+  Between its first instructions and the functions the listing has 58 bytes that are never
+  run: the functions then stand from 4194547, where the lines after the start-up of the compile
+  system's sample files stand (`v3/compile/x86/startup.shard`), so that such a file has `dot`'s
+  rows as they are.
 
 Each rests on Lean's three axioms and on nothing else. A contract assumes that the processor
 decodes the listing's instructions at their addresses (`code_in`); `listing_loaded` proves that
