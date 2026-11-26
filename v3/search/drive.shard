@@ -14,7 +14,10 @@
 ;;;                                           of the list, a function of the task's vocabulary
 ;;;                                           whose result type fits — each over new hole
 ;;;                                           functions for its arguments, which take the same
-;;;                                           parameters and are decided when a run needs them.
+;;;                                           parameters and are decided when a run needs them
+;;;                                           —, or a match on a parameter, a row a constructor,
+;;;                                           each row's body a new hole function over the
+;;;                                           parameters and the constructor's fields.
 ;;; Each way costs one unit of SIZE. The walk is depth first under a size bound, the bound
 ;;; raised one at a time (`deepen`), so the first answer found is one of the smallest in what
 ;;; the runs needed decided. A branch ends when the goal answers no, runs out of its fuel, is
@@ -46,6 +49,8 @@
 (use kernel.prog.EDecl)
 (use kernel.prog.EType)
 (use kernel.ev.IVal)
+(use kernel.ev.LArm)
+(use kernel.ev.LPat)
 (use kernel.ev.LTerm)
 (use search.narrow)
 (use search.task)
@@ -131,20 +136,21 @@
     ((cons ty r) (push_unknowns (heap_push h (CUnk ty)) r (cons (NRef (heap_next h)) acc)))))
 
 ;; a hole function with no body: its productions, in this order — parameters, constructors,
-;; integers, the vocabulary
+;; integers, the vocabulary, matches
 (fn alts_hole ((t Problem) (m Mach) (h Heap) (id Int)) (List Alt)
   (match (im_find (mach_holes m) id)
-    ((some (Hole.Hole ptys rty none))
+    ((some (Hole.Hole ptys rty none _))
      (append (prod_vars m h id ptys rty ptys (- (len ptys) 1))
-       (append (prod_data t m h id) (prod_calls t m h id (Problem.voc t)))))
+       (append (prod_data t m h id)
+         (append (prod_calls t m h id (Problem.voc t)) (prod_matches t m h id ptys 0)))))
     (_ nil)))
 ;; the hole function `id` given the body `b`
 (fn bind_hole ((m Mach) (id Int) (b LTerm)) Mach
   (match m
     ((Mach.Mach lk hs n)
      (match (im_find hs id)
-       ((some (Hole.Hole ptys rty _))
-        (Mach.Mach lk (im_insert hs id (Hole.Hole ptys rty (some b))) n))
+       ((some (Hole.Hole ptys rty _ cx))
+        (Mach.Mach lk (im_insert hs id (Hole.Hole ptys rty (some b) cx)) n))
        (none m)))))
 ;; a parameter of the result type: its index counted from the last (`i` at the first)
 (fn prod_vars
@@ -161,10 +167,10 @@
 ;; functions for its fields
 (fn prod_data ((t Problem) (m Mach) (h Heap) (id Int)) (List Alt)
   (match (im_find (mach_holes m) id)
-    ((some (Hole.Hole ptys (ETCon n targs) _))
+    ((some (Hole.Hole _ (ETCon n targs) _ _))
      (if (ty_is_int n) (prod_ints m h id (ty_is_nat n) (Problem.ints t))
      (match (decl_index_find (Problem.inds t) n)
-       ((some (EInd _ _ cs)) (prod_ctors t m h id ptys targs cs))
+       ((some (EInd _ _ cs)) (prod_ctors t m h id targs cs))
        (_ nil))))
     (_ nil)))
 (fn prod_ints ((m Mach) (h Heap) (id Int) (nat Bool) (ks (List Int))) (List Alt)
@@ -174,49 +180,172 @@
     ((cons k rest)
      (if (bool_and nat (< k 0)) (prod_ints m h id nat rest)
      (cons (Alt.Alt (bind_hole m id (LLit (IVInt k))) h) (prod_ints m h id nat rest))))))
-(fn prod_ctors
-  ((t Problem)
-   (m Mach)
-   (h Heap)
-   (id Int)
-   (ptys (List EType))
-   (targs (List EType))
-   (cs (List ECtorDef)))
+(fn prod_ctors ((t Problem) (m Mach) (h Heap) (id Int) (targs (List EType)) (cs (List ECtorDef)))
   (List Alt)
   (measure (struct cs))
   (match cs
     (nil nil)
     ((cons (ECtorDef.ECtorDef c fts) rest)
      (match (nmap_find (lk_tags (Problem.lk t)) c)
-       (none (prod_ctors t m h id ptys targs rest))
+       (none (prod_ctors t m h id targs rest))
        ((some tag)
-        (match (add_holes m ptys (subst_tys targs fts) nil)
-          ((Prod.mk m1 calls)
-           (cons (Alt.Alt (bind_hole m1 id (LCtor tag calls)) h)
-             (prod_ctors t m h id ptys targs rest)))))))))
+        (match (im_find (mach_holes m) id)
+          ((some (Hole.Hole ptys _ _ cx))
+           (match (add_holes m ptys cx (subst_tys targs fts) nil)
+             ((Prod.mk m1 calls)
+              (cons (Alt.Alt (bind_hole m1 id (LCtor tag calls)) h) (prod_ctors t m h id targs rest)))))
+          (none nil)))))))
 ;; a function of the vocabulary whose result type takes the hole function's, at the type
 ;; arguments that makes — over new hole functions for its arguments. One whose parameters name a
-;; type parameter its result does not is passed over: nothing here says what to put for it
+;; type parameter its result does not is passed over: nothing here says what to put for it.
+;; The function being found is called from inside its own body by `prod_rec` alone
 (fn prod_calls ((t Problem) (m Mach) (h Heap) (id Int) (vs (List Voc))) (List Alt)
   (measure (struct vs))
   (match vs
     (nil nil)
     ((cons (Voc.Voc f ps rt) rest)
      (match (im_find (mach_holes m) id)
-       ((some (Hole.Hole ptys rty _))
-        (match (ty_match rt rty nil)
-          (none (prod_calls t m h id rest))
-          ((some s)
-           (match (ty_insts s ps nil)
-             (none (prod_calls t m h id rest))
-             ((some ps1)
-              (match (add_holes m ptys ps1 nil)
-                ((Prod.mk m1 calls)
-                 (cons (Alt.Alt (bind_hole m1 id (LCall f calls)) h) (prod_calls t m h id rest)))))))))
+       ((some (Hole.Hole ptys rty _ (HCtx.HCtx root ar matched smaller)))
+        (if (= f root)
+          (append (if (etype_eq rt rty) (prod_rec m h id ps smaller) nil) (prod_calls t m h id rest))
+          (match (ty_match rt rty nil)
+            (none (prod_calls t m h id rest))
+            ((some s)
+             (match (ty_insts s ps nil)
+               (none (prod_calls t m h id rest))
+               ((some ps1)
+                (match (add_holes m ptys (HCtx.HCtx root ar matched smaller) ps1 nil)
+                  ((Prod.mk m1 calls)
+                   (cons (Alt.Alt (bind_hole m1 id (LCall f calls)) h) (prod_calls t m h id rest))))))))))
        (none nil)))))
-;; new hole functions over the parameters `ptys`, one for each result type: the machine with
-;; them, and a call of each on the parameters in order — the frame a body over them stands in
-(fn add_holes ((m Mach) (ptys (List EType)) (tys (List EType)) (acc (List LTerm)))
+;; a call of the function being found from inside its own body: at one position a parameter
+;; that is a proper part of what the function was given there, the other arguments new hole
+;; functions. Every such call is on something smaller — the language's structural rule
+;; (`(measure (struct x))`) — so no body made here calls itself forever
+(fn prod_rec ((m Mach) (h Heap) (id Int) (ps (List EType)) (sm (List (Prod Int Int)))) (List Alt)
+  (measure (struct sm))
+  (match sm
+    (nil nil)
+    ((cons (Prod.mk j q) rest)
+     (match (im_find (mach_holes m) id)
+       ((some (Hole.Hole ptys _ _ (HCtx.HCtx root ar matched smaller)))
+        (if (same_type (nth ptys j) (nth ps q))
+          (match
+            (rec_args m (Prod.mk ptys (HCtx.HCtx root ar matched smaller)) ps 0
+              (Prod.mk q (LBVar (- (- (len ptys) 1) j)))
+              nil)
+            ((Prod.mk m1 args)
+             (cons (Alt.Alt (bind_hole m1 id (LCall root args)) h) (prod_rec m h id ps rest))))
+          (prod_rec m h id ps rest)))
+       (none nil)))))
+(fn same_type ((a (Option EType)) (b (Option EType))) Bool
+  (match a
+    ((some x)
+     (match b
+       ((some y) (etype_eq x y))
+       (none false)))
+    (none false)))
+;; the arguments of such a call: the variable at its position, a new hole function at each other
+(fn rec_args
+  ((m Mach)
+   (fr (Prod (List EType) HCtx))
+   (ps (List EType))
+   (i Int)
+   (at (Prod Int LTerm))
+   (acc (List LTerm)))
+  (Prod Mach (List LTerm))
+  (measure (struct ps))
+  (match ps
+    (nil (Prod.mk m (rev acc)))
+    ((cons ty r)
+     (match at
+       ((Prod.mk q v)
+        (if (= i q) (rec_args m fr r (+ i 1) at (cons v acc))
+        (match fr
+          ((Prod.mk ptys cx)
+           (match (add_holes m ptys cx (cons ty nil) nil)
+             ((Prod.mk m1 (cons c _)) (rec_args m1 fr r (+ i 1) at (cons c acc)))
+             (_ (Prod.mk m (rev acc))))))))))))
+;; a match on a parameter of an inductive type that no match above has taken apart: a row for
+;; each constructor, its body a new hole function whose parameters are these and then the
+;; constructor's fields. Where the parameter is one the function being found was given, or a
+;; proper part of one, the fields are proper parts of that one
+(fn prod_matches ((t Problem) (m Mach) (h Heap) (id Int) (rest (List EType)) (j Int)) (List Alt)
+  (measure (struct rest))
+  (match rest
+    (nil nil)
+    ((cons (ETCon n targs) more)
+     (match (match_at t m id j (Prod.mk n targs))
+       ((some m1) (cons (Alt.Alt m1 h) (prod_matches t m h id more (+ j 1))))
+       (none (prod_matches t m h id more (+ j 1)))))
+    ((cons _ more) (prod_matches t m h id more (+ j 1)))))
+(fn match_at ((t Problem) (m Mach) (id Int) (j Int) (ty (Prod Name (List EType)))) (Option Mach)
+  (match ty
+    ((Prod.mk n targs)
+     (if (ty_is_int n) none
+     (match (im_find (mach_holes m) id)
+       ((some (Hole.Hole ptys rty none (HCtx.HCtx root ar matched smaller)))
+        (if (mem_int j matched) none
+        (match (decl_index_find (Problem.inds t) n)
+          ((some (EInd _ _ (cons c0 cs)))
+           (match
+             (match_rows t m
+               (Rows.Rows ptys rty targs (HCtx.HCtx root ar (cons j matched) smaller)
+                 (if (< j ar) (some j) (part_of smaller j)))
+               (cons c0 cs)
+               nil)
+             ((Prod.mk m1 arms)
+              (some (bind_hole m1 id (LMatch (LBVar (- (- (len ptys) 1) j)) arms))))))
+          (_ none))))
+       (_ none))))))
+(fn part_of ((sm (List (Prod Int Int))) (j Int)) (Option Int)
+  (measure (struct sm))
+  (match sm
+    (nil none)
+    ((cons (Prod.mk a q) r) (if (= a j) (some q) (part_of r j)))))
+;; what the rows of one match share: the parameters and result type of the hole function, the
+;; scrutinee's type arguments, the rows' own context, and the position the scrutinee is a part
+;; (or the whole) of
+(type Rows (Rows (List EType) EType (List EType) HCtx (Option Int)))
+(fn match_rows ((t Problem) (m Mach) (rw Rows) (cs (List ECtorDef)) (acc (List LArm)))
+  (Prod Mach (List LArm))
+  (measure (struct cs))
+  (match cs
+    (nil (Prod.mk m (rev acc)))
+    ((cons (ECtorDef.ECtorDef c fts) rest)
+     (match rw
+       ((Rows.Rows ptys rty targs (HCtx.HCtx root ar matched smaller) part)
+        (match (nmap_find (lk_tags (Problem.lk t)) c)
+          (none (match_rows t m rw rest acc))
+          ((some tag)
+           (let ((fts1 (subst_tys targs fts)) (n (len ptys)) (k (len fts1)))
+             (match m
+               ((Mach.Mach lk hs nx)
+                (match_rows t
+                  (Mach.Mach lk
+                    (im_insert hs nx
+                      (Hole.Hole (append ptys fts1) rty none
+                        (HCtx.HCtx root ar matched (append (parts_from part n k) smaller))))
+                    (+ nx 1))
+                  rw
+                  rest
+                  (cons (LArm.LArm (LPCtor tag (lpvars k)) (LCall nx (frame_vars (- (+ n k) 1))))
+                    acc))))))))))))
+;; the k parameters from position n on as proper parts of position q
+(fn parts_from ((part (Option Int)) (n Int) (k Int)) (List (Prod Int Int))
+  (measure (Int.natAbs k))
+  (match part
+    (none nil)
+    ((some q) (if (< k 1) nil (cons (Prod.mk n q) (parts_from part (+ n 1) (- k 1)))))))
+(fulfills parts_from.dec_1 (by (intro p q hp h) (apply natAbs_pred (arith))))
+(fn lpvars ((k Int)) (List LPat)
+  (measure (Int.natAbs k))
+  (if (< k 1) nil (cons LPVar (lpvars (- k 1)))))
+(fulfills lpvars.dec_1 (by (intro k h) (apply natAbs_pred (arith))))
+;; new hole functions over the parameters `ptys` and with the context `cx`, one for each result
+;; type: the machine with them, and a call of each on the parameters in order — the frame a body
+;; over them stands in
+(fn add_holes ((m Mach) (ptys (List EType)) (cx HCtx) (tys (List EType)) (acc (List LTerm)))
   (Prod Mach (List LTerm))
   (measure (struct tys))
   (match tys
@@ -224,7 +353,7 @@
     ((cons ty r)
      (match m
        ((Mach.Mach lk hs n)
-        (add_holes (Mach.Mach lk (im_insert hs n (Hole.Hole ptys ty none)) (+ n 1)) ptys r
+        (add_holes (Mach.Mach lk (im_insert hs n (Hole.Hole ptys ty none cx)) (+ n 1)) ptys cx r
           (cons (LCall n (frame_vars (- (len ptys) 1))) acc)))))))
 ;; the parameters of a frame of i+1, first to last: indices i down to 0
 (fn frame_vars ((i Int)) (List LTerm)
@@ -293,9 +422,12 @@
 (fulfills ty_inst.dec_1 (by (intro s ty n as h) (rw h) (rw EType.size.eq_1) (arith)))
 
 ;; ---- the walk ----------------------------------------------------------------------------------
+;; where a branch is: the size of what is decided so far, and — for a property — the tests still
+;; to pass after the one being run
+(type Place (Place Int (List (List NVal))))
 ;; a stopped run: the machine, the heap, the cell it needs, the rest of the run, the fuel left,
-;; the size so far
-(type Stopped (Stopped Mach Heap Int NKont Int Int))
+;; where the branch is
+(type Stopped (Stopped Mach Heap Int NKont Int Place))
 ;; an answer: the machine and the heap of a goal that answered yes
 (type Sol (Sol Mach Heap))
 ;; work (function entries), cells settled, goals that answered no, branches out of fuel, stuck,
@@ -340,25 +472,46 @@
     ((Tally.Tally w e f o s c n u _) (list w e f o s c n u))))
 ;; what a round of runs left: the stopped runs in order, the answers (latest first), the tally
 (type Ran (Ran (List Stopped) (List Sol) Tally))
-;; one run's end taken into a round: `fuel` is what the run was given, `size` the size of what
-;; was decided before it. A goal that answered yes is an answer when its replay says so too
-(fn ran_add ((t Problem) (x Ran) (m Mach) (st Stop) (fuel Int) (size Int)) Ran
+;; one run's end taken into a round: `fuel` is what the run was given. A goal that answered yes
+;; goes on to the next test where the branch has one; with none left it is an answer when its
+;; replay says so too
+(fn ran_add ((t Problem) (x Ran) (m Mach) (st Stop) (fuel Int) (cx Place)) Ran
   (match x
     ((Ran.Ran nodes sols y)
      (match st
        ((SVal (NCtor tag _) h f)
-        (let ((y1 (tally_answered y (- (Problem.fuel t) f))))
+        (let ((y1 (tally_add (tally_answered y (- (Problem.fuel t) f)) (- fuel f) 0)))
           (if (= (band tag 1) 1)
-            (if (replay t m h (tag_name (Problem.lk t) tag) (* 8 (Problem.fuel t)))
-              (Ran.Ran nodes (cons (Sol.Sol m h) sols) (tally_add y1 (- fuel f) 0))
-              (Ran.Ran nodes sols (tally_add y1 (- fuel f) 7)))
-            (Ran.Ran nodes sols (tally_add y1 (- fuel f) 2)))))
+            (match cx
+              ((Place.Place _ nil)
+               (if (replay t m h (tag_name (Problem.lk t) tag) (* 8 (Problem.fuel t)))
+                 (Ran.Ran nodes (cons (Sol.Sol m h) sols) y1)
+                 (Ran.Ran nodes sols (tally_add y1 0 7))))
+              ((Place.Place size (cons args more))
+               (ran_add t (Ran.Ran nodes sols y1) m
+                 (nv_start m (heap_empty) (Problem.goal_id t) args (Problem.fuel t))
+                 (Problem.fuel t)
+                 (Place.Place size more))))
+            (Ran.Ran nodes sols (tally_add y1 0 2)))))
        ((SVal _ _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))
        ((SNeed r k h f)
-        (Ran.Ran (cons (Stopped.Stopped m h r k f size) nodes) sols (tally_add y (- fuel f) 0)))
+        (Ran.Ran (cons (Stopped.Stopped m h r k f cx) nodes) sols (tally_add y (- fuel f) 0)))
        (SOut (Ran.Ran nodes sols (tally_add y fuel 3)))
        ((SStuck _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))
        ((SExh _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))))))
+;; the goal run from its start for a machine: on the unknown arguments in the heap where the
+;; problem has no tests, else on the first test with the others to follow
+(fn first_run ((t Problem) (m Mach) (h Heap) (x Ran) (size Int)) Ran
+  (match (Problem.tests t)
+    (nil
+      (ran_add t x m
+        (nv_start m h (Problem.goal_id t) (arg_refs 0 (len (Problem.goal_tys t))) (Problem.fuel t))
+        (Problem.fuel t)
+        (Place.Place size nil)))
+    ((cons args more)
+     (ran_add t x m (nv_start m (heap_empty) (Problem.goal_id t) args (Problem.fuel t))
+       (Problem.fuel t)
+       (Place.Place size more)))))
 ;; each way resumed from the stop it settles: the runs' ends, the stopped ones latest first
 (fn run_alts ((t Problem) (as (List Alt)) (nd Stopped) (acc Ran)) Ran
   (measure (struct as))
@@ -366,8 +519,9 @@
     (nil acc)
     ((cons (Alt.Alt m h) rest)
      (match nd
-       ((Stopped.Stopped _ _ r k fuel size)
-        (run_alts t rest nd (ran_add t acc m (nv_resume m h r k fuel) fuel (+ size 1))))))))
+       ((Stopped.Stopped _ _ r k fuel (Place.Place size tests))
+        (run_alts t rest nd
+          (ran_add t acc m (nv_resume m h r k fuel) fuel (Place.Place (+ size 1) tests))))))))
 ;; what a walk left: the answers (latest first), the tally, whether the work budget ended it
 (type Walk (Walk (List Sol) Tally Bool))
 ;; depth first: the stopped run on top is settled each way and the runs that stopped again go
@@ -375,36 +529,37 @@
 (fn walk ((t Problem) (lim Lim) (stack (List Stopped)) (sols (List Sol)) (y Tally)) Walk
   (match stack
     (nil (Walk.Walk sols y false))
-    ((cons (Stopped.Stopped m h r k fuel size) rest)
+    ((cons (Stopped.Stopped m h r k fuel (Place.Place size tests)) rest)
      (if (<= (lim_budget lim) (tally_work y)) (Walk.Walk sols y true)
      (if (<= (lim_size lim) size) (walk t lim rest sols (tally_add y 0 5))
      (match (alts t m h r)
        (nil (walk t lim rest sols (tally_add y 0 6)))
        (as
          (match
-           (run_alts t as (Stopped.Stopped m h r k fuel size) (Ran.Ran nil sols (tally_add y 0 1)))
+           (run_alts t as (Stopped.Stopped m h r k fuel (Place.Place size tests))
+             (Ran.Ran nil sols (tally_add y 0 1)))
            ((Ran.Ran nodes sols1 y1)
             (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols1))) (Walk.Walk sols1 y1 false)
             (walk t lim (rev_onto nodes rest) sols1 y1)))))))))))
 
 ;; ---- a search ----------------------------------------------------------------------------------
-;; where a search starts: the machine with the task's hole functions, the goal's index, its
-;; parameter types — each an unknown value
-(type Start (Start Mach Int (List EType)))
-;; one walk under `lim` from the start, adding to the tally `y`
+;; where a search starts: the machine with the problem's hole functions
+(type Start (Start Mach))
+;; one walk under `lim` from the start, adding to the tally `y`. The goal's parameters are
+;; unknown cells, the first of the heap (none where the problem is a property over tests)
 (fn search_at ((t Problem) (lim Lim) (s Start) (y Tally)) Walk
   (match s
-    ((Start.Start m goal ptys)
-     (match (push_unknowns (heap_empty) ptys nil)
-       ((Prod.mk h0 refs)
+    ((Start.Start m)
+     (match (push_unknowns (heap_empty) (Problem.goal_tys t) nil)
+       ((Prod.mk h0 _)
         (if (lim_eager lim)
-          (enum_walk t lim s
+          (enum_walk t lim
             (list
-              (Cand.Cand m h0 (append (cell_items 0 (len ptys)) (hole_items (Problem.holes t))) 0))
+              (Cand.Cand m h0
+                (append (cell_items 0 (len (Problem.goal_tys t))) (hole_items (Problem.holes t)))
+                0))
             (Ran.Ran nil nil y))
-          (match
-            (ran_add t (Ran.Ran nil nil y) m (nv_start m h0 goal refs (lim_fuel lim)) (lim_fuel lim)
-              0)
+          (match (first_run t m h0 (Ran.Ran nil nil y) 0)
             ((Ran.Ran nodes sols y1)
              (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y1 false)
              (walk t lim nodes sols y1))))))))))
@@ -474,7 +629,7 @@
            (append (new_holes (mach_next m0) (mach_next m)) rest))
          (+ size 1))
        (cands_of more m0 h0 rest size)))))
-(fn enum_walk ((t Problem) (lim Lim) (s Start) (stack (List Cand)) (acc Ran)) Walk
+(fn enum_walk ((t Problem) (lim Lim) (stack (List Cand)) (acc Ran)) Walk
   (match acc
     ((Ran.Ran _ sols y)
      (match stack
@@ -483,19 +638,74 @@
         (if (<= (lim_budget lim) (tally_work y)) (Walk.Walk sols y true)
         (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y false)
         (match pending
-          (nil
-            (match s
-              ((Start.Start _ goal ptys)
-               (enum_walk t lim s rest
-                 (ran_add t (Ran.Ran nil sols y) m
-                   (nv_start m h goal (arg_refs 0 (len ptys)) (lim_fuel lim))
-                   (lim_fuel lim)
-                   size)))))
+          (nil (enum_walk t lim rest (first_run t m h (Ran.Ran nil sols y) size)))
           ((cons it more)
            (if (< (lim_size lim) (+ size (len pending)))
-             (enum_walk t lim s rest (Ran.Ran nil sols (tally_add y 0 5)))
+             (enum_walk t lim rest (Ran.Ran nil sols (tally_add y 0 5)))
              (match (item_alts t m h it)
-               (nil (enum_walk t lim s rest (Ran.Ran nil sols (tally_add y 0 6))))
+               (nil (enum_walk t lim rest (Ran.Ran nil sols (tally_add y 0 6))))
                (as
-                 (enum_walk t lim s (append (cands_of as m h more size) rest)
+                 (enum_walk t lim (append (cands_of as m h more size) rest)
                    (Ran.Ran nil sols (tally_add y 0 1)))))))))))))))
+
+;; ---- the tests of a property -------------------------------------------------------------------
+;; A property is a goal that must answer yes on EVERY argument tuple, and it is tried on the
+;; small ones: every tuple of closed values of the parameter types, by size — an integer of the
+;; problem's list one unit, a constructor one unit and its fields' — smallest first, up to a
+;; size and a count. A branch runs them in order and ends at the first no, so what the small
+;; tests decide is decided before a large one is run.
+(fn vals_sized ((t Problem) (ty EType) (s Int)) (List NVal)
+  (if (< s 1) nil
+  (match ty
+    ((ETVar _) nil)
+    ((ETCon n targs)
+     (if (ty_is_int n) (if (= s 1) (int_vals (ty_is_nat n) (Problem.ints t)) nil)
+     (match (decl_index_find (Problem.inds t) n)
+       ((some (EInd _ _ cs)) (ctor_vals t targs cs s))
+       (_ nil)))))))
+(fn int_vals ((nat Bool) (ks (List Int))) (List NVal)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons k r) (if (bool_and nat (< k 0)) (int_vals nat r) (cons (NInt k) (int_vals nat r))))))
+(fn ctor_vals ((t Problem) (targs (List EType)) (cs (List ECtorDef)) (s Int)) (List NVal)
+  (match cs
+    (nil nil)
+    ((cons (ECtorDef.ECtorDef c fts) rest)
+     (match (nmap_find (lk_tags (Problem.lk t)) c)
+       (none (ctor_vals t targs rest s))
+       ((some tag)
+        (append (cells_of tag (tuples_sized t (subst_tys targs fts) (- s 1)))
+          (ctor_vals t targs rest s)))))))
+(fn cells_of ((tag Int) (tuples (List (List NVal)))) (List NVal)
+  (measure (struct tuples))
+  (match tuples
+    (nil nil)
+    ((cons fs r) (cons (NCtor tag fs) (cells_of tag r)))))
+;; every tuple of values of these types that takes exactly `s` units in all
+(fn tuples_sized ((t Problem) (tys (List EType)) (s Int)) (List (List NVal))
+  (match tys
+    (nil (if (= s 0) (cons nil nil) nil))
+    ((cons ty nil) (pair_up (vals_sized t ty s) (cons nil nil)))
+    ((cons ty r) (tuples_split t ty r s 1))))
+;; the first of the tuple at each size from `a` up, the others at what is left
+(fn tuples_split ((t Problem) (ty EType) (r (List EType)) (s Int) (a Int)) (List (List NVal))
+  (if (< (- s (len r)) a) nil
+  (append (pair_up (vals_sized t ty a) (tuples_sized t r (- s a))) (tuples_split t ty r s (+ a 1)))))
+(fn pair_up ((fs (List NVal)) (rests (List (List NVal)))) (List (List NVal))
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons f more) (append (cons_each f rests) (pair_up more rests)))))
+(fn cons_each ((f NVal) (rests (List (List NVal)))) (List (List NVal))
+  (measure (struct rests))
+  (match rests
+    (nil nil)
+    ((cons x r) (cons (cons f x) (cons_each f r)))))
+;; the tests: the tuples of size `s`, `s`+1, … up to `smax`, the first `n` of them
+(fn tests_of ((t Problem) (tys (List EType)) (s Int) (lim (Prod Int Int)) (acc (List (List NVal))))
+  (List (List NVal))
+  (match lim
+    ((Prod.mk smax n)
+     (if (bool_or (< smax s) (<= n (len acc))) (take n acc)
+     (tests_of t tys (+ s 1) lim (append acc (tuples_sized t tys s)))))))

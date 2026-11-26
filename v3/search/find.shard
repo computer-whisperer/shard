@@ -1,10 +1,16 @@
 ;;; v3/search/find.shard — the search's driver:
-;;;   find --root DIR [--init EXPORT --init-index INDEX] --goal M.FN [--hole M.FN]… [--use M.FN]…
+;;;   find --root DIR [--init EXPORT --init-index INDEX] (--goal|--spec) M.FN [--hole M.FN]…
+;;;        [--use M.FN]… [--tests N] [--test-size N]
 ;;;        [--ints K,K,…] [--size N] [--fuel N] [--fuel-min N] [--budget N] [--all] [--enum] FILE…
 ;;; loads each FILE as load.shard does and searches the program the load yields:
 ;;;   --goal    a function whose answer is a two-constructor cell (`Bool`, a decision): the
 ;;;             search wants its second constructor (`true`). Its parameters are the UNKNOWN
 ;;;             VALUES, each of its stated type
+;;;   --spec    in place of --goal: a PROPERTY. The function must answer yes on every argument
+;;;             tuple, and is tried on the small ones: every tuple of closed values of its
+;;;             parameter types by size, smallest first, up to --test-size units (default 10)
+;;;             and --tests of them (default 200). Nothing of it is unknown: what is searched
+;;;             for is the hole functions that make it hold on all of them
 ;;;   --hole    a function the program names and does not define — an `extern`, a view's `sig fn`
 ;;;             with no implementation among the roots — whose body is to be found
 ;;;   --use     a function a found body may call (a hole function among them: recursion)
@@ -75,7 +81,10 @@
   (all Bool)
   (eager Bool)
   (closed Bool)
-  (batch (List Int)))
+  (batch (List Int))
+  (spec Bool)
+  (tests Int)
+  (test_size Int))
 (fn parse_fargs ((args (List (List Int))) (a FArgs)) FArgs
   (measure (struct args))
   (match args
@@ -92,7 +101,12 @@
         (if (int_list_eq x (utf8 "--root")) (parse_fargs r2 (with FArgs a (root v)))
         (if (int_list_eq x (utf8 "--init")) (parse_fargs r2 (with FArgs a (export v)))
         (if (int_list_eq x (utf8 "--init-index")) (parse_fargs r2 (with FArgs a (index v)))
-        (if (int_list_eq x (utf8 "--goal")) (parse_fargs r2 (with FArgs a (goal v)))
+        (if (int_list_eq x (utf8 "--goal")) (parse_fargs r2 (with FArgs a (goal v) (spec false)))
+        (if (int_list_eq x (utf8 "--spec")) (parse_fargs r2 (with FArgs a (goal v) (spec true)))
+        (if (int_list_eq x (utf8 "--tests"))
+          (parse_fargs r2 (with FArgs a (tests (read_num v (FArgs.tests a)))))
+        (if (int_list_eq x (utf8 "--test-size"))
+          (parse_fargs r2 (with FArgs a (test_size (read_num v (FArgs.test_size a)))))
         (if (int_list_eq x (utf8 "--hole"))
           (parse_fargs r2 (with FArgs a (holes (cons v (FArgs.holes a)))))
         (if (int_list_eq x (utf8 "--use"))
@@ -108,7 +122,7 @@
         (if (int_list_eq x (utf8 "--batch")) (parse_fargs r2 (with FArgs a (batch v)))
         (if (int_list_eq x (utf8 "--budget"))
           (parse_fargs r2 (with FArgs a (budget (read_num v (FArgs.budget a)))))
-          (parse_fargs r (with FArgs a (files (cons x (FArgs.files a)))))))))))))))))))))))))
+          (parse_fargs r (with FArgs a (files (cons x (FArgs.files a))))))))))))))))))))))))))))
 (fn read_num ((s (List Int)) (dflt Int)) Int
   (if (bool_and (< 0 (len s)) (all_digits s)) (digits_val s 0) dflt))
 ;; integers separated by commas, each with an optional minus sign; what does not read is passed over
@@ -171,7 +185,10 @@
               (all false)
               (eager false)
               (closed false)
-              (batch nil)))))
+              (batch nil)
+              (spec false)
+              (tests 200)
+              (test_size 10)))))
        (match (parts_of (FArgs.root a))
          (none (exit 2 (write_line (utf8 "FIND-ERROR usage: --root DIR is required") w1)))
          ((some rootp)
@@ -269,7 +286,7 @@
      (match (sig_of lk p x true)
        ((SigNo m) (HolesNo m))
        ((SigOk id ps rt)
-        (holes_of lk p r (im_insert hs id (Hole.Hole ps rt none))
+        (holes_of lk p r (im_insert hs id (Hole.Hole ps rt none (HCtx.HCtx id (len ps) nil nil)))
           (cons (Prod.mk id (fn_name lk id)) acc)))))))
 (type Vocs (VocsOk (List Voc)) (VocsNo (List Int)))
 (fn vocs_of ((lk Linked) (p Prog) (texts (List (List Int))) (acc (List Voc))) Vocs
@@ -306,23 +323,33 @@
              (match p
                ((Prog.Prog ds)
                 (let
-                  ((pb
+                  ((pb0
                      (problem_of (Given.Given lk ds voc (FArgs.ints a) (FArgs.fuel a))
                        (fn_name lk gid)
                        gid
-                       gps
-                       named)))
-                  (report a pb
-                    (deepen pb
-                      (Lim.Lim (FArgs.size a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
-                        (FArgs.fuel a)
-                        (FArgs.budget a)
-                        (FArgs.all a)
-                        (FArgs.eager a))
-                      (Start.Start (Mach.Mach lk hs (Problem.base pb)) gid gps)
-                      1
-                      (tally_zero))
-                    w)))))))))))))
+                       (if (FArgs.spec a) nil gps)
+                       named))
+                   (tests
+                     (if (FArgs.spec a)
+                       (tests_of pb0 gps 0 (Prod.mk (FArgs.test_size a) (FArgs.tests a)) nil)
+                       nil)))
+                  (if (bool_and (FArgs.spec a) (= (len tests) 0))
+                    (fail
+                      (utf8
+                        "--spec: no test: no tuple of values of the parameter types under --test-size")
+                      w)
+                    (let ((pb (problem_tests pb0 tests)))
+                      (report a pb
+                        (deepen pb
+                          (Lim.Lim (FArgs.size a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
+                            (FArgs.fuel a)
+                            (FArgs.budget a)
+                            (FArgs.all a)
+                            (FArgs.eager a))
+                          (Start.Start (Mach.Mach lk hs (Problem.base pb)))
+                          1
+                          (tally_zero))
+                        w)))))))))))))))
 ;; --closed: a function with no parameter and nothing unknown, run by the narrowing machine and
 ;; by `ev`: the two answers must be the same value, or the same kind of end
 (fn closed_run ((a FArgs) (p Prog) (lk Linked) (gid Int) (gps (List EType)) (w World))
@@ -391,7 +418,12 @@
                                (append (show_nat (FArgs.fuel a))
                                  (append (utf8 " budget=")
                                    (append (show_nat (FArgs.budget a))
-                                     (if (FArgs.eager a) (utf8 " enum") nil)))))))))))))
+                                     (append
+                                       (if (< 0 (len (Problem.tests pb)))
+                                         (append (utf8 " tests=")
+                                           (show_nat (len (Problem.tests pb))))
+                                         nil)
+                                       (if (FArgs.eager a) (utf8 " enum") nil))))))))))))))
              w)))))))
 (fn show_tally ((cs (List Int))) (List Int)
   (match cs

@@ -33,13 +33,19 @@
 (use kernel.prog.ECtorDef)
 (use kernel.prog.EDecl)
 (use kernel.prog.ELit)
+(use kernel.prog.EPat)
 (use kernel.prog.ERec)
 (use kernel.prog.ETerm)
 (use kernel.prog.EType)
 (use kernel.prog.EvRes)
 (use kernel.prog.Prog)
 (use kernel.prog.Val)
+(use kernel.ev.Door)
 (use kernel.ev.IVal)
+(use kernel.ev.InvRes)
+(use kernel.ev.LArm)
+(use kernel.ev.LPat)
+(use kernel.ev.Prep)
 (use kernel.ev.LTerm)
 (use search.narrow)
 (use search.narrow.Cell)
@@ -55,7 +61,8 @@
   (ints (List Int))
   (goal Name)
   (goal_id Int)
-  (goal_tys (List EType))  ; the goal's parameter types: the unknown values
+  (goal_tys (List EType))  ; the goal's parameter types: the unknown values — none under tests
+  (tests (List (List NVal)))  ; a property's tests: the argument tuples the goal must answer yes on, in order
   (holes (List (Prod Int Name)))  ; the program's hole functions: index and identity
   (base Int)  ; the first index of a hole function the search makes: past every function's
   (fuel Int))  ; the fuel of a branch in the round being walked; a replay gets eight times it
@@ -69,9 +76,12 @@
        (goal goal)
        (goal_id goal_id)
        (goal_tys goal_tys)
+       (tests nil)
        (holes holes)
        (base (len ds))
        (fuel fuel)))))
+;; the problem as a property: the goal must answer yes on each of these argument tuples
+(fn problem_tests ((pb Problem) (tests (List (List NVal)))) Problem (with Problem pb (tests tests)))
 ;; the problem at another fuel of a branch
 (fn problem_fuel ((pb Problem) (fuel Int)) Problem (with Problem pb (fuel fuel)))
 (fn ty_is_nat ((n Name)) Bool (name_eq n (n1 (sym "Nat"))))
@@ -126,22 +136,27 @@
      (if (<= (Problem.base pb) id)
        (if (< d 1) LAbsurd
        (match (im_find (mach_holes m) id)
-         ((some (Hole.Hole _ _ (some b))) (close_term pb m b (- d 1)))
-         ((some (Hole.Hole ptys rty none)) (default_term pb ptys rty 4))
+         ((some (Hole.Hole _ _ (some b) _)) (close_term pb m b (- d 1)))
+         ((some (Hole.Hole ptys rty none _)) (default_term pb ptys rty 4))
          (none LAbsurd)))
        (LCall id (close_terms pb m args d))))
     ((LCtor tag args) (LCtor tag (close_terms pb m args d)))
+    ((LMatch s arms) (LMatch (close_term pb m s d) (close_arms pb m arms d)))
     (_ t)))
 (fn close_terms ((pb Problem) (m Mach) (ts (List LTerm)) (d Int)) (List LTerm)
   (match ts
     (nil nil)
     ((cons t r) (cons (close_term pb m t d) (close_terms pb m r d)))))
+(fn close_arms ((pb Problem) (m Mach) (arms (List LArm)) (d Int)) (List LArm)
+  (match arms
+    (nil nil)
+    ((cons (LArm.LArm p b) r) (cons (LArm.LArm p (close_term pb m b d)) (close_arms pb m r d)))))
 ;; the body found for one of the program's hole functions, closed: its own where a run needed
 ;; it, the default where none did
 (fn closed_body ((pb Problem) (m Mach) (id Int)) LTerm
   (match (im_find (mach_holes m) id)
-    ((some (Hole.Hole _ _ (some b))) (close_term pb m b 64))
-    ((some (Hole.Hole ptys rty none)) (default_term pb ptys rty 4))
+    ((some (Hole.Hole _ _ (some b) _)) (close_term pb m b 64))
+    ((some (Hole.Hole ptys rty none _)) (default_term pb ptys rty 4))
     (none LAbsurd)))
 ;; the first value of a type: zero, the first constructor whose fields can be filled
 (fn default_val ((pb Problem) (ty EType) (d Int)) (Option Val)
@@ -210,11 +225,25 @@
     ((LLit v) (eterm_of_val lk v))
     ((LCtor tag args) (ECtor (tag_name lk tag) (eterms_of lk args)))
     ((LCall id args) (ECall (fn_name lk id) (eterms_of lk args)))
+    ((LMatch s arms) (EMatch (eterm_of lk s) (earms_of lk arms)))
     (_ EAbsurd)))
 (fn eterms_of ((lk Linked) (ts (List LTerm))) (List ETerm)
   (match ts
     (nil nil)
     ((cons t r) (cons (eterm_of lk t) (eterms_of lk r)))))
+(fn earms_of ((lk Linked) (arms (List LArm))) (List EArm)
+  (match arms
+    (nil nil)
+    ((cons (LArm.LArm p b) r) (cons (EArm.EArm (epat_of lk p) (eterm_of lk b)) (earms_of lk r)))))
+(fn epat_of ((lk Linked) (p LPat)) EPat
+  (match p
+    (LPVar PVar)
+    ((LPInt k) (PLit (if (< k 0) (LInt k) (LNat k))))
+    ((LPCtor tag subs) (PCtor (tag_name lk tag) (epats_of lk subs)))))
+(fn epats_of ((lk Linked) (ps (List LPat))) (List EPat)
+  (match ps
+    (nil nil)
+    ((cons p r) (cons (epat_of lk p) (epats_of lk r)))))
 (fn eterm_of_val ((lk Linked) (v IVal)) ETerm
   (match v
     ((IVInt k) (ELit (if (< k 0) (LInt k) (LNat k))))
@@ -284,15 +313,30 @@
   (Prog.Prog (fill_decls (Problem.decls pb) (fills_of pb m (Problem.holes pb)))))
 
 ;; ---- the replay ----------------------------------------------------------------------------------
-;; the goal of the filled program on the closed arguments, under `ev`: is its answer the
-;; constructor `yes`
+;; the goal of the filled program under `ev`, linked once: is its answer the constructor `yes` —
+;; on the closed arguments in the heap, or, for a property, on every test
 (fn replay ((pb Problem) (m Mach) (h Heap) (yes Name) (fuel Int)) Bool
-  (match (goal_args pb h)
-    (none false)
-    ((some args)
-     (match (ev (filled_prog pb m) (Problem.goal pb) args fuel)
-       ((EvOk (VCtor c _)) (name_eq c yes))
-       (_ false)))))
+  (match (prepare (filled_prog pb m) (Problem.goal pb) (policy_of Assumed false nil fuel))
+    ((PrepNo _ _) false)
+    ((PrepOk hd)
+     (match (Problem.tests pb)
+       (nil
+         (match (goal_args pb h)
+           (none false)
+           ((some args) (replay_one hd args yes))))
+       (tests (replay_tests pb hd tests yes))))))
+(fn replay_one ((hd Handle) (args (List Val)) (yes Name)) Bool
+  (match (invoke hd args)
+    ((InvRan (EvOk (VCtor c _))) (name_eq c yes))
+    (_ false)))
+(fn replay_tests ((pb Problem) (hd Handle) (tests (List (List NVal))) (yes Name)) Bool
+  (measure (struct tests))
+  (match tests
+    (nil true)
+    ((cons args r)
+     (match (closed_vals pb (heap_empty) args nil)
+       (none false)
+       ((some vs) (if (replay_one hd vs yes) (replay_tests pb hd r yes) false))))))
 
 ;; ---- the text ------------------------------------------------------------------------------------
 ;; a closed body over n parameters as source text: the parameters are x0 … in order
@@ -307,7 +351,36 @@
     ((LCall id args)
      (append (utf8 "(")
        (append (show_name (fn_name lk id)) (append (show_bodies lk n args) (utf8 ")")))))
+    ((LMatch s arms)
+     (append (utf8 "(match ") (append (show_body lk n s) (append (show_arms lk n arms) (utf8 ")")))))
     (_ (utf8 "?"))))
+;; a row: its pattern — a constructor over new variables, numbered on from the frame's — and its
+;; body in the frame with them
+(fn show_arms ((lk Linked) (n Int) (arms (List LArm))) (List Int)
+  (match arms
+    (nil nil)
+    ((cons (LArm.LArm p b) r)
+     (append (utf8 " (")
+       (append (show_pat lk n p)
+         (append (utf8 " ")
+           (append (show_body lk (+ n (row_vars p)) b) (append (utf8 ")") (show_arms lk n r)))))))))
+(fn row_vars ((p LPat)) Int
+  (match p
+    ((LPCtor _ subs) (len subs))
+    (LPVar 1)
+    (_ 0)))
+(fn show_pat ((lk Linked) (n Int) (p LPat)) (List Int)
+  (match p
+    ((LPCtor tag nil) (show_name (tag_name lk tag)))
+    ((LPCtor tag subs)
+     (append (utf8 "(")
+       (append (show_name (tag_name lk tag)) (append (show_pat_vars n (len subs)) (utf8 ")")))))
+    ((LPInt k) (show_int k))
+    (LPVar (cons 120 (show_nat n)))))
+(fn show_pat_vars ((n Int) (k Int)) (List Int)
+  (measure (Int.natAbs k))
+  (if (< k 1) nil (append (utf8 " x") (append (show_nat n) (show_pat_vars (+ n 1) (- k 1))))))
+(fulfills show_pat_vars.dec_1 (by (intro p h) (apply natAbs_pred (arith))))
 (fn show_bodies ((lk Linked) (n Int) (ts (List LTerm))) (List Int)
   (match ts
     (nil nil)
@@ -322,19 +395,72 @@
   (match vs
     (nil nil)
     ((cons v r) (cons 32 (append (show_val v) (show_vals r))))))
-;; a hole function as a definition: (fn NAME ((x0 T) …) RET BODY), NAME its last component
+;; a hole function as a definition: (fn NAME ((x0 T) …) RET BODY), NAME its last component —
+;; with (measure (struct xP)) where the body calls the function itself and every such call passes
+;; a proper part at position P
 (fn show_fn ((pb Problem) (m Mach) (id Int) (n Name)) (List Int)
   (match (im_find (mach_holes m) id)
-    ((some (Hole.Hole ptys rty _))
-     (append (utf8 "(fn ")
-       (append (show_last n)
-         (append (utf8 " (")
-           (append (show_binders ptys 0)
-             (append (utf8 ") ")
-               (append (show_etype rty)
-                 (append (utf8 " ")
-                   (append (show_body (Problem.lk pb) (len ptys) (closed_body pb m id)) (utf8 ")"))))))))))
+    ((some (Hole.Hole ptys rty _ _))
+     (let ((body (closed_body pb m id)) (ar (len ptys)))
+       (append (utf8 "(fn ")
+         (append (show_last n)
+           (append (utf8 " (")
+             (append (show_binders ptys 0)
+               (append (utf8 ") ")
+                 (append (show_etype rty)
+                   (append
+                     (match (struct_pos (rec_calls body (Prod.mk id ar) ar nil) 0 ar)
+                       ((some q)
+                        (append (utf8 " (measure (struct x") (append (show_nat q) (utf8 "))"))))
+                       (none nil))
+                     (append (utf8 " ") (append (show_body (Problem.lk pb) ar body) (utf8 ")"))))))))))))
     (none (utf8 "?"))))
+;; the calls of the function `root` (its index and number of parameters) in a body, each as its
+;; arguments' answers to: is this a variable that is none of the function's own parameters — by
+;; the way such calls are made (drive.shard `prod_rec`) a proper part of one. `n` is the frame
+(fn rec_calls ((t LTerm) (root (Prod Int Int)) (n Int) (acc (List (List Bool)))) (List (List Bool))
+  (match t
+    ((LCall id args)
+     (rec_calls_all args root n
+       (match root
+         ((Prod.mk rid ar) (if (= id rid) (cons (part_flags args n ar) acc) acc)))))
+    ((LCtor _ args) (rec_calls_all args root n acc))
+    ((LMatch s arms) (rec_calls_arms arms root n (rec_calls s root n acc)))
+    (_ acc)))
+(fn rec_calls_all ((ts (List LTerm)) (root (Prod Int Int)) (n Int) (acc (List (List Bool))))
+  (List (List Bool))
+  (match ts
+    (nil acc)
+    ((cons t r) (rec_calls_all r root n (rec_calls t root n acc)))))
+(fn rec_calls_arms ((arms (List LArm)) (root (Prod Int Int)) (n Int) (acc (List (List Bool))))
+  (List (List Bool))
+  (match arms
+    (nil acc)
+    ((cons (LArm.LArm p b) r) (rec_calls_arms r root n (rec_calls b root (+ n (row_vars p)) acc)))))
+(fn part_flags ((args (List LTerm)) (n Int) (ar Int)) (List Bool)
+  (measure (struct args))
+  (match args
+    (nil nil)
+    ((cons (LBVar i) r) (cons (<= ar (- (- n 1) i)) (part_flags r n ar)))
+    ((cons _ r) (cons false (part_flags r n ar)))))
+;; the first position at which every call passes a proper part; none without a call
+(fn struct_pos ((calls (List (List Bool))) (q Int) (ar Int)) (Option Int)
+  (measure (Int.natAbs (- ar q)))
+  (match calls
+    (nil none)
+    (_
+      (if (<= ar q) none
+      (if (all_at calls q) (some q)
+      (struct_pos calls (+ q 1) ar))))))
+(fn all_at ((calls (List (List Bool))) (q Int)) Bool
+  (measure (struct calls))
+  (match calls
+    (nil true)
+    ((cons flags r)
+     (match (nth flags q)
+       ((some true) (all_at r q))
+       (_ false)))))
+(fulfills struct_pos.dec_1 (by (intro p x hc h hn) (apply natAbs_lt (arith) (arith))))
 (fn show_last ((n Name)) (List Int)
   (match n
     ((Str _ s) (chars_of_sym s))
