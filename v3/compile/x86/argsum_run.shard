@@ -1,0 +1,137 @@
+;;; v3/compile/x86/argsum_run.shard — a program of its command-line arguments through every
+;;; layer (docs/COMPILE.md §5, §8): the file of argsum_file.shard, started with its stack
+;;; anywhere and with ANY arguments the kernel leaves at the stack pointer (v3/models/x86
+;;; linux.shard `args_at`), exits with the low byte of `argsum` of them (../argsum_src.shard).
+;;; The chain: the intermediate code of the three functions, written by hand, answers `argsum`
+;;; where a memory holds the arguments (../argsum_ir.shard); the code the pass answers for the
+;;; module realizes each function's answer (`module_realizes`); and a file with a function that
+;;; realizes its answer over the range from the stack pointer to the top of the stack's range
+;;; exits as the answer says, the memory the function is entered with being the start's from
+;;; the stack pointer up (`start_exits_top`).
+(import "argsum_file.shard")
+(import "link.shard")
+(import "module.shard")
+(use std.mem)
+(use compile.argsum_ir)
+(use compile.argsum_src)
+(use compile.ir)
+(use compile.x86.argsum_file)
+(use compile.x86.link)
+(use compile.x86.module)
+(use compile.x86.pass)
+(use compile.x86.seam)
+(use compile.x86.startup)
+(use models.x86.args)
+(use models.x86.elf)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the module's theorem, met by this file ---------------------------------------------------------
+;; every function of the module, at the entry the pass answered and with the need it answered,
+;; realizes the answer of its intermediate code, for any data ranges: the module calls nothing
+;; from outside
+(theorem argsum_realizes
+  ((rs (List Seg))
+   (i Nat)
+   (g IFn)
+   (en (Prod Nat Nat))
+   (hf (= (fn_at argsum_prog i) (some g)))
+   (he (= (pair_at argsum_entries i) (some en))))
+  (realizes argsum_tbl 4194424 argsum_chi (Prod.fst en) (Prod.snd en) rs
+    (fn_ans argsum_prog no_ext rs g))
+  (by
+    (have hx
+      (forall ((j Nat) (en0 (Prod Nat Nat)))
+        (-> (= (pair_at (@List.nil (Prod Nat Nat)) j) (some en0))
+          (realizes argsum_tbl 4194424 argsum_chi (Prod.fst en0) (Prod.snd en0) rs
+            (ext_ans no_ext j))))
+      (intro j en0 h)
+      (have hn (= (@Option.none (Prod Nat Nat)) (some en0)) (exact h))
+      (exact (absurd (Eq.symm hn) (Option.some_ne_none en0))))
+    (exact
+      (module_realizes argsum_prog no_ext rs argsum_tbl 4194424 argsum_chi nil 4194455
+        argsum_listing argsum_entries argsum_within argsum_chi_word hx argsum_compiled argsum_placed
+        i g en hf he))))
+;; function 2, the one the start-up calls
+(theorem argsum_code_is () (= (fn_at argsum_prog 2) (some argsum_code2)) (by rfl))
+(theorem argsum_code_realizes ((rs (List Seg)))
+  (realizes argsum_tbl 4194424 argsum_chi argsum_at argsum_need rs
+    (fn_ans argsum_prog no_ext rs argsum_code2))
+  (exact
+    (argsum_realizes rs 2 argsum_code2 (Prod.mk argsum_at argsum_need) argsum_code_is argsum_entry)))
+
+;; ---- the file, end to end ---------------------------------------------------------------------------
+;; THE FILE'S THEOREM. For every start `stack_ok` allows with the words the entry needs under
+;; the stack pointer, and every list of arguments the start's memory holds at the stack pointer:
+;; the file exits with the low byte of `argsum` of the arguments.
+(theorem argsum_file_exits
+  ((lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (hst (stack_ok lo sp hi (+ argsum_chi 15) (+ argsum_need 1)))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (args (List (List Nat)))
+   (ha (args_at m sp hi args)))
+  (exits (elf_exec argsum_image) (start_at lo sp hi r f m) (% (w64_val (argsum args)) 256))
+  (by
+    (have hsp (<= sp hi) (exact (And.left (And.right (And.right hst)))))
+    (have hhi (<= hi 140737488355328) (exact (And.right (And.right (And.right hst)))))
+    (have hst2 (stack_ok lo sp hi (+ argsum_chi 15) (+ (+ (List.length argsum_data) argsum_need) 1))
+      (exact hst))
+    (have hn (<= (List.length argsum_argd) 6) (decide))
+    ;; the word the start-up hands over is the stack pointer's address
+    (have hsp64 (< sp 18446744073709551616) (arith))
+    (have hv0 (= (w64_val (w64 sp)) sp) (exact (w64_val_small sp hsp64)))
+    (have hk0 (< (+ sp 0) 18446744073709551616) (arith))
+    (have hq (= (w64_val (w64_add (w64 sp) (w64 0))) sp)
+      (exact (w64_val_add (w64 sp) sp 0 hv0 hk0)))
+    (have hans
+      (forall ((m0 Mem))
+        (-> (<= (+ (start_base sp argsum_data) (* 8 (List.length argsum_data))) 140737488355328)
+          (holds m0 (start_base sp argsum_data) argsum_data)
+          (same_outside m m0 0 sp)
+          (exists ((m2 Mem))
+            (fn_ans argsum_prog no_ext (args_rs sp hi) argsum_code2
+              (arg_words (w64 (start_base sp argsum_data)) argsum_argd)
+              m0
+              (argsum args)
+              m2))))
+      (intro m0 hb hh hsm)
+      (have ha0 (args_at m0 sp hi args) (exact (args_at_same m m0 sp hi args hsm ha)))
+      (exact
+        (Exists.intro m0
+          (argsum_prog_tie no_ext sp hi m0 hhi args (w64_add (w64 sp) (w64 0)) hq ha0))))
+    (exact
+      (start_exits_top argsum_data argsum_argd 1 argsum_lines argsum_image argsum_instrs argsum_d
+        argsum_xt
+        argsum_at
+        argsum_chi
+        argsum_need
+        (fn_ans argsum_prog no_ext (args_rs sp hi) argsum_code2)
+        (argsum args)
+        lo
+        sp
+        hi
+        hi
+        argsum_assembled
+        argsum_resolved
+        argsum_laid
+        argsum_target
+        argsum_within
+        argsum_code_end
+        hst2
+        hn
+        (Nat.le_refl hi)
+        r
+        f
+        m
+        (argsum_code_realizes (args_rs sp hi))
+        hans))))

@@ -1,7 +1,8 @@
 # v3/kernel/test/x86_common.sh — what the tests of the x86-64 model (v3/models/x86) and of the
 # compile system (v3/compile) share: each x86_*_test.sh and compile_*_test.sh sets NAME and
 # sources it. The engine, the Init index, a scratch directory, the count of checks, the loader's
-# command line and the model runner's, a file's run by the processor, a .hex file's bytes. Not an
+# command line and the model runner's, a file's run by the processor — with arguments too —, a
+# .hex file's bytes. Not an
 # entrypoint: each of those is one, so that the suite runs them side by side — on the bootstrap
 # they are among the longest of the suite.
 set -u
@@ -22,5 +23,7 @@ onchip=0; [ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ] && onchip=1
 no_chip() { [ $onchip = 1 ] || echo "$NAME: not an x86-64 Linux machine: the processor's runs are skipped"; }
 # a file run by the processor: `exit N`, or `killed` where the shell reports a signal
 chip() { local err rc; chmod +x "$1"; err=$( { bash -c '"$0"; exit $?' "$1"; } 2>&1 >/dev/null ); rc=$?; if [ -n "$err" ]; then echo killed; else echo "exit $rc"; fi; }
+# a file run by the processor with arguments, the first the name it is run by
+chip_args() { local f=$1 err rc; shift; chmod +x "$f"; err=$( { bash -c 'f=$0; n=$1; shift; exec -a "$n" "$f" "$@"' "$f" "$@"; } 2>&1 >/dev/null ); rc=$?; if [ -n "$err" ]; then echo killed; else echo "exit $rc"; fi; }
 # the bytes of a .hex file (hexadecimal bytes with `;` comments), its `KK` read as $2
 hex2bin() { local h; for h in $(sed 's/;.*//' "$1" | tr -s ' \n' ' '); do printf "\\x${h/KK/$2}"; done; }

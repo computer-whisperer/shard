@@ -1,0 +1,344 @@
+;;; v3/compile/argsum_ir.shard — the intermediate code of `argsum` (argsum_src.shard), written by
+;;; hand, and its tie: where a memory holds a process's arguments at the stack pointer as the
+;;; kernel leaves them (v3/models/x86/linux.shard `args_at`), the code's answer on the address
+;;; of the stack pointer is `argsum` of the arguments, and the memory is left as it was. Three
+;;; functions: the digits of one string, a loop over its bytes to the 0 after them; the sum, a
+;;; loop over the strings' addresses that calls the first; and the entry, which reads the count
+;;; and passes over the first address. The code reads through one range, from the stack pointer
+;;; to the top of the stack's range (v3/models/x86/args.shard `args_rs`).
+;;; There is no low form between the meaning and the code: the tie is from the meaning straight
+;;; to the code, by induction on the lists.
+(import "argsum_src.shard")
+(import "ir_laws.shard")
+(import "../models/x86/args.shard")
+(use std.mem)
+(use compile.argsum_src)
+(use compile.ir)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.ir_laws)
+(use models.x86.args)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code -----------------------------------------------------------------------------------
+;; function 0, the digits of a string: the string's address, the number so far; a third local
+;; for the byte read. A byte of 0 ends the string
+(fn argsum_code0 () IFn
+  (MkIFn 2 1
+    (SLet 2 (ELoad8 (EVar 0))
+      (SIf (EVar 2) CLtu (ENum (w64 1)) (SRet (EVar 1))
+        (SLet 1 (EOp OAdd (EOp OMul (EVar 1) (ENum (w64 10))) (EOp OSub (EVar 2) (ENum (w64 48))))
+          (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 1))) (STail (CFn 0) (list (EVar 0) (EVar 1)))))))))
+;; function 1, the sum: the address of the next string's address, how many are left, the sum so
+;; far; two locals more for a string's address and its number
+(fn argsum_code1 () IFn
+  (MkIFn 3 2
+    (SIf (EVar 1) CLtu (ENum (w64 1)) (SRet (EVar 2))
+      (SLet 3 (ELoad (EVar 0))
+        (SCall 4 (CFn 0) (list (EVar 3) (ENum (w64 0)))
+          (SLet 2 (EOp OAdd (EVar 2) (EVar 4))
+            (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 8)))
+              (SLet 1 (EOp OSub (EVar 1) (ENum (w64 1)))
+                (STail (CFn 1) (list (EVar 0) (EVar 1) (EVar 2)))))))))))
+;; function 2, the entry: the address the kernel left the stack pointer at. The count is the
+;; word there; with no argument the sum is 0; else the sum of all but the first
+(fn argsum_code2 () IFn
+  (MkIFn 1 2
+    (SLet 1 (ELoad (EVar 0))
+      (SIf (EVar 1) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+        (SLet 2 (EOp OAdd (EVar 0) (ENum (w64 16)))
+          (SLet 1 (EOp OSub (EVar 1) (ENum (w64 1)))
+            (STail (CFn 1) (list (EVar 2) (EVar 1) (ENum (w64 0))))))))))
+(fn argsum_prog () (List IFn) (list argsum_code0 argsum_code1 argsum_code2))
+
+;; ---- the ties -----------------------------------------------------------------------------------
+;; a number below 2^64 is its word's number
+(theorem w64_val_small ((n Nat) (h (< n 18446744073709551616))) (= (w64_val (w64 n)) n)
+  (by (rw (w64_val_w64 n)) (exact (Nat.mod_eq_of_lt h))))
+;; THE DIGITS, by induction on the string: the byte at the address is read through the range;
+;; a 0 returns the number so far; another byte is a digit, and the tail is the function's own
+;; call on the address after it
+(theorem argsum_tie0
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some argsum_code0)))
+   (hhi (<= hi 140737488355328))
+   (bs (List Nat)))
+  (forall ((q (BitVec 64)) (a Nat) (acc (BitVec 64)))
+    (-> (= (w64_val q) a) (<= sp a) (< (+ a (List.length bs)) hi) (str_at m a bs)
+      (fn_ans p ext (args_rs sp hi) argsum_code0 (cons q (cons acc nil)) m (digits bs acc) m)))
+  (by
+    (induction bs
+      ((nil () (intro q a acc hq h1 h2 hs) (have hz (= (mem_get m a) 0) (exact hs))
+         (have h2b (< (+ a 0) hi) (exact h2))
+         (have h3 (<= (+ a 1) hi) (arith))
+         (have hm (= (mapped (args_rs sp hi) (w64_val q) 1 4) true)
+           (rw hq)
+           (exact (args_rs_mapped sp hi a 1 h1 h3)))
+         (have hl
+           (= (ieval (args_rs sp hi) (cons q (cons acc (cons (w64 0) nil))) m (ELoad8 (EVar 0)))
+             (some (w64 0)))
+           (rw
+             (ieval_load8 (args_rs sp hi) (cons q (cons acc (cons (w64 0) nil))) m (EVar 0) q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           (rw hz)
+           rfl)
+         (have hlt (< (w64_val (w64 0)) 1) (decide))
+         (apply And.intro (rfl)
+           ((apply (iends_let (w64 0)) ((exact hl))
+              ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true (w64 0) (w64 1) hlt)))
+                 ((apply iends_ret (rfl)))))))))
+       (cons (b r ih) (intro q a acc hq h1 h2 hs)
+         (have hb (= (mem_get m a) b) (exact (And.left hs)))
+         (have hpos (< 0 b) (exact (And.left (And.right hs))))
+         (have hr (str_at m (+ a 1) r) (exact (And.right (And.right hs))))
+         (have h2b (< (+ a (+ (List.length r) 1)) hi) (exact h2))
+         (have h3 (<= (+ a 1) hi) (arith))
+         (have hm (= (mapped (args_rs sp hi) (w64_val q) 1 4) true)
+           (rw hq)
+           (exact (args_rs_mapped sp hi a 1 h1 h3)))
+         (have hl
+           (= (ieval (args_rs sp hi) (cons q (cons acc (cons (w64 0) nil))) m (ELoad8 (EVar 0)))
+             (some (w64 b)))
+           (rw
+             (ieval_load8 (args_rs sp hi) (cons q (cons acc (cons (w64 0) nil))) m (EVar 0) q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           (rw hb)
+           rfl)
+         (have hb256 (< b 256) (rw (<- hb)) (exact (mem_get_lt m a)))
+         (have hb64 (< b 18446744073709551616) (arith))
+         (have hnl (Not (< (w64_val (w64 b)) 1)) (rw (w64_val_small b hb64)) (arith))
+         (have hk (< (+ a 1) 18446744073709551616) (arith))
+         (have hq1 (= (w64_val (w64_add q (w64 1))) (+ a 1)) (exact (w64_val_add q a 1 hq hk)))
+         (have h1b (<= sp (+ a 1)) (arith))
+         (have h2c (< (+ (+ a 1) (List.length r)) hi) (arith))
+         (apply And.intro (rfl)
+           ((apply (iends_let (w64 b)) ((exact hl))
+              ((apply iends_if_false (rfl) (rfl) ((exact (icmp_ltu_false (w64 b) (w64 1) hnl)))
+                 ((apply (iends_let (w64_add (w64_mul acc (w64 10)) (w64_sub (w64 b) (w64 48))))
+                    (rfl)
+                    ((apply (iends_let (w64_add q (w64 1))) (rfl)
+                       ((apply
+                          (iends_tail argsum_code0
+                            (cons (w64_add q (w64 1))
+                              (cons (w64_add (w64_mul acc (w64 10)) (w64_sub (w64 b) (w64 48))) nil)))
+                          (rfl)
+                          ((exact h0))
+                          ((exact
+                             (ih (w64_add q (w64 1)) (+ a 1)
+                               (w64_add (w64_mul acc (w64 10)) (w64_sub (w64 b) (w64 48)))
+                               hq1
+                               h1b
+                               h2c
+                               hr)))))))))))))))))))
+;; THE SUM, by induction on the strings: with none left the sum so far; else the next address
+;; is read through the range, the digits of the string there by the first function's tie, and
+;; the tail is the function's own call on the address after
+(theorem argsum_tie1
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some argsum_code0)))
+   (h1 (= (fn_at p 1) (some argsum_code1)))
+   (hhi (<= hi 140737488355328))
+   (ss (List (List Nat))))
+  (forall ((q (BitVec 64)) (a Nat) (n (BitVec 64)) (acc (BitVec 64)))
+    (-> (= (w64_val q) a) (= (w64_val n) (List.length ss)) (<= sp a)
+      (<= (+ a (* 8 (List.length ss))) hi)
+      (argv_at m a sp hi ss)
+      (fn_ans p ext (args_rs sp hi) argsum_code1 (cons q (cons n (cons acc nil))) m
+        (sum_strs ss acc)
+        m)))
+  (by
+    (induction ss
+      ((nil () (intro q a n acc hq hn ha hb hv) (have hn0 (= (w64_val n) 0) (exact hn))
+         (have hlt (< (w64_val n) 1) (rw hn0) (decide))
+         (apply And.intro (rfl)
+           ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true n (w64 1) hlt)))
+              ((apply iends_ret (rfl)))))))
+       (cons (s r ih) (intro q a n acc hq hn ha hb hv)
+         (have hn1 (= (w64_val n) (+ (List.length r) 1)) (exact hn))
+         (have hb1 (<= (+ a (* 8 (+ (List.length r) 1))) hi) (exact hb))
+         (have p1 (<= sp (mem_le64 m a)) (exact (And.left hv)))
+         (have p2 (< (+ (mem_le64 m a) (List.length s)) hi) (exact (And.left (And.right hv))))
+         (have p3 (str_at m (mem_le64 m a) s) (exact (And.left (And.right (And.right hv)))))
+         (have p4 (argv_at m (+ a 8) sp hi r) (exact (And.right (And.right (And.right hv)))))
+         (have hnl (Not (< (w64_val n) 1)) (rw hn1) (arith))
+         (have h8 (<= (+ a 8) hi) (arith))
+         (have hm (= (mapped (args_rs sp hi) (w64_val q) 8 4) true)
+           (rw hq)
+           (exact (args_rs_mapped sp hi a 8 ha h8)))
+         (have hl
+           (=
+             (ieval (args_rs sp hi) (cons q (cons n (cons acc (cons (w64 0) (cons (w64 0) nil))))) m
+               (ELoad (EVar 0)))
+             (some (w64 (mem_le64 m a))))
+           (rw
+             (ieval_load (args_rs sp hi)
+               (cons q (cons n (cons acc (cons (w64 0) (cons (w64 0) nil)))))
+               m
+               (EVar 0)
+               q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           rfl)
+         (have hp64 (< (mem_le64 m a) 18446744073709551616) (arith))
+         (have hpv (= (w64_val (w64 (mem_le64 m a))) (mem_le64 m a))
+           (exact (w64_val_small (mem_le64 m a) hp64)))
+         (have hk (< (+ a 8) 18446744073709551616) (arith))
+         (have hq1 (= (w64_val (w64_add q (w64 8))) (+ a 8)) (exact (w64_val_add q a 8 hq hk)))
+         (have k1 (< 1 18446744073709551616) (decide))
+         (have hn2 (= (w64_val (w64_sub n (w64 1))) (List.length r))
+           (exact (w64_val_sub n (List.length r) 1 hn1 k1)))
+         (have ha1 (<= sp (+ a 8)) (arith))
+         (have hb2 (<= (+ (+ a 8) (* 8 (List.length r))) hi) (arith))
+         (apply And.intro (rfl)
+           ((apply iends_if_false (rfl) (rfl) ((exact (icmp_ltu_false n (w64 1) hnl)))
+              ((apply (iends_let (w64 (mem_le64 m a))) ((exact hl))
+                 ((apply
+                    (iends_call argsum_code0 (cons (w64 (mem_le64 m a)) (cons (w64 0) nil))
+                      (digits s (w64 0))
+                      m)
+                    (rfl)
+                    ((exact h0))
+                    ((exact
+                       (argsum_tie0 p ext sp hi m h0 hhi s (w64 (mem_le64 m a)) (mem_le64 m a)
+                         (w64 0)
+                         hpv
+                         p1
+                         p2
+                         p3)))
+                    ((apply (iends_let (w64_add acc (digits s (w64 0)))) (rfl)
+                       ((apply (iends_let (w64_add q (w64 8))) (rfl)
+                          ((apply (iends_let (w64_sub n (w64 1))) (rfl)
+                             ((apply
+                                (iends_tail argsum_code1
+                                  (cons (w64_add q (w64 8))
+                                    (cons (w64_sub n (w64 1))
+                                      (cons (w64_add acc (digits s (w64 0))) nil))))
+                                (rfl)
+                                ((exact h1))
+                                ((exact
+                                   (ih (w64_add q (w64 8)) (+ a 8) (w64_sub n (w64 1))
+                                     (w64_add acc (digits s (w64 0)))
+                                     hq1
+                                     hn2
+                                     ha1
+                                     hb2
+                                     p4)))))))))))))))))))))))
+;; THE ENTRY: the count is the word at the stack pointer; with no argument 0; else the sum over
+;; the addresses after the first, by the second function's tie
+(theorem argsum_tie2
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some argsum_code0)))
+   (h1 (= (fn_at p 1) (some argsum_code1)))
+   (hhi (<= hi 140737488355328))
+   (args (List (List Nat)))
+   (q (BitVec 64))
+   (hq (= (w64_val q) sp))
+   (ha (args_at m sp hi args)))
+  (fn_ans p ext (args_rs sp hi) argsum_code2 (cons q nil) m (argsum args) m)
+  (by
+    (have hc (= (mem_le64 m sp) (List.length args)) (exact (And.left ha)))
+    (have hb (<= (+ sp (* 8 (+ (List.length args) 1))) hi) (exact (And.left (And.right ha))))
+    (have hv (argv_at m (+ sp 8) sp hi args) (exact (And.right (And.right ha))))
+    (have h8 (<= (+ sp 8) hi) (arith))
+    (have hm (= (mapped (args_rs sp hi) (w64_val q) 8 4) true)
+      (rw hq)
+      (exact (args_rs_mapped sp hi sp 8 (Nat.le_refl sp) h8)))
+    (have hl
+      (= (ieval (args_rs sp hi) (cons q (cons (w64 0) (cons (w64 0) nil))) m (ELoad (EVar 0)))
+        (some (w64 (List.length args))))
+      (rw
+        (ieval_load (args_rs sp hi) (cons q (cons (w64 0) (cons (w64 0) nil))) m (EVar 0) q
+          (Eq.refl (some q))
+          hm))
+      (rw hq)
+      (rw hc)
+      rfl)
+    (cases args hargs
+      ((nil () (have hlt (< (w64_val (w64 0)) 1) (decide))
+         (apply And.intro (rfl)
+           ((apply (iends_let (w64 0)) ((exact hl))
+              ((apply iends_if_true (rfl) (rfl) ((exact (icmp_ltu_true (w64 0) (w64 1) hlt)))
+                 ((apply iends_ret (rfl)))))))))
+       (cons (name r) (have hb1 (<= (+ sp (* 8 (+ (+ (List.length r) 1) 1))) hi) (exact hb))
+         (have hn64 (< (+ (List.length r) 1) 18446744073709551616) (arith))
+         (have hnv (= (w64_val (w64 (+ (List.length r) 1))) (+ (List.length r) 1))
+           (exact (w64_val_small (+ (List.length r) 1) hn64)))
+         (have hnl (Not (< (w64_val (w64 (+ (List.length r) 1))) 1)) (rw hnv) (arith))
+         (have hk (< (+ sp 16) 18446744073709551616) (arith))
+         (have hq2 (= (w64_val (w64_add q (w64 16))) (+ (+ sp 8) 8))
+           (rw (w64_val_add q sp 16 hq hk))
+           (arith))
+         (have k1 (< 1 18446744073709551616) (decide))
+         (have hn2 (= (w64_val (w64_sub (w64 (+ (List.length r) 1)) (w64 1))) (List.length r))
+           (exact (w64_val_sub (w64 (+ (List.length r) 1)) (List.length r) 1 hnv k1)))
+         (have ha1 (<= sp (+ (+ sp 8) 8)) (arith))
+         (have hb2 (<= (+ (+ (+ sp 8) 8) (* 8 (List.length r))) hi) (arith))
+         (have p4 (argv_at m (+ (+ sp 8) 8) sp hi r) (exact (And.right (And.right (And.right hv)))))
+         (apply And.intro (rfl)
+           ((apply (iends_let (w64 (+ (List.length r) 1))) ((exact hl))
+              ((apply iends_if_false (rfl) (rfl)
+                 ((exact (icmp_ltu_false (w64 (+ (List.length r) 1)) (w64 1) hnl)))
+                 ((apply (iends_let (w64_add q (w64 16))) (rfl)
+                    ((apply (iends_let (w64_sub (w64 (+ (List.length r) 1)) (w64 1))) (rfl)
+                       ((apply
+                          (iends_tail argsum_code1
+                            (cons (w64_add q (w64 16))
+                              (cons (w64_sub (w64 (+ (List.length r) 1)) (w64 1)) (cons (w64 0) nil))))
+                          (rfl)
+                          ((exact h1))
+                          ((exact
+                             (argsum_tie1 p ext sp hi m h0 h1 hhi r (w64_add q (w64 16))
+                               (+ (+ sp 8) 8)
+                               (w64_sub (w64 (+ (List.length r) 1)) (w64 1))
+                               (w64 0)
+                               hq2
+                               hn2
+                               ha1
+                               hb2
+                               p4)))))))))))))))))))
+;; the three as one program: the answer of its function 2 is `argsum`
+(theorem argsum_prog_tie
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (hhi (<= hi 140737488355328))
+   (args (List (List Nat)))
+   (q (BitVec 64))
+   (hq (= (w64_val q) sp))
+   (ha (args_at m sp hi args)))
+  (fn_ans argsum_prog ext (args_rs sp hi) argsum_code2 (cons q nil) m (argsum args) m)
+  (exact
+    (argsum_tie2 argsum_prog ext sp hi m (Eq.refl (some argsum_code0)) (Eq.refl (some argsum_code1))
+      hhi
+      args
+      q
+      hq
+      ha)))
