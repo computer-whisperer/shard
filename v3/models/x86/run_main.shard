@@ -12,6 +12,8 @@
 ;;;                                the kernel's answers, a line each: items between commas, `N`
 ;;;                                (it takes N bytes, all for 0), `eN` (it fails with the error
 ;;;                                N), `k` (it ends the process)
+;;;   … -- cases STEPS FILE SPEC ARG… / SPEC ARG… …  the file run once for each case, a line
+;;;                                each: on the answers SPEC, with the arguments ARG…
 ;;;   … -- wrap CODE FILE …     the bytes of CODE as the executable file FILE that runs them
 (import "../../std/bytes.shard")
 (import "../../std/derive.shard")
@@ -111,6 +113,7 @@
 ;;   run STEPS FILE…      each file run for at most STEPS steps, a line each
 ;;   args STEPS FILE ARG… the file run for at most STEPS steps with the arguments ARG…
 ;;   answers STEPS FILE SPEC…      the file run once on each list SPEC of the kernel's answers
+;;   cases STEPS FILE SPEC ARG… / …  the file run once for each case: answers, then arguments
 ;;   wrap SRC DST …       each SRC's bytes as code, wrapped as the executable file DST
 (fn same ((a (List Nat)) (b (List Nat))) Bool
   (measure (struct a))
@@ -179,6 +182,32 @@
   (match bs
     (nil nil)
     ((cons b r) (cons (Bytes.toNats b) (nats_each r)))))
+;; a command line's arguments split at each argument `/`: the lists between them, `cur` the one
+;; being read, its arguments the last first
+(fn is_sep ((bs (List Nat))) Bool
+  (match bs
+    ((cons b nil) (if (= b 47) true false))
+    (_ false)))
+(fn cases_of ((rest (List (List Nat))) (cur (List (List Nat)))) (List (List (List Nat)))
+  (measure (struct rest))
+  (match rest
+    (nil (cons (List.reverse cur) nil))
+    ((cons b r)
+     (if (is_sep b) (cons (List.reverse cur) (cases_of r nil)) (cases_of r (cons b cur))))))
+;; a file's bytes run once for each case — a list of answers, then the arguments —, a line each
+(fn run_cases ((steps Nat) (bs (List Nat)) (cs (List (List (List Nat)))) (w World)) World
+  (measure (struct cs))
+  (match cs
+    (nil w)
+    ((cons c r)
+     (match c
+       (nil (run_cases steps bs r w))
+       ((cons spec argv)
+        (run_cases steps bs r
+          (write_line
+            (Bytes.ofNats
+              (show_res (run_file (fuel_of steps) bs (start_args argv) (answers_of spec nil))))
+            w)))))))
 (fn wrap_one ((src ByteArray) (dst ByteArray) (w World)) World
   (match (read_file src w)
     ((Prod.mk r w1)
@@ -217,6 +246,18 @@
                      ((some bs)
                       (run_specs (nat_of (Bytes.toNats steps) 0) (Bytes.toNats bs) specs w2))))))
                (nil (fail w1)))
-             (fail w1)))))
+           (if (same (Bytes.toNats cmd) (text "cases"))
+             (match files
+               ((cons file rest2)
+                (match (read_file file w1)
+                  ((Prod.mk r w2)
+                   (match r
+                     (none (fail w2))
+                     ((some bs)
+                      (run_cases (nat_of (Bytes.toNats steps) 0) (Bytes.toNats bs)
+                        (cases_of (nats_each rest2) nil)
+                        w2))))))
+               (nil (fail w1)))
+             (fail w1))))))
           (nil (fail w1)))))
        (nil (fail w1))))))

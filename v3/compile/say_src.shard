@@ -1,0 +1,54 @@
+;;; v3/compile/say_src.shard — the meaning of `say`, a program of its command-line arguments
+;;; that writes (docs/COMPILE.md §5, §6): each argument after the name the program was run by,
+;;; on a line of its own. An argument is its bytes, a list of numbers. The program is a
+;;; function on a World (std/world.shard): its value is the status its process exits with, 0,
+;;; and the World after the writes — a recursion over the arguments, each written by the
+;;; platform's `write_all` and a line's end after it. Where a write stops the process, the
+;;; arguments after it write nothing (`say_each_stopped`).
+(import "../std/world.shard")
+(import "../models/x86/word.shard")
+(use std.world)
+(use std.world.Life)
+(use std.world.World)
+(use models.x86.word)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; one argument: its bytes, then a line's end
+(fn say_line ((s (List Nat)) (w World)) World (write_all (list 10) (write_all s w)))
+;; each of a list of arguments
+(fn say_each ((ss (List (List Nat))) (w World)) World
+  (measure (struct ss))
+  (match ss
+    (nil w)
+    ((cons s r) (say_each r (say_line s w)))))
+;; of a program's arguments: the first, its name, is passed over
+(fn say ((args (List (List Nat))) (w World)) (Prod (BitVec 64) World)
+  (match args
+    (nil (Prod.mk (w64 0) w))
+    ((cons name r) (Prod.mk (w64 0) (say_each r w)))))
+;; the status is 0 whatever the arguments
+(theorem say_status ((args (List (List Nat))) (w World)) (= (Prod.fst (say args w)) (w64 0))
+  (by (cases args ((nil () rfl) (cons (name r) rfl)))))
+;; in a process that has stopped nothing more is written
+(theorem say_line_stopped ((s (List Nat)) (w World) (h (= (runs (World.life w)) false)))
+  (= (say_line s w) w)
+  (by
+    (show (= (write_all (list 10) (write_all s w)) w))
+    (rw (write_all_stopped s w h))
+    (exact (write_all_stopped (list 10) w h))))
+(theorem say_each_stopped ((ss (List (List Nat))))
+  (forall ((w World)) (-> (= (runs (World.life w)) false) (= (say_each ss w) w)))
+  (by
+    (induction ss
+      ((nil () (intro w h) rfl)
+       (cons (s r ih) (intro w h) (show (= (say_each r (say_line s w)) w))
+         (rw (say_line_stopped s w h))
+         (exact (ih w h)))))))
+;; of `say hi yo`, where the outside takes all it is offered: two lines
+(theorem sample_say ()
+  (=
+    (World.out
+      (Prod.snd (say (list (list 115 97 121) (list 104 105) (list 121 111)) (MkWorld nil nil Live))))
+    (list 104 105 10 121 111 10))
+  (by rfl))

@@ -1,0 +1,523 @@
+;;; v3/compile/say_ir.shard — the intermediate code of `say` (say_src.shard), written by hand,
+;;; and its tie. Four functions: the length of one string, a loop over its bytes to the 0 after
+;;; them; one line, which takes that length and calls the module's one outside function, the
+;;; platform's `write_all` (put.shard), on the string and on the byte of a line's end; the loop
+;;; over the strings' addresses, which calls the second for each and then itself; and the
+;;; entry, which reads the count and passes over the first address. No local holds the World:
+;;; it is what the run has outside the process. The code reads through one range, from the
+;;; address b of a word that holds the line's end to the top of the stack's range
+;;; (v3/models/x86/args.shard `args_rs`): the arguments the kernel left lie in it, from the
+;;; stack pointer up.
+;;; The tie (`say_tie3`): where a memory holds a process's arguments at the stack pointer
+;;; (v3/models/x86/linux.shard `args_at`) and the byte 10 at the second argument's address,
+;;; the entry's run with what is outside has an outcome that is the value of `say` of the
+;;; arguments on the World of what is outside, the memory left as it was. By induction on the
+;;; lists, with the rules of a tie (tie.shard): a write that stops the process ends the loop
+;;; in the code, and in the meaning the arguments after it write nothing.
+(import "say_src.shard")
+(import "put.shard")
+(import "../models/x86/args.shard")
+(use std.mem)
+(use std.world)
+(use std.world.World)
+(use compile.say_src)
+(use compile.ir)
+(use compile.ir_laws)
+(use compile.ir_world)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.put)
+(use compile.tie)
+(use models.x86.args)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Answer)
+(use models.x86.linux.Os)
+(use models.x86.linux.Outcome)
+(use models.x86.linux.Res)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.world)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code -----------------------------------------------------------------------------------
+;; function 0, the length of a string: the address of the next byte, the count so far; a third
+;; local for the byte read. A byte of 0 ends the string
+(fn say_code0 () IFn
+  (MkIFn 2 1
+    (SLet 2 (ELoad8 (EVar 0))
+      (SIf (EVar 2) CLtu (ENum (w64 1)) (SRet (EVar 1))
+        (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 1)))
+          (SLet 1 (EOp OAdd (EVar 1) (ENum (w64 1))) (STail (CFn 0) (list (EVar 0) (EVar 1)))))))))
+;; function 1, one line: the string's address, the address of the line's end; two locals more
+;; for the length and for what a call returns
+(fn say_code1 () IFn
+  (MkIFn 2 2
+    (SCall 2 (CFn 0) (list (EVar 0) (ENum (w64 0)))
+      (SCall 3 (CExt 0) (list (EVar 0) (EVar 2))
+        (SCall 3 (CExt 0) (list (EVar 1) (ENum (w64 1))) (SRet (ENum (w64 0))))))))
+;; function 2, the loop: the address of the next string's address, how many are left, the
+;; address of the line's end; two locals more for a string's address and what a call returns
+(fn say_code2 () IFn
+  (MkIFn 3 2
+    (SIf (EVar 1) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+      (SLet 3 (ELoad (EVar 0))
+        (SCall 4 (CFn 1) (list (EVar 3) (EVar 2))
+          (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 8)))
+            (SLet 1 (EOp OSub (EVar 1) (ENum (w64 1)))
+              (STail (CFn 2) (list (EVar 0) (EVar 1) (EVar 2))))))))))
+;; function 3, the entry: the address the kernel left the stack pointer at, the address of the
+;; line's end; a third local for the count, the word at the first. With no argument nothing is
+;; written; else each but the first
+(fn say_code3 () IFn
+  (MkIFn 2 1
+    (SLet 2 (ELoad (EVar 0))
+      (SIf (EVar 2) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+        (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 16)))
+          (SLet 2 (EOp OSub (EVar 2) (ENum (w64 1)))
+            (STail (CFn 2) (list (EVar 0) (EVar 2) (EVar 1)))))))))
+(fn say_prog () (List IFn) (list say_code0 say_code1 say_code2 say_code3))
+
+;; ---- the length -----------------------------------------------------------------------------------
+;; the count after a string's bytes, as the code counts it: one more a byte
+(fn count_on ((bs (List Nat)) (acc (BitVec 64))) (BitVec 64)
+  (measure (struct bs))
+  (match bs
+    (nil acc)
+    ((cons _ r) (count_on r (w64_add acc (w64 1))))))
+;; it is the string's length more, where that is below 2^64
+(theorem count_on_val ((bs (List Nat)))
+  (forall ((acc (BitVec 64)) (n Nat))
+    (-> (= (w64_val acc) n) (< (+ n (List.length bs)) 18446744073709551616)
+      (= (w64_val (count_on bs acc)) (+ n (List.length bs)))))
+  (by
+    (induction bs
+      ((nil () (intro acc n h hk) (exact h))
+       (cons (c r ih) (intro acc n h hk)
+         (have hk1 (< (+ n (+ (List.length r) 1)) 18446744073709551616) (exact hk))
+         (have hk2 (< (+ n 1) 18446744073709551616) (arith))
+         (have h1 (= (w64_val (w64_add acc (w64 1))) (+ n 1)) (exact (w64_val_add acc n 1 h hk2)))
+         (have hk3 (< (+ (+ n 1) (List.length r)) 18446744073709551616) (arith))
+         (have g (= (w64_val (count_on r (w64_add acc (w64 1)))) (+ (+ n 1) (List.length r)))
+           (exact (ih (w64_add acc (w64 1)) (+ n 1) h1 hk3)))
+         (show (= (w64_val (count_on r (w64_add acc (w64 1)))) (+ n (+ (List.length r) 1))))
+         (rw g)
+         (arith))))))
+;; THE LENGTH, by induction on the string, with anything outside: the byte at the address is
+;; read through the range; a 0 returns the count so far; another byte is counted, and the tail
+;; is the function's own call on the address after it. The function calls nothing outside: its
+;; outcome is a return, the memory and the outside as they were
+(theorem say_tie0
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (b Nat)
+   (hi Nat)
+   (m Mem)
+   (o Os)
+   (h0 (= (fn_at p 0) (some say_code0)))
+   (hhi (<= hi 140737488355328))
+   (bs (List Nat)))
+  (forall ((q (BitVec 64)) (a Nat) (acc (BitVec 64)))
+    (-> (= (w64_val q) a) (<= b a) (< (+ a (List.length bs)) hi) (str_at m a bs)
+      (wfn_ans p wx (args_rs b hi) say_code0 (cons q (cons acc nil)) m o
+        (ORet (count_on bs acc) m o))))
+  (by
+    (induction bs
+      ((nil () (intro q a acc hq h1 h2 hs) (have hz (= (mem_get m a) 0) (exact hs))
+         (have h2b (< (+ a 0) hi) (exact h2))
+         (have h3 (<= (+ a 1) hi) (arith))
+         (have hm (= (mapped (args_rs b hi) (w64_val q) 1 4) true)
+           (rw hq)
+           (exact (args_rs_mapped b hi a 1 h1 h3)))
+         (have hl
+           (= (ieval (args_rs b hi) (cons q (cons acc (cons (w64 0) nil))) m (ELoad8 (EVar 0)))
+             (some (w64 0)))
+           (rw
+             (ieval_load8 (args_rs b hi) (cons q (cons acc (cons (w64 0) nil))) m (EVar 0) q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           (rw hz)
+           rfl)
+         (have hlt (< (w64_val (w64 0)) 1) (decide))
+         (apply And.intro (rfl)
+           ((apply (wends_let (w64 0)) ((exact hl))
+              ((apply wends_if_true (rfl) (rfl) ((exact (icmp_ltu_true (w64 0) (w64 1) hlt)))
+                 ((apply wends_ret (rfl)))))))))
+       (cons (c r ih) (intro q a acc hq h1 h2 hs)
+         (have hb (= (mem_get m a) c) (exact (And.left hs)))
+         (have hr (str_at m (+ a 1) r) (exact (And.right (And.right hs))))
+         (have h2b (< (+ a (+ (List.length r) 1)) hi) (exact h2))
+         (have h3 (<= (+ a 1) hi) (arith))
+         (have hm (= (mapped (args_rs b hi) (w64_val q) 1 4) true)
+           (rw hq)
+           (exact (args_rs_mapped b hi a 1 h1 h3)))
+         (have hl
+           (= (ieval (args_rs b hi) (cons q (cons acc (cons (w64 0) nil))) m (ELoad8 (EVar 0)))
+             (some (w64 c)))
+           (rw
+             (ieval_load8 (args_rs b hi) (cons q (cons acc (cons (w64 0) nil))) m (EVar 0) q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           (rw hb)
+           rfl)
+         (have hpos (< 0 c) (exact (And.left (And.right hs))))
+         (have hc256 (< c 256) (rw (<- hb)) (exact (mem_get_lt m a)))
+         (have hc64 (< c 18446744073709551616) (arith))
+         (have hnl (Not (< (w64_val (w64 c)) 1)) (rw (w64_val_small c hc64)) (arith))
+         (have hk (< (+ a 1) 18446744073709551616) (arith))
+         (have hq1 (= (w64_val (w64_add q (w64 1))) (+ a 1)) (exact (w64_val_add q a 1 hq hk)))
+         (have h1b (<= b (+ a 1)) (arith))
+         (have h2c (< (+ (+ a 1) (List.length r)) hi) (arith))
+         (apply And.intro (rfl)
+           ((apply (wends_let (w64 c)) ((exact hl))
+              ((apply wends_if_false (rfl) (rfl) ((exact (icmp_ltu_false (w64 c) (w64 1) hnl)))
+                 ((apply (wends_let (w64_add q (w64 1))) (rfl)
+                    ((apply (wends_let (w64_add acc (w64 1))) (rfl)
+                       ((apply
+                          (wends_tail say_code0
+                            (cons (w64_add q (w64 1)) (cons (w64_add acc (w64 1)) nil)))
+                          (rfl)
+                          ((exact h0))
+                          ((exact
+                             (ih (w64_add q (w64 1)) (+ a 1) (w64_add acc (w64 1)) hq1 h1b h2c hr)))))))))))))))))))
+
+;; ---- one line -------------------------------------------------------------------------------------
+;; ONE LINE: the length by the first function's tie; the string's bytes are the bytes of
+;; memory at its address, and the write of them is the platform's on the World of what is
+;; outside; then the write of the line's end, where the process still runs
+(theorem say_tie1
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (b Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some say_code0)))
+   (hx
+     (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os))
+       (= (wx 0 vs m0 o0) (put_ext (args_rs b hi) vs m0 o0))))
+   (hhi (<= hi 140737488355328))
+   (s (List Nat))
+   (q (BitVec 64))
+   (a Nat)
+   (nl (BitVec 64))
+   (c Nat)
+   (o Os)
+   (hq (= (w64_val q) a))
+   (h1 (<= b a))
+   (h2 (< (+ a (List.length s)) hi))
+   (hs (str_at m a s))
+   (hn (= (w64_val nl) c))
+   (h3 (<= b c))
+   (h4 (<= (+ c 1) hi))
+   (hnl (= (mem_bytes m c 1) (list 10))))
+  (fn_ties p wx (args_rs b hi) say_code1 (cons q (cons nl nil)) m o (w64 0) m
+    (say_line s (os_world o)))
+  (by
+    (have hlen64 (< (+ 0 (List.length s)) 18446744073709551616) (arith))
+    (have hz (= (w64_val (w64 0)) 0) rfl)
+    (have hcv (= (w64_val (count_on s (w64 0))) (List.length s))
+      (rw (count_on_val s (w64 0) 0 hz hlen64))
+      (arith))
+    (have h2le (<= (+ a (List.length s)) hi) (arith))
+    (have hm1 (= (mapped (args_rs b hi) (w64_val q) (w64_val (count_on s (w64 0))) 4) true)
+      (rw hq)
+      (rw hcv)
+      (exact (args_rs_mapped b hi a (List.length s) h1 h2le)))
+    (have hb1 (<= (+ (w64_val q) (w64_val (count_on s (w64 0)))) 140737488355328)
+      (rw hq)
+      (rw hcv)
+      (arith))
+    (have hbs1 (= (mem_bytes m (w64_val q) (w64_val (count_on s (w64 0)))) s)
+      (rw hq)
+      (rw hcv)
+      (exact (str_bytes m s a hs)))
+    (have e1 (= (w64_val (w64 1)) 1) rfl)
+    (have hm2 (= (mapped (args_rs b hi) (w64_val nl) (w64_val (w64 1)) 4) true)
+      (rw hn)
+      (rw e1)
+      (exact (args_rs_mapped b hi c 1 h3 h4)))
+    (have hb2 (<= (+ (w64_val nl) (w64_val (w64 1))) 140737488355328) (rw hn) (rw e1) (arith))
+    (have hbs2 (= (mem_bytes m (w64_val nl) (w64_val (w64 1))) (list 10))
+      (rw hn)
+      (rw e1)
+      (exact hnl))
+    (apply tie_fn (rfl)
+      ((apply (tie_call_ret say_code0 (cons q (cons (w64 0) nil)) (count_on s (w64 0)) m o) (rfl)
+         ((exact h0))
+         ((exact (say_tie0 p wx b hi m o h0 hhi s q a (w64 0) hq h1 h2 hs)))
+         ((apply (tie_put q (count_on s (w64 0)) s) ((exact hx)) (rfl) ((exact hm1)) ((exact hb1))
+            ((exact hbs1))
+            ((intro o1 ho1)
+             (apply (tie_put nl (w64 1) (list 10)) ((exact hx)) (rfl) ((exact hm2)) ((exact hb2))
+               ((exact hbs2))
+               ((intro o2 ho2) (apply tie_ret (rfl) ((rw ho2) (rw ho1) rfl)))
+               ((intro hst2) (rw ho1) rfl)))
+            ((intro hst) (exact (write_all_stopped (list 10) (write_all s (os_world o)) hst))))))))))
+
+;; ---- the loop -------------------------------------------------------------------------------------
+;; THE LOOP, by induction on the strings, for whatever is outside: with none left 0 is
+;; returned; else the next address is read through the range and the string there is written
+;; as a line by the second function's tie. Where the process still runs after it, the tail is
+;; the function's own call on the address after, with what the line left outside; where the
+;; line stopped the process the code's run has ended, and the strings after it write nothing
+(theorem say_tie2
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (b Nat)
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some say_code0)))
+   (h1 (= (fn_at p 1) (some say_code1)))
+   (h2 (= (fn_at p 2) (some say_code2)))
+   (hx
+     (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os))
+       (= (wx 0 vs m0 o0) (put_ext (args_rs b hi) vs m0 o0))))
+   (hbsp (<= b sp))
+   (hhi (<= hi 140737488355328))
+   (nl (BitVec 64))
+   (c Nat)
+   (hn (= (w64_val nl) c))
+   (h3 (<= b c))
+   (h4 (<= (+ c 1) hi))
+   (hnl (= (mem_bytes m c 1) (list 10)))
+   (ss (List (List Nat))))
+  (forall ((q (BitVec 64)) (a Nat) (n (BitVec 64)) (o Os))
+    (-> (= (w64_val q) a) (= (w64_val n) (List.length ss)) (<= b a)
+      (<= (+ a (* 8 (List.length ss))) hi)
+      (argv_at m a sp hi ss)
+      (fn_ties p wx (args_rs b hi) say_code2 (cons q (cons n (cons nl nil))) m o (w64 0) m
+        (say_each ss (os_world o)))))
+  (by
+    (induction ss
+      ((nil () (intro q a n o hq hc ha hb hv) (have hn0 (= (w64_val n) 0) (exact hc))
+         (have hlt (< (w64_val n) 1) (rw hn0) (decide))
+         (apply tie_fn (rfl)
+           ((apply tie_if_true (rfl) (rfl) ((exact (icmp_ltu_true n (w64 1) hlt)))
+              ((apply tie_ret (rfl) (rfl)))))))
+       (cons (s r ih) (intro q a n o hq hc ha hb hv)
+         (have hn1 (= (w64_val n) (+ (List.length r) 1)) (exact hc))
+         (have hb1 (<= (+ a (* 8 (+ (List.length r) 1))) hi) (exact hb))
+         (have p1 (<= sp (mem_le64 m a)) (exact (And.left hv)))
+         (have p2 (< (+ (mem_le64 m a) (List.length s)) hi) (exact (And.left (And.right hv))))
+         (have p3 (str_at m (mem_le64 m a) s) (exact (And.left (And.right (And.right hv)))))
+         (have p4 (argv_at m (+ a 8) sp hi r) (exact (And.right (And.right (And.right hv)))))
+         (have hnl0 (Not (< (w64_val n) 1)) (rw hn1) (arith))
+         (have h8 (<= (+ a 8) hi) (arith))
+         (have hm (= (mapped (args_rs b hi) (w64_val q) 8 4) true)
+           (rw hq)
+           (exact (args_rs_mapped b hi a 8 ha h8)))
+         (have hl
+           (=
+             (ieval (args_rs b hi) (cons q (cons n (cons nl (cons (w64 0) (cons (w64 0) nil))))) m
+               (ELoad (EVar 0)))
+             (some (w64 (mem_le64 m a))))
+           (rw
+             (ieval_load (args_rs b hi)
+               (cons q (cons n (cons nl (cons (w64 0) (cons (w64 0) nil)))))
+               m
+               (EVar 0)
+               q
+               (Eq.refl (some q))
+               hm))
+           (rw hq)
+           rfl)
+         (have hp64 (< (mem_le64 m a) 18446744073709551616) (arith))
+         (have hpv (= (w64_val (w64 (mem_le64 m a))) (mem_le64 m a))
+           (exact (w64_val_small (mem_le64 m a) hp64)))
+         (have hk (< (+ a 8) 18446744073709551616) (arith))
+         (have hq1 (= (w64_val (w64_add q (w64 8))) (+ a 8)) (exact (w64_val_add q a 8 hq hk)))
+         (have k1 (< 1 18446744073709551616) (decide))
+         (have hn2 (= (w64_val (w64_sub n (w64 1))) (List.length r))
+           (exact (w64_val_sub n (List.length r) 1 hn1 k1)))
+         (have ha1 (<= b (+ a 8)) (arith))
+         (have hb2 (<= (+ (+ a 8) (* 8 (List.length r))) hi) (arith))
+         (have pb (<= b (mem_le64 m a)) (arith))
+         (apply tie_fn (rfl)
+           ((apply tie_if_false (rfl) (rfl) ((exact (icmp_ltu_false n (w64 1) hnl0)))
+              ((apply (tie_let (w64 (mem_le64 m a))) ((exact hl))
+                 ((apply
+                    (tie_call say_code1 (cons (w64 (mem_le64 m a)) (cons nl nil)) (w64 0) m
+                      (say_line s (os_world o)))
+                    (rfl)
+                    ((exact h1))
+                    ((exact
+                       (say_tie1 p wx b hi m h0 hx hhi s (w64 (mem_le64 m a)) (mem_le64 m a) nl c o
+                         hpv
+                         pb
+                         p2
+                         p3
+                         hn
+                         h3
+                         h4
+                         hnl)))
+                    ((intro o1 ho1)
+                     (apply (tie_let (w64_add q (w64 8))) (rfl)
+                       ((apply (tie_let (w64_sub n (w64 1))) (rfl)
+                          ((apply
+                             (tie_tail say_code2
+                               (cons (w64_add q (w64 8)) (cons (w64_sub n (w64 1)) (cons nl nil))))
+                             (rfl)
+                             ((exact h2))
+                             ((have e
+                                (= (say_each (cons s r) (os_world o)) (say_each r (os_world o1)))
+                                (rw ho1)
+                                rfl)
+                              (rw e)
+                              (exact
+                                (ih (w64_add q (w64 8)) (+ a 8) (w64_sub n (w64 1)) o1 hq1 hn2 ha1
+                                  hb2
+                                  p4)))))))))
+                    ((intro hst) (exact (say_each_stopped r (say_line s (os_world o)) hst)))))))))))))))
+
+;; ---- the entry ------------------------------------------------------------------------------------
+;; THE ENTRY: the count is the word at the stack pointer; with no argument 0 is returned and
+;; nothing written; else the loop over the addresses after the first, by the third function's
+;; tie
+(theorem say_tie3
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (b Nat)
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (h0 (= (fn_at p 0) (some say_code0)))
+   (h1 (= (fn_at p 1) (some say_code1)))
+   (h2 (= (fn_at p 2) (some say_code2)))
+   (hx
+     (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os))
+       (= (wx 0 vs m0 o0) (put_ext (args_rs b hi) vs m0 o0))))
+   (hbsp (<= b sp))
+   (hhi (<= hi 140737488355328))
+   (nl (BitVec 64))
+   (c Nat)
+   (hn (= (w64_val nl) c))
+   (h3 (<= b c))
+   (h4 (<= (+ c 1) hi))
+   (hnl (= (mem_bytes m c 1) (list 10)))
+   (args (List (List Nat)))
+   (q (BitVec 64))
+   (o Os)
+   (hq (= (w64_val q) sp))
+   (ha (args_at m sp hi args)))
+  (fn_ties p wx (args_rs b hi) say_code3 (cons q (cons nl nil)) m o (w64 0) m
+    (Prod.snd (say args (os_world o))))
+  (by
+    (have hc (= (mem_le64 m sp) (List.length args)) (exact (And.left ha)))
+    (have hb (<= (+ sp (* 8 (+ (List.length args) 1))) hi) (exact (And.left (And.right ha))))
+    (have hv (argv_at m (+ sp 8) sp hi args) (exact (And.right (And.right ha))))
+    (have h8 (<= (+ sp 8) hi) (arith))
+    (have hm (= (mapped (args_rs b hi) (w64_val q) 8 4) true)
+      (rw hq)
+      (exact (args_rs_mapped b hi sp 8 hbsp h8)))
+    (have hl
+      (= (ieval (args_rs b hi) (cons q (cons nl (cons (w64 0) nil))) m (ELoad (EVar 0)))
+        (some (w64 (List.length args))))
+      (rw
+        (ieval_load (args_rs b hi) (cons q (cons nl (cons (w64 0) nil))) m (EVar 0) q
+          (Eq.refl (some q))
+          hm))
+      (rw hq)
+      (rw hc)
+      rfl)
+    (cases args hargs
+      ((nil () (have hlt (< (w64_val (w64 0)) 1) (decide))
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 0)) ((exact hl))
+              ((apply tie_if_true (rfl) (rfl) ((exact (icmp_ltu_true (w64 0) (w64 1) hlt)))
+                 ((apply tie_ret (rfl) (rfl)))))))))
+       (cons (name r) (have hb1 (<= (+ sp (* 8 (+ (+ (List.length r) 1) 1))) hi) (exact hb))
+         (have hn64 (< (+ (List.length r) 1) 18446744073709551616) (arith))
+         (have hnv (= (w64_val (w64 (+ (List.length r) 1))) (+ (List.length r) 1))
+           (exact (w64_val_small (+ (List.length r) 1) hn64)))
+         (have hnl0 (Not (< (w64_val (w64 (+ (List.length r) 1))) 1)) (rw hnv) (arith))
+         (have hk (< (+ sp 16) 18446744073709551616) (arith))
+         (have hq2 (= (w64_val (w64_add q (w64 16))) (+ (+ sp 8) 8))
+           (rw (w64_val_add q sp 16 hq hk))
+           (arith))
+         (have k1 (< 1 18446744073709551616) (decide))
+         (have hn2 (= (w64_val (w64_sub (w64 (+ (List.length r) 1)) (w64 1))) (List.length r))
+           (exact (w64_val_sub (w64 (+ (List.length r) 1)) (List.length r) 1 hnv k1)))
+         (have ha1 (<= b (+ (+ sp 8) 8)) (arith))
+         (have hb2 (<= (+ (+ (+ sp 8) 8) (* 8 (List.length r))) hi) (arith))
+         (have p4 (argv_at m (+ (+ sp 8) 8) sp hi r) (exact (And.right (And.right (And.right hv)))))
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 (+ (List.length r) 1))) ((exact hl))
+              ((apply tie_if_false (rfl) (rfl)
+                 ((exact (icmp_ltu_false (w64 (+ (List.length r) 1)) (w64 1) hnl0)))
+                 ((apply (tie_let (w64_add q (w64 16))) (rfl)
+                    ((apply (tie_let (w64_sub (w64 (+ (List.length r) 1)) (w64 1))) (rfl)
+                       ((apply
+                          (tie_tail say_code2
+                            (cons (w64_add q (w64 16))
+                              (cons (w64_sub (w64 (+ (List.length r) 1)) (w64 1)) (cons nl nil))))
+                          (rfl)
+                          ((exact h2))
+                          ((exact
+                             (say_tie2 p wx b sp hi m h0 h1 h2 hx hbsp hhi nl c hn h3 h4 hnl r
+                               (w64_add q (w64 16))
+                               (+ (+ sp 8) 8)
+                               (w64_sub (w64 (+ (List.length r) 1)) (w64 1))
+                               o
+                               hq2
+                               hn2
+                               ha1
+                               hb2
+                               p4)))))))))))))))))))
+;; the four as one program, its one outside function the platform's `write_all`: the outcome of
+;; its function 3 is the value of `say`
+(theorem say_prog_tie
+  ((b Nat)
+   (sp Nat)
+   (hi Nat)
+   (m Mem)
+   (hbsp (<= b sp))
+   (hhi (<= hi 140737488355328))
+   (nl (BitVec 64))
+   (c Nat)
+   (hn (= (w64_val nl) c))
+   (h3 (<= b c))
+   (h4 (<= (+ c 1) hi))
+   (hnl (= (mem_bytes m c 1) (list 10)))
+   (args (List (List Nat)))
+   (q (BitVec 64))
+   (o Os)
+   (hq (= (w64_val q) sp))
+   (ha (args_at m sp hi args)))
+  (fn_ties say_prog (put_wx (args_rs b hi)) (args_rs b hi) say_code3 (cons q (cons nl nil)) m o
+    (w64 0)
+    m
+    (Prod.snd (say args (os_world o))))
+  (exact
+    (say_tie3 say_prog (put_wx (args_rs b hi)) b sp hi m (Eq.refl (some say_code0))
+      (Eq.refl (some say_code1))
+      (Eq.refl (some say_code2))
+      (put_wx_is (args_rs b hi))
+      hbsp
+      hhi
+      nl
+      c
+      hn
+      h3
+      h4
+      hnl
+      args
+      q
+      o
+      hq
+      ha)))
+
+;; ---- how its file ends -----------------------------------------------------------------------------
+;; by the arguments and the kernel's answers: as the program's value on the World a process
+;; starts with says
+(fn say_res ((args (List (List Nat))) (as (List Answer))) Res
+  (world_res (Prod.fst (say args (world_of as))) (Prod.snd (say args (world_of as)))))
