@@ -131,6 +131,9 @@
 (fn store64 ((c Cpu) (a Nat) (v (BitVec 64))) Wr
   (if (mapped (Cpu.segs c) a 8 2) (WrOk (with Cpu c (mem (mem_put64 (Cpu.mem c) a (w64_val v)))))
   (WrFault a)))
+;; a read of one byte, as a word
+(fn load8 ((c Cpu) (a Nat)) Rd
+  (if (mapped (Cpu.segs c) a 1 4) (RdOk (w64 (mem_get (Cpu.mem c) a))) (RdFault a)))
 
 ;; an operand that is a register or memory: a register; the eight bytes at a base register plus
 ;; a displacement (a word's number); or those at a base register plus an index register times a
@@ -144,6 +147,12 @@
     ((RmReg r) (RdOk (reg c r)))
     ((RmMem b d) (load64 c (ea c b d)))
     ((RmSib b x s d) (load64 c (ea_sib c b x s d)))))
+;; an operand of one byte, as a word: a register's low byte, or the byte in memory
+(fn rd8 ((c Cpu) (rm Rm)) Rd
+  (match rm
+    ((RmReg r) (RdOk (w64 (% (w64_val (reg c r)) 256))))
+    ((RmMem b d) (load8 c (ea c b d)))
+    ((RmSib b x s d) (load8 c (ea_sib c b x s d)))))
 (fn wr ((c Cpu) (rm Rm) (v (BitVec 64))) Wr
   (match rm
     ((RmReg r) (WrOk (set_reg c r v)))
@@ -185,7 +194,8 @@
   (Ret)  ; ret (C3)
   (Push Nat)  ; push r64 (50+r)
   (Pop Nat)  ; pop r64 (58+r)
-  (Syscall))  ; syscall (0F 05): control passes to the operating system
+  (Syscall)  ; syscall (0F 05): control passes to the operating system
+  (Movzx8 Nat Rm))  ; movzx r64, r/m8 (REX.W 0F B6 /r): the byte as a word, the bytes above it zero
 
 ;; ---- decode ---------------------------------------------------------------------------------
 (fn within ((lo Nat) (x Nat) (hi Nat)) Bool (if (<= lo x) (if (< x hi) true false) false))
@@ -281,7 +291,8 @@
     (nil none)
     ((cons m r) (modrm_at (/ m 64) (+ (% (/ m 8) 8) (* 8 rr)) (% m 8) x b r))))
 
-;; after 0F: syscall (05), with no prefix; jcc (80+cc); imul (AF) under the prefix's W
+;; after 0F: syscall (05), with no prefix; jcc (80+cc); imul (AF) and movzx of a byte (B6) under
+;; the prefix's W
 (fn decode_0f ((w Nat) (rr Nat) (x Nat) (b Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
   (match bs
     (nil none)
@@ -297,7 +308,13 @@
            (none none)
            ((some (MR rg rm _ used)) (dec_ok (ImulRRm rg rm) (+ pl (+ 2 used)))))
          none)
-       none))))))
+     (if (= o2 182)
+       (if (= w 1)
+         (match (modrm rr x b r)
+           (none none)
+           ((some (MR rg rm _ used)) (dec_ok (Movzx8 rg rm) (+ pl (+ 2 used)))))
+         none)
+       none)))))))
 ;; B8+r: eight bytes of immediate under the prefix's W, four without
 (fn decode_mov_ri ((w Nat) (r Nat) (pl Nat) (bs (List Nat))) (Option (Prod Instr Nat))
   (if (= w 1)
@@ -449,8 +466,8 @@
 ;; why a step has no rule
 (type Why
   (WDecode Nat (List Nat))  ; the bytes at this address are no instruction of the model
-  (WLoad Nat)  ; eight bytes at this address are not mapped to read
-  (WStore Nat)  ; eight bytes at this address are not mapped to write
+  (WLoad Nat)  ; the bytes read at this address are not mapped to read
+  (WStore Nat)  ; the bytes written at this address are not mapped to write
   (WCond Nat)  ; a jump on a condition a flag of which the model does not keep, or does not know
   (WSyscall Nat)  ; a system call the boundary has no rule for
   (WFile))  ; a file the boundary does not load
@@ -519,7 +536,11 @@
      (match (load64 c (w64_val (reg c 4)))
        ((RdFault a) (SStuck (WLoad a)))
        ((RdOk v) (goto (set_reg (set_reg c 4 (w64_add (reg c 4) (w64 8))) r v) (next_rip c len)))))
-    (Syscall (SSys (with Cpu c (rip (next_rip c len)))))))
+    (Syscall (SSys (with Cpu c (rip (next_rip c len)))))
+    ((Movzx8 r rm)
+     (match (rd8 c rm)
+       ((RdFault a) (SStuck (WLoad a)))
+       ((RdOk v) (goto (set_reg c r v) (next_rip c len)))))))
 (fn step ((c Cpu)) Step
   (match (decode (fetch (Cpu.segs c) (Cpu.mem c) (w64_val (Cpu.rip c)) fifteen))
     (none

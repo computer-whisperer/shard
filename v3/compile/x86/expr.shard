@@ -131,7 +131,9 @@
                             (w64 (+ pc (List.length (encode (MovRRm r (RmMem 4 (* 8 (- i 6))))))))))))))))))))
        (EOp (o a b) (unfold ld_atom) (intro h1)
          (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
-       (ELoad (q) (unfold ld_atom) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))))))
+       (ELoad (q) (unfold ld_atom) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
+       (ELoad8 (q) (unfold ld_atom) (intro h1)
+         (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))))))
 
 ;; ---- what an expression's code is given, and what it comes to -----------------------------------
 ;; the state an expression's code starts in: the table's code in place, the locals in their
@@ -635,13 +637,27 @@
                                  ihb hk hca hcb hx hy hp hrip hst)))))))))))))))))))
 
 ;; ---- a load -------------------------------------------------------------------------------------
-;; the state after a load's instruction at pc, the word w read
-(fn l_out ((c Cpu) (k Nat) (w (BitVec 64)) (pc Nat)) Cpu
-  (at_pc (set_reg c (treg k) w)
-    (w64 (+ pc (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0))))))))
-;; a load's instruction after its address's code: where the address is mapped to read in the
-;; data ranges, temporary k takes the word the run's memory has there
-(theorem load_end
+;; What a load's instruction li does where temporary k holds the address q: from a state at the
+;; instruction, the processor comes to the state after it with the word wv in temporary k. The
+;; two loads differ in this and in nothing else.
+(def lstep
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (k Nat)
+   (li Instr)
+   (q (BitVec 64))
+   (wv (BitVec 64)))
+  Prop
+  (forall ((c Cpu) (pc Nat))
+    (-> (est tbl rs ls mi nl c) (= (Cpu.rip c) (w64 pc)) (placed tbl pc (cons li nil))
+      (= (reg c (treg k)) q)
+      (reaches c (at_pc (set_reg c (treg k) wv) (w64 (+ pc (List.length (encode li)))))))))
+;; a word's load: where the eight bytes at q are mapped to read in the data ranges, the word the
+;; run's memory has there
+(theorem lstep_word
   ((tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
    (chi Nat)
@@ -650,20 +666,13 @@
    (mi Mem)
    (nl Nat)
    (k Nat)
-   (c Cpu)
-   (pc Nat)
    (q (BitVec 64))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hk (< k 9))
-   (hst (est tbl rs ls mi nl c))
-   (hrip (= (Cpu.rip c) (w64 pc)))
-   (hp (placed tbl pc (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))
-   (hq (= (reg c (treg k)) q))
    (hm (= (mapped rs (w64_val q) 8 4) true)))
-  (eres k c (+ pc (isize (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))
-    (w64 (mem_le64 mi (w64_val q))))
+  (lstep tbl rs ls mi nl k (MovRRm (treg k) (RmMem (treg k) 0)) q (w64 (mem_le64 mi (w64_val q))))
   (by
+    (intro c pc hst hrip hp hq)
     (have hcode (code_in c tbl) (exact (And.left hst)))
     (have hag (agree rs mi (Cpu.mem c)) (exact (And.left (And.right (And.right hst)))))
     (have hmp
@@ -679,45 +688,110 @@
     (have hv (= (w64 (mem_le64 (Cpu.mem c) (w64_val q))) (w64 (mem_le64 mi (w64_val q))))
       (rw (agree_le64 rs mi (Cpu.mem c) (w64_val q) 4 hag hm))
       rfl)
-    (have hr (reaches c (l_out c k (w64 (mem_le64 mi (w64_val q))) pc))
-      (apply
-        (t_load tbl clo chi pc (treg k) (treg k)
-          (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0))))
-          q
-          (w64 (mem_le64 mi (w64_val q))))
-        ((exact hall))
-        ((exact hchi))
-        ((exact hcode))
-        ((exact hrip))
-        ((exact hs))
-        ((exact hq))
-        ((exact (hmp (w64_val q) 8 4 hm)))
-        ((exact hv))
-        ((exact (reaches_refl (l_out c k (w64 (mem_le64 mi (w64_val q))) pc))))))
-    (have hw
-      (= (reg (l_out c k (w64 (mem_le64 mi (w64_val q))) pc) (treg k))
+    (apply
+      (t_load tbl clo chi pc (treg k) (treg k)
+        (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0))))
+        q
         (w64 (mem_le64 mi (w64_val q))))
-      (exact
-        (tset_self c k (w64 (mem_le64 mi (w64_val q)))
-          (w64 (+ pc (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0))))))
-          hk)))
-    (have hpc
-      (= (Cpu.rip (l_out c k (w64 (mem_le64 mi (w64_val q))) pc))
-        (w64 (+ pc (isize (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))))
-      rfl)
-    (have ht (tstep k c (l_out c k (w64 (mem_le64 mi (w64_val q))) pc))
-      (exact
-        (tstep_set k c (w64 (mem_le64 mi (w64_val q)))
-          (w64 (+ pc (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0))))))
-          hk)))
-    (apply (Exists.intro (l_out c k (w64 (mem_le64 mi (w64_val q))) pc))
+      ((exact hall))
+      ((exact hchi))
+      ((exact hcode))
+      ((exact hrip))
+      ((exact hs))
+      ((exact hq))
+      ((exact (hmp (w64_val q) 8 4 hm)))
+      ((exact hv))
+      ((exact
+         (reaches_refl
+           (at_pc (set_reg c (treg k) (w64 (mem_le64 mi (w64_val q))))
+             (w64 (+ pc (List.length (encode (MovRRm (treg k) (RmMem (treg k) 0)))))))))))))
+;; a byte's load: where the byte at q is mapped to read in the data ranges, the byte the run's
+;; memory has there, as a word
+(theorem lstep_byte
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (k Nat)
+   (q (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hm (= (mapped rs (w64_val q) 1 4) true)))
+  (lstep tbl rs ls mi nl k (Movzx8 (treg k) (RmMem (treg k) 0)) q (w64 (mem_get mi (w64_val q))))
+  (by
+    (intro c pc hst hrip hp hq)
+    (have hcode (code_in c tbl) (exact (And.left hst)))
+    (have hag (agree rs mi (Cpu.mem c)) (exact (And.left (And.right (And.right hst)))))
+    (have hmp
+      (forall ((a Nat) (n Nat) (need Nat))
+        (-> (= (mapped rs a n need) true) (= (mapped (Cpu.segs c) a n need) true)))
+      (exact (And.right (And.right (And.right hst)))))
+    (have hs
+      (= (site tbl pc)
+        (some
+          (Prod.mk (Movzx8 (treg k) (RmMem (treg k) 0))
+            (List.length (encode (Movzx8 (treg k) (RmMem (treg k) 0)))))))
+      (exact (And.left hp)))
+    (have hb (= (mem_get (Cpu.mem c) (w64_val q)) (mem_get mi (w64_val q)))
+      (exact (hag (w64_val q) 4 hm)))
+    (have hv (= (w64 (mem_get (Cpu.mem c) (w64_val q))) (w64 (mem_get mi (w64_val q)))) (rw hb) rfl)
+    (apply
+      (t_load8 tbl clo chi pc (treg k) (treg k)
+        (List.length (encode (Movzx8 (treg k) (RmMem (treg k) 0))))
+        q
+        (w64 (mem_get mi (w64_val q))))
+      ((exact hall))
+      ((exact hchi))
+      ((exact hcode))
+      ((exact hrip))
+      ((exact hs))
+      ((exact hq))
+      ((exact (hmp (w64_val q) 1 4 hm)))
+      ((exact hv))
+      ((exact
+         (reaches_refl
+           (at_pc (set_reg c (treg k) (w64 (mem_get mi (w64_val q))))
+             (w64 (+ pc (List.length (encode (Movzx8 (treg k) (RmMem (treg k) 0)))))))))))))
+;; the state after a load's instruction li at pc, the word w read
+(fn l_out ((c Cpu) (k Nat) (w (BitVec 64)) (pc Nat) (li Instr)) Cpu
+  (at_pc (set_reg c (treg k) w) (w64 (+ pc (List.length (encode li))))))
+;; a load's instruction after its address's code: temporary k takes the word the instruction
+;; reads
+(theorem load_end
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (k Nat)
+   (c Cpu)
+   (pc Nat)
+   (li Instr)
+   (q (BitVec 64))
+   (wv (BitVec 64))
+   (hk (< k 9))
+   (hl (lstep tbl rs ls mi nl k li q wv))
+   (hst (est tbl rs ls mi nl c))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hp (placed tbl pc (cons li nil)))
+   (hq (= (reg c (treg k)) q)))
+  (eres k c (+ pc (isize (cons li nil))) wv)
+  (by
+    (have hr (reaches c (l_out c k wv pc li)) (exact (hl c pc hst hrip hp hq)))
+    (have hw (= (reg (l_out c k wv pc li) (treg k)) wv)
+      (exact (tset_self c k wv (w64 (+ pc (List.length (encode li)))) hk)))
+    (have hpc (= (Cpu.rip (l_out c k wv pc li)) (w64 (+ pc (isize (cons li nil))))) rfl)
+    (have ht (tstep k c (l_out c k wv pc li))
+      (exact (tstep_set k c wv (w64 (+ pc (List.length (encode li)))) hk)))
+    (apply (Exists.intro (l_out c k wv pc li))
       ((apply And.intro ((exact hr))
          ((apply And.intro ((exact hw)) ((apply And.intro ((exact hpc)) ((exact ht)))))))))))
 ;; a load: the address's code for temporary k, the load's instruction
 (theorem load_ok
   ((tbl (List (Prod Nat (Prod Instr Nat))))
-   (clo Nat)
-   (chi Nat)
    (rs (List Seg))
    (ls (List (BitVec 64)))
    (mi Mem)
@@ -727,28 +801,25 @@
    (c Cpu)
    (pc Nat)
    (ca (List Instr))
+   (li Instr)
    (q (BitVec 64))
-   (hall (= (all_within tbl clo chi) true))
-   (hchi (<= (+ chi 15) 18446744073709551616))
+   (wv (BitVec 64))
    (ih (efact tbl rs ls mi nl a))
    (hk (< k 9))
    (hca (= (cexp k a nl) (some ca)))
    (hq (= (ieval rs ls mi a) (some q)))
-   (hm (= (mapped rs (w64_val q) 8 4) true))
-   (hp (placed tbl pc (List.append ca (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil))))
+   (hl (lstep tbl rs ls mi nl k li q wv))
+   (hp (placed tbl pc (List.append ca (cons li nil))))
    (hrip (= (Cpu.rip c) (w64 pc)))
    (hst (est tbl rs ls mi nl c)))
-  (eres k c (+ pc (isize (List.append ca (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil))))
-    (w64 (mem_le64 mi (w64_val q))))
+  (eres k c (+ pc (isize (List.append ca (cons li nil)))) wv)
   (by
-    (have p1 (placed tbl pc ca)
-      (exact (And.left (placed_app tbl ca pc (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil) hp))))
-    (have p2 (placed tbl (+ pc (isize ca)) (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil))
-      (exact (And.right (placed_app tbl ca pc (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil) hp))))
+    (have p1 (placed tbl pc ca) (exact (And.left (placed_app tbl ca pc (cons li nil) hp))))
+    (have p2 (placed tbl (+ pc (isize ca)) (cons li nil))
+      (exact (And.right (placed_app tbl ca pc (cons li nil) hp))))
     (have ea
-      (= (+ pc (isize (List.append ca (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil))))
-        (+ (+ pc (isize ca)) (isize (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil))))
-      (rw (isize_app ca (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))
+      (= (+ pc (isize (List.append ca (cons li nil)))) (+ (+ pc (isize ca)) (isize (cons li nil))))
+      (rw (isize_app ca (cons li nil)))
       (arith))
     (rw ea)
     (cases (ih k c pc ca q hca hq p1 hrip hst)
@@ -760,13 +831,8 @@
          (have st1 (est tbl rs ls mi nl c1)
            (exact (est_scratch tbl rs ls mi nl c c1 hst (tstep_scratch k c c1 t1))))
          (exact
-           (eres_from k c c1
-             (+ (+ pc (isize ca)) (isize (cons (MovRRm (treg k) (RmMem (treg k) 0)) nil)))
-             (w64 (mem_le64 mi (w64_val q)))
-             r1
-             t1
-             (load_end tbl clo chi rs ls mi nl k c1 (+ pc (isize ca)) q hall hchi hk st1 rip1 p2 v1
-               hm))))))))
+           (eres_from k c c1 (+ (+ pc (isize ca)) (isize (cons li nil))) wv r1 t1
+             (load_end tbl rs ls mi nl k c1 (+ pc (isize ca)) li q wv hk hl st1 rip1 p2 v1))))))))
 ;; a load, from the pass's answer and the run's
 (theorem load_case
   ((tbl (List (Prod Nat (Prod Instr Nat))))
@@ -801,8 +867,62 @@
                       (true () (reduce) (intro h2) (rw (<- (Option.some.inj h2)))
                         (intro hp hrip hst)
                         (exact
-                          (load_ok tbl clo chi rs ls mi nl a k c pc ca q hall hchi ih hk hca hq hm
-                            hp hrip hst))))))))))))))))
+                          (load_ok tbl rs ls mi nl a k c pc ca (MovRRm (treg k) (RmMem (treg k) 0))
+                            q
+                            (w64 (mem_le64 mi (w64_val q)))
+                            ih
+                            hk
+                            hca
+                            hq
+                            (lstep_word tbl clo chi rs ls mi nl k q hall hchi hm)
+                            hp
+                            hrip
+                            hst))))))))))))))))
+;; a byte's load, likewise
+(theorem load8_case
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (rs (List Seg))
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (nl Nat)
+   (a IExp)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (efact tbl rs ls mi nl a)))
+  (efact tbl rs ls mi nl (ELoad8 a))
+  (by
+    (intro k c pc ce w)
+    (unfold cexp)
+    (unfold ieval)
+    (cases (Nat.decLt k 9)
+      ((isFalse (hk) (rw (if_neg hk)) (intro h1)
+         (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+       (isTrue (hk) (rw (if_pos hk))
+         (cases (cexp k a nl) hca
+           ((none () (reduce) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
+            (some (ca) (reduce) (intro h1) (rw (<- (Option.some.inj h1)))
+              (cases (ieval rs ls mi a) hq
+                ((none () (reduce) (intro h2) (exact (absurd (Eq.symm h2) (Option.some_ne_none w))))
+                 (some (q) (reduce)
+                   (cases (mapped rs (w64_val q) 1 4) hm
+                     ((false () (reduce) (intro h2)
+                        (exact (absurd (Eq.symm h2) (Option.some_ne_none w))))
+                      (true () (reduce) (intro h2) (rw (<- (Option.some.inj h2)))
+                        (intro hp hrip hst)
+                        (exact
+                          (load_ok tbl rs ls mi nl a k c pc ca (Movzx8 (treg k) (RmMem (treg k) 0))
+                            q
+                            (w64 (mem_get mi (w64_val q)))
+                            ih
+                            hk
+                            hca
+                            hq
+                            (lstep_byte tbl clo chi rs ls mi nl k q hall hchi hm)
+                            hp
+                            hrip
+                            hst))))))))))))))))
 
 ;; ---- every expression ---------------------------------------------------------------------------
 (theorem cexp_all
@@ -860,7 +980,8 @@
                        hrip
                        hst)))))))))
        (EOp (o a b iha ihb) (exact (op_case tbl clo chi rs ls mi nl o a b hall hchi iha ihb)))
-       (ELoad (a ih) (exact (load_case tbl clo chi rs ls mi nl a hall hchi ih)))))))
+       (ELoad (a ih) (exact (load_case tbl clo chi rs ls mi nl a hall hchi ih)))
+       (ELoad8 (a ih) (exact (load8_case tbl clo chi rs ls mi nl a hall hchi ih)))))))
 ;; an expression's code for temporary k
 (theorem cexp_at
   ((tbl (List (Prod Nat (Prod Instr Nat))))
