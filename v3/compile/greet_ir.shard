@@ -1,0 +1,208 @@
+;;; v3/compile/greet_ir.shard — `greet`'s intermediate code, by hand, and its tie. The code is
+;;; one function of one parameter, the address of the text's thirteen bytes: it calls the
+;;; module's one outside function, the platform's `write_all` (put.shard), on the first eight
+;;; bytes and on the five after them, and returns 0. No local holds the World: it is what the
+;;; run has outside the process. The tie (`greet_tie`): where the memory holds the text at the
+;;; address and the data ranges map it to read, the code's run with what is outside has an
+;;; outcome that is the value of `greet` on the World of what is outside — by the rule for a
+;;; call that writes (`tie_put`), twice.
+(import "greet_src.shard")
+(import "put.shard")
+(use std.mem)
+(use std.world)
+(use std.world.World)
+(use compile.greet_src)
+(use compile.ir)
+(use compile.ir_world)
+(use compile.ir.ICallee)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.put)
+(use models.x86.linux)
+(use models.x86.linux.Os)
+(use models.x86.linux.Answer)
+(use models.x86.linux.Outcome)
+(use models.x86.linux.Res)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.world)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code ---------------------------------------------------------------------------------------
+;; locals: 0 the text's address, 1 what a call returns, 2 the address of the second piece
+(fn greet_code () IFn
+  (MkIFn 1 2
+    (SCall 1 (CExt 0) (list (EVar 0) (ENum (w64 8)))
+      (SLet 2 (EOp OAdd (EVar 0) (ENum (w64 8)))
+        (SCall 1 (CExt 0) (list (EVar 2) (ENum (w64 5))) (SRet (ENum (w64 0))))))))
+(fn greet_prog () (List IFn) (list greet_code))
+(theorem greet_code_is () (= (fn_at greet_prog 0) (some greet_code)) (by rfl))
+;; the module's outside functions, as a run with the outside is given them: function 0 is the
+;; platform's `write_all` over the data ranges, and there is no other
+(fn greet_wx ((rs (List Seg)) (j Nat) (vs (List (BitVec 64))) (m Mem) (o Os)) (Option Outcome)
+  (if (= j 0) (put_ext rs vs m o) none))
+
+;; ---- the tie ----------------------------------------------------------------------------------------
+(theorem greet_tie
+  ((rs (List Seg))
+   (p (BitVec 64))
+   (m Mem)
+   (o Os)
+   (h1 (= (mapped rs (w64_val p) 8 4) true))
+   (h2 (= (mapped rs (+ (w64_val p) 8) 5 4) true))
+   (hb (<= (+ (w64_val p) 13) 140737488355328))
+   (hone (= (mem_bytes m (w64_val p) 8) greet_one))
+   (htwo (= (mem_bytes m (+ (w64_val p) 8) 5) greet_two)))
+  (exists ((out Outcome))
+    (and (wfn_ans greet_prog (greet_wx rs) rs greet_code (cons p nil) m o out)
+      (tied out (w64 0) (write_all greet_two (write_all greet_one (os_world o))))))
+  (by
+    (have e8 (= (w64_val (w64 8)) 8) rfl)
+    (have e5 (= (w64_val (w64 5)) 5) rfl)
+    (have hx
+      (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os))
+        (= (greet_wx rs 0 vs m0 o0) (put_ext rs vs m0 o0)))
+      (intro vs m0 o0)
+      rfl)
+    (have hm1 (= (mapped rs (w64_val p) (w64_val (w64 8)) 4) true) (rw e8) (exact h1))
+    (have hb1 (<= (+ (w64_val p) (w64_val (w64 8))) 140737488355328) (rw e8) (arith))
+    (have hlt (< (+ (w64_val p) 8) 18446744073709551616) (arith))
+    (have ea (= (w64_val (w64_add p (w64 8))) (+ (w64_val p) 8))
+      (exact (w64_val_add p (w64_val p) 8 (Eq.refl (w64_val p)) hlt)))
+    (have hm2 (= (mapped rs (w64_val (w64_add p (w64 8))) (w64_val (w64 5)) 4) true)
+      (rw ea)
+      (rw e5)
+      (exact h2))
+    (have hb2 (<= (+ (w64_val (w64_add p (w64 8))) (w64_val (w64 5))) 140737488355328)
+      (rw ea)
+      (rw e5)
+      (arith))
+    (have hbs1 (= (mem_bytes m (w64_val p) (w64_val (w64 8))) greet_one) (rw e8) (exact hone))
+    (have hbs2 (= (mem_bytes m (w64_val (w64_add p (w64 8))) (w64_val (w64 5))) greet_two)
+      (rw ea)
+      (rw e5)
+      (exact htwo))
+    (have body
+      (exists ((out Outcome))
+        (and
+          (wends greet_prog (greet_wx rs) rs
+            (SCall 1 (CExt 0) (list (EVar 0) (ENum (w64 8)))
+              (SLet 2 (EOp OAdd (EVar 0) (ENum (w64 8)))
+                (SCall 1 (CExt 0) (list (EVar 2) (ENum (w64 5))) (SRet (ENum (w64 0))))))
+            (cons p (cons (w64 0) (cons (w64 0) nil)))
+            m
+            o
+            out)
+          (tied out (w64 0) (write_all greet_two (write_all greet_one (os_world o))))))
+      (apply
+        (tie_put greet_prog (greet_wx rs) rs 1 0 (list (EVar 0) (ENum (w64 8)))
+          (SLet 2 (EOp OAdd (EVar 0) (ENum (w64 8)))
+            (SCall 1 (CExt 0) (list (EVar 2) (ENum (w64 5))) (SRet (ENum (w64 0)))))
+          (cons p (cons (w64 0) (cons (w64 0) nil)))
+          m
+          o
+          (w64 0)
+          (write_all greet_two (write_all greet_one (os_world o)))
+          p
+          (w64 8))
+        ((exact hx))
+        (rfl)
+        ((exact hm1))
+        ((exact hb1))
+        ((intro o1 ho1)
+         (have ho1b (= (os_world o1) (write_all greet_one (os_world o))) (rw (<- hbs1)) (exact ho1))
+         (have he2
+           (=
+             (ieval rs (upd (cons p (cons (w64 0) (cons (w64 0) nil))) 1 (w64 1)) m
+               (EOp OAdd (EVar 0) (ENum (w64 8))))
+             (some (w64_add p (w64 8))))
+           rfl)
+         (have inner
+           (exists ((out Outcome))
+             (and
+               (wends greet_prog (greet_wx rs) rs
+                 (SCall 1 (CExt 0) (list (EVar 2) (ENum (w64 5))) (SRet (ENum (w64 0))))
+                 (upd (upd (cons p (cons (w64 0) (cons (w64 0) nil))) 1 (w64 1)) 2
+                   (w64_add p (w64 8)))
+                 m
+                 o1
+                 out)
+               (tied out (w64 0) (write_all greet_two (write_all greet_one (os_world o))))))
+           (apply
+             (tie_put greet_prog (greet_wx rs) rs 1 0 (list (EVar 2) (ENum (w64 5)))
+               (SRet (ENum (w64 0)))
+               (upd (upd (cons p (cons (w64 0) (cons (w64 0) nil))) 1 (w64 1)) 2 (w64_add p (w64 8)))
+               m
+               o1
+               (w64 0)
+               (write_all greet_two (write_all greet_one (os_world o)))
+               (w64_add p (w64 8))
+               (w64 5))
+             ((exact hx))
+             (rfl)
+             ((exact hm2))
+             ((exact hb2))
+             ((intro o2 ho2)
+              (have he3
+                (=
+                  (ieval rs
+                    (upd
+                      (upd (upd (cons p (cons (w64 0) (cons (w64 0) nil))) 1 (w64 1)) 2
+                        (w64_add p (w64 8)))
+                      1
+                      (w64 1))
+                    m
+                    (ENum (w64 0)))
+                  (some (w64 0)))
+                rfl)
+              (have hw2 (= (os_world o2) (write_all greet_two (write_all greet_one (os_world o))))
+                (rw (<- ho1b))
+                (rw (<- hbs2))
+                (exact ho2))
+              (exact
+                (tie_ret greet_prog (greet_wx rs) rs (ENum (w64 0))
+                  (upd
+                    (upd (upd (cons p (cons (w64 0) (cons (w64 0) nil))) 1 (w64 1)) 2
+                      (w64_add p (w64 8)))
+                    1
+                    (w64 1))
+                  m
+                  o2
+                  (w64 0)
+                  (write_all greet_two (write_all greet_one (os_world o)))
+                  he3
+                  hw2)))
+             ((intro hst2) (rw hbs2) (rw ho1b) rfl)))
+         (cases inner
+           ((intro (out g)
+              (apply (Exists.intro out)
+                ((exact (And.intro (wends_let (w64_add p (w64 8)) he2 (And.left g)) (And.right g)))))))))
+        ((intro hst)
+         (have hs1 (= (runs (World.life (write_all greet_one (os_world o)))) false)
+           (rw (<- hbs1))
+           (exact hst))
+         (rw hbs1)
+         (exact (write_all_stopped greet_two (write_all greet_one (os_world o)) hs1)))))
+    (cases body
+      ((intro (out g)
+         (apply (Exists.intro out)
+           ((apply And.intro
+              ((show
+                 (and (= (List.length (cons p nil)) (IFn.params greet_code))
+                   (wends greet_prog (greet_wx rs) rs (IFn.body greet_code)
+                     (enter greet_code (cons p nil))
+                     m
+                     o
+                     out)))
+               (apply And.intro (rfl) ((exact (And.left g)))))
+              ((exact (And.right g)))))))))))
+
+;; ---- how its file ends -----------------------------------------------------------------------------
+;; by the kernel's answers: as the program's value on the World a process starts with says
+(fn greet_res ((as (List Answer))) Res
+  (world_res (Prod.fst (greet (world_of as))) (Prod.snd (greet (world_of as)))))

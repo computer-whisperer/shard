@@ -3,8 +3,10 @@
 # docs/COMPILE.md §5): the intermediate machine (ir.shard) and its laws (ir_laws.shard), the
 # statement that crosses a module's seam on the x86-64 model (x86/seam.shard), the pass from
 # intermediate code to instructions (x86/pass.shard) and its theorem, proven once
-# (x86/module.shard `module_realizes`): where each function a module calls from outside realizes
-# its answer, each function of the compiled module realizes its own. Held here: the files load
+# (x86/module.shard `wmodule_realizes`): where each function a module calls from outside realizes
+# its answer, each function of the compiled module realizes its own — for runs with what is
+# outside a process (ir.shard `wrun`), and so, as its corollary `module_realizes`, for code
+# that calls nothing outside. Held here: the files load
 # with nothing refused and nothing pending, the intermediate machine and the pass are
 # definitions, and the theorem and the laws it is proven from are accepted on no axiom but
 # Lean's three. The theorem's hypotheses met by a module are compile_calls_test.sh's and
@@ -20,7 +22,7 @@ checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/pass.txt")" = 0 ] || { 
 for f in ir.ieval ir.ievals x86.seam.regs_of x86.pass.cexp x86.pass.cargs x86.pass.cstm x86.pass.cfn x86.pass.cmod x86.pass.compile x86.code.placedb; do
   checks=$((checks+1)); grep -q "^DEFINE compile.$f equations=." "$OUT/pass.txt" || bad "compile.$f is not a definition with its equations"
 done
-for t in ir.irun ir_laws.irun_call_inv ir_laws.irun_more ir_laws.iends_ret ir_laws.iends_let ir_laws.iends_if_true ir_laws.iends_if_false ir_laws.iends_tail ir_laws.iends_call ir_laws.iends_call_ext x86.seam_laws.realizes_sub x86.seam_laws.realizes_part x86.code.placedb_ok x86.mem.framed_back_kept x86.call.call_law x86.tail.tail_law x86.expr.cexp_all x86.stmt_store.sim_store x86.function.sim_all x86.function.cfn_ok x86.module.module_realizes x86.module.fn_realizes_ext x86.module.pair_at_one; do
+for t in ir.irun ir.wrun ir_world.wrun_call_inv ir_world.wrun_of_irun ir_world.wrun_more x86.seam.arrives_comes x86.seam.realizes_lift x86.module.wmodule_realizes x86.module.wfn_realizes_ext x86.module.unlift_fn ir_laws.irun_call_inv ir_laws.irun_more ir_laws.iends_ret ir_laws.iends_let ir_laws.iends_if_true ir_laws.iends_if_false ir_laws.iends_tail ir_laws.iends_call ir_laws.iends_call_ext x86.seam_laws.realizes_sub x86.seam_laws.realizes_part x86.code.placedb_ok x86.mem.framed_back_kept x86.call.call_law x86.tail.tail_law x86.expr.cexp_all x86.stmt_store.sim_store x86.function.sim_all x86.function.cfn_ok x86.module.module_realizes x86.module.fn_realizes_ext x86.module.pair_at_one; do
   checks=$((checks+1)); grep -q "^ACCEPT compile.$t " "$OUT/pass.txt" || bad "compile.$t is not accepted"
   axs=$(grep "^ACCEPT compile.$t " "$OUT/pass.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')
