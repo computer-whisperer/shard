@@ -2274,3 +2274,22 @@ measurements; measure again before building on one.
   and the processor's run of it agree; with the place of a frame's local wrong by a word in a
   copy of the pass, 18 of its 53 checks fail. The fifteen x86 and compile entrypoints pass
   natively, 874 checks, the processor's runs among them.
+- A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
+  without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
+  link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above
+  the data, and the old statement its corollary of forty lines —; the pass's proof of an
+  expression 1,043 for 922, the two loads one proof and two instances; the model's file 550
+  for 529 and its boundary 184 for 157. The program: a meaning of 31 lines, intermediate code
+  and three ties of 344, a file's facts 106, its theorem 137. A load of its whole chain is
+  53 to 70 s; its file is 656 bytes. Each proof of the stage but one loaded as first written,
+  the closing parentheses of a form counted by a script; the one refusal was a fact of the
+  file — the compiled code placed five bytes low, refused by the layout's computation. Seven
+  lists of arguments — none but the name, numbers, a sum past a byte, a number past a word, a
+  byte that is no digit, an argument of no bytes —: the evaluator's status, the model's run
+  and the processor's agree. Planted faults, each in a copy: the code multiplying by 9 where
+  the meaning multiplies by 10, refused at the tie; the pass emitting a word's load for a
+  byte's, refused at the pass's proof; the runner laying each address one byte late, 5 of 22
+  checks of the file's test failed. The model's instruction type gaining a constructor made
+  the trial's nine stored proofs out of date — their key is the statement's dependencies —
+  and `prove` wrote them again. The seventeen x86 and compile entrypoints pass natively,
+  1,006 checks, the processor's runs among them.

@@ -21,7 +21,7 @@ it.
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the listing's file; a `main` that writes the file |
 | `args.shard` | laws of a process's arguments: a memory that is the start's from the stack pointer up holds the same arguments (`args_at_same`); the range a function reads them through, from the stack pointer to the top of the stack's range (`args_rs`) |
 | `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), code wrapped as an executable file |
-| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of twenty-two instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
+| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of twenty-four instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
 | `process.shard` | a loaded file's process with its stack anywhere: an access inside the stack's range is mapped (`stack_access`, `stack_words`); a state of the process told by where its stack pointer stands (`proc_at`) — the first state (`proc_first`), across a push (`proc_pushed`), across instructions that move registers (`same_stack`, `proc_same`), across a call that has returned (`proc_returned`) —; and the room a function is entered with (`proc_room`) |
@@ -31,7 +31,7 @@ it.
 | `buffers_tactic.shard` | the tactics the trial's lemmas name: `derive_block` over the trial's table (`block`), and over `dot`'s own rows (`block_dot`) |
 | `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
 | `buffers_run.shard` | that listing's file from end to end: started with its stack anywhere `stack_ok` allows, it exits with 19 (`buffers_exits`), by `both`'s contract |
-| `demo_run.shard` | the demonstration's file from end to end: two instruction rules its code needs (`do_alu_rb`, `do_cmp_rb`), the contracts of `triple`'s code and of `pick`'s (`triple_contract`, `pick_contract`), and the theorem that the file, started with its stack anywhere, exits with the low byte of what `entry` computes (`demo_exits`) |
+| `demo_run.shard` | the demonstration's file from end to end: the contracts of `triple`'s code and of `pick`'s (`triple_contract`, `pick_contract`), and the theorem that the file, started with its stack anywhere, exits with the low byte of what `entry` computes (`demo_exits`) |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
 | `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
 
@@ -135,14 +135,15 @@ on Lean's three axioms. It is one program: there is no compiler.
 some count of steps, none a system call or stuck. A rule for an instruction form says: where the
 program counter is at `pc`, the processor decodes that instruction there (`code_at`), and an
 operand in memory is mapped, the state before the instruction reaches whatever the state after it
-reaches; the state after is written out, with its program counter a numeral. There are twenty-two.
+reaches; the state after is written out, with its program counter a numeral. There are twenty-four.
 Fifteen are for the forms the trial's listing uses: an operation between registers, `cmp`, an
 operation with an immediate, `mov` between registers, `mov` of an immediate, a conditional jump
 taken and not taken, `jmp`, a load and an `imul` through an indexed operand, `add` into an indexed
 operand, `push`, `pop`, `call`, `ret`. Seven are for forms the compile system's pass emits
 (`v3/compile/x86/pass.shard`): `mov` of a 64-bit immediate, a load and a store through a base
 register, the two through a base register and a displacement, a byte's load through a base
-register, an `imul` of two registers. Of memory: bytes stored leave every other address as it was
+register, an `imul` of two registers. Two are for the demonstration's listing: an operation of a
+register with the word at a base register, and `cmp` so. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
 agree outside a range (`same_outside`) give the same word, the same fetched bytes and the same
 decoded instructions clear of the range (`le64_same`, `fetch_same`, `code_in_same`); two that
@@ -316,11 +317,10 @@ The assembler's bytes for three of the programs, written as listings, are the by
 hand.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
-`mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
-`encode` for every instruction; what stands at the stack pointer when a process starts
-(the count of the arguments, the arguments, the environment), and its alignment; a rule for
-every instruction form (the two the demonstration's code needs beside the laws' are
-`demo_run.shard`'s own); a law for the return of a callee that keeps a frame of its own; a
+`mov` and a byte's read; a system call that returns; the bitwise three proven to be Init's; a
+theorem about `encode` for every instruction; what stands above a process's arguments when it
+starts (the environment, the auxiliary vector), and the stack pointer's alignment; a rule for
+every instruction form; a law for the return of a callee that keeps a frame of its own; a
 derivation of
 a whole contract (a loop's invariant and a callee's hypotheses are by hand, and the frame's
 laws are applied by hand); a compiler from a shard function to a listing and its contract.
