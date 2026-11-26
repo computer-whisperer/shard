@@ -109,7 +109,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: sixteen instructions, laws for them, what a kernel leaves at a process's stack pointer — its arguments —, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
+| x86-64 under Linux | the bytes of an executable file, run on the answers the kernel gives its calls | `v3/models/x86`, begun: sixteen instructions, laws for them, what a kernel leaves at a process's stack pointer — its arguments —, the system call `write` under every answer a kernel may give it and a file by hand proven to write as those answers decide, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -363,12 +363,16 @@ undischarged.
 
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
-exact form; events and their prefixes at the Linux boundary; registers; floats; a second target;
+exact form; events and their prefixes at the Linux boundary above the machine's model — the model has a process's writes and the kernel's answers to them (§4's table), no host call is tied to them —; registers; floats; a second target;
 how results are stored and reused between builds; names and directories.
 
 Open in §5's form, each found by the trial or by the review before it:
 
-- an outcome other than a return: a declared failure, a host call with the World in the state;
+- an outcome other than a return: a declared failure, a host call with the World in the state.
+  The first code that has one is by hand: `models/x86/write.shard` `write_all` returns, or exits
+  with a failed write's status, or the kernel ends the process; its contract says which by the
+  kernel's answers. The intermediate machine, the pass's theorem and the link know a return
+  only;
 - a stack need that depends on the arguments — recursion that is not a tail call;
 - what crosses a seam for a type: how memory holds a value of it, its size, the ranges it stands
   in. A low form that follows pointers takes two parameters that no code holds — the list a chain

@@ -37,7 +37,8 @@ and the facts between them:
   instructions realize the code's answer — an instance of the pass's theorem, every hypothesis
   closed by computation.
 - `x86/calls_run.shard` `calls_file_exits`: the file, started with its stack anywhere
-  (`stack_ok`), exits with 22, the low byte of what `calls_f5` computes of the words the start-up hands over —
+  (`stack_ok`) and whatever the kernel would answer a call (`exits`, `v3/models/x86/linux.shard`:
+  it writes nothing), exits with 22, the low byte of what `calls_f5` computes of the words the start-up hands over —
   by the link theorem. `x86/dot_run.shard` `dot_file_exits`: `dot`'s file exits with 68, the low
   byte of what `dot` computes of the buffers 3 5 7 and 2 4 6 that the start-up pushes.
 

@@ -14,13 +14,17 @@ it.
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
 | `words.shard` | a buffer of machine words as a value, a list: the word at an index (`nth`), the list with one replaced (`upd`), an access that takes the evidence that its index is in range (`word_at`, `put_at`) |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`, and `load8`, a byte as a word); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
-| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), what stands at the stack pointer then — a process's arguments (`args_at`) —, its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
+| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), what stands at the stack pointer then — a process's arguments (`args_at`) —, its first state (`boot`), what is outside a process (`Os`: the kernel's answers to come, each an `Answer`, and the bytes written to descriptor 1), system calls (`on_syscall`, `write_to`), a run (`run`, `run_file`), the machine's system (`ends`; `exits`, of a file that writes nothing), and what a loop that writes all of some bytes comes to under the answers (`send`, `sends_end`) |
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
+| `write.shard` | writing bytes out: the rules of the system call `write` by the kernel's next answer (`write_took`, `write_err`, `write_kill`), and `write_all` — fourteen instructions by hand that offer a range's bytes to descriptor 1 until all are taken — with its contract for any address, any range and every list of answers (`write_all_ok`) |
+| `hello.shard` | a file that writes: a listing by hand that writes two pieces of text with `write_all` and exits with 0; what its process ends as, on a list of answers (`hello_res`) |
+| `hello_run.shard` | that file from end to end: started with its stack anywhere and on any list of answers, it ends as `hello_res` says (`hello_ends`) |
+| `hello_main.shard` | the file written; what the theorem says of lists of answers, printed |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the listing's file; a `main` that writes the file |
 | `args.shard` | laws of a process's arguments: a memory that is the start's from the stack pointer up holds the same arguments (`args_at_same`); the range a function reads them through, from the stack pointer to the top of the stack's range (`args_rs`) |
-| `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), code wrapped as an executable file |
+| `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), a file run on lists of the kernel's answers, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of twenty-four instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
@@ -76,7 +80,23 @@ mapped with its permissions. It refuses a segment that reaches past the file, th
 the file than in memory, whose address and place in the file differ within a page, that lies
 below 65536 or ends above 2^47. A process starts from the image and a `Start`: the registers, the
 flags, the stack's range and the memory under the image — whatever the kernel leaves. System call
-60 (`exit`) ends the process with the low byte of `rdi`; any other is stuck.
+60 (`exit`) ends the process with the low byte of `rdi`; 1 is `write`; any other is stuck.
+
+**What is outside a process.** A run takes, beside the processor's state, an `Os`: the answers
+the kernel will give the process's calls, in order, and the bytes the process has written to
+descriptor 1. The answers are an input of a run, as the arguments are: the model does not say
+what a kernel answers, and a statement about a file is for every list of them. An answer says
+how a call that offers bytes went — `(HTook a)`: the kernel took a of them, at least one and at
+most what was offered, all for a = 0; `(HErr e)`: it failed, and the call returns the negative
+of an error number from 1 to 4095; `HKill`: it ended the process there, as it does by a signal
+at a write to a pipe nobody reads — and what the call leaves in `rcx` and `r11`, which Linux
+destroys at every system call. When the list is used up the kernel takes everything offered:
+the empty list is a kernel that never takes less and never fails. No flag is known after a call
+that returns. `write` has a rule for descriptor 1 and for bytes that are all mapped to read: the
+bytes the answer takes, from the first, are written and their count returned. A write to
+another descriptor, or from bytes not mapped, is stuck — Linux answers the second with an error;
+the model does not say so, and a proven program does not ask. Nothing is read: no `read`, no
+`open`, no descriptor but 1.
 
 **A process's arguments.** `(args_at m sp hi args)` is what the model takes the kernel to leave
 at the stack pointer `sp` of a start whose memory is `m` and whose stack's range ends at `hi`,
@@ -91,9 +111,19 @@ that reads its arguments is for every `args` and every start that holds them
 so the memory a function is entered with holds the same arguments (`args.shard`
 `args_at_same`).
 
-**The system** (`docs/COMPILE.md` §2): `(exits file start status)` — there is a count of steps at
-which the run of the file from that start has exited with the status. No statement names the
-count.
+**The system** (`docs/COMPILE.md` §2): `(ends file start answers r)` — there is a count of steps
+at which the run of the file from that start, on those answers, has ended with `r`: `(RExit
+status out)`, the process exited with the status having written `out`, or `(RKill out)`, the
+kernel ended it. No statement names the count. `(exits file start status)` is the statement of
+a file that writes nothing: for EVERY list of answers it ends with `(RExit status nil)`.
+
+**Writing all of some bytes.** `(send answers bytes)` is what a loop comes to that offers the
+bytes until all are taken, each call taking one answer: `(SAll left)`, every byte taken and
+these answers left; `(SFail written)`, an answer failed; `(SKill written)`, the kernel ended
+the process. `(sends_end answers before pieces status)` is how a process ends that writes
+pieces one after another so and then exits with the status: with the status and everything
+written; with `status_io`, 74, where a call failed; or ended by the kernel — each with what was
+taken before. A theorem about a file that writes is an equation in it (`hello_ends`).
 
 ## The assembler
 
@@ -154,8 +184,25 @@ place in any later state with the same mapping whose memory agrees outside a ran
 (`code_in_after`); agreement outside two ranges, a buffer and a frame (`same_outside2`), composed
 of a caller's writes to its frame around a callee's to a buffer (`same_outside2_around`). Of what
 is mapped: a range mapped whole is mapped word by word (`mapped_words_of`). Of a run's end: a run
-from a state the processor comes to is a run from where it came (`run_of_steps`), and the system
-call `exit` ends the process with the low byte of `rdi` (`run_exit`).
+from a state the processor comes to is a run from where it came, what is outside unchanged
+(`run_of_steps`: no step of the processor touches it), and the system call `exit` ends the
+process with the low byte of `rdi` and what it has written (`run_exit`). `(comes c o c2 o2)`:
+the run from `c` with `o` outside goes on as the run from `c2` with `o2` — system calls that
+return may lie between; it follows from `reaches` (`comes_of_reaches`) and from one step of a
+run (`comes_of_move`), and is transitive. `(ends_at c o r)`: a run from there ends with `r`. Of
+a range's bytes (`mem_bytes`): how many, the first k and the rest, and that a memory which
+differs only in a range they lie outside of has the same (`mem_bytes_outside`).
+
+**Writing** (`write.shard`). At a system call whose registers ask for a write to descriptor 1
+of bytes mapped to read, the run's step is the kernel's next answer (`write_call`); the three
+kinds each have their rule. `write_all` is fourteen instructions: while bytes are left it
+offers them all, moves on by the count returned, and exits with 74 where the result is above
+what it offered — a count never is, an error always. Its contract `write_all_ok`, for the code
+at any address, any range and every list of answers, by induction on the answers: what the
+code comes to is what `send` says — every byte written and the code returned in a state with
+the same memory, the stack pointer above the return address and the registers a callee keeps;
+or the process ended, the bytes taken before that written. It is used twice in `hello_ends`:
+the answers the first call leaves are the second's.
 
 **A function's frame** (`frame.shard`). `(holds m p ws)`: the words `ws` stand in the memory
 `m` from the address `p`, eight bytes each — a buffer a function was handed, or the words a
@@ -301,7 +348,7 @@ in place after it — is a hypothesis of the run's lemma, which the frame's desc
 
 Believed: that the model is the processor and the kernel, where it has a rule. The evidence is
 `kernel/test/x86_test.sh` (the assembler and the demonstration are `x86_asm_test.sh`'s, the trial
-`x86_trial_test.sh`'s). It runs the first program's file and the programs of `test/*.hex` —
+`x86_trial_test.sh`'s, a file that writes `x86_write_test.sh`'s). It runs the first program's file and the programs of `test/*.hex` —
 sums and differences with their carries, a product, the fourteen conditions over the four flags,
 sign extension at its edge, memory through each form of operand, the stack, a call — under the model
 and, on an x86-64 Linux machine, on the processor: where the model's run exits, the processor's
@@ -316,8 +363,23 @@ each fault. That was checked with a tool outside the tree.
 The assembler's bytes for three of the programs, written as listings, are the bytes assembled by
 hand.
 
+Of what is outside a process the evidence is `x86_write_test.sh`, on the file `hello.shard`
+describes, 236 bytes: for twelve lists of answers — everything taken at once, one byte a call,
+more than was offered, a failure before any byte and between the pieces, the process ended —
+the right side of the file's theorem, evaluated, and the model's run are one line; and the
+processor's runs are what three of the model's kinds of answer say: the text and status 0; the
+status 74 with the output closed, to `/dev/full`, and to a pipe nobody reads where the signal
+is ignored; the process ended by the kernel at such a pipe otherwise. That a kernel takes fewer
+bytes than it was offered is not made to happen on the processor: only the model's runs and
+the theorem cover it. Two faults planted, each refused by K: the loop moving its address back
+by the count instead of on (at the turn's statement), and the file asking for five bytes of
+its second piece (at the file's table).
+
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
-`mov` and a byte's read; a system call that returns; the bitwise three proven to be Init's; a
+`mov` and a byte's read; a system call but `exit` and `write`, a descriptor but 1, anything
+read; a line of the assembler for bytes that are no instruction (the text a file writes stands
+in it as the immediate numbers of instructions it never comes to); the bitwise three proven to
+be Init's; a
 theorem about `encode` for every instruction; what stands above a process's arguments when it
 starts (the environment, the auxiliary vector), and the stack pointer's alignment; a rule for
 every instruction form; a law for the return of a callee that keeps a frame of its own; a
@@ -333,9 +395,16 @@ X="v3/bin/load --root v3 --init $EXPORT --init-index $INDEX --run models.x86.run
 $X wrap CODE FILE            # the bytes of CODE as the executable file FILE that runs them
 $X run 10000 FILE…           # each file run for at most 10000 steps: a line each
 $X args 10000 FILE NAME ARG… # the file run with the arguments NAME ARG…, the first its name
+$X answers 10000 FILE SPEC…  # the file run once on each list SPEC of the kernel's answers
 ```
 
-A line is `exit N`; `stuck: no instruction of the model at ADDRESS: BYTES…`, `stuck: not mapped to
+A list of answers is items between commas: `N`, the kernel takes N bytes (all for 0); `eN`, it
+fails with the error N; `k`, it ends the process. `run` and `args` give no answers: the kernel
+takes all it is offered.
+
+A line is `exit N`; `killed`, where the kernel ended the process — either of the two followed by
+`, wrote` and the bytes written, in hexadecimal, where there are any —; `stuck: no instruction of
+the model at ADDRESS: BYTES…`, `stuck: not mapped to
 read at ADDRESS`, `stuck: not mapped to write at ADDRESS`, `stuck: no rule for a jump on condition
 N`, `stuck: no rule for system call N`, `stuck: not a file the model loads`; or `out of steps at
 ADDRESS`. The runner starts a process from zeroed registers, cleared flags and eight megabytes of

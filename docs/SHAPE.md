@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 64 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 69 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
@@ -105,10 +105,10 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 71 files | the test scripts and drivers |
+| `v3/kernel/test/` | 76 files | the test scripts and drivers |
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
-| `v3/models/x86/` | 6,900 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
+| `v3/models/x86/` | 11,800 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; what is outside a process — the kernel's answers to its calls, an input of a run, and the bytes it has written —, and a file that writes, proven for every list of answers; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
 | `v3/compile/` | 16,100 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
@@ -228,7 +228,16 @@ be built to is `COMPILE.md`.
   start allows (`stack_ok`); and the same of the demonstration's file, by a contract of each
   of its two functions' code (`demo_run.shard` `demo_exits`);
 - a tactic library (`derive.shard`) that writes the proof of a run of a listing's instructions
-  from the listing's table; nine of the trial's lemmas are proven by it.
+  from the listing's table; nine of the trial's lemmas are proven by it;
+- output (`linux.shard`, `write.shard`, `hello_run.shard`): a run takes the answers the kernel
+  will give the process's calls — it took some of the bytes offered, it failed, it ended the
+  process — as an input, and ends with a status and the bytes written, or ended by the kernel;
+  the system call `write` to descriptor 1; a loop by hand that offers a range's bytes until all
+  are taken and exits with 74 where a call fails, its contract proven once for any address and
+  every list of answers; and a file by hand that writes two pieces of text with it, proven to
+  end as a function of the answers says (`hello_ends`), for a stack anywhere. Every other
+  file's theorem (`exits`) says, in the same words as before, that it writes nothing whatever
+  the kernel would answer.
 
 **Exists** (`v3/compile/`, its README; the form is `COMPILE.md` §5):
 - an intermediate machine a little above x86 (`ir.shard`): local words, word operations, loads
@@ -289,8 +298,10 @@ be built to is `COMPILE.md`.
 - a build: nothing reads a `bin` form and assembles a file's facts; a compiled file's data is
   what its start-up pushes, and the tree's files that have data share one sample;
 - of a process's start, beyond its arguments: the environment and the auxiliary vector; memory
-  whose size the arguments decide, and the size check at the entry that goes with it; output,
-  files, any system call but `exit`;
+  whose size the arguments decide, and the size check at the entry that goes with it;
+- of what is outside a process: a compiled function that writes — the pass's theorem is of
+  code that returns, and the file that writes is by hand —; anything read (`read`, `open`,
+  standard input), a descriptor other than 1, any system call but `exit` and `write`;
 - in the pass: more than six parameters, a function's call of itself that is not a tail call,
   a host call, a declared failure;
 - at the seam, hand-written code that writes memory or keeps a frame — the trial's other two

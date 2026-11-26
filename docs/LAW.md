@@ -379,6 +379,22 @@ admitted that the logic does not derive.
     stage chose — what the model says of a process's arguments, how a file reads them, a
     byte's read — was not put to the owner one by one: `DECISIONS.md`, "Programs and the
     back end", a process's arguments.)
+28. *Output: what the model takes the kernel to promise about `write`.* The report of ruling 27
+    put one decision before the stage: "What should the model take the kernel to promise about
+    `write`? 1. It always takes every byte. Smallest model and proofs. False on a real kernel
+    for pipes, signals and full disks, so a theorem would promise output that a real run can
+    cut short. 2. It takes between one byte and all of them, or fails (my lean). The program
+    loops, and a failure ends it with a reserved exit status. This is what a kernel actually
+    promises, the same stance as your stack ruling. It costs one loop proven once, and every
+    output theorem carries the failure branch." The owner: "Let's go for 2 -- proceed." (The
+    same report said "I would also fold the size check and a stack region reserved without
+    pushing into that stage, since an I/O buffer needs both"; no word answered that, and
+    neither is built — nothing in the stage needs memory. Found in building and not in the
+    question: a kernel also ENDS a process at a write, by a signal, where a pipe has no
+    reader; the model has that as a third answer. What else the stage chose — the answers as
+    an input of a run, the status 74, a file written by hand as the one that writes — was not
+    put to the owner: `DECISIONS.md`, "Programs and the back end", output. How a COMPILED
+    function writes is not ruled and not built.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

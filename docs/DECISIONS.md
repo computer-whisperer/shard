@@ -933,6 +933,58 @@ entries are explained under "Measured" at the end.
   parameter is not ruled (`OPEN.md`). Not built: memory whose size the arguments decide,
   and the one size check at the entry that ruling 24 (3) describes — no program here needs
   memory for its arguments.
+- Output at the machine's boundary (2026-11-26; the stage ruled in `LAW.md` §6, 24 and 28;
+  what follows was chosen in building and not put to the owner one by one).
+  *The kernel's answers are an input of a run* (`models/x86/linux.shard`): a run takes, beside
+  the processor's state, the list of answers the kernel will give the process's calls and the
+  bytes written so far, and a statement about a file is for EVERY list. Chosen because the run
+  stays a function — K computes it, the evaluator runs it, the processor is compared with it —
+  and "whatever the kernel does" is a quantifier over data. Rejected: a run as a relation with
+  a step that may go several ways (nothing runs it); the answers as a function of the call's
+  number (a running program holds no function value, `LAW.md` §2, 8, and the runner is one).
+  A used-up list answers that everything offered was taken, so the empty list is the kernel
+  that never takes less and never fails.
+  *What an answer is*: the kernel took a count of the bytes — held to at least one and at most
+  what was offered, all for 0 —; it failed, with any error number from 1 to 4095; or it ended
+  the process; and the two words it leaves in `rcx` and `r11`. Every answer so stands for
+  something a kernel may do, and everything it may do at a `write` has its answer. Rejected:
+  one error number (a program that tested for that number alone would be proven and be wrong
+  of the others); `rcx` and `r11` as the processor leaves them, the return address and the
+  flags (Linux states only that they are destroyed, and the model keeps four of the flags'
+  bits). No flag is known after a call that returns. The third kind of answer is not in the
+  ruling's words: a write to a pipe nobody reads is answered with a signal that ends the
+  process, so a statement naming only an exit would be false of `hello | head -c 3`; the
+  processor's run shows it (the shell reports 141).
+  *What is outside is not in the processor's state.* `Cpu` is as it was, and no step of the
+  processor is given what is outside: every proof over `reaches` — each instruction's rule,
+  the frame's laws, every contract, the pass — stands unchanged, and that code which makes no
+  call leaves the output alone needs no proof (`laws.shard` `comes_of_reaches`). Rejected: a
+  field of the state, which every `reaches` would then have had to say it keeps.
+  *`exits` keeps its statement and says more*: for every list of answers the file exits with
+  the status having written nothing. No file's theorem in the tree changed its text, and none
+  of the generators' output does. A file that writes is stated with `ends`, by an equation:
+  how it ends is a function of the answers (`send`, `sends_end`). Chosen over "what was
+  written is a start of the text": the equation is what composes — the answers one write
+  leaves are the next one's — and the weaker statements follow from it. That general
+  consequence is not stated as a lemma; the one for a kernel that takes everything is
+  (`hello_run.shard` `hello_exits`).
+  *`write` has a rule for descriptor 1 and bytes all mapped to read*; another descriptor and
+  bytes not mapped are stuck. Linux answers the second with an error; a model that said so
+  would let a proof lean on it.
+  *The loop* (`models/x86/write.shard` `write_all`): written by hand, proven once for any
+  address it stands at; a failure is told by one comparison — a result above the count offered
+  is no count —, and the code then exits with 74, `sysexits.h`'s number for an input or output
+  error, so it does not return to its caller. The status is not kept from a program's own:
+  nothing reserves a number.
+  *The file that writes is written by hand* (`models/x86/hello.shard`), with the model's
+  demonstration and trial, and is not compiled. The pass's theorem is of code that returns
+  (`reaches`); a compiled function that calls `write_all` may not return, and its run has
+  events. An outcome other than a return in the intermediate machine, in the pass's theorem
+  and in the link is open (`COMPILE.md` §8) and not ruled; so is the other way, a function
+  that fills a buffer the file writes out when it has returned. The text stands in the file as
+  the immediate numbers of two instructions the process never comes to: the assembler has no
+  line for bytes that are no instruction. Not built: anything read (`read`, `open`), a second
+  descriptor, the size check at the entry, memory reserved without being pushed.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
@@ -2274,6 +2326,25 @@ measurements; measure again before building on one.
   and the processor's run of it agree; with the place of a frame's local wrong by a word in a
   copy of the pass, 18 of its 53 checks fail. The fifteen x86 and compile entrypoints pass
   natively, 874 checks, the processor's runs among them.
+- Output at the machine's boundary (2026-11-26; natively, single measurements). The model's
+  boundary is 308 lines for 184; the rules of `write`, the loop and its contract 1,299
+  (`models/x86/write.shard`, most of it the states of a turn written out); the file that
+  writes 60, its theorem 822. The loop is 14 instructions, 54 bytes; the file 236 bytes.
+  `write.shard` loads in 12 s, `hello_run.shard` with what it rests on in 26 s. What changed
+  under the files proven before: three run lemmas' statements (`run_of_steps`, `run_exit`,
+  `run_file_exec`), and the proofs of five theorems that end in an exit (the first program,
+  the trial's and the demonstration's three, the link theorem's one); no statement of a
+  file's theorem, and nothing in the pass. Every proof of the stage loaded as first written
+  but for parentheses and three single steps. Twelve lists of answers: the theorem's right
+  side, evaluated, and the model's run are one line each. The processor: the text and status
+  0; 74 with the output closed, to `/dev/full`, and at a pipe nobody reads with the signal
+  ignored; ended by the kernel at such a pipe otherwise (the shell's 141). Not made to happen
+  on the processor: a kernel that takes fewer bytes than it was offered. Planted faults, each
+  refused by K: the loop moving its address back by the count (code, statement and stage
+  lemma changed alike), at the turn's statement; the file asking for five bytes of its second
+  piece, at the file's table. The boundary's change made the trial's nine stored proofs out
+  of date, and `prove` wrote them again. The eighteen x86 and compile entrypoints pass
+  natively, 1,198 checks, the processor's runs among them.
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above
