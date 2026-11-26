@@ -232,7 +232,8 @@ be built to is `COMPILE.md`.
 
 **Exists** (`v3/compile/`, its README; the form is `COMPILE.md` §5):
 - an intermediate machine a little above x86 (`ir.shard`): local words, word operations, loads
-  and stores, `if`, calls, and a return or a tail call at the end of every path; and its laws
+  of a word and of a byte, stores, `if`, calls, and a return or a tail call at the end of every
+  path; and its laws
   (`ir_laws.shard`), among them that a run given more fuel answers the same, and by it a rule
   for a call that returns: a function that calls another is tied to its definition from the
   callee's tie alone;
@@ -250,7 +251,16 @@ be built to is `COMPILE.md`.
   start-up is data: the words it pushes, and at most six arguments, each a word or the address
   of one of those words. The theorem is for every start with the stack anywhere: its range and
   the stack pointer are unknowns, held to `stack_ok` (`models/x86/linux.shard`) — the range
-  above the code, room under the pointer for the words the file needs;
+  above the code, room under the pointer for the words the file needs. The function's data
+  range may reach above the data to what the kernel left there (`start_exits_top`), and the
+  memory it is entered with is the start's from the stack pointer up;
+- a program of its command-line arguments, proven for every list of them
+  (`x86/argsum_run.shard` `argsum_file_exits`): the model states what a kernel leaves at the
+  stack pointer (`models/x86/linux.shard` `args_at` — the count, an address for each argument,
+  each argument's bytes with a 0 after them), and the file, started with its stack anywhere
+  and with any arguments, exits with the low byte of the sum of the decimal numbers given
+  after its name. Its intermediate code, by hand, is tied straight to its meaning over a list
+  of byte lists;
 - two programs through every layer, each from its definition to the exit status of an
   executable file: six functions over words with calls, a test and a loop
   (`x86/calls_run.shard` `calls_file_exits`), and `dot`, a sum of products over two buffers,
@@ -277,13 +287,16 @@ be built to is `COMPILE.md`.
 - the step from a definition to intermediate code: no tool reads a definition, and the proofs
   above the pass are written by hand, a function at a time;
 - a build: nothing reads a `bin` form and assembles a file's facts; a compiled file's data is
-  what its start-up pushes, and the tree's files share one sample;
+  what its start-up pushes, and the tree's files that have data share one sample;
+- of a process's start, beyond its arguments: the environment and the auxiliary vector; memory
+  whose size the arguments decide, and the size check at the entry that goes with it; output,
+  files, any system call but `exit`;
 - in the pass: more than six parameters, a function's call of itself that is not a tail call,
   a host call, a declared failure;
-- at the seam, a function that writes memory or keeps a frame — the answer is stated for
-  functions that only read, and the trial's other two contracts are in their own form —, a low
-  form that follows pointers, and hand-written code at an address other than the one it was
-  written for;
+- at the seam, hand-written code that writes memory or keeps a frame — the trial's other two
+  contracts are in their own form —, a low form that follows pointers (the program of its
+  arguments has none: its code is tied straight to its meaning), and hand-written code at an
+  address other than the one it was written for;
 - any link between the machine's model and what the present compiler emits;
 - a way to turn a large computed result (megabytes of compiled output) into a theorem;
 - the link from a binary's system calls to the `World` its contract speaks of.

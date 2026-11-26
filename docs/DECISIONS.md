@@ -898,6 +898,41 @@ entries are explained under "Measured" at the end.
   the owner: the frame's locals are made by pushes of zero — one byte each after five for
   the zero — and not by one subtraction and a store each; they are given back by one `add`
   and not by pops.
+- A process's arguments (2026-11-25; the stage ruled in `LAW.md` §6, 24 and 27; what follows
+  was chosen in building and not put to the owner one by one).
+  *What the model says* (`models/x86/linux.shard` `args_at`): a predicate on a start's
+  memory — the count at the stack pointer, an address for each argument, at each address the
+  argument's bytes, none 0, and a 0 after them, all from the stack pointer up inside the
+  stack's range. A file's theorem takes it as a hypothesis and is for every list of
+  arguments. Chosen because it is what a kernel promises and no more: where the strings
+  stand, in what order, what follows them, is not said, so no proof leans on a layout.
+  Rejected: a start built from the arguments by a function (one layout, the runner's — the
+  mistake ruling 25 undid for the stack pointer); the word after the last address, the
+  environment and the auxiliary vector (no consumer); that there is a first argument (a
+  kernel before 5.18 runs a program with none).
+  *How a file reads them*: the start-up is as it was — its one argument is the address of
+  word 0 of no data, which is the stack pointer the kernel left — and the function it calls
+  loads the count itself. The link theorem (`x86/link.shard` `start_exits_top`) is for a data
+  range from the data's first word to any `top` in the stack's range, and gives the answer's
+  memory as the start's from the stack pointer up; `start_exits`, for the data alone, is its
+  corollary, so no file proven before changed. Rejected: a start-up argument that is a
+  loaded word (an instruction, a row kind and a case in three inductions, for what one
+  `ELoad` in the entry does); a second range beside the data's (the two are adjacent: one
+  range reaches over both, and the proof of `data_ok` for it existed). The range above the
+  stack pointer is mapped as the stack is, to read and to write: the model has no
+  finer grain, and nothing here writes it.
+  *A byte's read*: the model gets `movzx r64, r/m8` and the intermediate machine `ELoad8`.
+  Rejected: reading a word and masking it — the eight bytes at an argument's last byte need
+  not be mapped by anything the model says. The proof of a load in the pass is stated once
+  over the load's instruction (`expr.shard` `lstep`).
+  *The program* (`argsum_src.shard`, `argsum_ir.shard`): the sum of the decimal numbers after
+  the program's name, in word arithmetic; a byte that is no digit counts as its number less
+  48. Its intermediate code is tied STRAIGHT to its meaning under `args_at`, with no low
+  form between: a low form that follows pointers takes evidence that names what memory
+  holds — the length of a string no code has — and whether a low form may take such a
+  parameter is not ruled (`OPEN.md`). Not built: memory whose size the arguments decide,
+  and the one size check at the entry that ruling 24 (3) describes — no program here needs
+  memory for its arguments.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the

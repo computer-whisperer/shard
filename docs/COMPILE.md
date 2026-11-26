@@ -109,7 +109,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
-| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: fifteen instructions, laws for them, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
+| x86-64 under Linux | the bytes of an executable file | `v3/models/x86`, begun: sixteen instructions, laws for them, what a kernel leaves at a process's stack pointer — its arguments —, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -161,8 +161,9 @@ The owner agreed to this form after it was tried outside the tree (`LAW.md` §6,
 trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the tree holds
 (`v3/compile`, its README): the intermediate; the seam's statement on the x86 model; the pass and
 its theorem, for a function's first six locals in registers and the rest in its frame, expressions
-of word operations and loads, stores,
-`if`, calls and tail calls; the link theorem, for a start-up given as data; two programs, each with
+of word operations and loads of a word and of a byte, stores,
+`if`, calls and tail calls; the link theorem, for a start-up given as data; a program of its
+command-line arguments, proven to its file's exit status for every list of them; two programs, each with
 its levels and its facts, proven to the exit status of its file: six functions over words with
 calls, a test and a loop, and a sum of products over two buffers; a caller of that sum
 compiled as a module of its own and linked in two files, one with the sum's hand-written
@@ -272,7 +273,10 @@ Two steps cross it:
 among any other lines, a function that meets the seam's statement exits as that function's answer
 says — started with its stack anywhere: the stack's range and the stack pointer are unknowns of
 the theorem, held to what the model takes a kernel to promise (`stack_ok`,
-`v3/models/x86/linux.shard`), so no address of a buffer is a number in a proof. What is particular
+`v3/models/x86/linux.shard`), so no address of a buffer is a number in a proof. A file that reads
+what its kernel left — its arguments — is linked by the same theorem with the function's data
+range reaching above the data: the memory the function is entered with is the start's from the
+stack pointer up, and the model states what stands there (`args_at`). What is particular
 to one file — that the pass answers this listing, that the listing lies
 at these addresses — is closed computation, which K runs. Hand-written code and compiled code
 meet through the seam's statement and through nothing else.

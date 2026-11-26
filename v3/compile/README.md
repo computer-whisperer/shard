@@ -2,8 +2,9 @@
 
 The first pieces of the compile system (`docs/COMPILE.md` §5): an intermediate machine with its
 laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64
-instructions with its theorem, a link theorem, and five programs taken through every layer to
-a file the processor runs — six functions over words with calls, a test and a loop; `dot`, a
+instructions with its theorem, a link theorem, and six programs taken through every layer to
+a file the processor runs — six functions over words with calls, a test and a loop; `argsum`,
+a program of its command-line arguments, proven for every list of them; `dot`, a
 sum of products over two buffers; `sqdiff`, a compiled caller of `dot` across a seam, in one
 file with the `dot` an author wrote in instructions and in another with the compiled one;
 `gap`, a caller of `sqdiff`, three functions deep; and `total`, a caller of `both`, which calls
@@ -39,6 +40,28 @@ and the facts between them:
   (`stack_ok`), exits with 22, the low byte of what `calls_f5` computes of the words the start-up hands over —
   by the link theorem. `x86/dot_run.shard` `dot_file_exits`: `dot`'s file exits with 68, the low
   byte of what `dot` computes of the buffers 3 5 7 and 2 4 6 that the start-up pushes.
+
+## A program of its arguments
+
+`argsum` is the sum of the decimal numbers given after the name a program is run by
+(`argsum_src.shard`): a function over a list of lists of bytes, in word arithmetic. Its file's
+theorem (`x86/argsum_run.shard` `argsum_file_exits`) is for every start `stack_ok` allows and
+every list of arguments the start's memory holds at the stack pointer (`args_at`,
+`v3/models/x86/linux.shard`): the file exits with the low byte of `argsum` of them.
+
+- The start-up pushes nothing and hands the function it calls one word, the address of word 0
+  of no data: the stack pointer as the kernel left it.
+- The intermediate code (`argsum_ir.shard`) is three functions: the entry loads the count and
+  passes over the first address; a loop over the addresses loads each and calls the third; and
+  that one reads a string a byte at a time (`ELoad8`) to the 0 after it. It reads through one
+  range, from the stack pointer to the top of the stack's range (`args_rs`).
+- The tie is from the meaning straight to the code, by induction on the lists
+  (`argsum_tie0`, `argsum_tie1`, `argsum_tie2`): there is no low form. What the code may read
+  — each address in the range, each string inside it — is what `args_at` states.
+- The link theorem for such a file is `start_exits_top`: the function's data range reaches
+  from the data's first word to the top of the stack's range, and its answer is asked on a
+  memory that is the start's from the stack pointer up, which therefore holds the same
+  arguments (`v3/models/x86/args.shard` `args_at_same`).
 
 ## A function as a module
 
@@ -165,10 +188,11 @@ the owner.
 
 | file | what it holds |
 |---|---|
-| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), the run by a fuel (`irun`), a function's answer (`fn_ans`). No proof: the pass reads this file |
+| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load of a word, a load of a byte), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), the run by a fuel (`irun`), a function's answer (`fn_ans`). No proof: the pass reads this file |
 | `ir_laws.shard` | the machine's laws: what a run of a statement says of its parts (`irun_let_inv` and its like), a run of a statement from its parts, that a run given more fuel answers the same (`irun_more`), and a rule of `iends` for each statement form a proof above the pass uses: a return, a local set, a branch each way, a tail call, a store (`iends_store`), a call that returns (`iends_call`), whose two runs — the callee's and what follows — are brought to one fuel, and a call of an outside function (`iends_call_ext`), by that function's answer |
 | `lo.shard` | what a low form is written with: a read with its evidence (`rd64`), a write with its evidence (`wr64`), a buffer in the ranges (`buf_ok`), the evidence at an index (`at8_ok`), a read's word against a list held in memory (`rd_word`); and an answer given where evidence exists (`ans_on`), by which a low form is the answer of a function called from outside |
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
+| `argsum_src.shard`, `argsum_ir.shard` | a program of its command-line arguments: its meaning over a list of lists of bytes — a string's digits, the sum over the strings, the first argument passed over —, and its intermediate code, three functions, with a tie for each from the meaning straight to the code where a memory holds the arguments (`args_at`) |
 | `wide_ir.shard` | intermediate code of five functions of more than six locals each, tied to no meaning: what a compiled file is run on to compare the pass's code for locals in the frame with the intermediate machine |
 | `two.shard` | functions of two buffers of one count that only read: the type of such a low form (`Reads2`), and such a function as the answer of a function called from outside — `two_ext`, `two_ans`, on words that have the evidence (`two_ext_is`), whatever it answers (`two_ans_inv`), and that code whose run answers the function's value answers what the answer says (`two_ans_tie`); and what such a function reads, from its first fact: its value is one in two memories that agree on the two buffers' words (`Means2`, `reads_on`) |
 | `upd.shard` | functions of two buffers of one count that write the first: that two buffers lie apart (`apart`), the type of such a low form (`Upd2`), and such a function as the answer of a function called from outside — `upd_ext`, `upd_ans`, `upd_ext_is`, `upd_ans_inv`, `upd_ans_tie`, as `two.shard`'s —; and across a call that writes: a read clear of what was written reads the same (`rd_same`), and the memories before and after agree on a buffer apart from the written one (`kept_apart`) |
@@ -188,8 +212,9 @@ the owner.
 | `x86/expr.shard` `entry.shard` `stmt.shard` `stmt_store.shard` `call.shard` `stmt_call.shard` `stmt_if.shard` `tail.shard` | the proof by cases: an expression (`cexp_all`), into a function and out of it (the six pushes, the frame's locals made and given back, the six pops), a local set from rax in its register or its word of the frame (`set_loc`) and a return, a store, the law of a call and a call as a statement, a branch, a tail call |
 | `x86/function.shard` `module.shard` | the statement for every statement (`sim_all`), a compiled function (`cfn_ok`), the module's theorem (`module_realizes`), and what a list of one outside function, and of two, has at an index (`pair_at_one`, `pair_at_two`) |
 | `x86/startup.shard` | a file's start-up as data: the words `data` it pushes, the last first, and at most six arguments (`Arg`), each a word or the address of one of the data's words, taken from the stack pointer when the start-up runs; then a call, and exit with the low byte of rax. The listing (`start_listing`) and the table its instructions lay out to (`start_table`), what the start-up hands the function it calls (`start_base`, `start_rs`, `arg_words`), the sample the tree's files share — two buffers of three words and their count —, and a compiled listing as lines with a label at one entry. No proof: a file's writer reads this file |
-| `x86/link.shard` | `start_exits`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer, the file exits as the answer says. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`, `holds_mid`: a memory that holds the data holds each stretch of it. For every start `stack_ok` allows: the stack's range and the stack pointer are unknowns. `link_exits`: the theorem for the sample |
+| `x86/link.shard` | `start_exits_top`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer over a range from the data's first word to any address of the stack's range, the file exits as the answer says, the answer asked on a memory that is the start's from the stack pointer up (`first_above`: the image lies below the stack; the start-up pushes below the stack pointer); `start_exits`, its corollary for the data's range alone. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`, `holds_mid`: a memory that holds the data holds each stretch of it. For every start `stack_ok` allows: the stack's range and the stack pointer are unknowns. `link_exits`: the theorem for the sample |
 | `x86/calls_file.shard` `calls_run.shard` `calls_main.shard` | the first program compiled and its file; the module's theorem met by it and the theorem that the file exits with 22; the file written |
+| `x86/argsum_file.shard` `argsum_run.shard` `argsum_main.shard` | `argsum` compiled after a start-up that pushes nothing and hands over the stack pointer's address, and its file; the module's theorem met by it and the theorem that the file exits with `argsum` of any arguments; the file written, and the evaluator's status for lists of arguments |
 | `x86/calls_cases_main.shard` | a module run one call at a time — the first program's, or `wide_ir.shard`'s —: a file of six first instructions for a function of two parameters on two given words, and the word the intermediate machine's run returns, for a test to compare |
 | `x86/dot_file.shard` `dot_run.shard` `dot_main.shard` | `dot` compiled and its file; the two theorems above; the file written |
 | `x86/sqdiff_hand_file.shard` `sqdiff_hand_run.shard` `sqdiff_hand_main.shard` | `sqdiff` compiled after the hand-written `dot`, and that file (names `sqh_`); the outside function's fact, the module's theorem met and the theorem that the file exits with 27; the file written |
@@ -216,14 +241,17 @@ listing stands in a table (`placed`), and each outside callee realizes its answe
 and with the need `xs` gives, then every function of `p` realizes its own answer — `fn_ans`, the
 run of its intermediate code — at the entry and with the need the pass answered. It covers every
 form the pass accepts and nothing else: the pass refuses what it does not compile (a seventh
-local, an expression deeper than the temporaries, a comparison other than unsigned below and not
+parameter, an expression deeper than the temporaries, a comparison other than unsigned below and not
 below, a call's argument that is not a constant or a local, a call of itself that is not a tail
 call).
 
-`start_exits` (`x86/link.shard`): for the listing of any start-up — any data, any arguments —
+`start_exits_top` (`x86/link.shard`): for the listing of any start-up — any data, any arguments —
 with any lines after it, assembled, where the function the start-up calls realizes an answer
-and that answer has a value on the arguments' words in any memory that holds the data, the file
-exits with the value's low byte. `link_exits` is that theorem for the sample: two buffers of
+over the range from the data's first word to an address `top` of the stack's range, and that
+answer has a value on the arguments' words in any memory that holds the data and is the start's
+from the stack pointer up, the file exits with the value's low byte. `start_exits` is that
+theorem with `top` the data's end, the answer asked of nothing above the data: what a file
+that takes no arguments from its kernel is linked by. `link_exits` is that theorem for the sample: two buffers of
 three words and their count. The theorem is for every start `(start_at lo sp hi r f m)` that
 `stack_ok` allows (`v3/models/x86/linux.shard`): the stack's range begins above the table's end,
 the words the file needs — its data's, the function's stack need, the return address — stand
@@ -258,7 +286,7 @@ stands in it —, in `x86/gap_file.shard` those for two compiled modules and the
   start-up stand — or not at all;
 - an outside function's answer that a program computes: `ans_on` is decided by no program, so
   the evaluator does not run a caller's intermediate code against it;
-- a file of the tree with a start-up other than the sample's: the function each of the seven
+- a file of the tree with data other than the sample's: the function each of seven files
   enters takes the sample's three words, so the first program's entry takes two addresses it
   does not use; a file whose data is not pushed by its start-up, a host call, a declared
   failure;
@@ -269,7 +297,10 @@ stands in it —, in `x86/gap_file.shard` those for two compiled modules and the
 
 ## Tests
 
-Eleven entrypoints of the suite, in `v3/kernel/test/`: `compile_pass_test.sh` (the machine's
+Thirteen entrypoints of the suite, in `v3/kernel/test/`: `compile_argsum_test.sh` (the program
+of its arguments: the chain accepted to the theorem for every list of them) and
+`compile_argsum_file_test.sh` (its file run with seven lists of arguments by the model and the
+processor); `compile_pass_test.sh` (the machine's
 laws, the pass and its theorem accepted), `compile_calls_test.sh` (the first program's chain
 accepted, to the theorem of its exit status), `compile_modules_test.sh` (the three modules and
 the four files over them in one load with the link: each view's laws discharged, each proof

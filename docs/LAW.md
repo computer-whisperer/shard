@@ -369,6 +369,16 @@ admitted that the logic does not derive.
     checkpoint. What was asked and built is the limit on a function's LOCALS; a function still
     takes at most six argument words, which was not put to the owner. Built of it in the tree:
     `DECISIONS.md`, "Programs and the back end", a function's locals.)
+27. *Command-line arguments; the model's own trial and demonstration for a stack anywhere.* The
+    report of rulings 25 and 26 ended: "By your earlier order the next stage is command-line
+    arguments. I would fold the trial and demo into that stage, since it restates the process
+    start anyway, and take up six argument words when a function first needs a seventh." The
+    owner: "Good. Let's proceed with command-line arguments and the additional scope you
+    suggested." (An assent to the stage ruling 24 ordered and to the addition as stated. No
+    function of the stage needed a seventh argument word, and the limit stands. What the
+    stage chose — what the model says of a process's arguments, how a file reads them, a
+    byte's read — was not put to the owner one by one: `DECISIONS.md`, "Programs and the
+    back end", a process's arguments.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

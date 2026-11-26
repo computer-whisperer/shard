@@ -13,14 +13,15 @@ it.
 |---|---|
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
 | `words.shard` | a buffer of machine words as a value, a list: the word at an index (`nth`), the list with one replaced (`upd`), an access that takes the evidence that its index is in range (`word_at`, `put_at`) |
-| `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
-| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
+| `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`, and `load8`, a byte as a word); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
+| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), what stands at the stack pointer then — a process's arguments (`args_at`) —, its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the listing's file; a `main` that writes the file |
-| `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
-| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of nineteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
+| `args.shard` | laws of a process's arguments: a memory that is the start's from the stack pointer up holds the same arguments (`args_at_same`); the range a function reads them through, from the stack pointer to the top of the stack's range (`args_rs`) |
+| `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), code wrapped as an executable file |
+| `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of twenty-two instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
 | `process.shard` | a loaded file's process with its stack anywhere: an access inside the stack's range is mapped (`stack_access`, `stack_words`); a state of the process told by where its stack pointer stands (`proc_at`) — the first state (`proc_first`), across a push (`proc_pushed`), across instructions that move registers (`same_stack`, `proc_same`), across a call that has returned (`proc_returned`) —; and the room a function is entered with (`proc_room`) |
@@ -56,6 +57,7 @@ prefix has a rule.
 | the same, `r64, r/m64` | `REX.W 03 0B 23 2B 33 3B /r` | |
 | the same, `r/m64, imm` | `REX.W 81 /n id`, `REX.W 83 /n ib` | the immediate sign-extended |
 | `imul r64, r/m64` | `REX.W 0F AF /r` | the low word of the product; every flag left unknown (the processor defines the carry and the overflow) |
+| `movzx r64, r/m8` | `REX.W 0F B6 /r` | the register is one byte as a word — a register's low byte, or the byte in memory —, the bytes above it zero; no flag changes |
 | `jcc rel32` | `0F 80+cc cd` | a jump where the condition holds: `o no b ae e ne be a s ns l ge le g`; the two on parity are stuck |
 | `jmp rel32`; `call rel32`; `ret` | `E9 cd`; `E8 cd`; `C3` | a jump; the return address pushed; popped |
 | `push r64`; `pop r64` | `50+r`; `58+r` | a word to and from the stack |
@@ -65,7 +67,7 @@ A register-or-memory operand is a register; the eight bytes at a base register p
 displacement of none, one or four bytes; or those at a base register plus an index register
 times 1, 2, 4 or 8 plus such a displacement. `rsp` and `r12` as a base take a SIB byte, and so
 does every operand with an index; `rsp` is no index. An address from the program counter, an
-index with no base and an absolute address have no rule. A read needs eight bytes inside one range mapped to read, a write eight
+index with no base and an absolute address have no rule. A read needs eight bytes inside one range mapped to read — a byte's read the one byte —, a write eight
 inside one mapped to write.
 
 **Linux.** `elf_load` reads a 64-bit little-endian executable for x86-64 at fixed addresses (type
@@ -75,6 +77,19 @@ the file than in memory, whose address and place in the file differ within a pag
 below 65536 or ends above 2^47. A process starts from the image and a `Start`: the registers, the
 flags, the stack's range and the memory under the image — whatever the kernel leaves. System call
 60 (`exit`) ends the process with the low byte of `rdi`; any other is stuck.
+
+**A process's arguments.** `(args_at m sp hi args)` is what the model takes the kernel to leave
+at the stack pointer `sp` of a start whose memory is `m` and whose stack's range ends at `hi`,
+for the arguments `args`, a list of lists of bytes: the word at `sp` is their count; the words
+after it are addresses, one for each argument; at each address stand that argument's bytes, none
+of them 0, and a 0 after them; and the count, the addresses and the strings lie from `sp` up,
+inside the stack's range. The first argument is by convention the name the program was run by;
+the model does not say there is one. Nothing is said of the word after the last address, of the
+environment, of the auxiliary vector, or of the stack pointer's alignment. A theorem about a file
+that reads its arguments is for every `args` and every start that holds them
+(`v3/compile/x86/argsum_run.shard`). A file's first instructions push below the stack pointer,
+so the memory a function is entered with holds the same arguments (`args.shard`
+`args_at_same`).
 
 **The system** (`docs/COMPILE.md` §2): `(exits file start status)` — there is a count of steps at
 which the run of the file from that start has exited with the status. No statement names the
@@ -120,12 +135,13 @@ on Lean's three axioms. It is one program: there is no compiler.
 some count of steps, none a system call or stuck. A rule for an instruction form says: where the
 program counter is at `pc`, the processor decodes that instruction there (`code_at`), and an
 operand in memory is mapped, the state before the instruction reaches whatever the state after it
-reaches; the state after is written out, with its program counter a numeral. There are nineteen.
+reaches; the state after is written out, with its program counter a numeral. There are twenty-two.
 Fifteen are for the forms the trial's listing uses: an operation between registers, `cmp`, an
 operation with an immediate, `mov` between registers, `mov` of an immediate, a conditional jump
 taken and not taken, `jmp`, a load and an `imul` through an indexed operand, `add` into an indexed
-operand, `push`, `pop`, `call`, `ret`. Four are for forms the compile system's pass emits
+operand, `push`, `pop`, `call`, `ret`. Seven are for forms the compile system's pass emits
 (`v3/compile/x86/pass.shard`): `mov` of a 64-bit immediate, a load and a store through a base
+register, the two through a base register and a displacement, a byte's load through a base
 register, an `imul` of two registers. Of memory: bytes stored leave every other address as it was
 (`mem_put64_other`); a stored word is the word read back (`le64_put64_word`); two memories that
 agree outside a range (`same_outside`) give the same word, the same fetched bytes and the same
@@ -316,13 +332,17 @@ read EXPORT INDEX < <(v3/kernel/test/init_index.sh)
 X="v3/bin/load --root v3 --init $EXPORT --init-index $INDEX --run models.x86.run_main.main v3/models/x86/run_main.shard --"
 $X wrap CODE FILE            # the bytes of CODE as the executable file FILE that runs them
 $X run 10000 FILE…           # each file run for at most 10000 steps: a line each
+$X args 10000 FILE NAME ARG… # the file run with the arguments NAME ARG…, the first its name
 ```
 
 A line is `exit N`; `stuck: no instruction of the model at ADDRESS: BYTES…`, `stuck: not mapped to
 read at ADDRESS`, `stuck: not mapped to write at ADDRESS`, `stuck: no rule for a jump on condition
 N`, `stuck: no rule for system call N`, `stuck: not a file the model loads`; or `out of steps at
 ADDRESS`. The runner starts a process from zeroed registers, cleared flags and eight megabytes of
-zeroed stack under `7FFFFFFFF000`.
+zeroed stack under `7FFFFFFFF000`. With `args` the arguments stand in that stack as Linux lays
+them: the strings at the top, under them — the stack pointer at a multiple of sixteen — the
+count, the strings' addresses, and two words of 0, the end of the arguments and of an empty
+environment.
 
 A test program is a file of hexadecimal bytes with `;` comments (`test/stack.hex`). `KK` in it
 stands for each of `F8`…`FF` in turn, eight programs. Its comments state what the model's run is:
