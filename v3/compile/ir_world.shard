@@ -691,8 +691,9 @@
        (FS (d1 ih) (rw (fadd_succ n d1)) (exact (wrun_more p wx rs (fadd n d1) s ls m o r ih)))))))
 
 ;; ---- a run's rules, one statement at a time -------------------------------------------------------
-;; the rules of `wends` a proof above the pass uses: a return, a local set, and a call of an
-;; outside function — one that returns, then what follows on what it left; and one in which
+;; the rules of `wends` a proof above the pass uses: a return; a local set; a branch, each way;
+;; a tail call to a function of the program; and a call — of an outside function or of a
+;; function of the program — that returns, then what follows on what it left, and one in which
 ;; the process ends
 (theorem wends_ret
   ((p (List IFn))
@@ -773,3 +774,163 @@
     (have hk2 (= (wnext FZ p wx rs x k ls (OEnd r)) (some (OEnd r))) rfl)
     (apply (Exists.intro (FS FZ))
       ((exact (wrun_call p wx rs FZ x (CExt j) es k ls m o vs (OEnd r) (OEnd r) hes hc2 hk2))))))
+;; a branch, each way
+(theorem wends_if_true
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (a IExp)
+   (cc ICmp)
+   (b IExp)
+   (t IStm)
+   (e IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (x (BitVec 64))
+   (y (BitVec 64))
+   (out Outcome)
+   (ha (= (ieval rs ls m a) (some x)))
+   (hb (= (ieval rs ls m b) (some y)))
+   (hc (= (icmp cc x y) true))
+   (hr (wends p wx rs t ls m o out)))
+  (wends p wx rs (SIf a cc b t e) ls m o out)
+  (by
+    (cases hr
+      ((intro (n hn)
+         (have hk (= (wrun n p wx rs (if (icmp cc x y) t e) ls m o) (some out)) (rw hc) (exact hn))
+         (apply (Exists.intro (FS n))
+           ((exact (wrun_if p wx rs n a cc b t e ls m o x y out ha hb hk)))))))))
+(theorem wends_if_false
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (a IExp)
+   (cc ICmp)
+   (b IExp)
+   (t IStm)
+   (e IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (x (BitVec 64))
+   (y (BitVec 64))
+   (out Outcome)
+   (ha (= (ieval rs ls m a) (some x)))
+   (hb (= (ieval rs ls m b) (some y)))
+   (hc (= (icmp cc x y) false))
+   (hr (wends p wx rs e ls m o out)))
+  (wends p wx rs (SIf a cc b t e) ls m o out)
+  (by
+    (cases hr
+      ((intro (n hn)
+         (have hk (= (wrun n p wx rs (if (icmp cc x y) t e) ls m o) (some out)) (rw hc) (exact hn))
+         (apply (Exists.intro (FS n))
+           ((exact (wrun_if p wx rs n a cc b t e ls m o x y out ha hb hk)))))))))
+;; a tail call to a function of the program: the callee's outcome is the statement's
+(theorem wends_tail
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (i Nat implicit)
+   (es (List IExp) implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (out Outcome implicit)
+   (g IFn)
+   (vs (List (BitVec 64)))
+   (hes (= (ievals rs ls m es) (some vs)))
+   (hg (= (fn_at p i) (some g)))
+   (hr (wfn_ans p wx rs g vs m o out)))
+  (wends p wx rs (STail (CFn i) es) ls m o out)
+  (by
+    (cases hr
+      ((intro (hlen hrun)
+         (cases hrun
+           ((intro (n hn)
+              (have hc (= (wcal_run n p wx rs (CFn i) vs m o) (some out))
+                (show (= (wfn_run n p wx rs (fn_at p i) vs m o) (some out)))
+                (rw hg)
+                (exact hn))
+              (apply (Exists.intro (FS n))
+                ((exact (wrun_tail p wx rs n (CFn i) es ls m o vs out hes hc))))))))))))
+;; a call of a function of the program that returns: the callee's word w, the memory m1 and
+;; the outside o1 it left, then what follows the call with the local set, on m1 and o1. The
+;; two runs are given on two fuels and the statement takes one for both: their sum
+(theorem wends_call
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (x Nat implicit)
+   (i Nat implicit)
+   (es (List IExp) implicit)
+   (k IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (out Outcome implicit)
+   (g IFn)
+   (vs (List (BitVec 64)))
+   (w (BitVec 64))
+   (m1 Mem)
+   (o1 Os)
+   (hes (= (ievals rs ls m es) (some vs)))
+   (hg (= (fn_at p i) (some g)))
+   (hc (wfn_ans p wx rs g vs m o (ORet w m1 o1)))
+   (hk (wends p wx rs k (upd ls x w) m1 o1 out)))
+  (wends p wx rs (SCall x (CFn i) es k) ls m o out)
+  (by
+    (cases hc
+      ((intro (hlen hrun)
+         (cases hrun
+           ((intro (nc hnc)
+              (cases hk
+                ((intro (nk hnk)
+                   (have hc2
+                     (= (wcal_run (fadd nc nk) p wx rs (CFn i) vs m o) (some (ORet w m1 o1)))
+                     (show
+                       (= (wfn_run (fadd nc nk) p wx rs (fn_at p i) vs m o) (some (ORet w m1 o1))))
+                     (rw hg)
+                     (exact
+                       (wrun_back p wx rs (IFn.body g) (enter g vs) m o (ORet w m1 o1) nc hnc nk)))
+                   (have hk2 (= (wnext (fadd nc nk) p wx rs x k ls (ORet w m1 o1)) (some out))
+                     (exact (wrun_front p wx rs k (upd ls x w) m1 o1 out nk hnk nc)))
+                   (apply (Exists.intro (FS (fadd nc nk)))
+                     ((exact
+                        (wrun_call p wx rs (fadd nc nk) x (CFn i) es k ls m o vs (ORet w m1 o1) out
+                          hes
+                          hc2
+                          hk2)))))))))))))))
+;; a call of a function of the program in which the process ends: the statement's outcome is
+;; that end, and what follows the call is not run
+(theorem wends_call_end
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (x Nat implicit)
+   (i Nat implicit)
+   (es (List IExp) implicit)
+   (k IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (g IFn)
+   (vs (List (BitVec 64)))
+   (r Res)
+   (hes (= (ievals rs ls m es) (some vs)))
+   (hg (= (fn_at p i) (some g)))
+   (hc (wfn_ans p wx rs g vs m o (OEnd r))))
+  (wends p wx rs (SCall x (CFn i) es k) ls m o (OEnd r))
+  (by
+    (cases hc
+      ((intro (hlen hrun)
+         (cases hrun
+           ((intro (n hn)
+              (have hc2 (= (wcal_run n p wx rs (CFn i) vs m o) (some (OEnd r)))
+                (show (= (wfn_run n p wx rs (fn_at p i) vs m o) (some (OEnd r))))
+                (rw hg)
+                (exact hn))
+              (have hk2 (= (wnext n p wx rs x k ls (OEnd r)) (some (OEnd r))) rfl)
+              (apply (Exists.intro (FS n))
+                ((exact (wrun_call p wx rs n x (CFn i) es k ls m o vs (OEnd r) (OEnd r) hes hc2 hk2))))))))))))

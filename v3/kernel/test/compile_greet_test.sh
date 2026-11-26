@@ -7,8 +7,8 @@
 # (x86/greet_run.shard `greet_file_ends`).
 # Held here: the theorems of the chain accepted on Lean's axioms and on no parameter — the run
 # of intermediate code with what is outside a process, the pass's theorem and the link over
-# it, `write_all`'s code at a seam, the rule that ties a function that writes, the tie and the
-# file's theorem; for lists of answers — every byte taken at once, one byte a call, more than
+# it, `write_all`'s code at a seam, the rules that tie a function that writes (v3/compile/tie.shard,
+# put.shard), the tie and the file's theorem; for lists of answers — every byte taken at once, one byte a call, more than
 # was offered, a failure before any byte, inside a piece and between the pieces, the process
 # ended by the kernel — the theorem's right side, evaluated, and the model's run of the file
 # are one line; and the processor's runs: the text and status 0; with the output closed, and
@@ -22,12 +22,12 @@ C=v3/compile
 "${LOAD[@]}" $C/x86/greet_run.shard $C/x86/greet_main.shard > "$OUT/load.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the files did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/load.txt" || { bad "the summary is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/load.txt"; }
-for f in std.world.took std.world.put std.world.after_put std.world.write_all compile.put.put_out compile.put.put_ext compile.greet_src.greet compile.greet_ir.greet_res models.x86.world.world_res models.x86.linux.exit_of; do
+for f in std.world.took std.world.put std.world.after_put std.world.write_all compile.put.put_out compile.put.put_ext compile.put.put_wx compile.greet_src.greet compile.greet_ir.greet_res models.x86.world.world_res models.x86.linux.exit_of; do
   checks=$((checks+1)); grep -q "^DEFINE $f equations=." "$OUT/load.txt" || bad "$f is not a definition with its equations"
 done
 # the run with the outside is a definition by its recursion: accepted, with its equations
 checks=$((checks+1)); grep -q "^ACCEPT compile.ir.wrun " "$OUT/load.txt" && grep -q "^TEMPLATE compile.ir.wrun .*equations=." "$OUT/load.txt" || bad "compile.ir.wrun is not accepted with its equations"
-for t in compile.ir_world.wrun_of_irun compile.ir_world.wrun_more compile.ir_world.wends_call_ext compile.ir_world.wends_call_ext_end compile.x86.seam.arrives_comes compile.x86.seam.realizes_lift compile.x86.call.call_law compile.x86.tail.tail_law compile.x86.function.sim_all compile.x86.function.cfn_ok compile.x86.module.wmodule_realizes compile.x86.module.lift_ext compile.x86.module.unlift_fn compile.x86.module.module_realizes compile.x86.link.exit_ends compile.x86.link.start_ends_top compile.x86.link.start_exits_top compile.x86.link.start_ends models.x86.world.send_put models.x86.world.tied_exit models.x86.world.write_all_stopped models.x86.bytes.le64_bytes models.x86.bytes.held_bytes compile.put.put_ext_inv compile.put.put_all compile.put.put_fail compile.put.put_kill compile.put.tie_put compile.put.tie_ret compile.x86.put.put_arrives compile.x86.put.put_realizes compile.greet_ir.greet_tie compile.x86.greet_run.greet_put_realizes compile.x86.greet_run.greet_code_realizes compile.x86.greet_run.greet_answer compile.x86.greet_run.greet_file_ends compile.x86.greet_run.greet_file_writes; do
+for t in compile.ir_world.wrun_of_irun compile.ir_world.wrun_more compile.ir_world.wends_call_ext compile.ir_world.wends_call_ext_end compile.x86.seam.arrives_comes compile.x86.seam.realizes_lift compile.x86.call.call_law compile.x86.tail.tail_law compile.x86.function.sim_all compile.x86.function.cfn_ok compile.x86.module.wmodule_realizes compile.x86.module.lift_ext compile.x86.module.unlift_fn compile.x86.module.module_realizes compile.x86.link.exit_ends compile.x86.link.start_ends_top compile.x86.link.start_exits_top compile.x86.link.start_ends models.x86.world.send_put models.x86.world.tied_exit std.world.write_all_stopped models.x86.bytes.le64_bytes models.x86.bytes.held_bytes compile.put.put_ext_inv compile.put.put_all compile.put.put_fail compile.put.put_kill compile.put.put_tied compile.put.tie_put compile.tie.tie_fn compile.tie.tie_ret compile.tie.tie_let compile.tie.tie_ext compile.x86.put.put_arrives compile.x86.put.put_realizes compile.x86.put.put_wx_realizes compile.x86.module.one_out_realizes compile.greet_ir.greet_tie compile.x86.greet_run.greet_code_realizes compile.x86.greet_run.greet_answer compile.x86.greet_run.greet_file_ends compile.x86.greet_run.greet_file_writes; do
   checks=$((checks+1)); grep -q "^ACCEPT $t " "$OUT/load.txt" || bad "$t is not accepted"
   axs=$(grep "^ACCEPT $t " "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')

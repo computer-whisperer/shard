@@ -5,6 +5,7 @@
 ;;; the model's `send` says of it (`send_put`), so a run of a file that the model ends in a
 ;;; result is the result its program's World gives (`world_res`).
 (import "linux.shard")
+(use std.mem)
 (use std.world)
 (use std.world.How)
 (use std.world.Life)
@@ -72,22 +73,25 @@
 
 ;; ---- an outcome of code against a program's value -------------------------------------------------
 ;; A program's function has a value: a word and a World. The outcome of the code's run is that
-;; value's when the code returned that word and left outside what that World is of; or when the
-;; process ended in it, the World has stopped, and the process ended as that World says.
-(def tied ((out Outcome) (v (BitVec 64)) (w World)) Prop
+;; value's, with the memory m left, when the code returned that word, left that memory, and
+;; left outside what that World is of; or when the process ended in it, the World has stopped,
+;; and the process ended as that World says.
+(def tied ((out Outcome) (v (BitVec 64)) (m Mem) (w World)) Prop
   (match out
-    ((ORet v1 m1 o1) (and (= v1 v) (= (os_world o1) w)))
+    ((ORet v1 m1 o1) (and (= v1 v) (and (= m1 m) (= (os_world o1) w))))
     ((OEnd r)
      (and (= (runs (World.life w)) false) (forall ((x (BitVec 64))) (= (world_res x w) r))))))
 ;; so a file whose function's outcome is its program's value ends as the program's World says
-(theorem tied_exit ((out Outcome) (v (BitVec 64)) (w World))
-  (-> (tied out v w) (= (exit_of out) (world_res v w)))
+(theorem tied_exit ((out Outcome) (v (BitVec 64)) (m Mem) (w World))
+  (-> (tied out v m w) (= (exit_of out) (world_res v w)))
   (by
     (cases out
       ((ORet (v1 m1 o1)
-         (show (-> (and (= v1 v) (= (os_world o1) w)) (= (exit_of (ORet v1 m1 o1)) (world_res v w))))
+         (show
+           (-> (and (= v1 v) (and (= m1 m) (= (os_world o1) w)))
+             (= (exit_of (ORet v1 m1 o1)) (world_res v w))))
          (intro h)
-         (rw (<- (And.right h)))
+         (rw (<- (And.right (And.right h))))
          (rw (<- (And.left h)))
          rfl)
        (OEnd (r)
@@ -97,19 +101,3 @@
              (= r (world_res v w))))
          (intro h)
          (exact (Eq.symm ((And.right h) v))))))))
-;; a write in a process that runs, by what offering the bytes comes to; and in one that has
-;; stopped: nothing
-(theorem write_all_live ((bs (List Nat)) (ans (List How)) (out (List Nat)))
-  (= (write_all bs (MkWorld ans out Live)) (after_put out bs (put ans bs)))
-  (by rfl))
-(theorem write_all_stopped ((bs (List Nat)) (w World) (h (= (runs (World.life w)) false)))
-  (= (write_all bs w) w)
-  (by
-    (have g (-> (= (runs (World.life w)) false) (= (write_all bs w) w))
-      (unfold write_all)
-      (cases (World.life w) hl
-        ((Live () (intro h0) (have h1 (= true false) (exact h0))
-           (exact (absurd (Eq.symm h1) Bool.false_ne_true)))
-         (Failed () (intro h0) rfl)
-         (Killed () (intro h0) rfl))))
-    (exact (g h))))

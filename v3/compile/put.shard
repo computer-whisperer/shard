@@ -3,12 +3,11 @@
 ;;; address, in the memory the answer is asked on, go as the kernel's answers decide — all of
 ;;; them, and the call returns 1; or a write fails and the process exits with the failure's
 ;;; status; or the kernel ends it. That is the platform's function on the World of what is
-;;; outside (`put_all`, `put_fail`, `put_kill`). And the rule by which a program's function
-;;; that writes is tied to its code: a call of this function, then what follows it where the
-;;; process still runs, and nothing where it has stopped (`tie_put`). The code that realizes
-;;; the answer is x86/put.shard's.
-(import "ir_world.shard")
-(import "../models/x86/world.shard")
+;;; outside (`put_all`, `put_fail`, `put_kill`): the answer's outcome is tied to it
+;;; (`put_tied`). And the rule for a call of it in a program's function (`tie_put`), by the
+;;; rule for a call of anything that is tied (tie.shard). The code that realizes the answer is
+;;; x86/put.shard's.
+(import "tie.shard")
 (use std.mem)
 (use std.world)
 (use std.world.Life)
@@ -19,6 +18,7 @@
 (use compile.ir.ICallee)
 (use compile.ir.IExp)
 (use compile.ir.IStm)
+(use compile.tie)
 (use models.x86.linux)
 (use models.x86.linux.Os)
 (use models.x86.linux.Outcome)
@@ -138,6 +138,15 @@
     (rw (if_pos hb))
     rfl))
 
+;; the outside functions of a module that has one, the platform's `write_all` over the data
+;; ranges, as a run with the outside is given them: function 0, and there is no other
+(fn put_wx ((rs (List Seg)) (j Nat) (vs (List (BitVec 64))) (m Mem) (o Os)) (Option Outcome)
+  (if (= j 0) (put_ext rs vs m o) none))
+(theorem put_wx_is ((rs (List Seg)))
+  (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os))
+    (= (put_wx rs 0 vs m0 o0) (put_ext rs vs m0 o0)))
+  (by (intro vs m0 o0) rfl))
+
 ;; ---- the answer is the platform's function ----------------------------------------------------------
 ;; by what the model's loop comes to on the answers: the call's outcome, and the World after
 (theorem put_all
@@ -195,164 +204,78 @@
       rfl)
     (exact (And.intro h1 h2))))
 
-;; ---- THE RULE FOR A FUNCTION THAT WRITES ------------------------------------------------------------
-;; A call of the function with an address and a count that have the evidence, where the
-;; program's value is the word v and the World w. The call's code and what follows it have an
-;; outcome that is that value's, if: wherever the process still runs after the write, what
-;; follows has such an outcome on what the write left; and where the write stopped the process,
-;; the program's World is the World the write left — the rest of the program writes nothing in
-;; a process that has stopped.
+;; so the answer's outcome is tied to the platform's function: the word 1, the memory as it
+;; was, and the World `write_all` gives on the World of what is outside
+(theorem put_tied ((m Mem) (o Os) (bs (List Nat)))
+  (tied (put_out m o bs) (w64 1) m (write_all bs (os_world o)))
+  (by
+    (cases (send (Os.ans o) bs) hs
+      ((SAll (left) (rw (And.left (put_all m o bs left hs)))
+         (rw (And.right (put_all m o bs left hs)))
+         (show
+           (and (= (w64 1) (w64 1))
+             (and (= m m)
+               (= (os_world (MkOs left (List.append (Os.out o) bs)))
+                 (os_world (MkOs left (List.append (Os.out o) bs)))))))
+         (apply And.intro (rfl) ((apply And.intro (rfl) (rfl)))))
+       (SFail (q) (rw (And.left (put_fail m o bs q hs))) (rw (And.right (put_fail m o bs q hs)))
+         (show
+           (and (= (runs Failed) false)
+             (forall ((y (BitVec 64)))
+               (= (world_res y (MkWorld nil (List.append (Os.out o) q) Failed))
+                 (RExit status_io (List.append (Os.out o) q))))))
+         (apply And.intro (rfl) ((intro y) rfl)))
+       (SKill (q) (rw (And.left (put_kill m o bs q hs))) (rw (And.right (put_kill m o bs q hs)))
+         (show
+           (and (= (runs Killed) false)
+             (forall ((y (BitVec 64)))
+               (= (world_res y (MkWorld nil (List.append (Os.out o) q) Killed))
+                 (RKill (List.append (Os.out o) q))))))
+         (apply And.intro (rfl) ((intro y) rfl)))))))
+
+;; ---- THE RULE FOR A CALL THAT WRITES ----------------------------------------------------------------
+;; A call of the function with an address and a count that have the evidence, the bytes there
+;; being bs, where the program's value is the word v and the World w. The call's code and what
+;; follows it have an outcome that is that value's (`ties`, tie.shard), if: wherever the
+;; process still runs after the write, what follows has such an outcome on what the write
+;; left; and where the write stopped the process, the program's World is the World the write
+;; left — the rest of the program writes nothing in a process that has stopped.
 (theorem tie_put
-  ((p (List IFn))
-   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
-   (rs (List Seg))
-   (x Nat)
-   (j Nat)
-   (es (List IExp))
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (o Os)
-   (v (BitVec 64))
-   (w World)
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (x Nat implicit)
+   (j Nat implicit)
+   (es (List IExp) implicit)
+   (k IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (v (BitVec 64) implicit)
+   (m2 Mem implicit)
+   (w World implicit)
    (a (BitVec 64))
    (n (BitVec 64))
+   (bs (List Nat))
    (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx j vs m0 o0) (put_ext rs vs m0 o0))))
    (hes (= (ievals rs ls m es) (some (cons a (cons n nil)))))
    (hm (= (mapped rs (w64_val a) (w64_val n) 4) true))
    (hb (<= (+ (w64_val a) (w64_val n)) 140737488355328))
+   (hbs (= (mem_bytes m (w64_val a) (w64_val n)) bs))
    (hlive
      (forall ((o1 Os))
-       (-> (= (os_world o1) (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o)))
-         (exists ((out Outcome)) (and (wends p wx rs k (upd ls x (w64 1)) m o1 out) (tied out v w))))))
+       (-> (= (os_world o1) (write_all bs (os_world o)))
+         (ties p wx rs k (upd ls x (w64 1)) m o1 v m2 w))))
    (hdead
-     (->
-       (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o)))) false)
-       (= w (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))))
-  (exists ((out Outcome)) (and (wends p wx rs (SCall x (CExt j) es k) ls m o out) (tied out v w)))
+     (-> (= (runs (World.life (write_all bs (os_world o)))) false) (= w (write_all bs (os_world o))))))
+  (ties p wx rs (SCall x (CExt j) es k) ls m o v m2 w)
   (by
     (have hc
-      (= (wx j (cons a (cons n nil)) m o) (some (put_out m o (mem_bytes m (w64_val a) (w64_val n)))))
-      (rw (hx (cons a (cons n nil)) m o))
-      (exact (put_ext_is rs a n m o hm hb)))
-    (cases (send (Os.ans o) (mem_bytes m (w64_val a) (w64_val n))) hs
-      ((SAll (left)
-         (have g1
-           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
-             (ORet (w64 1) m
-               (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))))
-           (exact (And.left (put_all m o (mem_bytes m (w64_val a) (w64_val n)) left hs))))
-         (have g2
-           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
-             (os_world (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))))
-           (exact (And.right (put_all m o (mem_bytes m (w64_val a) (w64_val n)) left hs))))
-         (have hc1
-           (= (wx j (cons a (cons n nil)) m o)
-             (some
-               (ORet (w64 1) m
-                 (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n)))))))
-           (rw hc)
-           (rw g1)
-           rfl)
-         (cases
-           (hlive (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))
-             (Eq.symm g2))
-           ((intro (out gk)
-              (apply (Exists.intro out)
-                ((exact
-                   (And.intro
-                     (wends_call_ext (cons a (cons n nil)) (w64 1) m
-                       (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))
-                       hes
-                       hc1
-                       (And.left gk))
-                     (And.right gk)))))))))
-       (SFail (q)
-         (have g1
-           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
-             (OEnd (RExit status_io (List.append (Os.out o) q))))
-           (exact (And.left (put_fail m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
-         (have g2
-           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
-             (MkWorld nil (List.append (Os.out o) q) Failed))
-           (exact (And.right (put_fail m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
-         (have hc1
-           (= (wx j (cons a (cons n nil)) m o)
-             (some (OEnd (RExit status_io (List.append (Os.out o) q)))))
-           (rw hc)
-           (rw g1)
-           rfl)
-         (have hst
-           (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))
-             false)
-           (rw g2)
-           rfl)
-         (have hw (= w (MkWorld nil (List.append (Os.out o) q) Failed))
-           (rw (<- g2))
-           (exact (hdead hst)))
-         (apply (Exists.intro (OEnd (RExit status_io (List.append (Os.out o) q))))
-           ((apply And.intro
-              ((exact
-                 (wends_call_ext_end (cons a (cons n nil))
-                   (RExit status_io (List.append (Os.out o) q))
-                   hes
-                   hc1)))
-              ((rw hw)
-               (show
-                 (and (= (runs Failed) false)
-                   (forall ((y (BitVec 64)))
-                     (= (world_res y (MkWorld nil (List.append (Os.out o) q) Failed))
-                       (RExit status_io (List.append (Os.out o) q))))))
-               (apply And.intro (rfl) ((intro y) rfl)))))))
-       (SKill (q)
-         (have g1
-           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
-             (OEnd (RKill (List.append (Os.out o) q))))
-           (exact (And.left (put_kill m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
-         (have g2
-           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
-             (MkWorld nil (List.append (Os.out o) q) Killed))
-           (exact (And.right (put_kill m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
-         (have hc1
-           (= (wx j (cons a (cons n nil)) m o) (some (OEnd (RKill (List.append (Os.out o) q)))))
-           (rw hc)
-           (rw g1)
-           rfl)
-         (have hst
-           (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))
-             false)
-           (rw g2)
-           rfl)
-         (have hw (= w (MkWorld nil (List.append (Os.out o) q) Killed))
-           (rw (<- g2))
-           (exact (hdead hst)))
-         (apply (Exists.intro (OEnd (RKill (List.append (Os.out o) q))))
-           ((apply And.intro
-              ((exact
-                 (wends_call_ext_end (cons a (cons n nil)) (RKill (List.append (Os.out o) q)) hes
-                   hc1)))
-              ((rw hw)
-               (show
-                 (and (= (runs Killed) false)
-                   (forall ((y (BitVec 64)))
-                     (= (world_res y (MkWorld nil (List.append (Os.out o) q) Killed))
-                       (RKill (List.append (Os.out o) q))))))
-               (apply And.intro (rfl) ((intro y) rfl)))))))))))
-;; a return of a word, where the program's value is that word and the World of what is outside
-(theorem tie_ret
-  ((p (List IFn))
-   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
-   (rs (List Seg))
-   (e IExp)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (o Os)
-   (v (BitVec 64))
-   (w World)
-   (he (= (ieval rs ls m e) (some v)))
-   (hw (= (os_world o) w)))
-  (exists ((out Outcome)) (and (wends p wx rs (SRet e) ls m o out) (tied out v w)))
-  (by
-    (apply (Exists.intro (ORet v m o))
-      ((apply And.intro ((exact (wends_ret p wx rs e ls m o v he)))
-         ((show (and (= v v) (= (os_world o) w))) (exact (And.intro (Eq.refl v) hw))))))))
+      (exists ((q Outcome))
+        (and (= (wx j (cons a (cons n nil)) m o) (some q))
+          (tied q (w64 1) m (write_all bs (os_world o)))))
+      (apply (Exists.intro (put_out m o bs))
+        ((apply And.intro
+           ((rw (hx (cons a (cons n nil)) m o)) (rw (<- hbs)) (exact (put_ext_is rs a n m o hm hb)))
+           ((exact (put_tied m o bs)))))))
+    (exact (tie_ext (cons a (cons n nil)) (w64 1) m (write_all bs (os_world o)) hes hc hlive hdead))))
