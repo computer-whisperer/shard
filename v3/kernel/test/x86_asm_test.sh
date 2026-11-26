@@ -2,10 +2,10 @@
 # v3/kernel/test/x86_asm_test.sh — the x86-64 model's assembler (v3/models/x86/asm.shard) and the
 # demonstration (demo.shard). The load: the assembler's functions definitions; its fact and the
 # lemmas that open it accepted, a listing with a missing label and one with an immediate too
-# wide refused, three listings assembled, and the demonstration's theorems accepted, all on no
-# axiom but `propext`. The assembler's bytes for three listings are the bytes assembled by hand
-# (test/*.hex, which x86_test.sh runs). The demonstration's file is written, and run by the
-# model and, on an x86-64 Linux machine, by the processor.
+# wide refused and three listings assembled, all on no axiom but `propext`. The assembler's
+# bytes for three listings are the bytes assembled by hand (test/*.hex, which x86_test.sh
+# runs). The demonstration's file is written, and run by the model and, on an x86-64 Linux
+# machine, by the processor; the theorem of its exit status is x86_trial_test.sh's.
 # Exit code = the number of checks that failed.
 NAME=x86_asm_test; . "$(dirname "$0")/x86_common.sh"
 no_chip
@@ -20,7 +20,7 @@ for f in asm.encode asm.resolve asm.decodes asm.assemble; do
 done
 # the assembler's fact, the lemmas that open it, and three listings decided by evaluation: on no
 # axiom but `propext`
-for t in asm.checked_some asm.assemble_decodes asm.same_decode_true asm.decodes_cons test.listings.refuses_missing_label test.listings.refuses_wide_immediate test.listings.assembles_three demo.demo_run demo.demo_exits; do
+for t in asm.checked_some asm.assemble_decodes asm.same_decode_true asm.decodes_cons test.listings.refuses_missing_label test.listings.refuses_wide_immediate test.listings.assembles_three; do
   checks=$((checks+1)); grep -q "^ACCEPT models.x86.$t " "$OUT/load.txt" || bad "models.x86.$t is not accepted"
   axs=$(grep "^ACCEPT models.x86.$t " "$OUT/load.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   checks=$((checks+1)); case "$axs" in ""|propext) ;; *) bad "models.x86.$t rests on $axs" ;; esac
@@ -38,9 +38,10 @@ for n in stack high add; do
 done
 
 # ---- the demonstration (demo.shard) ---------------------------------------------------------------
-# Three shard functions over machine words, a listing compiled by hand, the listing's file: its
-# theorems are among those held above; the file is written, and the model's run of it and
-# the processor's exit with 20, the low byte of what the function computes.
+# Three shard functions over machine words, a listing compiled by hand, the listing's file: the
+# file is written, and the model's run of it and the processor's exit with 20, the low byte of
+# what the function computes. That it does so from every start is x86_trial_test.sh's
+# (demo_run.shard `demo_exits`).
 "${LOAD[@]}" --run models.x86.demo.main $M/demo.shard -- "$OUT/demo" > "$OUT/demo.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] && [ -s "$OUT/demo" ] || { bad "the demonstration's file was not written (exit $rc)"; head -3 "$OUT/demo.txt" | cut -c1-200; }
 m=$("${RUN[@]}" run 100 "$OUT/demo" 2>&1 | tail -1)

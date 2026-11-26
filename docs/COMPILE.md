@@ -145,9 +145,9 @@ that stand from its stack pointer up to the return address, and a push, a pop an
 each take one description to the next. A contract
 assumes its code in place; that is proven once, of the first state of the file of any listing
 the assembler answers for (`loaded.shard`), and with it the system's statement of the trial's
-file: started as the model's runner starts it, the file exits with the low byte of what the
-functions compute (`buffers_run.shard` `buffers_exits`) — every hypothesis of the caller's
-contract met in the state the file's first instructions reach. The proof of a run of
+file: started with its stack anywhere the model's start allows, the file exits with the low
+byte of what the functions compute (`buffers_run.shard` `buffers_exits`) — every hypothesis of
+the caller's contract met in the state the file's first instructions reach. The proof of a run of
 instructions between two branch points is derived from the listing by a tactic library
 (`derive.shard`), a certificate in §3's sense; everything else is written by hand. Not shown:
 a compiler that derives a contract; a frame that holds variables of its own; a caller of a

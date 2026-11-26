@@ -1,0 +1,1144 @@
+;;; v3/models/x86/demo_run.shard — the demonstration's file from end to end: the file `demo.shard`
+;;; writes, started with its stack anywhere `stack_ok` allows (linux.shard), exits with the low
+;;; byte of what `entry` computes. Proven as the trial's file is (buffers_run.shard), by
+;;; contracts and each instruction's rule, with no address of the stack a number: the code of
+;;; `triple` and the code of `pick`, entered with room for a frame, return with the function's
+;;; value in rax — for any arguments; `pick`'s both ways its comparison can go —; the first
+;;; instructions call the two in states that meet the contracts, by the facts of a process's
+;;; state (process.shard); three instructions more and the process has exited with the low byte
+;;; of rax, which the contracts say is `entry`. The model is not run on the file.
+(import "demo.shard")
+(import "process.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.demo)
+(use models.x86.elf)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Res)
+(use models.x86.loaded)
+(use models.x86.process)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rd)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use models.x86.x86.Step)
+(use models.x86.x86.Why)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the listing, assembled -------------------------------------------------------------------
+;; the listing's code and its instructions with their labels resolved, as the assembler has them
+(fn demo_code () (List Nat)
+  (match (assemble demo_listing)
+    (none nil)
+    ((some code) code)))
+(fn demo_instrs () (List Instr)
+  (match (resolve demo_listing demo_listing 0)
+    (none nil)
+    ((some is) is)))
+;; the listing's instructions by address, as its file holds them
+(fn demo_table () (List (Prod Nat (Prod Instr Nat)))
+  (list
+    ;; the process's first instructions
+    (Prod.mk 4194424 (Prod.mk (MovRI32 7 7) 5))
+    (Prod.mk 4194429 (Prod.mk (Call 27) 5))
+    (Prod.mk 4194434 (Prod.mk (MovRmR (RmReg 7) 0) 3))
+    (Prod.mk 4194437 (Prod.mk (MovRI32 6 20) 5))
+    (Prod.mk 4194442 (Prod.mk (Call 38) 5))
+    (Prod.mk 4194447 (Prod.mk (AluRmI BSub (RmReg 0) 1) 4))
+    (Prod.mk 4194451 (Prod.mk (MovRmR (RmReg 7) 0) 3))
+    (Prod.mk 4194454 (Prod.mk (MovRI32 0 60) 5))
+    (Prod.mk 4194459 (Prod.mk Syscall 2))
+    ;; triple
+    (Prod.mk 4194461 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194462 (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))
+    (Prod.mk 4194466 (Prod.mk (AluRRm BAdd 0 (RmMem 4 0)) 4))
+    (Prod.mk 4194470 (Prod.mk (MovRmR (RmReg 1) 0) 3))
+    (Prod.mk 4194473 (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))
+    (Prod.mk 4194477 (Prod.mk (AluRmR BAdd (RmReg 0) 1) 3))
+    (Prod.mk 4194480 (Prod.mk (AluRmI BAdd (RmReg 4) 8) 4))
+    (Prod.mk 4194484 (Prod.mk Ret 1))
+    ;; pick
+    (Prod.mk 4194485 (Prod.mk (Push 7) 1))
+    (Prod.mk 4194486 (Prod.mk (Push 6) 1))
+    (Prod.mk 4194487 (Prod.mk (MovRRm 0 (RmMem 4 8)) 5))
+    (Prod.mk 4194492 (Prod.mk (AluRRm BCmp 0 (RmMem 4 0)) 4))
+    (Prod.mk 4194496 (Prod.mk (Jcc 3 9) 6))
+    (Prod.mk 4194502 (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))
+    (Prod.mk 4194506 (Prod.mk (Jmp 5) 5))
+    (Prod.mk 4194511 (Prod.mk (MovRRm 0 (RmMem 4 8)) 5))
+    (Prod.mk 4194516 (Prod.mk (AluRmI BAdd (RmReg 4) 16) 4))
+    (Prod.mk 4194520 (Prod.mk Ret 1))))
+(theorem demo_assembled () (= (assemble demo_listing) (some demo_code)) (by rfl))
+(theorem demo_resolved () (= (resolve demo_listing demo_listing 0) (some demo_instrs)) (by rfl))
+(theorem demo_file_is () (= demo_file (elf_exec demo_code)) (by rfl))
+(theorem demo_laid () (= (layout demo_instrs 4194424) demo_table) (by rfl))
+(theorem demo_within () (= (all_within demo_table 4194424 4194521) true) (by rfl))
+(theorem demo_size () (<= (+ 4194424 (List.length demo_code)) 140737488355328) (by decide))
+(theorem demo_ends () (<= (+ 4194424 (List.length demo_code)) 4194521) (by decide))
+
+;; ---- two rules: an operation of a register with the word at a base register -------------------
+;; what follows the read
+(fn after_alu_r ((c Cpu) (op Bop) (r Nat) (pc (BitVec 64)) (x Rd)) Step
+  (match x
+    ((RdFault a) (SStuck (WLoad a)))
+    ((RdOk v) (alu_to_reg c op r (reg c r) v pc))))
+;; op r, [b] for an operation that writes its result
+(fn x_alu_rb ((c Cpu) (op Bop) (r Nat) (b Nat) (pc (BitVec 64))) Cpu
+  (at_pc
+    (set_reg (set_flags c (alu_flags op (reg c r) (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c b))))))
+      r
+      (alu_res op (reg c r) (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c b))))))
+    pc))
+(theorem do_alu_rb
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (op Bop)
+   (r Nat)
+   (b Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRRm op r (RmMem b 0)) len))
+   (hm (= (mapped (Cpu.segs c) (w64_val (reg c b)) 8 4) true))
+   (hw (= (alu_writes op) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_alu_rb c op r b (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_alu_rb c op r b (w64 next)) c2)
+      ((rw (step_at c pc (AluRRm op r (RmMem b 0)) len hrip hc))
+       (show
+         (= (after_alu_r c op r (next_rip c len) (load64 c (ea c b 0)))
+           (SNext (x_alu_rb c op r b (w64 next)))))
+       (rw (ea_zero c b))
+       (rw (load64_ok c (w64_val (reg c b)) hm))
+       (rw (<- hnr))
+       (cases op
+         ((BAdd () rfl)
+          (BOr () rfl)
+          (BAnd () rfl)
+          (BSub () rfl)
+          (BXor () rfl)
+          (BCmp () (exact (absurd hw Bool.false_ne_true))))))
+      ((exact hr)))))
+;; cmp r, [b]
+(fn x_cmp_rb ((c Cpu) (r Nat) (b Nat) (pc (BitVec 64))) Cpu
+  (at_pc (set_flags c (alu_flags BCmp (reg c r) (w64 (mem_le64 (Cpu.mem c) (w64_val (reg c b))))))
+    pc))
+(theorem do_cmp_rb
+  ((c Cpu implicit)
+   (c2 Cpu implicit)
+   (pc Nat)
+   (r Nat)
+   (b Nat)
+   (len Nat)
+   (next Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc (AluRRm BCmp r (RmMem b 0)) len))
+   (hm (= (mapped (Cpu.segs c) (w64_val (reg c b)) 8 4) true))
+   (hnext (= (+ pc len) next))
+   (hr (reaches (x_cmp_rb c r b (w64 next)) c2)))
+  (reaches c c2)
+  (by
+    (have hnr (= (next_rip c len) (w64 next))
+      (show (= (w64 (+ (w64_val (Cpu.rip c)) len)) (w64 next)))
+      (rw hrip)
+      (rw hnext)
+      rfl)
+    (apply (reaches_step c (x_cmp_rb c r b (w64 next)) c2)
+      ((rw (step_at c pc (AluRRm BCmp r (RmMem b 0)) len hrip hc))
+       (show
+         (= (after_alu_r c BCmp r (next_rip c len) (load64 c (ea c b 0)))
+           (SNext (x_cmp_rb c r b (w64 next)))))
+       (rw (ea_zero c b))
+       (rw (load64_ok c (w64_val (reg c b)) hm))
+       (rw (<- hnr))
+       rfl)
+      ((exact hr)))))
+;; after a comparison of a with b the condition `ae` (3) does not hold where a is below b as
+;; unsigned numbers, and holds where it is not
+(theorem cmp_ae_below ((a (BitVec 64)) (b (BitVec 64)) (h (< (w64_val a) (w64_val b))))
+  (= (cc_holds 3 (alu_flags BCmp a b)) (some false))
+  (by
+    (show (= (some (not (if (< (w64_val a) (w64_val b)) true false))) (some false)))
+    (rw (if_pos h))
+    rfl))
+(theorem cmp_ae_not_below ((a (BitVec 64)) (b (BitVec 64)) (h (Not (< (w64_val a) (w64_val b)))))
+  (= (cc_holds 3 (alu_flags BCmp a b)) (some true))
+  (by
+    (show (= (some (not (if (< (w64_val a) (w64_val b)) true false))) (some true)))
+    (rw (if_neg h))
+    rfl))
+
+;; ---- inside a function ----------------------------------------------------------------------------
+;; c2 has the registers a callee keeps (rbx, rbp, r12 to r15) as c has them
+(def saved ((c Cpu) (c2 Cpu)) Prop
+  (and (= (reg c2 3) (reg c 3))
+    (and (= (reg c2 5) (reg c 5))
+      (and (= (reg c2 12) (reg c 12))
+        (and (= (reg c2 13) (reg c 13)) (and (= (reg c2 14) (reg c 14)) (= (reg c2 15) (reg c 15))))))))
+(theorem saved_intro
+  ((c Cpu)
+   (c2 Cpu)
+   (h3 (= (reg c2 3) (reg c 3)))
+   (h5 (= (reg c2 5) (reg c 5)))
+   (h12 (= (reg c2 12) (reg c 12)))
+   (h13 (= (reg c2 13) (reg c 13)))
+   (h14 (= (reg c2 14) (reg c 14)))
+   (h15 (= (reg c2 15) (reg c 15))))
+  (saved c c2)
+  (exact (And.intro h3 (And.intro h5 (And.intro h12 (And.intro h13 (And.intro h14 h15)))))))
+;; A state d inside a function of the listing that was entered in the state c0 with room for k
+;; words above f: the frame as `framed` describes it (frame.shard) — the stack pointer j words
+;; above f, the words ws from there up to the return address, memory outside the k words the
+;; entry's — and the registers a callee keeps as the entry had them.
+(def inside ((c0 Cpu) (f Nat) (k Nat) (d Cpu) (j Nat) (ws (List (BitVec 64)))) Prop
+  (and (framed c0 demo_table 4194424 4194521 f k (Cpu.mem c0) d j ws) (saved c0 d)))
+;; a function's first state is inside it, the return address the one word
+(theorem inside_enter
+  ((c Cpu)
+   (f Nat)
+   (k Nat)
+   (pc (BitVec 64))
+   (hcode (code_in c demo_table))
+   (hroom (room c 4194424 4194521 f k)))
+  (inside c f k (at_pc c pc) k (cons (ret_addr c) nil))
+  (by
+    (have w0
+      (framed c demo_table 4194424 4194521 f k (Cpu.mem c) (at_pc c pc) k (cons (ret_addr c) nil))
+      (exact (framed_enter c demo_table 4194424 4194521 f k hroom demo_within hcode)))
+    (have s0 (saved c (at_pc c pc))
+      (exact
+        (saved_intro c (at_pc c pc) (Eq.refl (reg c 3)) (Eq.refl (reg c 5)) (Eq.refl (reg c 12))
+          (Eq.refl (reg c 13))
+          (Eq.refl (reg c 14))
+          (Eq.refl (reg c 15)))))
+    (exact (And.intro w0 s0))))
+
+;; ---- triple ---------------------------------------------------------------------------------------
+;; The states a function's instructions lead through are named, each from the state before it:
+;; tr_1 … tr_3 and tr_5 … tr_7 of `triple`, pk_1 … pk_8 of `pick`, dm_0 … dm_7 of the first
+;; instructions.
+(fn tr_1 ((d Cpu)) Cpu (at_pc (pushed d (reg d 7)) (w64 4194462)))
+(fn tr_2 ((d Cpu)) Cpu (x_load_b (tr_1 d) 0 4 (w64 4194466)))
+(fn tr_3 ((d Cpu)) Cpu (x_alu_rb (tr_2 d) BAdd 0 4 (w64 4194470)))
+;; its first four instructions: the argument pushed, read, added to itself, the sum kept in rcx
+(fn tr_a ((d Cpu)) Cpu (x_mov_rr (tr_3 d) 1 0 (w64 4194473)))
+(theorem tr_a_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (w (BitVec 64))
+   (h (inside c0 f 1 d 1 (cons w nil)))
+   (hrip (= (w64_val (Cpu.rip d)) 4194461)))
+  (and (reaches d (tr_a d))
+    (and (inside c0 f 1 (tr_a d) 0 (cons (reg d 7) (cons w nil)))
+      (= (reg (tr_a d) 1) (w64_add (reg d 7) (reg d 7)))))
+  (by
+    (have w0 (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) d 1 (cons w nil))
+      (exact (And.left h)))
+    (have w1
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_1 d) 0
+        (cons (reg d 7) (cons w nil)))
+      (exact (framed_push (reg d 7) w0 (Eq.refl true))))
+    (have w2
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_2 d) 0
+        (cons (reg d 7) (cons w nil)))
+      (exact w1))
+    (have w3
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_3 d) 0
+        (cons (reg d 7) (cons w nil)))
+      (exact w1))
+    (have w4
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_a d) 0
+        (cons (reg d 7) (cons w nil)))
+      (exact w1))
+    (have v2 (= (reg (tr_2 d) 0) (reg d 7)) (exact (framed_top w1)))
+    (have v3 (= (reg (tr_3 d) 0) (w64_add (reg d 7) (reg d 7)))
+      (show
+        (= (w64_add (reg (tr_2 d) 0) (w64 (mem_le64 (Cpu.mem (tr_2 d)) (w64_val (reg (tr_2 d) 4)))))
+          (w64_add (reg d 7) (reg d 7))))
+      (rw v2)
+      (rw (framed_top w2))
+      rfl)
+    (have v4 (= (reg (tr_a d) 1) (w64_add (reg d 7) (reg d 7))) (exact v3))
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (tr_1 d) demo_table) (exact (framed_code w1)))
+    (have hc2 (code_in (tr_2 d) demo_table) (exact (framed_code w2)))
+    (have hc3 (code_in (tr_3 d) demo_table) (exact (framed_code w3)))
+    (have hr (reaches d (tr_a d))
+      (apply (do_push 4194461 7 1 4194462) ((exact hrip))
+        ((exact (hc0 4194461 (Push 7) 1 (Eq.refl (some (Prod.mk (Push 7) 1))))))
+        ((exact (framed_push_ok w0 (Eq.refl true))))
+        (rfl)
+        ((apply (do_load_b 4194462 0 4 4 4194466) (rfl)
+           ((exact
+              (hc1 4194462 (MovRRm 0 (RmMem 4 0)) 4
+                (Eq.refl (some (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))))))
+           ((exact (framed_top_ok w1)))
+           (rfl)
+           ((apply (do_alu_rb 4194466 BAdd 0 4 4 4194470) (rfl)
+              ((exact
+                 (hc2 4194466 (AluRRm BAdd 0 (RmMem 4 0)) 4
+                   (Eq.refl (some (Prod.mk (AluRRm BAdd 0 (RmMem 4 0)) 4))))))
+              ((exact (framed_top_ok w2)))
+              (rfl)
+              (rfl)
+              ((apply (do_mov_rr 4194470 1 0 3 4194473) (rfl)
+                 ((exact
+                    (hc3 4194470 (MovRmR (RmReg 1) 0) 3
+                      (Eq.refl (some (Prod.mk (MovRmR (RmReg 1) 0) 3))))))
+                 (rfl)
+                 ((exact (reaches_refl (tr_a d))))))))))))
+    (have hs (saved c0 (tr_a d)) (exact (And.right h)))
+    (exact (And.intro hr (And.intro (And.intro w4 hs) v4)))))
+(fn tr_5 ((d Cpu)) Cpu (x_load_b d 0 4 (w64 4194477)))
+(fn tr_6 ((d Cpu)) Cpu (x_alu_rr (tr_5 d) BAdd 0 1 (w64 4194480)))
+(fn tr_7 ((d Cpu)) Cpu (x_alu_ri (tr_6 d) BAdd 4 8 (w64 4194484)))
+;; its last four: the argument read again, the sum added, the frame given back, the return
+(fn tr_b ((d Cpu)) Cpu (x_ret (tr_7 d)))
+(theorem tr_b_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (v (BitVec 64))
+   (h (inside c0 f 1 d 0 (cons v (cons (ret_addr c0) nil))))
+   (hrip (= (w64_val (Cpu.rip d)) 4194473)))
+  (and (reaches d (tr_b d))
+    (and (returned c0 (tr_b d))
+      (and (= (reg (tr_b d) 0) (w64_add v (reg d 1))) (= (Cpu.mem (tr_b d)) (Cpu.mem d)))))
+  (by
+    (have w0
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) d 0 (cons v (cons (ret_addr c0) nil)))
+      (exact (And.left h)))
+    (have hs (saved c0 d) (exact (And.right h)))
+    (have w1
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_5 d) 0
+        (cons v (cons (ret_addr c0) nil)))
+      (exact w0))
+    (have w2
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_6 d) 0
+        (cons v (cons (ret_addr c0) nil)))
+      (exact w0))
+    (have ea (= (+ f (* 8 (+ 0 1))) (+ (+ f (* 8 0)) 8)) (arith))
+    (have hh (holds (Cpu.mem (tr_6 d)) (+ f (* 8 (+ 0 1))) (cons (ret_addr c0) nil))
+      (rw ea)
+      (exact
+        (holds_tail (Cpu.mem (tr_6 d)) (+ f (* 8 0)) v (cons (ret_addr c0) nil) (framed_holds w2))))
+    (have g1 (= (Cpu.segs (tr_7 d)) (Cpu.segs (tr_6 d))) rfl)
+    (have g2 (= (Cpu.mem (tr_7 d)) (Cpu.mem (tr_6 d))) rfl)
+    (have g3 (= (reg (tr_7 d) 4) (w64_add (reg (tr_6 d) 4) (w64 (* 8 1)))) rfl)
+    (have g5 (= (+ (+ 0 1) (List.length (cons (ret_addr c0) nil))) (+ 1 1)) rfl)
+    (have g6 (< 0 (List.length (cons (ret_addr c0) nil))) (exact (Nat.zero_lt_succ 0)))
+    (have w3
+      (framed c0 demo_table 4194424 4194521 f 1 (Cpu.mem c0) (tr_7 d) 1 (cons (ret_addr c0) nil))
+      (exact (framed_raise 1 (cons (ret_addr c0) nil) (tr_7 d) w2 g1 g2 g3 hh g5 g6)))
+    (have v1 (= (reg (tr_5 d) 0) v) (exact (framed_top w0)))
+    (have v2 (= (reg (tr_6 d) 0) (w64_add v (reg d 1)))
+      (show (= (w64_add (reg (tr_5 d) 0) (reg (tr_5 d) 1)) (w64_add v (reg d 1))))
+      (rw v1)
+      rfl)
+    (have v4 (= (reg (tr_b d) 0) (w64_add v (reg d 1))) (exact v2))
+    (have hm (= (Cpu.mem (tr_b d)) (Cpu.mem d)) rfl)
+    (have e3 (= (reg (tr_7 d) 3) (reg c0 3)) (exact (And.left hs)))
+    (have e5 (= (reg (tr_7 d) 5) (reg c0 5)) (exact (And.left (And.right hs))))
+    (have e12 (= (reg (tr_7 d) 12) (reg c0 12)) (exact (And.left (And.right (And.right hs)))))
+    (have e13 (= (reg (tr_7 d) 13) (reg c0 13))
+      (exact (And.left (And.right (And.right (And.right hs))))))
+    (have e14 (= (reg (tr_7 d) 14) (reg c0 14))
+      (exact (And.left (And.right (And.right (And.right (And.right hs)))))))
+    (have e15 (= (reg (tr_7 d) 15) (reg c0 15))
+      (exact (And.right (And.right (And.right (And.right (And.right hs)))))))
+    (have hret (returned c0 (tr_b d)) (exact (framed_returned w3 e3 e5 e12 e13 e14 e15)))
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (tr_5 d) demo_table) (exact (framed_code w1)))
+    (have hc2 (code_in (tr_6 d) demo_table) (exact (framed_code w2)))
+    (have hc3 (code_in (tr_7 d) demo_table) (exact (framed_code w3)))
+    (have hr (reaches d (tr_b d))
+      (apply (do_load_b 4194473 0 4 4 4194477) ((exact hrip))
+        ((exact
+           (hc0 4194473 (MovRRm 0 (RmMem 4 0)) 4 (Eq.refl (some (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))))))
+        ((exact (framed_top_ok w0)))
+        (rfl)
+        ((apply (do_alu_rr 4194477 BAdd 0 1 3 4194480) (rfl)
+           ((exact
+              (hc1 4194477 (AluRmR BAdd (RmReg 0) 1) 3
+                (Eq.refl (some (Prod.mk (AluRmR BAdd (RmReg 0) 1) 3))))))
+           (rfl)
+           (rfl)
+           ((apply (do_alu_ri 4194480 BAdd 4 8 4 4194484) (rfl)
+              ((exact
+                 (hc2 4194480 (AluRmI BAdd (RmReg 4) 8) 4
+                   (Eq.refl (some (Prod.mk (AluRmI BAdd (RmReg 4) 8) 4))))))
+              (rfl)
+              (rfl)
+              ((apply (do_ret 4194484 1) (rfl)
+                 ((exact (hc3 4194484 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))))
+                 ((exact (framed_top_ok w3)))
+                 ((exact (reaches_refl (tr_b d))))))))))))
+    (exact (And.intro hr (And.intro hret (And.intro v4 hm))))))
+;; THE CONTRACT OF `triple`'s CODE. From a state with the table in place and room for a frame of
+;; one word above an address f: the processor comes from the code's first instruction to a
+;; state that has returned, with `triple` of the word in rdi in rax, and memory changed in that
+;; one word alone.
+(theorem triple_contract
+  ((c Cpu) (f Nat) (hcode (code_in c demo_table)) (hroom (room c 4194424 4194521 f 1)))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194461)) c2)
+      (and (= (reg c2 0) (triple (reg c 7)))
+        (and (same_outside (Cpu.mem c) (Cpu.mem c2) f (+ f (* 8 1))) (returned c c2)))))
+  (by
+    (have i0 (inside c f 1 (at_pc c (w64 4194461)) 1 (cons (ret_addr c) nil))
+      (exact (inside_enter c f 1 (w64 4194461) hcode hroom)))
+    (have gA
+      (and (reaches (at_pc c (w64 4194461)) (tr_a (at_pc c (w64 4194461))))
+        (and
+          (inside c f 1 (tr_a (at_pc c (w64 4194461))) 0
+            (cons (reg (at_pc c (w64 4194461)) 7) (cons (ret_addr c) nil)))
+          (= (reg (tr_a (at_pc c (w64 4194461))) 1)
+            (w64_add (reg (at_pc c (w64 4194461)) 7) (reg (at_pc c (w64 4194461)) 7)))))
+      (exact (tr_a_run c f (at_pc c (w64 4194461)) (ret_addr c) i0 (Eq.refl 4194461))))
+    (have gB
+      (and (reaches (tr_a (at_pc c (w64 4194461))) (tr_b (tr_a (at_pc c (w64 4194461)))))
+        (and (returned c (tr_b (tr_a (at_pc c (w64 4194461)))))
+          (and
+            (= (reg (tr_b (tr_a (at_pc c (w64 4194461)))) 0)
+              (w64_add (reg (at_pc c (w64 4194461)) 7) (reg (tr_a (at_pc c (w64 4194461))) 1)))
+            (= (Cpu.mem (tr_b (tr_a (at_pc c (w64 4194461)))))
+              (Cpu.mem (tr_a (at_pc c (w64 4194461))))))))
+      (exact
+        (tr_b_run c f (tr_a (at_pc c (w64 4194461))) (reg (at_pc c (w64 4194461)) 7)
+          (And.left (And.right gA))
+          (Eq.refl 4194473))))
+    (have hv (= (reg (tr_b (tr_a (at_pc c (w64 4194461)))) 0) (triple (reg c 7)))
+      (rw (And.left (And.right (And.right gB))))
+      (rw (And.right (And.right gA)))
+      rfl)
+    (have hso
+      (same_outside (Cpu.mem c) (Cpu.mem (tr_b (tr_a (at_pc c (w64 4194461))))) f (+ f (* 8 1)))
+      (rw (And.right (And.right (And.right gB))))
+      (exact (framed_mem (And.left (And.left (And.right gA))))))
+    (apply (Exists.intro (tr_b (tr_a (at_pc c (w64 4194461)))))
+      ((exact
+         (And.intro
+           (reaches_trans (at_pc c (w64 4194461)) (tr_a (at_pc c (w64 4194461)))
+             (tr_b (tr_a (at_pc c (w64 4194461))))
+             (And.left gA)
+             (And.left gB))
+           (And.intro hv (And.intro hso (And.left (And.right gB))))))))))
+
+;; ---- pick -----------------------------------------------------------------------------------------
+(fn pk_1 ((d Cpu)) Cpu (at_pc (pushed d (reg d 7)) (w64 4194486)))
+(fn pk_2 ((d Cpu)) Cpu (at_pc (pushed (pk_1 d) (reg d 6)) (w64 4194487)))
+(fn pk_3 ((d Cpu)) Cpu (x_load_bd (pk_2 d) 0 4 8 (w64 4194492)))
+;; its first four instructions: the two arguments pushed, the first read and compared with the
+;; second
+(fn pk_a ((d Cpu)) Cpu (x_cmp_rb (pk_3 d) 0 4 (w64 4194496)))
+(theorem pk_a_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (w (BitVec 64))
+   (h (inside c0 f 2 d 2 (cons w nil)))
+   (hrip (= (w64_val (Cpu.rip d)) 4194485)))
+  (and (reaches d (pk_a d))
+    (and (inside c0 f 2 (pk_a d) 0 (cons (reg d 6) (cons (reg d 7) (cons w nil))))
+      (= (Cpu.flags (pk_a d)) (alu_flags BCmp (reg d 7) (reg d 6)))))
+  (by
+    (have w0 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) d 2 (cons w nil))
+      (exact (And.left h)))
+    (have w1
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_1 d) 1
+        (cons (reg d 7) (cons w nil)))
+      (exact (framed_push (reg d 7) w0 (Eq.refl true))))
+    (have w2
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_2 d) 0
+        (cons (reg d 6) (cons (reg d 7) (cons w nil))))
+      (exact (framed_push (reg d 6) w1 (Eq.refl true))))
+    (have w3
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_3 d) 0
+        (cons (reg d 6) (cons (reg d 7) (cons w nil))))
+      (exact w2))
+    (have w4
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_a d) 0
+        (cons (reg d 6) (cons (reg d 7) (cons w nil))))
+      (exact w2))
+    (have hi1 (< 1 (List.length (cons (reg d 6) (cons (reg d 7) (cons w nil)))))
+      (show (< 1 3))
+      (decide))
+    (have ea1 (= (ea (pk_2 d) 4 8) (+ f (* 8 (+ 0 1)))) (exact (framed_ea 1 w2 hi1)))
+    (have hm3 (= (mapped (Cpu.segs (pk_2 d)) (ea (pk_2 d) 4 8) 8 4) true)
+      (rw ea1)
+      (exact (framed_word_ok 1 w2 hi1)))
+    (have v3 (= (reg (pk_3 d) 0) (reg d 7))
+      (show (= (w64 (mem_le64 (Cpu.mem (pk_2 d)) (ea (pk_2 d) 4 8))) (reg d 7)))
+      (rw ea1)
+      (exact (framed_word 1 w2 hi1)))
+    (have hf (= (Cpu.flags (pk_a d)) (alu_flags BCmp (reg d 7) (reg d 6)))
+      (show
+        (=
+          (alu_flags BCmp (reg (pk_3 d) 0)
+            (w64 (mem_le64 (Cpu.mem (pk_3 d)) (w64_val (reg (pk_3 d) 4)))))
+          (alu_flags BCmp (reg d 7) (reg d 6))))
+      (rw v3)
+      (rw (framed_top w3))
+      rfl)
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (pk_1 d) demo_table) (exact (framed_code w1)))
+    (have hc2 (code_in (pk_2 d) demo_table) (exact (framed_code w2)))
+    (have hc3 (code_in (pk_3 d) demo_table) (exact (framed_code w3)))
+    (have hr (reaches d (pk_a d))
+      (apply (do_push 4194485 7 1 4194486) ((exact hrip))
+        ((exact (hc0 4194485 (Push 7) 1 (Eq.refl (some (Prod.mk (Push 7) 1))))))
+        ((exact (framed_push_ok w0 (Eq.refl true))))
+        (rfl)
+        ((apply (do_push 4194486 6 1 4194487) (rfl)
+           ((exact (hc1 4194486 (Push 6) 1 (Eq.refl (some (Prod.mk (Push 6) 1))))))
+           ((exact (framed_push_ok w1 (Eq.refl true))))
+           (rfl)
+           ((apply (do_load_bd 4194487 0 4 8 5 4194492) (rfl)
+              ((exact
+                 (hc2 4194487 (MovRRm 0 (RmMem 4 8)) 5
+                   (Eq.refl (some (Prod.mk (MovRRm 0 (RmMem 4 8)) 5))))))
+              ((exact hm3))
+              (rfl)
+              ((apply (do_cmp_rb 4194492 0 4 4 4194496) (rfl)
+                 ((exact
+                    (hc3 4194492 (AluRRm BCmp 0 (RmMem 4 0)) 4
+                      (Eq.refl (some (Prod.mk (AluRRm BCmp 0 (RmMem 4 0)) 4))))))
+                 ((exact (framed_top_ok w3)))
+                 (rfl)
+                 ((exact (reaches_refl (pk_a d))))))))))))
+    (have hs (saved c0 (pk_a d)) (exact (And.right h)))
+    (exact (And.intro hr (And.intro (And.intro w4 hs) hf)))))
+(fn pk_5 ((d Cpu)) Cpu (at_pc d (w64 4194502)))
+(fn pk_6 ((d Cpu)) Cpu (x_load_b (pk_5 d) 0 4 (w64 4194506)))
+;; where the first is below the second: the jump not taken, the second read, the jump to the end
+(fn pk_t ((d Cpu)) Cpu (at_pc (pk_6 d) (w64 4194516)))
+(theorem pk_t_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (b (BitVec 64))
+   (ws (List (BitVec 64)))
+   (h (inside c0 f 2 d 0 (cons b ws)))
+   (hrip (= (w64_val (Cpu.rip d)) 4194496))
+   (hcc (= (cc_holds 3 (Cpu.flags d)) (some false))))
+  (and (reaches d (pk_t d)) (and (inside c0 f 2 (pk_t d) 0 (cons b ws)) (= (reg (pk_t d) 0) b)))
+  (by
+    (have w0 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) d 0 (cons b ws))
+      (exact (And.left h)))
+    (have w1 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_5 d) 0 (cons b ws))
+      (exact w0))
+    (have w3 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_t d) 0 (cons b ws))
+      (exact w0))
+    (have v (= (reg (pk_t d) 0) b) (exact (framed_top w1)))
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (pk_5 d) demo_table) (exact hc0))
+    (have hc2 (code_in (pk_6 d) demo_table) (exact hc0))
+    (have hr (reaches d (pk_t d))
+      (apply (do_jcc_not 4194496 3 9 6 4194502) ((exact hrip))
+        ((exact (hc0 4194496 (Jcc 3 9) 6 (Eq.refl (some (Prod.mk (Jcc 3 9) 6))))))
+        ((exact hcc))
+        (rfl)
+        ((apply (do_load_b 4194502 0 4 4 4194506) (rfl)
+           ((exact
+              (hc1 4194502 (MovRRm 0 (RmMem 4 0)) 4
+                (Eq.refl (some (Prod.mk (MovRRm 0 (RmMem 4 0)) 4))))))
+           ((exact (framed_top_ok w1)))
+           (rfl)
+           ((apply (do_jmp 4194506 5 5 4194516) (rfl)
+              ((exact (hc2 4194506 (Jmp 5) 5 (Eq.refl (some (Prod.mk (Jmp 5) 5))))))
+              (rfl)
+              ((exact (reaches_refl (pk_t d))))))))))
+    (have hs (saved c0 (pk_t d)) (exact (And.right h)))
+    (exact (And.intro hr (And.intro (And.intro w3 hs) v)))))
+(fn pk_7 ((d Cpu)) Cpu (at_pc d (w64 4194511)))
+;; where it is not: the jump taken, the first read
+(fn pk_e ((d Cpu)) Cpu (x_load_bd (pk_7 d) 0 4 8 (w64 4194516)))
+(theorem pk_e_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (b (BitVec 64))
+   (a (BitVec 64))
+   (ws (List (BitVec 64)))
+   (h (inside c0 f 2 d 0 (cons b (cons a ws))))
+   (hrip (= (w64_val (Cpu.rip d)) 4194496))
+   (hcc (= (cc_holds 3 (Cpu.flags d)) (some true))))
+  (and (reaches d (pk_e d))
+    (and (inside c0 f 2 (pk_e d) 0 (cons b (cons a ws))) (= (reg (pk_e d) 0) a)))
+  (by
+    (have w0 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) d 0 (cons b (cons a ws)))
+      (exact (And.left h)))
+    (have w1 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_7 d) 0 (cons b (cons a ws)))
+      (exact w0))
+    (have w3 (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_e d) 0 (cons b (cons a ws)))
+      (exact w0))
+    (have hi1 (< 1 (List.length (cons b (cons a ws))))
+      (show (< 1 (+ (+ (List.length ws) 1) 1)))
+      (arith))
+    (have ea1 (= (ea (pk_7 d) 4 8) (+ f (* 8 (+ 0 1)))) (exact (framed_ea 1 w1 hi1)))
+    (have hm (= (mapped (Cpu.segs (pk_7 d)) (ea (pk_7 d) 4 8) 8 4) true)
+      (rw ea1)
+      (exact (framed_word_ok 1 w1 hi1)))
+    (have v (= (reg (pk_e d) 0) a)
+      (show (= (w64 (mem_le64 (Cpu.mem (pk_7 d)) (ea (pk_7 d) 4 8))) a))
+      (rw ea1)
+      (exact (framed_word 1 w1 hi1)))
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (pk_7 d) demo_table) (exact hc0))
+    (have hr (reaches d (pk_e d))
+      (apply (do_jcc_taken 4194496 3 6 9 4194511) ((exact hrip))
+        ((exact (hc0 4194496 (Jcc 3 9) 6 (Eq.refl (some (Prod.mk (Jcc 3 9) 6))))))
+        ((exact hcc))
+        (rfl)
+        ((apply (do_load_bd 4194511 0 4 8 5 4194516) (rfl)
+           ((exact
+              (hc1 4194511 (MovRRm 0 (RmMem 4 8)) 5
+                (Eq.refl (some (Prod.mk (MovRRm 0 (RmMem 4 8)) 5))))))
+           ((exact hm))
+           (rfl)
+           ((exact (reaches_refl (pk_e d))))))))
+    (have hs (saved c0 (pk_e d)) (exact (And.right h)))
+    (exact (And.intro hr (And.intro (And.intro w3 hs) v)))))
+(fn pk_8 ((d Cpu)) Cpu (x_alu_ri d BAdd 4 16 (w64 4194520)))
+;; its last two: the frame given back, the return
+(fn pk_b ((d Cpu)) Cpu (x_ret (pk_8 d)))
+(theorem pk_b_run
+  ((c0 Cpu)
+   (f Nat)
+   (d Cpu)
+   (b (BitVec 64))
+   (a (BitVec 64))
+   (h (inside c0 f 2 d 0 (cons b (cons a (cons (ret_addr c0) nil)))))
+   (hrip (= (w64_val (Cpu.rip d)) 4194516)))
+  (and (reaches d (pk_b d))
+    (and (returned c0 (pk_b d))
+      (and (= (reg (pk_b d) 0) (reg d 0)) (= (Cpu.mem (pk_b d)) (Cpu.mem d)))))
+  (by
+    (have w0
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) d 0
+        (cons b (cons a (cons (ret_addr c0) nil))))
+      (exact (And.left h)))
+    (have hs (saved c0 d) (exact (And.right h)))
+    (have ea (= (+ f (* 8 (+ 0 2))) (+ (+ (+ f (* 8 0)) 8) 8)) (arith))
+    (have hh (holds (Cpu.mem d) (+ f (* 8 (+ 0 2))) (cons (ret_addr c0) nil))
+      (rw ea)
+      (exact
+        (holds_tail (Cpu.mem d) (+ (+ f (* 8 0)) 8) a (cons (ret_addr c0) nil)
+          (holds_tail (Cpu.mem d) (+ f (* 8 0)) b (cons a (cons (ret_addr c0) nil))
+            (framed_holds w0)))))
+    (have g1 (= (Cpu.segs (pk_8 d)) (Cpu.segs d)) rfl)
+    (have g2 (= (Cpu.mem (pk_8 d)) (Cpu.mem d)) rfl)
+    (have g3 (= (reg (pk_8 d) 4) (w64_add (reg d 4) (w64 (* 8 2)))) rfl)
+    (have g5 (= (+ (+ 0 2) (List.length (cons (ret_addr c0) nil))) (+ 2 1)) rfl)
+    (have g6 (< 0 (List.length (cons (ret_addr c0) nil))) (exact (Nat.zero_lt_succ 0)))
+    (have w1
+      (framed c0 demo_table 4194424 4194521 f 2 (Cpu.mem c0) (pk_8 d) 2 (cons (ret_addr c0) nil))
+      (exact (framed_raise 2 (cons (ret_addr c0) nil) (pk_8 d) w0 g1 g2 g3 hh g5 g6)))
+    (have v (= (reg (pk_b d) 0) (reg d 0)) rfl)
+    (have hm (= (Cpu.mem (pk_b d)) (Cpu.mem d)) rfl)
+    (have e3 (= (reg (pk_8 d) 3) (reg c0 3)) (exact (And.left hs)))
+    (have e5 (= (reg (pk_8 d) 5) (reg c0 5)) (exact (And.left (And.right hs))))
+    (have e12 (= (reg (pk_8 d) 12) (reg c0 12)) (exact (And.left (And.right (And.right hs)))))
+    (have e13 (= (reg (pk_8 d) 13) (reg c0 13))
+      (exact (And.left (And.right (And.right (And.right hs))))))
+    (have e14 (= (reg (pk_8 d) 14) (reg c0 14))
+      (exact (And.left (And.right (And.right (And.right (And.right hs)))))))
+    (have e15 (= (reg (pk_8 d) 15) (reg c0 15))
+      (exact (And.right (And.right (And.right (And.right (And.right hs)))))))
+    (have hret (returned c0 (pk_b d)) (exact (framed_returned w1 e3 e5 e12 e13 e14 e15)))
+    (have hc0 (code_in d demo_table) (exact (framed_code w0)))
+    (have hc1 (code_in (pk_8 d) demo_table) (exact (framed_code w1)))
+    (have hr (reaches d (pk_b d))
+      (apply (do_alu_ri 4194516 BAdd 4 16 4 4194520) ((exact hrip))
+        ((exact
+           (hc0 4194516 (AluRmI BAdd (RmReg 4) 16) 4
+             (Eq.refl (some (Prod.mk (AluRmI BAdd (RmReg 4) 16) 4))))))
+        (rfl)
+        (rfl)
+        ((apply (do_ret 4194520 1) (rfl)
+           ((exact (hc1 4194520 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))))
+           ((exact (framed_top_ok w1)))
+           ((exact (reaches_refl (pk_b d))))))))
+    (exact (And.intro hr (And.intro hret (And.intro v hm))))))
+;; THE CONTRACT OF `pick`'s CODE. From a state with the table in place and room for a frame of
+;; two words above an address f: the processor comes from the code's first instruction to a
+;; state that has returned, with `pick` of the words in rdi and rsi in rax, and memory changed in
+;; those two words alone. By the two ways the comparison can go.
+(theorem pick_contract
+  ((c Cpu) (f Nat) (hcode (code_in c demo_table)) (hroom (room c 4194424 4194521 f 2)))
+  (exists ((c2 Cpu))
+    (and (reaches (at_pc c (w64 4194485)) c2)
+      (and (= (reg c2 0) (pick (reg c 7) (reg c 6)))
+        (and (same_outside (Cpu.mem c) (Cpu.mem c2) f (+ f (* 8 2))) (returned c c2)))))
+  (by
+    (have i0 (inside c f 2 (at_pc c (w64 4194485)) 2 (cons (ret_addr c) nil))
+      (exact (inside_enter c f 2 (w64 4194485) hcode hroom)))
+    (have gA
+      (and (reaches (at_pc c (w64 4194485)) (pk_a (at_pc c (w64 4194485))))
+        (and
+          (inside c f 2 (pk_a (at_pc c (w64 4194485))) 0
+            (cons (reg (at_pc c (w64 4194485)) 6)
+              (cons (reg (at_pc c (w64 4194485)) 7) (cons (ret_addr c) nil))))
+          (= (Cpu.flags (pk_a (at_pc c (w64 4194485))))
+            (alu_flags BCmp (reg (at_pc c (w64 4194485)) 7) (reg (at_pc c (w64 4194485)) 6)))))
+      (exact (pk_a_run c f (at_pc c (w64 4194485)) (ret_addr c) i0 (Eq.refl 4194485))))
+    (cases (Nat.decLt (w64_val (reg c 7)) (w64_val (reg c 6)))
+      ((isTrue (hl)
+         (have hcc (= (cc_holds 3 (Cpu.flags (pk_a (at_pc c (w64 4194485))))) (some false))
+           (rw (And.right (And.right gA)))
+           (exact (cmp_ae_below (reg (at_pc c (w64 4194485)) 7) (reg (at_pc c (w64 4194485)) 6) hl)))
+         (have gT
+           (and (reaches (pk_a (at_pc c (w64 4194485))) (pk_t (pk_a (at_pc c (w64 4194485)))))
+             (and
+               (inside c f 2 (pk_t (pk_a (at_pc c (w64 4194485)))) 0
+                 (cons (reg (at_pc c (w64 4194485)) 6)
+                   (cons (reg (at_pc c (w64 4194485)) 7) (cons (ret_addr c) nil))))
+               (= (reg (pk_t (pk_a (at_pc c (w64 4194485)))) 0) (reg (at_pc c (w64 4194485)) 6))))
+           (exact
+             (pk_t_run c f (pk_a (at_pc c (w64 4194485))) (reg (at_pc c (w64 4194485)) 6)
+               (cons (reg (at_pc c (w64 4194485)) 7) (cons (ret_addr c) nil))
+               (And.left (And.right gA))
+               (Eq.refl 4194496)
+               hcc)))
+         (have gB
+           (and
+             (reaches (pk_t (pk_a (at_pc c (w64 4194485))))
+               (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))))
+             (and (returned c (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))))
+               (and
+                 (= (reg (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))) 0)
+                   (reg (pk_t (pk_a (at_pc c (w64 4194485)))) 0))
+                 (= (Cpu.mem (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))))
+                   (Cpu.mem (pk_t (pk_a (at_pc c (w64 4194485)))))))))
+           (exact
+             (pk_b_run c f (pk_t (pk_a (at_pc c (w64 4194485)))) (reg (at_pc c (w64 4194485)) 6)
+               (reg (at_pc c (w64 4194485)) 7)
+               (And.left (And.right gT))
+               (Eq.refl 4194516))))
+         (have lt (= (w64_ltu (reg c 7) (reg c 6)) true)
+           (show (= (if (< (w64_val (reg c 7)) (w64_val (reg c 6))) true false) true))
+           (rw (if_pos hl))
+           rfl)
+         (have hv
+           (= (reg (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))) 0) (pick (reg c 7) (reg c 6)))
+           (rw (And.left (And.right (And.right gB))))
+           (rw (And.right (And.right gT)))
+           (unfold pick)
+           (rw lt)
+           rfl)
+         (have hso
+           (same_outside (Cpu.mem c) (Cpu.mem (pk_b (pk_t (pk_a (at_pc c (w64 4194485)))))) f
+             (+ f (* 8 2)))
+           (rw (And.right (And.right (And.right gB))))
+           (exact (framed_mem (And.left (And.left (And.right gT))))))
+         (apply (Exists.intro (pk_b (pk_t (pk_a (at_pc c (w64 4194485))))))
+           ((exact
+              (And.intro
+                (reaches_trans (at_pc c (w64 4194485)) (pk_a (at_pc c (w64 4194485)))
+                  (pk_b (pk_t (pk_a (at_pc c (w64 4194485)))))
+                  (And.left gA)
+                  (reaches_trans (pk_a (at_pc c (w64 4194485)))
+                    (pk_t (pk_a (at_pc c (w64 4194485))))
+                    (pk_b (pk_t (pk_a (at_pc c (w64 4194485)))))
+                    (And.left gT)
+                    (And.left gB)))
+                (And.intro hv (And.intro hso (And.left (And.right gB)))))))))
+       (isFalse (hnl)
+         (have hcc (= (cc_holds 3 (Cpu.flags (pk_a (at_pc c (w64 4194485))))) (some true))
+           (rw (And.right (And.right gA)))
+           (exact
+             (cmp_ae_not_below (reg (at_pc c (w64 4194485)) 7) (reg (at_pc c (w64 4194485)) 6) hnl)))
+         (have gT
+           (and (reaches (pk_a (at_pc c (w64 4194485))) (pk_e (pk_a (at_pc c (w64 4194485)))))
+             (and
+               (inside c f 2 (pk_e (pk_a (at_pc c (w64 4194485)))) 0
+                 (cons (reg (at_pc c (w64 4194485)) 6)
+                   (cons (reg (at_pc c (w64 4194485)) 7) (cons (ret_addr c) nil))))
+               (= (reg (pk_e (pk_a (at_pc c (w64 4194485)))) 0) (reg (at_pc c (w64 4194485)) 7))))
+           (exact
+             (pk_e_run c f (pk_a (at_pc c (w64 4194485))) (reg (at_pc c (w64 4194485)) 6)
+               (reg (at_pc c (w64 4194485)) 7)
+               (cons (ret_addr c) nil)
+               (And.left (And.right gA))
+               (Eq.refl 4194496)
+               hcc)))
+         (have gB
+           (and
+             (reaches (pk_e (pk_a (at_pc c (w64 4194485))))
+               (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))))
+             (and (returned c (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))))
+               (and
+                 (= (reg (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))) 0)
+                   (reg (pk_e (pk_a (at_pc c (w64 4194485)))) 0))
+                 (= (Cpu.mem (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))))
+                   (Cpu.mem (pk_e (pk_a (at_pc c (w64 4194485)))))))))
+           (exact
+             (pk_b_run c f (pk_e (pk_a (at_pc c (w64 4194485)))) (reg (at_pc c (w64 4194485)) 6)
+               (reg (at_pc c (w64 4194485)) 7)
+               (And.left (And.right gT))
+               (Eq.refl 4194516))))
+         (have lt (= (w64_ltu (reg c 7) (reg c 6)) false)
+           (show (= (if (< (w64_val (reg c 7)) (w64_val (reg c 6))) true false) false))
+           (rw (if_neg hnl))
+           rfl)
+         (have hv
+           (= (reg (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))) 0) (pick (reg c 7) (reg c 6)))
+           (rw (And.left (And.right (And.right gB))))
+           (rw (And.right (And.right gT)))
+           (unfold pick)
+           (rw lt)
+           rfl)
+         (have hso
+           (same_outside (Cpu.mem c) (Cpu.mem (pk_b (pk_e (pk_a (at_pc c (w64 4194485)))))) f
+             (+ f (* 8 2)))
+           (rw (And.right (And.right (And.right gB))))
+           (exact (framed_mem (And.left (And.left (And.right gT))))))
+         (apply (Exists.intro (pk_b (pk_e (pk_a (at_pc c (w64 4194485))))))
+           ((exact
+              (And.intro
+                (reaches_trans (at_pc c (w64 4194485)) (pk_a (at_pc c (w64 4194485)))
+                  (pk_b (pk_e (pk_a (at_pc c (w64 4194485)))))
+                  (And.left gA)
+                  (reaches_trans (pk_a (at_pc c (w64 4194485)))
+                    (pk_e (pk_a (at_pc c (w64 4194485))))
+                    (pk_b (pk_e (pk_a (at_pc c (w64 4194485)))))
+                    (And.left gT)
+                    (And.left gB)))
+                (And.intro hv (And.intro hso (And.left (And.right gB)))))))))))))
+
+;; ---- the first instructions -------------------------------------------------------------------------
+(fn dm_0 ((d Cpu)) Cpu (x_mov_ri d 7 7 (w64 4194429)))
+;; `mov edi, 7` and the call of `triple`: the state `triple` is entered in
+(fn dm_1 ((d Cpu)) Cpu (pushed (dm_0 d) (w64 4194434)))
+(theorem dm_1_rdi ((d Cpu)) (= (reg (dm_1 d) 7) (w64 7)) (by rfl))
+(theorem dm_1_ret ((d Cpu)) (= (ret_addr (dm_1 d)) (w64 4194434))
+  (exact (ret_addr_pushed (dm_0 d) (w64 4194434))))
+(theorem dm_1_run
+  ((lo Nat)
+   (hi Nat)
+   (d Cpu)
+   (s Nat)
+   (t Nat)
+   (b1 (<= 4194536 lo))
+   (ht (= t (+ s 8)))
+   (hat (proc_at demo_table demo_code lo hi d t))
+   (hrip (= (w64_val (Cpu.rip d)) 4194424))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (reaches d (at_pc (dm_1 d) (w64 4194461))) (proc_at demo_table demo_code lo hi (dm_1 d) s))
+  (by
+    (have hsz (< (+ 4194424 (List.length demo_code)) lo) (arith demo_ends))
+    (have hchi (<= (+ 4194521 15) lo) (arith))
+    (have hc (code_in d demo_table) (exact (And.left hat)))
+    (have e1 (= (Cpu.segs (dm_0 d)) (Cpu.segs d)) rfl)
+    (have e2 (= (Cpu.mem (dm_0 d)) (Cpu.mem d)) rfl)
+    (have e3 (= (reg (dm_0 d) 4) (reg d 4)) rfl)
+    (have hat1 (proc_at demo_table demo_code lo hi (dm_0 d) t)
+      (exact
+        (proc_same demo_table demo_code lo hi d (dm_0 d) t (And.intro e1 (And.intro e2 e3)) hat)))
+    (have gp
+      (and (= (mapped (Cpu.segs (dm_0 d)) (push_at (dm_0 d)) 8 2) true)
+        (and (proc_at demo_table demo_code lo hi (dm_1 d) s)
+          (and (= (Cpu.mem (dm_1 d)) (mem_put64 (Cpu.mem (dm_0 d)) s (w64_val (w64 4194434))))
+            (same_outside (Cpu.mem (dm_0 d)) (Cpu.mem (dm_1 d)) s (+ s 8)))))
+      (exact
+        (proc_pushed demo_table demo_code 4194521 lo hi (dm_0 d) (w64 4194434) s t hsz demo_within
+          hchi
+          ht
+          hat1
+          hlo
+          hhi)))
+    (have hr (reaches d (at_pc (dm_1 d) (w64 4194461)))
+      (apply (do_mov_ri32 4194424 7 7 5 4194429) ((exact hrip))
+        ((exact (hc 4194424 (MovRI32 7 7) 5 (Eq.refl (some (Prod.mk (MovRI32 7 7) 5))))))
+        (rfl)
+        ((apply (do_call 4194429 5 27 4194434 4194461) (rfl)
+           ((exact ((And.left hat1) 4194429 (Call 27) 5 (Eq.refl (some (Prod.mk (Call 27) 5))))))
+           ((exact (And.left gp)))
+           (rfl)
+           (rfl)
+           ((exact (reaches_refl (at_pc (dm_1 d) (w64 4194461)))))))))
+    (exact (And.intro hr (And.left (And.right gp))))))
+(fn dm_3 ((d Cpu)) Cpu (x_mov_rr d 7 0 (w64 4194437)))
+(fn dm_4 ((d Cpu)) Cpu (x_mov_ri (dm_3 d) 6 20 (w64 4194442)))
+;; `mov rdi, rax`, `mov esi, 20` and the call of `pick`: the state `pick` is entered in
+(fn dm_2 ((d Cpu)) Cpu (pushed (dm_4 d) (w64 4194447)))
+(theorem dm_2_rdi ((d Cpu)) (= (reg (dm_2 d) 7) (reg d 0)) (by rfl))
+(theorem dm_2_rsi ((d Cpu)) (= (reg (dm_2 d) 6) (w64 20)) (by rfl))
+(theorem dm_2_ret ((d Cpu)) (= (ret_addr (dm_2 d)) (w64 4194447))
+  (exact (ret_addr_pushed (dm_4 d) (w64 4194447))))
+(theorem dm_2_run
+  ((lo Nat)
+   (hi Nat)
+   (d Cpu)
+   (s Nat)
+   (t Nat)
+   (b1 (<= 4194536 lo))
+   (ht (= t (+ s 8)))
+   (hat (proc_at demo_table demo_code lo hi d t))
+   (hrip (= (w64_val (Cpu.rip d)) 4194434))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (reaches d (at_pc (dm_2 d) (w64 4194485))) (proc_at demo_table demo_code lo hi (dm_2 d) s))
+  (by
+    (have hsz (< (+ 4194424 (List.length demo_code)) lo) (arith demo_ends))
+    (have hchi (<= (+ 4194521 15) lo) (arith))
+    (have hc (code_in d demo_table) (exact (And.left hat)))
+    (have hcz (code_in (dm_3 d) demo_table) (exact hc))
+    (have e1 (= (Cpu.segs (dm_4 d)) (Cpu.segs d)) rfl)
+    (have e2 (= (Cpu.mem (dm_4 d)) (Cpu.mem d)) rfl)
+    (have e3 (= (reg (dm_4 d) 4) (reg d 4)) rfl)
+    (have hat1 (proc_at demo_table demo_code lo hi (dm_4 d) t)
+      (exact
+        (proc_same demo_table demo_code lo hi d (dm_4 d) t (And.intro e1 (And.intro e2 e3)) hat)))
+    (have gp
+      (and (= (mapped (Cpu.segs (dm_4 d)) (push_at (dm_4 d)) 8 2) true)
+        (and (proc_at demo_table demo_code lo hi (dm_2 d) s)
+          (and (= (Cpu.mem (dm_2 d)) (mem_put64 (Cpu.mem (dm_4 d)) s (w64_val (w64 4194447))))
+            (same_outside (Cpu.mem (dm_4 d)) (Cpu.mem (dm_2 d)) s (+ s 8)))))
+      (exact
+        (proc_pushed demo_table demo_code 4194521 lo hi (dm_4 d) (w64 4194447) s t hsz demo_within
+          hchi
+          ht
+          hat1
+          hlo
+          hhi)))
+    (have hr (reaches d (at_pc (dm_2 d) (w64 4194485)))
+      (apply (do_mov_rr 4194434 7 0 3 4194437) ((exact hrip))
+        ((exact
+           (hc 4194434 (MovRmR (RmReg 7) 0) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 0) 3))))))
+        (rfl)
+        ((apply (do_mov_ri32 4194437 6 20 5 4194442) (rfl)
+           ((exact (hcz 4194437 (MovRI32 6 20) 5 (Eq.refl (some (Prod.mk (MovRI32 6 20) 5))))))
+           (rfl)
+           ((apply (do_call 4194442 5 38 4194447 4194485) (rfl)
+              ((exact ((And.left hat1) 4194442 (Call 38) 5 (Eq.refl (some (Prod.mk (Call 38) 5))))))
+              ((exact (And.left gp)))
+              (rfl)
+              (rfl)
+              ((exact (reaches_refl (at_pc (dm_2 d) (w64 4194485)))))))))))
+    (exact (And.intro hr (And.left (And.right gp))))))
+(fn dm_5 ((d Cpu)) Cpu (x_alu_ri d BSub 0 1 (w64 4194451)))
+(fn dm_6 ((d Cpu)) Cpu (x_mov_rr (dm_5 d) 7 0 (w64 4194454)))
+(fn dm_7 ((d Cpu)) Cpu (x_mov_ri (dm_6 d) 0 60 (w64 4194459)))
+;; From a state at the address after the second call with the table in place: `sub rax, 1`,
+;; `mov rdi, rax`, `mov eax, 60` and the system call end the process with the low byte of rax
+;; less one.
+(theorem demo_end ((d Cpu) (hc (code_in d demo_table)) (hrip (= (w64_val (Cpu.rip d)) 4194447)))
+  (exists ((n Fuel)) (= (run n d) (RExit (% (w64_val (w64_sub (reg d 0) (w64 1))) 256))))
+  (by
+    (have hc1 (code_in (dm_5 d) demo_table) (exact hc))
+    (have hc2 (code_in (dm_6 d) demo_table) (exact hc))
+    (have hc3 (code_in (dm_7 d) demo_table) (exact hc))
+    (have hreach (reaches d (dm_7 d))
+      (apply (do_alu_ri 4194447 BSub 0 1 4 4194451) ((exact hrip))
+        ((exact
+           (hc 4194447 (AluRmI BSub (RmReg 0) 1) 4
+             (Eq.refl (some (Prod.mk (AluRmI BSub (RmReg 0) 1) 4))))))
+        (rfl)
+        (rfl)
+        ((apply (do_mov_rr 4194451 7 0 3 4194454) (rfl)
+           ((exact
+              (hc1 4194451 (MovRmR (RmReg 7) 0) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 0) 3))))))
+           (rfl)
+           ((apply (do_mov_ri32 4194454 0 60 5 4194459) (rfl)
+              ((exact (hc2 4194454 (MovRI32 0 60) 5 (Eq.refl (some (Prod.mk (MovRI32 0 60) 5))))))
+              (rfl)
+              ((exact (reaches_refl (dm_7 d))))))))))
+    (have h60 (= (w64_val (reg (dm_7 d) 0)) 60) rfl)
+    (have hrip3 (= (w64_val (Cpu.rip (dm_7 d))) 4194459) rfl)
+    (have hexit (= (run (FS FZ) (dm_7 d)) (RExit (% (w64_val (reg (dm_7 d) 7)) 256)))
+      (exact
+        (run_exit (dm_7 d) 4194459 2 hrip3
+          (hc3 4194459 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+          h60)))
+    (cases hreach
+      ((intro (k hk)
+         (cases (run_of_steps k d (dm_7 d) (FS FZ) hk)
+           ((intro (n2 hn)
+              (apply (Exists.intro n2)
+                ((show (= (run n2 d) (RExit (% (w64_val (w64_sub (reg d 0) (w64 1))) 256))))
+                 (rw hn)
+                 (rw hexit)
+                 rfl))))))))))
+
+;; ---- from the first instruction to the exit ----------------------------------------------------------
+;; From a state of the file's process at the file's first address whose stack pointer stands at
+;; sp, three words above an address F in the stack's range: the return address of each call
+;; stands at F + 16, `triple`'s frame is the word at F + 8 and `pick`'s the two words from F.
+(theorem demo_runs
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (F Nat)
+   (sp Nat)
+   (hF (= (+ F 24) sp))
+   (b1 (<= 4194536 lo))
+   (b2 (<= lo F))
+   (hsp (<= sp hi))
+   (b4 (<= hi 140737488355328))
+   (hat (proc_at demo_table demo_code lo hi c sp))
+   (hrip (= (w64_val (Cpu.rip c)) 4194424)))
+  (exists ((n Fuel)) (= (run n c) (RExit (% (w64_val entry) 256))))
+  (by
+    (have hsz (< (+ 4194424 (List.length demo_code)) lo) (arith demo_ends))
+    (have hchi (<= (+ 4194521 15) lo) (arith))
+    (have e1 (= sp (+ (+ F 16) 8)) (arith hF))
+    (have l16 (<= lo (+ F 16)) (arith))
+    (have l8 (<= lo (+ F 8)) (arith))
+    (have u16 (<= (+ (+ F 16) 8) hi) (arith hF))
+    (have k64 (< (+ (+ F 16) 8) 18446744073709551616) (arith hF))
+    ;; to `triple`
+    (have g1
+      (and (reaches c (at_pc (dm_1 c) (w64 4194461)))
+        (proc_at demo_table demo_code lo hi (dm_1 c) (+ F 16)))
+      (exact (dm_1_run lo hi c (+ F 16) sp b1 e1 hat hrip l16 hsp)))
+    (have hc1 (code_in (dm_1 c) demo_table) (exact (And.left (And.right g1))))
+    (have q1 (= (+ F 16) (+ (+ F 8) (* 8 1))) (arith))
+    (have a1 (proc_at demo_table demo_code lo hi (dm_1 c) (+ (+ F 8) (* 8 1)))
+      (rw (<- q1))
+      (exact (And.right g1)))
+    (have u8 (<= (+ (+ (+ F 8) (* 8 1)) 8) hi) (arith hF))
+    (have r1 (room (dm_1 c) 4194424 4194521 (+ F 8) 1)
+      (exact (proc_room demo_table demo_code 4194521 lo hi (dm_1 c) (+ F 8) 1 hsz hchi a1 l8 u8)))
+    (cases (triple_contract (dm_1 c) (+ F 8) hc1 r1)
+      ((intro (c3 h3)
+         (have reach3 (reaches (at_pc (dm_1 c) (w64 4194461)) c3) (exact (And.left h3)))
+         (have v3 (= (reg c3 0) (triple (reg (dm_1 c) 7))) (exact (And.left (And.right h3))))
+         (have so3 (same_outside (Cpu.mem (dm_1 c)) (Cpu.mem c3) (+ F 8) (+ (+ F 8) (* 8 1)))
+           (exact (And.left (And.right (And.right h3)))))
+         (have ret3 (returned (dm_1 c) c3) (exact (And.right (And.right (And.right h3)))))
+         (have a3 (proc_at demo_table demo_code lo hi c3 (+ (+ F 16) 8))
+           (exact
+             (proc_returned demo_table demo_code 4194521 lo hi (dm_1 c) c3 (+ F 16) (+ F 8)
+               (+ (+ F 8) (* 8 1))
+               demo_within
+               hchi
+               (And.right g1)
+               ret3
+               so3
+               l8
+               k64)))
+         (have rip3 (= (w64_val (Cpu.rip c3)) 4194434)
+           (rw (returned_at (dm_1 c) c3 ret3))
+           (rw (dm_1_ret c))
+           rfl)
+         ;; to `pick`
+         (have g4
+           (and (reaches c3 (at_pc (dm_2 c3) (w64 4194485)))
+             (proc_at demo_table demo_code lo hi (dm_2 c3) (+ F 16)))
+           (exact
+             (dm_2_run lo hi c3 (+ F 16) (+ (+ F 16) 8) b1 (Eq.refl (+ (+ F 16) 8)) a3 rip3 l16 u16)))
+         (have hc4 (code_in (dm_2 c3) demo_table) (exact (And.left (And.right g4))))
+         (have q2 (= (+ F 16) (+ F (* 8 2))) (arith))
+         (have a4 (proc_at demo_table demo_code lo hi (dm_2 c3) (+ F (* 8 2)))
+           (rw (<- q2))
+           (exact (And.right g4)))
+         (have u24 (<= (+ (+ F (* 8 2)) 8) hi) (arith hF))
+         (have r4 (room (dm_2 c3) 4194424 4194521 F 2)
+           (exact (proc_room demo_table demo_code 4194521 lo hi (dm_2 c3) F 2 hsz hchi a4 b2 u24)))
+         (cases (pick_contract (dm_2 c3) F hc4 r4)
+           ((intro (c5 h5)
+              (have reach5 (reaches (at_pc (dm_2 c3) (w64 4194485)) c5) (exact (And.left h5)))
+              (have v5 (= (reg c5 0) (pick (reg (dm_2 c3) 7) (reg (dm_2 c3) 6)))
+                (exact (And.left (And.right h5))))
+              (have so5 (same_outside (Cpu.mem (dm_2 c3)) (Cpu.mem c5) F (+ F (* 8 2)))
+                (exact (And.left (And.right (And.right h5)))))
+              (have ret5 (returned (dm_2 c3) c5) (exact (And.right (And.right (And.right h5)))))
+              (have a5 (proc_at demo_table demo_code lo hi c5 (+ (+ F 16) 8))
+                (exact
+                  (proc_returned demo_table demo_code 4194521 lo hi (dm_2 c3) c5 (+ F 16) F
+                    (+ F (* 8 2))
+                    demo_within
+                    hchi
+                    (And.right g4)
+                    ret5
+                    so5
+                    b2
+                    k64)))
+              (have hc5 (code_in c5 demo_table) (exact (And.left a5)))
+              (have rip5 (= (w64_val (Cpu.rip c5)) 4194447)
+                (rw (returned_at (dm_2 c3) c5 ret5))
+                (rw (dm_2_ret c3))
+                rfl)
+              ;; what rax then holds, less one, is `entry`
+              (have val (= (w64_sub (reg c5 0) (w64 1)) entry)
+                (rw v5)
+                (rw (dm_2_rdi c3))
+                (rw (dm_2_rsi c3))
+                (rw v3)
+                (rw (dm_1_rdi c))
+                rfl)
+              (have hstart (reaches c c5)
+                (exact
+                  (reaches_trans c (at_pc (dm_1 c) (w64 4194461)) c5 (And.left g1)
+                    (reaches_trans (at_pc (dm_1 c) (w64 4194461)) c3 c5 reach3
+                      (reaches_trans c3 (at_pc (dm_2 c3) (w64 4194485)) c5 (And.left g4) reach5)))))
+              (cases (demo_end c5 hc5 rip5)
+                ((intro (n hn)
+                   (cases hstart
+                     ((intro (k hk)
+                        (cases (run_of_steps k c c5 n hk)
+                          ((intro (n2 hn2)
+                             (apply (Exists.intro n2)
+                               ((show (= (run n2 c) (RExit (% (w64_val entry) 256))))
+                                (rw hn2)
+                                (rw hn)
+                                (rw val)
+                                rfl)))))))))))))))))))
+
+;; ---- the file, end to end -------------------------------------------------------------------------
+;; the process's first state, started with the stack's range [lo, hi) and the stack pointer sp
+(fn demo_first ((lo Nat) (sp Nat) (hi Nat) (r Regs) (f Flags) (m Mem)) Cpu
+  (boot (image_of demo_code m) (start_at lo sp hi r f m)))
+;; THE DEMONSTRATION'S FILE. Started with ANY stack `stack_ok` allows — its range beginning at
+;; or above 4194536, past the file's table and the fifteen bytes the processor reads from an
+;; instruction's address, with three words under the stack pointer: a call's return address and
+;; `pick`'s frame of two —, whatever the registers but the stack pointer, the flags and the
+;; memory then hold, the file exits with the low byte of what `entry` computes.
+(theorem demo_exits
+  ((lo Nat) (sp Nat) (hi Nat) (hst (stack_ok lo sp hi 4194536 3)) (r Regs) (f Flags) (m Mem))
+  (exits demo_file (start_at lo sp hi r f m) (% (w64_val entry) 256))
+  (by
+    (have b1 (<= 4194536 lo) (exact (And.left hst)))
+    (have hfit (<= (+ lo (* 8 3)) sp) (exact (And.left (And.right hst))))
+    (have hsp (<= sp hi) (exact (And.left (And.right (And.right hst)))))
+    (have b4 (<= hi 140737488355328) (exact (And.right (And.right (And.right hst)))))
+    (have le24 (<= 24 sp) (arith))
+    (have hF (= (+ (- sp 24) 24) sp) (exact (Nat.sub_add_cancel le24)))
+    (have b2 (<= lo (- sp 24)) (arith hF))
+    (have h64 (< sp 18446744073709551616) (arith))
+    (have hsz (< (+ 4194424 (List.length demo_code)) lo) (arith demo_ends))
+    (have a0 (proc_at demo_table demo_code lo hi (demo_first lo sp hi r f m) sp)
+      (exact
+        (proc_first demo_listing demo_code demo_instrs demo_table lo sp hi r f m demo_assembled
+          demo_resolved demo_laid hsz h64)))
+    (cases
+      (demo_runs lo hi (demo_first lo sp hi r f m) (- sp 24) sp hF b1 b2 hsp b4 a0 (Eq.refl 4194424))
+      ((intro (n hn)
+         (apply (Exists.intro n)
+           ((show
+              (= (run_file n demo_file (start_at lo sp hi r f m)) (RExit (% (w64_val entry) 256))))
+            (rw demo_file_is)
+            (rw (run_file_exec n demo_code (start_at lo sp hi r f m) demo_size))
+            (exact hn))))))))

@@ -1,0 +1,285 @@
+;;; v3/models/x86/process.shard — a loaded file's process with its stack anywhere: what a proof of
+;;; a file from end to end knows of a state of the process. The stack's range is [lo, hi), it
+;;; begins past the code and the fifteen bytes the processor reads from an instruction's
+;;; address, and nothing else is known of where it is (linux.shard `stack_ok`): no address of the
+;;; stack is a number. Here: an access inside the range is mapped; a state of the process
+;;; described by where its stack pointer stands (`proc_at`), from the first state on, across a
+;;; push, across instructions that move registers, and across a call that has returned; and the
+;;; room a function is entered with (frame.shard `room`).
+(import "frame.shard")
+(import "loaded.shard")
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the stack of a loaded file's process -------------------------------------------------------
+;; Where a code's file is loaded and the code ends below the stack's range [lo, hi): an access
+;; inside the range, of a kind the stack permits, is mapped
+(theorem stack_access
+  ((code (List Nat))
+   (lo Nat)
+   (hi Nat)
+   (a Nat)
+   (n Nat)
+   (need Nat)
+   (hsz (< (+ 4194424 (List.length code)) lo))
+   (h1 (<= lo a))
+   (h2 (<= (+ a n) hi))
+   (h3 (= (band 6 need) need)))
+  (= (mapped (loaded_segs code (MkSeg lo hi 6)) a n need) true)
+  (by
+    (have hlt (< (+ 4194304 (+ 120 (List.length code))) (+ a n)) (arith))
+    (show
+      (=
+        (mapped
+          (cons (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5) (cons (MkSeg lo hi 6) nil))
+          a
+          n
+          need)
+        true))
+    (rw
+      (mapped_skip (MkSeg 4194304 (+ 4194304 (+ 120 (List.length code))) 5)
+        (cons (MkSeg lo hi 6) nil)
+        a
+        n
+        need
+        (seg_holds_past 4194304 (+ 4194304 (+ 120 (List.length code))) 5 a n need hlt)))
+    (exact (mapped_head (MkSeg lo hi 6) nil a n need (seg_holds_in lo hi 6 a n need h1 h2 h3)))))
+;; and so is each of n words from an address p, where the n words lie inside the range
+(theorem stack_words
+  ((code (List Nat))
+   (lo Nat)
+   (hi Nat)
+   (p Nat)
+   (n Nat)
+   (need Nat)
+   (hsz (< (+ 4194424 (List.length code)) lo))
+   (h1 (<= lo p))
+   (h2 (<= (+ p (* 8 n)) hi))
+   (h3 (= (band 6 need) need)))
+  (mapped_words (loaded_segs code (MkSeg lo hi 6)) p n need)
+  (by
+    (intro k hk)
+    (have g1 (<= lo (+ p (* 8 k))) (arith))
+    (have g2 (<= (+ (+ p (* 8 k)) 8) hi) (arith))
+    (exact (stack_access code lo hi (+ p (* 8 k)) 8 need hsz g1 g2 h3))))
+
+;; ---- a state of the process -----------------------------------------------------------------------
+;; A state of the process of a code's file: the table tbl is in place, what is mapped is the
+;; file's image and the stack's range [lo, hi), and the stack pointer stands at s.
+(def proc_at
+  ((tbl (List (Prod Nat (Prod Instr Nat)))) (code (List Nat)) (lo Nat) (hi Nat) (c Cpu) (s Nat))
+  Prop
+  (and (code_in c tbl)
+    (and (= (Cpu.segs c) (loaded_segs code (MkSeg lo hi 6))) (= (w64_val (reg c 4)) s))))
+;; The first state is one, the stack pointer where the process is started with it: for a
+;; listing the assembler answers `code` for, whose instructions lay out to the table.
+(theorem proc_first
+  ((p (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (ha (= (assemble p) (some code)))
+   (hr (= (resolve p p 0) (some is)))
+   (hl (= (layout is 4194424) tbl))
+   (hsz (< (+ 4194424 (List.length code)) lo))
+   (h64 (< sp 18446744073709551616)))
+  (proc_at tbl code lo hi (boot (image_of code m) (start_at lo sp hi r f m)) sp)
+  (by
+    (have hstk
+      (= (seg_holds (Start.stack (start_at lo sp hi r f m)) (+ 4194424 (List.length code)) 1 1)
+        false)
+      (exact (seg_holds_before lo hi 6 (+ 4194424 (List.length code)) 1 1 hsz)))
+    (have hc (code_in (boot (image_of code m) (start_at lo sp hi r f m)) tbl)
+      (rw (<- hl))
+      (exact (listing_loaded p code is (start_at lo sp hi r f m) ha hr hstk)))
+    (have hsegs
+      (= (Cpu.segs (boot (image_of code m) (start_at lo sp hi r f m)))
+        (loaded_segs code (MkSeg lo hi 6)))
+      rfl)
+    (have hsp (= (w64_val (reg (boot (image_of code m) (start_at lo sp hi r f m)) 4)) sp)
+      (show (= (Nat.mod sp 18446744073709551616) sp))
+      (exact (Nat.mod_eq_of_lt h64)))
+    (exact (And.intro hc (And.intro hsegs hsp)))))
+
+;; ---- instructions that move registers -------------------------------------------------------------
+;; c2 has c's mapping, c's memory and c's stack pointer
+(def same_stack ((c Cpu) (c2 Cpu)) Prop
+  (and (= (Cpu.segs c2) (Cpu.segs c)) (and (= (Cpu.mem c2) (Cpu.mem c)) (= (reg c2 4) (reg c 4)))))
+(theorem same_stack_at_pc ((c Cpu) (pc (BitVec 64))) (same_stack c (at_pc c pc))
+  (by
+    (have e1 (= (Cpu.segs (at_pc c pc)) (Cpu.segs c)) rfl)
+    (have e2 (= (Cpu.mem (at_pc c pc)) (Cpu.mem c)) rfl)
+    (have e3 (= (reg (at_pc c pc) 4) (reg c 4)) rfl)
+    (exact (And.intro e1 (And.intro e2 e3)))))
+;; such a state is a state of the process with the stack pointer where it stood, and holds the
+;; lists the first held
+(theorem proc_same
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (code (List Nat))
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (c2 Cpu)
+   (s Nat)
+   (hs (same_stack c c2))
+   (h (proc_at tbl code lo hi c s)))
+  (proc_at tbl code lo hi c2 s)
+  (by
+    (have e1 (= (Cpu.segs c2) (Cpu.segs c)) (exact (And.left hs)))
+    (have e2 (= (Cpu.mem c2) (Cpu.mem c)) (exact (And.left (And.right hs))))
+    (have e3 (= (reg c2 4) (reg c 4)) (exact (And.right (And.right hs))))
+    (have hc (code_in c2 tbl) (exact (code_in_of c c2 tbl e1 e2 (And.left h))))
+    (have hsegs (= (Cpu.segs c2) (loaded_segs code (MkSeg lo hi 6)))
+      (rw e1)
+      (exact (And.left (And.right h))))
+    (have hsp (= (w64_val (reg c2 4)) s) (rw e3) (exact (And.right (And.right h))))
+    (exact (And.intro hc (And.intro hsegs hsp)))))
+(theorem holds_same_stack
+  ((c Cpu)
+   (c2 Cpu)
+   (p Nat)
+   (xs (List (BitVec 64)))
+   (hs (same_stack c c2))
+   (h (holds (Cpu.mem c) p xs)))
+  (holds (Cpu.mem c2) p xs)
+  (by (rw (And.left (And.right hs))) (exact h)))
+
+;; ---- a push ---------------------------------------------------------------------------------------
+;; A WORD PUSHED. In a state of the process whose stack pointer stands at t, a word above the
+;; address s in the stack's range, where the table lies in [4194424, chi) and the stack's range
+;; begins at or above chi + 15: the push is mapped, and the state after it is a state of the
+;; process with the stack pointer at s, whose memory is the first's with the word at s.
+(theorem proc_pushed
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (code (List Nat))
+   (chi Nat)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (v (BitVec 64))
+   (s Nat)
+   (t Nat)
+   (hsz (< (+ 4194424 (List.length code)) lo))
+   (hall (= (all_within tbl 4194424 chi) true))
+   (hchi (<= (+ chi 15) lo))
+   (ht (= t (+ s 8)))
+   (hat (proc_at tbl code lo hi c t))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+    (and (proc_at tbl code lo hi (pushed c v) s)
+      (and (= (Cpu.mem (pushed c v)) (mem_put64 (Cpu.mem c) s (w64_val v)))
+        (same_outside (Cpu.mem c) (Cpu.mem (pushed c v)) s (+ s 8)))))
+  (by
+    (have hc (code_in c tbl) (exact (And.left hat)))
+    (have hsegs (= (Cpu.segs c) (loaded_segs code (MkSeg lo hi 6)))
+      (exact (And.left (And.right hat))))
+    (have hsp (= (w64_val (reg c 4)) (+ s 8)) (rw (<- ht)) (exact (And.right (And.right hat))))
+    (have u1 (<= (+ s 8) hi) (arith ht))
+    (have k8 (< 8 18446744073709551616) (decide))
+    (have hpa (= (push_at c) s) (exact (w64_val_sub (reg c 4) s 8 hsp k8)))
+    (have k2 (= (band 6 2) 2) (decide))
+    (have hm (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+      (rw hpa)
+      (rw hsegs)
+      (exact (stack_access code lo hi s 8 2 hsz hlo u1 k2)))
+    (have hmem (= (Cpu.mem (pushed c v)) (mem_put64 (Cpu.mem c) s (w64_val v))) (rw (<- hpa)) rfl)
+    (have hso (same_outside (Cpu.mem c) (Cpu.mem (pushed c v)) s (+ s 8))
+      (rw hmem)
+      (exact
+        (same_outside_put64 (Cpu.mem c) (Cpu.mem c) s (+ s 8) s (w64_val v)
+          (same_outside_refl (Cpu.mem c) s (+ s 8))
+          (Nat.le_refl s)
+          (Nat.le_refl (+ s 8)))))
+    (have hclear (or (<= (+ chi 15) s) (<= (+ s 8) 4194424)) (apply Or.inl ((arith))))
+    (have hsegs2 (= (Cpu.segs (pushed c v)) (Cpu.segs c)) rfl)
+    (have hc2 (code_in (pushed c v) tbl)
+      (exact (code_in_after c (pushed c v) tbl 4194424 chi s (+ s 8) hall hsegs2 hso hclear hc)))
+    (have hsp2 (= (w64_val (reg (pushed c v) 4)) s) (exact hpa))
+    (have hsegs3 (= (Cpu.segs (pushed c v)) (loaded_segs code (MkSeg lo hi 6))) (exact hsegs))
+    (exact (And.intro hm (And.intro (And.intro hc2 (And.intro hsegs3 hsp2)) (And.intro hmem hso))))))
+
+;; ---- a function entered, and returned ---------------------------------------------------------------
+;; ROOM for a frame of k words: a state of the process whose stack pointer stands k words above
+;; an address f in the stack's range, the return address at the stack pointer inside the range
+(theorem proc_room
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (code (List Nat))
+   (chi Nat)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (f Nat)
+   (k Nat)
+   (hsz (< (+ 4194424 (List.length code)) lo))
+   (hchi (<= (+ chi 15) lo))
+   (hat (proc_at tbl code lo hi c (+ f (* 8 k))))
+   (hlo (<= lo f))
+   (hhi (<= (+ (+ f (* 8 k)) 8) hi)))
+  (room c 4194424 chi f k)
+  (by
+    (have hsegs (= (Cpu.segs c) (loaded_segs code (MkSeg lo hi 6)))
+      (exact (And.left (And.right hat))))
+    (have k4 (= (band 6 4) 4) (decide))
+    (have k2 (= (band 6 2) 2) (decide))
+    (have u4 (<= (+ f (* 8 (+ k 1))) hi) (arith))
+    (have u2 (<= (+ f (* 8 k)) hi) (arith))
+    (have hrd (mapped_words (Cpu.segs c) f (+ k 1) 4)
+      (rw hsegs)
+      (exact (stack_words code lo hi f (+ k 1) 4 hsz hlo u4 k4)))
+    (have hwr (mapped_words (Cpu.segs c) f k 2)
+      (rw hsegs)
+      (exact (stack_words code lo hi f k 2 hsz hlo u2 k2)))
+    (have hcl (or (<= (+ chi 15) f) (<= (+ f (* 8 k)) 4194424)) (apply Or.inl ((arith))))
+    (exact (And.intro (And.right (And.right hat)) (And.intro hrd (And.intro hwr hcl))))))
+;; A CALL RETURNED. Where a function entered in a state of the process with the stack pointer
+;; at s has returned, and memory differs from the entry's in a range [a, b) of the stack alone:
+;; the state it returned in is a state of the process, the stack pointer a word above s.
+(theorem proc_returned
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (code (List Nat))
+   (chi Nat)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (c2 Cpu)
+   (s Nat)
+   (a Nat)
+   (b Nat)
+   (hall (= (all_within tbl 4194424 chi) true))
+   (hchi (<= (+ chi 15) lo))
+   (hat (proc_at tbl code lo hi c s))
+   (hret (returned c c2))
+   (hso (same_outside (Cpu.mem c) (Cpu.mem c2) a b))
+   (ha (<= lo a))
+   (h64 (< (+ s 8) 18446744073709551616)))
+  (proc_at tbl code lo hi c2 (+ s 8))
+  (by
+    (have kp (kept c c2) (exact (returned_kept c c2 hret)))
+    (have hsegs2 (= (Cpu.segs c2) (Cpu.segs c)) (exact (kept_segs c c2 kp)))
+    (have hclear (or (<= (+ chi 15) a) (<= b 4194424)) (apply Or.inl ((arith))))
+    (have hc2 (code_in c2 tbl)
+      (exact (code_in_after c c2 tbl 4194424 chi a b hall hsegs2 hso hclear (And.left hat))))
+    (have hsegs3 (= (Cpu.segs c2) (loaded_segs code (MkSeg lo hi 6)))
+      (rw hsegs2)
+      (exact (And.left (And.right hat))))
+    (have hsp2 (= (w64_val (reg c2 4)) (+ s 8))
+      (rw (kept_sp c c2 kp))
+      (exact (w64_val_add (reg c 4) s 8 (And.right (And.right hat)) h64)))
+    (exact (And.intro hc2 (And.intro hsegs3 hsp2)))))

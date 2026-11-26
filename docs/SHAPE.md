@@ -167,7 +167,7 @@ host calls.
 
 *Cost.*
 - Checking is slow where proofs are long: the x86 trial's proofs load in about 20 seconds
-  natively (`v3/models/x86/buffers_run.shard`, 1,680 declarations with what they rest on); the
+  natively (`v3/models/x86/buffers_run.shard`, 1,772 declarations with what they rest on); the
   full replay of Init takes 7 minutes natively and 76 on the bootstrap.
 - The full gate is 75 minutes in CI. A change to
   the toolchain is pushed after the checks it can move, minutes on the development machine, and
@@ -224,7 +224,9 @@ be built to is `COMPILE.md`.
 - the step from a listing to the processor (`loaded.shard`): the code of any listing the
   assembler answers for is in place when its file is loaded, proven once from the assembler's
   check; and by it and the caller's contract, that the trial's file exits with the low byte of
-  what its functions compute (`buffers_exits`), for the start the model's runner gives;
+  what its functions compute (`buffers_exits`), started with its stack anywhere the model's
+  start allows (`stack_ok`); and the same of the demonstration's file, by a contract of each
+  of its two functions' code (`demo_run.shard` `demo_exits`);
 - a tactic library (`derive.shard`) that writes the proof of a run of a listing's instructions
   from the listing's table; nine of the trial's lemmas are proven by it.
 

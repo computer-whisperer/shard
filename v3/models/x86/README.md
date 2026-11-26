@@ -18,17 +18,19 @@ it.
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
-| `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the theorem that the listing's file exits with the low byte of what the function computes |
+| `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the listing's file; a `main` that writes the file |
 | `run_main.shard` | the model from the command line: files run, code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of nineteen instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
+| `process.shard` | a loaded file's process with its stack anywhere: an access inside the stack's range is mapped (`stack_access`, `stack_words`); a state of the process told by where its stack pointer stands (`proc_at`) — the first state (`proc_first`), across a push (`proc_pushed`), across instructions that move registers (`same_stack`, `proc_same`), across a call that has returned (`proc_returned`) —; and the room a function is entered with (`proc_room`) |
 | `part.shard` | a part of a table of instructions is in place where the whole is: `table_part`, a computation, and `code_in_part` |
 | `derive.shard` | a tactic library: `derive_block`, the proof of a run of a listing's instructions by the laws' rules, read off the listing's table |
 | `buffers.shard` | a trial of low-level code as shard (`docs/COMPILE.md` §4): three functions over buffers of machine words, a listing for them compiled by hand, the listing's file, its instructions by address (`buffers_table`); `dot`'s own lines and rows of them (`dot_asm`, `dot_rows`) |
 | `buffers_tactic.shard` | the tactics the trial's lemmas name: `derive_block` over the trial's table (`block`), and over `dot`'s own rows (`block_dot`) |
 | `buffers_facts.shard` | the contracts of the code of those three functions, proven from the laws |
-| `buffers_run.shard` | that listing's file from end to end: started as the runner starts it, it exits with 19 (`buffers_exits`), by `both`'s contract |
+| `buffers_run.shard` | that listing's file from end to end: started with its stack anywhere `stack_ok` allows, it exits with 19 (`buffers_exits`), by `both`'s contract |
+| `demo_run.shard` | the demonstration's file from end to end: two instruction rules its code needs (`do_alu_rb`, `do_cmp_rb`), the contracts of `triple`'s code and of `pick`'s (`triple_contract`, `pick_contract`), and the theorem that the file, started with its stack anywhere, exits with the low byte of what `entry` computes (`demo_exits`) |
 | `test/*.hex` | programs assembled by hand, each stating what the model's run of it is |
 | `test/listings.shard` | three of those programs as listings for the assembler; listings it refuses |
 
@@ -104,11 +106,15 @@ proven to be Init's `BitVec.ofNat 64`, `BitVec.add`, `BitVec.sub` and `BitVec.mu
 lemmas (above) are accepted; a listing with a missing label and one with an immediate too wide are
 proven refused, by evaluation.
 
-`demo_run` (`demo.shard`): three functions written as ordinary shard over machine words — a sum,
-a comparison under an `if`, calls — and a listing for them compiled by hand; the model's run of
-the listing's file exits with the low byte of what the function computes in the logic. K
-evaluates both sides. It is one program: there is no compiler, and the stack's place is fixed in
-the statement.
+`demo_exits` (`demo_run.shard`): three functions written as ordinary shard over machine words —
+a sum, a comparison under an `if`, calls — and a listing for them compiled by hand
+(`demo.shard`); the listing's file, started with its stack anywhere `stack_ok` allows, exits
+with the low byte of what the function computes in the logic. The model is not run on the file:
+the code of `triple` and the code of `pick` each have a contract, for any arguments — entered
+with room for a frame, the code returns with the function's value in rax; `pick`'s by the two
+ways its comparison can go —, the first instructions call the two in states that meet the
+contracts, and what the contracts leave in rax, less one, is `entry` as it is written. It rests
+on Lean's three axioms. It is one program: there is no compiler.
 
 **The laws** (`laws.shard`). `(reaches c c2)`: from the state `c` the processor comes to `c2` in
 some count of steps, none a system call or stuck. A rule for an instruction form says: where the
@@ -214,14 +220,19 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
   three runs of instructions, and not one theorem: K's recursion is bounded in depth
   (`OPEN.md` §3), so each part is a lemma whose statement lists its hypotheses again.
 
-- `buffers_exits` (`buffers_run.shard`): the listing's file, started as the runner starts it —
-  whatever the registers but the stack pointer, the flags and the memory then hold — exits with
-  19, the low byte of `both` of the buffers 3 5 7 and 2 4 6. The proof does not run the model
-  through the functions: the code is in place by `listing_loaded`; the seventeen instructions
-  before `both` are run by the model, and the state they end in is shown to meet each of
-  `both_contract`'s nineteen hypotheses; the contract gives the state at the return, and from
-  any state it allows three instructions more end the process. That the functions' value is 19
-  is the logic's own computation of `both`.
+- `buffers_exits` (`buffers_run.shard`): the listing's file, started with its stack anywhere
+  `stack_ok` allows — the stack's range beginning at or above 4194661, past the table and the
+  fifteen bytes the processor reads from an instruction's address, with ten words under the
+  stack pointer; whatever the registers but the stack pointer, the flags and the memory then
+  hold — exits with 19, the low byte of `both` of the buffers 3 5 7 and 2 4 6. The proof does
+  not run the model: the code is in place by `listing_loaded`; the seventeen instructions
+  before `both` are taken each by its rule, in five stages — the first buffer's three pushes,
+  its address kept, the second's pushes, the arguments, the call —, each a theorem about a
+  state of the process (`process.shard` `proc_at`) that names the state after the stage and
+  does not open the one before; the state they end in meets each of `both_contract`'s nineteen
+  hypotheses by where its ten words lie in the stack's range, no address a number; the
+  contract gives the state at the return, and from any state it allows three instructions more
+  end the process. That the functions' value is 19 is the logic's own computation of `both`.
   Between its first instructions and the functions the listing has 58 bytes that are never
   run: the functions then stand from 4194547, where the lines after the start-up of the compile
   system's sample files stand (`v3/compile/x86/startup.shard`), so that such a file has `dot`'s
@@ -230,11 +241,13 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
 Each rests on Lean's three axioms and on nothing else. A contract assumes that the processor
 decodes the listing's instructions at their addresses (`code_in`); `listing_loaded` proves that
 of the first state, and `buffers_exits` is the one statement here that assumes nothing of the
-code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`: the first
-instructions are run by the model on that start's numbers. A statement for a stack anywhere is
-made with `start_at` and `stack_ok` (`linux.shard`) — the stack's range and the stack pointer
-unknown, the range above a bound the statement gives, room under the pointer for the words the
-file needs —, as the compile system's file theorems are (`v3/compile/x86/link.shard`). The evaluator's
+code. It is for a stack anywhere, as `demo_exits` is and as the compile system's file theorems
+are (`v3/compile/x86/link.shard`): the statement is made with `start_at` and `stack_ok`
+(`linux.shard`) — the stack's range and the stack pointer unknown, the range above a bound the
+statement gives, room under the pointer for the words the file needs. K is slow where a proof
+step has it compare, as wholes, the states of two instructions far apart in a run — seconds a
+step at twenty instructions' distance —; a stage's theorem is therefore about ANY state before
+it, and a later proof rewrites by the stage's facts. The evaluator's
 run of `both`, the model's run of the listing's file and the processor's give that one status,
 19. No compiler made the listing. The proofs are written by hand, but for nine: the runs of
 instructions between a function's branch points, which a tactic derives.
@@ -288,12 +301,11 @@ hand.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
 `mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
-`encode` for every instruction; the trial's and the demonstration's statements for a stack
-anywhere but where the runner puts it; what stands at the stack pointer when a process starts
+`encode` for every instruction; what stands at the stack pointer when a process starts
 (the count of the arguments, the arguments, the environment), and its alignment; a rule for
-every instruction form; a contract of code whose frame
-holds variables of its own (there is no rule for an operand at the stack pointer and a
-displacement); a law for the return of a callee that keeps a frame of its own; a derivation of
+every instruction form (the two the demonstration's code needs beside the laws' are
+`demo_run.shard`'s own); a law for the return of a callee that keeps a frame of its own; a
+derivation of
 a whole contract (a loop's invariant and a callee's hypotheses are by hand, and the frame's
 laws are applied by hand); a compiler from a shard function to a listing and its contract.
 

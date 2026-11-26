@@ -1,16 +1,16 @@
 ;;; v3/models/x86/buffers_run.shard — the trial's file from end to end: the file `buffers.shard`
-;;; writes, started as the model's runner starts it, exits with 19 — the low byte of what `both`
-;;; computes of the two buffers the file's first instructions push. Proven through the contract
-;;; of `both`'s code, not by running the model: the listing's code is in place because the
-;;; assembler checked it (`loaded.shard`); the first instructions bring the processor to
-;;; `both`'s first instruction in a state that meets every hypothesis of `both_contract`; the
-;;; contract gives the state at the return; three instructions more and the process has exited.
-;;; The statement is for the ONE start the runner makes (`runner_start`, linux.shard): the first
-;;; instructions are run by the model on that start's stack pointer, and the contract's
-;;; hypotheses are met by computation on the addresses it gives. A file's theorem for a stack
-;;; anywhere (`stack_ok`) is the compile system's (v3/compile/x86/link.shard).
+;;; writes, started with its stack anywhere `stack_ok` allows (linux.shard), exits with 19 — the
+;;; low byte of what `both` computes of the two buffers the file's first instructions push. Proven
+;;; through the contract of `both`'s code, not by running the model: the listing's code is in
+;;; place because the assembler checked it (`loaded.shard`); the first instructions, each by its
+;;; rule, bring the processor to `both`'s first instruction in a state that meets every
+;;; hypothesis of `both_contract`; the contract gives the state at the return; three instructions
+;;; more and the process has exited. No address of the stack is a number here: the stack's range
+;;; is [lo, hi) and the stack pointer starts at sp, all three unknown; the first instructions
+;;; take the buffers' addresses from the stack pointer as they find it.
 (import "buffers_facts.shard")
 (import "loaded.shard")
+(import "process.shard")
 (use std.list)
 (use std.mem)
 (use models.x86.asm)
@@ -22,11 +22,13 @@
 (use models.x86.linux)
 (use models.x86.linux.Res)
 (use models.x86.loaded)
+(use models.x86.process)
 (use models.x86.word)
 (use models.x86.x86)
 (use models.x86.x86.Fuel)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
@@ -48,207 +50,405 @@
 ;; the table the contracts are stated over is the assembler's layout of the listing
 (theorem buffers_laid () (= (layout buffers_instrs 4194424) buffers_table) (by rfl))
 (theorem buffers_size () (<= (+ 4194424 (List.length buffers_code)) 140737488355328) (by decide))
+;; the code ends where the table does
+(theorem buffers_ends () (<= (+ 4194424 (List.length buffers_code)) 4194646) (by decide))
 
 ;; ---- the first state ----------------------------------------------------------------------------
-;; the process's first state, and the code in place in it
-(fn buffers_first ((r Regs) (f Flags) (m Mem)) Cpu
-  (boot (image_of buffers_code m) (runner_start r f m)))
-(theorem buffers_code_first ((r Regs) (f Flags) (m Mem))
-  (code_in (buffers_first r f m) buffers_table)
+;; the process's first state, started with the stack's range [lo, hi) and the stack pointer sp
+(fn buffers_first ((lo Nat) (sp Nat) (hi Nat) (r Regs) (f Flags) (m Mem)) Cpu
+  (boot (image_of buffers_code m) (start_at lo sp hi r f m)))
+;; it is a state of the file's process (process.shard `proc_at`), the stack pointer at sp
+(theorem buffers_first_at
+  ((lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (b1 (<= 4194661 lo))
+   (h64 (< sp 18446744073709551616)))
+  (proc_at buffers_table buffers_code lo hi (buffers_first lo sp hi r f m) sp)
   (by
-    (have hstk
-      (= (seg_holds (Start.stack (runner_start r f m)) (+ 4194424 (List.length buffers_code)) 1 1)
-        false)
-      (decide))
-    (rw (<- buffers_laid))
+    (have hsz (< (+ 4194424 (List.length buffers_code)) lo) (arith buffers_ends))
     (exact
-      (listing_loaded buffers_listing buffers_code buffers_instrs (runner_start r f m)
-        buffers_assembled
-        buffers_resolved
-        hstk))))
+      (proc_first buffers_listing buffers_code buffers_instrs buffers_table lo sp hi r f m
+        buffers_assembled buffers_resolved buffers_laid hsz h64))))
 
 ;; ---- the first instructions ---------------------------------------------------------------------
+;; The states the first instructions lead through, each a function of the state before it: a
+;; proof names the state after a stage by the stage and never opens the state before.
 ;; a word moved into rdi and pushed
 (fn su_push ((c Cpu) (v Nat) (p1 Nat) (p2 Nat)) Cpu
   (at_pc (pushed (x_mov_ri c 7 v (w64 p1)) (w64 v)) (w64 p2)))
-;; the first buffer pushed, 7 5 3, and its address kept in r14
-(fn su_a ((c Cpu)) Cpu
-  (x_mov_rr (su_push (su_push (su_push c 7 4194429 4194430) 5 4194435 4194436) 3 4194441 4194442) 14
-    4
-    (w64 4194445)))
-;; the second pushed, 6 4 2; the two addresses in rdi and rsi and the count in rdx
-(fn su_b ((c Cpu)) Cpu
-  (x_mov_ri
-    (x_mov_rr
-      (x_mov_rr
-        (su_push (su_push (su_push (su_a c) 6 4194450 4194451) 4 4194456 4194457) 2 4194462 4194463)
-        6
-        4
-        (w64 4194466))
-      7
-      14
-      (w64 4194469))
-    2
-    3
-    (w64 4194474)))
+;; the first buffer pushed, 7 5 3, from the file's first address
+(fn su_1 ((c Cpu)) Cpu (su_push c 7 4194429 4194430))
+(fn su_2 ((c Cpu)) Cpu (su_push (su_1 c) 5 4194435 4194436))
+(fn su_3 ((c Cpu)) Cpu (su_push (su_2 c) 3 4194441 4194442))
+;; its address kept in r14
+(fn su_k ((c Cpu)) Cpu (x_mov_rr c 14 4 (w64 4194445)))
+;; the second pushed, 6 4 2
+(fn su_4 ((c Cpu)) Cpu (su_push c 6 4194450 4194451))
+(fn su_5 ((c Cpu)) Cpu (su_push (su_4 c) 4 4194456 4194457))
+(fn su_6 ((c Cpu)) Cpu (su_push (su_5 c) 2 4194462 4194463))
+;; the two addresses in rsi and rdi and the count in rdx
+(fn su_g ((c Cpu)) Cpu
+  (x_mov_ri (x_mov_rr (x_mov_rr c 6 4 (w64 4194466)) 7 14 (w64 4194469)) 2 3 (w64 4194474)))
 ;; the call's return address pushed: the state `both` is entered in, put at its first instruction
-(fn su_c ((c Cpu)) Cpu (pushed (su_b c) (w64 4194479)))
-(fn seventeen () Fuel
-  (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS FZ))))))))))))))))))
-;; seventeen steps from the first state, by the model's own run of them
-(theorem buffers_startup ((r Regs) (f Flags) (m Mem))
-  (= (steps seventeen (buffers_first r f m))
-    (some (at_pc (su_c (buffers_first r f m)) (w64 4194614))))
-  (by rfl))
+(fn su_r ((c Cpu)) Cpu (pushed c (w64 4194479)))
 
-;; ---- the state `both` is entered in ---------------------------------------------------------------
-;; The stack pointer started at 140737488347136. The first buffer stands at 140737488347112, the
-;; second at 140737488347088, the return address at 140737488347080, and `both`'s frame is the
-;; three words from 140737488347056.
-(fn su_in ((r Regs) (f Flags) (m Mem)) Cpu (su_c (buffers_first r f m)))
-;; the code is in place there: the seven words pushed are clear of it
-(theorem su_code ((r Regs) (f Flags) (m Mem)) (code_in (su_in r f m) buffers_table)
+;; what each stage that moves registers leaves, and where a register's word comes from
+(theorem su_k_stack ((c Cpu)) (same_stack c (su_k c))
   (by
-    (have hso
-      (same_outside (Cpu.mem (buffers_first r f m)) (Cpu.mem (su_in r f m)) 140737488347080
-        140737488347136)
-      (show
-        (same_outside (Cpu.mem (buffers_first r f m))
-          (mem_put64
-            (mem_put64
-              (mem_put64
-                (mem_put64
-                  (mem_put64
-                    (mem_put64 (mem_put64 (Cpu.mem (buffers_first r f m)) 140737488347128 7)
-                      140737488347120
-                      5)
-                    140737488347112
-                    3)
-                  140737488347104
-                  6)
-                140737488347096
-                4)
-              140737488347088
-              2)
-            140737488347080
-            4194479)
-          140737488347080
-          140737488347136))
-      (apply same_outside_put64
-        ((apply same_outside_put64
-           ((apply same_outside_put64
-              ((apply same_outside_put64
-                 ((apply same_outside_put64
-                    ((apply same_outside_put64
-                       ((apply same_outside_put64
-                          ((exact
-                             (same_outside_refl (Cpu.mem (buffers_first r f m)) 140737488347080
-                               140737488347136)))
-                          ((decide))
-                          ((decide))))
-                       ((decide))
-                       ((decide))))
-                    ((decide))
-                    ((decide))))
-                 ((decide))
-                 ((decide))))
-              ((decide))
-              ((decide))))
-           ((decide))
-           ((decide))))
-        ((decide))
-        ((decide))))
-    (have hsegs (= (Cpu.segs (su_in r f m)) (Cpu.segs (buffers_first r f m))) rfl)
-    (have hclear (or (<= (+ 4194646 15) 140737488347080) (<= 140737488347136 4194424))
-      (apply Or.inl ((decide))))
+    (have e1 (= (Cpu.segs (su_k c)) (Cpu.segs c)) rfl)
+    (have e2 (= (Cpu.mem (su_k c)) (Cpu.mem c)) rfl)
+    (have e3 (= (reg (su_k c) 4) (reg c 4)) rfl)
+    (exact (And.intro e1 (And.intro e2 e3)))))
+(theorem su_k_r14 ((c Cpu)) (= (reg (su_k c) 14) (reg c 4)) (by rfl))
+(theorem su_6_r14 ((c Cpu)) (= (reg (su_6 c) 14) (reg c 14)) (by rfl))
+(theorem su_g_stack ((c Cpu)) (same_stack c (su_g c))
+  (by
+    (have e1 (= (Cpu.segs (su_g c)) (Cpu.segs c)) rfl)
+    (have e2 (= (Cpu.mem (su_g c)) (Cpu.mem c)) rfl)
+    (have e3 (= (reg (su_g c) 4) (reg c 4)) rfl)
+    (exact (And.intro e1 (And.intro e2 e3)))))
+(theorem su_g_rdi ((c Cpu)) (= (reg (su_g c) 7) (reg c 14)) (by rfl))
+(theorem su_g_rsi ((c Cpu)) (= (reg (su_g c) 6) (reg c 4)) (by rfl))
+(theorem su_g_rdx ((c Cpu)) (= (reg (su_g c) 2) (w64 3)) (by rfl))
+(theorem su_r_rdi ((c Cpu)) (= (reg (su_r c) 7) (reg c 7)) (by rfl))
+(theorem su_r_rsi ((c Cpu)) (= (reg (su_r c) 6) (reg c 6)) (by rfl))
+(theorem su_r_rdx ((c Cpu)) (= (reg (su_r c) 2) (reg c 2)) (by rfl))
+
+;; What one word's push comes to, from the state c: the state c2, a state of the file's process
+;; with the stack pointer at s, whose memory holds the words xs from s and is c's outside the
+;; word at s.
+(def su_pushed ((lo Nat) (hi Nat) (c Cpu) (c2 Cpu) (s Nat) (xs (List (BitVec 64)))) Prop
+  (and (reaches c c2)
+    (and (proc_at buffers_table buffers_code lo hi c2 s)
+      (and (holds (Cpu.mem c2) s xs) (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8))))))
+;; ONE WORD PUSHED, by `mov edi, v` and `push rdi` at p. From a state of the file's process at
+;; p whose stack pointer stands at t, a word above the address s in the stack's range, with the
+;; words xs held from t: two steps, and the word stands before them.
+(theorem su_push_run
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (v Nat)
+   (p Nat)
+   (s Nat)
+   (t Nat)
+   (xs (List (BitVec 64)))
+   (b1 (<= 4194661 lo))
+   (ht (= t (+ s 8)))
+   (hat (proc_at buffers_table buffers_code lo hi c t))
+   (hrip (= (w64_val (Cpu.rip c)) p))
+   (hs1 (= (site buffers_table p) (some (Prod.mk (MovRI32 7 v) 5))))
+   (hs2 (= (site buffers_table (+ p 5)) (some (Prod.mk (Push 7) 1))))
+   (hlo (<= lo s))
+   (hhi (<= t hi))
+   (hx (holds (Cpu.mem c) t xs)))
+  (su_pushed lo hi c (su_push c v (+ p 5) (+ p 6)) s (cons (w64 v) xs))
+  (by
+    (have hsz (< (+ 4194424 (List.length buffers_code)) lo) (arith buffers_ends))
+    (have hchi (<= (+ 4194646 15) lo) (arith))
+    (have hc (code_in c buffers_table) (exact (And.left hat)))
+    ;; after the move
+    (have e1 (= (Cpu.segs (x_mov_ri c 7 v (w64 (+ p 5)))) (Cpu.segs c)) rfl)
+    (have e2 (= (Cpu.mem (x_mov_ri c 7 v (w64 (+ p 5)))) (Cpu.mem c)) rfl)
+    (have e3 (= (reg (x_mov_ri c 7 v (w64 (+ p 5))) 4) (reg c 4)) rfl)
+    (have hat1 (proc_at buffers_table buffers_code lo hi (x_mov_ri c 7 v (w64 (+ p 5))) t)
+      (exact
+        (proc_same buffers_table buffers_code lo hi c (x_mov_ri c 7 v (w64 (+ p 5))) t
+          (And.intro e1 (And.intro e2 e3))
+          hat)))
+    (have hx1 (holds (Cpu.mem (x_mov_ri c 7 v (w64 (+ p 5)))) (+ s 8) xs)
+      (rw e2)
+      (rw (<- ht))
+      (exact hx))
+    ;; after the push
+    (have gp
+      (and
+        (=
+          (mapped (Cpu.segs (x_mov_ri c 7 v (w64 (+ p 5)))) (push_at (x_mov_ri c 7 v (w64 (+ p 5))))
+            8
+            2)
+          true)
+        (and
+          (proc_at buffers_table buffers_code lo hi (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v))
+            s)
+          (and
+            (= (Cpu.mem (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v)))
+              (mem_put64 (Cpu.mem (x_mov_ri c 7 v (w64 (+ p 5)))) s (w64_val (w64 v))))
+            (same_outside (Cpu.mem (x_mov_ri c 7 v (w64 (+ p 5))))
+              (Cpu.mem (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v)))
+              s
+              (+ s 8)))))
+      (exact
+        (proc_pushed buffers_table buffers_code 4194646 lo hi (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v)
+          s
+          t
+          hsz
+          table_within
+          hchi
+          ht
+          hat1
+          hlo
+          hhi)))
+    (have hat2 (proc_at buffers_table buffers_code lo hi (su_push c v (+ p 5) (+ p 6)) s)
+      (exact
+        (proc_same buffers_table buffers_code lo hi (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v))
+          (su_push c v (+ p 5) (+ p 6))
+          s
+          (same_stack_at_pc (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v)) (w64 (+ p 6)))
+          (And.left (And.right gp)))))
+    (have hh (holds (Cpu.mem (su_push c v (+ p 5) (+ p 6))) s (cons (w64 v) xs))
+      (show (holds (Cpu.mem (pushed (x_mov_ri c 7 v (w64 (+ p 5))) (w64 v))) s (cons (w64 v) xs)))
+      (rw (And.left (And.right (And.right gp))))
+      (exact (holds_pushed (Cpu.mem (x_mov_ri c 7 v (w64 (+ p 5)))) s (w64 v) xs hx1)))
+    (have hso (same_outside (Cpu.mem c) (Cpu.mem (su_push c v (+ p 5) (+ p 6))) s (+ s 8))
+      (exact (And.right (And.right (And.right gp)))))
+    (have w5 (and (<= 4194424 (+ p 5)) (< (+ p 5) 4194646))
+      (exact
+        (site_within buffers_table 4194424 4194646 (+ p 5) (Prod.mk (Push 7) 1) table_within hs2)))
+    (have w5b (< (+ p 5) 4194646) (exact (And.right w5)))
+    (have pc1 (= (w64_val (Cpu.rip (x_mov_ri c 7 v (w64 (+ p 5))))) (+ p 5))
+      (show (= (Nat.mod (+ p 5) 18446744073709551616) (+ p 5)))
+      (apply Nat.mod_eq_of_lt (arith)))
+    (have hr (reaches c (su_push c v (+ p 5) (+ p 6)))
+      (apply (do_mov_ri32 p 7 v 5 (+ p 5)) ((exact hrip)) ((exact (hc p (MovRI32 7 v) 5 hs1))) (rfl)
+        ((apply (do_push (+ p 5) 7 1 (+ p 6)) ((exact pc1))
+           ((exact ((And.left hat1) (+ p 5) (Push 7) 1 hs2)))
+           ((exact (And.left gp)))
+           ((arith))
+           ((exact (reaches_refl (su_push c v (+ p 5) (+ p 6)))))))))
+    (exact (And.intro hr (And.intro hat2 (And.intro hh hso))))))
+;; THE FIRST BUFFER PUSHED. From a state of the file's process at the file's first address
+;; whose stack pointer stands at t, three words above the address s in the stack's range: the
+;; three pushes; the buffer 3 5 7 stands from s.
+(theorem su_first
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (t Nat)
+   (b1 (<= 4194661 lo))
+   (ht (= t (+ s 24)))
+   (hat (proc_at buffers_table buffers_code lo hi c t))
+   (hrip (= (w64_val (Cpu.rip c)) 4194424))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (reaches c (su_3 c))
+    (and (proc_at buffers_table buffers_code lo hi (su_3 c) s)
+      (holds (Cpu.mem (su_3 c)) s sample_xs)))
+  (by
+    (have e1 (= t (+ (+ s 16) 8)) (arith ht))
+    (have e2 (= (+ s 16) (+ (+ s 8) 8)) (arith))
+    (have l1 (<= lo (+ s 16)) (arith))
+    (have l2 (<= lo (+ s 8)) (arith))
+    (have u2 (<= (+ s 16) hi) (arith ht))
+    (have u3 (<= (+ s 8) hi) (arith ht))
+    (have g1 (su_pushed lo hi c (su_1 c) (+ s 16) (cons (w64 7) nil))
+      (exact
+        (su_push_run lo hi c 7 4194424 (+ s 16) t nil b1 e1 hat hrip
+          (Eq.refl (some (Prod.mk (MovRI32 7 7) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          l1
+          hhi
+          (holds_nil (Cpu.mem c) t))))
+    (have g2 (su_pushed lo hi (su_1 c) (su_2 c) (+ s 8) (cons (w64 5) (cons (w64 7) nil)))
+      (exact
+        (su_push_run lo hi (su_1 c) 5 4194430 (+ s 8) (+ s 16) (cons (w64 7) nil) b1 e2
+          (And.left (And.right g1))
+          (Eq.refl 4194430)
+          (Eq.refl (some (Prod.mk (MovRI32 7 5) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          l2
+          u2
+          (And.left (And.right (And.right g1))))))
+    (have g3 (su_pushed lo hi (su_2 c) (su_3 c) s sample_xs)
+      (exact
+        (su_push_run lo hi (su_2 c) 3 4194436 s (+ s 8) (cons (w64 5) (cons (w64 7) nil)) b1
+          (Eq.refl (+ s 8))
+          (And.left (And.right g2))
+          (Eq.refl 4194436)
+          (Eq.refl (some (Prod.mk (MovRI32 7 3) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          hlo
+          u3
+          (And.left (And.right (And.right g2))))))
+    (have hr (reaches c (su_3 c))
+      (exact
+        (reaches_trans c (su_1 c) (su_3 c) (And.left g1)
+          (reaches_trans (su_1 c) (su_2 c) (su_3 c) (And.left g2) (And.left g3)))))
     (exact
-      (code_in_after (buffers_first r f m) (su_in r f m) buffers_table 4194424 4194646
-        140737488347080
-        140737488347136
-        table_within
-        hsegs
-        hso
-        hclear
-        (buffers_code_first r f m)))))
-;; the two buffers hold the sample's lists
-(theorem su_holds_x ((r Regs) (f Flags) (m Mem))
-  (holds (Cpu.mem (su_in r f m)) (w64_val (reg (su_in r f m) 7)) sample_xs)
+      (And.intro hr (And.intro (And.left (And.right g3)) (And.left (And.right (And.right g3))))))))
+;; THE FIRST BUFFER'S ADDRESS KEPT: `mov r14, rsp`
+(theorem su_k_run ((c Cpu) (hc (code_in c buffers_table)) (hrip (= (w64_val (Cpu.rip c)) 4194442)))
+  (reaches c (su_k c))
   (by
-    (show
-      (holds (Cpu.mem (su_in r f m)) 140737488347112
-        (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))))
-    (apply holds_cons (rfl)
-      ((apply holds_cons (rfl)
-         ((apply holds_cons (rfl)
-            ((exact (holds_nil (Cpu.mem (su_in r f m)) (+ (+ (+ 140737488347112 8) 8) 8)))))))))))
-(theorem su_holds_y ((r Regs) (f Flags) (m Mem))
-  (holds (Cpu.mem (su_in r f m)) (w64_val (reg (su_in r f m) 6)) sample_ys)
+    (apply (do_mov_rr 4194442 14 4 3 4194445) ((exact hrip))
+      ((exact
+         (hc 4194442 (MovRmR (RmReg 14) 4) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 14) 4) 3))))))
+      (rfl)
+      ((exact (reaches_refl (su_k c)))))))
+;; THE SECOND BUFFER PUSHED. From a state of the file's process at the second buffer's first
+;; push, whose stack pointer stands at t, three words above s: the three pushes; the buffer
+;; 2 4 6 stands from s, and a list that stood at or above t stands as it did.
+(theorem su_second
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (t Nat)
+   (q Nat)
+   (zs (List (BitVec 64)))
+   (b1 (<= 4194661 lo))
+   (ht (= t (+ s 24)))
+   (hat (proc_at buffers_table buffers_code lo hi c t))
+   (hrip (= (w64_val (Cpu.rip c)) 4194445))
+   (hz (holds (Cpu.mem c) q zs))
+   (hq (<= t q))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (reaches c (su_6 c))
+    (and (proc_at buffers_table buffers_code lo hi (su_6 c) s)
+      (and (holds (Cpu.mem (su_6 c)) s sample_ys) (holds (Cpu.mem (su_6 c)) q zs))))
   (by
-    (show
-      (holds (Cpu.mem (su_in r f m)) 140737488347088
-        (cons (w64 2) (cons (w64 4) (cons (w64 6) nil)))))
-    (apply holds_cons (rfl)
-      ((apply holds_cons (rfl)
-         ((apply holds_cons (rfl)
-            ((exact (holds_nil (Cpu.mem (su_in r f m)) (+ (+ (+ 140737488347088 8) 8) 8)))))))))))
+    (have e1 (= t (+ (+ s 16) 8)) (arith ht))
+    (have e2 (= (+ s 16) (+ (+ s 8) 8)) (arith))
+    (have l1 (<= lo (+ s 16)) (arith))
+    (have l2 (<= lo (+ s 8)) (arith))
+    (have u2 (<= (+ s 16) hi) (arith ht))
+    (have u3 (<= (+ s 8) hi) (arith ht))
+    (have g1 (su_pushed lo hi c (su_4 c) (+ s 16) (cons (w64 6) nil))
+      (exact
+        (su_push_run lo hi c 6 4194445 (+ s 16) t nil b1 e1 hat hrip
+          (Eq.refl (some (Prod.mk (MovRI32 7 6) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          l1
+          hhi
+          (holds_nil (Cpu.mem c) t))))
+    (have g2 (su_pushed lo hi (su_4 c) (su_5 c) (+ s 8) (cons (w64 4) (cons (w64 6) nil)))
+      (exact
+        (su_push_run lo hi (su_4 c) 4 4194451 (+ s 8) (+ s 16) (cons (w64 6) nil) b1 e2
+          (And.left (And.right g1))
+          (Eq.refl 4194451)
+          (Eq.refl (some (Prod.mk (MovRI32 7 4) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          l2
+          u2
+          (And.left (And.right (And.right g1))))))
+    (have g3 (su_pushed lo hi (su_5 c) (su_6 c) s sample_ys)
+      (exact
+        (su_push_run lo hi (su_5 c) 2 4194457 s (+ s 8) (cons (w64 4) (cons (w64 6) nil)) b1
+          (Eq.refl (+ s 8))
+          (And.left (And.right g2))
+          (Eq.refl 4194457)
+          (Eq.refl (some (Prod.mk (MovRI32 7 2) 5)))
+          (Eq.refl (some (Prod.mk (Push 7) 1)))
+          hlo
+          u3
+          (And.left (And.right (And.right g2))))))
+    ;; the list above stands through the three pushes
+    (have c1 (or (<= (+ q (* 8 (List.length zs))) (+ s 16)) (<= (+ (+ s 16) 8) q))
+      (apply Or.inr ((arith ht))))
+    (have z1 (holds (Cpu.mem (su_4 c)) q zs)
+      (exact
+        (holds_same (Cpu.mem c) (Cpu.mem (su_4 c)) (+ s 16) (+ (+ s 16) 8) q zs hz
+          (And.right (And.right (And.right g1)))
+          c1)))
+    (have c2 (or (<= (+ q (* 8 (List.length zs))) (+ s 8)) (<= (+ (+ s 8) 8) q))
+      (apply Or.inr ((arith ht))))
+    (have z2 (holds (Cpu.mem (su_5 c)) q zs)
+      (exact
+        (holds_same (Cpu.mem (su_4 c)) (Cpu.mem (su_5 c)) (+ s 8) (+ (+ s 8) 8) q zs z1
+          (And.right (And.right (And.right g2)))
+          c2)))
+    (have c3 (or (<= (+ q (* 8 (List.length zs))) s) (<= (+ s 8) q)) (apply Or.inr ((arith ht))))
+    (have z3 (holds (Cpu.mem (su_6 c)) q zs)
+      (exact
+        (holds_same (Cpu.mem (su_5 c)) (Cpu.mem (su_6 c)) s (+ s 8) q zs z2
+          (And.right (And.right (And.right g3)))
+          c3)))
+    (have hr (reaches c (su_6 c))
+      (exact
+        (reaches_trans c (su_4 c) (su_6 c) (And.left g1)
+          (reaches_trans (su_4 c) (su_5 c) (su_6 c) (And.left g2) (And.left g3)))))
+    (exact
+      (And.intro hr
+        (And.intro (And.left (And.right g3)) (And.intro (And.left (And.right (And.right g3))) z3))))))
+;; THE ARGUMENTS: `mov rsi, rsp`, `mov rdi, r14`, `mov edx, 3`
+(theorem su_g_run ((c Cpu) (hc (code_in c buffers_table)) (hrip (= (w64_val (Cpu.rip c)) 4194463)))
+  (reaches c (su_g c))
+  (by
+    (have hc7 (code_in (x_mov_rr c 6 4 (w64 4194466)) buffers_table) (exact hc))
+    (have hc8 (code_in (x_mov_rr (x_mov_rr c 6 4 (w64 4194466)) 7 14 (w64 4194469)) buffers_table)
+      (exact hc))
+    (apply (do_mov_rr 4194463 6 4 3 4194466) ((exact hrip))
+      ((exact (hc 4194463 (MovRmR (RmReg 6) 4) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 6) 4) 3))))))
+      (rfl)
+      ((apply (do_mov_rr 4194466 7 14 3 4194469) (rfl)
+         ((exact
+            (hc7 4194466 (MovRmR (RmReg 7) 14) 3 (Eq.refl (some (Prod.mk (MovRmR (RmReg 7) 14) 3))))))
+         (rfl)
+         ((apply (do_mov_ri32 4194469 2 3 5 4194474) (rfl)
+            ((exact (hc8 4194469 (MovRI32 2 3) 5 (Eq.refl (some (Prod.mk (MovRI32 2 3) 5))))))
+            (rfl)
+            ((exact (reaches_refl (su_g c)))))))))))
+;; THE CALL. From a state of the file's process at the call, whose stack pointer stands at t, a
+;; word above s: the return address pushed at s, and `both`'s first instruction.
+(theorem su_call
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (t Nat)
+   (b1 (<= 4194661 lo))
+   (ht (= t (+ s 8)))
+   (hat (proc_at buffers_table buffers_code lo hi c t))
+   (hrip (= (w64_val (Cpu.rip c)) 4194474))
+   (hlo (<= lo s))
+   (hhi (<= t hi)))
+  (and (reaches c (at_pc (su_r c) (w64 4194614)))
+    (and (proc_at buffers_table buffers_code lo hi (su_r c) s)
+      (same_outside (Cpu.mem c) (Cpu.mem (su_r c)) s (+ s 8))))
+  (by
+    (have hsz (< (+ 4194424 (List.length buffers_code)) lo) (arith buffers_ends))
+    (have hchi (<= (+ 4194646 15) lo) (arith))
+    (have hc (code_in c buffers_table) (exact (And.left hat)))
+    (have gp
+      (and (= (mapped (Cpu.segs c) (push_at c) 8 2) true)
+        (and (proc_at buffers_table buffers_code lo hi (su_r c) s)
+          (and (= (Cpu.mem (su_r c)) (mem_put64 (Cpu.mem c) s (w64_val (w64 4194479))))
+            (same_outside (Cpu.mem c) (Cpu.mem (su_r c)) s (+ s 8)))))
+      (exact
+        (proc_pushed buffers_table buffers_code 4194646 lo hi c (w64 4194479) s t hsz table_within
+          hchi
+          ht
+          hat
+          hlo
+          hhi)))
+    (have hr (reaches c (at_pc (su_r c) (w64 4194614)))
+      (apply (do_call 4194474 5 135 4194479 4194614) ((exact hrip))
+        ((exact (hc 4194474 (Call 135) 5 (Eq.refl (some (Prod.mk (Call 135) 5))))))
+        ((exact (And.left gp)))
+        (rfl)
+        (rfl)
+        ((exact (reaches_refl (at_pc (su_r c) (w64 4194614)))))))
+    (exact
+      (And.intro hr (And.intro (And.left (And.right gp)) (And.right (And.right (And.right gp))))))))
 
 ;; ---- from `both`'s return to the exit -----------------------------------------------------------
 ;; the status the evaluator gives the functions is 19
 (theorem sample_is () (= (% (w64_val sample_value) 256) 19) (by decide))
-;; From any state `both`'s contract allows at its return — the value in rax, memory changed in
-;; the first buffer and the frame alone, the return as the caller needs it — three instructions
-;; end the process with the value's low byte.
+;; From any state at the address after the call with the table in place and the value in rax:
+;; three instructions end the process with the value's low byte.
 (theorem buffers_end
-  ((r Regs)
-   (f Flags)
-   (m Mem)
-   (c2 Cpu)
-   (hv (= (reg c2 0) sample_value))
-   (hso
-     (same_outside2 (Cpu.mem (su_in r f m)) (Cpu.mem c2) (w64_val (reg (su_in r f m) 7))
-       (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
-       140737488347056
-       (+ 140737488347056 24)))
-   (hret (returned (su_in r f m) c2)))
+  ((c2 Cpu)
+   (hcode2 (code_in c2 buffers_table))
+   (hrip2 (= (w64_val (Cpu.rip c2)) 4194479))
+   (hv (= (reg c2 0) sample_value)))
   (exists ((n Fuel)) (= (run n c2) (RExit (% (w64_val sample_value) 256))))
   (by
-    (have kp (kept (su_in r f m) c2) (exact (returned_kept (su_in r f m) c2 hret)))
-    (have hsegs (= (Cpu.segs c2) (Cpu.segs (su_in r f m))) (exact (kept_segs (su_in r f m) c2 kp)))
-    (have b1 (<= 140737488347056 (w64_val (reg (su_in r f m) 7))) (decide))
-    (have b2 (<= 140737488347056 140737488347056) (decide))
-    (have b3 (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 140737488347136)
-      (decide))
-    (have b4 (<= (+ 140737488347056 24) 140737488347136) (decide))
-    (have hull (same_outside (Cpu.mem (su_in r f m)) (Cpu.mem c2) 140737488347056 140737488347136)
-      (exact
-        (same_outside2_hull (Cpu.mem (su_in r f m)) (Cpu.mem c2) (w64_val (reg (su_in r f m) 7))
-          (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
-          140737488347056
-          (+ 140737488347056 24)
-          140737488347056
-          140737488347136
-          hso
-          b1
-          b2
-          b3
-          b4)))
-    (have hclear (or (<= (+ 4194646 15) 140737488347056) (<= 140737488347136 4194424))
-      (apply Or.inl ((decide))))
-    (have hcode2 (code_in c2 buffers_table)
-      (exact
-        (code_in_after (su_in r f m) c2 buffers_table 4194424 4194646 140737488347056
-          140737488347136
-          table_within
-          hsegs
-          hull
-          hclear
-          (su_code r f m))))
-    (have hra (= (ret_addr (su_in r f m)) (w64 4194479))
-      (exact (ret_addr_pushed (su_b (buffers_first r f m)) (w64 4194479))))
-    (have hrip2 (= (w64_val (Cpu.rip c2)) 4194479)
-      (rw (returned_at (su_in r f m) c2 hret))
-      (rw hra)
-      rfl)
     (have hcode3 (code_in (x_mov_rr c2 7 0 (w64 4194482)) buffers_table) (exact hcode2))
     (have hcode4
       (code_in (x_mov_ri (x_mov_rr c2 7 0 (w64 4194482)) 0 60 (w64 4194487)) buffers_table)
@@ -287,100 +487,358 @@
                  (rw hv)
                  rfl))))))))))
 
-;; ---- the file, end to end -------------------------------------------------------------------------
-;; The file `buffers.shard` writes, started as the model's runner starts it — whatever the
-;; registers but the stack pointer, the flags and the memory then hold — exits with 19.
-(theorem buffers_exits ((r Regs) (f Flags) (m Mem)) (exits buffers_file (runner_start r f m) 19)
+;; ---- from `both`'s first instruction to the exit ---------------------------------------------------
+;; From a state c of the file's process that stands as the first instructions leave it, F the
+;; lowest address of the ten words the file uses of its stack: `both`'s frame is the three words
+;; from F, the return address stands at F + 24, the second buffer at F + 32 with its address in
+;; rsi, the first at F + 56 with its address in rdi, the count 3 in rdx. Every hypothesis of
+;; `both_contract` follows from where the ten words lie — inside the stack's range, which begins
+;; past the code —; the contract gives the state at the return, and `buffers_end` the exit.
+(theorem buffers_from
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (F Nat)
+   (b1 (<= 4194661 lo))
+   (b2 (<= lo F))
+   (b3 (<= (+ F 80) hi))
+   (b4 (<= hi 140737488355328))
+   (hat (proc_at buffers_table buffers_code lo hi c (+ F 24)))
+   (hn (= (reg c 2) (w64 3)))
+   (h7 (= (w64_val (reg c 7)) (+ F 56)))
+   (h6 (= (w64_val (reg c 6)) (+ F 32)))
+   (hx (holds (Cpu.mem c) (+ F 56) sample_xs))
+   (hy (holds (Cpu.mem c) (+ F 32) sample_ys))
+   (hra (= (ret_addr c) (w64 4194479))))
+  (exists ((n Fuel)) (= (run n (at_pc c (w64 4194614))) (RExit 19)))
   (by
-    (have n0 (= (reg (su_in r f m) 2) (w64 3)) rfl)
-    (have hmxr
-      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 7)) (w64_val (w64 3)) 4)
-      (apply mapped_words_of (decide)))
-    (have hmxw
-      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 7)) (w64_val (w64 3)) 2)
-      (apply mapped_words_of (decide)))
-    (have hmy
-      (mapped_words (Cpu.segs (su_in r f m)) (w64_val (reg (su_in r f m) 6)) (w64_val (w64 3)) 4)
-      (apply mapped_words_of (decide)))
-    (have hwx (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
-      (decide))
-    (have hwy (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
-      (decide))
-    (have hf (= (w64_val (reg (su_in r f m) 4)) (+ 140737488347056 24)) (decide))
-    (have hfr (mapped_words (Cpu.segs (su_in r f m)) 140737488347056 4 4)
-      (apply mapped_words_of (decide)))
-    (have hfw (mapped_words (Cpu.segs (su_in r f m)) 140737488347056 3 2)
-      (apply mapped_words_of (decide)))
+    (have hcode (code_in c buffers_table) (exact (And.left hat)))
+    (have hsegs (= (Cpu.segs c) (loaded_segs buffers_code (MkSeg lo hi 6)))
+      (exact (And.left (And.right hat))))
+    (have hsz (< (+ 4194424 (List.length buffers_code)) lo) (arith buffers_ends))
+    (have k4 (= (band 6 4) 4) (decide))
+    (have k2 (= (band 6 2) 2) (decide))
+    (have hx7 (holds (Cpu.mem c) (w64_val (reg c 7)) sample_xs) (rw h7) (exact hx))
+    (have hy6 (holds (Cpu.mem c) (w64_val (reg c 6)) sample_ys) (rw h6) (exact hy))
+    ;; the two buffers and the frame lie in the stack's range
+    (have x1 (<= lo (+ F 56)) (arith))
+    (have x2 (<= (+ (+ F 56) (* 8 3)) hi) (arith))
+    (have y1 (<= lo (+ F 32)) (arith))
+    (have y2 (<= (+ (+ F 32) (* 8 3)) hi) (arith))
+    (have hmxr (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (w64 3)) 4)
+      (rw h7)
+      (rw hsegs)
+      (exact (stack_words buffers_code lo hi (+ F 56) 3 4 hsz x1 x2 k4)))
+    (have hmxw (mapped_words (Cpu.segs c) (w64_val (reg c 7)) (w64_val (w64 3)) 2)
+      (rw h7)
+      (rw hsegs)
+      (exact (stack_words buffers_code lo hi (+ F 56) 3 2 hsz x1 x2 k2)))
+    (have hmy (mapped_words (Cpu.segs c) (w64_val (reg c 6)) (w64_val (w64 3)) 4)
+      (rw h6)
+      (rw hsegs)
+      (exact (stack_words buffers_code lo hi (+ F 32) 3 4 hsz y1 y2 k4)))
+    (have hwx (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
+      (show (<= (+ (w64_val (reg c 7)) 24) 18446744073709551616))
+      (rw h7)
+      (arith))
+    (have hwy (<= (+ (w64_val (reg c 6)) (* 8 (w64_val (w64 3)))) 18446744073709551616)
+      (show (<= (+ (w64_val (reg c 6)) 24) 18446744073709551616))
+      (rw h6)
+      (arith))
+    (have hchi (<= (+ 4194646 15) lo) (arith))
+    (have f4 (<= (+ (+ F (* 8 3)) 8) hi) (arith))
+    (have hroom (room c 4194424 4194646 F 3)
+      (exact (proc_room buffers_table buffers_code 4194646 lo hi c F 3 hsz hchi hat b2 f4)))
+    ;; they lie clear of the code and of each other
     (have dcode
-      (or (<= 4194661 (w64_val (reg (su_in r f m) 7)))
-        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3)))) 4194424))
-      (apply Or.inl ((decide))))
+      (or (<= 4194661 (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3)))) 4194424))
+      (apply Or.inl ((rw h7) (arith))))
     (have dy
-      (or
-        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (w64_val (w64 3))))
-          (w64_val (reg (su_in r f m) 6)))
-        (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (List.length sample_ys)))
-          (w64_val (reg (su_in r f m) 7))))
-      (apply Or.inr ((decide))))
-    (have dfc (or (<= 4194661 140737488347056) (<= (+ 140737488347056 24) 4194424))
-      (apply Or.inl ((decide))))
+      (or (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3)))) (w64_val (reg c 6)))
+        (<= (+ (w64_val (reg c 6)) (* 8 (List.length sample_ys))) (w64_val (reg c 7))))
+      (apply Or.inr
+        ((show (<= (+ (w64_val (reg c 6)) 24) (w64_val (reg c 7)))) (rw h6) (rw h7) (arith))))
     (have dfx
-      (or (<= (+ 140737488347056 32) (w64_val (reg (su_in r f m) 7)))
-        (<= (+ (w64_val (reg (su_in r f m) 7)) (* 8 (List.length sample_xs))) 140737488347056))
-      (apply Or.inl ((decide))))
+      (or (<= (+ F 32) (w64_val (reg c 7)))
+        (<= (+ (w64_val (reg c 7)) (* 8 (List.length sample_xs))) F))
+      (apply Or.inl ((rw h7) (arith))))
     (have dfy
-      (or (<= (+ 140737488347056 24) (w64_val (reg (su_in r f m) 6)))
-        (<= (+ (w64_val (reg (su_in r f m) 6)) (* 8 (List.length sample_ys))) 140737488347056))
-      (apply Or.inl ((decide))))
+      (or (<= (+ F 24) (w64_val (reg c 6)))
+        (<= (+ (w64_val (reg c 6)) (* 8 (List.length sample_ys))) F))
+      (apply Or.inl ((rw h6) (arith))))
     (cases
-      (both_contract sample_xs sample_ys (w64 3) sample_rx sample_ry (su_in r f m) 140737488347056
-        (su_code r f m)
-        n0
-        (su_holds_x r f m)
-        (su_holds_y r f m)
-        hmxr
-        hmxw
+      (both_contract sample_xs sample_ys (w64 3) sample_rx sample_ry c F hcode hn hx7 hy6 hmxr hmxw
         hmy
         hwx
         hwy
-        (And.intro hf (And.intro hfr (And.intro hfw dfc)))
+        hroom
         dcode
         dy
         dfx
         dfy)
-      ((intro (c2 h)
-         (cases h
-           ((intro (hreach2 h1)
-              (cases h1
-                ((intro (hv h2)
-                   (cases h2
-                     ((intro (hheld h3)
-                        (cases h3
-                          ((intro (hso hret)
-                             (have hstart
-                               (reaches (buffers_first r f m) (at_pc (su_in r f m) (w64 4194614)))
-                               (apply (Exists.intro seventeen) ((exact (buffers_startup r f m)))))
-                             (cases
-                               (reaches_trans (buffers_first r f m)
-                                 (at_pc (su_in r f m) (w64 4194614))
-                                 c2
-                                 hstart
-                                 hreach2)
-                               ((intro (k hk)
-                                  (cases (buffers_end r f m c2 hv hso hret)
-                                    ((intro (n hn)
-                                       (cases (run_of_steps k (buffers_first r f m) c2 n hk)
-                                         ((intro (n2 hn2)
-                                            (apply (Exists.intro n2)
-                                              ((show
-                                                 (= (run_file n2 buffers_file (runner_start r f m))
-                                                   (RExit 19)))
-                                               (rw buffers_file_is)
-                                               (rw
-                                                 (run_file_exec n2 buffers_code (runner_start r f m)
-                                                   buffers_size))
-                                               (show (= (run n2 (buffers_first r f m)) (RExit 19)))
-                                               (rw hn2)
-                                               (rw hn)
-                                               (rw sample_is)
-                                               rfl))))))))))))))))))))))))))))
+      ((intro (c2 h) (have hreach2 (reaches (at_pc c (w64 4194614)) c2) (exact (And.left h)))
+         (have hv (= (reg c2 0) sample_value) (exact (And.left (And.right h))))
+         (have hso
+           (same_outside2 (Cpu.mem c) (Cpu.mem c2) (w64_val (reg c 7))
+             (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3))))
+             F
+             (+ F 24))
+           (exact (And.left (And.right (And.right (And.right h))))))
+         (have hret (returned c c2) (exact (And.right (And.right (And.right (And.right h))))))
+         ;; the code is in place at the return: what `both` wrote lies in the ten words
+         (have hsegs2 (= (Cpu.segs c2) (Cpu.segs c))
+           (exact (kept_segs c c2 (returned_kept c c2 hret))))
+         (have q1 (<= F (w64_val (reg c 7))) (rw h7) (arith))
+         (have q3 (<= (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3)))) (+ F 80))
+           (show (<= (+ (w64_val (reg c 7)) 24) (+ F 80)))
+           (rw h7)
+           (arith))
+         (have q4 (<= (+ F 24) (+ F 80)) (arith))
+         (have hull (same_outside (Cpu.mem c) (Cpu.mem c2) F (+ F 80))
+           (exact
+             (same_outside2_hull (Cpu.mem c) (Cpu.mem c2) (w64_val (reg c 7))
+               (+ (w64_val (reg c 7)) (* 8 (w64_val (w64 3))))
+               F
+               (+ F 24)
+               F
+               (+ F 80)
+               hso
+               q1
+               (Nat.le_refl F)
+               q3
+               q4)))
+         (have hclear (or (<= (+ 4194646 15) F) (<= (+ F 80) 4194424)) (apply Or.inl ((arith))))
+         (have hcode2 (code_in c2 buffers_table)
+           (exact
+             (code_in_after c c2 buffers_table 4194424 4194646 F (+ F 80) table_within hsegs2 hull
+               hclear
+               hcode)))
+         (have hrip2 (= (w64_val (Cpu.rip c2)) 4194479) (rw (returned_at c c2 hret)) (rw hra) rfl)
+         (cases (buffers_end c2 hcode2 hrip2 hv)
+           ((intro (n hn2)
+              (cases hreach2
+                ((intro (k hk)
+                   (cases (run_of_steps k (at_pc c (w64 4194614)) c2 n hk)
+                     ((intro (n3 hn3)
+                        (apply (Exists.intro n3)
+                          ((show (= (run n3 (at_pc c (w64 4194614))) (RExit 19)))
+                           (rw hn3)
+                           (rw hn2)
+                           (rw sample_is)
+                           rfl))))))))))))))))
+
+;; ---- from the first instruction to the exit ----------------------------------------------------------
+;; From a state of the file's process at the file's first address whose stack pointer stands at
+;; sp, ten words above an address F in the stack's range: the five stages, each by its theorem,
+;; lead to `both`'s first instruction in a state `buffers_from` takes to the exit.
+(theorem buffers_runs
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (F Nat)
+   (sp Nat)
+   (hF (= (+ F 80) sp))
+   (b1 (<= 4194661 lo))
+   (b2 (<= lo F))
+   (hsp (<= sp hi))
+   (b4 (<= hi 140737488355328))
+   (hat (proc_at buffers_table buffers_code lo hi c sp))
+   (hrip (= (w64_val (Cpu.rip c)) 4194424)))
+  (exists ((n Fuel)) (= (run n c) (RExit 19)))
+  (by
+    (have b3 (<= (+ F 80) hi) (rw hF) (exact hsp))
+    ;; the first buffer, from F + 56
+    (have e1 (= sp (+ (+ F 56) 24)) (arith hF))
+    (have l1 (<= lo (+ F 56)) (arith))
+    (have g1
+      (and (reaches c (su_3 c))
+        (and (proc_at buffers_table buffers_code lo hi (su_3 c) (+ F 56))
+          (holds (Cpu.mem (su_3 c)) (+ F 56) sample_xs)))
+      (exact (su_first lo hi c (+ F 56) sp b1 e1 hat hrip l1 hsp)))
+    ;; its address in r14
+    (have r2 (reaches (su_3 c) (su_k (su_3 c)))
+      (exact (su_k_run (su_3 c) (And.left (And.left (And.right g1))) (Eq.refl 4194442))))
+    (have a2 (proc_at buffers_table buffers_code lo hi (su_k (su_3 c)) (+ F 56))
+      (exact
+        (proc_same buffers_table buffers_code lo hi (su_3 c) (su_k (su_3 c)) (+ F 56)
+          (su_k_stack (su_3 c))
+          (And.left (And.right g1)))))
+    (have x2 (holds (Cpu.mem (su_k (su_3 c))) (+ F 56) sample_xs)
+      (exact
+        (holds_same_stack (su_3 c) (su_k (su_3 c)) (+ F 56) sample_xs (su_k_stack (su_3 c))
+          (And.right (And.right g1)))))
+    ;; the second buffer, from F + 32
+    (have e2 (= (+ F 56) (+ (+ F 32) 24)) (arith))
+    (have l2 (<= lo (+ F 32)) (arith))
+    (have u2 (<= (+ F 56) hi) (arith))
+    (have g3
+      (and (reaches (su_k (su_3 c)) (su_6 (su_k (su_3 c))))
+        (and (proc_at buffers_table buffers_code lo hi (su_6 (su_k (su_3 c))) (+ F 32))
+          (and (holds (Cpu.mem (su_6 (su_k (su_3 c)))) (+ F 32) sample_ys)
+            (holds (Cpu.mem (su_6 (su_k (su_3 c)))) (+ F 56) sample_xs))))
+      (exact
+        (su_second lo hi (su_k (su_3 c)) (+ F 32) (+ F 56) (+ F 56) sample_xs b1 e2 a2
+          (Eq.refl 4194445)
+          x2
+          (Nat.le_refl (+ F 56))
+          l2
+          u2)))
+    ;; the arguments
+    (have r4 (reaches (su_6 (su_k (su_3 c))) (su_g (su_6 (su_k (su_3 c)))))
+      (exact
+        (su_g_run (su_6 (su_k (su_3 c))) (And.left (And.left (And.right g3))) (Eq.refl 4194463))))
+    (have a4 (proc_at buffers_table buffers_code lo hi (su_g (su_6 (su_k (su_3 c)))) (+ F 32))
+      (exact
+        (proc_same buffers_table buffers_code lo hi (su_6 (su_k (su_3 c)))
+          (su_g (su_6 (su_k (su_3 c))))
+          (+ F 32)
+          (su_g_stack (su_6 (su_k (su_3 c))))
+          (And.left (And.right g3)))))
+    (have y4 (holds (Cpu.mem (su_g (su_6 (su_k (su_3 c))))) (+ F 32) sample_ys)
+      (exact
+        (holds_same_stack (su_6 (su_k (su_3 c))) (su_g (su_6 (su_k (su_3 c)))) (+ F 32) sample_ys
+          (su_g_stack (su_6 (su_k (su_3 c))))
+          (And.left (And.right (And.right g3))))))
+    (have x4 (holds (Cpu.mem (su_g (su_6 (su_k (su_3 c))))) (+ F 56) sample_xs)
+      (exact
+        (holds_same_stack (su_6 (su_k (su_3 c))) (su_g (su_6 (su_k (su_3 c)))) (+ F 56) sample_xs
+          (su_g_stack (su_6 (su_k (su_3 c))))
+          (And.right (And.right (And.right g3))))))
+    ;; the return address, at F + 24
+    (have e5 (= (+ F 32) (+ (+ F 24) 8)) (arith))
+    (have l5 (<= lo (+ F 24)) (arith))
+    (have u5 (<= (+ F 32) hi) (arith))
+    (have g5
+      (and
+        (reaches (su_g (su_6 (su_k (su_3 c))))
+          (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614)))
+        (and
+          (proc_at buffers_table buffers_code lo hi (su_r (su_g (su_6 (su_k (su_3 c))))) (+ F 24))
+          (same_outside (Cpu.mem (su_g (su_6 (su_k (su_3 c)))))
+            (Cpu.mem (su_r (su_g (su_6 (su_k (su_3 c))))))
+            (+ F 24)
+            (+ (+ F 24) 8))))
+      (exact
+        (su_call lo hi (su_g (su_6 (su_k (su_3 c)))) (+ F 24) (+ F 32) b1 e5 a4 (Eq.refl 4194474) l5
+          u5)))
+    ;; the state `both` is entered in: the count, the two addresses, the two buffers
+    (have hn (= (reg (su_r (su_g (su_6 (su_k (su_3 c))))) 2) (w64 3))
+      (rw (su_r_rdx (su_g (su_6 (su_k (su_3 c))))))
+      (exact (su_g_rdx (su_6 (su_k (su_3 c))))))
+    (have h7 (= (w64_val (reg (su_r (su_g (su_6 (su_k (su_3 c))))) 7)) (+ F 56))
+      (rw (su_r_rdi (su_g (su_6 (su_k (su_3 c))))))
+      (rw (su_g_rdi (su_6 (su_k (su_3 c)))))
+      (rw (su_6_r14 (su_k (su_3 c))))
+      (rw (su_k_r14 (su_3 c)))
+      (exact (And.right (And.right (And.left (And.right g1))))))
+    (have h6 (= (w64_val (reg (su_r (su_g (su_6 (su_k (su_3 c))))) 6)) (+ F 32))
+      (rw (su_r_rsi (su_g (su_6 (su_k (su_3 c))))))
+      (rw (su_g_rsi (su_6 (su_k (su_3 c)))))
+      (exact (And.right (And.right (And.left (And.right g3))))))
+    (have cx
+      (or (<= (+ (+ F 56) (* 8 (List.length sample_xs))) (+ F 24)) (<= (+ (+ F 24) 8) (+ F 56)))
+      (apply Or.inr ((arith))))
+    (have hx (holds (Cpu.mem (su_r (su_g (su_6 (su_k (su_3 c)))))) (+ F 56) sample_xs)
+      (exact
+        (holds_same (Cpu.mem (su_g (su_6 (su_k (su_3 c)))))
+          (Cpu.mem (su_r (su_g (su_6 (su_k (su_3 c))))))
+          (+ F 24)
+          (+ (+ F 24) 8)
+          (+ F 56)
+          sample_xs
+          x4
+          (And.right (And.right g5))
+          cx)))
+    (have cy
+      (or (<= (+ (+ F 32) (* 8 (List.length sample_ys))) (+ F 24)) (<= (+ (+ F 24) 8) (+ F 32)))
+      (apply Or.inr ((arith))))
+    (have hy (holds (Cpu.mem (su_r (su_g (su_6 (su_k (su_3 c)))))) (+ F 32) sample_ys)
+      (exact
+        (holds_same (Cpu.mem (su_g (su_6 (su_k (su_3 c)))))
+          (Cpu.mem (su_r (su_g (su_6 (su_k (su_3 c))))))
+          (+ F 24)
+          (+ (+ F 24) 8)
+          (+ F 32)
+          sample_ys
+          y4
+          (And.right (And.right g5))
+          cy)))
+    (have hra (= (ret_addr (su_r (su_g (su_6 (su_k (su_3 c)))))) (w64 4194479))
+      (exact (ret_addr_pushed (su_g (su_6 (su_k (su_3 c)))) (w64 4194479))))
+    (have hstart (reaches c (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614)))
+      (exact
+        (reaches_trans c (su_3 c) (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614))
+          (And.left g1)
+          (reaches_trans (su_3 c) (su_k (su_3 c))
+            (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614))
+            r2
+            (reaches_trans (su_k (su_3 c)) (su_6 (su_k (su_3 c)))
+              (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614))
+              (And.left g3)
+              (reaches_trans (su_6 (su_k (su_3 c))) (su_g (su_6 (su_k (su_3 c))))
+                (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614))
+                r4
+                (And.left g5)))))))
+    (cases
+      (buffers_from lo hi (su_r (su_g (su_6 (su_k (su_3 c))))) F b1 b2 b3 b4
+        (And.left (And.right g5))
+        hn
+        h7
+        h6
+        hx
+        hy
+        hra)
+      ((intro (n hn0)
+         (cases hstart
+           ((intro (k hk)
+              (cases
+                (run_of_steps k c (at_pc (su_r (su_g (su_6 (su_k (su_3 c))))) (w64 4194614)) n hk)
+                ((intro (n2 hn2)
+                   (apply (Exists.intro n2) ((show (= (run n2 c) (RExit 19))) (rw hn2) (exact hn0))))))))))))))
+
+;; ---- the file, end to end -------------------------------------------------------------------------
+;; The file's process, started with the stack pointer at sp, ten words above an address F
+(theorem buffers_exits_from
+  ((lo Nat)
+   (F Nat)
+   (sp Nat)
+   (hi Nat)
+   (hF (= (+ F 80) sp))
+   (b1 (<= 4194661 lo))
+   (b2 (<= lo F))
+   (hsp (<= sp hi))
+   (b4 (<= hi 140737488355328))
+   (r Regs)
+   (f Flags)
+   (m Mem))
+  (exits buffers_file (start_at lo sp hi r f m) 19)
+  (by
+    (have h64 (< sp 18446744073709551616) (arith))
+    (cases
+      (buffers_runs lo hi (buffers_first lo sp hi r f m) F sp hF b1 b2 hsp b4
+        (buffers_first_at lo sp hi r f m b1 h64)
+        (Eq.refl 4194424))
+      ((intro (n hn)
+         (apply (Exists.intro n)
+           ((show (= (run_file n buffers_file (start_at lo sp hi r f m)) (RExit 19)))
+            (rw buffers_file_is)
+            (rw (run_file_exec n buffers_code (start_at lo sp hi r f m) buffers_size))
+            (exact hn))))))))
+;; THE TRIAL'S FILE. Started with ANY stack `stack_ok` allows — its range beginning at or above
+;; 4194661, past the file's table and the fifteen bytes the processor reads from an
+;; instruction's address, with ten words under the stack pointer: the two buffers' six, the
+;; return address and `both`'s frame of three —, whatever the registers but the stack pointer,
+;; the flags and the memory then hold, the file `buffers.shard` writes exits with 19.
+(theorem buffers_exits
+  ((lo Nat) (sp Nat) (hi Nat) (hst (stack_ok lo sp hi 4194661 10)) (r Regs) (f Flags) (m Mem))
+  (exits buffers_file (start_at lo sp hi r f m) 19)
+  (by
+    (have b1 (<= 4194661 lo) (exact (And.left hst)))
+    (have hfit (<= (+ lo (* 8 10)) sp) (exact (And.left (And.right hst))))
+    (have hsp (<= sp hi) (exact (And.left (And.right (And.right hst)))))
+    (have b4 (<= hi 140737488355328) (exact (And.right (And.right (And.right hst)))))
+    (have le80 (<= 80 sp) (arith))
+    (have hF (= (+ (- sp 80) 80) sp) (exact (Nat.sub_add_cancel le80)))
+    (have b2 (<= lo (- sp 80)) (arith hF))
+    (exact (buffers_exits_from lo (- sp 80) sp hi hF b1 b2 hsp b4 r f m))))

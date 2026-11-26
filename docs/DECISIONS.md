@@ -963,11 +963,15 @@ entries are explained under "Measured" at the end.
   table's end (`X_code_end`), where it stated two comparisons with the runner's stack and one
   of its stack need with the runner's room: the need is now in the theorem's own hypothesis.
   The sample of the tree's files (`sample.shard`) and each view's theorem on it are for any
-  address of the data. NOT moved: the model's own trial and its demonstration
-  (`buffers_exits`, `demo_exits`) are statements for `runner_start` — the trial runs its
-  seventeen first instructions by the model and meets its contract's nineteen hypotheses by
-  computation on that start's addresses, and the demonstration is one evaluation; either for
-  any stack is its proof written again, a rule an instruction.
+  address of the data. The model's own trial and its demonstration (`buffers_exits`,
+  `demo_exits`) are for every such start too, each proof written again a rule an instruction:
+  the trial's seventeen first instructions in stages, the state after each a state of the
+  process told by where its stack pointer stands (`v3/models/x86/process.shard`), its
+  contract's nineteen hypotheses met by where ten words lie in the stack's range; the
+  demonstration by a contract of each of its two functions' code, where it was one
+  evaluation. Checked: two of the nineteen as the old proof had them — the stack pointer and a
+  buffer's address as numbers — are refused for an unknown start and accepted for the
+  runner's.
 - Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `two.shard`,
   `x86/dot_hand.shard`, the views `dot/` and `sqdiff/`), not put to the owner one by one; the
   first of them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
