@@ -1,0 +1,433 @@
+;;; v3/compile/x86/put.shard — the platform's `write_all` (std/world.shard) at a module's seam.
+;;; Its code is two moves and the model's loop (models/x86/write.shard `write_all`): the
+;;; convention hands the address and the count over in rdi and rsi, the loop takes them in rsi
+;;; and rdx. The code realizes the function's answer (../put.shard `put_ext`) wherever its
+;;; sixteen instructions stand (`put_realizes`), with no word of stack of its own. Compiled
+;;; code calls it as it calls any outside function.
+(import "seam_laws.shard")
+(import "../put.shard")
+(import "code.shard")
+(import "../../models/x86/write.shard")
+(use std.mem)
+(use compile.put)
+(use compile.x86.code)
+(use compile.x86.seam)
+(use compile.x86.seam_laws)
+(use models.x86.frame)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Os)
+(use models.x86.linux.Outcome)
+(use models.x86.linux.Res)
+(use models.x86.linux.Sent)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.write)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; the code: the count into rdx, the address into rsi, and the loop
+(fn put_code () (List Instr) (cons (MovRmR (RmReg 2) 6) (cons (MovRmR (RmReg 6) 7) write_all)))
+
+;; ---- the bytes of a range, in two memories that agree on it ---------------------------------------
+(theorem mem_bytes_on ((m Mem) (m2 Mem) (n Nat))
+  (forall ((a Nat)) (-> (same_on m m2 a (+ a n)) (= (mem_bytes m2 a n) (mem_bytes m a n))))
+  (by
+    (induction n
+      ((zero () (intro a h) (show (= (mem_bytes m2 a 0) (mem_bytes m a 0)))
+         (rw (mem_bytes_zero m2 a))
+         (rw (mem_bytes_zero m a))
+         rfl)
+       (succ (k ih) (intro a h0) (have h (same_on m m2 a (+ a (+ k 1))) (exact h0))
+         (have hle (<= a a) (exact (Nat.le_refl a)))
+         (have hlt (< a (+ a (+ k 1))) (arith))
+         (have hr (same_on m m2 (+ a 1) (+ (+ a 1) k))
+           (intro x h1 h2)
+           (have h3 (<= a x) (arith))
+           (have h4 (< x (+ a (+ k 1))) (arith))
+           (exact (h x h3 h4)))
+         (show (= (mem_bytes m2 a (+ k 1)) (mem_bytes m a (+ k 1))))
+         (rw (mem_bytes_succ m2 a k))
+         (rw (mem_bytes_succ m a k))
+         (rw (h a hle hlt))
+         (rw (ih (+ a 1) hr))
+         rfl)))))
+
+;; ---- what the loop comes to, as the call's arrival ------------------------------------------------
+;; from a state c2 the call's first instructions come to, which has c's memory and returns
+;; where c would
+(theorem put_arrives
+  ((rs (List Seg))
+   (f Nat)
+   (c Cpu)
+   (E Nat)
+   (o Os)
+   (m Mem)
+   (bs (List Nat))
+   (c2 Cpu)
+   (hcome (comes (at_pc c (w64 E)) o c2 o))
+   (hag (agree rs m (Cpu.mem c)))
+   (hm (= (Cpu.mem c2) (Cpu.mem c)))
+   (hret (forall ((c3 Cpu)) (-> (returned c2 c3) (returned c c3))))
+   (hpost (wa_post (send (Os.ans o) bs) c2 (Os.ans o) (Os.out o) bs)))
+  (arrives rs f 0 c (at_pc c (w64 E)) o (put_out m o bs))
+  (by
+    (have fin
+      (-> (wa_post (send (Os.ans o) bs) c2 (Os.ans o) (Os.out o) bs)
+        (arrives rs f 0 c (at_pc c (w64 E)) o (put_out m o bs)))
+      (unfold put_out)
+      (cases (send (Os.ans o) bs) hs
+        ((SAll (left)
+           (show
+             (->
+               (exists ((c3 Cpu))
+                 (and
+                   (comes c2 (MkOs (Os.ans o) (Os.out o)) c3 (MkOs left (List.append (Os.out o) bs)))
+                   (and (returned c2 c3) (and (= (Cpu.mem c3) (Cpu.mem c2)) (= (reg c3 0) (w64 1))))))
+               (rets rs f 0 c (at_pc c (w64 E)) o (w64 1) m (MkOs left (List.append (Os.out o) bs)))))
+           (intro gg)
+           (cases gg
+             ((intro (c3 g)
+                (have hc3 (comes c2 o c3 (MkOs left (List.append (Os.out o) bs)))
+                  (exact (And.left g)))
+                (have hmem (= (Cpu.mem c3) (Cpu.mem c))
+                  (exact (Eq.trans (And.left (And.right (And.right g))) hm)))
+                (have hag3 (agree rs m (Cpu.mem c3)) (rw hmem) (exact hag))
+                (have hkm (kept_mem rs f 0 (Cpu.mem c) (Cpu.mem c3))
+                  (rw hmem)
+                  (exact (kept_refl rs f 0 (Cpu.mem c))))
+                (apply (Exists.intro c3)
+                  ((exact
+                     (And.intro
+                       (comes_trans (at_pc c (w64 E)) o c2 o c3
+                         (MkOs left (List.append (Os.out o) bs))
+                         hcome
+                         hc3)
+                       (And.intro (And.right (And.right (And.right g)))
+                         (And.intro hag3 (And.intro hkm (hret c3 (And.left (And.right g))))))))))))))
+         (SFail (q)
+           (show
+             (->
+               (ends_at c2 (MkOs (Os.ans o) (Os.out o)) (RExit status_io (List.append (Os.out o) q)))
+               (ends_at (at_pc c (w64 E)) o (RExit status_io (List.append (Os.out o) q)))))
+           (intro gg)
+           (have g2 (ends_at c2 o (RExit status_io (List.append (Os.out o) q))) (exact gg))
+           (exact
+             (ends_of_comes (at_pc c (w64 E)) o c2 o (RExit status_io (List.append (Os.out o) q))
+               hcome
+               g2)))
+         (SKill (q)
+           (show
+             (-> (ends_at c2 (MkOs (Os.ans o) (Os.out o)) (RKill (List.append (Os.out o) q)))
+               (ends_at (at_pc c (w64 E)) o (RKill (List.append (Os.out o) q)))))
+           (intro gg)
+           (have g2 (ends_at c2 o (RKill (List.append (Os.out o) q))) (exact gg))
+           (exact
+             (ends_of_comes (at_pc c (w64 E)) o c2 o (RKill (List.append (Os.out o) q)) hcome g2))))))
+    (exact (fin hpost))))
+
+;; ---- THE CODE REALIZES THE ANSWER -------------------------------------------------------------------
+;; In any table that has the sixteen instructions from the address E, the code range ending at
+;; or below 2^47 less fifteen: called by the convention with an address and a count, with no
+;; word of stack but the return address, the code comes to what the answer says.
+(theorem put_realizes
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (E Nat)
+   (rs (List Seg))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 140737488355328))
+   (hpl (placed tbl E put_code)))
+  (wrealizes tbl clo chi E 0 rs (put_ans rs))
+  (by
+    (intro c vs m f o out hcode hargs hroom hdo hag hans)
+    (have hc64 (<= (+ chi 15) 18446744073709551616) (arith))
+    (have s0 (= (site tbl E) (some (Prod.mk (MovRmR (RmReg 2) 6) 3))) (exact (And.left hpl)))
+    (have s1 (= (site tbl (+ E 3)) (some (Prod.mk (MovRmR (RmReg 6) 7) 3)))
+      (exact (And.left (And.right hpl))))
+    (have w0 (= (site tbl (+ E 6)) (some (Prod.mk (MovRI32 0 1) 5)))
+      (exact (And.left (And.right (And.right hpl)))))
+    (have w5 (= (site tbl (+ (+ E 6) 5)) (some (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3)))
+      (exact (And.left (And.right (And.right (And.right hpl))))))
+    (have w8 (= (site tbl (+ (+ E 6) 8)) (some (Prod.mk (Jcc 3 1) 6)))
+      (exact (And.left (And.right (And.right (And.right (And.right hpl)))))))
+    (have w14 (= (site tbl (+ (+ E 6) 14)) (some (Prod.mk Ret 1)))
+      (exact (And.left (And.right (And.right (And.right (And.right (And.right hpl))))))))
+    (have w15 (= (site tbl (+ (+ E 6) 15)) (some (Prod.mk (MovRI32 7 1) 5)))
+      (exact (And.left (And.right (And.right (And.right (And.right (And.right (And.right hpl)))))))))
+    (have w20 (= (site tbl (+ (+ E 6) 20)) (some (Prod.mk Syscall 2)))
+      (exact
+        (And.left
+          (And.right (And.right (And.right (And.right (And.right (And.right (And.right hpl))))))))))
+    (have w22 (= (site tbl (+ (+ E 6) 22)) (some (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3)))
+      (exact
+        (And.left
+          (And.right
+            (And.right (And.right (And.right (And.right (And.right (And.right (And.right hpl)))))))))))
+    (have w25 (= (site tbl (+ (+ E 6) 25)) (some (Prod.mk (Jcc 3 12) 6)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right (And.right (And.right (And.right (And.right (And.right (And.right hpl))))))))))))
+    (have w31 (= (site tbl (+ (+ E 6) 31)) (some (Prod.mk (MovRI32 7 74) 5)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right (And.right (And.right (And.right (And.right (And.right hpl)))))))))))))
+    (have w36 (= (site tbl (+ (+ E 6) 36)) (some (Prod.mk (MovRI32 0 60) 5)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right (And.right (And.right (And.right (And.right (And.right hpl))))))))))))))
+    (have w41 (= (site tbl (+ (+ E 6) 41)) (some (Prod.mk Syscall 2)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right
+                      (And.right (And.right (And.right (And.right (And.right (And.right hpl)))))))))))))))
+    (have w43 (= (site tbl (+ (+ E 6) 43)) (some (Prod.mk (AluRmR BAdd (RmReg 6) 0) 3)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right
+                      (And.right
+                        (And.right (And.right (And.right (And.right (And.right (And.right hpl))))))))))))))))
+    (have w46 (= (site tbl (+ (+ E 6) 46)) (some (Prod.mk (AluRmR BSub (RmReg 2) 0) 3)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right
+                      (And.right
+                        (And.right
+                          (And.right (And.right (And.right (And.right (And.right (And.right hpl)))))))))))))))))
+    (have w49 (= (site tbl (+ (+ E 6) 49)) (some (Prod.mk (Jmp 18446744073709551562) 5)))
+      (exact
+        (And.left
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right
+                      (And.right
+                        (And.right
+                          (And.right
+                            (And.right
+                              (And.right (And.right (And.right (And.right (And.right hpl))))))))))))))))))
+    (cases (put_ext_inv rs vs m o out hans)
+      ((intro (hlen g1)
+         (have hmp (= (mapped rs (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4) true)
+           (exact (And.left g1)))
+         (have hbd (<= (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))) 140737488355328)
+           (exact (And.left (And.right g1))))
+         (have hout (= out (put_out m o (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1)))))
+           (exact (And.right (And.right g1))))
+         ;; the two arguments are rdi and rsi
+         (have hv2 (= vs (regs_of c (List.take 2 arg_regs)))
+           (rw (<- hlen))
+           (exact (And.right hargs)))
+         (have ha0 (= (nth vs 0) (reg c 7)) (rw hv2) rfl)
+         (have ha1 (= (nth vs 1) (reg c 6)) (rw hv2) rfl)
+         ;; the two moves
+         (have hc0 (code_in (at_pc c (w64 E)) tbl) (exact hcode))
+         (have hr0 (= (Cpu.rip (at_pc c (w64 E))) (w64 E)) rfl)
+         (have hrip0 (= (w64_val (Cpu.rip (at_pc c (w64 E)))) E)
+           (exact
+             (rip_at tbl clo chi (at_pc c (w64 E)) E (Prod.mk (MovRmR (RmReg 2) 6) 3) hall hc64 hr0
+               s0)))
+         (have hc1 (code_in (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) tbl) (exact hcode))
+         (have hr1 (= (Cpu.rip (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3)))) (w64 (+ E 3))) rfl)
+         (have hrip1 (= (w64_val (Cpu.rip (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))))) (+ E 3))
+           (exact
+             (rip_at tbl clo chi (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) (+ E 3)
+               (Prod.mk (MovRmR (RmReg 6) 7) 3)
+               hall
+               hc64
+               hr1
+               s1)))
+         (have hc2
+           (code_in (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))) tbl)
+           (exact hcode))
+         (have hreach
+           (reaches (at_pc c (w64 E))
+             (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+           (apply (do_mov_rr E 2 6 3 (+ E 3)) ((exact hrip0))
+             ((exact (hc0 E (MovRmR (RmReg 2) 6) 3 s0)))
+             ((arith))
+             ((apply (do_mov_rr (+ E 3) 6 7 3 (+ E 6)) ((exact hrip1))
+                ((exact (hc1 (+ E 3) (MovRmR (RmReg 6) 7) 3 s1)))
+                ((arith))
+                ((exact
+                   (reaches_refl
+                     (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))))))))
+         ;; the loop's hypotheses in the state after them
+         (have hwa
+           (wa_code (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+             (+ E 6))
+           (exact
+             (And.intro (hc2 (+ E 6) (MovRI32 0 1) 5 w0)
+               (And.intro (hc2 (+ (+ E 6) 5) (AluRmR BCmp (RmReg 2) 0) 3 w5)
+                 (And.intro (hc2 (+ (+ E 6) 8) (Jcc 3 1) 6 w8)
+                   (And.intro (hc2 (+ (+ E 6) 14) Ret 1 w14)
+                     (And.intro (hc2 (+ (+ E 6) 15) (MovRI32 7 1) 5 w15)
+                       (And.intro (hc2 (+ (+ E 6) 20) Syscall 2 w20)
+                         (And.intro (hc2 (+ (+ E 6) 22) (AluRmR BCmp (RmReg 2) 0) 3 w22)
+                           (And.intro (hc2 (+ (+ E 6) 25) (Jcc 3 12) 6 w25)
+                             (And.intro (hc2 (+ (+ E 6) 31) (MovRI32 7 74) 5 w31)
+                               (And.intro (hc2 (+ (+ E 6) 36) (MovRI32 0 60) 5 w36)
+                                 (And.intro (hc2 (+ (+ E 6) 41) Syscall 2 w41)
+                                   (And.intro (hc2 (+ (+ E 6) 43) (AluRmR BAdd (RmReg 6) 0) 3 w43)
+                                     (And.intro (hc2 (+ (+ E 6) 46) (AluRmR BSub (RmReg 2) 0) 3 w46)
+                                       (hc2 (+ (+ E 6) 49) (Jmp 18446744073709551562) 5 w49))))))))))))))))
+         (have hlast (< (+ (+ E 6) 49) chi)
+           (exact
+             (And.right
+               (site_within tbl clo chi (+ (+ E 6) 49) (Prod.mk (Jmp 18446744073709551562) 5) hall
+                 w49))))
+         (have hW (<= (+ (+ E 6) 54) 140737488355328) (arith))
+         (have hr2
+           (= (Cpu.rip (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+             (w64 (+ E 6)))
+           rfl)
+         (have hrip2
+           (=
+             (w64_val
+               (Cpu.rip (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))))
+             (+ E 6))
+           (exact
+             (rip_at tbl clo chi
+               (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+               (+ E 6)
+               (Prod.mk (MovRI32 0 1) 5)
+               hall
+               hc64
+               hr2
+               w0)))
+         (have h6
+           (=
+             (w64_val
+               (reg (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))) 6))
+             (w64_val (nth vs 0)))
+           (rw ha0)
+           rfl)
+         (have h2
+           (=
+             (w64_val
+               (reg (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))) 2))
+             (w64_val (nth vs 1)))
+           (rw ha1)
+           rfl)
+         (have hmap
+           (=
+             (mapped
+               (Cpu.segs (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+               (w64_val (nth vs 0))
+               (w64_val (nth vs 1))
+               4)
+             true)
+           (exact (And.left (hdo (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4 hmp))))
+         (have h01 (< 0 (+ 0 1)) (decide))
+         (have hsp0 (= (mapped (Cpu.segs c) (+ f (* 8 0)) 8 4) true)
+           (exact ((And.left (And.right hroom)) 0 h01)))
+         (have hsp
+           (=
+             (mapped
+               (Cpu.segs (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+               (w64_val
+                 (reg (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))) 4))
+               8
+               4)
+             true)
+           (show (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true))
+           (rw (And.left hroom))
+           (exact hsp0))
+         ;; the bytes are the answer's memory's: the machine's agrees with it on the range
+         (have hso
+           (same_on m (Cpu.mem c) (w64_val (nth vs 0)) (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))))
+           (exact (agree_on rs m (Cpu.mem c) (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4 hag hmp)))
+         (have hbs
+           (=
+             (mem_bytes
+               (Cpu.mem (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+               (w64_val (nth vs 0))
+               (w64_val (nth vs 1)))
+             (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1))))
+           (exact (mem_bytes_on m (Cpu.mem c) (w64_val (nth vs 1)) (w64_val (nth vs 0)) hso)))
+         (have hpost
+           (wa_post (send (Os.ans o) (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1))))
+             (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+             (Os.ans o)
+             (Os.out o)
+             (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1))))
+           (rw (<- hbs))
+           (exact
+             (write_all_ok (Os.ans o)
+               (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+               (+ E 6)
+               (w64_val (nth vs 0))
+               (w64_val (nth vs 1))
+               (Os.out o)
+               hwa
+               hW
+               hrip2
+               h6
+               h2
+               hmap
+               hbd
+               hsp)))
+         (have hcome
+           (comes (at_pc c (w64 E)) o
+             (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+             o)
+           (exact
+             (comes_of_reaches (at_pc c (w64 E))
+               (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+               o
+               hreach)))
+         (have hm2
+           (= (Cpu.mem (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6))))
+             (Cpu.mem c))
+           rfl)
+         (have hret2
+           (forall ((c3 Cpu))
+             (->
+               (returned (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+                 c3)
+               (returned c c3)))
+           (intro c3 h)
+           (exact h))
+         (rw hout)
+         (exact
+           (put_arrives rs f c E o m (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1)))
+             (x_mov_rr (x_mov_rr (at_pc c (w64 E)) 2 6 (w64 (+ E 3))) 6 7 (w64 (+ E 6)))
+             hcome
+             hag
+             hm2
+             hret2
+             hpost)))))))

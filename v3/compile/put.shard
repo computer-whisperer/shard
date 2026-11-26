@@ -1,0 +1,358 @@
+;;; v3/compile/put.shard — the platform's `write_all` (std/world.shard) as a function outside a
+;;; module. Its answer is given on what is outside the process (`put_ext`): the bytes at the
+;;; address, in the memory the answer is asked on, go as the kernel's answers decide — all of
+;;; them, and the call returns 1; or a write fails and the process exits with the failure's
+;;; status; or the kernel ends it. That is the platform's function on the World of what is
+;;; outside (`put_all`, `put_fail`, `put_kill`). And the rule by which a program's function
+;;; that writes is tied to its code: a call of this function, then what follows it where the
+;;; process still runs, and nothing where it has stopped (`tie_put`). The code that realizes
+;;; the answer is x86/put.shard's.
+(import "ir_world.shard")
+(import "../models/x86/world.shard")
+(use std.mem)
+(use std.world)
+(use std.world.Life)
+(use std.world.Put)
+(use std.world.World)
+(use compile.ir)
+(use compile.ir_world)
+(use compile.ir.ICallee)
+(use compile.ir.IExp)
+(use compile.ir.IStm)
+(use models.x86.linux)
+(use models.x86.linux.Os)
+(use models.x86.linux.Outcome)
+(use models.x86.linux.Res)
+(use models.x86.linux.Sent)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.world)
+(use models.x86.x86)
+(use models.x86.x86.Fuel)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the answer -----------------------------------------------------------------------------------
+(fn put_out ((m Mem) (o Os) (bs (List Nat))) Outcome
+  (match (send (Os.ans o) bs)
+    ((SAll left) (ORet (w64 1) m (MkOs left (List.append (Os.out o) bs))))
+    ((SFail q) (OEnd (RExit status_io (List.append (Os.out o) q))))
+    ((SKill q) (OEnd (RKill (List.append (Os.out o) q))))))
+(fn put_ext ((rs (List Seg)) (vs (List (BitVec 64))) (m Mem) (o Os)) (Option Outcome)
+  (if (= (List.length vs) 2)
+    (if (mapped rs (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4)
+      (if (<= (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))) 140737488355328)
+        (some (put_out m o (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1)))))
+        none)
+      none)
+    none))
+(def put_ans ((rs (List Seg)) (vs (List (BitVec 64))) (m Mem) (o Os) (out Outcome)) Prop
+  (= (put_ext rs vs m o) (some out)))
+(theorem put_ext_inv
+  ((rs (List Seg))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (out Outcome)
+   (h (= (put_ext rs vs m o) (some out))))
+  (and (= (List.length vs) 2)
+    (and (= (mapped rs (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4) true)
+      (and (<= (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))) 140737488355328)
+        (= out (put_out m o (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1))))))))
+  (by
+    (have g
+      (-> (= (put_ext rs vs m o) (some out))
+        (and (= (List.length vs) 2)
+          (and (= (mapped rs (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4) true)
+            (and (<= (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))) 140737488355328)
+              (= out (put_out m o (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1)))))))))
+      (cases (Nat.decEq (List.length vs) 2)
+        ((isFalse (e) (intro h0)
+           (have hn (= (@Option.none Outcome) (some out))
+             (rw (<- h0))
+             (unfold put_ext)
+             (rw (if_neg e))
+             rfl)
+           (exact (absurd (Eq.symm hn) (Option.some_ne_none out))))
+         (isTrue (e)
+           (cases (mapped rs (w64_val (nth vs 0)) (w64_val (nth vs 1)) 4) hm
+             ((false () (intro h0)
+                (have hn (= (@Option.none Outcome) (some out))
+                  (rw (<- h0))
+                  (unfold put_ext)
+                  (rw (if_pos e))
+                  (rw hm)
+                  rfl)
+                (exact (absurd (Eq.symm hn) (Option.some_ne_none out))))
+              (true ()
+                (cases (Nat.decLe (+ (w64_val (nth vs 0)) (w64_val (nth vs 1))) 140737488355328)
+                  ((isFalse (e2) (intro h0)
+                     (have hn (= (@Option.none Outcome) (some out))
+                       (rw (<- h0))
+                       (unfold put_ext)
+                       (rw (if_pos e))
+                       (rw hm)
+                       (rw (if_neg e2))
+                       rfl)
+                     (exact (absurd (Eq.symm hn) (Option.some_ne_none out))))
+                   (isTrue (e2) (intro h0)
+                     (have hs
+                       (=
+                         (some (put_out m o (mem_bytes m (w64_val (nth vs 0)) (w64_val (nth vs 1)))))
+                         (some out))
+                       (rw (<- h0))
+                       (unfold put_ext)
+                       (rw (if_pos e))
+                       (rw hm)
+                       (rw (if_pos e2))
+                       rfl)
+                     (exact
+                       (And.intro e
+                         (And.intro (Eq.refl true) (And.intro e2 (Eq.symm (Option.some.inj hs))))))))))))))))
+    (exact (g h))))
+;; the answer on an address and a count that have the evidence
+(theorem put_ext_is
+  ((rs (List Seg))
+   (a (BitVec 64))
+   (n (BitVec 64))
+   (m Mem)
+   (o Os)
+   (hm (= (mapped rs (w64_val a) (w64_val n) 4) true))
+   (hb (<= (+ (w64_val a) (w64_val n)) 140737488355328)))
+  (= (put_ext rs (cons a (cons n nil)) m o)
+    (some (put_out m o (mem_bytes m (w64_val a) (w64_val n)))))
+  (by
+    (have hl (= (List.length (cons a (cons n nil))) 2) rfl)
+    (unfold put_ext)
+    (rw (if_pos hl))
+    (show
+      (=
+        (if (mapped rs (w64_val a) (w64_val n) 4)
+          (if (<= (+ (w64_val a) (w64_val n)) 140737488355328)
+            (some (put_out m o (mem_bytes m (w64_val a) (w64_val n))))
+            none)
+          none)
+        (some (put_out m o (mem_bytes m (w64_val a) (w64_val n))))))
+    (rw hm)
+    (rw (if_pos hb))
+    rfl))
+
+;; ---- the answer is the platform's function ----------------------------------------------------------
+;; by what the model's loop comes to on the answers: the call's outcome, and the World after
+(theorem put_all
+  ((m Mem) (o Os) (bs (List Nat)) (left (List Answer)) (hs (= (send (Os.ans o) bs) (SAll left))))
+  (and (= (put_out m o bs) (ORet (w64 1) m (MkOs left (List.append (Os.out o) bs))))
+    (= (write_all bs (os_world o)) (os_world (MkOs left (List.append (Os.out o) bs)))))
+  (by
+    (have h1 (= (put_out m o bs) (ORet (w64 1) m (MkOs left (List.append (Os.out o) bs))))
+      (unfold put_out)
+      (rw hs)
+      rfl)
+    (have hp (= (put (hows (Os.ans o)) bs) (PAll (hows left)))
+      (rw (send_put (Os.ans o) bs))
+      (rw hs)
+      rfl)
+    (have h2
+      (= (write_all bs (MkWorld (hows (Os.ans o)) (Os.out o) Live))
+        (MkWorld (hows left) (List.append (Os.out o) bs) Live))
+      (rw (write_all_live bs (hows (Os.ans o)) (Os.out o)))
+      (rw hp)
+      rfl)
+    (exact (And.intro h1 h2))))
+(theorem put_fail
+  ((m Mem) (o Os) (bs (List Nat)) (q (List Nat)) (hs (= (send (Os.ans o) bs) (SFail q))))
+  (and (= (put_out m o bs) (OEnd (RExit status_io (List.append (Os.out o) q))))
+    (= (write_all bs (os_world o)) (MkWorld nil (List.append (Os.out o) q) Failed)))
+  (by
+    (have h1 (= (put_out m o bs) (OEnd (RExit status_io (List.append (Os.out o) q))))
+      (unfold put_out)
+      (rw hs)
+      rfl)
+    (have hp (= (put (hows (Os.ans o)) bs) (PFail q)) (rw (send_put (Os.ans o) bs)) (rw hs) rfl)
+    (have h2
+      (= (write_all bs (MkWorld (hows (Os.ans o)) (Os.out o) Live))
+        (MkWorld nil (List.append (Os.out o) q) Failed))
+      (rw (write_all_live bs (hows (Os.ans o)) (Os.out o)))
+      (rw hp)
+      rfl)
+    (exact (And.intro h1 h2))))
+(theorem put_kill
+  ((m Mem) (o Os) (bs (List Nat)) (q (List Nat)) (hs (= (send (Os.ans o) bs) (SKill q))))
+  (and (= (put_out m o bs) (OEnd (RKill (List.append (Os.out o) q))))
+    (= (write_all bs (os_world o)) (MkWorld nil (List.append (Os.out o) q) Killed)))
+  (by
+    (have h1 (= (put_out m o bs) (OEnd (RKill (List.append (Os.out o) q))))
+      (unfold put_out)
+      (rw hs)
+      rfl)
+    (have hp (= (put (hows (Os.ans o)) bs) (PKill q)) (rw (send_put (Os.ans o) bs)) (rw hs) rfl)
+    (have h2
+      (= (write_all bs (MkWorld (hows (Os.ans o)) (Os.out o) Live))
+        (MkWorld nil (List.append (Os.out o) q) Killed))
+      (rw (write_all_live bs (hows (Os.ans o)) (Os.out o)))
+      (rw hp)
+      rfl)
+    (exact (And.intro h1 h2))))
+
+;; ---- THE RULE FOR A FUNCTION THAT WRITES ------------------------------------------------------------
+;; A call of the function with an address and a count that have the evidence, where the
+;; program's value is the word v and the World w. The call's code and what follows it have an
+;; outcome that is that value's, if: wherever the process still runs after the write, what
+;; follows has such an outcome on what the write left; and where the write stopped the process,
+;; the program's World is the World the write left — the rest of the program writes nothing in
+;; a process that has stopped.
+(theorem tie_put
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (x Nat)
+   (j Nat)
+   (es (List IExp))
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (v (BitVec 64))
+   (w World)
+   (a (BitVec 64))
+   (n (BitVec 64))
+   (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx j vs m0 o0) (put_ext rs vs m0 o0))))
+   (hes (= (ievals rs ls m es) (some (cons a (cons n nil)))))
+   (hm (= (mapped rs (w64_val a) (w64_val n) 4) true))
+   (hb (<= (+ (w64_val a) (w64_val n)) 140737488355328))
+   (hlive
+     (forall ((o1 Os))
+       (-> (= (os_world o1) (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o)))
+         (exists ((out Outcome)) (and (wends p wx rs k (upd ls x (w64 1)) m o1 out) (tied out v w))))))
+   (hdead
+     (->
+       (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o)))) false)
+       (= w (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))))
+  (exists ((out Outcome)) (and (wends p wx rs (SCall x (CExt j) es k) ls m o out) (tied out v w)))
+  (by
+    (have hc
+      (= (wx j (cons a (cons n nil)) m o) (some (put_out m o (mem_bytes m (w64_val a) (w64_val n)))))
+      (rw (hx (cons a (cons n nil)) m o))
+      (exact (put_ext_is rs a n m o hm hb)))
+    (cases (send (Os.ans o) (mem_bytes m (w64_val a) (w64_val n))) hs
+      ((SAll (left)
+         (have g1
+           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
+             (ORet (w64 1) m
+               (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))))
+           (exact (And.left (put_all m o (mem_bytes m (w64_val a) (w64_val n)) left hs))))
+         (have g2
+           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
+             (os_world (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))))
+           (exact (And.right (put_all m o (mem_bytes m (w64_val a) (w64_val n)) left hs))))
+         (have hc1
+           (= (wx j (cons a (cons n nil)) m o)
+             (some
+               (ORet (w64 1) m
+                 (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n)))))))
+           (rw hc)
+           (rw g1)
+           rfl)
+         (cases
+           (hlive (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))
+             (Eq.symm g2))
+           ((intro (out gk)
+              (apply (Exists.intro out)
+                ((exact
+                   (And.intro
+                     (wends_call_ext (cons a (cons n nil)) (w64 1) m
+                       (MkOs left (List.append (Os.out o) (mem_bytes m (w64_val a) (w64_val n))))
+                       hes
+                       hc1
+                       (And.left gk))
+                     (And.right gk)))))))))
+       (SFail (q)
+         (have g1
+           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
+             (OEnd (RExit status_io (List.append (Os.out o) q))))
+           (exact (And.left (put_fail m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
+         (have g2
+           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
+             (MkWorld nil (List.append (Os.out o) q) Failed))
+           (exact (And.right (put_fail m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
+         (have hc1
+           (= (wx j (cons a (cons n nil)) m o)
+             (some (OEnd (RExit status_io (List.append (Os.out o) q)))))
+           (rw hc)
+           (rw g1)
+           rfl)
+         (have hst
+           (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))
+             false)
+           (rw g2)
+           rfl)
+         (have hw (= w (MkWorld nil (List.append (Os.out o) q) Failed))
+           (rw (<- g2))
+           (exact (hdead hst)))
+         (apply (Exists.intro (OEnd (RExit status_io (List.append (Os.out o) q))))
+           ((apply And.intro
+              ((exact
+                 (wends_call_ext_end (cons a (cons n nil))
+                   (RExit status_io (List.append (Os.out o) q))
+                   hes
+                   hc1)))
+              ((rw hw)
+               (show
+                 (and (= (runs Failed) false)
+                   (forall ((y (BitVec 64)))
+                     (= (world_res y (MkWorld nil (List.append (Os.out o) q) Failed))
+                       (RExit status_io (List.append (Os.out o) q))))))
+               (apply And.intro (rfl) ((intro y) rfl)))))))
+       (SKill (q)
+         (have g1
+           (= (put_out m o (mem_bytes m (w64_val a) (w64_val n)))
+             (OEnd (RKill (List.append (Os.out o) q))))
+           (exact (And.left (put_kill m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
+         (have g2
+           (= (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))
+             (MkWorld nil (List.append (Os.out o) q) Killed))
+           (exact (And.right (put_kill m o (mem_bytes m (w64_val a) (w64_val n)) q hs))))
+         (have hc1
+           (= (wx j (cons a (cons n nil)) m o) (some (OEnd (RKill (List.append (Os.out o) q)))))
+           (rw hc)
+           (rw g1)
+           rfl)
+         (have hst
+           (= (runs (World.life (write_all (mem_bytes m (w64_val a) (w64_val n)) (os_world o))))
+             false)
+           (rw g2)
+           rfl)
+         (have hw (= w (MkWorld nil (List.append (Os.out o) q) Killed))
+           (rw (<- g2))
+           (exact (hdead hst)))
+         (apply (Exists.intro (OEnd (RKill (List.append (Os.out o) q))))
+           ((apply And.intro
+              ((exact
+                 (wends_call_ext_end (cons a (cons n nil)) (RKill (List.append (Os.out o) q)) hes
+                   hc1)))
+              ((rw hw)
+               (show
+                 (and (= (runs Killed) false)
+                   (forall ((y (BitVec 64)))
+                     (= (world_res y (MkWorld nil (List.append (Os.out o) q) Killed))
+                       (RKill (List.append (Os.out o) q))))))
+               (apply And.intro (rfl) ((intro y) rfl)))))))))))
+;; a return of a word, where the program's value is that word and the World of what is outside
+(theorem tie_ret
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (e IExp)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (v (BitVec 64))
+   (w World)
+   (he (= (ieval rs ls m e) (some v)))
+   (hw (= (os_world o) w)))
+  (exists ((out Outcome)) (and (wends p wx rs (SRet e) ls m o out) (tied out v w)))
+  (by
+    (apply (Exists.intro (ORet v m o))
+      ((apply And.intro ((exact (wends_ret p wx rs e ls m o v he)))
+         ((show (and (= v v) (= (os_world o) w))) (exact (And.intro (Eq.refl v) hw))))))))
