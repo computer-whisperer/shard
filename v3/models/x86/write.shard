@@ -1,0 +1,1299 @@
+;;; v3/models/x86/write.shard — writing bytes out. The rules of the system call `write` as the
+;;; kernel's next answer decides it (models/x86/linux.shard); and `write_all`, instructions
+;;; written by hand that offer the bytes of a range to descriptor 1 until the kernel has taken
+;;; them all, with their contract, proven once for any address they stand at, any range and
+;;; every list of answers: what the loop comes to is what `send` says of the answers and the
+;;; bytes — all written and the code returned, or the process ended.
+(import "laws.shard")
+(use std.mem)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Answer)
+(use models.x86.linux.How)
+(use models.x86.linux.Move)
+(use models.x86.linux.Os)
+(use models.x86.linux.Res)
+(use models.x86.linux.Sent)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- what an answer takes -------------------------------------------------------------------------
+;; of n bytes offered, one at the least, an answer takes at least one and no more than n
+(theorem took_le ((t Nat) (n Nat)) (<= (took t n) n)
+  (by
+    (unfold took)
+    (cases (Nat.decEq t 0)
+      ((isTrue (h) (rw (if_pos h)) (arith))
+       (isFalse (h) (rw (if_neg h))
+         (cases (Nat.decLe n t)
+           ((isTrue (h2) (rw (if_pos h2)) (arith)) (isFalse (h2) (rw (if_neg h2)) (arith h2)))))))))
+(theorem took_pos ((t Nat) (n Nat) (hn (<= 1 n))) (<= 1 (took t n))
+  (by
+    (unfold took)
+    (cases (Nat.decEq t 0)
+      ((isTrue (h) (rw (if_pos h)) (exact hn))
+       (isFalse (h) (rw (if_neg h))
+         (cases (Nat.decLe n t)
+           ((isTrue (h2) (rw (if_pos h2)) (exact hn))
+            (isFalse (h2) (rw (if_neg h2)) (exact (Nat.pos_of_ne_zero h))))))))))
+;; a failed call's result is a number no count of bytes below 2^64 less 4095 reaches
+(theorem err_word_big ((e Nat)) (<= 18446744073709547521 (w64_val (err_word e)))
+  (by
+    (have h0 (< 0 4095) (decide))
+    (have hm (< (% e 4095) 4095) (exact (Nat.mod_lt e h0)))
+    (have hle (<= (+ 1 (% e 4095)) 18446744073709551616) (arith))
+    (have hc (= (+ (- 18446744073709551616 (+ 1 (% e 4095))) (+ 1 (% e 4095))) 18446744073709551616)
+      (exact (Nat.sub_add_cancel hle)))
+    (have hlt (< (- 18446744073709551616 (+ 1 (% e 4095))) 18446744073709551616) (arith))
+    (show (<= 18446744073709547521 (w64_val (w64 (- 18446744073709551616 (+ 1 (% e 4095)))))))
+    (rw (w64_val_small (- 18446744073709551616 (+ 1 (% e 4095))) hlt))
+    (arith)))
+
+;; ---- the call `write` ---------------------------------------------------------------------------
+;; At a system call whose registers ask for a write to descriptor 1 of the n bytes at a, all
+;; mapped to read, the run's step is the kernel's next answer.
+(theorem write_call
+  ((c Cpu)
+   (pc Nat)
+   (len Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Syscall len))
+   (h0 (= (w64_val (reg c 0)) 1))
+   (h7 (= (w64_val (reg c 7)) 1))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true)))
+  (= (move c o) (write_to (Cpu.with_rip (next_rip c len) c) o a n))
+  (by
+    (have e0 (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 0)) 1) (exact h0))
+    (have n60 (Not (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 0)) 60)) (rw e0) (arith))
+    (have e7 (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 7)) 1) (exact h7))
+    (have e6 (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 6)) a) (exact h6))
+    (have e2 (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 2)) n) (exact h2))
+    (have em (= (mapped (Cpu.segs (Cpu.with_rip (next_rip c len) c)) a n 4) true) (exact hm))
+    (rw (move_sys c pc len o hrip hc))
+    (rw on_syscall.eq_1)
+    (rw (if_neg n60))
+    (rw (if_pos e0))
+    (rw on_write.eq_1)
+    (rw (if_pos e7))
+    (rw e6)
+    (rw e2)
+    (rw (if_pos em))
+    rfl))
+;; the kernel took bytes: they are written, their count is in rax, and the process goes on
+(theorem write_took
+  ((c Cpu)
+   (pc Nat)
+   (len Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (t Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Syscall len))
+   (h0 (= (w64_val (reg c 0)) 1))
+   (h7 (= (w64_val (reg c 7)) 1))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hh (= (Answer.how (next_answer (Os.ans o))) (HTook t))))
+  (comes c o (sys_back (Cpu.with_rip (next_rip c len) c) (next_answer (Os.ans o)) (w64 (took t n)))
+    (MkOs (rest_answers (Os.ans o)) (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n)))))
+  (by
+    (apply comes_of_move
+      ((rw (write_call c pc len o a n hrip hc h0 h7 h6 h2 hm)) (rw write_to.eq_1) (rw hh) rfl))))
+;; the kernel failed the call: nothing is written, the error is in rax, and the process goes on
+(theorem write_err
+  ((c Cpu)
+   (pc Nat)
+   (len Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (e Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Syscall len))
+   (h0 (= (w64_val (reg c 0)) 1))
+   (h7 (= (w64_val (reg c 7)) 1))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hh (= (Answer.how (next_answer (Os.ans o))) (HErr e))))
+  (comes c o (sys_back (Cpu.with_rip (next_rip c len) c) (next_answer (Os.ans o)) (err_word e))
+    (MkOs (rest_answers (Os.ans o)) (Os.out o)))
+  (by
+    (apply comes_of_move
+      ((rw (write_call c pc len o a n hrip hc h0 h7 h6 h2 hm)) (rw write_to.eq_1) (rw hh) rfl))))
+;; the kernel ended the process at the call
+(theorem write_kill
+  ((c Cpu)
+   (pc Nat)
+   (len Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Syscall len))
+   (h0 (= (w64_val (reg c 0)) 1))
+   (h7 (= (w64_val (reg c 7)) 1))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hh (= (Answer.how (next_answer (Os.ans o))) HKill)))
+  (ends_at c o (RKill (Os.out o)))
+  (by
+    (apply ends_of_move
+      ((rw (write_call c pc len o a n hrip hc h0 h7 h6 h2 hm)) (rw write_to.eq_1) (rw hh) rfl))))
+
+;; ---- `write_all` ----------------------------------------------------------------------------------
+;; The count in rdx of bytes at the address in rsi, written to descriptor 1 — offered again from
+;; where the kernel stopped until it has taken them all; then the code returns. Where the kernel
+;; fails a call the code exits with `status_io`. It uses rax, rcx, rdx, rsi, rdi and r11 and no
+;; memory. The jumps are by distance: the code stands at any address.
+;;
+;;      0  mov eax, 1          the number of `write`; and the 1 the count is compared with
+;;      5  cmp rdx, rax
+;;      8  jae 15              bytes are left
+;;     14  ret
+;;     15  mov edi, 1          descriptor 1
+;;     20  syscall
+;;     22  cmp rdx, rax        a count is at most what was offered; an error is a number above it
+;;     25  jae 43
+;;     31  mov edi, 74
+;;     36  mov eax, 60
+;;     41  syscall             exit
+;;     43  add rsi, rax
+;;     46  sub rdx, rax
+;;     49  jmp 0
+(fn write_all () (List Instr)
+  (list (MovRI32 0 1) (AluRmR BCmp (RmReg 2) 0) (Jcc 3 1) Ret (MovRI32 7 1) Syscall
+    (AluRmR BCmp (RmReg 2) 0)
+    (Jcc 3 12)
+    (MovRI32 7 74)
+    (MovRI32 0 60)
+    Syscall
+    (AluRmR BAdd (RmReg 6) 0)
+    (AluRmR BSub (RmReg 2) 0)
+    (Jmp 18446744073709551562)))
+;; the processor decodes `write_all` from the address W
+(def wa_code ((c Cpu) (W Nat)) Prop
+  (and (code_at c W (MovRI32 0 1) 5)
+    (and (code_at c (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3)
+      (and (code_at c (+ W 8) (Jcc 3 1) 6)
+        (and (code_at c (+ W 14) Ret 1)
+          (and (code_at c (+ W 15) (MovRI32 7 1) 5)
+            (and (code_at c (+ W 20) Syscall 2)
+              (and (code_at c (+ W 22) (AluRmR BCmp (RmReg 2) 0) 3)
+                (and (code_at c (+ W 25) (Jcc 3 12) 6)
+                  (and (code_at c (+ W 31) (MovRI32 7 74) 5)
+                    (and (code_at c (+ W 36) (MovRI32 0 60) 5)
+                      (and (code_at c (+ W 41) Syscall 2)
+                        (and (code_at c (+ W 43) (AluRmR BAdd (RmReg 6) 0) 3)
+                          (and (code_at c (+ W 46) (AluRmR BSub (RmReg 2) 0) 3)
+                            (code_at c (+ W 49) (Jmp 18446744073709551562) 5)))))))))))))))
+;; the code is where it was in a state with the same memory and the same ranges
+(theorem wa_code_same
+  ((c Cpu)
+   (c2 Cpu)
+   (W Nat)
+   (hm (= (Cpu.mem c2) (Cpu.mem c)))
+   (hs (= (Cpu.segs c2) (Cpu.segs c)))
+   (h (wa_code c W)))
+  (wa_code c2 W)
+  (by (unfold wa_code) (unfold code_at) (rw hm) (rw hs) (exact h)))
+
+;; each instruction of the code, from that fact
+(theorem wa_at0 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c W (MovRI32 0 1) 5)
+  (by (exact (And.left h))))
+(theorem wa_at5 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3)
+  (by (exact (And.left (And.right h)))))
+(theorem wa_at8 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 8) (Jcc 3 1) 6)
+  (by (exact (And.left (And.right (And.right h))))))
+(theorem wa_at14 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 14) Ret 1)
+  (by (exact (And.left (And.right (And.right (And.right h)))))))
+(theorem wa_at15 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 15) (MovRI32 7 1) 5)
+  (by (exact (And.left (And.right (And.right (And.right (And.right h))))))))
+(theorem wa_at20 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 20) Syscall 2)
+  (by (exact (And.left (And.right (And.right (And.right (And.right (And.right h)))))))))
+(theorem wa_at22 ((c Cpu) (W Nat) (h (wa_code c W)))
+  (code_at c (+ W 22) (AluRmR BCmp (RmReg 2) 0) 3)
+  (by (exact (And.left (And.right (And.right (And.right (And.right (And.right (And.right h))))))))))
+(theorem wa_at25 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 25) (Jcc 3 12) 6)
+  (by
+    (exact
+      (And.left
+        (And.right (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))))
+(theorem wa_at31 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 31) (MovRI32 7 74) 5)
+  (by
+    (exact
+      (And.left
+        (And.right
+          (And.right (And.right (And.right (And.right (And.right (And.right (And.right h))))))))))))
+(theorem wa_at36 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 36) (MovRI32 0 60) 5)
+  (by
+    (exact
+      (And.left
+        (And.right
+          (And.right
+            (And.right (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))))))
+(theorem wa_at41 ((c Cpu) (W Nat) (h (wa_code c W))) (code_at c (+ W 41) Syscall 2)
+  (by
+    (exact
+      (And.left
+        (And.right
+          (And.right
+            (And.right
+              (And.right (And.right (And.right (And.right (And.right (And.right (And.right h))))))))))))))
+(theorem wa_at43 ((c Cpu) (W Nat) (h (wa_code c W)))
+  (code_at c (+ W 43) (AluRmR BAdd (RmReg 6) 0) 3)
+  (by
+    (exact
+      (And.left
+        (And.right
+          (And.right
+            (And.right
+              (And.right
+                (And.right (And.right (And.right (And.right (And.right (And.right (And.right h)))))))))))))))
+(theorem wa_at46 ((c Cpu) (W Nat) (h (wa_code c W)))
+  (code_at c (+ W 46) (AluRmR BSub (RmReg 2) 0) 3)
+  (by
+    (exact
+      (And.left
+        (And.right
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right (And.right (And.right (And.right (And.right (And.right h))))))))))))))))
+(theorem wa_at49 ((c Cpu) (W Nat) (h (wa_code c W)))
+  (code_at c (+ W 49) (Jmp 18446744073709551562) 5)
+  (by
+    (exact
+      (And.right
+        (And.right
+          (And.right
+            (And.right
+              (And.right
+                (And.right
+                  (And.right
+                    (And.right (And.right (And.right (And.right (And.right (And.right h))))))))))))))))
+
+;; the states of one turn of the loop, from a state c at the first instruction: after the
+;; comparison with 1; at the system call; back from it with the answer's registers and the
+;; result v
+(fn wa_s1 ((c Cpu) (W Nat)) Cpu (x_cmp_rr (x_mov_ri c 0 1 (w64 (+ W 5))) 2 0 (w64 (+ W 8))))
+(fn wa_s2 ((c Cpu) (W Nat)) Cpu (x_mov_ri (at_pc (wa_s1 c W) (w64 (+ W 15))) 7 1 (w64 (+ W 20))))
+(fn wa_s3 ((c Cpu) (W Nat) (ans Answer) (v (BitVec 64))) Cpu
+  (sys_back (Cpu.with_rip (next_rip (wa_s2 c W) 2) (wa_s2 c W)) ans v))
+;; and from a state s back from the call, at the first instruction again: the address moved on
+;; by the count in rax, the count left less by it
+(fn wa_s5 ((s Cpu) (W Nat)) Cpu
+  (at_pc
+    (x_alu_rr
+      (x_alu_rr (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) BAdd 6 0 (w64 (+ W 46)))
+      BSub
+      2
+      0
+      (w64 (+ W 49)))
+    (w64 W)))
+;; the state the code returns in from a state c at its first instruction with no byte left
+(fn wa_out ((c Cpu) (W Nat)) Cpu (x_ret (at_pc (wa_s1 c W) (w64 (+ W 14)))))
+
+;; a jump's target 54 bytes back
+(theorem back_54 ((W Nat)) (= (w64_add (w64 (+ (+ W 49) 5)) (w64 18446744073709551562)) (w64 W))
+  (by
+    (have e (= (+ (+ (+ W 49) 5) 18446744073709551562) (+ W 18446744073709551616)) (arith))
+    (rw (w64_add_w64 (+ (+ W 49) 5) 18446744073709551562))
+    (rw e)
+    (apply BitVec.eq_of_toNat_eq
+      ((show (= (w64_val (w64 (+ W 18446744073709551616))) (w64_val (w64 W))))
+       (rw (w64_val_w64 (+ W 18446744073709551616)))
+       (rw (w64_val_w64 W))
+       (exact (Nat.add_mod_right W 18446744073709551616))))))
+
+;; from the first instruction to the comparison's end
+(theorem wa_head
+  ((c Cpu)
+   (W Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc0 (code_at c W (MovRI32 0 1) 5))
+   (hc5 (code_at c (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3)))
+  (reaches c (wa_s1 c W))
+  (by
+    (have l5 (< (+ W 5) 18446744073709551616) (arith))
+    (have r5 (= (w64_val (Cpu.rip (x_mov_ri c 0 1 (w64 (+ W 5))))) (+ W 5))
+      (exact (w64_val_small (+ W 5) l5)))
+    (have k5 (code_at (x_mov_ri c 0 1 (w64 (+ W 5))) (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3)
+      (exact hc5))
+    (apply (do_mov_ri32 W 0 1 5 (+ W 5)) ((exact hrip)) ((exact hc0)) (rfl)
+      ((apply (do_cmp_rr (+ W 5) 2 0 3 (+ W 8)) ((exact r5)) ((exact k5)) ((arith))
+         ((exact (reaches_refl (wa_s1 c W)))))))))
+;; no byte left: the code returns
+(theorem wa_done
+  ((c Cpu)
+   (W Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h2 (< (w64_val (reg c 2)) 1))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (reaches c (wa_out c W))
+  (by
+    (have hc0 (code_at c W (MovRI32 0 1) 5) (exact (wa_at0 c W hc)))
+    (have hc5 (code_at c (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3) (exact (wa_at5 c W hc)))
+    (have hc8 (code_at (wa_s1 c W) (+ W 8) (Jcc 3 1) 6) (exact (wa_at8 c W hc)))
+    (have hc14 (code_at (at_pc (wa_s1 c W) (w64 (+ W 14))) (+ W 14) Ret 1) (exact (wa_at14 c W hc)))
+    (have l8 (< (+ W 8) 18446744073709551616) (arith))
+    (have r8 (= (w64_val (Cpu.rip (wa_s1 c W))) (+ W 8)) (exact (w64_val_small (+ W 8) l8)))
+    (have l14 (< (+ W 14) 18446744073709551616) (arith))
+    (have r14 (= (w64_val (Cpu.rip (at_pc (wa_s1 c W) (w64 (+ W 14))))) (+ W 14))
+      (exact (w64_val_small (+ W 14) l14)))
+    (have hb
+      (< (w64_val (reg (x_mov_ri c 0 1 (w64 (+ W 5))) 2))
+        (w64_val (reg (x_mov_ri c 0 1 (w64 (+ W 5))) 0)))
+      (exact h2))
+    (have hcc (= (cc_holds 3 (Cpu.flags (wa_s1 c W))) (some false))
+      (exact (cmp_below (x_mov_ri c 0 1 (w64 (+ W 5))) 2 0 (w64 (+ W 8)) hb)))
+    (have hm
+      (=
+        (mapped (Cpu.segs (at_pc (wa_s1 c W) (w64 (+ W 14))))
+          (w64_val (reg (at_pc (wa_s1 c W) (w64 (+ W 14))) 4))
+          8
+          4)
+        true)
+      (exact hsp))
+    (apply (reaches_trans c (wa_s1 c W) (wa_out c W)) ((exact (wa_head c W hW hrip hc0 hc5)))
+      ((apply (do_jcc_not (+ W 8) 3 1 6 (+ W 14)) ((exact r8)) ((exact hc8)) ((exact hcc)) ((arith))
+         ((apply (do_ret (+ W 14) 1) ((exact r14)) ((exact hc14)) ((exact hm))
+            ((exact (reaches_refl (wa_out c W)))))))))))
+;; bytes are left: the code comes to its system call
+(theorem wa_more
+  ((c Cpu)
+   (W Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h2 (<= 1 (w64_val (reg c 2)))))
+  (reaches c (wa_s2 c W))
+  (by
+    (have hc0 (code_at c W (MovRI32 0 1) 5) (exact (wa_at0 c W hc)))
+    (have hc5 (code_at c (+ W 5) (AluRmR BCmp (RmReg 2) 0) 3) (exact (wa_at5 c W hc)))
+    (have hc8 (code_at (wa_s1 c W) (+ W 8) (Jcc 3 1) 6) (exact (wa_at8 c W hc)))
+    (have hc15 (code_at (at_pc (wa_s1 c W) (w64 (+ W 15))) (+ W 15) (MovRI32 7 1) 5)
+      (exact (wa_at15 c W hc)))
+    (have l8 (< (+ W 8) 18446744073709551616) (arith))
+    (have r8 (= (w64_val (Cpu.rip (wa_s1 c W))) (+ W 8)) (exact (w64_val_small (+ W 8) l8)))
+    (have l15 (< (+ W 15) 18446744073709551616) (arith))
+    (have r15 (= (w64_val (Cpu.rip (at_pc (wa_s1 c W) (w64 (+ W 15))))) (+ W 15))
+      (exact (w64_val_small (+ W 15) l15)))
+    (have hnb
+      (Not
+        (< (w64_val (reg (x_mov_ri c 0 1 (w64 (+ W 5))) 2))
+          (w64_val (reg (x_mov_ri c 0 1 (w64 (+ W 5))) 0))))
+      (show (Not (< (w64_val (reg c 2)) 1)))
+      (arith))
+    (have hcc (= (cc_holds 3 (Cpu.flags (wa_s1 c W))) (some true))
+      (exact (cmp_not_below (x_mov_ri c 0 1 (w64 (+ W 5))) 2 0 (w64 (+ W 8)) hnb)))
+    (have e15 (= (+ (+ (+ W 8) 6) 1) (+ W 15)) (arith))
+    (have t15 (= (w64_add (w64 (+ (+ W 8) 6)) (w64 1)) (w64 (+ W 15)))
+      (rw (w64_add_w64 (+ (+ W 8) 6) 1))
+      (rw e15)
+      rfl)
+    (apply (reaches_trans c (wa_s1 c W) (wa_s2 c W)) ((exact (wa_head c W hW hrip hc0 hc5)))
+      ((apply (do_jcc_taken (+ W 8) 3 6 1 (+ W 15)) ((exact r8)) ((exact hc8)) ((exact hcc))
+         ((exact t15))
+         ((apply (do_mov_ri32 (+ W 15) 7 1 5 (+ W 20)) ((exact r15)) ((exact hc15)) ((arith))
+            ((exact (reaches_refl (wa_s2 c W)))))))))))
+;; back from the call with a count the kernel took: on to the first instruction again
+(theorem wa_loop
+  ((s Cpu)
+   (W Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip s)) (+ W 22)))
+   (hc (wa_code s W))
+   (hnb (Not (< (w64_val (reg s 2)) (w64_val (reg s 0))))))
+  (reaches s (wa_s5 s W))
+  (by
+    (have hc22 (code_at s (+ W 22) (AluRmR BCmp (RmReg 2) 0) 3) (exact (wa_at22 s W hc)))
+    (have hc25 (code_at (x_cmp_rr s 2 0 (w64 (+ W 25))) (+ W 25) (Jcc 3 12) 6)
+      (exact (wa_at25 s W hc)))
+    (have hc43
+      (code_at (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) (+ W 43)
+        (AluRmR BAdd (RmReg 6) 0)
+        3)
+      (exact (wa_at43 s W hc)))
+    (have hc46
+      (code_at
+        (x_alu_rr (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) BAdd 6 0 (w64 (+ W 46)))
+        (+ W 46)
+        (AluRmR BSub (RmReg 2) 0)
+        3)
+      (exact (wa_at46 s W hc)))
+    (have hc49
+      (code_at
+        (x_alu_rr
+          (x_alu_rr (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) BAdd 6 0 (w64 (+ W 46)))
+          BSub
+          2
+          0
+          (w64 (+ W 49)))
+        (+ W 49)
+        (Jmp 18446744073709551562)
+        5)
+      (exact (wa_at49 s W hc)))
+    (have l25 (< (+ W 25) 18446744073709551616) (arith))
+    (have r25 (= (w64_val (Cpu.rip (x_cmp_rr s 2 0 (w64 (+ W 25))))) (+ W 25))
+      (exact (w64_val_small (+ W 25) l25)))
+    (have l43 (< (+ W 43) 18446744073709551616) (arith))
+    (have r43
+      (= (w64_val (Cpu.rip (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))))) (+ W 43))
+      (exact (w64_val_small (+ W 43) l43)))
+    (have l46 (< (+ W 46) 18446744073709551616) (arith))
+    (have r46
+      (=
+        (w64_val
+          (Cpu.rip
+            (x_alu_rr (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) BAdd 6 0 (w64 (+ W 46)))))
+        (+ W 46))
+      (exact (w64_val_small (+ W 46) l46)))
+    (have l49 (< (+ W 49) 18446744073709551616) (arith))
+    (have r49
+      (=
+        (w64_val
+          (Cpu.rip
+            (x_alu_rr
+              (x_alu_rr (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 43))) BAdd 6 0
+                (w64 (+ W 46)))
+              BSub
+              2
+              0
+              (w64 (+ W 49)))))
+        (+ W 49))
+      (exact (w64_val_small (+ W 49) l49)))
+    (have hcc (= (cc_holds 3 (Cpu.flags (x_cmp_rr s 2 0 (w64 (+ W 25))))) (some true))
+      (exact (cmp_not_below s 2 0 (w64 (+ W 25)) hnb)))
+    (have e43 (= (+ (+ (+ W 25) 6) 12) (+ W 43)) (arith))
+    (have t43 (= (w64_add (w64 (+ (+ W 25) 6)) (w64 12)) (w64 (+ W 43)))
+      (rw (w64_add_w64 (+ (+ W 25) 6) 12))
+      (rw e43)
+      rfl)
+    (apply (do_cmp_rr (+ W 22) 2 0 3 (+ W 25)) ((exact hrip)) ((exact hc22)) ((arith))
+      ((apply (do_jcc_taken (+ W 25) 3 6 12 (+ W 43)) ((exact r25)) ((exact hc25)) ((exact hcc))
+         ((exact t43))
+         ((apply (do_alu_rr (+ W 43) BAdd 6 0 3 (+ W 46)) ((exact r43)) ((exact hc43)) (rfl)
+            ((arith))
+            ((apply (do_alu_rr (+ W 46) BSub 2 0 3 (+ W 49)) ((exact r46)) ((exact hc46)) (rfl)
+               ((arith))
+               ((apply (do_jmp (+ W 49) 5 18446744073709551562 W) ((exact r49)) ((exact hc49))
+                  ((exact (back_54 W)))
+                  ((exact (reaches_refl (wa_s5 s W)))))))))))))))
+;; back from the call with an error: the process exits with `status_io`, what it has written
+;; unchanged
+(theorem wa_fail
+  ((s Cpu)
+   (W Nat)
+   (o Os)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip s)) (+ W 22)))
+   (hc (wa_code s W))
+   (hb (< (w64_val (reg s 2)) (w64_val (reg s 0)))))
+  (ends_at s o (RExit status_io (Os.out o)))
+  (by
+    (have hc22 (code_at s (+ W 22) (AluRmR BCmp (RmReg 2) 0) 3) (exact (wa_at22 s W hc)))
+    (have hc25 (code_at (x_cmp_rr s 2 0 (w64 (+ W 25))) (+ W 25) (Jcc 3 12) 6)
+      (exact (wa_at25 s W hc)))
+    (have hc31
+      (code_at (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) (+ W 31) (MovRI32 7 74) 5)
+      (exact (wa_at31 s W hc)))
+    (have hc36
+      (code_at (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+        (+ W 36)
+        (MovRI32 0 60)
+        5)
+      (exact (wa_at36 s W hc)))
+    (have hc41
+      (code_at
+        (x_mov_ri
+          (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+          0
+          60
+          (w64 (+ W 41)))
+        (+ W 41)
+        Syscall
+        2)
+      (exact (wa_at41 s W hc)))
+    (have l25 (< (+ W 25) 18446744073709551616) (arith))
+    (have r25 (= (w64_val (Cpu.rip (x_cmp_rr s 2 0 (w64 (+ W 25))))) (+ W 25))
+      (exact (w64_val_small (+ W 25) l25)))
+    (have l31 (< (+ W 31) 18446744073709551616) (arith))
+    (have r31
+      (= (w64_val (Cpu.rip (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))))) (+ W 31))
+      (exact (w64_val_small (+ W 31) l31)))
+    (have l36 (< (+ W 36) 18446744073709551616) (arith))
+    (have r36
+      (=
+        (w64_val
+          (Cpu.rip
+            (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))))
+        (+ W 36))
+      (exact (w64_val_small (+ W 36) l36)))
+    (have l41 (< (+ W 41) 18446744073709551616) (arith))
+    (have r41
+      (=
+        (w64_val
+          (Cpu.rip
+            (x_mov_ri
+              (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+              0
+              60
+              (w64 (+ W 41)))))
+        (+ W 41))
+      (exact (w64_val_small (+ W 41) l41)))
+    (have hcc (= (cc_holds 3 (Cpu.flags (x_cmp_rr s 2 0 (w64 (+ W 25))))) (some false))
+      (exact (cmp_below s 2 0 (w64 (+ W 25)) hb)))
+    (have hreach
+      (reaches s
+        (x_mov_ri
+          (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+          0
+          60
+          (w64 (+ W 41))))
+      (apply (do_cmp_rr (+ W 22) 2 0 3 (+ W 25)) ((exact hrip)) ((exact hc22)) ((arith))
+        ((apply (do_jcc_not (+ W 25) 3 12 6 (+ W 31)) ((exact r25)) ((exact hc25)) ((exact hcc))
+           ((arith))
+           ((apply (do_mov_ri32 (+ W 31) 7 74 5 (+ W 36)) ((exact r31)) ((exact hc31)) ((arith))
+              ((apply (do_mov_ri32 (+ W 36) 0 60 5 (+ W 41)) ((exact r36)) ((exact hc36)) ((arith))
+                 ((exact
+                    (reaches_refl
+                      (x_mov_ri
+                        (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74
+                          (w64 (+ W 36)))
+                        0
+                        60
+                        (w64 (+ W 41))))))))))))))
+    (have h60
+      (=
+        (w64_val
+          (reg
+            (x_mov_ri
+              (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+              0
+              60
+              (w64 (+ W 41)))
+            0))
+        60)
+      rfl)
+    (have hexit
+      (ends_at
+        (x_mov_ri
+          (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+          0
+          60
+          (w64 (+ W 41)))
+        o
+        (RExit status_io (Os.out o)))
+      (apply (Exists.intro (FS FZ))
+        ((exact
+           (run_exit
+             (x_mov_ri
+               (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+               0
+               60
+               (w64 (+ W 41)))
+             (+ W 41)
+             2
+             o
+             r41
+             hc41
+             h60)))))
+    (exact
+      (ends_of_comes s o
+        (x_mov_ri
+          (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+          0
+          60
+          (w64 (+ W 41)))
+        o
+        (RExit status_io (Os.out o))
+        (comes_of_reaches s
+          (x_mov_ri
+            (x_mov_ri (at_pc (x_cmp_rr s 2 0 (w64 (+ W 25))) (w64 (+ W 31))) 7 74 (w64 (+ W 36)))
+            0
+            60
+            (w64 (+ W 41)))
+          o
+          hreach)
+        hexit))))
+;; ---- one turn of the loop ---------------------------------------------------------------------
+;; an answer of no count takes everything offered
+(theorem took_zero ((n Nat)) (= (took 0 n) n) (by rfl))
+;; From the first instruction with bytes left, the kernel's answer taking some: the code is at
+;; its first instruction again, those bytes written, the address moved on by their count and the
+;; count left less by it.
+(theorem wa_turn
+  ((c Cpu)
+   (W Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (t Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hn (<= 1 n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hb (<= (+ a n) 140737488355328))
+   (hh (= (Answer.how (next_answer (Os.ans o))) (HTook t))))
+  (and
+    (comes c o (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+      (MkOs (rest_answers (Os.ans o)) (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n)))))
+    (and
+      (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W) 6))
+        (+ a (took t n)))
+      (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W) 2))
+        (- n (took t n)))))
+  (by
+    (have l20 (< (+ W 20) 18446744073709551616) (arith))
+    (have r20 (= (w64_val (Cpu.rip (wa_s2 c W))) (+ W 20)) (exact (w64_val_small (+ W 20) l20)))
+    (have k20 (code_at (wa_s2 c W) (+ W 20) Syscall 2) (exact (wa_at20 c W hc)))
+    (have q0 (= (w64_val (reg (wa_s2 c W) 0)) 1) rfl)
+    (have q7 (= (w64_val (reg (wa_s2 c W) 7)) 1) rfl)
+    (have q6 (= (w64_val (reg (wa_s2 c W) 6)) a) (exact h6))
+    (have q2 (= (w64_val (reg (wa_s2 c W) 2)) n) (exact h2))
+    (have qm (= (mapped (Cpu.segs (wa_s2 c W)) a n 4) true) (exact hm))
+    (have hn1 (<= 1 (w64_val (reg c 2))) (rw h2) (exact hn))
+    (have go2 (comes c o (wa_s2 c W) o)
+      (exact (comes_of_reaches c (wa_s2 c W) o (wa_more c W hW hrip hc hn1))))
+    (have l22 (< (+ W 22) 18446744073709551616) (arith))
+    (have e22 (= (+ (+ W 20) 2) (+ W 22)) (arith))
+    (have r22 (= (w64_val (Cpu.rip (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))))) (+ W 22))
+      (show (= (w64_val (w64 (+ (w64_val (w64 (+ W 20))) 2))) (+ W 22)))
+      (rw (w64_val_small (+ W 20) l20))
+      (rw e22)
+      (exact (w64_val_small (+ W 22) l22)))
+    (have k3 (wa_code (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+      (exact
+        (wa_code_same c (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W
+          (Eq.refl (Cpu.mem c))
+          (Eq.refl (Cpu.segs c))
+          hc)))
+    (have hk (<= (took t n) n) (exact (took_le t n)))
+    (have hx (< (w64_val (reg c 2)) 18446744073709551616) (exact (w64_val_lt (reg c 2))))
+    (have kl (< (took t n) 18446744073709551616) (arith h2))
+    (have hnb
+      (Not
+        (< (w64_val (reg (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) 2))
+          (w64_val (reg (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) 0))))
+      (show (Not (< (w64_val (reg c 2)) (w64_val (w64 (took t n))))))
+      (rw h2)
+      (rw (w64_val_small (took t n) kl))
+      (arith))
+    (have go3
+      (comes (wa_s2 c W) o (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n)))
+        (MkOs (rest_answers (Os.ans o))
+          (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n)))))
+      (exact (write_took (wa_s2 c W) (+ W 20) 2 o a n t r20 k20 q0 q7 q6 q2 qm hh)))
+    (have go5
+      (comes (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n)))
+        (MkOs (rest_answers (Os.ans o))
+          (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))
+        (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+        (MkOs (rest_answers (Os.ans o))
+          (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n)))))
+      (exact
+        (comes_of_reaches (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n)))
+          (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+          (MkOs (rest_answers (Os.ans o))
+            (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))
+          (wa_loop (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W hW r22 k3 hnb))))
+    (have ha (< (+ a (took t n)) 18446744073709551616) (arith))
+    (have v6
+      (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W) 6))
+        (+ a (took t n)))
+      (show (= (w64_val (w64_add (reg c 6) (w64 (took t n)))) (+ a (took t n))))
+      (exact (w64_val_add (reg c 6) a (took t n) h6 ha)))
+    (have hsplit (= (w64_val (reg c 2)) (+ (- n (took t n)) (took t n)))
+      (rw h2)
+      (exact (Eq.symm (Nat.sub_add_cancel hk))))
+    (have v2
+      (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W) 2))
+        (- n (took t n)))
+      (show (= (w64_val (w64_sub (reg c 2) (w64 (took t n)))) (- n (took t n))))
+      (exact (w64_val_sub (reg c 2) (- n (took t n)) (took t n) hsplit kl)))
+    (exact
+      (And.intro
+        (comes_trans c o (wa_s2 c W) o
+          (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+          (MkOs (rest_answers (Os.ans o))
+            (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))
+          go2
+          (comes_trans (wa_s2 c W) o (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n)))
+            (MkOs (rest_answers (Os.ans o))
+              (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))
+            (wa_s5 (wa_s3 c W (next_answer (Os.ans o)) (w64 (took t n))) W)
+            (MkOs (rest_answers (Os.ans o))
+              (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))
+            go3
+            go5))
+        (And.intro v6 v2)))))
+;; the kernel's answer a failure: the process exits with `status_io`, nothing more written
+(theorem wa_turn_err
+  ((c Cpu)
+   (W Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (e Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hn (<= 1 n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hb (<= (+ a n) 140737488355328))
+   (hh (= (Answer.how (next_answer (Os.ans o))) (HErr e))))
+  (ends_at c o (RExit status_io (Os.out o)))
+  (by
+    (have l20 (< (+ W 20) 18446744073709551616) (arith))
+    (have r20 (= (w64_val (Cpu.rip (wa_s2 c W))) (+ W 20)) (exact (w64_val_small (+ W 20) l20)))
+    (have k20 (code_at (wa_s2 c W) (+ W 20) Syscall 2) (exact (wa_at20 c W hc)))
+    (have q0 (= (w64_val (reg (wa_s2 c W) 0)) 1) rfl)
+    (have q7 (= (w64_val (reg (wa_s2 c W) 7)) 1) rfl)
+    (have q6 (= (w64_val (reg (wa_s2 c W) 6)) a) (exact h6))
+    (have q2 (= (w64_val (reg (wa_s2 c W) 2)) n) (exact h2))
+    (have qm (= (mapped (Cpu.segs (wa_s2 c W)) a n 4) true) (exact hm))
+    (have hn1 (<= 1 (w64_val (reg c 2))) (rw h2) (exact hn))
+    (have go2 (comes c o (wa_s2 c W) o)
+      (exact (comes_of_reaches c (wa_s2 c W) o (wa_more c W hW hrip hc hn1))))
+    (have l22 (< (+ W 22) 18446744073709551616) (arith))
+    (have e22 (= (+ (+ W 20) 2) (+ W 22)) (arith))
+    (have r22 (= (w64_val (Cpu.rip (wa_s3 c W (next_answer (Os.ans o)) (err_word e)))) (+ W 22))
+      (show (= (w64_val (w64 (+ (w64_val (w64 (+ W 20))) 2))) (+ W 22)))
+      (rw (w64_val_small (+ W 20) l20))
+      (rw e22)
+      (exact (w64_val_small (+ W 22) l22)))
+    (have k3 (wa_code (wa_s3 c W (next_answer (Os.ans o)) (err_word e)) W)
+      (exact
+        (wa_code_same c (wa_s3 c W (next_answer (Os.ans o)) (err_word e)) W (Eq.refl (Cpu.mem c))
+          (Eq.refl (Cpu.segs c))
+          hc)))
+    (have hbig (<= 18446744073709547521 (w64_val (err_word e))) (exact (err_word_big e)))
+    (have hlt
+      (< (w64_val (reg (wa_s3 c W (next_answer (Os.ans o)) (err_word e)) 2))
+        (w64_val (reg (wa_s3 c W (next_answer (Os.ans o)) (err_word e)) 0)))
+      (show (< (w64_val (reg c 2)) (w64_val (err_word e))))
+      (rw h2)
+      (arith))
+    (have go3
+      (comes (wa_s2 c W) o (wa_s3 c W (next_answer (Os.ans o)) (err_word e))
+        (MkOs (rest_answers (Os.ans o)) (Os.out o)))
+      (exact (write_err (wa_s2 c W) (+ W 20) 2 o a n e r20 k20 q0 q7 q6 q2 qm hh)))
+    (have hend
+      (ends_at (wa_s3 c W (next_answer (Os.ans o)) (err_word e))
+        (MkOs (rest_answers (Os.ans o)) (Os.out o))
+        (RExit status_io (Os.out o)))
+      (exact
+        (wa_fail (wa_s3 c W (next_answer (Os.ans o)) (err_word e)) W
+          (MkOs (rest_answers (Os.ans o)) (Os.out o))
+          hW
+          r22
+          k3
+          hlt)))
+    (exact
+      (ends_of_comes c o (wa_s2 c W) o (RExit status_io (Os.out o)) go2
+        (ends_of_comes (wa_s2 c W) o (wa_s3 c W (next_answer (Os.ans o)) (err_word e))
+          (MkOs (rest_answers (Os.ans o)) (Os.out o))
+          (RExit status_io (Os.out o))
+          go3
+          hend)))))
+;; the kernel ended the process at the call
+(theorem wa_turn_kill
+  ((c Cpu)
+   (W Nat)
+   (o Os)
+   (a Nat)
+   (n Nat)
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h6 (= (w64_val (reg c 6)) a))
+   (h2 (= (w64_val (reg c 2)) n))
+   (hn (<= 1 n))
+   (hm (= (mapped (Cpu.segs c) a n 4) true))
+   (hb (<= (+ a n) 140737488355328))
+   (hh (= (Answer.how (next_answer (Os.ans o))) HKill)))
+  (ends_at c o (RKill (Os.out o)))
+  (by
+    (have l20 (< (+ W 20) 18446744073709551616) (arith))
+    (have r20 (= (w64_val (Cpu.rip (wa_s2 c W))) (+ W 20)) (exact (w64_val_small (+ W 20) l20)))
+    (have k20 (code_at (wa_s2 c W) (+ W 20) Syscall 2) (exact (wa_at20 c W hc)))
+    (have q0 (= (w64_val (reg (wa_s2 c W) 0)) 1) rfl)
+    (have q7 (= (w64_val (reg (wa_s2 c W) 7)) 1) rfl)
+    (have q6 (= (w64_val (reg (wa_s2 c W) 6)) a) (exact h6))
+    (have q2 (= (w64_val (reg (wa_s2 c W) 2)) n) (exact h2))
+    (have qm (= (mapped (Cpu.segs (wa_s2 c W)) a n 4) true) (exact hm))
+    (have hn1 (<= 1 (w64_val (reg c 2))) (rw h2) (exact hn))
+    (have go2 (comes c o (wa_s2 c W) o)
+      (exact (comes_of_reaches c (wa_s2 c W) o (wa_more c W hW hrip hc hn1))))
+    (have hend (ends_at (wa_s2 c W) o (RKill (Os.out o)))
+      (exact (write_kill (wa_s2 c W) (+ W 20) 2 o a n r20 k20 q0 q7 q6 q2 qm hh)))
+    (exact (ends_of_comes c o (wa_s2 c W) o (RKill (Os.out o)) go2 hend))))
+
+;; ---- the contract ---------------------------------------------------------------------------------
+;; A later state of the loop stands in the frame of an earlier one: the stack pointer, the
+;; memory, what is mapped and the registers a callee keeps are the same.
+(def wa_frame ((c Cpu) (c1 Cpu)) Prop
+  (and (= (reg c1 4) (reg c 4))
+    (and (= (Cpu.mem c1) (Cpu.mem c))
+      (and (= (Cpu.segs c1) (Cpu.segs c))
+        (and (= (reg c1 3) (reg c 3))
+          (and (= (reg c1 5) (reg c 5))
+            (and (= (reg c1 12) (reg c 12))
+              (and (= (reg c1 13) (reg c 13))
+                (and (= (reg c1 14) (reg c 14)) (= (reg c1 15) (reg c 15)))))))))))
+;; the state a turn that took bytes ends in stands in the frame of the state it began in
+(theorem wa_turn_frame ((c Cpu) (W Nat) (ans Answer) (v (BitVec 64)))
+  (wa_frame c (wa_s5 (wa_s3 c W ans v) W))
+  (by
+    (exact
+      (And.intro (Eq.refl (reg c 4))
+        (And.intro (Eq.refl (Cpu.mem c))
+          (And.intro (Eq.refl (Cpu.segs c))
+            (And.intro (Eq.refl (reg c 3))
+              (And.intro (Eq.refl (reg c 5))
+                (And.intro (Eq.refl (reg c 12))
+                  (And.intro (Eq.refl (reg c 13))
+                    (And.intro (Eq.refl (reg c 14)) (Eq.refl (reg c 15)))))))))))))
+;; code that has returned from a state in an earlier state's frame has returned from that one
+(theorem returned_frame ((c Cpu) (c1 Cpu) (c2 Cpu) (hf (wa_frame c c1)) (h (returned c1 c2)))
+  (returned c c2)
+  (by
+    (cases hf
+      ((intro (e4 z1)
+         (cases z1
+           ((intro (em z2)
+              (cases z2
+                ((intro (es z3)
+                   (cases z3
+                     ((intro (e3 z4)
+                        (cases z4
+                          ((intro (e5 z5)
+                             (cases z5
+                               ((intro (e12 z6)
+                                  (cases z6
+                                    ((intro (e13 z7)
+                                       (cases z7
+                                         ((intro (e14 e15) (unfold returned) (unfold kept)
+                                            (unfold ret_addr)
+                                            (rw (<- e4))
+                                            (rw (<- em))
+                                            (rw (<- es))
+                                            (rw (<- e3))
+                                            (rw (<- e5))
+                                            (rw (<- e12))
+                                            (rw (<- e13))
+                                            (rw (<- e14))
+                                            (rw (<- e15))
+                                            (exact h)))))))))))))))))))))))))))
+;; the state the code returns in has returned from the state at its first instruction
+(theorem wa_out_returned ((c Cpu) (W Nat)) (returned c (wa_out c W))
+  (by
+    (exact
+      (And.intro (Eq.refl (ret_addr c))
+        (And.intro (Eq.refl (w64_add (reg c 4) (w64 8)))
+          (And.intro (Eq.refl (Cpu.segs c))
+            (And.intro (Eq.refl (reg c 3))
+              (And.intro (Eq.refl (reg c 5))
+                (And.intro (Eq.refl (reg c 12))
+                  (And.intro (Eq.refl (reg c 13))
+                    (And.intro (Eq.refl (reg c 14)) (Eq.refl (reg c 15)))))))))))))
+
+;; What the code comes to from a state c at its first instruction, the answers `as` to come and
+;; `out` written, by what `send` says of the answers and the bytes bs it was given: all taken —
+;; the code has returned in a state with the same memory, the answers left to come and the
+;; bytes written after `out` —; or the process has ended, exited with `status_io` or ended by
+;; the kernel, the bytes taken before that written after `out`.
+(def wa_post ((s Sent) (c Cpu) (as (List Answer)) (out (List Nat)) (bs (List Nat))) Prop
+  (match s
+    ((SAll left)
+     (exists ((c2 Cpu))
+       (and (comes c (MkOs as out) c2 (MkOs left (List.append out bs)))
+         (and (returned c c2) (= (Cpu.mem c2) (Cpu.mem c))))))
+    ((SFail p) (ends_at c (MkOs as out) (RExit status_io (List.append out p))))
+    ((SKill p) (ends_at c (MkOs as out) (RKill (List.append out p))))))
+;; a turn that took the bytes t, and then what the code comes to from the state after it
+(theorem wa_post_step
+  ((s Sent)
+   (c Cpu)
+   (c1 Cpu)
+   (as (List Answer))
+   (ar (List Answer))
+   (out (List Nat))
+   (t (List Nat))
+   (rest (List Nat))
+   (hgo (comes c (MkOs as out) c1 (MkOs ar (List.append out t))))
+   (hf (wa_frame c c1))
+   (h (wa_post s c1 ar (List.append out t) rest)))
+  (wa_post (sent_after t s) c as out (List.append t rest))
+  (by
+    (have hmem (= (Cpu.mem c1) (Cpu.mem c)) (exact (And.left (And.right hf))))
+    (cases s
+      ((SAll (left)
+         (have h1
+           (exists ((c2 Cpu))
+             (and
+               (comes c1 (MkOs ar (List.append out t)) c2
+                 (MkOs left (List.append (List.append out t) rest)))
+               (and (returned c1 c2) (= (Cpu.mem c2) (Cpu.mem c1)))))
+           (exact h))
+         (show
+           (exists ((c2 Cpu))
+             (and (comes c (MkOs as out) c2 (MkOs left (List.append out (List.append t rest))))
+               (and (returned c c2) (= (Cpu.mem c2) (Cpu.mem c))))))
+         (cases h1
+           ((intro (c2 g)
+              (apply (Exists.intro c2)
+                ((rw (<- (List.append_assoc out t rest)))
+                 (exact
+                   (And.intro
+                     (comes_trans c (MkOs as out) c1 (MkOs ar (List.append out t)) c2
+                       (MkOs left (List.append (List.append out t) rest))
+                       hgo
+                       (And.left g))
+                     (And.intro (returned_frame c c1 c2 hf (And.left (And.right g)))
+                       (Eq.trans (And.right (And.right g)) hmem))))))))))
+       (SFail (p)
+         (have h1
+           (ends_at c1 (MkOs ar (List.append out t))
+             (RExit status_io (List.append (List.append out t) p)))
+           (exact h))
+         (show (ends_at c (MkOs as out) (RExit status_io (List.append out (List.append t p)))))
+         (rw (<- (List.append_assoc out t p)))
+         (exact
+           (ends_of_comes c (MkOs as out) c1 (MkOs ar (List.append out t))
+             (RExit status_io (List.append (List.append out t) p))
+             hgo
+             h1)))
+       (SKill (p)
+         (have h1
+           (ends_at c1 (MkOs ar (List.append out t)) (RKill (List.append (List.append out t) p)))
+           (exact h))
+         (show (ends_at c (MkOs as out) (RKill (List.append out (List.append t p)))))
+         (rw (<- (List.append_assoc out t p)))
+         (exact
+           (ends_of_comes c (MkOs as out) c1 (MkOs ar (List.append out t))
+             (RKill (List.append (List.append out t) p))
+             hgo
+             h1)))))))
+;; no byte to write: the code returns, nothing written and no answer used
+(theorem wa_zero
+  ((c Cpu)
+   (W Nat)
+   (as (List Answer))
+   (out (List Nat))
+   (hW (<= (+ W 54) 140737488355328))
+   (hrip (= (w64_val (Cpu.rip c)) W))
+   (hc (wa_code c W))
+   (h2 (< (w64_val (reg c 2)) 1))
+   (hsp (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)))
+  (wa_post (SAll as) c as out nil)
+  (by
+    (show
+      (exists ((c2 Cpu))
+        (and (comes c (MkOs as out) c2 (MkOs as (List.append out nil)))
+          (and (returned c c2) (= (Cpu.mem c2) (Cpu.mem c))))))
+    (apply (Exists.intro (wa_out c W))
+      ((rw (List.append_nil out))
+       (exact
+         (And.intro (comes_of_reaches c (wa_out c W) (MkOs as out) (wa_done c W hW hrip hc h2 hsp))
+           (And.intro (wa_out_returned c W) (Eq.refl (Cpu.mem c)))))))))
+
+;; what `send` says where bytes are left, by the first answer
+(theorem send_took
+  ((ans Answer)
+   (ar (List Answer))
+   (bs (List Nat))
+   (b Nat)
+   (r (List Nat))
+   (t Nat)
+   (hb (= bs (cons b r)))
+   (hh (= (Answer.how ans) (HTook t))))
+  (= (send (cons ans ar) bs)
+    (sent_after (List.take (took t (List.length bs)) bs)
+      (send ar (List.drop (took t (List.length bs)) bs))))
+  (by (rw hb) (rw send.eq_3) (rw hh) rfl))
+(theorem send_err
+  ((ans Answer)
+   (ar (List Answer))
+   (bs (List Nat))
+   (b Nat)
+   (r (List Nat))
+   (e Nat)
+   (hb (= bs (cons b r)))
+   (hh (= (Answer.how ans) (HErr e))))
+  (= (send (cons ans ar) bs) (SFail nil))
+  (by (rw hb) (rw send.eq_3) (rw hh) rfl))
+(theorem send_kill
+  ((ans Answer)
+   (ar (List Answer))
+   (bs (List Nat))
+   (b Nat)
+   (r (List Nat))
+   (hb (= bs (cons b r)))
+   (hh (= (Answer.how ans) HKill)))
+  (= (send (cons ans ar) bs) (SKill nil))
+  (by (rw hb) (rw send.eq_3) (rw hh) rfl))
+
+;; THE CONTRACT OF `write_all`. From a state at its first instruction, standing at any address W
+;; below the top of a process's addresses, with the address a in rsi and the count n in rdx of
+;; bytes mapped to read, and the return address readable at the stack pointer: for every list
+;; of answers the kernel may give and whatever has been written before, the code comes to what
+;; `send` says of the answers and those bytes (`wa_post`).
+(theorem write_all_ok ((as (List Answer)))
+  (forall ((c Cpu) (W Nat) (a Nat) (n Nat) (out (List Nat)))
+    (-> (wa_code c W) (<= (+ W 54) 140737488355328) (= (w64_val (Cpu.rip c)) W)
+      (= (w64_val (reg c 6)) a)
+      (= (w64_val (reg c 2)) n)
+      (= (mapped (Cpu.segs c) a n 4) true)
+      (<= (+ a n) 140737488355328)
+      (= (mapped (Cpu.segs c) (w64_val (reg c 4)) 8 4) true)
+      (wa_post (send as (mem_bytes (Cpu.mem c) a n)) c as out (mem_bytes (Cpu.mem c) a n))))
+  (by
+    (induction as
+      ((nil () (intro c W a n out hc hW hrip h6 h2 hm hb hsp)
+         (have hw64 (< W 18446744073709551616) (arith))
+         (cases (Nat.decLt n 1)
+           ((isTrue (hz) (have hn0 (= n 0) (arith hz))
+              (have h2z (< (w64_val (reg c 2)) 1) (rw h2) (exact hz))
+              (rw hn0)
+              (rw (mem_bytes_zero (Cpu.mem c) a))
+              (exact (wa_zero c W nil out hW hrip hc h2z hsp)))
+            (isFalse (hz) (have hn (<= 1 n) (arith hz)) (have hne (Not (= n 0)) (arith hn))
+              (have eb
+                (= (mem_bytes (Cpu.mem c) a n)
+                  (cons (mem_get (Cpu.mem c) a) (mem_bytes (Cpu.mem c) (+ a 1) (- n 1))))
+                (rw mem_bytes.eq_1)
+                (rw (if_neg hne))
+                rfl)
+
+              (have hh0 (= (Answer.how (next_answer (Os.ans (MkOs nil out)))) (HTook 0)) rfl)
+              (have g
+                (and
+                  (comes c (MkOs nil out) (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W)
+                    (MkOs nil (List.append out (mem_bytes (Cpu.mem c) a (took 0 n)))))
+                  (and
+                    (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) 6))
+                      (+ a (took 0 n)))
+                    (= (w64_val (reg (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) 2))
+                      (- n (took 0 n)))))
+                (exact (wa_turn c W (MkOs nil out) a n 0 hW hrip hc h6 h2 hn hm hb hh0)))
+              (have hr1
+                (= (w64_val (Cpu.rip (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W))) W)
+                (exact (w64_val_small W hw64)))
+              (have hc1 (wa_code (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W)
+                (exact
+                  (wa_code_same c (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W
+                    (Eq.refl (Cpu.mem c))
+                    (Eq.refl (Cpu.segs c))
+                    hc)))
+              (have hz1
+                (< (w64_val (reg (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) 2)) 1)
+                (rw (And.right (And.right g)))
+                (rw (took_zero n))
+                (rw (Nat.sub_self n))
+                (decide))
+              (have hsp1
+                (=
+                  (mapped (Cpu.segs (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W))
+                    (w64_val (reg (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) 4))
+                    8
+                    4)
+                  true)
+                (exact hsp))
+              (have hf (wa_frame c (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W))
+                (exact (wa_turn_frame c W (next_answer nil) (w64 (took 0 n)))))
+              (show
+                (exists ((c2 Cpu))
+                  (and
+                    (comes c (MkOs nil out) c2
+                      (MkOs nil (List.append out (mem_bytes (Cpu.mem c) a n))))
+                    (and (returned c c2) (= (Cpu.mem c2) (Cpu.mem c))))))
+              (apply
+                (Exists.intro (wa_out (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W))
+                ((exact
+                   (And.intro
+                     (comes_trans c (MkOs nil out)
+                       (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W)
+                       (MkOs nil (List.append out (mem_bytes (Cpu.mem c) a n)))
+                       (wa_out (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W)
+                       (MkOs nil (List.append out (mem_bytes (Cpu.mem c) a n)))
+                       (And.left g)
+                       (comes_of_reaches (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W)
+                         (wa_out (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W)
+                         (MkOs nil (List.append out (mem_bytes (Cpu.mem c) a n)))
+                         (wa_done (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W hW hr1
+                           hc1
+                           hz1
+                           hsp1)))
+                     (And.intro
+                       (returned_frame c (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W)
+                         (wa_out (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W)
+                         hf
+                         (wa_out_returned (wa_s5 (wa_s3 c W (next_answer nil) (w64 (took 0 n))) W) W))
+                       (Eq.refl (Cpu.mem c)))))))))))
+       (cons (ans ar ih) (intro c W a n out hc hW hrip h6 h2 hm hb hsp)
+         (have hw64 (< W 18446744073709551616) (arith))
+         (cases (Nat.decLt n 1)
+           ((isTrue (hz) (have hn0 (= n 0) (arith hz))
+              (have h2z (< (w64_val (reg c 2)) 1) (rw h2) (exact hz))
+              (rw hn0)
+              (rw (mem_bytes_zero (Cpu.mem c) a))
+              (exact (wa_zero c W (cons ans ar) out hW hrip hc h2z hsp)))
+            (isFalse (hz) (have hn (<= 1 n) (arith hz)) (have hne (Not (= n 0)) (arith hn))
+              (have eb
+                (= (mem_bytes (Cpu.mem c) a n)
+                  (cons (mem_get (Cpu.mem c) a) (mem_bytes (Cpu.mem c) (+ a 1) (- n 1))))
+                (rw mem_bytes.eq_1)
+                (rw (if_neg hne))
+                rfl)
+
+              (cases (Answer.how ans) hh
+                ((HTook (t)
+                   (have hh1
+                     (= (Answer.how (next_answer (Os.ans (MkOs (cons ans ar) out)))) (HTook t))
+                     (exact hh))
+                   (have hk (<= (took t n) n) (exact (took_le t n)))
+                   (have g
+                     (and
+                       (comes c (MkOs (cons ans ar) out) (wa_s5 (wa_s3 c W ans (w64 (took t n))) W)
+                         (MkOs ar (List.append out (mem_bytes (Cpu.mem c) a (took t n)))))
+                       (and
+                         (= (w64_val (reg (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) 6))
+                           (+ a (took t n)))
+                         (= (w64_val (reg (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) 2))
+                           (- n (took t n)))))
+                     (exact
+                       (wa_turn c W (MkOs (cons ans ar) out) a n t hW hrip hc h6 h2 hn hm hb hh1)))
+                   (have hr1 (= (w64_val (Cpu.rip (wa_s5 (wa_s3 c W ans (w64 (took t n))) W))) W)
+                     (exact (w64_val_small W hw64)))
+                   (have hc1 (wa_code (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) W)
+                     (exact
+                       (wa_code_same c (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) W
+                         (Eq.refl (Cpu.mem c))
+                         (Eq.refl (Cpu.segs c))
+                         hc)))
+                   (have hsp1
+                     (=
+                       (mapped (Cpu.segs (wa_s5 (wa_s3 c W ans (w64 (took t n))) W))
+                         (w64_val (reg (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) 4))
+                         8
+                         4)
+                       true)
+                     (exact hsp))
+                   (have hf (wa_frame c (wa_s5 (wa_s3 c W ans (w64 (took t n))) W))
+                     (exact (wa_turn_frame c W ans (w64 (took t n)))))
+                   (have ha1 (<= a (+ a (took t n))) (arith))
+                   (have ha2 (<= (+ (+ a (took t n)) (- n (took t n))) (+ a n))
+                     (arith (Nat.sub_add_cancel hk)))
+                   (have hm1
+                     (=
+                       (mapped (Cpu.segs (wa_s5 (wa_s3 c W ans (w64 (took t n))) W))
+                         (+ a (took t n))
+                         (- n (took t n))
+                         4)
+                       true)
+                     (exact
+                       (mapped_part (Cpu.segs c) a n (+ a (took t n)) (- n (took t n)) 4 ha1 ha2 hm)))
+                   (have hb1 (<= (+ (+ a (took t n)) (- n (took t n))) 140737488355328) (arith ha2))
+                   (have hi
+                     (wa_post (send ar (mem_bytes (Cpu.mem c) (+ a (took t n)) (- n (took t n))))
+                       (wa_s5 (wa_s3 c W ans (w64 (took t n))) W)
+                       ar
+                       (List.append out (mem_bytes (Cpu.mem c) a (took t n)))
+                       (mem_bytes (Cpu.mem c) (+ a (took t n)) (- n (took t n))))
+                     (exact
+                       (ih (wa_s5 (wa_s3 c W ans (w64 (took t n))) W) W (+ a (took t n))
+                         (- n (took t n))
+                         (List.append out (mem_bytes (Cpu.mem c) a (took t n)))
+                         hc1
+                         hW
+                         hr1
+                         (And.left (And.right g))
+                         (And.right (And.right g))
+                         hm1
+                         hb1
+                         hsp1)))
+                   (have es
+                     (= (send (cons ans ar) (mem_bytes (Cpu.mem c) a n))
+                       (sent_after (mem_bytes (Cpu.mem c) a (took t n))
+                         (send ar (mem_bytes (Cpu.mem c) (+ a (took t n)) (- n (took t n))))))
+                     (rw
+                       (send_took ans ar (mem_bytes (Cpu.mem c) a n) (mem_get (Cpu.mem c) a)
+                         (mem_bytes (Cpu.mem c) (+ a 1) (- n 1))
+                         t
+                         eb
+                         hh))
+                     (rw (mem_bytes_length (Cpu.mem c) n a))
+                     (rw (mem_bytes_take (Cpu.mem c) (took t n) a n hk))
+                     (rw (mem_bytes_drop (Cpu.mem c) (took t n) a n hk))
+                     rfl)
+                   (rw es)
+                   (rw (<- (mem_bytes_split (Cpu.mem c) a n (took t n) hk)))
+                   (exact
+                     (wa_post_step
+                       (send ar (mem_bytes (Cpu.mem c) (+ a (took t n)) (- n (took t n))))
+                       c
+                       (wa_s5 (wa_s3 c W ans (w64 (took t n))) W)
+                       (cons ans ar)
+                       ar
+                       out
+                       (mem_bytes (Cpu.mem c) a (took t n))
+                       (mem_bytes (Cpu.mem c) (+ a (took t n)) (- n (took t n)))
+                       (And.left g)
+                       hf
+                       hi)))
+                 (HErr (e)
+                   (have hh1
+                     (= (Answer.how (next_answer (Os.ans (MkOs (cons ans ar) out)))) (HErr e))
+                     (exact hh))
+                   (rw
+                     (send_err ans ar (mem_bytes (Cpu.mem c) a n) (mem_get (Cpu.mem c) a)
+                       (mem_bytes (Cpu.mem c) (+ a 1) (- n 1))
+                       e
+                       eb
+                       hh))
+                   (show
+                     (ends_at c (MkOs (cons ans ar) out) (RExit status_io (List.append out nil))))
+                   (rw (List.append_nil out))
+                   (exact
+                     (wa_turn_err c W (MkOs (cons ans ar) out) a n e hW hrip hc h6 h2 hn hm hb hh1)))
+                 (HKill ()
+                   (have hh1 (= (Answer.how (next_answer (Os.ans (MkOs (cons ans ar) out)))) HKill)
+                     (exact hh))
+                   (rw
+                     (send_kill ans ar (mem_bytes (Cpu.mem c) a n) (mem_get (Cpu.mem c) a)
+                       (mem_bytes (Cpu.mem c) (+ a 1) (- n 1))
+                       eb
+                       hh))
+                   (show (ends_at c (MkOs (cons ans ar) out) (RKill (List.append out nil))))
+                   (rw (List.append_nil out))
+                   (exact
+                     (wa_turn_kill c W (MkOs (cons ans ar) out) a n hW hrip hc h6 h2 hn hm hb hh1)))))))))))))

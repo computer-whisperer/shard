@@ -1,0 +1,822 @@
+;;; v3/models/x86/hello_run.shard — the file `hello.shard` writes, from end to end: started with
+;;; its stack anywhere `stack_ok` allows and on ANY list of answers of the kernel to its calls,
+;;; the process ends as `hello_res` says of the answers — both pieces written and the exit with
+;;; 0 where the kernel takes every byte, however few at a call; the exit with `status_io` where
+;;; it fails a write, and the end it makes of the process itself, each with what was written
+;;; before. Proven by the contract of `write_all` (write.shard), used at each of the two calls,
+;;; and the facts of a process's state (process.shard). The model is not run on the file.
+(import "hello.shard")
+(import "process.shard")
+(use std.list)
+(use std.mem)
+(use models.x86.asm)
+(use models.x86.elf)
+(use models.x86.frame)
+(use models.x86.hello)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Answer)
+(use models.x86.linux.Os)
+(use models.x86.linux.Res)
+(use models.x86.linux.Sent)
+(use models.x86.loaded)
+(use models.x86.process)
+(use models.x86.word)
+(use models.x86.write)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Cpu)
+(use models.x86.x86.Fuel)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the listing, assembled -------------------------------------------------------------------
+(fn hello_code () (List Nat)
+  (match (assemble hello_listing)
+    (none nil)
+    ((some code) code)))
+(fn hello_instrs () (List Instr)
+  (match (resolve hello_listing hello_listing 0)
+    (none nil)
+    ((some is) is)))
+;; the listing's instructions by address, as its file holds them
+(fn hello_table () (List (Prod Nat (Prod Instr Nat)))
+  (list
+    ;; the process's first instructions
+    (Prod.mk 4194424 (Prod.mk (MovRI32 6 4194522) 5))
+    (Prod.mk 4194429 (Prod.mk (MovRI32 2 7) 5))
+    (Prod.mk 4194434 (Prod.mk (Call 27) 5))
+    (Prod.mk 4194439 (Prod.mk (MovRI32 6 4194532) 5))
+    (Prod.mk 4194444 (Prod.mk (MovRI32 2 6) 5))
+    (Prod.mk 4194449 (Prod.mk (Call 12) 5))
+    (Prod.mk 4194454 (Prod.mk (MovRI32 7 0) 5))
+    (Prod.mk 4194459 (Prod.mk (MovRI32 0 60) 5))
+    (Prod.mk 4194464 (Prod.mk Syscall 2))
+    ;; write_all
+    (Prod.mk 4194466 (Prod.mk (MovRI32 0 1) 5))
+    (Prod.mk 4194471 (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3))
+    (Prod.mk 4194474 (Prod.mk (Jcc 3 1) 6))
+    (Prod.mk 4194480 (Prod.mk Ret 1))
+    (Prod.mk 4194481 (Prod.mk (MovRI32 7 1) 5))
+    (Prod.mk 4194486 (Prod.mk Syscall 2))
+    (Prod.mk 4194488 (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3))
+    (Prod.mk 4194491 (Prod.mk (Jcc 3 12) 6))
+    (Prod.mk 4194497 (Prod.mk (MovRI32 7 74) 5))
+    (Prod.mk 4194502 (Prod.mk (MovRI32 0 60) 5))
+    (Prod.mk 4194507 (Prod.mk Syscall 2))
+    (Prod.mk 4194509 (Prod.mk (AluRmR BAdd (RmReg 6) 0) 3))
+    (Prod.mk 4194512 (Prod.mk (AluRmR BSub (RmReg 2) 0) 3))
+    (Prod.mk 4194515 (Prod.mk (Jmp 18446744073709551562) 5))
+    ;; the text
+    (Prod.mk 4194520 (Prod.mk (MovRI64 0 9056056326776168) 10))
+    (Prod.mk 4194530 (Prod.mk (MovRI64 0 11426432446327) 10))))
+(theorem hello_assembled () (= (assemble hello_listing) (some hello_code)) (by rfl))
+(theorem hello_resolved () (= (resolve hello_listing hello_listing 0) (some hello_instrs)) (by rfl))
+(theorem hello_file_is () (= hello_file (elf_exec hello_code)) (by rfl))
+(theorem hello_laid () (= (layout hello_instrs 4194424) hello_table) (by rfl))
+(theorem hello_within () (= (all_within hello_table 4194424 4194540) true) (by rfl))
+(theorem hello_size () (<= (+ 4194424 (List.length hello_code)) 140737488355328) (by decide))
+(theorem hello_code_ends () (<= (+ 4194424 (List.length hello_code)) 4194540) (by decide))
+(theorem hello_bytes () (= (bytes_ok hello_code) true) (by rfl))
+;; the two pieces are bytes of the code: seven from index 98, six from index 108
+(theorem hello_one_in () (= (List.take 7 (List.drop 98 hello_code)) hello_one) (by rfl))
+(theorem hello_two_in () (= (List.take 6 (List.drop 108 hello_code)) hello_two) (by rfl))
+;; `write_all` stands at 4194466 wherever the table is in place
+(theorem hello_wa ((c Cpu) (h (code_in c hello_table))) (wa_code c 4194466)
+  (by
+    (exact
+      (And.intro (h 4194466 (MovRI32 0 1) 5 (Eq.refl (some (Prod.mk (MovRI32 0 1) 5))))
+        (And.intro
+          (h 4194471 (AluRmR BCmp (RmReg 2) 0) 3
+            (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3))))
+          (And.intro (h 4194474 (Jcc 3 1) 6 (Eq.refl (some (Prod.mk (Jcc 3 1) 6))))
+            (And.intro (h 4194480 Ret 1 (Eq.refl (some (Prod.mk Ret 1))))
+              (And.intro (h 4194481 (MovRI32 7 1) 5 (Eq.refl (some (Prod.mk (MovRI32 7 1) 5))))
+                (And.intro (h 4194486 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+                  (And.intro
+                    (h 4194488 (AluRmR BCmp (RmReg 2) 0) 3
+                      (Eq.refl (some (Prod.mk (AluRmR BCmp (RmReg 2) 0) 3))))
+                    (And.intro (h 4194491 (Jcc 3 12) 6 (Eq.refl (some (Prod.mk (Jcc 3 12) 6))))
+                      (And.intro
+                        (h 4194497 (MovRI32 7 74) 5 (Eq.refl (some (Prod.mk (MovRI32 7 74) 5))))
+                        (And.intro
+                          (h 4194502 (MovRI32 0 60) 5 (Eq.refl (some (Prod.mk (MovRI32 0 60) 5))))
+                          (And.intro (h 4194507 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+                            (And.intro
+                              (h 4194509 (AluRmR BAdd (RmReg 6) 0) 3
+                                (Eq.refl (some (Prod.mk (AluRmR BAdd (RmReg 6) 0) 3))))
+                              (And.intro
+                                (h 4194512 (AluRmR BSub (RmReg 2) 0) 3
+                                  (Eq.refl (some (Prod.mk (AluRmR BSub (RmReg 2) 0) 3))))
+                                (h 4194515 (Jmp 18446744073709551562) 5
+                                  (Eq.refl (some (Prod.mk (Jmp 18446744073709551562) 5))))))))))))))))))))
+
+;; ---- a piece written ------------------------------------------------------------------------------
+;; What a piece's three instructions and `write_all` come to from a state c of the process, by
+;; what `send` says: all taken — a state of the process at the address after the call, the
+;; stack pointer where it stood, memory changed in the word under it alone —; or the process
+;; has ended.
+(def piece_post
+  ((sent Sent)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (ret Nat)
+   (as (List Answer))
+   (out (List Nat))
+   (text (List Nat)))
+  Prop
+  (match sent
+    ((SAll left)
+     (exists ((c2 Cpu))
+       (and (comes c (MkOs as out) c2 (MkOs left (List.append out text)))
+         (and (proc_at hello_table hello_code lo hi c2 (+ s 8))
+           (and (= (w64_val (Cpu.rip c2)) ret) (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8)))))))
+    ((SFail p) (ends_at c (MkOs as out) (RExit status_io (List.append out p))))
+    ((SKill p) (ends_at c (MkOs as out) (RKill (List.append out p))))))
+;; from the contract's word of the state the call entered to the piece's word of the state
+;; before the three instructions
+(theorem piece_of_wa
+  ((sent Sent)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (ca Cpu)
+   (s Nat)
+   (ret Nat)
+   (as (List Answer))
+   (out (List Nat))
+   (text (List Nat))
+   (hchi (<= 4194555 lo))
+   (h64 (< (+ s 8) 18446744073709551616))
+   (hgo (reaches c ca))
+   (hata (proc_at hello_table hello_code lo hi ca s))
+   (hra (= (ret_addr ca) (w64 ret)))
+   (hret (< ret 18446744073709551616))
+   (hso (same_outside (Cpu.mem c) (Cpu.mem ca) s (+ s 8)))
+   (hlo (<= lo s))
+   (h (wa_post sent ca as out text)))
+  (piece_post sent lo hi c s ret as out text)
+  (by
+    (cases sent
+      ((SAll (left)
+         (have h1
+           (exists ((c2 Cpu))
+             (and (comes ca (MkOs as out) c2 (MkOs left (List.append out text)))
+               (and (returned ca c2) (= (Cpu.mem c2) (Cpu.mem ca)))))
+           (exact h))
+         (show
+           (exists ((c2 Cpu))
+             (and (comes c (MkOs as out) c2 (MkOs left (List.append out text)))
+               (and (proc_at hello_table hello_code lo hi c2 (+ s 8))
+                 (and (= (w64_val (Cpu.rip c2)) ret)
+                   (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8)))))))
+         (cases h1
+           ((intro (c2 g)
+              (have hmem (= (Cpu.mem c2) (Cpu.mem ca)) (exact (And.right (And.right g))))
+              (have hso2 (same_outside (Cpu.mem ca) (Cpu.mem c2) s (+ s 8))
+                (rw hmem)
+                (exact (same_outside_refl (Cpu.mem ca) s (+ s 8))))
+              (have hat2 (proc_at hello_table hello_code lo hi c2 (+ s 8))
+                (exact
+                  (proc_returned hello_table hello_code 4194540 lo hi ca c2 s s (+ s 8) hello_within
+                    hchi
+                    hata
+                    (And.left (And.right g))
+                    hso2
+                    hlo
+                    h64)))
+              (have hrip2 (= (w64_val (Cpu.rip c2)) ret)
+                (rw (returned_at ca c2 (And.left (And.right g))))
+                (rw hra)
+                (exact (w64_val_small ret hret)))
+              (have hso3 (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8)) (rw hmem) (exact hso))
+              (apply (Exists.intro c2)
+                ((exact
+                   (And.intro
+                     (comes_trans c (MkOs as out) ca (MkOs as out) c2
+                       (MkOs left (List.append out text))
+                       (comes_of_reaches c ca (MkOs as out) hgo)
+                       (And.left g))
+                     (And.intro hat2 (And.intro hrip2 hso3))))))))))
+       (SFail (p)
+         (have h1 (ends_at ca (MkOs as out) (RExit status_io (List.append out p))) (exact h))
+         (show (ends_at c (MkOs as out) (RExit status_io (List.append out p))))
+         (exact
+           (ends_of_comes c (MkOs as out) ca (MkOs as out) (RExit status_io (List.append out p))
+             (comes_of_reaches c ca (MkOs as out) hgo)
+             h1)))
+       (SKill (p) (have h1 (ends_at ca (MkOs as out) (RKill (List.append out p))) (exact h))
+         (show (ends_at c (MkOs as out) (RKill (List.append out p))))
+         (exact
+           (ends_of_comes c (MkOs as out) ca (MkOs as out) (RKill (List.append out p))
+             (comes_of_reaches c ca (MkOs as out) hgo)
+             h1)))))))
+;; A PIECE WRITTEN. From a state of the file's process at the address pc of `mov esi, a`,
+;; `mov edx, n` and a call of `write_all`, the stack pointer a word above s in the stack's
+;; range, the n bytes at a bytes of the image that are `text`: what `send` says of the answers
+;; and the text.
+(theorem hello_piece
+  ((lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (pc Nat)
+   (d Nat)
+   (a Nat)
+   (n Nat)
+   (text (List Nat))
+   (as (List Answer))
+   (out (List Nat))
+   (b1 (<= 4194555 lo))
+   (hlo (<= lo s))
+   (hhi (<= (+ s 8) hi))
+   (b4 (<= hi 140737488355328))
+   (hat (proc_at hello_table hello_code lo hi c (+ s 8)))
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hpc (<= (+ pc 15) 4194540))
+   (i1 (= (site hello_table pc) (some (Prod.mk (MovRI32 6 a) 5))))
+   (i2 (= (site hello_table (+ pc 5)) (some (Prod.mk (MovRI32 2 n) 5))))
+   (i3 (= (site hello_table (+ pc 10)) (some (Prod.mk (Call d) 5))))
+   (htgt (= (w64_add (w64 (+ pc 15)) (w64 d)) (w64 4194466)))
+   (hin (<= (+ a n) 4194540))
+   (hmp (= (mapped (loaded_segs hello_code (MkSeg lo hi 6)) a n 4) true))
+   (htext (= (mem_bytes (Cpu.mem c) a n) text)))
+  (piece_post (send as text) lo hi c s (+ pc 15) as out text)
+  (by
+    (have hsz (< (+ 4194424 (List.length hello_code)) lo) (arith hello_code_ends))
+    (have hchi (<= (+ 4194540 15) lo) (exact b1))
+    (have hcode (code_in c hello_table) (exact (And.left hat)))
+    (have hc1 (code_in (x_mov_ri c 6 a (w64 (+ pc 5))) hello_table) (exact hcode))
+    (have hc2 (code_in (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) hello_table)
+      (exact hcode))
+    (have l5 (< (+ pc 5) 18446744073709551616) (arith))
+    (have r5 (= (w64_val (Cpu.rip (x_mov_ri c 6 a (w64 (+ pc 5))))) (+ pc 5))
+      (exact (w64_val_small (+ pc 5) l5)))
+    (have l10 (< (+ pc 10) 18446744073709551616) (arith))
+    (have r10
+      (= (w64_val (Cpu.rip (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))))
+        (+ pc 10))
+      (exact (w64_val_small (+ pc 10) l10)))
+    (have ss (same_stack c (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))))
+      (exact
+        (And.intro (Eq.refl (Cpu.segs c)) (And.intro (Eq.refl (Cpu.mem c)) (Eq.refl (reg c 4))))))
+    (have hat2
+      (proc_at hello_table hello_code lo hi
+        (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+        (+ s 8))
+      (exact
+        (proc_same hello_table hello_code lo hi c
+          (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+          (+ s 8)
+          ss
+          hat)))
+    (have gp
+      (and
+        (=
+          (mapped (Cpu.segs (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))))
+            (push_at (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))))
+            8
+            2)
+          true)
+        (and
+          (proc_at hello_table hello_code lo hi
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            s)
+          (and
+            (=
+              (Cpu.mem
+                (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+                  (w64 (+ pc 15))))
+              (mem_put64 (Cpu.mem (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))) s
+                (w64_val (w64 (+ pc 15)))))
+            (same_outside (Cpu.mem (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))))
+              (Cpu.mem
+                (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+                  (w64 (+ pc 15))))
+              s
+              (+ s 8)))))
+      (exact
+        (proc_pushed hello_table hello_code 4194540 lo hi
+          (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+          (w64 (+ pc 15))
+          s
+          (+ s 8)
+          hsz
+          hello_within
+          hchi
+          (Eq.refl (+ s 8))
+          hat2
+          hlo
+          hhi)))
+    (have hgo
+      (reaches c
+        (at_pc
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (w64 4194466)))
+      (apply (do_mov_ri32 pc 6 a 5 (+ pc 5)) ((exact hrip)) ((exact (hcode pc (MovRI32 6 a) 5 i1)))
+        (rfl)
+        ((apply (do_mov_ri32 (+ pc 5) 2 n 5 (+ pc 10)) ((exact r5))
+           ((exact (hc1 (+ pc 5) (MovRI32 2 n) 5 i2)))
+           ((arith))
+           ((apply (do_call (+ pc 10) 5 d (+ pc 15) 4194466) ((exact r10))
+              ((exact (hc2 (+ pc 10) (Call d) 5 i3)))
+              ((exact (And.left gp)))
+              ((arith))
+              ((exact htgt))
+              ((exact
+                 (reaches_refl
+                   (at_pc
+                     (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+                       (w64 (+ pc 15)))
+                     (w64 4194466)))))))))))
+    (have hata
+      (proc_at hello_table hello_code lo hi
+        (at_pc
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (w64 4194466))
+        s)
+      (exact
+        (proc_same hello_table hello_code lo hi
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466))
+          s
+          (same_stack_at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466))
+          (And.left (And.right gp)))))
+    (have hsegs
+      (=
+        (Cpu.segs
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466)))
+        (loaded_segs hello_code (MkSeg lo hi 6)))
+      (exact (And.left (And.right hata))))
+    (have hspa
+      (=
+        (w64_val
+          (reg
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466))
+            4))
+        s)
+      (exact (And.right (And.right hata))))
+    (have hwa
+      (wa_code
+        (at_pc
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (w64 4194466))
+        4194466)
+      (exact
+        (hello_wa
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466))
+          (And.left hata))))
+    (have hW (<= (+ 4194466 54) 140737488355328) (decide))
+    (have hripa
+      (=
+        (w64_val
+          (Cpu.rip
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466))))
+        4194466)
+      rfl)
+    (have la (< a 18446744073709551616) (arith))
+    (have ln (< n 18446744073709551616) (arith))
+    (have h6
+      (=
+        (w64_val
+          (reg
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466))
+            6))
+        a)
+      (show (= (w64_val (w64 a)) a))
+      (exact (w64_val_small a la)))
+    (have h2
+      (=
+        (w64_val
+          (reg
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466))
+            2))
+        n)
+      (show (= (w64_val (w64 n)) n))
+      (exact (w64_val_small n ln)))
+    (have hma
+      (=
+        (mapped
+          (Cpu.segs
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466)))
+          a
+          n
+          4)
+        true)
+      (rw hsegs)
+      (exact hmp))
+    (have hba (<= (+ a n) 140737488355328) (arith))
+    (have k4 (= (band 6 4) 4) (decide))
+    (have hsp
+      (=
+        (mapped
+          (Cpu.segs
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466)))
+          (w64_val
+            (reg
+              (at_pc
+                (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+                  (w64 (+ pc 15)))
+                (w64 4194466))
+              4))
+          8
+          4)
+        true)
+      (rw hspa)
+      (rw hsegs)
+      (exact (stack_access hello_code lo hi s 8 4 hsz hlo hhi k4)))
+    (have hso
+      (same_outside (Cpu.mem c)
+        (Cpu.mem
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466)))
+        s
+        (+ s 8))
+      (exact (And.right (And.right (And.right gp)))))
+    (have hout (or (<= (+ a n) s) (<= (+ s 8) a)) (apply Or.inl ((arith))))
+    (have hb
+      (=
+        (mem_bytes
+          (Cpu.mem
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466)))
+          a
+          n)
+        text)
+      (rw
+        (mem_bytes_outside (Cpu.mem c)
+          (Cpu.mem
+            (at_pc
+              (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+              (w64 4194466)))
+          s
+          (+ s 8)
+          hso
+          n
+          a
+          hout))
+      (exact htext))
+    (have hpost
+      (wa_post (send as text)
+        (at_pc
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (w64 4194466))
+        as
+        out
+        text)
+      (rw (<- hb))
+      (exact
+        (write_all_ok as
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466))
+          4194466
+          a
+          n
+          out
+          hwa
+          hW
+          hripa
+          h6
+          h2
+          hma
+          hba
+          hsp)))
+    (have hra
+      (=
+        (ret_addr
+          (at_pc
+            (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+            (w64 4194466)))
+        (w64 (+ pc 15)))
+      (exact
+        (ret_addr_pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10)))
+          (w64 (+ pc 15)))))
+    (have lr (< (+ pc 15) 18446744073709551616) (arith))
+    (have h64 (< (+ s 8) 18446744073709551616) (arith))
+    (exact
+      (piece_of_wa (send as text) lo hi c
+        (at_pc
+          (pushed (x_mov_ri (x_mov_ri c 6 a (w64 (+ pc 5))) 2 n (w64 (+ pc 10))) (w64 (+ pc 15)))
+          (w64 4194466))
+        s
+        (+ pc 15)
+        as
+        out
+        text
+        b1
+        h64
+        hgo
+        hata
+        hra
+        lr
+        hso
+        hlo
+        hpost))))
+
+;; ---- the exit -------------------------------------------------------------------------------------
+;; from the address after the second call: `mov edi, 0`, `mov eax, 60` and the system call end
+;; the process with 0 and what it has written
+(theorem hello_exit
+  ((c Cpu) (o Os) (hcode (code_in c hello_table)) (hrip (= (w64_val (Cpu.rip c)) 4194454)))
+  (ends_at c o (RExit 0 (Os.out o)))
+  (by
+    (have hc1 (code_in (x_mov_ri c 7 0 (w64 4194459)) hello_table) (exact hcode))
+    (have hc2 (code_in (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) hello_table)
+      (exact hcode))
+    (have hreach (reaches c (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)))
+      (apply (do_mov_ri32 4194454 7 0 5 4194459) ((exact hrip))
+        ((exact (hcode 4194454 (MovRI32 7 0) 5 (Eq.refl (some (Prod.mk (MovRI32 7 0) 5))))))
+        (rfl)
+        ((apply (do_mov_ri32 4194459 0 60 5 4194464) (rfl)
+           ((exact (hc1 4194459 (MovRI32 0 60) 5 (Eq.refl (some (Prod.mk (MovRI32 0 60) 5))))))
+           (rfl)
+           ((exact (reaches_refl (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)))))))))
+    (have h60 (= (w64_val (reg (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) 0)) 60)
+      rfl)
+    (have r4
+      (= (w64_val (Cpu.rip (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)))) 4194464)
+      rfl)
+    (have hexit
+      (ends_at (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) o (RExit 0 (Os.out o)))
+      (apply (Exists.intro (FS FZ))
+        ((exact
+           (run_exit (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) 4194464 2 o r4
+             (hc2 4194464 Syscall 2 (Eq.refl (some (Prod.mk Syscall 2))))
+             h60)))))
+    (exact
+      (ends_of_comes c o (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) o
+        (RExit 0 (Os.out o))
+        (comes_of_reaches c (x_mov_ri (x_mov_ri c 7 0 (w64 4194459)) 0 60 (w64 4194464)) o hreach)
+        hexit))))
+
+;; ---- the two pieces -------------------------------------------------------------------------------
+;; the second piece written from a state c2 — as `sent` says of it —, and then the exit
+(theorem hello_second
+  ((sent Sent)
+   (lo Nat)
+   (hi Nat)
+   (c2 Cpu)
+   (s Nat)
+   (as1 (List Answer))
+   (out1 (List Nat))
+   (h (piece_post sent lo hi c2 s 4194454 as1 out1 hello_two))
+   (hs (= (send as1 hello_two) sent)))
+  (ends_at c2 (MkOs as1 out1) (sends_end as1 out1 (cons hello_two nil) 0))
+  (by
+    (cases sent
+      ((SAll (left)
+         (have e
+           (= (sends_end as1 out1 (cons hello_two nil) 0) (RExit 0 (List.append out1 hello_two)))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (have h1
+           (exists ((c3 Cpu))
+             (and (comes c2 (MkOs as1 out1) c3 (MkOs left (List.append out1 hello_two)))
+               (and (proc_at hello_table hello_code lo hi c3 (+ s 8))
+                 (and (= (w64_val (Cpu.rip c3)) 4194454)
+                   (same_outside (Cpu.mem c2) (Cpu.mem c3) s (+ s 8))))))
+           (exact h))
+         (rw e)
+         (cases h1
+           ((intro (c3 g)
+              (exact
+                (ends_of_comes c2 (MkOs as1 out1) c3 (MkOs left (List.append out1 hello_two))
+                  (RExit 0 (List.append out1 hello_two))
+                  (And.left g)
+                  (hello_exit c3 (MkOs left (List.append out1 hello_two))
+                    (And.left (And.left (And.right g)))
+                    (And.left (And.right (And.right g))))))))))
+       (SFail (p)
+         (have e
+           (= (sends_end as1 out1 (cons hello_two nil) 0) (RExit status_io (List.append out1 p)))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (rw e)
+         (exact h))
+       (SKill (p)
+         (have e (= (sends_end as1 out1 (cons hello_two nil) 0) (RKill (List.append out1 p)))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (rw e)
+         (exact h))))))
+;; the first piece written from a state c — as `sent` says of it —, then the second and the exit
+(theorem hello_both
+  ((sent Sent)
+   (lo Nat)
+   (hi Nat)
+   (c Cpu)
+   (s Nat)
+   (as (List Answer))
+   (b1 (<= 4194555 lo))
+   (hlo (<= lo s))
+   (hhi (<= (+ s 8) hi))
+   (b4 (<= hi 140737488355328))
+   (ht2 (= (mem_bytes (Cpu.mem c) 4194532 6) hello_two))
+   (h (piece_post sent lo hi c s 4194439 as nil hello_one))
+   (hs (= (send as hello_one) sent)))
+  (ends_at c (MkOs as nil) (hello_res as))
+  (by
+    (cases sent
+      ((SAll (left)
+         (have e
+           (= (hello_res as) (sends_end left (List.append nil hello_one) (cons hello_two nil) 0))
+           (show
+             (= (sends_end as nil (cons hello_one (cons hello_two nil)) 0)
+               (sends_end left (List.append nil hello_one) (cons hello_two nil) 0)))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (have h1
+           (exists ((c2 Cpu))
+             (and (comes c (MkOs as nil) c2 (MkOs left (List.append nil hello_one)))
+               (and (proc_at hello_table hello_code lo hi c2 (+ s 8))
+                 (and (= (w64_val (Cpu.rip c2)) 4194439)
+                   (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8))))))
+           (exact h))
+         (rw e)
+         (cases h1
+           ((intro (c2 g)
+              (have hat2 (proc_at hello_table hello_code lo hi c2 (+ s 8))
+                (exact (And.left (And.right g))))
+              (have hrip2 (= (w64_val (Cpu.rip c2)) 4194439)
+                (exact (And.left (And.right (And.right g)))))
+              (have hso (same_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8))
+                (exact (And.right (And.right (And.right g)))))
+              (have hout (or (<= (+ 4194532 6) s) (<= (+ s 8) 4194532)) (apply Or.inl ((arith))))
+              (have ht2b (= (mem_bytes (Cpu.mem c2) 4194532 6) hello_two)
+                (rw (mem_bytes_outside (Cpu.mem c) (Cpu.mem c2) s (+ s 8) hso 6 4194532 hout))
+                (exact ht2))
+              (have q1 (<= (+ 4194439 15) 4194540) (decide))
+              (have q2 (= (w64_add (w64 (+ 4194439 15)) (w64 12)) (w64 4194466)) rfl)
+              (have q3 (<= (+ 4194532 6) 4194540) (decide))
+              (have q4 (= (mapped (loaded_segs hello_code (MkSeg lo hi 6)) 4194532 6 4) true) rfl)
+              (have p2
+                (piece_post (send left hello_two) lo hi c2 s 4194454 left
+                  (List.append nil hello_one)
+                  hello_two)
+                (exact
+                  (hello_piece lo hi c2 s 4194439 12 4194532 6 hello_two left
+                    (List.append nil hello_one)
+                    b1
+                    hlo
+                    hhi
+                    b4
+                    hat2
+                    hrip2
+                    q1
+                    (Eq.refl (some (Prod.mk (MovRI32 6 4194532) 5)))
+                    (Eq.refl (some (Prod.mk (MovRI32 2 6) 5)))
+                    (Eq.refl (some (Prod.mk (Call 12) 5)))
+                    q2
+                    q3
+                    q4
+                    ht2b)))
+              (exact
+                (ends_of_comes c (MkOs as nil) c2 (MkOs left (List.append nil hello_one))
+                  (sends_end left (List.append nil hello_one) (cons hello_two nil) 0)
+                  (And.left g)
+                  (hello_second (send left hello_two) lo hi c2 s left (List.append nil hello_one) p2
+                    (Eq.refl (send left hello_two)))))))))
+       (SFail (p)
+         (have e (= (hello_res as) (RExit status_io (List.append nil p)))
+           (show
+             (= (sends_end as nil (cons hello_one (cons hello_two nil)) 0)
+               (RExit status_io (List.append nil p))))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (rw e)
+         (exact h))
+       (SKill (p)
+         (have e (= (hello_res as) (RKill (List.append nil p)))
+           (show
+             (= (sends_end as nil (cons hello_one (cons hello_two nil)) 0)
+               (RKill (List.append nil p))))
+           (rw sends_end.eq_2)
+           (rw hs)
+           rfl)
+         (rw e)
+         (exact h))))))
+
+;; ---- the file, end to end -------------------------------------------------------------------------
+;; the process's first state, started with the stack's range [lo, hi) and the stack pointer sp
+(fn hello_first ((lo Nat) (sp Nat) (hi Nat) (r Regs) (f Flags) (m Mem)) Cpu
+  (boot (image_of hello_code m) (start_at lo sp hi r f m)))
+;; THE FILE THAT WRITES. Started with ANY stack `stack_ok` allows — its range beginning at or
+;; above 4194555, past the file's table and the fifteen bytes the processor reads from an
+;; instruction's address, with one word under the stack pointer: a call's return address —,
+;; whatever the registers but the stack pointer, the flags and the memory then hold, and on ANY
+;; list of answers of the kernel to the process's calls, the file ends as `hello_res` says of
+;; the answers.
+(theorem hello_ends
+  ((lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (hst (stack_ok lo sp hi 4194555 1))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (as (List Answer)))
+  (ends hello_file (start_at lo sp hi r f m) as (hello_res as))
+  (by
+    (have b1 (<= 4194555 lo) (exact (And.left hst)))
+    (have hfit (<= (+ lo (* 8 1)) sp) (exact (And.left (And.right hst))))
+    (have hsp (<= sp hi) (exact (And.left (And.right (And.right hst)))))
+    (have b4 (<= hi 140737488355328) (exact (And.right (And.right (And.right hst)))))
+    (have le8 (<= 8 sp) (arith))
+    (have hF (= (+ (- sp 8) 8) sp) (exact (Nat.sub_add_cancel le8)))
+    (have hlo (<= lo (- sp 8)) (arith hF))
+    (have hhi (<= (+ (- sp 8) 8) hi) (rw hF) (exact hsp))
+    (have h64 (< sp 18446744073709551616) (arith))
+    (have hsz (< (+ 4194424 (List.length hello_code)) lo) (arith hello_code_ends))
+    (have a0 (proc_at hello_table hello_code lo hi (hello_first lo sp hi r f m) (+ (- sp 8) 8))
+      (rw hF)
+      (exact
+        (proc_first hello_listing hello_code hello_instrs hello_table lo sp hi r f m hello_assembled
+          hello_resolved hello_laid hsz h64)))
+    (have n1 (<= (+ 98 7) (List.length hello_code)) (decide))
+    (have n2 (<= (+ 108 6) (List.length hello_code)) (decide))
+    (have t1 (= (mem_bytes (Cpu.mem (hello_first lo sp hi r f m)) 4194522 7) hello_one)
+      (show (= (mem_bytes (loaded_mem hello_code m) (+ 4194424 98) 7) hello_one))
+      (rw (loaded_bytes hello_code m hello_bytes 7 98 n1))
+      (exact hello_one_in))
+    (have t2 (= (mem_bytes (Cpu.mem (hello_first lo sp hi r f m)) 4194532 6) hello_two)
+      (show (= (mem_bytes (loaded_mem hello_code m) (+ 4194424 108) 6) hello_two))
+      (rw (loaded_bytes hello_code m hello_bytes 6 108 n2))
+      (exact hello_two_in))
+    (have q1 (<= (+ 4194424 15) 4194540) (decide))
+    (have q2 (= (w64_add (w64 (+ 4194424 15)) (w64 27)) (w64 4194466)) rfl)
+    (have q3 (<= (+ 4194522 7) 4194540) (decide))
+    (have q4 (= (mapped (loaded_segs hello_code (MkSeg lo hi 6)) 4194522 7 4) true) rfl)
+    (have p1
+      (piece_post (send as hello_one) lo hi (hello_first lo sp hi r f m) (- sp 8) 4194439 as nil
+        hello_one)
+      (exact
+        (hello_piece lo hi (hello_first lo sp hi r f m) (- sp 8) 4194424 27 4194522 7 hello_one as
+          nil
+          b1
+          hlo
+          hhi
+          b4
+          a0
+          (Eq.refl 4194424)
+          q1
+          (Eq.refl (some (Prod.mk (MovRI32 6 4194522) 5)))
+          (Eq.refl (some (Prod.mk (MovRI32 2 7) 5)))
+          (Eq.refl (some (Prod.mk (Call 27) 5)))
+          q2
+          q3
+          q4
+          t1)))
+    (have hend (ends_at (hello_first lo sp hi r f m) (MkOs as nil) (hello_res as))
+      (exact
+        (hello_both (send as hello_one) lo hi (hello_first lo sp hi r f m) (- sp 8) as b1 hlo hhi b4
+          t2
+          p1
+          (Eq.refl (send as hello_one)))))
+    (cases hend
+      ((intro (n hn)
+         (apply (Exists.intro n)
+           ((show (= (run_file n hello_file (start_at lo sp hi r f m) as) (hello_res as)))
+            (rw hello_file_is)
+            (rw (run_file_exec n hello_code (start_at lo sp hi r f m) as hello_size))
+            (exact hn))))))))
+;; On a kernel that takes all it is offered the file exits with 0, `hello, world` and a line's
+;; end written.
+(theorem hello_exits
+  ((lo Nat) (sp Nat) (hi Nat) (hst (stack_ok lo sp hi 4194555 1)) (r Regs) (f Flags) (m Mem))
+  (ends hello_file (start_at lo sp hi r f m) nil
+    (RExit 0 (list 104 101 108 108 111 44 32 119 111 114 108 100 10)))
+  (by (exact (hello_ends lo sp hi hst r f m nil))))
