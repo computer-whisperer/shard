@@ -35,8 +35,8 @@ and the facts between them:
 - `x86/calls_run.shard` `calls_realizes`, `x86/dot_run.shard` `dot_code_realizes`: the
   instructions realize the code's answer — an instance of the pass's theorem, every hypothesis
   closed by computation.
-- `x86/calls_run.shard` `calls_file_exits`: the file, started as the model's runner starts it,
-  exits with 22, the low byte of what `calls_f5` computes of the words the start-up hands over —
+- `x86/calls_run.shard` `calls_file_exits`: the file, started with its stack anywhere
+  (`stack_ok`), exits with 22, the low byte of what `calls_f5` computes of the words the start-up hands over —
   by the link theorem. `x86/dot_run.shard` `dot_file_exits`: `dot`'s file exits with 68, the low
   byte of what `dot` computes of the buffers 3 5 7 and 2 4 6 that the start-up pushes.
 
@@ -171,7 +171,8 @@ the owner.
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
 | `two.shard` | functions of two buffers of one count that only read: the type of such a low form (`Reads2`), and such a function as the answer of a function called from outside — `two_ext`, `two_ans`, on words that have the evidence (`two_ext_is`), whatever it answers (`two_ans_inv`), and that code whose run answers the function's value answers what the answer says (`two_ans_tie`); and what such a function reads, from its first fact: its value is one in two memories that agree on the two buffers' words (`Means2`, `reads_on`) |
 | `upd.shard` | functions of two buffers of one count that write the first: that two buffers lie apart (`apart`), the type of such a low form (`Upd2`), and such a function as the answer of a function called from outside — `upd_ext`, `upd_ans`, `upd_ext_is`, `upd_ans_inv`, `upd_ans_tie`, as `two.shard`'s —; and across a call that writes: a read clear of what was written reads the same (`rd_same`), and the memories before and after agree on a buffer apart from the written one (`kept_apart`) |
-| `sample.shard` | the two buffers the sample's start-up pushes, as a function's arguments see them: the data range, a memory that holds them, the evidence about each |
+| `stretch.shard` | a stretch of a range of words from ANY address b (a file's data: where a kernel puts it is not the file's to know): the range (`data_rs`), and the evidence a low form asks about a stretch of it, by its offset — mapped (`start_buf`), apart from another (`start_apart`), held at the address the start-up computes (`start_addr`, `start_holds`). All that is asked of b: the range ends at or below 2^47 |
+| `sample.shard` | the two buffers the sample's start-up pushes, as a function's arguments see them, the data at any address b: the data range, the argument words, the evidence about each buffer; and for evaluation a memory that holds them at one address |
 | `dot_obj.shard`, `sqdiff_obj.shard`, `gap_obj.shard`, `addto_obj.shard`, `both_obj.shard`, `total_obj.shard` | each module's intermediate code, by hand: the code as data. `sqdiff`'s calls `dot`, `gap`'s `sqdiff`, `both`'s `addto` and `dot`, and `total`'s `both` and `dot`, each as a function outside its module. `addto`'s loop has a store |
 | `sqdiff_src.shard`, `gap_src.shard`, `total_src.shard` | the meanings of `sqdiff`, `gap` and `total`, functions over two lists, and their values on the sample |
 | `dot/` | `dot`'s module. `mod.req.shard`, the view: the signature `dot_lo`, the laws `dot_lo_means` and `dot_prog_tie`, and from them that the code's run answers whatever the low form's answer says (`dot_ans_tie`) and answers the meaning's value (`dot_answer`). Behind it: `low.shard` the loop with its two cases, `mean.shard` the loop against the meaning, `tie.shard` the loop's code against the loop, `dot.shard` the low form and the two laws' proofs |
@@ -186,7 +187,7 @@ the owner.
 | `x86/expr.shard` `entry.shard` `stmt.shard` `stmt_store.shard` `call.shard` `stmt_call.shard` `stmt_if.shard` `tail.shard` | the proof by cases: an expression (`cexp_all`), into a function and out of it, a local set and a return, a store, the law of a call and a call as a statement, a branch, a tail call |
 | `x86/function.shard` `module.shard` | the statement for every statement (`sim_all`), a compiled function (`cfn_ok`), the module's theorem (`module_realizes`), and what a list of one outside function, and of two, has at an index (`pair_at_one`, `pair_at_two`) |
 | `x86/startup.shard` | a file's start-up as data: the words `data` it pushes, the last first, and at most six arguments (`Arg`), each a word or the address of one of the data's words, taken from the stack pointer when the start-up runs; then a call, and exit with the low byte of rax. The listing (`start_listing`) and the table its instructions lay out to (`start_table`), what the start-up hands the function it calls (`start_base`, `start_rs`, `arg_words`), the sample the tree's files share — two buffers of three words and their count —, and a compiled listing as lines with a label at one entry. No proof: a file's writer reads this file |
-| `x86/link.shard` | `start_exits`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer, the file exits as the answer says. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`: a memory that holds the data holds each stretch of it. `link_exits`: the theorem for the sample |
+| `x86/link.shard` | `start_exits`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer, the file exits as the answer says. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`, `holds_mid`: a memory that holds the data holds each stretch of it. For every start `stack_ok` allows: the stack's range and the stack pointer are unknowns. `link_exits`: the theorem for the sample |
 | `x86/calls_file.shard` `calls_run.shard` `calls_main.shard` | the first program compiled and its file; the module's theorem met by it and the theorem that the file exits with 22; the file written |
 | `x86/calls_cases_main.shard` | the same module run one call at a time: a file of six first instructions for a function of two parameters on two given words, and the word the intermediate machine's run returns, for a test to compare |
 | `x86/dot_file.shard` `dot_run.shard` `dot_main.shard` | `dot` compiled and its file; the two theorems above; the file written |
@@ -222,13 +223,17 @@ call).
 with any lines after it, assembled, where the function the start-up calls realizes an answer
 and that answer has a value on the arguments' words in any memory that holds the data, the file
 exits with the value's low byte. `link_exits` is that theorem for the sample: two buffers of
-three words and their count. The theorem is of the model's start, which fixes the stack pointer
-(`v3/models/x86/README.md`, what is not here); the start-up's instructions take the stack
-pointer as they find it.
+three words and their count. The theorem is for every start `(start_at lo sp hi r f m)` that
+`stack_ok` allows (`v3/models/x86/linux.shard`): the stack's range begins above the table's end,
+the words the file needs — its data's, the function's stack need, the return address — stand
+under the stack pointer, and nothing else is known of where the stack is. So no address of a
+buffer is a number: the evidence about a buffer is that of a stretch of the data from any
+address (`stretch.shard`: `start_buf`, `start_apart`, `start_holds`), and the start-up's
+instructions take the stack pointer as they find it.
 
 A file's own facts — the pass answers this listing, the assembler these bytes, the listing lies
-at these addresses — are closed computations (`rfl`, `decide`): twelve in `x86/dot_file.shard`,
-the same twelve in `x86/calls_file.shard`, in each of `sqdiff`'s two files those and one more —
+at these addresses, the code ends at or below the table's end — are closed computations (`rfl`,
+`decide`): ten in `x86/dot_file.shard`, the same ten in `x86/calls_file.shard`, in each of `sqdiff`'s two files those and one more —
 that the hand-written rows are rows of the file's table, or that the second module's listing
 stands in it —, in `x86/gap_file.shard` those for two compiled modules and the rows, and in
 `x86/total_file.shard` those for three and the rows.

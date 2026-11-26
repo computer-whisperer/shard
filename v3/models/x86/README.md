@@ -14,7 +14,7 @@ it.
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
 | `words.shard` | a buffer of machine words as a value, a list: the word at an index (`nth`), the list with one replaced (`upd`), an access that takes the evidence that its index is in range (`word_at`, `put_at`) |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
-| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `runner_start`, the start the runner gives), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
+| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), its first state (`boot`), system calls (`on_syscall`), a run (`run`, `run_file`), and the machine's system `exits` |
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
@@ -230,7 +230,11 @@ check of an index; `addto`'s loop writes into the buffer it was given. Proven:
 Each rests on Lean's three axioms and on nothing else. A contract assumes that the processor
 decodes the listing's instructions at their addresses (`code_in`); `listing_loaded` proves that
 of the first state, and `buffers_exits` is the one statement here that assumes nothing of the
-code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`. The evaluator's
+code. The stack's place is fixed in it (`runner_start`), as in `demo_exits`: the first
+instructions are run by the model on that start's numbers. A statement for a stack anywhere is
+made with `start_at` and `stack_ok` (`linux.shard`) — the stack's range and the stack pointer
+unknown, the range above a bound the statement gives, room under the pointer for the words the
+file needs —, as the compile system's file theorems are (`v3/compile/x86/link.shard`). The evaluator's
 run of `both`, the model's run of the listing's file and the processor's give that one status,
 19. No compiler made the listing. The proofs are written by hand, but for nine: the runs of
 instructions between a function's branch points, which a tactic derives.
@@ -284,8 +288,10 @@ hand.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
 `mov`; a system call that returns; the bitwise three proven to be Init's; a theorem about
-`encode` for every instruction; a start whose stack is anywhere but where the runner puts it,
-in a statement about a file; a rule for every instruction form; a contract of code whose frame
+`encode` for every instruction; the trial's and the demonstration's statements for a stack
+anywhere but where the runner puts it; what stands at the stack pointer when a process starts
+(the count of the arguments, the arguments, the environment), and its alignment; a rule for
+every instruction form; a contract of code whose frame
 holds variables of its own (there is no rule for an operand at the stack pointer and a
 displacement); a law for the return of a callee that keeps a frame of its own; a derivation of
 a whole contract (a loop's invariant and a callee's hypotheses are by hand, and the frame's

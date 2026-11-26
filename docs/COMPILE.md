@@ -269,7 +269,10 @@ Two steps cross it:
 
 **Linking.** A file is a start-up and listings one after another. Proven once: a file that holds,
 among any other lines, a function that meets the seam's statement exits as that function's answer
-says. What is particular to one file — that the pass answers this listing, that the listing lies
+says — started with its stack anywhere: the stack's range and the stack pointer are unknowns of
+the theorem, held to what the model takes a kernel to promise (`stack_ok`,
+`v3/models/x86/linux.shard`), so no address of a buffer is a number in a proof. What is particular
+to one file — that the pass answers this listing, that the listing lies
 at these addresses — is closed computation, which K runs. Hand-written code and compiled code
 meet through the seam's statement and through nothing else.
 

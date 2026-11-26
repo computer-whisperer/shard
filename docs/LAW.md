@@ -349,6 +349,16 @@ admitted that the logic does not derive.
     start-up as data, then command-line arguments, then output and files, the limit of six
     words a function lifted beside the first. (Each a short assent to a stated lean. Built of
     it in the tree: the start-up as data, `DECISIONS.md`, "Programs and the back end".)
+25. *The model does not promise where a process's stack is.* On a finding — a start-up that
+    passed its buffers' addresses as constants, computed from the one stack pointer the
+    model's start fixed, had its theorem accepted by K and its file run by the model, and the
+    processor killed the file — the question was put: "should the model stop promising where
+    the stack pointer is?", with three options: yes, as part of the command-line-arguments
+    stage; "Yes, now, before the six words."; no, relying on the processor's runs. The owner,
+    answering this question and one other in one message: "Agreed with 2 for both; proceed
+    with the six words" — "2" being here the option "Yes, now, before the six words." (A bare
+    assent to a stated option: a checkpoint. Built of it in the tree: `DECISIONS.md`,
+    "Programs and the back end", the stack's place not promised.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

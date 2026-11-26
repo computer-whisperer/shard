@@ -1,22 +1,80 @@
-;;; v3/compile/sample.shard — the two buffers the fixed start-up pushes (x86/startup.shard)
-;;; as a function's arguments see them: one data range of six words at the top of the stack,
-;;; the words 3 5 7 at 140737488347112 and 2 4 6 at 140737488347088, a memory that holds them,
-;;; and the evidence about each buffer that a low form over them asks for. The lists themselves
-;;; are the model's (`sample_xs`, `sample_ys`, v3/models/x86/buffers.shard).
+;;; v3/compile/sample.shard — the two buffers the tree's files push (x86/startup.shard) as a
+;;; function's arguments see them: one data range of six words from an address b — ANY address
+;;; where the six words end at or below 2^47, since where a kernel puts a file's stack is not
+;;; the file's to know —, the words 2 4 6 from b and 3 5 7 three words above it; the argument
+;;; words as the start-up computes them; and the evidence about each buffer that a low form
+;;; over them asks for (stretch.shard). For evaluation, a memory that holds the two buffers at
+;;; one address. The lists themselves are the model's (`sample_xs`, `sample_ys`,
+;;; v3/models/x86/buffers.shard).
 (import "lo.shard")
+(import "stretch.shard")
 (import "../models/x86/buffers.shard")
 (use std.mem)
 (use compile.lo)
+(use compile.stretch)
 (use models.x86.buffers)
+(use models.x86.frame)
 (use models.x86.laws)
 (use models.x86.word)
 (use models.x86.words)
 (use models.x86.x86)
-(use models.x86.x86.Seg)
 (use Init.List cons nil)
 
-;; One range of six words mapped to read and write, the last 48 bytes below 140737488347136.
-(fn sample_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
+;; one range of six words from b, mapped to read and write; the two buffers' addresses, the
+;; first three words above the second; and the argument words: the addresses and the count
+(fn sample_rs ((b Nat)) (List Seg) (data_rs b 6))
+(fn sample_px ((b Nat)) (BitVec 64) (w64_add (w64 b) (w64 24)))
+(fn sample_py ((b Nat)) (BitVec 64) (w64_add (w64 b) (w64 0)))
+(fn sample_args ((b Nat)) (List (BitVec 64))
+  (cons (sample_px b) (cons (sample_py b) (cons (w64 3) nil))))
+;; the evidence about each buffer: mapped to read, the first to write as well, and the two apart
+(theorem sample_ex ((b Nat) (hb (<= (+ b 48) 140737488355328)))
+  (buf_ok (sample_rs b) (sample_px b) (w64 3) 4)
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have ho (<= (+ 3 3) 6) (decide))
+    (have hn (= (band 6 4) 4) (decide))
+    (exact (start_buf b 6 3 3 4 h ho hn))))
+(theorem sample_ew ((b Nat) (hb (<= (+ b 48) 140737488355328)))
+  (buf_ok (sample_rs b) (sample_px b) (w64 3) 2)
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have ho (<= (+ 3 3) 6) (decide))
+    (have hn (= (band 6 2) 2) (decide))
+    (exact (start_buf b 6 3 3 2 h ho hn))))
+(theorem sample_ey ((b Nat) (hb (<= (+ b 48) 140737488355328)))
+  (buf_ok (sample_rs b) (sample_py b) (w64 3) 4)
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have ho (<= (+ 0 3) 6) (decide))
+    (have hn (= (band 6 4) 4) (decide))
+    (exact (start_buf b 6 0 3 4 h ho hn))))
+(theorem sample_lies ((b Nat) (hb (<= (+ b 48) 140737488355328)))
+  (<= (+ (w64_val (sample_py b)) (* 8 (w64_val (w64 3)))) (w64_val (sample_px b)))
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have h1 (<= (+ 0 3) 3) (decide))
+    (have h2 (<= 3 6) (decide))
+    (exact (start_apart b 6 0 3 3 h h1 h2))))
+;; a memory that holds the two buffers where they are said to stand holds them at their addresses
+(theorem sample_hx
+  ((b Nat) (m Mem) (hb (<= (+ b 48) 140737488355328)) (hx (holds m (+ b 24) sample_xs)))
+  (holds m (w64_val (sample_px b)) sample_xs)
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have ho (<= 3 6) (decide))
+    (have hx2 (holds m (+ b (* 8 3)) sample_xs) (exact hx))
+    (exact (start_holds m b 6 3 sample_xs h ho hx2))))
+(theorem sample_hy ((b Nat) (m Mem) (hb (<= (+ b 48) 140737488355328)) (hy (holds m b sample_ys)))
+  (holds m (w64_val (sample_py b)) sample_ys)
+  (by
+    (have h (<= (+ b (* 8 6)) 140737488355328) (exact hb))
+    (have ho (<= 0 6) (decide))
+    (have hy2 (holds m (+ b (* 8 0)) sample_ys) (exact hy))
+    (exact (start_holds m b 6 0 sample_ys h ho hy2))))
+;; for evaluation: the address 140737488347088, and a memory with the two buffers there
+(fn sample_at () Nat 140737488347088)
+(theorem sample_top () (<= (+ sample_at 48) 140737488355328) (by decide))
 (fn sample_m () Mem
   (mem_put64
     (mem_put64
@@ -30,19 +88,6 @@
       4)
     140737488347104
     6))
-;; the evidence about each buffer, by computation
-(theorem sample_ex () (buf_ok sample_rs (w64 140737488347112) (w64 3) 4)
-  (by
-    (apply And.intro
-      ((apply (mapped_words_of sample_rs (w64_val (w64 140737488347112)) (w64_val (w64 3)) 4)
-         (decide)))
-      ((decide)))))
-(theorem sample_ey () (buf_ok sample_rs (w64 140737488347088) (w64 3) 4)
-  (by
-    (apply And.intro
-      ((apply (mapped_words_of sample_rs (w64_val (w64 140737488347088)) (w64_val (w64 3)) 4)
-         (decide)))
-      ((decide)))))
 ;; the sum of the products of 3 5 7 and 2 4 6
 (theorem sample_dot () (= (w64_val (dot sample_xs sample_ys (w64 3) sample_rx sample_ry)) 68)
   (by decide))

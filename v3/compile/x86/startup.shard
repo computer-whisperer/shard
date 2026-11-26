@@ -11,6 +11,8 @@
 ;;; link.shard's. Every word is moved by the ten-byte form: the start-up is not tuned for size.
 (import "pass.shard")
 (import "../../models/x86/asm.shard")
+(import "../stretch.shard")
+(use compile.stretch)
 (use compile.x86.pass)
 (use models.x86.asm)
 (use models.x86.asm.Asm)
@@ -19,7 +21,6 @@
 (use models.x86.x86.Bop)
 (use models.x86.x86.Instr)
 (use models.x86.x86.Rm)
-(use models.x86.x86.Seg)
 (use Init.Bool false true)
 (use Init.List cons nil)
 
@@ -116,12 +117,13 @@
     (arg_rows args 0 (start_moves data) (exit_rows (start_call data args) d xt))))
 
 ;; ---- what the start-up hands the function it calls ----------------------------------------------
-;; The model's runner starts the stack pointer at 140737488347136: there the data stands under
-;; it, from `start_base`. (The start-up's instructions take the stack pointer as they find it.)
-(fn start_base ((data (List (BitVec 64)))) Nat (- 140737488347136 (* 8 (List.length data))))
+;; The data stands under the stack pointer the process starts with, sp, from `start_base`.
+;; Where that is, a file is not told (`stack_ok`, models/x86/linux.shard): the start-up's
+;; instructions take the stack pointer as they find it.
+(fn start_base ((sp Nat) (data (List (BitVec 64)))) Nat (- sp (* 8 (List.length data))))
 ;; the data ranges: the data's words, to read and to write
-(fn start_rs ((data (List (BitVec 64)))) (List Seg)
-  (cons (MkSeg (start_base data) 140737488347136 6) nil))
+(fn start_rs ((sp Nat) (data (List (BitVec 64)))) (List Seg)
+  (data_rs (start_base sp data) (List.length data)))
 ;; the argument words, where the data stands at the word sp
 (fn arg_word ((sp (BitVec 64)) (a Arg)) (BitVec 64)
   (match a
@@ -136,19 +138,18 @@
 ;; ---- the sample -----------------------------------------------------------------------------------
 ;; Two buffers of three words and their count: the second buffer, 2 4 6, from the data's
 ;; address, the first, 3 5 7, three words above it; the arguments are the first's address, the
-;; second's and the count. Under the model's runner the buffers stand at 140737488347112 and
-;; 140737488347088; the call returns to 4194537 and the lines after the start-up stand from
-;; 4194547.
+;; second's and the count. The call returns to 4194537 and the lines after the start-up stand
+;; from 4194547.
 (fn link_xs () (List (BitVec 64)) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil))))
 (fn link_ys () (List (BitVec 64)) (cons (w64 2) (cons (w64 4) (cons (w64 6) nil))))
 (fn link_data () (List (BitVec 64))
   (cons (w64 2) (cons (w64 4) (cons (w64 6) (cons (w64 3) (cons (w64 5) (cons (w64 7) nil)))))))
 (fn link_argd () (List Arg) (cons (AAddr 3) (cons (AAddr 0) (cons (AWord (w64 3)) nil))))
-;; the argument words under the model's runner: the two buffers' addresses and the count
-(fn link_args () (List (BitVec 64))
-  (cons (w64 140737488347112) (cons (w64 140737488347088) (cons (w64 3) nil))))
-;; the data ranges: the six words of the two buffers
-(fn link_rs () (List Seg) (cons (MkSeg 140737488347088 140737488347136 6) nil))
+;; where the data stands in a process started with the stack pointer sp, the argument words
+;; there — the two buffers' addresses and the count — and the data ranges: the six words
+(fn link_base ((sp Nat)) Nat (start_base sp link_data))
+(fn link_args ((sp Nat)) (List (BitVec 64)) (arg_words (w64 (link_base sp)) link_argd))
+(fn link_rs ((sp Nat)) (List Seg) (start_rs sp link_data))
 (fn link_listing ((l Nat) (extra (List Asm))) (List Asm)
   (start_listing link_data link_argd l extra))
 (fn link_table ((d Nat) (xt (List (Prod Nat (Prod Instr Nat))))) (List (Prod Nat (Prod Instr Nat)))

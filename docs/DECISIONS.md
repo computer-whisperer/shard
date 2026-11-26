@@ -907,15 +907,43 @@ entries are explained under "Measured" at the end.
   address is taken from the stack pointer when the start-up runs (a move, and eight times the
   index added); not a constant computed from where the model's runner starts the stack
   pointer, as first built — K accepted that start-up's theorem, the model's run exited with the
-  status, and the processor's run was killed: the model's start fixes the stack pointer
-  (`v3/models/x86/README.md`, what is not here) and a kernel does not. The theorem is still of
-  the model's start. Every word is moved by the ten-byte form, one length for any word; the
+  status, and the processor's run was killed: the model's start then fixed the stack pointer
+  and a kernel does not (the next entry: it no longer does). Every word is moved by the
+  ten-byte form, one length for any word; the
   start-up is not tuned for size. `link_exits`, the theorem for the sample of the tree's files,
   is a corollary. The hand-written `dot` stands at one address, its contract being over its own
   rows: it moved with the start-up's length, from 4194489 to 4194547, and the model's trial,
   whose rows they are, has 58 bytes that are never run after its own start-up so that its
   functions stand there; not hand-written code proven for any address, which is the trial's
   proofs written again.
+- The stack's place is not promised (`v3/models/x86/linux.shard` `start_at`, `stack_ok`;
+  `v3/compile/stretch.shard`; `x86/link.shard`; on the owner's ruling, `LAW.md` §6, 25; the
+  choices inside it not put to the owner one by one). A file's theorem is for every start
+  `(start_at lo sp hi r f m)` that `stack_ok` allows: the stack's range [lo, hi) begins at or
+  above a bound the theorem states — the table's end and the fifteen bytes the processor reads
+  past an instruction —; under the stack pointer sp stand the words the file needs — the
+  data's, the function's stack need, the return address —; sp is inside the range; and the
+  range ends at or below 2^47. No alignment is assumed, none being used. What stands at sp and
+  above — the count of the arguments, the arguments, the environment — is not modelled.
+  Rejected: the one start the model's runner makes (`runner_start`: eight megabytes under
+  7FFFFFFFF000, the pointer a page under the top) as the start of a statement. Under it every
+  address of a buffer was a number and a file's evidence was `decide` on that number; K
+  accepted the start-up that passed those numbers as constants, and the processor killed its
+  file. Checked after the change: that start-up's two facts — its buffer mapped at the
+  constant, its buffer held there — are refused for an unknown sp (`decide` does not evaluate;
+  a type mismatch) and accepted where sp is the runner's number. `runner_start` stays as an
+  instance, for the model's runs. What a file shows of its buffers is stated once, for a
+  stretch of a range of words from ANY address b (`start_buf`, `start_apart`, `start_holds`):
+  all that is asked of b is that the range ends at or below 2^47, which `start_exits` hands to
+  the file's hypothesis about its answer. A file states that its code ends at or below its
+  table's end (`X_code_end`), where it stated two comparisons with the runner's stack and one
+  of its stack need with the runner's room: the need is now in the theorem's own hypothesis.
+  The sample of the tree's files (`sample.shard`) and each view's theorem on it are for any
+  address of the data. NOT moved: the model's own trial and its demonstration
+  (`buffers_exits`, `demo_exits`) are statements for `runner_start` — the trial runs its
+  seventeen first instructions by the model and meets its contract's nineteen hypotheses by
+  computation on that start's addresses, and the demonstration is one evaluation; either for
+  any stack is its proof written again, a rule an instruction.
 - Chosen in joining hand-written code through the seam (`v3/compile/lo.shard`, `two.shard`,
   `x86/dot_hand.shard`, the views `dot/` and `sqdiff/`), not put to the owner one by one; the
   first of them the owner ratified on its report (`LAW.md` §6, 22). The answer of a
@@ -2163,3 +2191,11 @@ measurements; measure again before building on one.
   for 3 —, so `dot`'s file is 498 bytes for 440 and the writer's 724 for 666. One load with the
   link of the five files' theorems, the first program's and the six directories is 110 s. The
   fourteen x86 and compile entrypoints pass natively, the processor's runs among them.
+- The stack's place not promised (2026-11-25; natively, CPU seconds, single measurements).
+  `x86/link.shard` is 1,773 lines for 1,629 and loads in 17 s for 15: every lemma of the
+  start-up's run takes the stack's range as two unknowns. `stretch.shard`, the evidence about
+  a stretch of a range from any address, is 105 lines; `sample.shard` 93 for 48. Each file
+  module has two computed facts fewer. No byte of a file changed. One load with the link of
+  the five files' theorems, the first program's and the six directories is 116 s for 110. The
+  fifteen x86 and compile entrypoints pass natively, 846 checks, the processor's runs among
+  them.

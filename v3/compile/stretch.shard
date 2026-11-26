@@ -1,0 +1,105 @@
+;;; v3/compile/stretch.shard — a stretch of a range of words: the evidence a low form asks for
+;;; about a buffer (`buf_ok`, lo.shard) where the buffer is some words of ONE range of n words
+;;; that begins at an address b, for ANY b. A file's data is such a range (x86/startup.shard):
+;;; where a kernel puts it is not the file's to know, so nothing here computes on an address.
+;;; All that is asked of b is that the range ends at or below the top of a process's
+;;; addresses, 2^47. The address of the range's word `off` is written as a start-up computes
+;;; it: the word b and eight times `off` added to it.
+(import "lo.shard")
+(use std.mem)
+(use compile.lo)
+(use models.x86.laws)
+(use models.x86.frame)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; one range of n words from the address b, mapped to read and to write
+(fn data_rs ((b Nat) (n Nat)) (List Seg) (cons (MkSeg b (+ b (* 8 n)) 6) nil))
+;; the address of the range's word `off` is the number b + 8 off: it does not wrap
+(theorem start_addr
+  ((b Nat) (n Nat) (off Nat) (hb (<= (+ b (* 8 n)) 140737488355328)) (ho (<= off n)))
+  (= (w64_val (w64_add (w64 b) (w64 (* 8 off)))) (+ b (* 8 off)))
+  (by
+    (have hlt (< b 18446744073709551616) (arith))
+    (have hv (= (w64_val (w64 b)) b)
+      (show (= (Nat.mod b 18446744073709551616) b))
+      (exact (Nat.mod_eq_of_lt hlt)))
+    (have hk (< (+ b (* 8 off)) 18446744073709551616) (arith))
+    (exact (w64_val_add (w64 b) b (* 8 off) hv hk))))
+;; a count of words that fits in the range is the number it is written as
+(theorem start_count
+  ((b Nat) (n Nat) (cnt Nat) (hb (<= (+ b (* 8 n)) 140737488355328)) (hc (<= cnt n)))
+  (= (w64_val (w64 cnt)) cnt)
+  (by
+    (have hlt (< cnt 18446744073709551616) (arith))
+    (show (= (Nat.mod cnt 18446744073709551616) cnt))
+    (exact (Nat.mod_eq_of_lt hlt))))
+;; THE EVIDENCE ABOUT A STRETCH: the cnt words from the range's word `off`, where they lie
+;; inside the range, are mapped for any need the range permits, and end below 2^64
+(theorem start_buf
+  ((b Nat)
+   (n Nat)
+   (off Nat)
+   (cnt Nat)
+   (need Nat)
+   (hb (<= (+ b (* 8 n)) 140737488355328))
+   (ho (<= (+ off cnt) n))
+   (hn (= (band 6 need) need)))
+  (buf_ok (data_rs b n) (w64_add (w64 b) (w64 (* 8 off))) (w64 cnt) need)
+  (by
+    (have ho2 (<= off n) (arith))
+    (have hc2 (<= cnt n) (arith))
+    (have ea (= (w64_val (w64_add (w64 b) (w64 (* 8 off)))) (+ b (* 8 off)))
+      (exact (start_addr b n off hb ho2)))
+    (have ec (= (w64_val (w64 cnt)) cnt) (exact (start_count b n cnt hb hc2)))
+    (have h1 (<= b (+ b (* 8 off))) (arith))
+    (have h2 (<= (+ (+ b (* 8 off)) (* 8 cnt)) (+ b (* 8 n))) (arith))
+    (have hm (= (mapped (data_rs b n) (+ b (* 8 off)) (* 8 cnt) need) true)
+      (exact
+        (mapped_head (MkSeg b (+ b (* 8 n)) 6) nil (+ b (* 8 off)) (* 8 cnt) need
+          (seg_holds_in b (+ b (* 8 n)) 6 (+ b (* 8 off)) (* 8 cnt) need h1 h2 hn))))
+    (show
+      (and
+        (mapped_words (data_rs b n) (w64_val (w64_add (w64 b) (w64 (* 8 off)))) (w64_val (w64 cnt))
+          need)
+        (<= (+ (w64_val (w64_add (w64 b) (w64 (* 8 off)))) (* 8 (w64_val (w64 cnt))))
+          18446744073709551616)))
+    (rw ea)
+    (rw ec)
+    (apply And.intro ((exact (mapped_words_of (data_rs b n) (+ b (* 8 off)) cnt need hm))) ((arith)))))
+;; TWO STRETCHES APART: the c1 words from the range's word o1 end at or before the range's
+;; word o2 where o1 + c1 <= o2 — the inequality every statement that two buffers lie apart is
+;; made of
+(theorem start_apart
+  ((b Nat)
+   (n Nat)
+   (o1 Nat)
+   (c1 Nat)
+   (o2 Nat)
+   (hb (<= (+ b (* 8 n)) 140737488355328))
+   (h1 (<= (+ o1 c1) o2))
+   (h2 (<= o2 n)))
+  (<= (+ (w64_val (w64_add (w64 b) (w64 (* 8 o1)))) (* 8 (w64_val (w64 c1))))
+    (w64_val (w64_add (w64 b) (w64 (* 8 o2)))))
+  (by
+    (have g1 (<= o1 n) (arith))
+    (have g2 (<= c1 n) (arith))
+    (rw (start_addr b n o1 hb g1))
+    (rw (start_addr b n o2 hb h2))
+    (rw (start_count b n c1 hb g2))
+    (arith)))
+;; a list held at the number of a stretch's address is held at the address
+(theorem start_holds
+  ((m Mem)
+   (b Nat)
+   (n Nat)
+   (off Nat)
+   (xs (List (BitVec 64)))
+   (hb (<= (+ b (* 8 n)) 140737488355328))
+   (ho (<= off n))
+   (h (holds m (+ b (* 8 off)) xs)))
+  (holds m (w64_val (w64_add (w64 b) (w64 (* 8 off)))) xs)
+  (by (rw (start_addr b n off hb ho)) (exact h)))
