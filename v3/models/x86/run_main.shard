@@ -1,10 +1,12 @@
 ;;; v3/models/x86/run_main.shard — the model run on a file from the command line: the file's
-;;; bytes loaded as Linux would, the processor stepped from `start_zero` for at most the count
-;;; given, and how the run ended printed as one line — `exit N`; `stuck`
-;;; with the reason, the address and the bytes found there; `out of steps`. The same file run by
-;;; the real processor is what the model is held to (kernel/test/x86_test.sh).
+;;; bytes loaded as Linux would, the processor stepped from `start_zero` — or, for a file given
+;;; arguments, from `start_args` — for at most the count given, and how the run ended printed as
+;;; one line — `exit N`; `stuck` with the reason, the address and the bytes found there; `out of
+;;; steps`. The same file run by the real processor is what the model is held to
+;;; (kernel/test/x86_test.sh).
 ;;;
 ;;;   load.shard --root v3 --init … --run models.x86.run_main.main v3/models/x86/run_main.shard -- run STEPS FILE…
+;;;   … -- args STEPS FILE ARG…  the file run with the arguments ARG…, the first its name
 ;;;   … -- wrap CODE FILE …     the bytes of CODE as the executable file FILE that runs them
 (import "../../std/bytes.shard")
 (import "../../std/derive.shard")
@@ -60,8 +62,41 @@
 ;; eight megabytes of zeroed stack below 7FFFFFFFF000, the stack pointer a page under its top
 (fn start_zero () Start (runner_start regs_zero flags_clear mem_empty))
 
+;; ---- a start with arguments ------------------------------------------------------------------
+;; the bytes the arguments' strings take, each with its 0
+(fn strs_size ((args (List (List Nat)))) Nat
+  (measure (struct args))
+  (match args
+    (nil 0)
+    ((cons s r) (+ (+ (List.length s) 1) (strs_size r)))))
+;; the strings laid from the address a, each with its 0 and the next after it, and from the
+;; address p a word for each: its string's address
+(fn lay_args ((m Mem) (p Nat) (a Nat) (args (List (List Nat)))) Mem
+  (measure (struct args))
+  (match args
+    (nil m)
+    ((cons s r)
+     (lay_args (mem_put64 (put_bytes (mem_set m (+ a (List.length s)) 0) a s (List.length s)) p a)
+       (+ p 8)
+       (+ (+ a (List.length s)) 1)
+       r))))
+;; where the stack pointer stands for these arguments: under the strings, the count, the
+;; addresses and two words more, at a multiple of sixteen
+(fn args_sp ((args (List (List Nat)))) Nat
+  (* 16 (/ (- (- 140737488351232 (strs_size args)) (* 8 (+ (List.length args) 3))) 16)))
+;; What the runner starts a process with arguments from, laid out as Linux lays them: the
+;; strings at the top of the stack's range; under them the count at the stack pointer, the
+;; strings' addresses, and two words of 0 — the end of the arguments and an empty environment.
+;; It is one start `args_at` allows (models/x86/linux.shard); a theorem about a file is for all.
+(fn start_args ((args (List (List Nat)))) Start
+  (start_at 140737479962624 (args_sp args) 140737488351232 regs_zero flags_clear
+    (lay_args (mem_put64 mem_empty (args_sp args) (List.length args)) (+ (args_sp args) 8)
+      (- 140737488351232 (strs_size args))
+      args)))
+
 ;; ---- the command line ----------------------------------------------------------------------
 ;;   run STEPS FILE…      each file run for at most STEPS steps, a line each
+;;   args STEPS FILE ARG… the file run for at most STEPS steps with the arguments ARG…
 ;;   wrap SRC DST …       each SRC's bytes as code, wrapped as the executable file DST
 (fn same ((a (List Nat)) (b (List Nat))) Bool
   (measure (struct a))
@@ -82,20 +117,23 @@
     ((cons d r) (nat_of r (+ (* 10 acc) (- d 48))))))
 (fn fail ((w World)) World
   (exit 2 (write_line (Bytes.ofNats (text "x86run: a file cannot be read or written")) w)))
-(fn run_one ((steps Nat) (path ByteArray) (w World)) World
+(fn run_one ((steps Nat) (st Start) (path ByteArray) (w World)) World
   (match (read_file path w)
     ((Prod.mk r w1)
      (match r
        (none (fail w1))
        ((some bs)
-        (write_line
-          (Bytes.ofNats (show_res (run_file (fuel_of steps) (Bytes.toNats bs) start_zero)))
-          w1))))))
+        (write_line (Bytes.ofNats (show_res (run_file (fuel_of steps) (Bytes.toNats bs) st))) w1))))))
 (fn run_each ((steps Nat) (paths (List ByteArray)) (w World)) World
   (measure (struct paths))
   (match paths
     (nil w)
-    ((cons p r) (run_each steps r (run_one steps p w)))))
+    ((cons p r) (run_each steps r (run_one steps start_zero p w)))))
+(fn nats_each ((bs (List ByteArray))) (List (List Nat))
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b r) (cons (Bytes.toNats b) (nats_each r)))))
 (fn wrap_one ((src ByteArray) (dst ByteArray) (w World)) World
   (match (read_file src w)
     ((Prod.mk r w1)
@@ -119,6 +157,11 @@
           ((cons steps files)
            (if (same (Bytes.toNats cmd) (text "run"))
              (run_each (nat_of (Bytes.toNats steps) 0) files w1)
-             (fail w1)))
+           (if (same (Bytes.toNats cmd) (text "args"))
+             (match files
+               ((cons file argv)
+                (run_one (nat_of (Bytes.toNats steps) 0) (start_args (nats_each argv)) file w1))
+               (nil (fail w1)))
+             (fail w1))))
           (nil (fail w1)))))
        (nil (fail w1))))))

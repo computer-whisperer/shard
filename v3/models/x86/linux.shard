@@ -1,6 +1,6 @@
 ;;; v3/models/x86/linux.shard — Linux at the processor's boundary, as far as a consumer has
-;;; needed it: how an executable file becomes a process's first state, and what a system call
-;;; does. A file the model does not load, and a system call it has no rule for, are stuck with
+;;; needed it: how an executable file becomes a process's first state, what stands at its stack
+;;; pointer then — its arguments —, and what a system call does. A file the model does not load, and a system call it has no rule for, are stuck with
 ;;; the reason. A run is the processor's steps until the process exits, counted by a fuel that
 ;;; no statement about a run names: `exits` quantifies it away.
 (import "../../std/list.shard")
@@ -118,8 +118,7 @@
 ;; is inside the range; and the range ends at or below the top of a process's addresses, 2^47.
 ;; Where the range is, and where in it the pointer stands, a file is not told: a kernel places
 ;; them anew at each start. Nothing is said of the pointer's alignment. What stands at the
-;; pointer and above it — the count of the arguments, the arguments, the environment — is not
-;; modelled.
+;; pointer and above it is `args_at`'s to say.
 (def stack_ok ((lo Nat) (sp Nat) (hi Nat) (top Nat) (n Nat)) Prop
   (and (<= top lo) (and (<= (+ lo (* 8 n)) sp) (and (<= sp hi) (<= hi 140737488355328)))))
 ;; the one start the model's runner makes (`run_main.shard`): eight megabytes under
@@ -127,6 +126,33 @@
 ;; theorem about a file is for every start `stack_ok` allows.
 (fn runner_start ((r Regs) (f Flags) (m Mem)) Start
   (start_at 140737479962624 140737488347136 140737488351232 r f m))
+
+;; ---- what the kernel leaves at the stack pointer ------------------------------------------------
+;; a string at the address a: its bytes, none of them 0, and a 0 after them
+(def str_at ((m Mem) (a Nat) (bs (List Nat))) Prop
+  (measure (struct bs))
+  (match bs
+    (nil (= (mem_get m a) 0))
+    ((cons b r) (and (= (mem_get m a) b) (and (< 0 b) (str_at m (+ a 1) r))))))
+;; the arguments' addresses, a word each from the address a: each is the address of its
+;; argument's string, which lies — its 0 with it — in [sp, hi)
+(def argv_at ((m Mem) (a Nat) (sp Nat) (hi Nat) (args (List (List Nat)))) Prop
+  (measure (struct args))
+  (match args
+    (nil True)
+    ((cons s r)
+     (and (<= sp (mem_le64 m a))
+       (and (< (+ (mem_le64 m a) (List.length s)) hi)
+         (and (str_at m (mem_le64 m a) s) (argv_at m (+ a 8) sp hi r)))))))
+;; What the model takes the kernel to leave a process at its stack pointer: the count of its
+;; arguments, a word; after it a word for each argument, the address of that argument's bytes;
+;; and the bytes of each, none of them 0, with a 0 after them. The count, the addresses and the
+;; strings lie from the stack pointer up, inside the stack's range. The first argument is by
+;; convention the name the program was run by; the model does not say there is one. Nothing is
+;; said of the word after the last address, of the environment, or of anything else above.
+(def args_at ((m Mem) (sp Nat) (hi Nat) (args (List (List Nat)))) Prop
+  (and (= (mem_le64 m sp) (List.length args))
+    (and (<= (+ sp (* 8 (+ (List.length args) 1))) hi) (argv_at m (+ sp 8) sp hi args))))
 
 ;; how a run ends: the process exited with a status; a step had no rule; the count ran out
 (type Res (RExit Nat) (RStuck Why) (ROut Cpu))

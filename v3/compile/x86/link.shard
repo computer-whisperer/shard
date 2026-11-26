@@ -47,6 +47,23 @@
 ;; the stack pointer sp
 (fn link_first ((code (List Nat)) (lo Nat) (sp Nat) (hi Nat) (r Regs) (f Flags) (m Mem)) Cpu
   (boot (image_of code m) (start_at lo sp hi r f m)))
+;; the first state's memory is the start's above the file's image: the stack's contents
+(theorem first_above
+  ((code (List Nat))
+   (lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (x Nat)
+   (h (<= (+ 4194424 (List.length code)) x)))
+  (= (mem_get (Cpu.mem (link_first code lo sp hi r f m)) x) (mem_get m x))
+  (by
+    (have hx (<= (+ 4194304 (+ 120 (List.length code))) x) (arith))
+    (show
+      (= (mem_get (put_bytes m 4194304 (elf_exec code) (+ 120 (List.length code))) x) (mem_get m x)))
+    (exact (put_bytes_above (elf_exec code) m 4194304 (+ 120 (List.length code)) x hx))))
 ;; where a code's file is loaded and the code ends below the stack's range, an access inside
 ;; the range, of a kind the stack permits, is mapped
 (theorem stack_mapped
@@ -1205,9 +1222,10 @@
   (pushed (start_moved data args code lo sp hi r f m) (w64 (start_ret data args))))
 ;; What the start-up's run comes to, from the first state c0: the call's target, in a state cin
 ;; that meets the hypotheses of `realizes` — the table in place, the argument words in their
-;; registers, room for k words above f0 under the return address, the data's range as `data_ok`
-;; asks — and whose memory holds the data from s; and the table from the call's address pc on is
-;; found as `rest`.
+;; registers, room for k words above f0 under the return address, the range from the data's
+;; address s to `top` as `data_ok` asks — and whose memory holds the data from s; the table from
+;; the call's address pc on is found as `rest`; and the memory is the first state's but in the
+;; words pushed, the return address and the data.
 (def entered
   ((tbl (List (Prod Nat (Prod Instr Nat))))
    (c0 Cpu)
@@ -1219,6 +1237,7 @@
    (k Nat)
    (s Nat)
    (data (List (BitVec 64)))
+   (top Nat)
    (pc Nat)
    (rest (List (Prod Nat (Prod Instr Nat)))))
   Prop
@@ -1226,8 +1245,11 @@
     (and (code_in cin tbl)
       (and (args_in cin args)
         (and (room cin 4194424 chi f0 k)
-          (and (data_ok cin (data_rs s (List.length data)) 4194424 chi f0 k)
-            (and (holds (Cpu.mem cin) s data) (tail_at tbl pc rest))))))))
+          (and (data_ok cin (cons (MkSeg s top 6) nil) 4194424 chi f0 k)
+            (and (holds (Cpu.mem cin) s data)
+              (and (tail_at tbl pc rest)
+                (same_outside (Cpu.mem c0) (Cpu.mem cin) (+ f0 (* 8 k))
+                  (+ s (* 8 (List.length data))))))))))))
 ;; From the first state of the process of ANY code's file where the table is in place and is
 ;; found, from its first address on, as the start-up's rows: the data's pushes, the moves of the
 ;; argument words and the call, each by its theorem.
@@ -1249,6 +1271,8 @@
    (s Nat)
    (f0 Nat)
    (k Nat)
+   (top Nat)
+   (htp (<= top hi))
    (hsz (< (+ 4194424 (List.length code)) lo))
    (hall (= (all_within tbl 4194424 chi) true))
    (hchi (<= (+ chi 15) lo))
@@ -1268,6 +1292,7 @@
     k
     s
     data
+    top
     (start_call data args)
     (exit_rows (start_call data args) d xt))
   (by
@@ -1436,6 +1461,36 @@
       (rw e8)
       (exact (And.left (And.right (And.right (And.right (And.right (And.right (And.right gp)))))))))
     (have hcl (<= (+ (push_at (start_moved data args code lo sp hi r f m)) 8) s) (rw paA) (arith))
+    ;; memory: the data's pushes wrote the data's words, the call's the return address
+    (have hko
+      (same_outside (Cpu.mem (link_first code lo sp hi r f m))
+        (Cpu.mem (start_in data args code lo sp hi r f m))
+        (+ f0 (* 8 k))
+        (+ s (* 8 (List.length data))))
+      (intro x hx)
+      (have x1
+        (or (< x (push_at (start_moved data args code lo sp hi r f m)))
+          (<= (+ (push_at (start_moved data args code lo sp hi r f m)) 8) x))
+        (rw paA)
+        (cases hx ((inl (h1) (exact (Or.inl h1))) (inr (h2) (apply Or.inr ((arith)))))))
+      (have x2 (or (< x s) (<= (+ s (* 8 (List.length data))) x))
+        (cases hx ((inl (h1) (apply Or.inl ((arith)))) (inr (h2) (exact (Or.inr h2))))))
+      (have i1
+        (= (mem_get (Cpu.mem (start_in data args code lo sp hi r f m)) x)
+          (mem_get (Cpu.mem (start_moved data args code lo sp hi r f m)) x))
+        (exact
+          (pushed_outside (start_moved data args code lo sp hi r f m) (w64 (start_ret data args)) x
+            x1)))
+      (have i2
+        (= (mem_get (Cpu.mem (start_pushed data code lo sp hi r f m)) x)
+          (mem_get (Cpu.mem (link_first code lo sp hi r f m)) x))
+        (exact
+          ((And.right (And.right (And.right (And.right (And.right (And.right (And.right gp)))))))
+           x
+           x2)))
+      (rw i1)
+      (rw e8)
+      (exact i2))
     (exact
       (And.intro
         (reaches_trans (link_first code lo sp hi r f m) (start_moved data args code lo sp hi r f m)
@@ -1453,14 +1508,12 @@
                 hlo
                 hi2)
               (And.intro
-                (stack_data code lo hi (start_in data args code lo sp hi r f m) chi f0 k s
-                  (+ s (* 8 (List.length data)))
-                  hsz
+                (stack_data code lo hi (start_in data args code lo sp hi r f m) chi f0 k s top hsz
                   hchi
                   gIn
                   hlo
                   d1
-                  hi_s)
+                  htp)
                 (And.intro
                   (holds_same (Cpu.mem (start_moved data args code lo sp hi r f m))
                     (Cpu.mem (start_in data args code lo sp hi r f m))
@@ -1472,7 +1525,7 @@
                     (pushed_outside (start_moved data args code lo sp hi r f m)
                       (w64 (start_ret data args)))
                     (Or.inr hcl))
-                  q4)))))))))
+                  (And.intro q4 hko))))))))))
 ;; the table in place in the first state: the assembler answered `code` for the listing, and
 ;; the code ends below the stack
 (theorem start_code_first
@@ -1512,13 +1565,14 @@
 ;; [4194424, chi) and the code ends at or below chi; and the process is started with ANY stack
 ;; `stack_ok` allows — its range beginning at or above chi + 15, with the data's words, the k
 ;; words of the function's stack need and the return address under the stack pointer: whatever
-;; code realizes an answer at `entry` over that table, for the data's range, if the answer gives
-;; the word v on the arguments' words in any memory that holds the data — at an address where
-;; the data ends at or below 2^47, which the theorem gives —, the code's file exits with v's low
-;; byte. The answer is taken on the machine's own memory, which agrees with itself. That the
-;; start-up's code is still in place after the call follows from the statement's own memory
-;; clause (`kept_code`).
-(theorem start_exits
+;; code realizes an answer at `entry` over that table, for the range from the data's first word
+;; to `top` — any address in the stack's range: the data's end, or with what the kernel left
+;; above it —, if the answer gives the word v on the arguments' words in any memory that holds
+;; the data — at an address where the data ends at or below 2^47, which the theorem gives — and
+;; is the start's from the stack pointer up, the code's file exits with v's low byte. The answer
+;; is taken on the machine's own memory, which agrees with itself. That the start-up's code is
+;; still in place after the call follows from the statement's own memory clause (`kept_code`).
+(theorem start_exits_top
   ((data (List (BitVec 64)))
    (args (List Arg))
    (l Nat)
@@ -1535,6 +1589,7 @@
    (lo Nat)
    (sp Nat)
    (hi Nat)
+   (top Nat)
    (ha (= (assemble (start_listing data args l extra)) (some code)))
    (hr (= (resolve (start_listing data args l extra) (start_listing data args l extra) 0) (some is)))
    (hl (= (layout is 4194424) (start_table data args d xt)))
@@ -1543,15 +1598,20 @@
    (hce (<= (+ 4194424 (List.length code)) chi))
    (hst (stack_ok lo sp hi (+ chi 15) (+ (+ (List.length data) k) 1)))
    (hn (<= (List.length args) 6))
-   (hreal (realizes (start_table data args d xt) 4194424 chi entry k (start_rs sp data) ans))
+   (htp (<= top hi))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (hreal
+     (realizes (start_table data args d xt) 4194424 chi entry k
+       (cons (MkSeg (start_base sp data) top 6) nil)
+       ans))
    (hans
      (forall ((m0 Mem))
        (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
          (holds m0 (start_base sp data) data)
-         (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2)))))
-   (r Regs)
-   (f Flags)
-   (m Mem))
+         (same_outside m m0 0 sp)
+         (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2))))))
   (exits (elf_exec code) (start_at lo sp hi r f m) (% (w64_val v) 256))
   (by
     ;; what `stack_ok` says, a fact at a time
@@ -1590,6 +1650,7 @@
         k
         (start_base sp data)
         data
+        top
         (start_call data args)
         (exit_rows (start_call data args) d xt))
       (exact
@@ -1597,6 +1658,8 @@
           (start_base sp data)
           (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
           k
+          top
+          htp
           hsz
           hw
           hchi
@@ -1615,21 +1678,48 @@
         k)
       (exact (And.left (And.right (And.right (And.right ge))))))
     (have hdata
-      (data_ok (start_in data args code lo sp hi r f m) (start_rs sp data) 4194424 chi
+      (data_ok (start_in data args code lo sp hi r f m)
+        (cons (MkSeg (start_base sp data) top 6) nil)
+        4194424
+        chi
         (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
         k)
       (exact (And.left (And.right (And.right (And.right (And.right ge)))))))
     (have hag
-      (agree (start_rs sp data) (Cpu.mem (start_in data args code lo sp hi r f m))
+      (agree (cons (MkSeg (start_base sp data) top 6) nil)
+        (Cpu.mem (start_in data args code lo sp hi r f m))
         (Cpu.mem (start_in data args code lo sp hi r f m)))
       (intro x need h)
       rfl)
     (have hbnd (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
       (rw hs)
       (arith))
+    ;; from the stack pointer up the memory is the start's: the image lies below the stack, and
+    ;; the start-up wrote below the stack pointer
+    (have hsame (same_outside m (Cpu.mem (start_in data args code lo sp hi r f m)) 0 sp)
+      (intro x hx)
+      (cases hx
+        ((inl (h1) (exact (absurd h1 (Nat.not_lt_zero x))))
+         (inr (h2)
+           (have y1
+             (or (< x (+ (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8))) (* 8 k)))
+               (<= (+ (start_base sp data) (* 8 (List.length data))) x))
+             (apply Or.inr ((rw hs) (exact h2))))
+           (have y2 (<= (+ 4194424 (List.length code)) x) (arith))
+           (have i1
+             (= (mem_get (Cpu.mem (start_in data args code lo sp hi r f m)) x)
+               (mem_get (Cpu.mem (link_first code lo sp hi r f m)) x))
+             (exact
+               ((And.right
+                  (And.right (And.right (And.right (And.right (And.right (And.right ge)))))))
+                x
+                y1)))
+           (rw i1)
+           (exact (first_above code lo sp hi r f m x y2))))))
     (cases
       (hans (Cpu.mem (start_in data args code lo sp hi r f m)) hbnd
-        (And.left (And.right (And.right (And.right (And.right (And.right ge)))))))
+        (And.left (And.right (And.right (And.right (And.right (And.right ge))))))
+        hsame)
       ((intro (m2 hma)
          (cases
            (hreal (start_in data args code lo sp hi r f m)
@@ -1654,7 +1744,9 @@
                     (And.left h))))
               (have hv (= (reg c2 0) v) (exact (And.left (And.right h))))
               (have hkm
-                (kept_mem (start_rs sp data) (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8))) k
+                (kept_mem (cons (MkSeg (start_base sp data) top 6) nil)
+                  (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+                  k
                   (Cpu.mem (start_in data args code lo sp hi r f m))
                   (Cpu.mem c2))
                 (exact (And.left (And.right (And.right (And.right h))))))
@@ -1664,7 +1756,7 @@
                 (exact
                   (kept_code (start_in data args code lo sp hi r f m) c2
                     (start_table data args d xt)
-                    (start_rs sp data)
+                    (cons (MkSeg (start_base sp data) top 6) nil)
                     4194424
                     chi
                     (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
@@ -1696,7 +1788,84 @@
                   hv
                   hcode2
                   hrip2
-                  (And.right (And.right (And.right (And.right (And.right (And.right ge))))))))))))))))
+                  (And.left
+                    (And.right (And.right (And.right (And.right (And.right (And.right ge)))))))))))))))))
+
+;; The same for the data's range alone, the answer asked of nothing above the data: what a file
+;; that takes no arguments from its kernel is linked by.
+(theorem start_exits
+  ((data (List (BitVec 64)))
+   (args (List Arg))
+   (l Nat)
+   (extra (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (entry Nat)
+   (chi Nat)
+   (k Nat)
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (v (BitVec 64))
+   (lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (ha (= (assemble (start_listing data args l extra)) (some code)))
+   (hr (= (resolve (start_listing data args l extra) (start_listing data args l extra) 0) (some is)))
+   (hl (= (layout is 4194424) (start_table data args d xt)))
+   (he (= (w64_add (w64 (start_ret data args)) (w64 d)) (w64 entry)))
+   (hw (= (all_within (start_table data args d xt) 4194424 chi) true))
+   (hce (<= (+ 4194424 (List.length code)) chi))
+   (hst (stack_ok lo sp hi (+ chi 15) (+ (+ (List.length data) k) 1)))
+   (hn (<= (List.length args) 6))
+   (hreal (realizes (start_table data args d xt) 4194424 chi entry k (start_rs sp data) ans))
+   (hans
+     (forall ((m0 Mem))
+       (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
+         (holds m0 (start_base sp data) data)
+         (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2)))))
+   (r Regs)
+   (f Flags)
+   (m Mem))
+  (exits (elf_exec code) (start_at lo sp hi r f m) (% (w64_val v) 256))
+  (by
+    (have hfit (<= (+ lo (* 8 (+ (+ (List.length data) k) 1))) sp)
+      (exact (And.left (And.right hst))))
+    (have hsp (<= sp hi) (exact (And.left (And.right (And.right hst)))))
+    (have le1 (<= (* 8 (List.length data)) sp) (arith))
+    (have hs (= (+ (start_base sp data) (* 8 (List.length data))) sp)
+      (exact (Nat.sub_add_cancel le1)))
+    (have htp (<= (+ (start_base sp data) (* 8 (List.length data))) hi) (rw hs) (exact hsp))
+    (have hreal2
+      (realizes (start_table data args d xt) 4194424 chi entry k
+        (cons (MkSeg (start_base sp data) (+ (start_base sp data) (* 8 (List.length data))) 6) nil)
+        ans)
+      (exact hreal))
+    (have hans2
+      (forall ((m0 Mem))
+        (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
+          (holds m0 (start_base sp data) data)
+          (same_outside m m0 0 sp)
+          (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2))))
+      (intro m0 hb hh hsm)
+      (exact (hans m0 hb hh)))
+    (exact
+      (start_exits_top data args l extra code is d xt entry chi k ans v lo sp hi
+        (+ (start_base sp data) (* 8 (List.length data)))
+        ha
+        hr
+        hl
+        he
+        hw
+        hce
+        hst
+        hn
+        htp
+        r
+        f
+        m
+        hreal2
+        hans2))))
 
 ;; ---- the sample -----------------------------------------------------------------------------------
 ;; THE LINK for the sample's two buffers (startup.shard): a stack with seven words more than

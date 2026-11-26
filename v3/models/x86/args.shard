@@ -1,0 +1,79 @@
+;;; v3/models/x86/args.shard — laws of what the kernel leaves at the stack pointer (linux.shard
+;;; `args_at`): a memory that is the start's from the stack pointer up holds the same arguments;
+;;; and the range a function reads them through, from the stack pointer to the top of the
+;;; stack's range.
+(import "laws.shard")
+(import "linux.shard")
+(use std.mem)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Seg)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; ---- the same arguments in another memory -----------------------------------------------------
+;; a string stands in any memory that is the first's from an address at or below it
+(theorem str_at_same ((m Mem) (m2 Mem) (sp Nat) (h (same_outside m m2 0 sp)) (bs (List Nat)))
+  (forall ((a Nat)) (-> (<= sp a) (str_at m a bs) (str_at m2 a bs)))
+  (by
+    (induction bs
+      ((nil () (intro a ha hs) (show (= (mem_get m2 a) 0)) (rw (h a (Or.inr ha))) (exact hs))
+       (cons (b r ih) (intro a ha hs) (have h1 (= (mem_get m a) b) (exact (And.left hs)))
+         (have h2 (< 0 b) (exact (And.left (And.right hs))))
+         (have h3 (str_at m (+ a 1) r) (exact (And.right (And.right hs))))
+         (have ha1 (<= sp (+ a 1)) (arith))
+         (have g1 (= (mem_get m2 a) b) (rw (h a (Or.inr ha))) (exact h1))
+         (exact (And.intro g1 (And.intro h2 (ih (+ a 1) ha1 h3)))))))))
+(theorem argv_at_same
+  ((m Mem) (m2 Mem) (sp Nat) (hi Nat) (h (same_outside m m2 0 sp)) (args (List (List Nat))))
+  (forall ((a Nat)) (-> (<= sp a) (argv_at m a sp hi args) (argv_at m2 a sp hi args)))
+  (by
+    (induction args
+      ((nil () (intro a ha hv) (exact True.intro))
+       (cons (s r ih) (intro a ha hv)
+         (have e (= (mem_le64 m2 a) (mem_le64 m a)) (exact (le64_same m m2 0 sp a h (Or.inr ha))))
+         (have h1 (<= sp (mem_le64 m a)) (exact (And.left hv)))
+         (have h2 (< (+ (mem_le64 m a) (List.length s)) hi) (exact (And.left (And.right hv))))
+         (have h3 (str_at m (mem_le64 m a) s) (exact (And.left (And.right (And.right hv)))))
+         (have h4 (argv_at m (+ a 8) sp hi r) (exact (And.right (And.right (And.right hv)))))
+         (have ha8 (<= sp (+ a 8)) (arith))
+         (show
+           (and (<= sp (mem_le64 m2 a))
+             (and (< (+ (mem_le64 m2 a) (List.length s)) hi)
+               (and (str_at m2 (mem_le64 m2 a) s) (argv_at m2 (+ a 8) sp hi r)))))
+         (rw e)
+         (exact
+           (And.intro h1
+             (And.intro h2
+               (And.intro (str_at_same m m2 sp h s (mem_le64 m a) h1 h3) (ih (+ a 8) ha8 h4))))))))))
+;; the arguments a start's memory holds, a memory that is the start's from the stack pointer up
+;; holds: what a file's first instructions push, they push below it
+(theorem args_at_same
+  ((m Mem)
+   (m2 Mem)
+   (sp Nat)
+   (hi Nat)
+   (args (List (List Nat)))
+   (h (same_outside m m2 0 sp))
+   (ha (args_at m sp hi args)))
+  (args_at m2 sp hi args)
+  (by
+    (have e (= (mem_le64 m2 sp) (mem_le64 m sp))
+      (exact (le64_same m m2 0 sp sp h (Or.inr (Nat.le_refl sp)))))
+    (have h8 (<= sp (+ sp 8)) (arith))
+    (have g1 (= (mem_le64 m2 sp) (List.length args)) (rw e) (exact (And.left ha)))
+    (exact
+      (And.intro g1
+        (And.intro (And.left (And.right ha))
+          (argv_at_same m m2 sp hi h args (+ sp 8) h8 (And.right (And.right ha))))))))
+
+;; ---- the range the arguments are read through -------------------------------------------------
+;; from the stack pointer to the top of the stack's range, to read
+(fn args_rs ((sp Nat) (hi Nat)) (List Seg) (cons (MkSeg sp hi 4) nil))
+(theorem args_rs_mapped ((sp Nat) (hi Nat) (a Nat) (n Nat) (h1 (<= sp a)) (h2 (<= (+ a n) hi)))
+  (= (mapped (args_rs sp hi) a n 4) true)
+  (by
+    (have b4 (= (band 4 4) 4) (decide))
+    (exact (mapped_head (MkSeg sp hi 4) nil a n 4 (seg_holds_in sp hi 4 a n 4 h1 h2 b4)))))
