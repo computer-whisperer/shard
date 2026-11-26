@@ -14,10 +14,12 @@ it.
 | `word.shard` | the machine word, Init's `(BitVec 64)`: `w64` (a number mod 2^64 as a word), `w64_val` (its number), `w64_add`, `w64_sub`, `w64_mul`, `w64_and`, `w64_or`, `w64_xor`, `w64_msb`, the sign extensions `sx8`, `sx32`, and facts of a word's number |
 | `words.shard` | a buffer of machine words as a value, a list: the word at an index (`nth`), the list with one replaced (`upd`), an access that takes the evidence that its index is in range (`word_at`, `put_at`) |
 | `x86.shard` | the registers `Regs`, the flags `Flags`, a mapped range `Seg`, the state `Cpu`; memory access (`load64`, `store64`, and `load8`, a byte as a word); `fetch`; the instructions `Instr` and `decode`; the flags of each operation; `exec` and `step`; why a step is stuck, `Why` |
-| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), what stands at the stack pointer then — a process's arguments (`args_at`) —, its first state (`boot`), what is outside a process (`Os`: the kernel's answers to come, each an `Answer`, and the bytes written to descriptor 1), system calls (`on_syscall`, `write_to`), a run (`run`, `run_file`), the machine's system (`ends`; `exits`, of a file that writes nothing), and what a loop that writes all of some bytes comes to under the answers (`send`, `sends_end`) |
-| `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`; `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
+| `linux.shard` | an executable file read (`elf_load`), what the kernel leaves at a process's start (`Start`; `start_at`, a start with the stack's range and the stack pointer given; `stack_ok`, what the model takes a kernel to promise a file of them; `runner_start`, the one start the runner makes), what stands at the stack pointer then — a process's arguments (`args_at`) —, its first state (`boot`), what is outside a process (`Os`: the kernel's answers to come, each an `Answer`, and the bytes written to descriptor 1), system calls (`on_syscall`, `write_to`), a run (`run`, `run_file`), the machine's system (`ends`; `exits`, of a file that writes nothing), what a loop that writes all of some bytes comes to under the answers (`send`, `sends_end`), and what a call of a function comes to — it returns, or the process ends in it (`Outcome`) — with how a file ends by it where its start-up exits with the word returned (`exit_of`) |
+| `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`, and instructions as its lines (`lines`); `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
-| `write.shard` | writing bytes out: the rules of the system call `write` by the kernel's next answer (`write_took`, `write_err`, `write_kill`), and `write_all` — fourteen instructions by hand that offer a range's bytes to descriptor 1 until all are taken — with its contract for any address, any range and every list of answers (`write_all_ok`) |
+| `write.shard` | writing bytes out: the rules of the system call `write` by the kernel's next answer (`write_took`, `write_err`, `write_kill`), and `write_all` — fourteen instructions by hand that offer a range's bytes to descriptor 1 until all are taken — with its contract for any address, any range and every list of answers (`write_all_ok`); where it returns, rax holds 1 |
+| `world.shard` | a program's World (`v3/std/world.shard`) against what is outside a process: the World of an `Os` (`os_world`) and of a process's start (`world_of`), with of each answer how the call went and nothing of the registers; that the model's loop is the platform's `write_all` (`send_put`); how a file ends by a program's value, a word and a World (`world_res`); and when the outcome of code is such a value (`tied`, `tied_exit`) |
+| `bytes.shard` | the bytes of a word that stands in memory: the eight bytes from an address are the eight low bytes of the number read there (`le64_bytes`), which is below 2^64 (`le64_lt`); so where a number's word is read, its bytes are known (`held_bytes`) |
 | `hello.shard` | a file that writes: a listing by hand that writes two pieces of text with `write_all` and exits with 0; what its process ends as, on a list of answers (`hello_res`) |
 | `hello_run.shard` | that file from end to end: started with its stack anywhere and on any list of answers, it ends as `hello_res` says (`hello_ends`) |
 | `hello_main.shard` | the file written; what the theorem says of lists of answers, printed |
@@ -86,7 +88,7 @@ flags, the stack's range and the memory under the image — whatever the kernel 
 the kernel will give the process's calls, in order, and the bytes the process has written to
 descriptor 1. The answers are an input of a run, as the arguments are: the model does not say
 what a kernel answers, and a statement about a file is for every list of them. An answer says
-how a call that offers bytes went — `(HTook a)`: the kernel took a of them, at least one and at
+how a call that offers bytes went (`How`, the platform's type: `v3/std/world.shard`) — `(HTook a)`: the kernel took a of them, at least one and at
 most what was offered, all for a = 0; `(HErr e)`: it failed, and the call returns the negative
 of an error number from 1 to 4095; `HKill`: it ended the process there, as it does by a signal
 at a write to a pipe nobody reads — and what the call leaves in `rcx` and `r11`, which Linux
@@ -124,6 +126,16 @@ the process. `(sends_end answers before pieces status)` is how a process ends th
 pieces one after another so and then exits with the status: with the status and everything
 written; with `status_io`, 74, where a call failed; or ended by the kernel — each with what was
 taken before. A theorem about a file that writes is an equation in it (`hello_ends`).
+
+**A program's World.** A program does not have an `Os`: it has a World (`v3/std/world.shard`),
+its own conversation with the outside — of each answer how the call went, and nothing of
+registers —, and the platform's `write_all` is a function on it. `world.shard` joins the two:
+`send` on the kernel's answers is `write_all`'s loop on the World's (`send_put`), and the
+outcome of code that was called — a return with what is outside as the code left it, or the
+process's end (`Outcome`) — is a program's value, a word and a World, when it is `tied` to it.
+A file whose function's outcome is tied to its program's value ends as `world_res` says of
+that value. The compile system's files that write are stated so (`v3/compile/README.md`, "A
+program that writes").
 
 ## The assembler
 
@@ -373,7 +385,8 @@ is ignored; the process ended by the kernel at such a pipe otherwise. That a ker
 bytes than it was offered is not made to happen on the processor: only the model's runs and
 the theorem cover it. Two faults planted, each refused by K: the loop moving its address back
 by the count instead of on (at the turn's statement), and the file asking for five bytes of
-its second piece (at the file's table).
+its second piece (at the file's table). The same runs are made of a file of COMPILED code
+that writes, by `compile_greet_test.sh`.
 
 Not here: any other instruction (a `nop` is stuck); operands of 8, 16 and 32 bits but the one
 `mov` and a byte's read; a system call but `exit` and `write`, a descriptor but 1, anything

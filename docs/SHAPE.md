@@ -95,7 +95,7 @@ toolchain's sources this way and checks those proofs (`toolchain_check.sh`); a b
 test read them as programs alone and pass the proofs over. The files elsewhere carry the theorems. This split is the largest irregularity in the
 system.
 
-**Build and gates.** 69 test scripts run on both engines and their outputs are compared byte for
+**Build and gates.** 70 test scripts run on both engines and their outputs are compared byte for
 byte. With the full replay of Init and the layout check, the whole gate takes about 75 minutes
 in CI on an idle runner, its jobs side by side: the time of the longest, `native`, of which the
 tie of the two engines' outputs is 42. It is not run whole on the development machine.
@@ -105,11 +105,11 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | where | size | what |
 |---|---|---|
 | `v3/kernel/` | 51,000 lines | the toolchain: K (`k/`), reader, elaborator, proof steps, loader, evaluator, compiler |
-| `v3/kernel/test/` | 76 files | the test scripts and drivers |
+| `v3/kernel/test/` | 77 files | the test scripts and drivers |
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
-| `v3/std/` | 1,000 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls |
-| `v3/models/x86/` | 11,800 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; what is outside a process — the kernel's answers to its calls, an input of a run, and the bytes it has written —, and a file that writes, proven for every list of answers; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
-| `v3/compile/` | 16,100 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view |
+| `v3/std/` | 1,100 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls; and a program's World with the platform's `write_all` as an ordinary function on it |
+| `v3/models/x86/` | 12,300 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; what is outside a process — the kernel's answers to its calls, an input of a run, and the bytes it has written —, and a file that writes, proven for every list of answers; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
+| `v3/compile/` | 21,400 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view —, and a compiled program that writes, proven to end as its value on a World says |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -237,7 +237,12 @@ be built to is `COMPILE.md`.
   every list of answers; and a file by hand that writes two pieces of text with it, proven to
   end as a function of the answers says (`hello_ends`), for a stack anywhere. Every other
   file's theorem (`exits`) says, in the same words as before, that it writes nothing whatever
-  the kernel would answer.
+  the kernel would answer;
+- a program's World against what is outside a process (`world.shard`): the model's loop is the
+  platform's `write_all` (`send_put`), how a file ends by a program's value on a World
+  (`world_res`), and when the outcome of code — a return, or the process's end
+  (`linux.shard` `Outcome`) — is a program's value (`tied`); and the bytes of a word that
+  stands in memory (`bytes.shard` `held_bytes`).
 
 **Exists** (`v3/compile/`, its README; the form is `COMPILE.md` §5):
 - an intermediate machine a little above x86 (`ir.shard`): local words, word operations, loads
@@ -246,10 +251,17 @@ be built to is `COMPILE.md`.
   (`ir_laws.shard`), among them that a run given more fuel answers the same, and by it a rule
   for a call that returns: a function that calls another is tied to its definition from the
   callee's tie alone;
-- the one statement about a function's code that crosses a module's seam (`x86/seam.shard`
-  `realizes`), the same for compiled and for hand-written code;
+- a second run of the intermediate machine, with what is outside a process (`ir.shard` `wrun`,
+  `ir_world.shard`): an outside function's answer may change it or end the process, and a run
+  in which a callee ends the process has ended; a run of code that calls nothing outside is
+  one of these;
+- the one statement about a function's code that crosses a module's seam (`x86/seam.shard`),
+  the same for compiled and for hand-written code, in two forms: of an answer that names
+  nothing outside the process (`realizes`), and of one given on the outside as well, an
+  outcome (`wrealizes`);
 - a pass, a function from a module's intermediate code to instructions of the model
-  (`x86/pass.shard`), and its theorem, proven once (`x86/module.shard` `module_realizes`): where
+  (`x86/pass.shard`), and its theorem, proven once (`x86/module.shard` `wmodule_realizes`, and
+  `module_realizes` its corollary for answers that name nothing outside): where
   each function the module calls from outside meets the seam's statement, each function of the
   compiled module meets it. Its fragment: a function of at most six parameters and any number
   of locals — the first six in registers, the rest words of the function's frame —,
@@ -270,6 +282,16 @@ be built to is `COMPILE.md`.
   and with any arguments, exits with the low byte of the sum of the decimal numbers given
   after its name. Its intermediate code, by hand, is tied straight to its meaning over a list
   of byte lists;
+- a compiled program that writes (`greet_src.shard`, `x86/greet_run.shard` `greet_file_ends`):
+  `greet` is a function on a World (`v3/std/world.shard`) that writes a text in two pieces
+  with the platform's `write_all`. Its intermediate code, by hand, calls `write_all` as an
+  outside function whose answer is given on what is outside the process (`put.shard`) and
+  whose code — two moves and the model's loop — realizes it wherever it stands
+  (`x86/put.shard` `put_realizes`); the code is tied to the function by the rule for a call
+  that writes (`tie_put`); and the file, started with its stack anywhere and on EVERY list of
+  the kernel's answers, ends as the function's value on the World a process starts with says:
+  the text and status 0, a failed write's status 74 with the bytes taken before it, or ended
+  by the kernel. The link for such a file is `start_ends`; `start_exits` is its corollary;
 - two programs through every layer, each from its definition to the exit status of an
   executable file: six functions over words with calls, a test and a loop
   (`x86/calls_run.shard` `calls_file_exits`), and `dot`, a sum of products over two buffers,
@@ -299,11 +321,12 @@ be built to is `COMPILE.md`.
   what its start-up pushes, and the tree's files that have data share one sample;
 - of a process's start, beyond its arguments: the environment and the auxiliary vector; memory
   whose size the arguments decide, and the size check at the entry that goes with it;
-- of what is outside a process: a compiled function that writes — the pass's theorem is of
-  code that returns, and the file that writes is by hand —; anything read (`read`, `open`,
-  standard input), a descriptor other than 1, any system call but `exit` and `write`;
+- of what is outside a process: anything read (`read`, `open`, standard input), a descriptor
+  other than 1, any system call but `exit` and `write`; a World split between two threads of
+  control; a tool that drops a definition's World parameter — the one compiled program that
+  writes has its intermediate code and its tie by hand;
 - in the pass: more than six parameters, a function's call of itself that is not a tail call,
-  a host call, a declared failure;
+  a call of the evaluator's host, a declared failure other than a failed write's;
 - at the seam, hand-written code that writes memory or keeps a frame — the trial's other two
   contracts are in their own form —, a low form that follows pointers (the program of its
   arguments has none: its code is tied straight to its meaning), and hand-written code at an

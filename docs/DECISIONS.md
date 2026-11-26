@@ -985,6 +985,46 @@ entries are explained under "Measured" at the end.
   the immediate numbers of two instructions the process never comes to: the assembler has no
   line for bytes that are no instruction. Not built: anything read (`read`, `open`), a second
   descriptor, the size check at the entry, memory reserved without being pushed.
+- A compiled function that writes (2026-11-26; the platform's function as an ordinary function
+  on a modelled World is the owner's ruling, `LAW.md` §6, 29; what follows was chosen in
+  building and not put to the owner).
+  *A World is a program's own conversation; the model's `Os` is another.* `v3/std/world.shard`
+  `World` has of each answer how the call went (`How`, moved there from the machine's model)
+  and nothing of the registers a call destroys; the model's `Os` has both. A projection
+  (`models/x86/world.shard` `os_world`) and one lemma (`send_put`) join them. Rejected: a
+  World that is `Os` — a program's theorem would quantify over the register values of one
+  processor. The cost: two functions of one shape, `put` on the platform's answers and `send`
+  on the kernel's.
+  *A stopped World is a state of the World; a stopped run is an outcome.* In a program a World
+  that has stopped (`Failed`, `Killed`) is left as it is by every write, so a function on a
+  World is total. In the intermediate machine a call in which the process ends ends its
+  caller's run (`Outcome`, `wrun`). Rejected for the machine: a state that absorbs — a loop
+  that goes on by what a dead write returns has no answer on any fuel, and its theorem would
+  say nothing where a write fails. The two meet at the tie: `tie_put` asks that the rest of
+  the program leaves a stopped World as it is.
+  *One proof of the pass, over the run with the outside.* The run of code that calls nothing
+  outside (`irun`) stays, with every tie stated in it; the pass's proof is over `wrun` alone
+  and the module's theorem for `irun` is its corollary (`wrun_of_irun`). Rejected: a second
+  proof beside the first, as the design of 2026-07-09 was built in the tree before this one —
+  half of the pass's proof above expressions written twice. `realizes` is restated to say
+  where a run COMES to, with what is outside as it was, for every outside; its text therefore
+  stands in every statement above the pass, and the seven files' proofs loaded unchanged.
+  Given up: nobody can take from `realizes` that the code ran by steps of the processor
+  alone. Nothing did but the pass and the link, and both now want less.
+  *The link takes an outcome and ONE result.* `start_ends_top` asks, for every memory that
+  holds the data, an outcome of the function and that it ends the file in the result named
+  (`exit_of out = res`): the memory a function leaves may depend on the memory it was given;
+  how the file ends may not.
+  *A program's value is a word and a World*, the word the status its process exits with.
+  *The failed write's status stays the model's* (`status_io`, 74): a World says `Failed`, and
+  what a binary exits with for it is the binding's (`world_res`).
+  *The text is data the start-up pushes*, two words: a module has no place for constants. That
+  a held word's bytes are known is proven once (`models/x86/bytes.shard` `held_bytes`).
+  *The tie is by hand, and the World is in no code.* The intermediate code has no local for
+  it: the run has what is outside. Nothing in the language says that a parameter is so
+  dropped; the owner was told and agreed in the same word as to the ruling.
+  *`write_all` names two things*: the platform's function and the model's instructions. No
+  file opens both modules.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
@@ -2345,6 +2385,30 @@ measurements; measure again before building on one.
   piece, at the file's table. The boundary's change made the trial's nine stored proofs out
   of date, and `prove` wrote them again. The eighteen x86 and compile entrypoints pass
   natively, 1,198 checks, the processor's runs among them.
+- A compiled function that writes (2026-11-26; natively, single measurements). The pass, the
+  seam and the link changed by 1,461 lines added and 754 removed, in eleven files, and no
+  statement above the pass changed: the seven files' proofs loaded as they were. New beside
+  them, 2,794 lines: the laws of the run with the outside 775, the platform's function as an
+  outside function with its tie rule 358, its code at the seam 433, the World and its bridge
+  to the model 78 and 115, the bytes of a held word 396, and the program — meaning 16, code
+  and tie 208, file 116, theorem 255, writer 44. The file is 357 bytes: the start-up, the
+  sixteen instructions of `write_all`, and `greet`'s module. Its theorem with all it rests on
+  loads in 142 s; `compile_greet_test.sh` takes about five minutes. The 19 x86 and compile
+  entrypoints: 1,373 checks, 0 failed. Twelve lists of answers: the theorem's right side,
+  evaluated, and the model's run of the compiled file are one line each. The processor: the
+  text and status 0; 74 with the output closed, to `/dev/full`, and at a pipe nobody reads
+  with the signal ignored; ended by the kernel at such a pipe otherwise. Not made to happen on
+  the processor: a kernel that takes fewer bytes than it was offered. Planted faults, each
+  refused by K: `write_all`'s two moves in the other order (code, statements and states
+  changed alike), where the count register is to hold the count; `greet`'s code asking six
+  bytes of the second piece (code and tie changed alike), at the evidence that five are
+  mapped; the meaning's text ending in another byte than the file's data, where the held
+  word's bytes are to be the text. Proofs that needed more than parentheses on first load:
+  the bridge lemma (`send_put`: the platform's function has an equation for each answer,
+  the model's loop one), and three names not in scope. Outside the tree, the generators'
+  output is as it was, text for text: the 51 generated modules load, the nine generated files
+  have their sizes and statuses on the evaluator, the model and the processor, and their nine
+  theorems link closed again, on Lean's three axioms and no parameter.
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above

@@ -2,9 +2,10 @@
 
 The first pieces of the compile system (`docs/COMPILE.md` §5): an intermediate machine with its
 laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64
-instructions with its theorem, a link theorem, and six programs taken through every layer to
+instructions with its theorem, a link theorem, and seven programs taken through every layer to
 a file the processor runs — six functions over words with calls, a test and a loop; `argsum`,
-a program of its command-line arguments, proven for every list of them; `dot`, a
+a program of its command-line arguments, proven for every list of them; `greet`, a program
+that writes, proven for every list of the kernel's answers; `dot`, a
 sum of products over two buffers; `sqdiff`, a compiled caller of `dot` across a seam, in one
 file with the `dot` an author wrote in instructions and in another with the compiled one;
 `gap`, a caller of `sqdiff`, three functions deep; and `total`, a caller of `both`, which calls
@@ -63,6 +64,42 @@ every list of arguments the start's memory holds at the stack pointer (`args_at`
   from the data's first word to the top of the stack's range, and its answer is asked on a
   memory that is the start's from the stack pointer up, which therefore holds the same
   arguments (`v3/models/x86/args.shard` `args_at_same`).
+
+## A program that writes
+
+`greet` writes "hello, world" and a line's end, in two pieces (`greet_src.shard`). Its meaning
+is a function on a WORLD (`v3/std/world.shard`): one caller's conversation with the outside —
+the answers it will still be given to its offers of bytes, the bytes it has written, and
+whether its process still runs. The platform's `write_all` is an ordinary function on a World,
+and no axiom: every byte where the answers take them all, however few at a time; the bytes
+taken before a failure, and the process stopped; those taken before the outside ended it; and
+nothing more in a process that has stopped. `greet`'s value is a word, the status its process
+exits with, and the World after.
+
+- The intermediate machine has a second run, with what is outside a process (`ir.shard`
+  `wrun`): the kernel's answers still to come and the bytes written (`models/x86/linux.shard`
+  `Os`). An outside function's answer may change it, or end the process, and a run in which a
+  callee ends the process has ended (`Outcome`). No local holds the World.
+- `write_all` outside a module is such a function (`put.shard` `put_ext`): on an address and a
+  count whose bytes the data ranges map to read, the bytes go as the answers decide; it
+  returns 1, or the process exits with a failed write's status 74, or the kernel ends it.
+  That answer is the platform's function on the World of what is outside (`put_all`,
+  `put_fail`, `put_kill`), because the model's loop is (`models/x86/world.shard` `send_put`).
+- Its code is two moves and the loop an author proved on the model (`models/x86/write.shard`):
+  it realizes the answer wherever its sixteen instructions stand, with no word of stack
+  (`x86/put.shard` `put_realizes`).
+- The tie (`greet_ir.shard` `greet_tie`) is by one rule, used twice (`put.shard` `tie_put`):
+  a call that writes, then what follows where the process still runs — and where the write
+  stopped the process nothing, the rest of the program writing nothing in a process that has
+  stopped.
+- The file (`x86/greet_file.shard`): a start-up that pushes the text as two words and hands
+  over the address of the first, `write_all`'s lines, and `greet`'s module compiled after them
+  with `write_all` as its one outside function. The text is known byte for byte in a memory
+  that holds the two words (`models/x86/bytes.shard` `held_bytes`).
+- The theorem (`x86/greet_run.shard` `greet_file_ends`): started with its stack anywhere and
+  on EVERY list of the kernel's answers, the file ends as `greet`'s value on the World a
+  process starts with says (`models/x86/world.shard` `world_res`) — the text written and
+  status 0; status 74 and the bytes taken before a failed write; or ended by the kernel.
 
 ## A function as a module
 
@@ -189,7 +226,10 @@ the owner.
 
 | file | what it holds |
 |---|---|
-| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load of a word, a load of a byte), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), the run by a fuel (`irun`), a function's answer (`fn_ans`). No proof: the pass reads this file |
+| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load of a word, a load of a byte), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), the run by a fuel (`irun`), a function's answer (`fn_ans`); and the run with what is outside a process (`wrun`, `wfn_ans`), in which an external's answer is an outcome. No proof: the pass reads this file |
+| `ir_world.shard` | the laws of the run with what is outside a process (`wrun`): what such a run of a statement says of its parts and a run from its parts; that a run of `irun` is one of these, the outside left as it was (`wrun_of_irun`); that a run with an outcome has it on any fuel above (`wrun_more`); and the rules of `wends` a tie uses: a return, a local set, a call of an outside function that returns and one in which the process ends |
+| `put.shard` | the platform's `write_all` as a function outside a module: its answer on what is outside the process (`put_out`, `put_ext`), that answer as the platform's function on a World (`put_all`, `put_fail`, `put_kill`), and the rule that ties a function that writes to its code (`tie_put`, `tie_ret`) |
+| `greet_src.shard`, `greet_ir.shard` | a program that writes: its meaning on a World, and its intermediate code — one function that calls `write_all` twice — with its tie and how its file ends by the kernel's answers (`greet_res`) |
 | `ir_laws.shard` | the machine's laws: what a run of a statement says of its parts (`irun_let_inv` and its like), a run of a statement from its parts, that a run given more fuel answers the same (`irun_more`), and a rule of `iends` for each statement form a proof above the pass uses: a return, a local set, a branch each way, a tail call, a store (`iends_store`), a call that returns (`iends_call`), whose two runs — the callee's and what follows — are brought to one fuel, and a call of an outside function (`iends_call_ext`), by that function's answer |
 | `lo.shard` | what a low form is written with: a read with its evidence (`rd64`), a write with its evidence (`wr64`), a buffer in the ranges (`buf_ok`), the evidence at an index (`at8_ok`), a read's word against a list held in memory (`rd_word`); and an answer given where evidence exists (`ans_on`), by which a low form is the answer of a function called from outside |
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
@@ -205,17 +245,19 @@ the owner.
 | `sqdiff/`, `gap/` | the modules of the two callers. Each view: the signature `F_lo`, the laws `F_lo_means` and `F_tie` — the tie with any outside functions whose function 0 answers as the callee's low form —, the module's outside functions by their answers (`F_ext`), and `F_prog_tie`, `F_ans_tie`, `F_answer` from the laws. Each implementation (`F/F.shard`) has the callee's view and no more of the callee |
 | `addto/` | the module of the function that writes. `mod.req.shard`, the view: the signature `addto_lo`, the laws `addto_lo_means`, `addto_lo_keeps` and `addto_prog_tie`, and `addto_ans_tie` from the last. Behind it: `low.shard` the loop with its two cases, `mean.shard` the loop against the meaning and what the loop leaves alone, `tie.shard` the loop's code against the loop, `addto.shard` the low form and the three laws' proofs |
 | `both/`, `total/` | the modules of the two callers above it. Each view: the signature `F_lo` with the evidence `addto` asks for, the laws `F_lo_means`, `F_lo_keeps` and `F_tie` — the tie with any outside functions whose function 0 answers as the writing callee's low form and function 1 as `dot`'s —, and `F_ext`, `F_prog_tie`, `F_ans_tie` from them; `total`'s also `total_answer` and the sample |
-| `x86/seam.shard` | the statement at a seam: `(realizes tbl clo chi entry k rs ans)` — the code at `entry`, called by the convention (arguments in rdi rsi rdx rcx r8 r9, the result in rax, rbx rbp r12–r15 kept) with room for `k` words of stack, returns what the answer `ans` says on any memory the machine's agrees with on the data ranges `rs`, leaves those ranges as the answer's memory has them and every other byte outside the `k` words as it was |
+| `x86/seam.shard` | the statement at a seam: `(realizes tbl clo chi entry k rs ans)` — the code at `entry`, called by the convention (arguments in rdi rsi rdx rcx r8 r9, the result in rax, rbx rbp r12–r15 kept) with room for `k` words of stack, returns what the answer `ans` says on any memory the machine's agrees with on the data ranges `rs`, leaves those ranges as the answer's memory has them and every other byte outside the `k` words as it was, and what is outside the process as it was. `(wrealizes …)` is the same of an answer given on the outside as well: the code arrives at the answer's outcome (`arrives`), a return with the outside as the code left it or the process's end. Both say where the run comes to (`models/x86/laws.shard` `comes`); an answer that names nothing outside is one that does (`lift_ans`, `realizes_lift`) |
 | `x86/seam_laws.shard` | laws of the statement that name no pass: memories that agree on a range or on the data ranges, and a list that stands in one standing in the other (`holds_agree`); a table still in place after code that kept memory has returned (`kept_code`); code that realizes an answer realizes every answer that says no more (`realizes_sub`), in every table that has its rows (`realizes_part`) |
 | `x86/dot_hand.shard` | the hand-written `dot` at the seam, a consumer of `dot`'s view: from the author's contract, given the lists read out of the machine's memory, and the view's first fact on the answer's memory, `dot_hand_realizes` |
 | `x86/pass.shard` | the pass, `(compile xs p base)`: a module's functions to instructions from the address `base`, given each outside callee's entry and stack need; it answers the listing and each function's entry and need. Each of a function's first six locals lives in a register a callee keeps, a local past the sixth in a word of the function's frame (`ld_loc`, `st_loc`; made on entry by `slots_in`, given back by `slots_out`); a function takes at most six arguments; an expression is evaluated on a stack of nine temporary registers; a tail call is a jump |
 | `x86/lists.shard` `code.shard` `mem.shard` `regs.shard` `inv.shard` | what the proof stands on: lists of words; a listing in place in a table (`placed`, and `placedb`, the same as a decision) and each instruction's rule for a table; memories and a frame's description across a callee's return and across a store; the registers of locals and temporaries, and a function's locals in a state (`locs`: the first six in their registers, the rest words of the frame); what the pass's answer for a statement says of its parts |
 | `x86/expr.shard` `entry.shard` `stmt.shard` `stmt_store.shard` `call.shard` `stmt_call.shard` `stmt_if.shard` `tail.shard` | the proof by cases: an expression (`cexp_all`), into a function and out of it (the six pushes, the frame's locals made and given back, the six pops), a local set from rax in its register or its word of the frame (`set_loc`) and a return, a store, the law of a call and a call as a statement, a branch, a tail call |
-| `x86/function.shard` `module.shard` | the statement for every statement (`sim_all`), a compiled function (`cfn_ok`), the module's theorem (`module_realizes`), and what a list of one outside function, and of two, has at an index (`pair_at_one`, `pair_at_two`) |
+| `x86/function.shard` `module.shard` | the statement for every statement (`sim_all`), a compiled function (`cfn_ok`), the module's theorem for runs with the outside (`wmodule_realizes`) and from it the one for answers that name nothing outside (`module_realizes`, by `lift_ext` and `unlift_fn`), and what a list of one outside function, and of two, has at an index (`pair_at_one`, `pair_at_two`) |
+| `x86/put.shard` | `write_all`'s code at the seam: two moves and the model's loop, and that it realizes the function's answer in any table that has its sixteen instructions (`put_realizes`) |
 | `x86/startup.shard` | a file's start-up as data: the words `data` it pushes, the last first, and at most six arguments (`Arg`), each a word or the address of one of the data's words, taken from the stack pointer when the start-up runs; then a call, and exit with the low byte of rax. The listing (`start_listing`) and the table its instructions lay out to (`start_table`), what the start-up hands the function it calls (`start_base`, `start_rs`, `arg_words`), the sample the tree's files share — two buffers of three words and their count —, and a compiled listing as lines with a label at one entry. No proof: a file's writer reads this file |
-| `x86/link.shard` | `start_exits_top`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer over a range from the data's first word to any address of the stack's range, the file exits as the answer says, the answer asked on a memory that is the start's from the stack pointer up (`first_above`: the image lies below the stack; the start-up pushes below the stack pointer); `start_exits`, its corollary for the data's range alone. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`, `holds_mid`: a memory that holds the data holds each stretch of it. For every start `stack_ok` allows: the stack's range and the stack pointer are unknowns. `link_exits`: the theorem for the sample |
+| `x86/link.shard` | `start_exits_top`: for any data and any arguments, the start-up followed by any lines, where the function called realizes an answer over a range from the data's first word to any address of the stack's range, the file exits as the answer says, the answer asked on a memory that is the start's from the stack pointer up (`first_above`: the image lies below the stack; the start-up pushes below the stack pointer); `start_exits`, its corollary for the data's range alone. By induction on the data (`pushes_run`) and on the arguments (`args_run`), over a table known from an address on (`tail_at`). `holds_app`, `holds_mid`: a memory that holds the data holds each stretch of it. For every start `stack_ok` allows: the stack's range and the stack pointer are unknowns. `link_exits`: the theorem for the sample. `start_ends_top` and `start_ends` are the theorems for a function whose answer is an outcome — the file ends as the outcome says —, proven first; the three above are their corollaries for an answer that names nothing outside |
 | `x86/calls_file.shard` `calls_run.shard` `calls_main.shard` | the first program compiled and its file; the module's theorem met by it and the theorem that the file exits with 22; the file written |
 | `x86/argsum_file.shard` `argsum_run.shard` `argsum_main.shard` | `argsum` compiled after a start-up that pushes nothing and hands over the stack pointer's address, and its file; the module's theorem met by it and the theorem that the file exits with `argsum` of any arguments; the file written, and the evaluator's status for lists of arguments |
+| `x86/greet_file.shard` `greet_run.shard` `greet_main.shard` | `greet` compiled after `write_all`'s lines, and its file; `write_all`'s theorem and the module's met by it, the text known in the memory the start-up leaves, and the theorem that the file ends as `greet` says for every list of answers; the file written, and the theorem's right side printed for lists of answers |
 | `x86/calls_cases_main.shard` | a module run one call at a time — the first program's, or `wide_ir.shard`'s —: a file of six first instructions for a function of two parameters on two given words, and the word the intermediate machine's run returns, for a test to compare |
 | `x86/dot_file.shard` `dot_run.shard` `dot_main.shard` | `dot` compiled and its file; the two theorems above; the file written |
 | `x86/sqdiff_hand_file.shard` `sqdiff_hand_run.shard` `sqdiff_hand_main.shard` | `sqdiff` compiled after the hand-written `dot`, and that file (names `sqh_`); the outside function's fact, the module's theorem met and the theorem that the file exits with 27; the file written |
@@ -237,16 +279,25 @@ rows at their addresses. By the first, code proven against one form of its answe
 intermediate code, a contract over lists — stands for a caller that runs with another; by the
 second, a proof over a function's own rows holds in any file that has them.
 
-`module_realizes` (`x86/module.shard`): if `(compile xs p base)` answers a listing and that
+`wmodule_realizes` (`x86/module.shard`): if `(compile xs p base)` answers a listing and that
 listing stands in a table (`placed`), and each outside callee realizes its answer at the entry
-and with the need `xs` gives, then every function of `p` realizes its own answer — `fn_ans`, the
-run of its intermediate code — at the entry and with the need the pass answered. It covers every
+and with the need `xs` gives, then every function of `p` realizes its own answer — `wfn_ans`,
+the run of its intermediate code with what is outside the process — at the entry and with the
+need the pass answered. The proof is one, over `wrun`: the law of a call is by the callee's
+outcome, a return or the process's end. `module_realizes` is its corollary for code that calls
+nothing outside (`fn_ans`, the run by `irun`), and its statement is as it was. It covers every
 form the pass accepts and nothing else: the pass refuses what it does not compile (a seventh
 parameter, an expression deeper than the temporaries, a comparison other than unsigned below and not
 below, a call's argument that is not a constant or a local, a call of itself that is not a tail
 call).
 
-`start_exits_top` (`x86/link.shard`): for the listing of any start-up — any data, any arguments —
+`start_ends_top` (`x86/link.shard`) is the link for a function whose answer is an outcome: the
+file ends as the outcome says (`models/x86/linux.shard` `exit_of`) — the function returned,
+and the start-up exits with its word's low byte, the process having written what it then had;
+or the process ended in the function. `start_ends` is that for the data's range alone, and
+`start_exits_top` its corollary for an answer that names nothing outside:
+
+`start_exits_top`: for the listing of any start-up — any data, any arguments —
 with any lines after it, assembled, where the function the start-up calls realizes an answer
 over the range from the data's first word to an address `top` of the stack's range, and that
 answer has a value on the arguments' words in any memory that holds the data and is the start's
@@ -266,7 +317,8 @@ at these addresses, the code ends at or below the table's end — are closed com
 `decide`): ten in `x86/dot_file.shard`, the same ten in `x86/calls_file.shard`, in each of `sqdiff`'s two files those and one more —
 that the hand-written rows are rows of the file's table, or that the second module's listing
 stands in it —, in `x86/gap_file.shard` those for two compiled modules and the rows, and in
-`x86/total_file.shard` those for three and the rows.
+`x86/total_file.shard` those for three and the rows; in `x86/greet_file.shard` those for the
+module, that `write_all`'s code stands in the table, and that the table ends below 2^47.
 
 ## Not here
 
@@ -289,16 +341,26 @@ stands in it —, in `x86/gap_file.shard` those for two compiled modules and the
   the evaluator does not run a caller's intermediate code against it;
 - a file of the tree with data other than the sample's: the function each of seven files
   enters takes the sample's three words, so the first program's entry takes two addresses it
-  does not use; a file whose data is not pushed by its start-up, a host call, a declared
-  failure;
-- a file's facts stated once for any module: each of the six files states its own;
+  does not use; a file whose data is not pushed by its start-up;
+- of what is outside a process: a function that reads, a descriptor other than the standard
+  output, a declared failure other than a failed write's, a call of the evaluator's host
+  (`v3/std/host.shard`); a module behind a view whose answer is an outcome — the views state
+  answers that name nothing outside; a rule of `wends` for a branch, a tail call and a call of
+  a function of the program — no tie here uses one; and a tool that writes a tie: `greet`'s
+  intermediate code and its tie are by hand, and the World its meaning takes is a parameter no
+  code holds, which nothing in the language marks;
+- a file's facts stated once for any module: each of the eight files states its own;
 - one statement of the answer of a low form called from outside, for any signature: `two.shard`
   and `upd.shard` state it for a signature each;
 - the first program as a module behind a view: its six functions are plain files.
 
 ## Tests
 
-Thirteen entrypoints of the suite, in `v3/kernel/test/`: `compile_argsum_test.sh` (the program
+Fourteen entrypoints of the suite, in `v3/kernel/test/`: `compile_greet_test.sh` (the program
+that writes: the chain accepted to the theorem for every list of the kernel's answers, that
+theorem's right side against the model's run on twelve lists, and the processor's runs — the
+text, a failed write's status, the process ended at a pipe nobody reads);
+`compile_argsum_test.sh` (the program
 of its arguments: the chain accepted to the theorem for every list of them) and
 `compile_argsum_file_test.sh` (its file run with seven lists of arguments by the model and the
 processor); `compile_pass_test.sh` (the machine's
@@ -312,7 +374,7 @@ same for the function that writes, its two callers and their file), `compile_cal
 `compile_sqdiff_comp_file_test.sh`, `compile_gap_file_test.sh` and
 `compile_total_file_test.sh` (each file run by the model and the processor), `compile_calls_cases_test.sh` (eight calls of the first program's
 functions compared between the intermediate machine, the model and the processor). Natively
-each takes under two minutes:
+each takes under two minutes, `compile_greet_test.sh` about five:
 
 ```sh
 EVAL=v3/bin/eval v3/kernel/test/compile_modules_test.sh

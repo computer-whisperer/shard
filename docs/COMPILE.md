@@ -109,7 +109,7 @@ linking: code that calls a function may be joined with anything the callee is re
 |---|---|---|
 | the logic | a function | a `fn`'s definition |
 | shard run | a program as data (`kernel/prog.shard`) under `ev.shard`, each host call answered from the input | `ev`'s machine is a definition, by its fuel (`ev_term`); the loop over host calls is not written as one: the toolchain's own (`run_loop`) asks the host and stays a program (`OPEN.md` §2) |
-| x86-64 under Linux | the bytes of an executable file, run on the answers the kernel gives its calls | `v3/models/x86`, begun: sixteen instructions, laws for them, what a kernel leaves at a process's stack pointer — its arguments —, the system call `write` under every answer a kernel may give it and a file by hand proven to write as those answers decide, three contracts of code written by hand and one file proven by them to exit as its functions compute; four files of compiled code proven so, one of them with hand-written code that the compiled code calls (§5) |
+| x86-64 under Linux | the bytes of an executable file, run on the answers the kernel gives its calls | `v3/models/x86`, begun: sixteen instructions, laws for them, what a kernel leaves at a process's stack pointer — its arguments —, the system call `write` under every answer a kernel may give it and a file by hand proven to write as those answers decide, three contracts of code written by hand and one file proven by them to exit as its functions compute; files of compiled code proven so, among them ones with hand-written code that the compiled code calls (§5), and a file of compiled code that writes, proven to end as its program's value on a World says (§6) |
 | others | a shader language, another processor | when a consumer comes; its floor may be a stated model above the bytes |
 
 No general form of a machine is designed before a second, different machine exists.
@@ -307,9 +307,13 @@ Only the two ends are fixed. The chain between them is assembled from facts: def
 (the erasure, believed today) → passes → instructions → bytes.
 
 §5's chain for one function starts at its definition and passes through no program and no
-erasure. It reaches a function that returns; a host call and a declared failure are not in its
-form yet. How this section's fact, which names `main`'s program, is assembled from §5's is open
-(§8).
+erasure. It reaches a function that returns, and one function that writes: `greet`
+(`v3/compile/greet_src.shard`), a function on a World whose file is proven to end as its value
+on the World a process starts with says, for every list of the kernel's answers — the text
+written and status 0, or a failed write's reserved status with the bytes taken before it, or
+the process ended by the kernel. The host call there is the platform's `write_all`, an
+ordinary function on the World and no extern (`LAW.md` §3, 10). How this section's fact, which
+names `main`'s program and the evaluator's host calls, is assembled from §5's is open (§8).
 
 ## 7. Trust, before and after
 
@@ -363,16 +367,20 @@ undischarged.
 
 Open on purpose: how integers of any size, constructors and reclaimed memory are represented
 (§4's form of low-level code does not reach them); the calling convention and the linking rule's
-exact form; events and their prefixes at the Linux boundary above the machine's model — the model has a process's writes and the kernel's answers to them (§4's table), no host call is tied to them —; registers; floats; a second target;
+exact form; events and their prefixes at the Linux boundary above the machine's model — the model has a process's writes and the kernel's answers to them (§4's table), and the platform's `write_all` is tied to them; no call of the evaluator's host is —; registers; floats; a second target;
 how results are stored and reused between builds; names and directories.
 
 Open in §5's form, each found by the trial or by the review before it:
 
-- an outcome other than a return: a declared failure, a host call with the World in the state.
-  The first code that has one is by hand: `models/x86/write.shard` `write_all` returns, or exits
-  with a failed write's status, or the kernel ends the process; its contract says which by the
-  kernel's answers. The intermediate machine, the pass's theorem and the link know a return
-  only;
+- an outcome other than a return is in the form for one platform function: the intermediate
+  machine's run with what is outside a process, the pass's theorem and the link have a call's
+  outcome — a return, or the process's end — and `write_all` is the one function with an
+  answer on the outside (`v3/compile/README.md`, "A program that writes"). Not in the form: a
+  function that reads; a file other than the standard output; a World a program splits or
+  hands to a second thread of control; an outcome at a seam of a function behind a view —
+  the views state answers that name nothing outside; and how a definition's World parameter,
+  which no code holds, is dropped by a tool: the tie is by hand and nothing in the language
+  marks such a parameter;
 - a stack need that depends on the arguments — recursion that is not a tail call;
 - what crosses a seam for a type: how memory holds a value of it, its size, the ranges it stands
   in. A low form that follows pointers takes two parameters that no code holds — the list a chain

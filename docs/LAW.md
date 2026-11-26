@@ -54,8 +54,13 @@ to is `COMPILE.md`.
    within a budget; past the budget is a refusal.
 9. Proofs and types are erased. Nothing that exists only by a non-constructive choice becomes a
    run-time value.
-10. Effects go through the World. Each World value is used at most once on every path. What a host
-    call does is stated as axioms, and a binary's contract names the axioms it trusts.
+10. Effects go through the World. Each World value is used at most once on every path. A World is
+    one caller's conversation with the outside — the answers it will still be given, and what it
+    has done — and never the state of a kernel. What a call of the platform does is an ordinary
+    function on a World, with no axiom (`v3/std/world.shard`), and a compiled binary's theorem
+    is for every list of answers (ruling 29). The toolchain's own programs still call six
+    externs that have no definition (`v3/std/host.shard`): what such a call does is stated as
+    axioms, and a binary's contract names the axioms it trusts.
 11. The evaluator defines what "run" means. Every other way of running is compared with it.
 24. What runs is written. A program is fixed by the source text and the types its binders state:
     elaboration fills in types and proofs, never an argument that exists at run time. A program
@@ -395,6 +400,37 @@ admitted that the logic does not derive.
     an input of a run, the status 74, a file written by hand as the one that writes — was not
     put to the owner: `DECISIONS.md`, "Programs and the back end", output. How a COMPILED
     function writes is not ruled and not built.)
+29. *What a call of the platform means; threads.* The report of ruling 28 asked how a compiled
+    function should write, and offered beside "compiled code has outcomes other than a return"
+    a buffer written out when the function has returned. The owner: "Correct me if I
+    misunderstand, but if your question is how to bind the results of kernel syscall actions to
+    logical results, then we had a method to answer that previously. The kernel interface is
+    part of the system we have a model for, and we can evaluate that the modelled kernel plus
+    the program we are testing does what we expect. I am a bit confused for what this write
+    loop does -- is it just a precompiled snippet of x86 you proved behaves coherently, rather
+    than bundling that into an api function you prove about?" (The method is the design of
+    2026-07-09, made for the tree before this one: a kernel model written in shard, the
+    kernel's answers read from the world, the routines that make system calls proven like any
+    code. The buffer was withdrawn.) Then put to them: "what is its meaning stated on? … 1. An
+    ordinary shard function on the modelled world (my lean). The world holds the answers still
+    to come, the bytes written so far, and whether the process has ended. "What we expect" is
+    then `main` evaluated on that world, and the binary's theorem says its run ends exactly so,
+    for every list of answers. There is no axiom. The cost is that law 10's sentence changes,
+    and the toolchain's own programs keep the old calls until the evaluator can run the new one
+    against a real kernel. 2. Keep `write` undefined and state axioms about it." The owner
+    first: "I do want to make sure we have a path in mind for multi-threaded kernel access
+    eventually. Binding everything to World is convenient for proofs, but what happens to tasks
+    where that becomes less practical." Answered with a path that rests on one choice — a
+    World is one caller's conversation with the outside, the answers it will still get and
+    what it has done, and never the kernel's state — and with the note that the design of
+    2026-07-09 had ruled threads that share memory "OUT permanently". The owner: "Agreed.
+    Let's withdraw that "OUT permanently" ruling and proceed with 1 in the previous message."
+    (Withdrawn is the word "permanently": nothing for threads is built or designed past that
+    answer, which is a conjecture. "1 in the previous message" is read as the first option of
+    the question quoted here — the message before the last — which the last message's first
+    step, "one thread, one conversation", agrees with. That the World is in no compiled code,
+    a parameter only a proof has, was named to the owner as a dependency and answered by the
+    same "Agreed"; nothing in the language marks such a parameter.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

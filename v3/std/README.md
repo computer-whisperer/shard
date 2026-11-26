@@ -15,6 +15,7 @@ comparison is the proposition `(<= a b)`; `/` and `%` at `Int` are the Euclidean
 | `derive.shard` | `std.derive` | equality, ordering and rendering for the basic types | `derive_test.sh` |
 | `fresh.shard` | `std.fresh` | a supply of fresh names | `define_test.sh` |
 | `host.shard` | `std.host` | the `World` and the host calls | `define_test.sh`, `bin_test.sh` |
+| `world.shard` | `std.world` | a program's World as a value, and the platform's `write_all` as a function on it | `compile_greet_test.sh` |
 | `map.shard` | `std.map` | a finite map over `Nat` keys | `std_test.sh`, `x86_test.sh` |
 | `mem.shard` | `std.mem` | a byte memory | `std_test.sh`, `x86_test.sh`, `plain_test.sh` |
 | `facts.shard` | `std.facts` | division, shift and bitwise facts | `std_test.sh` |
@@ -107,6 +108,25 @@ supply's prefix and an index. `Fresh.next_ne` proves that two successive names o
 
 A host call has no body in the logic: it is an opaque constant, and what a program's theorems may
 assume of it is stated as axioms in the program's contract (`v3/examples/calc/calc_bin.shard`).
+
+## `world.shard`
+
+A second `World`, and not the first's: the token above is what the evaluator's host calls
+thread, and those calls are externs with no definition. `std.world`'s `World` is a value — one
+caller's conversation with the outside: the answers it will still be given to its offers of
+bytes (`How`: it took some, it failed, it ended the process), the bytes it has written, and
+whether its process still runs (`Life`) — and the platform's function is an ordinary function
+on it:
+
+| function | what it is |
+|---|---|
+| `write_all` | `((bs (List Nat)) (w World)) World`: all of the bytes written, however few an answer takes at a time; the bytes taken before a failure, and the process stopped; those taken before the outside ended it; nothing in a process that has stopped |
+| `put` | offering bytes until all are taken, by the answers alone |
+
+A program on this World computes for any list of answers, and a theorem about it is for every
+list. A compiled program's file is proven to end as its value on the World a process starts
+with says (`v3/compile/README.md`, "A program that writes"). No file opens both modules: the
+two types share a name.
 
 ## `map.shard` and `mem.shard`
 
