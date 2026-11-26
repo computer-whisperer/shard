@@ -1726,19 +1726,44 @@ total `ENGINE: solved S of N`.
 The default producer is the *engine* (`v3/kernel/engine.shard`). It tries the following, cheapest
 first, and confirms every step by running it:
 
-1. `intro` over every leading binder (named after the binder, else `h1`, `h2`, …), then the rest;
+1. `intro` over every leading binder (named after the binder, else `h1`, `h2`, …; a name an
+   earlier binder of the same statement took gets its binder's number, `h_7`), then the rest;
 2. `rfl`; then `(reduce)` and `rfl`; then `decide`;
 3. `(arith only FACT… (farkas K…))` over the context's comparisons and the hinted lemmas, the
-   certificate written out;
-4. `(simp_only RULE…)` over the equations of the functions in the target, the context's equations
-   (an induction hypothesis among them) and the hinted lemmas, then `rfl` or step 3;
-5. `(induction X (…))` on the hinted local, then on each local of an inductive type that the
-   target mentions, every arm by this same list; inductions nest two deep.
+   certificate written out — a denied equation (`x ≠ k`) is no fact;
+4. `(simp_only RULE…)` over the equations of the functions in the target, Init's equations of
+   `List.length` where the target has it, the context's equations (an induction hypothesis
+   among them) and the hinted lemmas, then `rfl` or step 3; where neither closes what is left,
+   once more with the rules read from what is left;
+5. the steps of a *descent*, each premise by this same list — where the target is a `Prod.Lex`
+   (a measure in several parts) `(apply Prod.Lex.right …)`, `.left`, `.right'` in turn; where
+   it compares two `Int.natAbs`, `(apply Int.natAbs_lt_natAbs_of_nonneg_of_lt …)`; where it has
+   a `Nat.sub`, `(apply Nat.sub_lt …)`; where it weighs or adds `Int.natAbs` terms, a `(have
+   abs_K …)` for each fact that holds between two of them, or of one over a numeral, and then
+   steps 2 to 4 with the facts in the context;
+6. `(induction X (…))` on the hinted local, then on each local of an inductive type that the
+   target mentions, every arm by this same list; inductions nest two deep, and a descent's
+   steps take two levels more.
 
-It emits no `cases`, `have`, `rw`, `unfold`, `apply`, `exact` or `wf`. The hints are `(induct X)`,
-`(lemmas NAME…)` and `(budget N)`, the number of steps it may try, 400 by default; any other hint
-is `auto_unsolved`. Over the 100 theorems of v3/examples/calc the engine closes 54 unaided
-(v3/kernel/test/engine_calc.txt).
+It emits no `cases`, `rw`, `unfold`, `exact` or `wf`. The lemmas of Init that steps 4 and 5 name
+are asked of Init for every file under `prove`, whether or not its source names them; a block
+cites one only where it is used, and a build fetches it then as it fetches whatever a sidecar's
+block cites. The hints are `(induct X)`, `(lemmas NAME…)` and `(budget N)`, the number of steps
+it may try, 400 by default; any other hint is `auto_unsolved`.
+
+What it reaches, measured by `prove --measure` (every hand-written proof's statement given to
+the engine unaided): 54 of the 100 theorems of v3/examples/calc (v3/kernel/test/engine_calc.txt);
+and of the descent obligations (`F.dec_N`) in the closures of three of the toolchain's files —
+
+| closure of | obligations | engine version 1 | version 2 |
+|---|---|---|---|
+| `v3/kernel/ev.shard` | 147 | 68 | 140 |
+| `v3/kernel/expr.shard` | 43 | 14 | 35 |
+| `v3/kernel/json.shard` | 20 | 3 | 18 |
+
+So an obligation of a measure is as a rule left to it: `(fulfills F.dec_N auto)`, then `prove`.
+Those it misses need a fact of the program's own (a lemma about a helper's result), a case
+split, or a `reduce` before the step.
 
 ### A tactic library
 

@@ -6,9 +6,13 @@
 ;;; `rfl`; `decide`; `(arith only FACT…)` over the context's comparisons and the lemmas
 ;;; given, the certificate written as `arith` found it; `(simp_only EQN…)` over the
 ;;; equations of the functions in the target, the context's equations (an induction
-;;; hypothesis among them) and the lemmas, then `rfl` or `arith`; `induction` on the
-;;; hinted local, then on each local of an inductive type in turn, each arm by the same
-;;; ladder one level down. Hints accelerate and add no language: `(induct X)`,
+;;; hypothesis among them), the equations Init states of its own functions (`init_equations`)
+;;; and the lemmas, then `rfl` or `arith`; the steps of a DESCENT — where the target is a
+;;; `Prod.Lex`, a measure in several parts, `(apply Prod.Lex.right …)`, `.left`, `.right'` in
+;;; turn; where it compares two `Int.natAbs`, the one lemma of Init that does; where it weighs
+;;; or adds them, the facts about them as `have`s and then the comparison —, each premise
+;;; by the same ladder; `induction` on the hinted local, then on each local of an inductive
+;;; type in turn, each arm by the same ladder one level down. Hints accelerate and add no language: `(induct X)`,
 ;;; `(lemmas NAME…)`, `(budget N)`. A failed attempt leaves nothing: the elaborator's state
 ;;; is a value and the attempt's is dropped. The budget counts steps tried.
 ;;;
@@ -47,7 +51,7 @@
 (use kernel.tactic.FactsRes)
 
 ;; the engine's version: printed in prove.shard's first line and in a sidecar's header comment
-(fn engine_version () Int 1)
+(fn engine_version () Int 2)
 
 ;; ---- hints ---------------------------------------------------------------------------------
 ;; (induct X), (lemmas NAME…), (budget N); anything else is refused by the reader of the hints
@@ -95,7 +99,7 @@
     ((HintsOk h)
      (match (el_fresh e (n1 (sym "goal")) stmt (sym "goal"))
        ((Prod.mk e1 (MVar _ i))
-        (match (eng_solve e1 (Goal i stmt nctx) h (hints_budget h) 3)
+        (match (eng_solve e1 (Goal i stmt nctx) h (hints_budget h) 5)
           ((EngOk _ nodes _) (Produced nodes))
           ((EngNo _ m) (NotProduced m))))
        ((Prod.mk _ _) (NotProduced (utf8 "no metavariable")))))))
@@ -117,7 +121,7 @@
         ((EngNo b1 _)
          (match (eng_simp_close e g h b1)
            ((EngOk e1 nodes b) (EngOk e1 nodes b))
-           ((EngNo b2 _) (eng_induct e g h b2 (- depth 1)))))))))))
+           ((EngNo b2 _) (eng_descent e g h b2 (- depth 1)))))))))))
 
 ;; intro: every leading binder of the target, named after the binder or h1, h2, … where it
 ;; has no name a source can write: none, a number, or a wildcard's (`_ wildcard`, elab.shard
@@ -135,8 +139,15 @@
 (fn pi_names ((e El) (t Expr) (k Int) (acc (List Name))) (List Name)
   (measure (struct t))
   (match t
-    ((Pi _ n _ _ body) (pi_names e body (+ k 1) (cons (binder_name n k) acc)))
+    ((Pi _ n _ _ body) (pi_names e body (+ k 1) (cons (unlike (binder_name n k) acc k) acc)))
     (_ (rev acc))))
+;; a name no earlier binder of the same intro took — the name with its binder's number where
+;; one did: two hypotheses a statement both calls `h` are two facts, and a later step cites
+;; each by its own name
+(fn unlike ((n Name) (taken (List Name)) (k Int)) Name
+  (if (mem_name n taken)
+    (n1 (sym_of_chars (append (show_name n) (append (utf8 "_") (show_nat (+ k 1))))))
+    n))
 (fn binder_name ((n Name) (k Int)) Name
   (match n
     ((Str Anon s)
@@ -196,11 +207,14 @@
             (match (ar_prove e2 (el_zonk e2 target) nil fs nil)
               ((ARErr _ m _ _) (EngNo (- budget 1) m))
               ((AROk _ _ certs) (eng_try_close e g (NArith true facts certs) (- budget 1)))))))))))))
-;; a local's type under a test: a comparison, an equation, an inductive type
+;; a local's type under a test: a comparison, an equation, an inductive type. A comparison is
+;; one arithmetic can weigh: an equation denied (`x ≠ k`) is none, and given as a fact it
+;; fails the step
 (fn ctx_test ((e El) (kind Symbol) (ty Expr)) Bool
   (if (sym_eq kind (sym "cmp"))
     (match (ar_rel (sp_canon ty))
       ((ARNone) false)
+      ((ARel op _ denied _ _) (bool_not (bool_and denied (sym_eq op (sym "eq")))))
       (_ true))
   (if (sym_eq kind (sym "eq"))
     (match (eq_sides (pi_result ty))
@@ -226,28 +240,44 @@
 ;; simp_only over the equations of the functions in the target, the context's equations and
 ;; the lemmas, then rfl or arith on what is left; nothing to rewrite with is nothing tried
 (fn eng_simp_close ((e El) (g Goal) (h Hints) (budget Int)) EngRes
-  (if (< budget 1) (EngNo budget (utf8 "budget"))
+  (match (eng_simp_once e g h budget)
+    ((SimpDone e1 ns b) (EngOk e1 ns b))
+    ((SimpNo b m) (EngNo b m))
+    ;; what is left does not close: one more round, its rules read from what is left — a
+    ;; rewrite by a size's equation brings in the sizes of the parts, whose equations the first
+    ;; target did not name
+    ((SimpLeft e1 g1 nd b)
+     (match (eng_simp_once e1 g1 h b)
+       ((SimpDone e2 ns b2) (EngOk e2 (cons nd ns) b2))
+       ((SimpLeft _ _ _ b2) (EngNo b2 (utf8 "the rewrite leaves a goal nothing closes")))
+       ((SimpNo b2 m) (EngNo b2 m))))))
+;; one round: closed, with its steps; or rewritten and not closed — the state, the goal left,
+;; the rewrite's step; or nothing
+(type SimpRes (SimpDone El (List Node) Int) (SimpLeft El Goal Node Int) (SimpNo Int (List Int)))
+(fn eng_simp_once ((e El) (g Goal) (h Hints) (budget Int)) SimpRes
+  (if (< budget 1) (SimpNo budget (utf8 "budget"))
   (match (tac_open e g)
     ((Opened e1 ctx target)
      (let
        ((rules
           (append (fn_equations e1 (names_dedup (expr_consts (el_zonk e1 target)) nil) nil)
-            (append (ctx_facts e1 ctx (sym "eq") nil) (hints_lemmas h)))))
+            (append (init_equations e1 (names_dedup (expr_consts (el_zonk e1 target)) nil) nil)
+              (append (ctx_facts e1 ctx (sym "eq") nil) (hints_lemmas h))))))
        (match rules
-         (nil (EngNo budget (utf8 "no rule")))
+         (nil (SimpNo budget (utf8 "no rule")))
          (_
            (let ((nd (NSimp (as_rules rules nil))))
              (match (tac_step e g nd)
                ((StepOk e2 filling nil nil (some g1))
                 (let ((e3 (el_set_mc e2 (mc_set (el_mc e2) (goal_id g) filling))))
                   (match (eng_try_close e3 g1 (NRfl) (- budget 1))
-                    ((EngOk e4 ns b) (EngOk e4 (cons nd ns) b))
+                    ((EngOk e4 ns b) (SimpDone e4 (cons nd ns) b))
                     ((EngNo b1 _)
                      (match (eng_arith e3 g1 h b1)
-                       ((EngOk e4 ns b) (EngOk e4 (cons nd ns) b))
-                       ((EngNo b2 m) (EngNo b2 m)))))))
-               ((StepOk _ _ _ _ _) (EngNo (- budget 1) (utf8 "the step left goals")))
-               ((StepErr _ m) (EngNo (- budget 1) m)))))))))))
+                       ((EngOk e4 ns b) (SimpDone e4 (cons nd ns) b))
+                       ((EngNo b2 _) (SimpLeft e3 g1 nd b2)))))))
+               ((StepOk _ _ _ _ _) (SimpNo (- budget 1) (utf8 "the step left goals")))
+               ((StepErr _ m) (SimpNo (- budget 1) m)))))))))))
 (fn as_rules ((ss (List SExpr)) (acc (List (Prod Bool SExpr)))) (List (Prod Bool SExpr))
   (measure (struct ss))
   (match ss
@@ -302,12 +332,262 @@
       (drop (len pre) full)
       full)))
 
+;; ---- the engine's lemmas of Init --------------------------------------------------------------
+;; The constants of Init the engine may cite though no source names them. Under prove's modes
+;; the loader asks Init for them with every file's own demand (loader.shard init_demand); a
+;; block cites one only where it is used, and a build fetches it then as it fetches whatever a
+;; sidecar's block cites.
+(fn eng_kit () (List Name)
+  (list (eng_natabs_lt) (eng_sub_lt) (n2 (sym "List") (sym "length_cons"))
+    (n2 (sym "List") (sym "length_nil"))
+    (eng_lex (sym "left"))
+    (eng_lex (sym "right"))
+    (eng_lex (sym "right'"))))
+(fn eng_natabs_lt () Name (n2 (sym "Int") (sym "natAbs_lt_natAbs_of_nonneg_of_lt")))
+(fn eng_sub_lt () Name (n2 (sym "Nat") (sym "sub_lt")))
+(fn eng_lex ((s Symbol)) Name (Str (n2 (sym "Prod") (sym "Lex")) s))
+;; the equations Init states of its own functions, for those among `cs` — what `fn_equations`
+;; is for a function of the program; each cited where the environment holds it
+(fn init_equations ((e El) (cs (List Name)) (acc (List SExpr))) (List SExpr)
+  (measure (struct cs))
+  (match cs
+    (nil (rev acc))
+    ((cons c r)
+     (init_equations e r
+       (if (name_eq c (n2 (sym "List") (sym "length")))
+         (cited_present e
+           (list (n2 (sym "List") (sym "length_cons")) (n2 (sym "List") (sym "length_nil")))
+           acc)
+         acc)))))
+(fn cited_present ((e El) (ns (List Name)) (acc (List SExpr))) (List SExpr)
+  (measure (struct ns))
+  (match ns
+    (nil acc)
+    ((cons n r)
+     (cited_present e r
+       (match (env_find (el_env e) n)
+         ((some _) (cons (SSym (sym_of_chars (show_name n))) acc))
+         (none acc))))))
+
+;; ---- a descent ---------------------------------------------------------------------------------
+;; The obligation of a measure has few shapes. A measure in several parts states a `Prod.Lex`:
+;; the first parts the same term (`Prod.Lex.right`, the rest compared), the first part falling
+;; (`.left`), or the first part no greater by arithmetic (`.right'`). A measure through
+;; `Int.natAbs` compares two of them, and Init's lemma takes `0 <= a` and `a < b` for it; a
+;; natural number less a positive one is less by `Nat.sub_lt`. Each
+;; lemma is applied and its premises are goals of the same ladder; where none closes the goal
+;; the induction follows, as before.
+(fn eng_descent ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
+  (measure (Int.natAbs depth) 8 0)
+  (match (eng_apply_each e g h budget depth (descent_lemmas e g))
+    ((EngOk e1 ns b) (EngOk e1 ns b))
+    ((EngNo b _)
+     (match (eng_abs_each e g h b depth (abs_facts e g) (Prod.mk nil 1))
+       ((EngOk e1 ns b1) (EngOk e1 ns b1))
+       ((EngNo b1 _) (eng_induct e g h b1 depth))))))
+
+;; ---- facts about Int.natAbs --------------------------------------------------------------------
+;; Arithmetic takes `(Int.natAbs X)` for a number it knows nothing of, so a comparison that
+;; weighs or adds such numbers — a measure `(* 2 (Int.natAbs (+ fuel 1)))`, or one beside a
+;; size — is closed in two moves: the facts first, each a `have` — for two of the target's
+;; `Int.natAbs` terms, that the one is less than the other (Init's lemma, its two premises by
+;; the ladder); for one over a numeral, its value —, then the comparison with the facts in the
+;; context. A fact that does not hold is passed over; with none there is nothing to add.
+;; A fact's statement is written from the target as it is displayed, read back: a projection
+;; `(proj I T)` is given the structure an obligation's tuple has, `PProd`. A statement that
+;; does not read, as any step that fails, is one candidate less.
+(fn abs_facts ((e El) (g Goal)) (List SExpr)
+  (match (tac_open e g)
+    ((Opened e1 ctx target)
+     (if (bool_not (mem_name (n2 (sym "Int") (sym "natAbs")) (expr_consts (el_zonk e1 target)))) nil
+     (match (read_expr (tc_show_closed e1 ctx (el_zonk e1 target)) 100000)
+       ((SOk sx _)
+        (let ((xs (sx_dedup (abs_args (with_struct sx) nil) nil)))
+          (append (abs_values xs) (abs_pairs xs xs))))
+       (_ nil))))))
+;; `(proj I T)` as `(proj PProd I T)`, everywhere
+(fn with_struct ((s SExpr)) SExpr
+  (measure (SExpr.size s))
+  (match s
+    ((SList xs) (SList (struct_named (with_struct_all xs))))
+    (_ s)))
+(fn struct_named ((xs (List SExpr))) (List SExpr)
+  (match xs
+    ((cons (SSym p) (cons (SNum i) (cons t nil)))
+     (if (sym_eq p (sym "proj")) (list (SSym p) (SSym (sym "PProd")) (SNum i) t) xs))
+    (_ xs)))
+(fn with_struct_all ((xs (List SExpr))) (List SExpr)
+  (measure (List_SExpr.size xs))
+  (match xs
+    (nil nil)
+    ((cons x r) (cons (with_struct x) (with_struct_all r)))))
+(fulfills with_struct.dec_1 (by (intro s xs h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills with_struct_all.dec_1 (by (intro xs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills with_struct_all.dec_2 (by (intro xs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+;; the arguments of the `Int.natAbs` terms in a form
+(fn abs_args ((s SExpr) (acc (List SExpr))) (List SExpr)
+  (measure (SExpr.size s))
+  (match s
+    ((SList xs) (abs_args_all xs (abs_here xs acc)))
+    (_ acc)))
+(fn abs_here ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (match xs
+    ((cons (SSym f) (cons x nil)) (if (sym_eq f (sym "Int.natAbs")) (cons x acc) acc))
+    (_ acc)))
+(fn abs_args_all ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (measure (List_SExpr.size xs))
+  (match xs
+    (nil acc)
+    ((cons x r) (abs_args_all r (abs_args x acc)))))
+(fulfills abs_args.dec_1 (by (intro s acc xs h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills abs_args_all.dec_1 (by (intro xs acc x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills abs_args_all.dec_2 (by (intro xs acc x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fn sx_dedup ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (measure (struct xs))
+  (match xs
+    (nil (rev acc))
+    ((cons x r) (sx_dedup r (if (sx_mem x acc) acc (cons x acc))))))
+(fn sx_mem ((x SExpr) (xs (List SExpr))) Bool
+  (measure (struct xs))
+  (match xs
+    (nil false)
+    ((cons y r) (if (int_list_eq (show_sexpr x) (show_sexpr y)) true (sx_mem x r)))))
+(fn abs_of ((x SExpr)) SExpr (SList (list (SSym (sym "Int.natAbs")) x)))
+;; the value of one over a numeral that is not negative
+(fn abs_values ((xs (List SExpr))) (List SExpr)
+  (measure (struct xs))
+  (match xs
+    (nil nil)
+    ((cons (SNum k) r)
+     (if (< k 0) (abs_values r)
+     (cons (SList (list (SSym (sym "=")) (abs_of (SNum k)) (SNum k))) (abs_values r))))
+    ((cons _ r) (abs_values r))))
+;; each less than each other
+(fn abs_pairs ((xs (List SExpr)) (all (List SExpr))) (List SExpr)
+  (measure (struct xs))
+  (match xs
+    (nil nil)
+    ((cons x r) (append (abs_less x all) (abs_pairs r all)))))
+(fn abs_less ((x SExpr) (ys (List SExpr))) (List SExpr)
+  (measure (struct ys))
+  (match ys
+    (nil nil)
+    ((cons y r)
+     (if (int_list_eq (show_sexpr x) (show_sexpr y)) (abs_less x r)
+     (cons (SList (list (SSym (sym "<")) (abs_of x) (abs_of y))) (abs_less x r))))))
+;; the facts in turn, each stated by a `have` and proven where it holds — the goal is then the
+;; `have`'s continuation, the fact in its context —; after the last, the comparison. `acc` is
+;; the steps so far (last first) and the next fact's number
+(fn eng_abs_each
+  ((e El)
+   (g Goal)
+   (h Hints)
+   (budget Int)
+   (depth Int)
+   (facts (List SExpr))
+   (acc (Prod (List Node) Int)))
+  EngRes
+  (measure (Int.natAbs depth) 7 (List.length facts))
+  (match acc
+    ((Prod.mk done k)
+     (match facts
+       (nil
+         (match done
+           (nil (EngNo budget (append (utf8 "nothing closes ") (goal_of g))))
+           (_
+             (match (eng_close e g h budget)
+               ((EngOk e1 ns b) (EngOk e1 (append (rev done) ns) b))
+               ((EngNo b1 _)
+                (match (eng_simp_close e g h b1)
+                  ((EngOk e1 ns b) (EngOk e1 (append (rev done) ns) b))
+                  ((EngNo b2 m) (EngNo b2 m))))))))
+       ((cons prop r)
+        (if (< budget 1) (EngNo budget (utf8 "budget"))
+        (let ((nm (n1 (sym_of_chars (append (utf8 "abs_") (show_nat k))))))
+          (match (tac_step e g (NHave nm prop nil))
+            ((StepOk e1 filling (cons child nil) _ (some cont))
+             (match
+               (eng_fact (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) child h (- budget 1)
+                 depth)
+               ((EngOk e2 block b)
+                (eng_abs_each e2 cont h b depth r
+                  (Prod.mk (cons (NHave nm prop block) done) (+ k 1))))
+               ((EngNo b _) (eng_abs_each e g h b depth r acc))))
+            (_ (eng_abs_each e g h (- budget 1) depth r acc))))))))))
+;; one fact's proof: a value by the closing steps, a comparison by Init's lemma and the ladder
+(fn eng_fact ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
+  (measure (Int.natAbs depth) 6 0)
+  (match (eng_close e g h budget)
+    ((EngOk e1 ns b) (EngOk e1 ns b))
+    ((EngNo b _)
+     (eng_apply_each e g h b depth (present_lemmas e (list (Prod.mk (eng_natabs_lt) 2)))))))
+;; the lemmas to try on a goal, each with the number of premises it leaves
+(fn descent_lemmas ((e El) (g Goal)) (List (Prod SExpr Int))
+  (match (tac_open e g)
+    ((Opened e1 _ target)
+     (let ((cs (expr_consts (el_zonk e1 target))))
+       (append
+         (if (mem_name (n2 (sym "Prod") (sym "Lex")) cs)
+           (present_lemmas e1
+             (list (Prod.mk (eng_lex (sym "right")) 1) (Prod.mk (eng_lex (sym "left")) 1)
+               (Prod.mk (eng_lex (sym "right'")) 2)))
+           nil)
+         (append
+           (if (mem_name (n2 (sym "Int") (sym "natAbs")) cs)
+             (present_lemmas e1 (list (Prod.mk (eng_natabs_lt) 2)))
+             nil)
+           (if (mem_name (n2 (sym "Nat") (sym "sub")) cs)
+             (present_lemmas e1 (list (Prod.mk (eng_sub_lt) 2)))
+             nil)))))))
+(fn present_lemmas ((e El) (ns (List (Prod Name Int)))) (List (Prod SExpr Int))
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons (Prod.mk n k) r)
+     (match (env_find (el_env e) n)
+       ((some _) (cons (Prod.mk (SSym (sym_of_chars (show_name n))) k) (present_lemmas e r)))
+       (none (present_lemmas e r))))))
+;; each lemma in turn: applied with an empty block for each premise, the premises then solved
+;; in order and written into the step
+(fn eng_apply_each
+  ((e El) (g Goal) (h Hints) (budget Int) (depth Int) (cands (List (Prod SExpr Int))))
+  EngRes
+  (measure (Int.natAbs depth) 5 (List.length cands))
+  (match cands
+    (nil (EngNo budget (append (utf8 "nothing closes ") (goal_of g))))
+    ((cons (Prod.mk t k) r)
+     (if (< budget 1) (EngNo budget (utf8 "budget"))
+     (match (tac_step e g (NApply t (empty_blocks k)))
+       ((StepOk e1 filling children _ none)
+        (match
+          (eng_children (el_set_mc e1 (mc_set (el_mc e1) (goal_id g) filling)) children h
+            (- budget 1)
+            depth
+            nil)
+          ((Prod.mk (some (Prod.mk e2 blocks)) b) (EngOk e2 (list (NApply t (as_blocks blocks))) b))
+          ((Prod.mk none b) (eng_apply_each e g h b depth r))))
+       (_ (eng_apply_each e g h (- budget 1) depth r)))))))
+(fn empty_blocks ((k Int)) (List Node)
+  (measure (Int.natAbs k))
+  (if (< k 1) nil (cons (NBlock nil) (empty_blocks (- k 1)))))
+(fulfills empty_blocks.dec_1 (by (intro k h) (apply natAbs_pred (arith))))
+(fn as_blocks ((bs (List (List Node)))) (List Node)
+  (measure (struct bs))
+  (match bs
+    (nil nil)
+    ((cons b r) (cons (NBlock b) (as_blocks r)))))
+
+;; the least depth an induction is tried at: the search starts at 5, so inductions nest two
+;; deep, as they did before a descent's steps took levels of their own — a third level of
+;; induction spends the budget on goals no induction closes
+(fn induct_floor () Int 3)
 ;; induction: on the hinted local first, then on each local of an inductive type in context
 ;; order; the arms named after the constructors' fields with `ih_FIELD` for a recursive one,
 ;; each arm's goal by the ladder one level down
 (fn eng_induct ((e El) (g Goal) (h Hints) (budget Int) (depth Int)) EngRes
   (measure (Int.natAbs depth) 4 0)
   (if (< budget 1) (EngNo budget (utf8 "budget"))
+  (if (< depth (induct_floor)) (EngNo budget (append (utf8 "nothing closes ") (goal_of g)))
   (match (tac_open e g)
     ((Opened e1 ctx target)
      (let
@@ -321,7 +601,7 @@
               (ctx_facts e1 (in_target e1 ctx (expr_fvars (el_zonk e1 target) nil) nil)
                 (sym "inductive")
                 nil))))
-         (eng_induct_each e g h budget depth cands)))))))
+         (eng_induct_each e g h budget depth cands))))))))
 ;; the locals the target mentions: an induction on another changes nothing
 (fn in_target ((e El) (ctx (List Expr)) (ids (List Int)) (acc (List Expr))) (List Expr)
   (measure (struct ctx))
@@ -426,6 +706,56 @@
        ((cons b br) (arms_with r br (cons (NArm c ns b) acc)))
        (nil (arms_with r nil (cons (NArm c ns nil) acc)))))
     ((cons o r) (arms_with r blocks (cons o acc)))))
+(fulfills eng_descent.dec_1
+  (by (intro e g h budget depth) (apply Prod.Lex.right ((apply Prod.Lex.left (decide))))))
+(fulfills eng_descent.dec_2
+  (by (intro e g h budget depth b h7) (apply Prod.Lex.right ((apply Prod.Lex.left (decide))))))
+(fulfills eng_descent.dec_3
+  (by (intro e g h budget depth b h7 b1 h9) (apply Prod.Lex.right ((apply Prod.Lex.left (decide))))))
+(fulfills eng_abs_each.dec_1
+  (by
+    (intro e g h budget depth facts acc done k h_10 prop r h_13 h_14)
+    (intro e1 filling child h18 cont h)
+    (apply Prod.Lex.right ((apply Prod.Lex.left (decide))))))
+(fulfills eng_abs_each.dec_2
+  (by
+    (intro e g h budget depth facts acc done k h_10 prop r h_13 h_14)
+    (intro e1 filling child h18 cont h e2 block b)
+    (apply Prod.Lex.right
+      ((apply Prod.Lex.right
+         ((simp_only List.length_cons List.length_nil h_10 h_13 h) (arith only h_14 (farkas 1))))))))
+(fulfills eng_abs_each.dec_3
+  (by
+    (intro e g h budget depth facts acc done k h_10 prop r h_13 h_14)
+    (intro e1 filling child h18 cont h b h22)
+    (apply Prod.Lex.right
+      ((apply Prod.Lex.right
+         ((simp_only List.length_cons List.length_nil h_10 h_13 h) (arith only h_14 (farkas 1))))))))
+(fulfills eng_abs_each.dec_4
+  (by
+    (intro e g h budget depth facts acc done k h_10 prop r h_13 h_14)
+    (intro h15 h)
+    (apply Prod.Lex.right
+      ((apply Prod.Lex.right
+         ((simp_only List.length_cons List.length_nil h_10 h_13 h) (arith only h_14 (farkas 1))))))))
+(fulfills eng_fact.dec_1
+  (by (intro e g h budget depth b h7 h_8) (apply Prod.Lex.right ((apply Prod.Lex.left (decide))))))
+(fulfills eng_apply_each.dec_1
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+(fulfills eng_apply_each.dec_2
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 hs a11 a12 a13 a14 a15 a16 a17)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
+(fulfills eng_apply_each.dec_3
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 hs a11 a12 a13)
+    (rw hs)
+    (rw List.length_cons)
+    (apply Prod.Lex.right (apply Prod.Lex.right (arith)))))
 (fulfills eng_solve.dec_1
   (by
     (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
@@ -439,7 +769,9 @@
     (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills eng_induct.dec_1
-  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+    (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills eng_induct_each.dec_1
   (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9) (apply Prod.Lex.right (apply Prod.Lex.left (arith)))))
 (fulfills eng_induct_each.dec_2
