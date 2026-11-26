@@ -5,6 +5,7 @@
 (use std.mem)
 (use models.x86.linux)
 (use models.x86.linux.Res)
+(use models.x86.linux.Move)
 (use models.x86.word)
 (use models.x86.x86)
 (use models.x86.x86.Bop)
@@ -1672,45 +1673,186 @@
     (have h2 (<= (+ (+ p (* 8 k)) 8) (+ p (* 8 n))) (arith))
     (exact (mapped_part segs p (* 8 n) (+ p (* 8 k)) 8 need h1 h2 h))))
 
-;; ---- a run to its end -----------------------------------------------------------------------------
-;; a run from a state the processor comes to is a run from where it came
-(theorem run_of_steps ((k Fuel))
-  (forall ((c Cpu) (c2 Cpu) (n Fuel))
-    (-> (= (steps k c) (some c2)) (exists ((n2 Fuel)) (= (run n2 c) (run n c2)))))
+;; ---- the bytes of a range -------------------------------------------------------------------------
+(theorem mem_bytes_zero ((m Mem) (a Nat)) (= (mem_bytes m a 0) nil)
+  (by (rw mem_bytes.eq_1) (rw (if_pos (Eq.refl 0))) rfl))
+(theorem mem_bytes_succ ((m Mem) (a Nat) (n Nat))
+  (= (mem_bytes m a (+ n 1)) (cons (mem_get m a) (mem_bytes m (+ a 1) n)))
+  (by (have hne (Not (= (+ n 1) 0)) (arith)) (rw mem_bytes.eq_1) (rw (if_neg hne)) rfl))
+;; a range's bytes are as many as its length
+(theorem mem_bytes_length ((m Mem) (n Nat)) (forall ((a Nat)) (= (List.length (mem_bytes m a n)) n))
+  (by
+    (induction n
+      ((zero () (intro a) (show (= (List.length (mem_bytes m a 0)) 0)) (rw (mem_bytes_zero m a)) rfl)
+       (succ (k ih) (intro a) (show (= (List.length (mem_bytes m a (+ k 1))) (+ k 1)))
+         (rw (mem_bytes_succ m a k))
+         (show (= (+ (List.length (mem_bytes m (+ a 1) k)) 1) (+ k 1)))
+         (rw (ih (+ a 1)))
+         rfl)))))
+;; the first k of a range's bytes are the bytes of its first k addresses, and the rest those of
+;; the addresses after them
+(theorem mem_bytes_take ((m Mem) (k Nat))
+  (forall ((a Nat) (n Nat)) (-> (<= k n) (= (List.take k (mem_bytes m a n)) (mem_bytes m a k))))
   (by
     (induction k
-      ((FZ () (intro c c2 n h) (have hs (= (some c) (some c2)) (exact h))
+      ((zero () (intro a n h) (show (= (List.take 0 (mem_bytes m a n)) (mem_bytes m a 0)))
+         (rw (mem_bytes_zero m a))
+         rfl)
+       (succ (j ih) (intro a n h0) (have h (<= (+ j 1) n) (exact h0)) (have h1 (<= 1 n) (arith))
+         (have hn (= (+ (- n 1) 1) n) (exact (Nat.sub_add_cancel h1)))
+         (have h2 (<= j (- n 1)) (arith))
+         (show (= (List.take (+ j 1) (mem_bytes m a n)) (mem_bytes m a (+ j 1))))
+         (rw (<- hn))
+         (rw (mem_bytes_succ m a (- n 1)))
+         (rw (mem_bytes_succ m a j))
+         (show
+           (= (cons (mem_get m a) (List.take j (mem_bytes m (+ a 1) (- n 1))))
+             (cons (mem_get m a) (mem_bytes m (+ a 1) j))))
+         (rw (ih (+ a 1) (- n 1) h2))
+         rfl)))))
+(theorem mem_bytes_drop ((m Mem) (k Nat))
+  (forall ((a Nat) (n Nat))
+    (-> (<= k n) (= (List.drop k (mem_bytes m a n)) (mem_bytes m (+ a k) (- n k)))))
+  (by
+    (induction k
+      ((zero () (intro a n h)
+         (show (= (List.drop 0 (mem_bytes m a n)) (mem_bytes m (+ a 0) (- n 0))))
+         rfl)
+       (succ (j ih) (intro a n h0) (have h (<= (+ j 1) n) (exact h0)) (have h1 (<= 1 n) (arith))
+         (have hn (= (+ (- n 1) 1) n) (exact (Nat.sub_add_cancel h1)))
+         (have h2 (<= j (- n 1)) (arith))
+         (have ea (= (+ a (+ j 1)) (+ (+ a 1) j)) (arith))
+         (have en (= (- n (+ j 1)) (- (- n 1) j))
+           (rw (Nat.add_comm j 1))
+           (exact (Eq.symm (Nat.sub_sub n 1 j))))
+         (show (= (List.drop (+ j 1) (mem_bytes m a n)) (mem_bytes m (+ a (+ j 1)) (- n (+ j 1)))))
+         (rw ea)
+         (rw en)
+         (rw (<- (ih (+ a 1) (- n 1) h2)))
+         (rw (<- hn))
+         (rw (mem_bytes_succ m a (- n 1)))
+         rfl)))))
+;; a range's bytes are those of its first k addresses and then the rest
+(theorem mem_bytes_split ((m Mem) (a Nat) (n Nat) (k Nat) (h (<= k n)))
+  (= (List.append (mem_bytes m a k) (mem_bytes m (+ a k) (- n k))) (mem_bytes m a n))
+  (by
+    (rw (<- (mem_bytes_take m k a n h)))
+    (rw (<- (mem_bytes_drop m k a n h)))
+    (exact (List.take_append_drop k (mem_bytes m a n)))))
+;; and are the same in a memory that differs from it only in a range they lie outside of
+(theorem mem_bytes_outside
+  ((m Mem) (m2 Mem) (lo Nat) (hi Nat) (hso (same_outside m m2 lo hi)) (n Nat))
+  (forall ((a Nat)) (-> (or (<= (+ a n) lo) (<= hi a)) (= (mem_bytes m2 a n) (mem_bytes m a n))))
+  (by
+    (induction n
+      ((zero () (intro a h) (show (= (mem_bytes m2 a 0) (mem_bytes m a 0)))
+         (rw (mem_bytes_zero m2 a))
+         (rw (mem_bytes_zero m a))
+         rfl)
+       (succ (k ih) (intro a h0) (have h (or (<= (+ a (+ k 1)) lo) (<= hi a)) (exact h0))
+         (have hx (or (< a lo) (<= hi a))
+           (cases h ((inl (h1) (apply Or.inl ((arith)))) (inr (h2) (apply Or.inr ((exact h2)))))))
+         (have hr (or (<= (+ (+ a 1) k) lo) (<= hi (+ a 1)))
+           (cases h ((inl (h1) (apply Or.inl ((arith)))) (inr (h2) (apply Or.inr ((arith)))))))
+         (show (= (mem_bytes m2 a (+ k 1)) (mem_bytes m a (+ k 1))))
+         (rw (mem_bytes_succ m2 a k))
+         (rw (mem_bytes_succ m a k))
+         (rw (hso a hx))
+         (rw (ih (+ a 1) hr))
+         rfl)))))
+
+;; ---- a run to its end -----------------------------------------------------------------------------
+;; a run from a state the processor comes to is a run from where it came: no step between
+;; them touches what is outside
+(theorem run_of_steps ((k Fuel))
+  (forall ((c Cpu) (c2 Cpu) (n Fuel) (o Os))
+    (-> (= (steps k c) (some c2)) (exists ((n2 Fuel)) (= (run n2 c o) (run n c2 o)))))
+  (by
+    (induction k
+      ((FZ () (intro c c2 n o h) (have hs (= (some c) (some c2)) (exact h))
          (have hc (= c c2) (exact (Option.some.inj hs)))
          (apply (Exists.intro n) ((rw hc) rfl)))
-       (FS (k1 ih) (intro c c2 n h)
+       (FS (k1 ih) (intro c c2 n o h)
          (cases (step c) hs
            ((SNext (c1) (have hx (= (steps (FS k1) c) (steps k1 c1)) (rw steps.eq_2) (rw hs) rfl)
-              (cases (ih c1 c2 n (Eq.trans (Eq.symm hx) h))
+              (cases (ih c1 c2 n o (Eq.trans (Eq.symm hx) h))
                 ((intro (n2 hn)
                    (apply (Exists.intro (FS n2))
-                     ((show (= (run (FS n2) c) (run n c2)))
+                     ((show (= (run (FS n2) c o) (run n c2 o)))
+                      (have hm (= (move c o) (MGo c1 o)) (rw move.eq_1) (rw hs) rfl)
                       (rw run.eq_2)
-                      (rw hs)
-                      (reduce)
+                      (rw hm)
                       (exact hn)))))))
             (SSys (c1) (have hx (= (steps (FS k1) c) none) (rw steps.eq_2) (rw hs) rfl)
               (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none c2))))
             (SStuck (y) (have hx (= (steps (FS k1) c) none) (rw steps.eq_2) (rw hs) rfl)
               (exact (absurd (Eq.symm (Eq.trans (Eq.symm hx) h)) (Option.some_ne_none c2)))))))))))
-;; the system call `exit`: the process ends with the low byte of rdi
+;; The run from c, with o outside, goes on as the run from c2 with o2: whatever a run from the
+;; second comes to, a run from the first comes to. System calls that return may lie between.
+(def comes ((c Cpu) (o Os) (c2 Cpu) (o2 Os)) Prop
+  (forall ((n Fuel)) (exists ((n2 Fuel)) (= (run n2 c o) (run n c2 o2)))))
+(theorem comes_refl ((c Cpu) (o Os)) (comes c o c o) (by (intro n) (apply (Exists.intro n) (rfl))))
+(theorem comes_trans
+  ((c Cpu) (o Os) (c1 Cpu) (o1 Os) (c2 Cpu) (o2 Os) (h1 (comes c o c1 o1)) (h2 (comes c1 o1 c2 o2)))
+  (comes c o c2 o2)
+  (by
+    (intro n)
+    (cases (h2 n)
+      ((intro (n1 e1)
+         (cases (h1 n1) ((intro (n0 e0) (apply (Exists.intro n0) ((exact (Eq.trans e0 e1))))))))))))
+;; steps of the processor leave what is outside as it was
+(theorem comes_of_reaches ((c Cpu) (c2 Cpu) (o Os) (h (reaches c c2))) (comes c o c2 o)
+  (by (intro n) (cases h ((intro (k hk) (exact (run_of_steps k c c2 n o hk)))))))
+;; a run from c, with o outside, ends with r
+(def ends_at ((c Cpu) (o Os) (r Res)) Prop (exists ((n Fuel)) (= (run n c o) r)))
+(theorem ends_of_comes
+  ((c Cpu) (o Os) (c2 Cpu) (o2 Os) (r Res) (h (comes c o c2 o2)) (he (ends_at c2 o2 r)))
+  (ends_at c o r)
+  (by
+    (cases he
+      ((intro (n hn)
+         (cases (h n) ((intro (n2 e) (apply (Exists.intro n2) ((exact (Eq.trans e hn))))))))))))
+;; a system call's step of a run is what the boundary makes of it
+(theorem move_sys
+  ((c Cpu)
+   (pc Nat)
+   (len Nat)
+   (o Os)
+   (hrip (= (w64_val (Cpu.rip c)) pc))
+   (hc (code_at c pc Syscall len)))
+  (= (move c o) (on_syscall (Cpu.with_rip (next_rip c len) c) o))
+  (by (rw move.eq_1) (rw (step_at c pc Syscall len hrip hc)) rfl))
+;; a step of a run that goes on, and one that ends it
+(theorem comes_of_move
+  ((c Cpu implicit)
+   (o Os implicit)
+   (c2 Cpu implicit)
+   (o2 Os implicit)
+   (h (= (move c o) (MGo c2 o2))))
+  (comes c o c2 o2)
+  (by
+    (intro n)
+    (apply (Exists.intro (FS n))
+      ((show (= (run (FS n) c o) (run n c2 o2))) (rw run.eq_2) (rw h) rfl))))
+(theorem ends_of_move
+  ((c Cpu implicit) (o Os implicit) (r Res implicit) (h (= (move c o) (MEnd r))))
+  (ends_at c o r)
+  (by (apply (Exists.intro (FS FZ)) ((show (= (run (FS FZ) c o) r)) (rw run.eq_2) (rw h) rfl))))
+;; the system call `exit`: the process ends with the low byte of rdi, and with what it has
+;; written
 (theorem run_exit
   ((c Cpu)
    (pc Nat)
    (len Nat)
+   (o Os)
    (hrip (= (w64_val (Cpu.rip c)) pc))
    (hc (code_at c pc Syscall len))
    (h60 (= (w64_val (reg c 0)) 60)))
-  (= (run (FS FZ) c) (RExit (% (w64_val (reg c 7)) 256)))
+  (= (run (FS FZ) c o) (RExit (% (w64_val (reg c 7)) 256) (Os.out o)))
   (by
     (have h2 (= (w64_val (reg (Cpu.with_rip (next_rip c len) c) 0)) 60) (exact h60))
     (rw run.eq_2)
-    (rw (step_at c pc Syscall len hrip hc))
-    (show (= (on_syscall (Cpu.with_rip (next_rip c len) c)) (RExit (% (w64_val (reg c 7)) 256))))
+    (rw (move_sys c pc len o hrip hc))
     (rw on_syscall.eq_1)
     (rw (if_pos h2))
     rfl))

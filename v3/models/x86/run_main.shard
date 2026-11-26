@@ -1,12 +1,17 @@
 ;;; v3/models/x86/run_main.shard — the model run on a file from the command line: the file's
 ;;; bytes loaded as Linux would, the processor stepped from `start_zero` — or, for a file given
-;;; arguments, from `start_args` — for at most the count given, and how the run ended printed as
-;;; one line — `exit N`; `stuck` with the reason, the address and the bytes found there; `out of
-;;; steps`. The same file run by the real processor is what the model is held to
-;;; (kernel/test/x86_test.sh).
+;;; arguments, from `start_args` — for at most the count given, on the kernel's answers given — or
+;;; on none, a kernel that takes all it is offered —, and how the run ended printed as one line:
+;;; `exit N`; `killed`; `stuck` with the reason, the address and the bytes found there; `out of
+;;; steps`. A process that wrote has `, wrote` and its bytes after the first two. The same file
+;;; run by the real processor is what the model is held to (kernel/test/x86_test.sh).
 ;;;
 ;;;   load.shard --root v3 --init … --run models.x86.run_main.main v3/models/x86/run_main.shard -- run STEPS FILE…
 ;;;   … -- args STEPS FILE ARG…  the file run with the arguments ARG…, the first its name
+;;;   … -- answers STEPS FILE SPEC…  the file run as `run` runs it, once on each list SPEC of
+;;;                                the kernel's answers, a line each: items between commas, `N`
+;;;                                (it takes N bytes, all for 0), `eN` (it fails with the error
+;;;                                N), `k` (it ends the process)
 ;;;   … -- wrap CODE FILE …     the bytes of CODE as the executable file FILE that runs them
 (import "../../std/bytes.shard")
 (import "../../std/derive.shard")
@@ -22,6 +27,8 @@
 (use models.x86.linux)
 (use models.x86.word)
 (use models.x86.x86)
+(use models.x86.linux.Answer)
+(use models.x86.linux.How)
 (use models.x86.linux.Res)
 (use models.x86.x86.Why)
 (use Init.Bool false true)
@@ -52,9 +59,15 @@
     ((WCond cc) (at_address "stuck: no rule for a jump on condition " cc nil))
     ((WSyscall n) (at_address "stuck: no rule for system call " n nil))
     (WFile (text "stuck: not a file the model loads"))))
+;; what a process wrote, after how it ended: nothing where it wrote nothing
+(fn show_out ((out (List Nat))) (List Nat)
+  (match out
+    (nil nil)
+    ((cons _ _) (List.append (text ", wrote") (hex_bytes out)))))
 (fn show_res ((r Res)) (List Nat)
   (match r
-    ((RExit status) (at_address "exit " status nil))
+    ((RExit status out) (at_address "exit " status (show_out out)))
+    ((RKill out) (List.append (text "killed") (show_out out)))
     ((RStuck y) (show_why y))
     ((ROut c) (at_address "out of steps at " (w64_val (Cpu.rip c)) nil))))
 
@@ -97,6 +110,7 @@
 ;; ---- the command line ----------------------------------------------------------------------
 ;;   run STEPS FILE…      each file run for at most STEPS steps, a line each
 ;;   args STEPS FILE ARG… the file run for at most STEPS steps with the arguments ARG…
+;;   answers STEPS FILE SPEC…      the file run once on each list SPEC of the kernel's answers
 ;;   wrap SRC DST …       each SRC's bytes as code, wrapped as the executable file DST
 (fn same ((a (List Nat)) (b (List Nat))) Bool
   (measure (struct a))
@@ -117,18 +131,49 @@
     ((cons d r) (nat_of r (+ (* 10 acc) (- d 48))))))
 (fn fail ((w World)) World
   (exit 2 (write_line (Bytes.ofNats (text "x86run: a file cannot be read or written")) w)))
-(fn run_one ((steps Nat) (st Start) (path ByteArray) (w World)) World
+;; the kernel's answers from their text: items between commas — a number N (it takes N bytes,
+;; all for 0), `e` and a number (it fails with that error), `k` (it ends the process). The two
+;; registers an answer leaves are given two words no program has a use for.
+(fn answer_of ((item (List Nat))) Answer
+  (MkAnswer
+    (match item
+      (nil (HTook 0))
+      ((cons x r)
+       (if (= x 101) (HErr (nat_of r 0))
+       (if (= x 107) HKill
+       (HTook (nat_of item 0))))))
+    (w64 12297829382473034410)
+    (w64 6148914691236517205)))
+(fn answers_of ((spec (List Nat)) (item (List Nat))) (List Answer)
+  (measure (struct spec))
+  (match spec
+    (nil (cons (answer_of (List.reverse item)) nil))
+    ((cons x r)
+     (if (= x 44) (cons (answer_of (List.reverse item)) (answers_of r nil))
+     (answers_of r (cons x item))))))
+(fn run_one ((steps Nat) (st Start) (as (List Answer)) (path ByteArray) (w World)) World
   (match (read_file path w)
     ((Prod.mk r w1)
      (match r
        (none (fail w1))
        ((some bs)
-        (write_line (Bytes.ofNats (show_res (run_file (fuel_of steps) (Bytes.toNats bs) st))) w1))))))
+        (write_line (Bytes.ofNats (show_res (run_file (fuel_of steps) (Bytes.toNats bs) st as))) w1))))))
+;; a file's bytes run once on each list of answers, a line each
+(fn run_specs ((steps Nat) (bs (List Nat)) (specs (List ByteArray)) (w World)) World
+  (measure (struct specs))
+  (match specs
+    (nil w)
+    ((cons sp r)
+     (run_specs steps bs r
+       (write_line
+         (Bytes.ofNats
+           (show_res (run_file (fuel_of steps) bs start_zero (answers_of (Bytes.toNats sp) nil))))
+         w)))))
 (fn run_each ((steps Nat) (paths (List ByteArray)) (w World)) World
   (measure (struct paths))
   (match paths
     (nil w)
-    ((cons p r) (run_each steps r (run_one steps start_zero p w)))))
+    ((cons p r) (run_each steps r (run_one steps start_zero nil p w)))))
 (fn nats_each ((bs (List ByteArray))) (List (List Nat))
   (measure (struct bs))
   (match bs
@@ -160,8 +205,18 @@
            (if (same (Bytes.toNats cmd) (text "args"))
              (match files
                ((cons file argv)
-                (run_one (nat_of (Bytes.toNats steps) 0) (start_args (nats_each argv)) file w1))
+                (run_one (nat_of (Bytes.toNats steps) 0) (start_args (nats_each argv)) nil file w1))
                (nil (fail w1)))
-             (fail w1))))
+           (if (same (Bytes.toNats cmd) (text "answers"))
+             (match files
+               ((cons file specs)
+                (match (read_file file w1)
+                  ((Prod.mk r w2)
+                   (match r
+                     (none (fail w2))
+                     ((some bs)
+                      (run_specs (nat_of (Bytes.toNats steps) 0) (Bytes.toNats bs) specs w2))))))
+               (nil (fail w1)))
+             (fail w1)))))
           (nil (fail w1)))))
        (nil (fail w1))))))

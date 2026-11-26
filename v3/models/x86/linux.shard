@@ -1,8 +1,10 @@
 ;;; v3/models/x86/linux.shard — Linux at the processor's boundary, as far as a consumer has
 ;;; needed it: how an executable file becomes a process's first state, what stands at its stack
-;;; pointer then — its arguments —, and what a system call does. A file the model does not load, and a system call it has no rule for, are stuck with
-;;; the reason. A run is the processor's steps until the process exits, counted by a fuel that
-;;; no statement about a run names: `exits` quantifies it away.
+;;; pointer then — its arguments —, what a system call does, and what is outside the process: the
+;;; answers the kernel gives its calls and the bytes it has written out. A file the model does
+;;; not load, and a system call it has no rule for, are stuck with the reason. A run is the
+;;; processor's steps until the process ends, counted by a fuel that no statement about a run
+;;; names: `ends` quantifies it away.
 (import "../../std/list.shard")
 (import "x86.shard")
 (use std.mem)
@@ -155,30 +157,152 @@
   (and (= (mem_le64 m sp) (List.length args))
     (and (<= (+ sp (* 8 (+ (List.length args) 1))) hi) (argv_at m (+ sp 8) sp hi args))))
 
-;; how a run ends: the process exited with a status; a step had no rule; the count ran out
-(type Res (RExit Nat) (RStuck Why) (ROut Cpu))
+;; ---- what is outside a process -----------------------------------------------------------------
+;; How the kernel answers a call that offers it bytes: it took some of them; it failed, with an
+;; error's number; or it ended the process there — as it does, by a signal, at a write to a pipe
+;; that nobody reads.
+(type How (HTook Nat) (HErr Nat) (HKill))
+;; An answer of the kernel to a call: how the call went and, for a call that returns, what it
+;; leaves in rcx and r11, the two registers Linux destroys at every system call.
+(record Answer (how How) (rcx (BitVec 64)) (r11 (BitVec 64)))
+;; What is outside a process, as far as the model follows it: the answers the kernel will give
+;; the process's calls, in order, and the bytes the process has written to descriptor 1, its
+;; standard output. The answers are an input of a run, as the arguments are: the model does not
+;; say what a kernel answers, and a statement about a file is for every list of answers.
+(record Os (ans (List Answer)) (out (List Nat)))
+;; a process's start: nothing written
+(fn os_start ((as (List Answer))) Os (MkOs as nil))
+;; the answer to the next call and the answers after it. When the list is used up the kernel
+;; takes everything a call offers: the empty list is a kernel that never takes less and never
+;; fails.
+(fn next_answer ((as (List Answer))) Answer
+  (match as
+    (nil (MkAnswer (HTook 0) (w64 0) (w64 0)))
+    ((cons a _) a)))
+(fn rest_answers ((as (List Answer))) (List Answer)
+  (match as
+    (nil nil)
+    ((cons _ r) r)))
+;; how many bytes the answer `(HTook a)` takes of the n a call offers: a of them — at least one,
+;; where one is offered, and at most n —, and all of them for a = 0. Every answer so stands for
+;; a count a kernel may return, and every such count has its answer.
+(fn took ((a Nat) (n Nat)) Nat
+  (if (= a 0) n
+  (if (<= n a) n
+  a)))
+;; what a failed call returns for the answer `(HErr e)`: the negative of an error number from 1
+;; to 4095, as a word
+(fn err_word ((e Nat)) (BitVec 64) (w64 (- 18446744073709551616 (+ 1 (% e 4095)))))
+;; the n bytes from the address a
+(fn mem_bytes ((m Mem) (a Nat) (n Nat)) (List Nat)
+  (measure n)
+  (if (= n 0) nil (cons (mem_get m a) (mem_bytes m (+ a 1) (- n 1)))))
+(fulfills mem_bytes.dec_1 (by (intro p h) (exact (Nat.sub_one_lt h))))
+
+;; how a run ends: the process exited with a status, having written these bytes; the kernel
+;; ended it at a call, having written these; a step had no rule; the count ran out
+(type Res (RExit Nat (List Nat)) (RKill (List Nat)) (RStuck Why) (ROut Cpu))
+;; what a step of a run comes to: the process goes on, or the run has ended
+(type Move (MGo Cpu Os) (MEnd Res))
+;; a call's return to the process: its result in rax, rcx and r11 as the answer leaves them, and
+;; no flag known
+(fn sys_back ((c Cpu) (a Answer) (v (BitVec 64))) Cpu
+  (set_flags (set_reg (set_reg (set_reg c 0 v) 1 (Answer.rcx a)) 11 (Answer.r11 a)) flags_none))
+;; What a write of the n bytes at the address a comes to, as the kernel's next answer decides:
+;; it takes a count of them, from the first — they are then written, and the count returned —;
+;; it fails, nothing written; or it ends the process.
+(fn write_to ((c Cpu) (o Os) (a Nat) (n Nat)) Move
+  (match (Answer.how (next_answer (Os.ans o)))
+    ((HTook t)
+     (MGo (sys_back c (next_answer (Os.ans o)) (w64 (took t n)))
+       (MkOs (rest_answers (Os.ans o)) (List.append (Os.out o) (mem_bytes (Cpu.mem c) a (took t n))))))
+    ((HErr e)
+     (MGo (sys_back c (next_answer (Os.ans o)) (err_word e))
+       (MkOs (rest_answers (Os.ans o)) (Os.out o))))
+    (HKill (MEnd (RKill (Os.out o))))))
+;; `write`: the count in rdx of bytes at the address in rsi, offered to the descriptor in rdi.
+;; The model has a rule for descriptor 1 and for bytes that are all mapped to read.
+(fn on_write ((c Cpu) (o Os)) Move
+  (if (= (w64_val (reg c 7)) 1)
+    (if (mapped (Cpu.segs c) (w64_val (reg c 6)) (w64_val (reg c 2)) 4)
+      (write_to c o (w64_val (reg c 6)) (w64_val (reg c 2)))
+      (MEnd (RStuck (WLoad (w64_val (reg c 6))))))
+    (MEnd (RStuck (WSyscall 1)))))
 ;; a system call, by the number in rax: 60 (exit) ends the process with the low byte of rdi, the
-;; status its parent is given
-(fn on_syscall ((c Cpu)) Res
-  (if (= (w64_val (reg c 0)) 60) (RExit (% (w64_val (reg c 7)) 256))
-  (RStuck (WSyscall (w64_val (reg c 0))))))
+;; status its parent is given; 1 is `write`
+(fn on_syscall ((c Cpu) (o Os)) Move
+  (if (= (w64_val (reg c 0)) 60) (MEnd (RExit (% (w64_val (reg c 7)) 256) (Os.out o)))
+  (if (= (w64_val (reg c 0)) 1) (on_write c o)
+  (MEnd (RStuck (WSyscall (w64_val (reg c 0))))))))
+;; one step of a run: the processor's, or a system call's
+(fn move ((c Cpu) (o Os)) Move
+  (match (step c)
+    ((SNext c1) (MGo c1 o))
+    ((SSys c1) (on_syscall c1 o))
+    ((SStuck y) (MEnd (RStuck y)))))
 ;; at most n steps
-(fn run ((n Fuel) (c Cpu)) Res
+(fn run ((n Fuel) (c Cpu) (o Os)) Res
   (measure (struct n))
   (match n
     (FZ (ROut c))
     ((FS n1)
-     (match (step c)
-       ((SNext c1) (run n1 c1))
-       ((SSys c1) (on_syscall c1))
-       ((SStuck y) (RStuck y))))))
-;; a file run from what the kernel leaves
-(fn run_file ((n Fuel) (bs (List Nat)) (st Start)) Res
+     (match (move c o)
+       ((MGo c1 o1) (run n1 c1 o1))
+       ((MEnd r) r)))))
+;; a file run from what the kernel leaves, on the answers it will give
+(fn run_file ((n Fuel) (bs (List Nat)) (st Start) (as (List Answer))) Res
   (match (elf_load bs (Start.mem st))
     (none (RStuck WFile))
-    ((some img) (run n (boot img st)))))
+    ((some img) (run n (boot img st) (os_start as)))))
 
-;; the machine's system (docs/COMPILE.md §2): started on a file, with what the kernel leaves,
-;; the process ends with an exit status
+;; the machine's system (docs/COMPILE.md §2): started on a file, with what the kernel leaves and
+;; the answers it will give, the process ends so
+(def ends ((bs (List Nat)) (st Start) (as (List Answer)) (r Res)) Prop
+  (exists ((n Fuel)) (= (run_file n bs st as) r)))
+;; a file that writes nothing: whatever the kernel would answer, the process exits with the
+;; status
 (def exits ((bs (List Nat)) (st Start) (status Nat)) Prop
-  (exists ((n Fuel)) (= (run_file n bs st) (RExit status))))
+  (forall ((as (List Answer))) (ends bs st as (RExit status nil))))
+
+;; ---- writing all of some bytes ----------------------------------------------------------------
+;; The status a file exits with where the kernel fails a write: the program's loop stops there.
+(fn status_io () Nat 74)
+;; What a loop that offers bytes until all are taken comes to, as the answers decide it: every
+;; byte was taken, and these answers are left; an answer failed, these bytes taken before it; or
+;; the kernel ended the process, these taken before.
+(type Sent (SAll (List Answer)) (SFail (List Nat)) (SKill (List Nat)))
+;; the bytes p taken before what followed
+(fn sent_after ((p (List Nat)) (s Sent)) Sent
+  (match s
+    ((SAll as) (SAll as))
+    ((SFail q) (SFail (List.append p q)))
+    ((SKill q) (SKill (List.append p q)))))
+;; the loop on the bytes bs: nothing is offered where none is left; each call offers all that is
+;; left and takes one answer
+(fn send ((as (List Answer)) (bs (List Nat))) Sent
+  (measure (struct as))
+  (match as
+    (nil (SAll nil))
+    ((cons a ar)
+     (match bs
+       (nil (SAll as))
+       ((cons _ _)
+        (match (Answer.how a)
+          ((HTook t)
+           (sent_after (List.take (took t (List.length bs)) bs)
+             (send ar (List.drop (took t (List.length bs)) bs))))
+          ((HErr _) (SFail nil))
+          (HKill (SKill nil))))))))
+;; How a process ends that writes these pieces one after another, each by that loop, and then
+;; exits with the status, `before` already written: where every byte of every piece was taken,
+;; with the status and all of them written; where a call failed, with `status_io` and what was
+;; taken before it; or ended by the kernel, what was taken before written.
+(fn sends_end ((as (List Answer)) (before (List Nat)) (pieces (List (List Nat))) (status Nat)) Res
+  (measure (struct pieces))
+  (match pieces
+    (nil (RExit status before))
+    ((cons p r)
+     (match (send as p)
+       ((SAll left) (sends_end left (List.append before p) r status))
+       ((SFail q) (RExit status_io (List.append before q)))
+       ((SKill q) (RKill (List.append before q)))))))
