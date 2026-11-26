@@ -1025,6 +1025,45 @@ entries are explained under "Measured" at the end.
   dropped; the owner was told and agreed in the same word as to the ruling.
   *`write_all` names two things*: the platform's function and the model's instructions. No
   file opens both modules.
+- A loop that writes (2026-11-26; the owner chose the stage — "Let's proceed with the program
+  with a loop that writes." —; what follows was chosen in building and not put to the owner).
+  *The program.* `say` writes each argument after the name on a line of its own: a recursion
+  over the arguments on a World. Two writes an argument, the string and then one byte, a
+  line's end, from a word the start-up pushes; the length by a loop over the string's bytes.
+  One line is a function of its own, so that the tree has a call, not in tail position, of a
+  function that writes. Not chosen: one write an argument from a buffer the program fills —
+  no code here fills a buffer and writes it.
+  *A tie carries the memory left.* `tied out v m w` (`models/x86/world.shard`): the code
+  returned the word, left the memory m and left outside what the World is of. A caller reads
+  memory after a call, so a callee's tie must say what it left; `greet`'s tie had no caller
+  and the relation had no memory. This changes what the entry above chose, and was not put to
+  the owner either.
+  *One statement of a tie, and a rule a statement form* (`tie.shard`): `ties` of a
+  statement's run and `fn_ties` of a function's. The rule for a call of what is itself tied
+  (`tie_call`, `tie_ext`) asks, beside what follows where the process still runs, that where
+  the process stopped in the callee the caller's World is the callee's. The rule for a call
+  that writes (`tie_put`) is that rule on `write_all`'s own tie (`put_tied`); before, it split
+  the three ways a write ends by itself. Rejected: each tie splitting a callee's outcome
+  itself — `greet`'s tie was 125 lines so and is 40 by the rules.
+  *The loop's proof is an induction for whatever is outside.* The statement is for every
+  `Os`, so the induction's hypothesis is used on what the line left outside. Where the line
+  stopped the process nothing is asked of the hypothesis: the code's run has ended, and the
+  meaning's remaining arguments write nothing (`say_each_stopped`, from `write_all_stopped`).
+  *A function that calls nothing outside, inside a program that writes, is tied as an exact
+  outcome* — `(ORet v m o)`, for any outside functions (`say_tie0`) — by the rules of `wends`.
+  Rejected: its tie over `irun` carried across by `wrun_of_irun`, which is for outside
+  functions that leave the outside as it was, and this module's does not. The cost: such a
+  function's tie is written over the run with the outside in a program that writes and over
+  `irun` elsewhere; `argsum`'s digits and `say`'s length are proofs of one shape.
+  *One range for the data and the arguments*: from the pushed word to the top of the stack's
+  range (`start_ends_top`, its `top` the range's end). The entry is handed two addresses, the
+  word after the data — where the kernel left the stack pointer — and the data's word.
+  *What a module with `write_all` as its one outside function needs is stated once*
+  (`put.shard` `put_wx`, `x86/put.shard` `put_wx_realizes`, `x86/module.shard`
+  `one_out_realizes`); `greet`'s own two theorems for it were removed.
+  *The model's runner takes answers and arguments together* (`cases`, the cases between
+  arguments `/`), so that a test compares the theorem's right side with the model's run case
+  by case in one load.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
@@ -2409,6 +2448,29 @@ measurements; measure again before building on one.
   output is as it was, text for text: the 51 generated modules load, the nine generated files
   have their sizes and statuses on the evaluator, the model and the processor, and their nine
   theorems link closed again, on Lean's three axioms and no parameter.
+- A loop that writes (2026-11-26; natively, single measurements). New: the program — meaning
+  54 lines, code and ties 523, file 116, theorem 218, writer 48 — and the rules of a tie, 363
+  lines; the rules of the run with the outside grew by 160. `greet`'s code and tie went from
+  208 lines to 98 by the rules, `put.shard` from 358 to 281. No statement of the pass, the
+  seam or the link changed: `x86/module.shard` and `x86/put.shard` gained a lemma each. The
+  file is 819 bytes. Its theorem with all it rests on loads in 80 s; `compile_say_test.sh`
+  takes 220 s and `compile_greet_test.sh` 162 s, the two side by side. The 20 x86 and compile
+  entrypoints: 1,567 checks, 0 failed. Seventeen cases of answers and arguments: the
+  theorem's right side, evaluated, and the model's run of the compiled file are one line
+  each. The processor: four arguments' lines and status 0, the same line as the model's run;
+  two hundred arguments; nothing and status 0 with no argument, the output closed too; 74
+  with the output closed, to `/dev/full`, and at a pipe nobody reads with the signal ignored;
+  ended by the kernel at such a pipe otherwise. A short write was made to happen: of an
+  argument of 100,000 bytes a pipe that does not block took 65,536, the next call failed, the
+  status was 74 and the pipe held exactly those bytes. Planted faults, each refused by K: the
+  loop stepping two addresses a turn (code, statements and proof changed alike), where the
+  rest of the arguments is needed at the next address; the line's end written before the
+  argument (code and proof alike), at the World the two writes come to against `say_line`'s;
+  the file's data byte 13 for the meaning's 10, where the held word is to be the line's end.
+  On first load the four ties needed parentheses only; one name clashed — the meaning's
+  function and the file's lines —, and the sample's proof is `rfl`, a list of numbers having
+  no decision. Outside the tree, as before: the 51 generated modules load and the nine
+  generated files' theorems link closed.
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above

@@ -15,7 +15,7 @@ comparison is the proposition `(<= a b)`; `/` and `%` at `Int` are the Euclidean
 | `derive.shard` | `std.derive` | equality, ordering and rendering for the basic types | `derive_test.sh` |
 | `fresh.shard` | `std.fresh` | a supply of fresh names | `define_test.sh` |
 | `host.shard` | `std.host` | the `World` and the host calls | `define_test.sh`, `bin_test.sh` |
-| `world.shard` | `std.world` | a program's World as a value, and the platform's `write_all` as a function on it | `compile_greet_test.sh` |
+| `world.shard` | `std.world` | a program's World as a value, and the platform's `write_all` as a function on it | `compile_greet_test.sh`, `compile_say_test.sh` |
 | `map.shard` | `std.map` | a finite map over `Nat` keys | `std_test.sh`, `x86_test.sh` |
 | `mem.shard` | `std.mem` | a byte memory | `std_test.sh`, `x86_test.sh`, `plain_test.sh` |
 | `facts.shard` | `std.facts` | division, shift and bitwise facts | `std_test.sh` |
@@ -122,6 +122,10 @@ on it:
 |---|---|
 | `write_all` | `((bs (List Nat)) (w World)) World`: all of the bytes written, however few an answer takes at a time; the bytes taken before a failure, and the process stopped; those taken before the outside ended it; nothing in a process that has stopped |
 | `put` | offering bytes until all are taken, by the answers alone |
+
+Two facts of `write_all` stand with it: what it is in a process that runs (`write_all_live`),
+and that it leaves a World that has stopped as it is (`write_all_stopped`) — by which a
+program's loop writes nothing after a write that stopped its process.
 
 A program on this World computes for any list of answers, and a theorem about it is for every
 list. A compiled program's file is proven to end as its value on the World a process starts

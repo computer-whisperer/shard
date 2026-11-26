@@ -18,15 +18,15 @@ it.
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`, and instructions as its lines (`lines`); `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `write.shard` | writing bytes out: the rules of the system call `write` by the kernel's next answer (`write_took`, `write_err`, `write_kill`), and `write_all` — fourteen instructions by hand that offer a range's bytes to descriptor 1 until all are taken — with its contract for any address, any range and every list of answers (`write_all_ok`); where it returns, rax holds 1 |
-| `world.shard` | a program's World (`v3/std/world.shard`) against what is outside a process: the World of an `Os` (`os_world`) and of a process's start (`world_of`), with of each answer how the call went and nothing of the registers; that the model's loop is the platform's `write_all` (`send_put`); how a file ends by a program's value, a word and a World (`world_res`); and when the outcome of code is such a value (`tied`, `tied_exit`) |
+| `world.shard` | a program's World (`v3/std/world.shard`) against what is outside a process: the World of an `Os` (`os_world`) and of a process's start (`world_of`), with of each answer how the call went and nothing of the registers; that the model's loop is the platform's `write_all` (`send_put`); how a file ends by a program's value, a word and a World (`world_res`); and when the outcome of code is such a value, with the memory left (`tied`, `tied_exit`) |
 | `bytes.shard` | the bytes of a word that stands in memory: the eight bytes from an address are the eight low bytes of the number read there (`le64_bytes`), which is below 2^64 (`le64_lt`); so where a number's word is read, its bytes are known (`held_bytes`) |
 | `hello.shard` | a file that writes: a listing by hand that writes two pieces of text with `write_all` and exits with 0; what its process ends as, on a list of answers (`hello_res`) |
 | `hello_run.shard` | that file from end to end: started with its stack anywhere and on any list of answers, it ends as `hello_res` says (`hello_ends`) |
 | `hello_main.shard` | the file written; what the theorem says of lists of answers, printed |
 | `exit42.shard` | the first program, its file, and the theorems `exit42_run` and `exit42_exits`; a `main` that writes the file |
 | `demo.shard` | a demonstration: three shard functions over machine words, a listing for them compiled by hand, and the listing's file; a `main` that writes the file |
-| `args.shard` | laws of a process's arguments: a memory that is the start's from the stack pointer up holds the same arguments (`args_at_same`); the range a function reads them through, from the stack pointer to the top of the stack's range (`args_rs`) |
-| `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), a file run on lists of the kernel's answers, code wrapped as an executable file |
+| `args.shard` | laws of a process's arguments: a memory that is the start's from the stack pointer up holds the same arguments (`args_at_same`); a string's bytes are the bytes of memory at its address (`str_bytes`); the range a function reads them through, from the stack pointer to the top of the stack's range (`args_rs`) |
+| `run_main.shard` | the model from the command line: files run, a file run with arguments (`start_args`, the arguments laid out as Linux lays them), a file run on lists of the kernel's answers, a file run once for each case of answers and arguments (`cases`, the cases between arguments `/`), code wrapped as an executable file |
 | `laws.shard` | what is proven once of the model: a run of steps (`reaches`), a rule for each of twenty-four instruction forms, what a store leaves as it was, a stored word read back, code unmoved by a store elsewhere, what a function's return keeps, what is mapped, a run to its end |
 | `frame.shard` | words in memory and a function's stack frame: a list of words standing from an address (`holds`), and the words a memory has from an address read out as a list (`read_words`); room for a frame (`room`); a state inside a function described by the words that stand from its stack pointer up to the return address (`framed`), and what a push, a pop, a callee's return and the function's own return make of the description |
 | `loaded.shard` | a listing's file, loaded: what `elf_load` makes of the file `elf_exec` writes, and the listing's code in place in the process's first state (`listing_loaded`) |
@@ -409,6 +409,7 @@ $X wrap CODE FILE            # the bytes of CODE as the executable file FILE tha
 $X run 10000 FILE…           # each file run for at most 10000 steps: a line each
 $X args 10000 FILE NAME ARG… # the file run with the arguments NAME ARG…, the first its name
 $X answers 10000 FILE SPEC…  # the file run once on each list SPEC of the kernel's answers
+$X cases 10000 FILE SPEC NAME ARG… / SPEC NAME ARG… …  # once for each case: answers, then arguments
 ```
 
 A list of answers is items between commas: `N`, the kernel takes N bytes (all for 0); `eN`, it
