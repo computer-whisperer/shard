@@ -9,7 +9,8 @@
 # K's tests, through k_clients_test.sh, which loads and runs them under the V3 loader.
 #
 # The entrypoints: every *_test.shard of kernel/test/ and k/test/, every *_test.sh of
-# kernel/test/, and each tool's own under tools/NAME/test/ (the formatter's).
+# kernel/test/, each tool's own under tools/NAME/test/ (the formatter's), and the search's
+# under search/test/.
 #
 # The entrypoints are independent processes over read-only sources (each shell test keeps
 # its scratch in directories of its own, under the system's temporary directory or as
@@ -55,7 +56,7 @@ run_one() {   # ENTRYPOINT INDEX: its output, exit code and seconds under $OUT
 }
 export -f run_one
 export OUT
-tests=(v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard $(ls v3/kernel/test/*_test.sh | grep -v native_tie_test.sh) v3/tools/*/test/*_test.sh)
+tests=(v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard $(ls v3/kernel/test/*_test.sh | grep -v native_tie_test.sh) v3/tools/*/test/*_test.sh v3/search/test/*_test.sh)
 [ "${V3_NATIVE:-0}" = 1 ] && tests+=(v3/kernel/test/native_tie_test.sh)
 for i in "${!tests[@]}"; do printf '%s %s\n' "${tests[$i]}" "$i"; done | xargs -P "$JOBS" -L 1 bash -c 'run_one "$0" "$1"'
 total=0; failed=0

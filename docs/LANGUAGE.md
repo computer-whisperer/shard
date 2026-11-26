@@ -1753,6 +1753,17 @@ library. A failure is `PENDING NAME auto_unsolved fp=S tactic=M.FN: REASON`: an 
 wrong signature, no answer, an answer that is not one block, a refused step, an evaluator stuck or
 out of fuel. One delegation names one tactic.
 
+### `find`: a search for values and bodies
+
+`prove` looks for proofs. `find` (`v3/search/`, built as `v3/bin/find`) looks for programs and
+data: given a goal — a function that answers a `Bool` or a decision — it searches for the values
+of the goal's parameters, and the bodies of the functions the program names and does not define
+(an `extern`, a view's `sig fn` with no implementation among the roots), for which the goal
+answers yes. It is a tool beside the build, as `prove` is: a load never searches. What it finds
+it prints as source text — a value, a `(fn …)` — after replaying it under the evaluator; it
+writes no file. The command line, the records and what each verdict claims are in
+`v3/search/README.md`.
+
 ## Fingerprints and versions
 
 A plain load persists nothing. Every load reads, elaborates and checks again, and prints one

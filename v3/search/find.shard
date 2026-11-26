@@ -1,0 +1,444 @@
+;;; v3/search/find.shard — the search's driver:
+;;;   find --root DIR [--init EXPORT --init-index INDEX] --goal M.FN [--hole M.FN]… [--use M.FN]…
+;;;        [--ints K,K,…] [--size N] [--fuel N] [--fuel-min N] [--budget N] [--all] [--enum] FILE…
+;;; loads each FILE as load.shard does and searches the program the load yields:
+;;;   --goal    a function whose answer is a two-constructor cell (`Bool`, a decision): the
+;;;             search wants its second constructor (`true`). Its parameters are the UNKNOWN
+;;;             VALUES, each of its stated type
+;;;   --hole    a function the program names and does not define — an `extern`, a view's `sig fn`
+;;;             with no implementation among the roots — whose body is to be found
+;;;   --use     a function a found body may call (a hole function among them: recursion)
+;;;   --ints    the integers an unknown `Int` or `Nat` is tried at, and a body may hold
+;;;             (default 0,1)
+;;;   --size    the last size bound tried (default 12): one unit for each constructor,
+;;;             integer, parameter or call decided
+;;;   --fuel    the most function entries allowed one branch (default 20000). A round walks at
+;;;             four times what the costliest answer so far took, between --fuel-min (default
+;;;             64) and this; a replay gets eight times the round's
+;;;   --budget  function entries allowed the whole search (default 20000000)
+;;;   --all     every answer of the first size that has one, not the first alone
+;;;   --enum    the comparison: every candidate decided whole before it is run (drive.shard
+;;;             `enum_walk`) — the same answers at many times the work
+;;; The records: `FIND …` (the problem as read), then for each answer `FOUND size=N` with one
+;;; `ARG i TYPE = VALUE` a goal parameter and one `FN (fn NAME ((x0 T) …) RET BODY)` a hole
+;;; function — source text: a hole function's line stands in the place of its `extern`, or in
+;;; the implementation of its view —, then the verdict and the tally (drive.shard):
+;;;   FIND: found|none|bounded|gave_up size=N work=W settled=… no=… out=… stuck=… cut=… dead=… unverified=…
+;;; Every answer printed was replayed under `ev` (task.shard). Exit 0: found; 1: not found
+;;; (the verdict says what that claims); 2: the load failed, or the problem does not read.
+;;; No file is written.
+;;;   --batch FILE   several problems over one load: each line of FILE is a problem's options
+;;;             as above (a line that starts with # is passed over), read over the command
+;;;             line's; exit 2 where a line does not read, else 0
+;;;   --closed  no search: the goal, a function with no parameter, is run by the narrowing
+;;;             machine and by `ev`, and the record is `SAME NAME = VALUE` or `DIFFER …` (exit
+;;;             1) — the check that the machine is `ev` where nothing is unknown
+
+(import "../kernel/loader.shard")
+(import "drive.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(use kernel.etable)
+(use kernel.ev)
+(use kernel.ev.LinkRes)
+(use kernel.host)
+(use kernel.host.World)
+(use kernel.intmap)
+(use kernel.intmap.IntMap)
+(use kernel.loader)
+(use kernel.name)
+(use kernel.name.Name)
+(use kernel.prog)
+(use kernel.prog.EDecl)
+(use kernel.prog.EType)
+(use kernel.prog.EvRes)
+(use kernel.prog.Prog)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.sym)
+(use kernel.util)
+(use search.drive)
+(use search.narrow)
+(use search.narrow.Stop)
+(use search.task)
+
+(record FArgs (root (List Int)) (export (List Int)) (index (List Int)) (files (List (List Int)))
+  (goal (List Int))
+  (holes (List (List Int)))
+  (uses (List (List Int)))
+  (ints (List Int))
+  (size Int)
+  (fuel Int)
+  (fuel_min Int)
+  (budget Int)
+  (all Bool)
+  (eager Bool)
+  (closed Bool)
+  (batch (List Int)))
+(fn parse_fargs ((args (List (List Int))) (a FArgs)) FArgs
+  (measure (struct args))
+  (match args
+    (nil
+      (with FArgs a (files (rev (FArgs.files a))) (holes (rev (FArgs.holes a)))
+        (uses (rev (FArgs.uses a)))))
+    ((cons x r)
+     (if (int_list_eq x (utf8 "--all")) (parse_fargs r (with FArgs a (all true)))
+     (if (int_list_eq x (utf8 "--enum")) (parse_fargs r (with FArgs a (eager true)))
+     (if (int_list_eq x (utf8 "--closed")) (parse_fargs r (with FArgs a (closed true)))
+     (match r
+       (nil (parse_fargs nil (with FArgs a (files (cons x (FArgs.files a))))))
+       ((cons v r2)
+        (if (int_list_eq x (utf8 "--root")) (parse_fargs r2 (with FArgs a (root v)))
+        (if (int_list_eq x (utf8 "--init")) (parse_fargs r2 (with FArgs a (export v)))
+        (if (int_list_eq x (utf8 "--init-index")) (parse_fargs r2 (with FArgs a (index v)))
+        (if (int_list_eq x (utf8 "--goal")) (parse_fargs r2 (with FArgs a (goal v)))
+        (if (int_list_eq x (utf8 "--hole"))
+          (parse_fargs r2 (with FArgs a (holes (cons v (FArgs.holes a)))))
+        (if (int_list_eq x (utf8 "--use"))
+          (parse_fargs r2 (with FArgs a (uses (cons v (FArgs.uses a)))))
+        (if (int_list_eq x (utf8 "--ints"))
+          (parse_fargs r2 (with FArgs a (ints (ints_of_text v nil nil))))
+        (if (int_list_eq x (utf8 "--size"))
+          (parse_fargs r2 (with FArgs a (size (read_num v (FArgs.size a)))))
+        (if (int_list_eq x (utf8 "--fuel"))
+          (parse_fargs r2 (with FArgs a (fuel (read_num v (FArgs.fuel a)))))
+        (if (int_list_eq x (utf8 "--fuel-min"))
+          (parse_fargs r2 (with FArgs a (fuel_min (read_num v (FArgs.fuel_min a)))))
+        (if (int_list_eq x (utf8 "--batch")) (parse_fargs r2 (with FArgs a (batch v)))
+        (if (int_list_eq x (utf8 "--budget"))
+          (parse_fargs r2 (with FArgs a (budget (read_num v (FArgs.budget a)))))
+          (parse_fargs r (with FArgs a (files (cons x (FArgs.files a)))))))))))))))))))))))))
+(fn read_num ((s (List Int)) (dflt Int)) Int
+  (if (bool_and (< 0 (len s)) (all_digits s)) (digits_val s 0) dflt))
+;; integers separated by commas, each with an optional minus sign; what does not read is passed over
+(fn ints_of_text ((bs (List Int)) (cur (List Int)) (acc (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (nil (rev (push_int (rev cur) acc)))
+    ((cons c r)
+     (if (= c 44) (ints_of_text r nil (push_int (rev cur) acc)) (ints_of_text r (cons c cur) acc)))))
+(fn push_int ((s (List Int)) (acc (List Int))) (List Int)
+  (match s
+    ((cons 45 d) (if (bool_and (< 0 (len d)) (all_digits d)) (cons (- 0 (digits_val d 0)) acc) acc))
+    (_ (if (bool_and (< 0 (len s)) (all_digits s)) (cons (digits_val s 0) acc) acc))))
+
+(fn find_files ((l Load) (files (List (List Int))) (w World)) (Prod Load World)
+  (measure (struct files))
+  (match files
+    (nil (Prod.mk l w))
+    ((cons f r)
+     (match (load_root_file l f w)
+       ((Prod.mk l1 w1) (find_files l1 r w1))))))
+;; the records of a load that failed: the refusals and the errors, not the whole load
+(fn print_frecs ((rs (List Rec)) (w World)) World
+  (measure (struct rs))
+  (match rs
+    (nil w)
+    ((cons x r)
+     (let ((line (show_rec x))) (print_frecs r (if (failure_line line) (write_line line w) w))))))
+;; a record whose first word is or ends in REFUSE or ERROR (REFUSE, READ-ERROR, IMPL-ERROR, …),
+;; or is IMPL before such a word
+(fn failure_line ((line (List Int))) Bool
+  (match (words_of line nil nil)
+    ((cons a rest)
+     (if (failure_word a) true
+     (match rest
+       ((cons b _) (bool_and (int_list_eq a (utf8 "IMPL")) (failure_word b)))
+       (nil false))))
+    (nil false)))
+(fn failure_word ((a (List Int))) Bool
+  (bool_or (ends_with a (utf8 "REFUSE")) (ends_with a (utf8 "ERROR"))))
+(fn ends_with ((a (List Int)) (suffix (List Int))) Bool
+  (int_list_eq (drop (- (len a) (len suffix)) a) suffix))
+;; a problem that does not read: its line, status 2
+(fn fail ((msg (List Int)) (w World)) (Prod Int World)
+  (Prod.mk 2 (write_line (append (utf8 "FIND-ERROR ") msg) w)))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Prod.mk args w1)
+     (let
+       ((a
+          (parse_fargs args
+            (make FArgs (root nil) (export nil) (index nil) (files nil) (goal nil) (holes nil)
+              (uses nil)
+              (ints (list 0 1))
+              (size 12)
+              (fuel 20000)
+              (fuel_min 64)
+              (budget 20000000)
+              (all false)
+              (eager false)
+              (closed false)
+              (batch nil)))))
+       (match (parts_of (FArgs.root a))
+         (none (exit 2 (write_line (utf8 "FIND-ERROR usage: --root DIR is required") w1)))
+         ((some rootp)
+          (if (= (len rootp) 0)
+            (exit 2 (write_line (utf8 "FIND-ERROR usage: --root DIR is required") w1))
+            (match (find_files (ld_start rootp (FArgs.export a) (FArgs.index a)) (FArgs.files a) w1)
+              ((Prod.mk l w2)
+               (let ((cs (rec_counts (ld_recs l) (zero_counts))))
+                 (if (< 0 (load_failures cs))
+                   (exit 2
+                     (write_line (append (utf8 "FIND-ERROR load: ") (show_counts_load cs))
+                       (print_frecs (ld_recs l) w2)))
+                   (main_loaded a (es_prog (Load.etab l)) w2))))))))))))
+;; the program linked once; one problem from the command line, or each line of the batch file
+(fn main_loaded ((a FArgs) (p Prog) (w World)) World
+  (match (link p)
+    ((LkErr e m)
+     (exit 2
+       (write_line (append (utf8 "FIND-ERROR link: ") (append (chars_of_sym e) (cons 32 m))) w)))
+    ((LkOk lk)
+     (if (= (len (FArgs.batch a)) 0)
+       (match (solve a p lk w)
+         ((Prod.mk st w1) (exit st w1)))
+       (match (read_file (FArgs.batch a) w)
+         ((Prod.mk none w1)
+          (exit 2 (write_line (append (utf8 "FIND-ERROR --batch: cannot read ") (FArgs.batch a)) w1)))
+         ((Prod.mk (some bs) w1)
+          (match (solve_lines a p lk (lines_of bs nil nil) (Prod.mk 0 w1))
+            ((Prod.mk st w2) (exit st w2)))))))))
+;; a batch: each line a problem — the command line's options, over the command line's own. The
+;; status is 2 where a line does not read, else 0: what each problem came to is in its records
+(fn solve_lines ((a FArgs) (p Prog) (lk Linked) (lines (List (List Int))) (acc (Prod Int World)))
+  (Prod Int World)
+  (measure (struct lines))
+  (match lines
+    (nil acc)
+    ((cons ln r)
+     (match acc
+       ((Prod.mk st w)
+        (let ((words (words_of ln nil nil)))
+          (match words
+            (nil (solve_lines a p lk r acc))
+            ((cons (cons 35 _) _) (solve_lines a p lk r acc))
+            (_
+              (match
+                (solve (parse_fargs words (with FArgs a (holes nil) (uses nil) (files nil))) p lk w)
+                ((Prod.mk st1 w1) (solve_lines a p lk r (Prod.mk (if (= st1 2) 2 st) w1))))))))))))
+(fn lines_of ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (nil (rev (cons (rev cur) acc)))
+    ((cons c r) (if (= c 10) (lines_of r nil (cons (rev cur) acc)) (lines_of r (cons c cur) acc)))))
+(fn words_of ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (nil (rev (push_word cur acc)))
+    ((cons c r) (if (is_ws c) (words_of r nil (push_word cur acc)) (words_of r (cons c cur) acc)))))
+(fn push_word ((cur (List Int)) (acc (List (List Int)))) (List (List Int))
+  (match cur
+    (nil acc)
+    (_ (cons (rev cur) acc))))
+
+;; ---- the problem as the command line states it -------------------------------------------------
+(type Sig (SigOk Int (List EType) EType) (SigNo (List Int)))
+;; a name of the command line as a function of the program: its index and signature. `holes`:
+;; it must be one the program does not define; otherwise any function, defined or not
+(fn sig_of ((lk Linked) (p Prog) (text (List Int)) (hole Bool)) Sig
+  (match (name_of_bytes text nil Anon)
+    (none (SigNo (append text (utf8 ": not a name"))))
+    ((some n)
+     (match (nmap_find (lk_ids lk) n)
+       (none (SigNo (append text (utf8 ": no function of the program has this identity"))))
+       ((some id)
+        (match (prog_find p n)
+          ((some (EFn _ k ps rt _ _))
+           (if hole
+             (SigNo (append text (utf8 ": defined — a hole function is an extern or a sig fn")))
+           (if (= k 0) (SigOk id ps rt)
+           (SigOk id ps rt))))
+          ((some (EExtern _ k ps rt))
+           (if (= k 0) (SigOk id ps rt)
+           (SigNo (append text (utf8 ": a hole function with type parameters")))))
+          ((some (ESig _ k ps rt))
+           (if (= k 0) (SigOk id ps rt)
+           (SigNo (append text (utf8 ": a hole function with type parameters")))))
+          (_ (SigNo (append text (utf8 ": not a function"))))))))))
+(type Holes (HolesOk (IntMap Hole) (List (Prod Int Name))) (HolesNo (List Int)))
+(fn holes_of
+  ((lk Linked) (p Prog) (texts (List (List Int))) (hs (IntMap Hole)) (acc (List (Prod Int Name))))
+  Holes
+  (measure (struct texts))
+  (match texts
+    (nil (HolesOk hs (rev acc)))
+    ((cons x r)
+     (match (sig_of lk p x true)
+       ((SigNo m) (HolesNo m))
+       ((SigOk id ps rt)
+        (holes_of lk p r (im_insert hs id (Hole.Hole ps rt none))
+          (cons (Prod.mk id (fn_name lk id)) acc)))))))
+(type Vocs (VocsOk (List Voc)) (VocsNo (List Int)))
+(fn vocs_of ((lk Linked) (p Prog) (texts (List (List Int))) (acc (List Voc))) Vocs
+  (measure (struct texts))
+  (match texts
+    (nil (VocsOk (rev acc)))
+    ((cons x r)
+     (match (sig_of lk p x false)
+       ((SigNo m) (VocsNo m))
+       ((SigOk id ps rt) (vocs_of lk p r (cons (Voc.Voc id ps rt) acc)))))))
+(fn no_type_params ((ts (List EType))) Bool
+  (measure (List_EType.size ts))
+  (match ts
+    (nil true)
+    ((cons (ETVar _) _) false)
+    ((cons (ETCon _ as) r) (bool_and (no_type_params as) (no_type_params r)))))
+(fulfills no_type_params.dec_1
+  (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (rw EType.size.eq_1) (arith)))
+(fulfills no_type_params.dec_2 (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (arith)))
+
+(fn solve ((a FArgs) (p Prog) (lk Linked) (w World)) (Prod Int World)
+  (match (sig_of lk p (FArgs.goal a) false)
+    ((SigNo m) (fail (append (utf8 "--goal ") m) w))
+    ((SigOk gid gps _)
+     (if (FArgs.closed a) (closed_run a p lk gid gps w)
+     (if (bool_not (no_type_params gps))
+       (fail (utf8 "--goal: a parameter's type names a type parameter") w)
+       (match (holes_of lk p (FArgs.holes a) IMEmpty nil)
+         ((HolesNo m) (fail (append (utf8 "--hole ") m) w))
+         ((HolesOk hs named)
+          (match (vocs_of lk p (FArgs.uses a) nil)
+            ((VocsNo m) (fail (append (utf8 "--use ") m) w))
+            ((VocsOk voc)
+             (match p
+               ((Prog.Prog ds)
+                (let
+                  ((pb
+                     (problem_of (Given.Given lk ds voc (FArgs.ints a) (FArgs.fuel a))
+                       (fn_name lk gid)
+                       gid
+                       gps
+                       named)))
+                  (report a pb
+                    (deepen pb
+                      (Lim.Lim (FArgs.size a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
+                        (FArgs.fuel a)
+                        (FArgs.budget a)
+                        (FArgs.all a)
+                        (FArgs.eager a))
+                      (Start.Start (Mach.Mach lk hs (Problem.base pb)) gid gps)
+                      1
+                      (tally_zero))
+                    w)))))))))))))
+;; --closed: a function with no parameter and nothing unknown, run by the narrowing machine and
+;; by `ev`: the two answers must be the same value, or the same kind of end
+(fn closed_run ((a FArgs) (p Prog) (lk Linked) (gid Int) (gps (List EType)) (w World))
+  (Prod Int World)
+  (match gps
+    ((cons _ _) (fail (utf8 "--closed: the function takes parameters") w))
+    (nil
+      (match p
+        ((Prog.Prog ds)
+         (let
+           ((pb (problem_of (Given.Given lk ds nil nil (FArgs.fuel a)) (fn_name lk gid) gid nil nil))
+            (mine
+              (end_text pb
+                (nv_start (Mach.Mach lk IMEmpty (len ds)) (heap_empty) gid nil (FArgs.fuel a))))
+            (evs (ev_text (ev p (fn_name lk gid) nil (FArgs.fuel a)))))
+           (if (int_list_eq mine evs)
+             (Prod.mk 0
+               (write_line
+                 (append (utf8 "SAME ")
+                   (append (show_name (fn_name lk gid)) (append (utf8 " = ") mine)))
+                 w))
+             (Prod.mk 1
+               (write_line
+                 (append (utf8 "DIFFER ")
+                   (append (show_name (fn_name lk gid))
+                     (append (utf8 ": the narrowing machine ")
+                       (append mine (append (utf8 ", ev ") evs)))))
+                 w)))))))))
+(fn end_text ((pb Problem) (st Stop)) (List Int)
+  (match st
+    ((SVal v h _)
+     (match (closed_val pb h v)
+       ((some x) (show_val x))
+       (none (utf8 "an open value"))))
+    ((SNeed _ _ _ _) (utf8 "a stop"))
+    (SOut (utf8 "out of fuel"))
+    ((SStuck why _) (append (utf8 "stuck ") (chars_of_sym why)))
+    ((SExh why _) (append (utf8 "exhausted ") (chars_of_sym why)))))
+(fn ev_text ((r EvRes)) (List Int)
+  (match r
+    ((EvOk v) (show_val v))
+    (EvOut (utf8 "out of fuel"))
+    ((EvStuck why _) (append (utf8 "stuck ") (chars_of_sym why)))
+    ((EvExhausted why _) (append (utf8 "exhausted ") (chars_of_sym why)))))
+
+;; ---- the records ---------------------------------------------------------------------------------
+(fn report ((a FArgs) (pb Problem) (o Ending) (w World)) (Prod Int World)
+  (match o
+    ((Ending.Ending verdict size sols y)
+     (Prod.mk (if (< 0 (len sols)) 0 1)
+       (write_line
+         (append (utf8 "FIND: ")
+           (append (chars_of_sym verdict)
+             (append (utf8 " size=") (append (show_nat size) (show_tally (tally_counts y))))))
+         (print_sols pb sols size
+           (write_line
+             (append (utf8 "FIND goal=")
+               (append (show_name (Problem.goal pb))
+                 (append (utf8 " holes=")
+                   (append (show_nat (len (Problem.holes pb)))
+                     (append (utf8 " use=")
+                       (append (show_nat (len (Problem.voc pb)))
+                         (append (utf8 " size<=")
+                           (append (show_nat (FArgs.size a))
+                             (append (utf8 " fuel<=")
+                               (append (show_nat (FArgs.fuel a))
+                                 (append (utf8 " budget=")
+                                   (append (show_nat (FArgs.budget a))
+                                     (if (FArgs.eager a) (utf8 " enum") nil)))))))))))))
+             w)))))))
+(fn show_tally ((cs (List Int))) (List Int)
+  (match cs
+    ((cons wk (cons e (cons f (cons o (cons s (cons c (cons n (cons u nil))))))))
+     (append (utf8 " work=")
+       (append (show_nat wk)
+         (append (utf8 " settled=")
+           (append (show_nat e)
+             (append (utf8 " no=")
+               (append (show_nat f)
+                 (append (utf8 " out=")
+                   (append (show_nat o)
+                     (append (utf8 " stuck=")
+                       (append (show_nat s)
+                         (append (utf8 " cut=")
+                           (append (show_nat c)
+                             (append (utf8 " dead=")
+                               (append (show_nat n) (append (utf8 " unverified=") (show_nat u)))))))))))))))))
+    (_ nil)))
+(fn print_sols ((pb Problem) (sols (List Sol)) (size Int) (w World)) World
+  (measure (struct sols))
+  (match sols
+    (nil w)
+    ((cons (Sol.Sol m h) r)
+     (print_sols pb r size
+       (print_fns pb m (Problem.holes pb)
+         (print_args pb h (Problem.goal_tys pb) 0
+           (write_line (append (utf8 "FOUND size=") (show_nat size)) w)))))))
+(fn print_args ((pb Problem) (h Heap) (tys (List EType)) (i Int) (w World)) World
+  (measure (struct tys))
+  (match tys
+    (nil w)
+    ((cons ty r)
+     (print_args pb h r (+ i 1)
+       (write_line
+         (append (utf8 "  ARG ")
+           (append (show_nat i)
+             (append (utf8 " ")
+               (append (show_etype ty)
+                 (append (utf8 " = ")
+                   (match (closed_val pb h (NVal.NRef i))
+                     ((some v) (show_val v))
+                     (none (utf8 "?"))))))))
+         w)))))
+(fn print_fns ((pb Problem) (m Mach) (hs (List (Prod Int Name))) (w World)) World
+  (measure (struct hs))
+  (match hs
+    (nil w)
+    ((cons (Prod.mk id n) r)
+     (print_fns pb m r (write_line (append (utf8 "  FN ") (show_fn pb m id n)) w)))))

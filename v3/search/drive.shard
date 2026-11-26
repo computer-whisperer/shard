@@ -1,0 +1,501 @@
+;;; v3/search/drive.shard — the search over the narrowing machine (narrow.shard).
+;;;
+;;; A PROBLEM (task.shard) is a linked program, a goal — a function of it whose answer is a two-constructor
+;;; cell, `Bool` or a decision — and what may be unknown: the goal's own arguments (values), and
+;;; the hole functions the program names (code). The search wants the goal to answer its
+;;; SECOND constructor (`true`, `isTrue`: the `if` rule's "yes").
+;;;
+;;; The machine runs the goal and stops where the run needs a cell settled. The ways to settle
+;;; it are read off the types the program states, never from a grammar somebody wrote:
+;;;   an unknown value of an inductive type   each constructor of the type, over new unknowns;
+;;;   an unknown `Int` or `Nat`               each integer of the task's list;
+;;;   a call of a hole function with no body  each PRODUCTION at its result type: a parameter of
+;;;                                           that type, a constructor of the type, an integer
+;;;                                           of the list, a function of the task's vocabulary
+;;;                                           whose result type fits — each over new hole
+;;;                                           functions for its arguments, which take the same
+;;;                                           parameters and are decided when a run needs them.
+;;; Each way costs one unit of SIZE. The walk is depth first under a size bound, the bound
+;;; raised one at a time (`deepen`), so the first answer found is one of the smallest in what
+;;; the runs needed decided. A branch ends when the goal answers no, runs out of its fuel, is
+;;; stuck, has no way to settle what it needs, or meets the size bound; the tally counts each.
+;;;
+;;; What is claimed, and never more (`Ending`):
+;;;   found      a goal that answered yes and whose replay under `ev` answered yes (task.shard);
+;;;              what was decided is in the machine and the heap
+;;;   none       every branch ended and none was cut by the size bound or the fuel: there is
+;;;              no answer over this vocabulary and these integers at any size
+;;;   bounded    every branch ended up to the last size bound, some cut: no answer of that size
+;;;              or less (branches that ran out of fuel are counted, and qualify the claim)
+;;;   gave_up    the work budget ended first: nothing is claimed
+;;; Work is counted in function entries, the machine's fuel.
+
+(import "task.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(use kernel.descent)
+(use kernel.ev)
+(use kernel.intmap)
+(use kernel.name)
+(use kernel.prog)
+(use kernel.sym)
+(use kernel.util)
+(use kernel.name.Name)
+(use kernel.prog.ECtorDef)
+(use kernel.prog.EDecl)
+(use kernel.prog.EType)
+(use kernel.ev.IVal)
+(use kernel.ev.LTerm)
+(use search.narrow)
+(use search.task)
+(use search.narrow.Cell)
+(use search.narrow.NVal)
+(use search.narrow.Stop)
+
+;; ---- the limits -----------------------------------------------------------------------------------
+;; the limits of a search: the last size bound, the least and the most fuel of a branch, the
+;; work budget, every answer or the first, and whether candidates are decided whole before they
+;; are run (`enum_walk`). A round walks at one size bound and one fuel (`deepen`)
+(type Lim (Lim Int Int Int Int Bool Bool))
+(fn lim_size ((l Lim)) Int
+  (match l
+    ((Lim.Lim s _ _ _ _ _) s)))
+(fn lim_fuel ((l Lim)) Int
+  (match l
+    ((Lim.Lim _ f _ _ _ _) f)))
+(fn lim_fuel_max ((l Lim)) Int
+  (match l
+    ((Lim.Lim _ _ f _ _ _) f)))
+(fn lim_budget ((l Lim)) Int
+  (match l
+    ((Lim.Lim _ _ _ b _ _) b)))
+(fn lim_all ((l Lim)) Bool
+  (match l
+    ((Lim.Lim _ _ _ _ a _) a)))
+(fn lim_eager ((l Lim)) Bool
+  (match l
+    ((Lim.Lim _ _ _ _ _ e) e)))
+;; the limits of one round: this size bound, this fuel
+(fn lim_at ((l Lim) (b Int) (fuel Int)) Lim
+  (match l
+    ((Lim.Lim _ _ fm bu a e) (Lim.Lim b fuel fm bu a e))))
+;; the limits with a higher least fuel
+(fn lim_floor ((l Lim) (fuel Int)) Lim
+  (match l
+    ((Lim.Lim s _ fm bu a e) (Lim.Lim s fuel fm bu a e))))
+
+;; ---- the ways to settle a cell -----------------------------------------------------------------
+(type Alt (Alt Mach Heap))
+;; the ways to settle the cell a run needs: an unknown value's, a hole function's
+(fn alts ((t Problem) (m Mach) (h Heap) (r Int)) (List Alt)
+  (match (heap_find h r)
+    ((some (CUnk ty)) (alts_value t m h r ty))
+    ((some (CSusp id _)) (alts_hole t m h id))
+    (_ nil)))
+;; an unknown value: every constructor of its type over new unknowns of the fields' types; an
+;; integer, every one of the list (a Nat: those not negative)
+(fn alts_value ((t Problem) (m Mach) (h Heap) (r Int) (ty EType)) (List Alt)
+  (match ty
+    ((ETVar _) nil)
+    ((ETCon n targs)
+     (if (ty_is_int n) (alts_val_ints m h r (ty_is_nat n) (Problem.ints t))
+     (match (decl_index_find (Problem.inds t) n)
+       ((some (EInd _ _ cs)) (alts_val_ctors t m h r targs cs))
+       (_ nil))))))
+(fn alts_val_ints ((m Mach) (h Heap) (r Int) (nat Bool) (ks (List Int))) (List Alt)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons k rest)
+     (if (bool_and nat (< k 0)) (alts_val_ints m h r nat rest)
+     (cons (Alt.Alt m (heap_set h r (CVal (NInt k)))) (alts_val_ints m h r nat rest))))))
+(fn alts_val_ctors ((t Problem) (m Mach) (h Heap) (r Int) (targs (List EType)) (cs (List ECtorDef)))
+  (List Alt)
+  (measure (struct cs))
+  (match cs
+    (nil nil)
+    ((cons (ECtorDef.ECtorDef c fts) rest)
+     (match (nmap_find (lk_tags (Problem.lk t)) c)
+       (none (alts_val_ctors t m h r targs rest))
+       ((some tag)
+        (match (push_unknowns h (subst_tys targs fts) nil)
+          ((Prod.mk h1 refs)
+           (cons (Alt.Alt m (heap_set h1 r (CVal (NCtor tag refs))))
+             (alts_val_ctors t m h r targs rest)))))))))
+;; new unknown cells of these types: the heap with them, their references in order
+(fn push_unknowns ((h Heap) (ts (List EType)) (acc (List NVal))) (Prod Heap (List NVal))
+  (measure (struct ts))
+  (match ts
+    (nil (Prod.mk h (rev acc)))
+    ((cons ty r) (push_unknowns (heap_push h (CUnk ty)) r (cons (NRef (heap_next h)) acc)))))
+
+;; a hole function with no body: its productions, in this order — parameters, constructors,
+;; integers, the vocabulary
+(fn alts_hole ((t Problem) (m Mach) (h Heap) (id Int)) (List Alt)
+  (match (im_find (mach_holes m) id)
+    ((some (Hole.Hole ptys rty none))
+     (append (prod_vars m h id ptys rty ptys (- (len ptys) 1))
+       (append (prod_data t m h id) (prod_calls t m h id (Problem.voc t)))))
+    (_ nil)))
+;; the hole function `id` given the body `b`
+(fn bind_hole ((m Mach) (id Int) (b LTerm)) Mach
+  (match m
+    ((Mach.Mach lk hs n)
+     (match (im_find hs id)
+       ((some (Hole.Hole ptys rty _))
+        (Mach.Mach lk (im_insert hs id (Hole.Hole ptys rty (some b))) n))
+       (none m)))))
+;; a parameter of the result type: its index counted from the last (`i` at the first)
+(fn prod_vars
+  ((m Mach) (h Heap) (id Int) (ptys (List EType)) (rty EType) (rest (List EType)) (i Int))
+  (List Alt)
+  (measure (struct rest))
+  (match rest
+    (nil nil)
+    ((cons p more)
+     (if (etype_eq p rty)
+       (cons (Alt.Alt (bind_hole m id (LBVar i)) h) (prod_vars m h id ptys rty more (- i 1)))
+       (prod_vars m h id ptys rty more (- i 1))))))
+;; the result type's own values: an integer of the list, or a constructor over new hole
+;; functions for its fields
+(fn prod_data ((t Problem) (m Mach) (h Heap) (id Int)) (List Alt)
+  (match (im_find (mach_holes m) id)
+    ((some (Hole.Hole ptys (ETCon n targs) _))
+     (if (ty_is_int n) (prod_ints m h id (ty_is_nat n) (Problem.ints t))
+     (match (decl_index_find (Problem.inds t) n)
+       ((some (EInd _ _ cs)) (prod_ctors t m h id ptys targs cs))
+       (_ nil))))
+    (_ nil)))
+(fn prod_ints ((m Mach) (h Heap) (id Int) (nat Bool) (ks (List Int))) (List Alt)
+  (measure (struct ks))
+  (match ks
+    (nil nil)
+    ((cons k rest)
+     (if (bool_and nat (< k 0)) (prod_ints m h id nat rest)
+     (cons (Alt.Alt (bind_hole m id (LLit (IVInt k))) h) (prod_ints m h id nat rest))))))
+(fn prod_ctors
+  ((t Problem)
+   (m Mach)
+   (h Heap)
+   (id Int)
+   (ptys (List EType))
+   (targs (List EType))
+   (cs (List ECtorDef)))
+  (List Alt)
+  (measure (struct cs))
+  (match cs
+    (nil nil)
+    ((cons (ECtorDef.ECtorDef c fts) rest)
+     (match (nmap_find (lk_tags (Problem.lk t)) c)
+       (none (prod_ctors t m h id ptys targs rest))
+       ((some tag)
+        (match (add_holes m ptys (subst_tys targs fts) nil)
+          ((Prod.mk m1 calls)
+           (cons (Alt.Alt (bind_hole m1 id (LCtor tag calls)) h)
+             (prod_ctors t m h id ptys targs rest)))))))))
+;; a function of the vocabulary whose result type takes the hole function's, at the type
+;; arguments that makes — over new hole functions for its arguments. One whose parameters name a
+;; type parameter its result does not is passed over: nothing here says what to put for it
+(fn prod_calls ((t Problem) (m Mach) (h Heap) (id Int) (vs (List Voc))) (List Alt)
+  (measure (struct vs))
+  (match vs
+    (nil nil)
+    ((cons (Voc.Voc f ps rt) rest)
+     (match (im_find (mach_holes m) id)
+       ((some (Hole.Hole ptys rty _))
+        (match (ty_match rt rty nil)
+          (none (prod_calls t m h id rest))
+          ((some s)
+           (match (ty_insts s ps nil)
+             (none (prod_calls t m h id rest))
+             ((some ps1)
+              (match (add_holes m ptys ps1 nil)
+                ((Prod.mk m1 calls)
+                 (cons (Alt.Alt (bind_hole m1 id (LCall f calls)) h) (prod_calls t m h id rest)))))))))
+       (none nil)))))
+;; new hole functions over the parameters `ptys`, one for each result type: the machine with
+;; them, and a call of each on the parameters in order — the frame a body over them stands in
+(fn add_holes ((m Mach) (ptys (List EType)) (tys (List EType)) (acc (List LTerm)))
+  (Prod Mach (List LTerm))
+  (measure (struct tys))
+  (match tys
+    (nil (Prod.mk m (rev acc)))
+    ((cons ty r)
+     (match m
+       ((Mach.Mach lk hs n)
+        (add_holes (Mach.Mach lk (im_insert hs n (Hole.Hole ptys ty none)) (+ n 1)) ptys r
+          (cons (LCall n (frame_vars (- (len ptys) 1))) acc)))))))
+;; the parameters of a frame of i+1, first to last: indices i down to 0
+(fn frame_vars ((i Int)) (List LTerm)
+  (measure (Int.natAbs (+ i 1)))
+  (if (< i 0) nil (cons (LBVar i) (frame_vars (- i 1)))))
+(fulfills frame_vars.dec_1 (by (intro i h) (apply natAbs_lt (arith) (arith))))
+;; a type over type parameters against a closed type: the parameters' types that make them
+;; equal, added to those already made
+(fn ty_match ((p EType) (c EType) (s (List (Prod Int EType)))) (Option (List (Prod Int EType)))
+  (measure (EType.size p))
+  (match p
+    ((ETVar i)
+     (match (ty_assoc s i)
+       ((some b) (if (etype_eq b c) (some s) none))
+       (none (some (cons (Prod.mk i c) s)))))
+    ((ETCon n as)
+     (match c
+       ((ETCon m cs) (if (name_eq n m) (ty_match_all as cs s) none))
+       (_ none)))))
+(fn ty_match_all ((ps (List EType)) (cs (List EType)) (s (List (Prod Int EType))))
+  (Option (List (Prod Int EType)))
+  (measure (List_EType.size ps))
+  (match ps
+    (nil
+      (match cs
+        (nil (some s))
+        (_ none)))
+    ((cons p pr)
+     (match cs
+       (nil none)
+       ((cons c cr)
+        (match (ty_match p c s)
+          (none none)
+          ((some s1) (ty_match_all pr cr s1))))))))
+(fn ty_assoc ((s (List (Prod Int EType))) (i Int)) (Option EType)
+  (measure (struct s))
+  (match s
+    (nil none)
+    ((cons (Prod.mk j ty) r) (if (= i j) (some ty) (ty_assoc r i)))))
+;; types under the parameters' types made; none where one names a parameter with no type made
+(fn ty_insts ((s (List (Prod Int EType))) (ts (List EType)) (acc (List EType)))
+  (Option (List EType))
+  (measure (List_EType.size ts))
+  (match ts
+    (nil (some (rev acc)))
+    ((cons ty r)
+     (match (ty_inst s ty)
+       (none none)
+       ((some ty1) (ty_insts s r (cons ty1 acc)))))))
+(fn ty_inst ((s (List (Prod Int EType))) (ty EType)) (Option EType)
+  (measure (EType.size ty))
+  (match ty
+    ((ETVar i) (ty_assoc s i))
+    ((ETCon n as)
+     (match (ty_insts s as nil)
+       (none none)
+       ((some as1) (some (ETCon n as1)))))))
+
+(fulfills ty_match.dec_1 (by (intro p c s n as h m cs hc hn) (rw h) (rw EType.size.eq_1) (arith)))
+(fulfills ty_match_all.dec_1
+  (by (intro ps cs s p pr h c cr hc) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills ty_match_all.dec_2
+  (by (intro ps cs s p pr h c cr hc s1) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills ty_insts.dec_1 (by (intro s ts acc ty r h) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills ty_insts.dec_2 (by (intro s ts acc ty r h ty1) (rw h) (rw List_EType.size.eq_2) (arith)))
+(fulfills ty_inst.dec_1 (by (intro s ty n as h) (rw h) (rw EType.size.eq_1) (arith)))
+
+;; ---- the walk ----------------------------------------------------------------------------------
+;; a stopped run: the machine, the heap, the cell it needs, the rest of the run, the fuel left,
+;; the size so far
+(type Stopped (Stopped Mach Heap Int NKont Int Int))
+;; an answer: the machine and the heap of a goal that answered yes
+(type Sol (Sol Mach Heap))
+;; work (function entries), cells settled, goals that answered no, branches out of fuel, stuck,
+;; cut by the size bound, with no way to settle what they needed, goals that answered yes and
+;; whose replay under `ev` did not — and the PEAK: the most work one branch took to an answer,
+;; yes or no, which is what the next round's fuel is set by
+(type Tally (Tally Int Int Int Int Int Int Int Int Int))
+(fn tally_zero () Tally (Tally.Tally 0 0 0 0 0 0 0 0 0))
+(fn tally_work ((y Tally)) Int
+  (match y
+    ((Tally.Tally w _ _ _ _ _ _ _ _) w)))
+(fn tally_no ((y Tally)) Int
+  (match y
+    ((Tally.Tally _ _ f _ _ _ _ u _) (+ f u))))
+(fn tally_out ((y Tally)) Int
+  (match y
+    ((Tally.Tally _ _ _ o _ _ _ _ _) o)))
+(fn tally_cut ((y Tally)) Int
+  (match y
+    ((Tally.Tally _ _ _ _ _ c _ _ _) c)))
+(fn tally_peak ((y Tally)) Int
+  (match y
+    ((Tally.Tally _ _ _ _ _ _ _ _ p) p)))
+;; the tally with work added and one more of: 0 nothing, 1 a cell settled, 2 a no, 3 out of
+;; fuel, 4 stuck, 5 cut, 6 no way, 7 a yes the replay did not give
+(fn tally_add ((y Tally) (work Int) (what Int)) Tally
+  (match y
+    ((Tally.Tally w e f o s c n u p)
+     (Tally.Tally (+ w work) (if (= what 1) (+ e 1) e) (if (= what 2) (+ f 1) f)
+       (if (= what 3) (+ o 1) o)
+       (if (= what 4) (+ s 1) s)
+       (if (= what 5) (+ c 1) c)
+       (if (= what 6) (+ n 1) n)
+       (if (= what 7) (+ u 1) u)
+       p))))
+;; a branch answered after `used` entries in all
+(fn tally_answered ((y Tally) (used Int)) Tally
+  (match y
+    ((Tally.Tally w e f o s c n u p) (Tally.Tally w e f o s c n u (max_int p used)))))
+(fn tally_counts ((y Tally)) (List Int)
+  (match y
+    ((Tally.Tally w e f o s c n u _) (list w e f o s c n u))))
+;; what a round of runs left: the stopped runs in order, the answers (latest first), the tally
+(type Ran (Ran (List Stopped) (List Sol) Tally))
+;; one run's end taken into a round: `fuel` is what the run was given, `size` the size of what
+;; was decided before it. A goal that answered yes is an answer when its replay says so too
+(fn ran_add ((t Problem) (x Ran) (m Mach) (st Stop) (fuel Int) (size Int)) Ran
+  (match x
+    ((Ran.Ran nodes sols y)
+     (match st
+       ((SVal (NCtor tag _) h f)
+        (let ((y1 (tally_answered y (- (Problem.fuel t) f))))
+          (if (= (band tag 1) 1)
+            (if (replay t m h (tag_name (Problem.lk t) tag) (* 8 (Problem.fuel t)))
+              (Ran.Ran nodes (cons (Sol.Sol m h) sols) (tally_add y1 (- fuel f) 0))
+              (Ran.Ran nodes sols (tally_add y1 (- fuel f) 7)))
+            (Ran.Ran nodes sols (tally_add y1 (- fuel f) 2)))))
+       ((SVal _ _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))
+       ((SNeed r k h f)
+        (Ran.Ran (cons (Stopped.Stopped m h r k f size) nodes) sols (tally_add y (- fuel f) 0)))
+       (SOut (Ran.Ran nodes sols (tally_add y fuel 3)))
+       ((SStuck _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))
+       ((SExh _ f) (Ran.Ran nodes sols (tally_add y (- fuel f) 4)))))))
+;; each way resumed from the stop it settles: the runs' ends, the stopped ones latest first
+(fn run_alts ((t Problem) (as (List Alt)) (nd Stopped) (acc Ran)) Ran
+  (measure (struct as))
+  (match as
+    (nil acc)
+    ((cons (Alt.Alt m h) rest)
+     (match nd
+       ((Stopped.Stopped _ _ r k fuel size)
+        (run_alts t rest nd (ran_add t acc m (nv_resume m h r k fuel) fuel (+ size 1))))))))
+;; what a walk left: the answers (latest first), the tally, whether the work budget ended it
+(type Walk (Walk (List Sol) Tally Bool))
+;; depth first: the stopped run on top is settled each way and the runs that stopped again go
+;; on top in the ways' order
+(fn walk ((t Problem) (lim Lim) (stack (List Stopped)) (sols (List Sol)) (y Tally)) Walk
+  (match stack
+    (nil (Walk.Walk sols y false))
+    ((cons (Stopped.Stopped m h r k fuel size) rest)
+     (if (<= (lim_budget lim) (tally_work y)) (Walk.Walk sols y true)
+     (if (<= (lim_size lim) size) (walk t lim rest sols (tally_add y 0 5))
+     (match (alts t m h r)
+       (nil (walk t lim rest sols (tally_add y 0 6)))
+       (as
+         (match
+           (run_alts t as (Stopped.Stopped m h r k fuel size) (Ran.Ran nil sols (tally_add y 0 1)))
+           ((Ran.Ran nodes sols1 y1)
+            (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols1))) (Walk.Walk sols1 y1 false)
+            (walk t lim (rev_onto nodes rest) sols1 y1)))))))))))
+
+;; ---- a search ----------------------------------------------------------------------------------
+;; where a search starts: the machine with the task's hole functions, the goal's index, its
+;; parameter types — each an unknown value
+(type Start (Start Mach Int (List EType)))
+;; one walk under `lim` from the start, adding to the tally `y`
+(fn search_at ((t Problem) (lim Lim) (s Start) (y Tally)) Walk
+  (match s
+    ((Start.Start m goal ptys)
+     (match (push_unknowns (heap_empty) ptys nil)
+       ((Prod.mk h0 refs)
+        (if (lim_eager lim)
+          (enum_walk t lim s
+            (list
+              (Cand.Cand m h0 (append (cell_items 0 (len ptys)) (hole_items (Problem.holes t))) 0))
+            (Ran.Ran nil nil y))
+          (match
+            (ran_add t (Ran.Ran nil nil y) m (nv_start m h0 goal refs (lim_fuel lim)) (lim_fuel lim)
+              0)
+            ((Ran.Ran nodes sols y1)
+             (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y1 false)
+             (walk t lim nodes sols y1))))))))))
+;; the verdict (found, none, bounded, gave_up), the size bound it was reached at, the answers
+;; (first found first), the tally over every round
+(type Ending (Ending Symbol Int (List Sol) Tally))
+;; rounds at the size bounds `b`, `b`+1, … up to `lim`'s. A round's fuel of a branch is four
+;; times the peak so far — what the costliest answer took — and no less than the least fuel: a
+;; half-decided program that loops then costs four ordinary runs, not the whole allowance. A
+;; round where branches ran out and none answered says the fuel is under what an answer takes:
+;; it is walked again at four times the fuel. The first round with an answer, or with nothing
+;; cut, ends the search
+(fn deepen ((t Problem) (lim Lim) (s Start) (b Int) (y Tally)) Ending
+  (if (< (lim_size lim) b) (Ending.Ending (sym "bounded") (lim_size lim) nil y)
+  (let ((fuel (min_int (lim_fuel_max lim) (max_int (lim_fuel lim) (* 4 (tally_peak y))))))
+    (match (search_at (problem_fuel t fuel) (lim_at lim b fuel) s (tally_round y))
+      ((Walk.Walk sols y1 over)
+       (if (< 0 (len sols)) (Ending.Ending (sym "found") b (rev sols) y1)
+       (if over (Ending.Ending (sym "gave_up") b nil y1)
+       (if
+         (bool_and (< 0 (tally_out y1)) (bool_and (= (tally_no y1) 0) (< fuel (lim_fuel_max lim))))
+         (deepen t (lim_floor lim (* 4 fuel)) s b y1)
+         (if (bool_and (= (tally_cut y1) 0) (= (tally_out y1) 0))
+           (Ending.Ending (sym "none") b nil y1)
+         (if (= (tally_cut y1) 0) (Ending.Ending (sym "bounded") b nil y1)
+         (deepen t lim s (+ b 1) y1)))))))))))
+(fn min_int ((a Int) (b Int)) Int (if (< a b) a b))
+;; a tally carried into the next round: the work and the peak stay, the counts are the round's own
+(fn tally_round ((y Tally)) Tally (Tally.Tally (tally_work y) 0 0 0 0 0 0 0 (tally_peak y)))
+
+;; ---- the comparison: generate and test ------------------------------------------------------------
+;; The same ways to settle, the same sizes, the same goal — and nothing left for a run to ask
+;; for: every unknown value and every hole function is decided before the goal is run, one
+;; candidate whole at a time. What this walk costs against the walk above is what running a
+;; goal on something half decided is worth (v3/search/test: the two are run on the same
+;; problems and their work compared).
+(type Item (ICell Int) (IHole Int))
+;; a candidate being decided: the machine, the heap, what is still undecided, the size so far
+(type Cand (Cand Mach Heap (List Item) Int))
+(fn cell_items ((i Int) (n Int)) (List Item)
+  (measure (Int.natAbs (- n i)))
+  (if (<= n i) nil (cons (ICell i) (cell_items (+ i 1) n))))
+(fulfills cell_items.dec_1 (by (intro p h) (apply natAbs_lt (arith) (arith))))
+(fn hole_items ((hs (List (Prod Int Name)))) (List Item)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (Prod.mk id _) r) (cons (IHole id) (hole_items r)))))
+;; the hole functions a production added, as items: indices i up to n
+(fn new_holes ((i Int) (n Int)) (List Item)
+  (measure (Int.natAbs (- n i)))
+  (if (<= n i) nil (cons (IHole i) (new_holes (+ i 1) n))))
+(fulfills new_holes.dec_1 (by (intro p h) (apply natAbs_lt (arith) (arith))))
+(fn item_alts ((t Problem) (m Mach) (h Heap) (it Item)) (List Alt)
+  (match it
+    ((ICell r) (alts t m h r))
+    ((IHole id) (alts_hole t m h id))))
+;; each way to decide the first item, as a candidate: what the way made new goes first
+(fn cands_of ((as (List Alt)) (m0 Mach) (h0 Heap) (rest (List Item)) (size Int)) (List Cand)
+  (measure (struct as))
+  (match as
+    (nil nil)
+    ((cons (Alt.Alt m h) more)
+     (cons
+       (Cand.Cand m h
+         (append (cell_items (heap_next h0) (heap_next h))
+           (append (new_holes (mach_next m0) (mach_next m)) rest))
+         (+ size 1))
+       (cands_of more m0 h0 rest size)))))
+(fn enum_walk ((t Problem) (lim Lim) (s Start) (stack (List Cand)) (acc Ran)) Walk
+  (match acc
+    ((Ran.Ran _ sols y)
+     (match stack
+       (nil (Walk.Walk sols y false))
+       ((cons (Cand.Cand m h pending size) rest)
+        (if (<= (lim_budget lim) (tally_work y)) (Walk.Walk sols y true)
+        (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y false)
+        (match pending
+          (nil
+            (match s
+              ((Start.Start _ goal ptys)
+               (enum_walk t lim s rest
+                 (ran_add t (Ran.Ran nil sols y) m
+                   (nv_start m h goal (arg_refs 0 (len ptys)) (lim_fuel lim))
+                   (lim_fuel lim)
+                   size)))))
+          ((cons it more)
+           (if (< (lim_size lim) (+ size (len pending)))
+             (enum_walk t lim s rest (Ran.Ran nil sols (tally_add y 0 5)))
+             (match (item_alts t m h it)
+               (nil (enum_walk t lim s rest (Ran.Ran nil sols (tally_add y 0 6))))
+               (as
+                 (enum_walk t lim s (append (cands_of as m h more size) rest)
+                   (Ran.Ran nil sols (tally_add y 0 1)))))))))))))))
