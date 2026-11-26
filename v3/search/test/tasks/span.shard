@@ -1,0 +1,58 @@
+;;; v3/search/test/tasks/span.shard — `find` on a machine model: unknown x86-64 CODE as a list of
+;;; the model's instructions (v3/models/x86), run by folding `exec` over the list — no bytes, no
+;;; decoding, no file. Each goal's parameter is the unknown program; a goal runs it from three
+;;; starting states and reads `rax`. Run by hand (v3/search/README.md has the commands' results);
+;;; not among the suite's problems, a load of the model being too long for the bootstrap.
+
+(import "../../../models/x86/x86.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(use std.mem)
+(use models.x86.word)
+(use models.x86.x86)
+(use models.x86.x86.Bop)
+(use models.x86.x86.Instr)
+(use models.x86.x86.Rm)
+(use models.x86.x86.Step)
+
+;; the list run instruction by instruction; a system call or a stuck step ends it with none
+(fn run_prog ((c Cpu) (p (List Instr))) (Option Cpu)
+  (measure (struct p))
+  (match p
+    (nil (some c))
+    ((cons i r)
+     (match (exec c i 0)
+       ((SNext c1) (run_prog c1 r))
+       (_ none)))))
+
+;; a state with rax, rdi, rsi given, every other register zero, nothing mapped
+(fn st ((a Nat) (d Nat) (s Nat)) Cpu
+  (cpu_at 4096 (reg_set (reg_set (reg_set (regs_zero) 0 (w64 a)) 7 (w64 d)) 6 (w64 s)) (flags_clear)
+    (mem_empty)
+    nil))
+
+;; whether p, run from c, ends with rax holding want
+(fn rax_is ((p (List Instr)) (c Cpu) (want Nat)) Bool
+  (match (run_prog c p)
+    (none false)
+    ((some c1) (if (= (w64_val (reg c1 0)) want) true false))))
+
+;; rax becomes rdi
+(fn mov_ok ((p (List Instr))) Bool
+  (if (rax_is p (st 5 3 9) 3) (if (rax_is p (st 11 6 2) 6) (rax_is p (st 100 20 1) 20) false) false))
+;; rax becomes rdi + rsi
+(fn add_ok ((p (List Instr))) Bool
+  (if (rax_is p (st 5 3 9) 12) (if (rax_is p (st 11 6 2) 8) (rax_is p (st 100 20 1) 21) false)
+  false))
+;; rax becomes 2*rdi + 1
+(fn dbl_ok ((p (List Instr))) Bool
+  (if (rax_is p (st 5 3 9) 7) (if (rax_is p (st 11 6 2) 13) (rax_is p (st 100 20 1) 41) false)
+  false))
+
+;; closed checks: hand-written answers
+(fn mov_closed () Bool (mov_ok (cons (MovRRm 0 (RmReg 7)) nil)))
+(fn add_closed () Bool (add_ok (cons (MovRRm 0 (RmReg 7)) (cons (AluRRm BAdd 0 (RmReg 6)) nil))))
+(fn dbl_closed () Bool
+  (dbl_ok
+    (cons (MovRRm 0 (RmReg 7)) (cons (AluRRm BAdd 0 (RmReg 0)) (cons (AluRmI BAdd (RmReg 0) 1) nil)))))

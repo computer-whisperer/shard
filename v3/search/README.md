@@ -100,6 +100,25 @@ a time. On the two sketches it costs: there a hole function calls the sketch's o
 with nothing saying on what, a half-decided body can loop without asking for anything more,
 and each such branch is run to the round's fuel.
 
+## On a machine model (2026-11-26, by hand: `test/tasks/span.shard`)
+
+The unknown is a `(List Instr)` of the x86-64 model (`v3/models/x86`), folded through the
+model's `exec` from three starting states; the goal reads `rax` at the end. Registers are
+numbers in `Instr`, so `--ints 0,1,6,7` names `rax`, `rsi`, `rdi` and the immediate 1.
+
+| wanted | lazy | generate and test |
+|---|---|---|
+| `rax := rdi` (one instruction) | found, 10,885 entries | found, 7,445 |
+| `rax := rdi + rsi` (two) | found, 14.0 million, 9.7 s | found, 35.3 million, 17.1 s |
+| `rax := 2*rdi + 1` (three) | not within 50 million | not within 50 million |
+
+Work grows about 3.3 times a unit of size. With every example input under 256 a byte move
+(`Movzx8`) passes as an answer: the examples must tell the wanted function from its near
+neighbours. So `find` runs a real machine model as it is, and is of use there for spans of
+one or two instructions; past that it needs what it does not have — two instruction lists
+that leave every test state the same are one candidate, not two. The file is not among the
+suite's problems: a load of the model is too long for the bootstrap.
+
 ## What is not here yet
 
 - A `match` is on a parameter only: no production tests the result of a call (an `if` on a
