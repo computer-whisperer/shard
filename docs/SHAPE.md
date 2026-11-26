@@ -239,8 +239,10 @@ be built to is `COMPILE.md`.
 - a pass, a function from a module's intermediate code to instructions of the model
   (`x86/pass.shard`), and its theorem, proven once (`x86/module.shard` `module_realizes`): where
   each function the module calls from outside meets the seam's statement, each function of the
-  compiled module meets it. Its fragment: six locals in registers, expressions of word
-  operations and loads, stores, `if` on an unsigned comparison, calls, tail calls;
+  compiled module meets it. Its fragment: a function of at most six parameters and any number
+  of locals — the first six in registers, the rest words of the function's frame —,
+  expressions of word operations and loads, stores, `if` on an unsigned comparison, calls,
+  tail calls;
 - a link theorem (`x86/link.shard` `start_exits`): a file of a start-up and any lines exits as
   the answer of the function it calls says, where that function meets the statement. The
   start-up is data: the words it pushes, and at most six arguments, each a word or the address
@@ -274,8 +276,8 @@ be built to is `COMPILE.md`.
   above the pass are written by hand, a function at a time;
 - a build: nothing reads a `bin` form and assembles a file's facts; a compiled file's data is
   what its start-up pushes, and the tree's files share one sample;
-- in the pass: more than six locals, a function's call of itself that is not a tail call, a
-  host call, a declared failure;
+- in the pass: more than six parameters, a function's call of itself that is not a tail call,
+  a host call, a declared failure;
 - at the seam, a function that writes memory or keeps a frame — the answer is stated for
   functions that only read, and the trial's other two contracts are in their own form —, a low
   form that follows pointers, and hand-written code at an address other than the one it was

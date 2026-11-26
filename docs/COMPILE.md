@@ -160,7 +160,8 @@ code not of this kind — lists, constructors, integers of any size.
 The owner agreed to this form after it was tried outside the tree (`LAW.md` §6, 20). What that
 trial proved and what it cost is in `DECISIONS.md` ("Measured"). Of the form the tree holds
 (`v3/compile`, its README): the intermediate; the seam's statement on the x86 model; the pass and
-its theorem, for six locals in registers, expressions of word operations and loads, stores,
+its theorem, for a function's first six locals in registers and the rest in its frame, expressions
+of word operations and loads, stores,
 `if`, calls and tail calls; the link theorem, for a start-up given as data; two programs, each with
 its levels and its facts, proven to the exit status of its file: six functions over words with
 calls, a test and a loop, and a sum of products over two buffers; a caller of that sum

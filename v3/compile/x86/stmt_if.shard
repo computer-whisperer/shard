@@ -47,8 +47,8 @@
    (e IStm)
    (code (List Instr))
    (h (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code))))
-  (exists ((j Nat))
-    (and (= (jcc_not cc) (some j))
+  (exists ((jc Nat))
+    (and (= (jcc_not cc) (some jc))
       (exists ((ix Instr))
         (and (= (ld_atom 0 x nl) (some ix))
           (exists ((iy Instr))
@@ -72,12 +72,12 @@
                         (cons ix
                           (cons iy
                             (cons (AluRmR BCmp (RmReg 0) 1)
-                              (cons (Jcc j (isize ct)) (List.append ct ce))))))))))))))))
+                              (cons (Jcc jc (isize ct)) (List.append ct ce))))))))))))))))
   (by
     (have g
       (-> (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code))
-        (exists ((j Nat))
-          (and (= (jcc_not cc) (some j))
+        (exists ((jc Nat))
+          (and (= (jcc_not cc) (some jc))
             (exists ((ix Instr))
               (and (= (ld_atom 0 x nl) (some ix))
                 (exists ((iy Instr))
@@ -102,9 +102,9 @@
                               (cons ix
                                 (cons iy
                                   (cons (AluRmR BCmp (RmReg 0) 1)
-                                    (cons (Jcc j (isize ct)) (List.append ct ce)))))))))))))))))
+                                    (cons (Jcc jc (isize ct)) (List.append ct ce)))))))))))))))))
       (unfold cstm)
-      (cases (jcc_not cc) hj
+      (cases (jcc_not cc) hjq
         ((none () (reduce) (intro h0) (exact (absurd (Eq.symm h0) (Option.some_ne_none code))))
          (some (j1) (reduce)
            (cases (ld_atom 0 x nl) hix
@@ -188,30 +188,36 @@
    (d Nat)
    (nl Nat)
    (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
    (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hj (forall ((c2 Cpu)) (-> (reaches (at_pc C (w64 ab)) c2) (reaches C c2))))
+   (hjmp (forall ((c2 Cpu)) (-> (reaches (at_pc C (w64 ab)) c2) (reaches C c2))))
    (hrb (= (irun n1 p ext rs sb ls mi) (some (Prod.mk v m2))))
    (hcb (= (cstm xs fs ts p nl ab sb) (some cb)))
    (hpb (placed tbl ab cb))
-   (hsn (<= (sneed xs fs ts p sb) d))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 C d (saved c0)))
-   (hls (= ls (List.take nl (regs6 C))))
-   (hnl (<= nl 6))
+   (hsn (<= (sneed xs fs ts p nl sb) j))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 C j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 C)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
   (done rs f (+ d 6) c0 C v m2)
   (by
-    (have w2 (framed c0 tbl clo chi f (+ d 6) m0 (at_pc C (w64 ab)) d (saved c0)) (exact w))
-    (have hls2 (= ls (List.take nl (regs6 (at_pc C (w64 ab))))) (exact hls))
+    (have w2 (framed c0 tbl clo chi f (+ d 6) m0 (at_pc C (w64 ab)) j (app sl (saved c0)))
+      (exact w))
+    (have hls2 (= ls (app (List.take nl (regs6 (at_pc C (w64 ab)))) sl)) (exact hls))
     (have hrip2 (= (Cpu.rip (at_pc C (w64 ab))) (w64 ab)) rfl)
     (cases
-      (ih sb ls mi v m2 (at_pc C (w64 ab)) ab cb c0 f d nl m0 hrb hcb hpb hsn hrip2 w2 hls2 hnl hag
+      (ih sb ls mi v m2 (at_pc C (w64 ab)) ab cb c0 f d nl m0 j sl hrb hcb hpb hsn hrip2 w2 hls2 hsl
+        hj
+        hag
         hkm
         hdo)
       ((intro (c2 g2)
          (apply (Exists.intro c2)
-           ((apply And.intro ((exact (hj c2 (And.left g2)))) ((exact (And.right g2)))))))))))
+           ((apply And.intro ((exact (hjmp c2 (And.left g2)))) ((exact (And.right g2)))))))))))
 ;; ---- the comparison -----------------------------------------------------------------------------
 ;; the state after the two atoms are in rax and rcx and compared
 (fn i_s3 ((c Cpu) (vx (BitVec 64)) (vy (BitVec 64)) (a Nat) (ix Instr) (iy Instr)) Cpu
@@ -242,8 +248,7 @@
    (hchi (<= (+ chi 15) 18446744073709551616))
    (hcode (code_in c tbl))
    (hrip (= (Cpu.rip c) (w64 a)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
+   (hls (locs c nl ls))
    (hix (= (ld_atom 0 x nl) (some ix)))
    (hiy (= (ld_atom 1 y nl) (some iy)))
    (hvx (= (ieval rs ls mi x) (some vx)))
@@ -253,16 +258,27 @@
   (by
     (have s1 (= (site tbl a) (some (Prod.mk ix (List.length (encode ix))))) (exact (And.left hpl)))
     (have r1 (reaches c (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))
-      (exact (ld_ok tbl clo chi rs ls mi nl c a 0 x ix vx hall hchi hcode hrip hls hnl hix hvx s1)))
+      (exact (ld_ok tbl clo chi rs ls mi nl c a 0 x ix vx hall hchi hcode hrip hls hix hvx s1)))
     (have hc1 (code_in (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) tbl)
       (exact hcode))
     (have hrip1
       (= (Cpu.rip (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))
         (w64 (+ a (List.length (encode ix)))))
       rfl)
-    (have hls1
-      (= ls (List.take nl (regs6 (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))))))
-      (exact hls))
+    (have t1
+      (= (Cpu.segs (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))) (Cpu.segs c))
+      rfl)
+    (have t2
+      (= (Cpu.mem (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))) (Cpu.mem c))
+      rfl)
+    (have t3 (= (reg (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) 4) (reg c 4))
+      rfl)
+    (have t4 (= (regs6 (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix)))))) (regs6 c))
+      rfl)
+    (have hls1 (locs (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) nl ls)
+      (exact
+        (locs_of c (at_pc (set_reg c 0 vx) (w64 (+ a (List.length (encode ix))))) nl ls hls t1 t2 t3
+          t4)))
     (have s2
       (= (site tbl (+ a (List.length (encode ix)))) (some (Prod.mk iy (List.length (encode iy)))))
       (exact (And.left (And.right hpl))))
@@ -283,7 +299,6 @@
           hc1
           hrip1
           hls1
-          hnl
           hiy
           hvy
           s2)))
@@ -341,9 +356,11 @@
    (d Nat)
    (nl Nat)
    (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
    (vx (BitVec 64))
    (vy (BitVec 64))
-   (j Nat)
+   (jc Nat)
    (ix Instr)
    (iy Instr)
    (ct (List Instr))
@@ -354,7 +371,7 @@
    (hvx (= (ieval rs ls mi x) (some vx)))
    (hvy (= (ieval rs ls mi y) (some vy)))
    (hrb (= (irun n1 p ext rs (if (icmp cc vx vy) t e) ls mi) (some (Prod.mk v m2))))
-   (hj (= (jcc_not cc) (some j)))
+   (hjq (= (jcc_not cc) (some jc)))
    (hix (= (ld_atom 0 x nl) (some ix)))
    (hiy (= (ld_atom 1 y nl) (some iy)))
    (hct
@@ -369,38 +386,41 @@
    (hpl
      (placed tbl a
        (cons ix
-         (cons iy (cons (AluRmR BCmp (RmReg 0) 1) (cons (Jcc j (isize ct)) (List.append ct ce)))))))
-   (hsnt (<= (sneed xs fs ts p t) d))
-   (hsne (<= (sneed xs fs ts p e) d))
+         (cons iy (cons (AluRmR BCmp (RmReg 0) 1) (cons (Jcc jc (isize ct)) (List.append ct ce)))))))
+   (hsnt (<= (sneed xs fs ts p nl t) j))
+   (hsne (<= (sneed xs fs ts p nl e) j))
    (hrip (= (Cpu.rip c) (w64 a)))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
   (done rs f (+ d 6) c0 c v m2)
   (by
+    (have hlc (locs c nl ls)
+      (exact (locs_framed c0 tbl clo chi f (+ d 6) m0 c j (saved c0) nl ls sl w hls hsl)))
     (have r03 (reaches c (i_s3 c vx vy a ix iy))
       (exact
         (if_head tbl clo chi rs ls mi nl c a x y ix iy vx vy
-          (cons (Jcc j (isize ct)) (List.append ct ce))
+          (cons (Jcc jc (isize ct)) (List.append ct ce))
           hall
           hchi
           (framed_code w)
           hrip
-          hls
-          hnl
+          hlc
           hix
           hiy
           hvx
           hvy
           hpl)))
-    (have w3 (framed c0 tbl clo chi f (+ d 6) m0 (i_s3 c vx vy a ix iy) d (saved c0)) (exact w))
-    (have hls3 (= ls (List.take nl (regs6 (i_s3 c vx vy a ix iy)))) (exact hls))
+    (have w3 (framed c0 tbl clo chi f (+ d 6) m0 (i_s3 c vx vy a ix iy) j (app sl (saved c0)))
+      (exact w))
+    (have hls3 (= ls (app (List.take nl (regs6 (i_s3 c vx vy a ix iy))) sl)) (exact hls))
     (have s4
       (= (site tbl (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3))
-        (some (Prod.mk (Jcc j (isize ct)) 6)))
+        (some (Prod.mk (Jcc jc (isize ct)) 6)))
       (exact (And.left (And.right (And.right (And.right hpl))))))
     (have pte
       (placed tbl (+ (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3) 6)
@@ -431,8 +451,8 @@
     (cases (Nat.decLt (w64_val vx) (w64_val vy))
       ((isTrue (hlt)
          (cases cc
-           ((CLtu () (have hjx (= (some 3) (some j)) (exact hj))
-              (have hj3 (= j 3) (exact (Eq.symm (Option.some.inj hjx))))
+           ((CLtu () (have hjx (= (some 3) (some jc)) (exact hjq))
+              (have hj3 (= jc 3) (exact (Eq.symm (Option.some.inj hjx))))
               (have hl2
                 (<
                   (w64_val
@@ -448,7 +468,7 @@
                         (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
                       1)))
                 (exact hlt))
-              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
+              (have hcc (= (cc_holds jc (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
                 (rw hj3)
                 (exact
                   (cmp_below
@@ -479,7 +499,7 @@
                 (apply
                   (t_jcc_not tbl clo chi
                     (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
-                    j
+                    jc
                     (isize ct)
                     6)
                   ((exact hall))
@@ -503,6 +523,8 @@
                     d
                     nl
                     m0
+                    j
+                    sl
                     ih
                     hjmp
                     hrx
@@ -511,12 +533,13 @@
                     hsnt
                     w3
                     hls3
-                    hnl
+                    hsl
+                    hj
                     hag
                     hkm
                     hdo))))
-            (CGeu () (have hjx (= (some 2) (some j)) (exact hj))
-              (have hj3 (= j 2) (exact (Eq.symm (Option.some.inj hjx))))
+            (CGeu () (have hjx (= (some 2) (some jc)) (exact hjq))
+              (have hj3 (= jc 2) (exact (Eq.symm (Option.some.inj hjx))))
               (have hl2
                 (<
                   (w64_val
@@ -532,7 +555,7 @@
                         (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
                       1)))
                 (exact hlt))
-              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
+              (have hcc (= (cc_holds jc (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
                 (rw hj3)
                 (exact
                   (cmp_b_yes
@@ -565,7 +588,7 @@
                 (apply
                   (t_jcc_taken tbl clo chi
                     (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
-                    j
+                    jc
                     (isize ct)
                     6)
                   ((exact hall))
@@ -590,6 +613,8 @@
                     d
                     nl
                     m0
+                    j
+                    sl
                     ih
                     hjmp
                     hrx
@@ -598,18 +623,19 @@
                     hsne
                     w3
                     hls3
-                    hnl
+                    hsl
+                    hj
                     hag
                     hkm
                     hdo))))
-            (CEq () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
-              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j))))
-            (CNe () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
-              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j)))))))
+            (CEq () (have hjx (= (@Option.none Nat) (some jc)) (exact hjq))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none jc))))
+            (CNe () (have hjx (= (@Option.none Nat) (some jc)) (exact hjq))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none jc)))))))
        (isFalse (hge)
          (cases cc
-           ((CLtu () (have hjx (= (some 3) (some j)) (exact hj))
-              (have hj3 (= j 3) (exact (Eq.symm (Option.some.inj hjx))))
+           ((CLtu () (have hjx (= (some 3) (some jc)) (exact hjq))
+              (have hj3 (= jc 3) (exact (Eq.symm (Option.some.inj hjx))))
               (have hl2
                 (Not
                   (<
@@ -628,7 +654,7 @@
                           (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
                         1))))
                 (exact hge))
-              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
+              (have hcc (= (cc_holds jc (Cpu.flags (i_s3 c vx vy a ix iy))) (some true))
                 (rw hj3)
                 (exact
                   (cmp_not_below
@@ -661,7 +687,7 @@
                 (apply
                   (t_jcc_taken tbl clo chi
                     (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
-                    j
+                    jc
                     (isize ct)
                     6)
                   ((exact hall))
@@ -686,6 +712,8 @@
                     d
                     nl
                     m0
+                    j
+                    sl
                     ih
                     hjmp
                     hrx
@@ -694,12 +722,13 @@
                     hsne
                     w3
                     hls3
-                    hnl
+                    hsl
+                    hj
                     hag
                     hkm
                     hdo))))
-            (CGeu () (have hjx (= (some 2) (some j)) (exact hj))
-              (have hj3 (= j 2) (exact (Eq.symm (Option.some.inj hjx))))
+            (CGeu () (have hjx (= (some 2) (some jc)) (exact hjq))
+              (have hj3 (= jc 2) (exact (Eq.symm (Option.some.inj hjx))))
               (have hl2
                 (Not
                   (<
@@ -718,7 +747,7 @@
                           (w64 (+ (+ a (List.length (encode ix))) (List.length (encode iy)))))
                         1))))
                 (exact hge))
-              (have hcc (= (cc_holds j (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
+              (have hcc (= (cc_holds jc (Cpu.flags (i_s3 c vx vy a ix iy))) (some false))
                 (rw hj3)
                 (exact
                   (cmp_b_no
@@ -749,7 +778,7 @@
                 (apply
                   (t_jcc_not tbl clo chi
                     (+ (+ (+ a (List.length (encode ix))) (List.length (encode iy))) 3)
-                    j
+                    jc
                     (isize ct)
                     6)
                   ((exact hall))
@@ -773,6 +802,8 @@
                     d
                     nl
                     m0
+                    j
+                    sl
                     ih
                     hjmp
                     hrx
@@ -781,14 +812,15 @@
                     hsnt
                     w3
                     hls3
-                    hnl
+                    hsl
+                    hj
                     hag
                     hkm
                     hdo))))
-            (CEq () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
-              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j))))
-            (CNe () (have hjx (= (@Option.none Nat) (some j)) (exact hj))
-              (exact (absurd (Eq.symm hjx) (Option.some_ne_none j)))))))))))
+            (CEq () (have hjx (= (@Option.none Nat) (some jc)) (exact hjq))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none jc))))
+            (CNe () (have hjx (= (@Option.none Nat) (some jc)) (exact hjq))
+              (exact (absurd (Eq.symm hjx) (Option.some_ne_none jc)))))))))))
 ;; ---- a branch -----------------------------------------------------------------------------------
 (theorem sim_if
   ((p (List IFn))
@@ -818,33 +850,36 @@
    (d Nat)
    (nl Nat)
    (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
    (ih (sim p ext rs tbl clo chi xs fs ts n1))
    (hrun (= (irun (FS n1) p ext rs (SIf x cc y t e) ls mi) (some (Prod.mk v m2))))
    (hcs (= (cstm xs fs ts p nl a (SIf x cc y t e)) (some code)))
    (hpl (placed tbl a code))
-   (hsn (<= (sneed xs fs ts p (SIf x cc y t e)) d))
+   (hsn (<= (sneed xs fs ts p nl (SIf x cc y t e)) j))
    (hrip (= (Cpu.rip c) (w64 a)))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
   (done rs f (+ d 6) c0 c v m2)
   (by
-    (have hm (<= (mx (sneed xs fs ts p t) (sneed xs fs ts p e)) d) (exact hsn))
-    (have hsnt (<= (sneed xs fs ts p t) d)
-      (exact (And.left (mx_le (sneed xs fs ts p t) (sneed xs fs ts p e) d hm))))
-    (have hsne (<= (sneed xs fs ts p e) d)
-      (exact (And.right (mx_le (sneed xs fs ts p t) (sneed xs fs ts p e) d hm))))
+    (have hm (<= (mx (sneed xs fs ts p nl t) (sneed xs fs ts p nl e)) j) (exact hsn))
+    (have hsnt (<= (sneed xs fs ts p nl t) j)
+      (exact (And.left (mx_le (sneed xs fs ts p nl t) (sneed xs fs ts p nl e) j hm))))
+    (have hsne (<= (sneed xs fs ts p nl e) j)
+      (exact (And.right (mx_le (sneed xs fs ts p nl t) (sneed xs fs ts p nl e) j hm))))
     (cases (irun_if_inv p ext rs n1 x cc y t e ls mi (Prod.mk v m2) hrun)
       ((intro (vx g0)
          (cases g0
            ((intro (vy g1)
               (cases (cstm_if_inv xs fs ts p nl a x cc y t e code hcs)
-                ((intro (j g2)
+                ((intro (jc g2)
                    (cases (And.right g2)
                      ((intro (ix g3)
                         (cases (And.right g3)
@@ -858,7 +893,7 @@
                                            (cons ix
                                              (cons iy
                                                (cons (AluRmR BCmp (RmReg 0) 1)
-                                                 (cons (Jcc j (isize ct)) (List.append ct ce))))))
+                                                 (cons (Jcc jc (isize ct)) (List.append ct ce))))))
                                          (rw (<- (And.right g6)))
                                          (exact hpl))
                                        (exact
@@ -872,9 +907,11 @@
                                            d
                                            nl
                                            m0
+                                           j
+                                           sl
                                            vx
                                            vy
-                                           j
+                                           jc
                                            ix
                                            iy
                                            ct
@@ -896,7 +933,8 @@
                                            hrip
                                            w
                                            hls
-                                           hnl
+                                           hsl
+                                           hj
                                            hag
                                            hkm
                                            hdo)))))))))))))))))))))))))

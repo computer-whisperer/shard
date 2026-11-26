@@ -359,6 +359,16 @@ admitted that the logic does not derive.
     with the six words" — "2" being here the option "Yes, now, before the six words." (A bare
     assent to a stated option: a checkpoint. Built of it in the tree: `DECISIONS.md`,
     "Programs and the back end", the stack's place not promised.)
+26. *A function's locals past the sixth live in its frame; the first six stay in registers.*
+    The question was put with a sizing: "where do locals beyond six live?", with two options —
+    every local in a stack slot (the smaller proof; every existing function's code changes,
+    each read or write of a local a memory access); "The first six stay in registers, the rest
+    go to stack slots" (the stated lean: the bar is no regrets against C, and the first would
+    later be undone). The owner, in the message of ruling 25: "Agreed with 2 for both; proceed
+    with the six words" — "2" being here the second option. (A bare assent to a stated lean: a
+    checkpoint. What was asked and built is the limit on a function's LOCALS; a function still
+    takes at most six argument words, which was not put to the owner. Built of it in the tree:
+    `DECISIONS.md`, "Programs and the back end", a function's locals.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

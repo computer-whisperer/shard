@@ -1,7 +1,10 @@
 ;;; v3/compile/x86/pass.shard — a pass from the intermediate machine
-;;; (`ir.shard`) to x86 instructions, the simplest whose proof is honest. Local i lives in the
-;;; i-th register a callee keeps (rbx rbp r12 r13 r14 r15), so a function has at most six locals.
-;;; Every function pushes all six on entry and pops them before it returns. An expression is
+;;; (`ir.shard`) to x86 instructions, the simplest whose proof is honest. Each of a function's
+;;; first six locals lives in a register a callee keeps (rbx rbp r12 r13 r14 r15); a local past
+;;; the sixth is a word of the function's frame, at the stack pointer and up. Every function
+;;; pushes all six registers on entry, then a zero for each local in the frame, and gives the
+;;; frame's words back and pops the six before it returns. A function takes at most six
+;;; arguments, in the argument registers. An expression is
 ;;; evaluated on a stack of nine temporaries, the registers a caller does not keep (rax rcx rdx
 ;;; rsi rdi r8 r9 r10 r11): an operation's left operand in one, its right operand in the next;
 ;;; an expression too deep for them is refused. A store's address goes to the first temporary
@@ -52,6 +55,15 @@
     (nil 0)
     ((cons i r) (+ (List.length (encode i)) (isize r)))))
 
+;; the locals past the sixth live in the frame: how many, of a function of nl locals
+(fn nsl ((nl Nat)) Nat (- nl 6))
+;; local i into the register r, and rax into local x: by the local's register, or by its word
+;; of the frame, the (i - 6)th from the stack pointer
+(fn ld_loc ((r Nat) (i Nat)) Instr
+  (if (< i 6) (MovRmR (RmReg r) (kreg i)) (MovRRm r (RmMem 4 (* 8 (- i 6))))))
+(fn st_loc ((x Nat)) Instr
+  (if (< x 6) (MovRmR (RmReg (kreg x)) 0) (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))
+
 ;; ---- expressions ------------------------------------------------------------------------------
 ;; the register of temporary k: rax rcx rdx rsi rdi r8 r9 r10 r11
 (fn treg ((k Nat)) Nat
@@ -79,7 +91,7 @@
 (fn ld_atom ((r Nat) (e IExp) (nl Nat)) (Option Instr)
   (match e
     ((ENum w) (some (MovRI64 r (w64_val w))))
-    ((EVar i) (if (< i nl) (some (MovRmR (RmReg r) (kreg i))) none))
+    ((EVar i) (if (< i nl) (some (ld_loc r i)) none))
     ((EOp _ _ _) none)
     ((ELoad _) none)))
 ;; An expression into temporary k, the temporaries below k left as they are: an operation's
@@ -89,8 +101,7 @@
   (measure (struct e))
   (match e
     ((ENum w) (if (< k 9) (some (cons (MovRI64 (treg k) (w64_val w)) nil)) none))
-    ((EVar i)
-     (if (< k 9) (if (< i nl) (some (cons (MovRmR (RmReg (treg k)) (kreg i)) nil)) none) none))
+    ((EVar i) (if (< k 9) (if (< i nl) (some (cons (ld_loc (treg k) i) nil)) none) none))
     ((EOp o a b)
      (if (< (+ k 1) 9)
        (match (cexp k a nl)
@@ -144,33 +155,35 @@
 
 ;; ---- statements -------------------------------------------------------------------------------
 (fn mx ((a Nat) (b Nat)) Nat (if (< a b) b a))
-;; the words of stack a statement needs below the function's saved registers: for a call, the
-;; return address and the callee's need; for a tail call, the callee's need less the six words
-;; the function has given back. A tail call's callees are looked up in ts: the functions
-;; compiled before this one, and this one.
+;; the words of stack a statement of a function of nl locals needs below the function's own —
+;; its saved registers and the locals in its frame: for a call, the return address and the
+;; callee's need; for a tail call, the callee's need less the words the function has given
+;; back. A tail call's callees are looked up in ts: the functions compiled before this one,
+;; and this one.
 (fn sneed
   ((xs (List (Prod Nat Nat)))
    (fs (List (Prod Nat Nat)))
    (ts (List (Prod Nat Nat)))
    (p (List IFn))
+   (nl Nat)
    (s IStm))
   Nat
   (measure (struct s))
   (match s
-    ((SLet x e k) (sneed xs fs ts p k))
-    ((SStore a e k) (sneed xs fs ts p k))
+    ((SLet x e k) (sneed xs fs ts p nl k))
+    ((SStore a e k) (sneed xs fs ts p nl k))
     ((SCall x cal es k)
      (mx
        (match (callee_at xs fs p cal (List.length es))
          (none 0)
          ((some en) (+ (Prod.snd en) 1)))
-       (sneed xs fs ts p k)))
-    ((SIf a cc b t e) (mx (sneed xs fs ts p t) (sneed xs fs ts p e)))
+       (sneed xs fs ts p nl k)))
+    ((SIf a cc b t e) (mx (sneed xs fs ts p nl t) (sneed xs fs ts p nl e)))
     ((SRet e) 0)
     ((STail cal es)
      (match (callee_at xs ts p cal (List.length es))
        (none 0)
-       ((some en) (- (Prod.snd en) 6))))))
+       ((some en) (- (Prod.snd en) (+ 6 (nsl nl))))))))
 ;; the jump over the first branch: taken where the comparison does not hold
 (fn jcc_not ((cc ICmp)) (Option Nat)
   (match cc
@@ -178,17 +191,19 @@
     (CGeu (some 2))
     (CEq none)
     (CNe none)))
-;; out of a function: the six registers popped, the return
-(fn epi () (List Instr)
-  (cons (Pop 15)
-    (cons (Pop 14) (cons (Pop 13) (cons (Pop 12) (cons (Pop 5) (cons (Pop 3) (cons Ret nil))))))))
-;; out of a function into another, whose entry is ea: the six registers popped, the jump (from
-;; the address pc)
-(fn tail_out ((ea Nat) (pc Nat)) (List Instr)
-  (cons (Pop 15)
-    (cons (Pop 14)
-      (cons (Pop 13)
-        (cons (Pop 12) (cons (Pop 5) (cons (Pop 3) (cons (Jmp (rel ea (+ pc 15))) nil))))))))
+;; the frame's locals given back: the stack pointer raised over them, where there are any
+(fn slots_out ((nl Nat)) (List Instr)
+  (if (<= nl 6) nil (cons (AluRmI BAdd (RmReg 4) (* 8 (nsl nl))) nil)))
+;; the six registers popped, then `rest`
+(fn pops ((rest (List Instr))) (List Instr)
+  (cons (Pop 15) (cons (Pop 14) (cons (Pop 13) (cons (Pop 12) (cons (Pop 5) (cons (Pop 3) rest)))))))
+;; out of a function of nl locals: the frame's locals given back, the six registers popped,
+;; the return
+(fn epi ((nl Nat)) (List Instr) (List.append (slots_out nl) (pops (cons Ret nil))))
+;; out of a function into another, whose entry is ea: the same, and the jump in the return's
+;; place (from the address pc)
+(fn tail_out ((nl Nat) (ea Nat) (pc Nat)) (List Instr)
+  (List.append (slots_out nl) (pops (cons (Jmp (rel ea (+ (+ pc (isize (slots_out nl))) 15))) nil))))
 ;; a statement's code, standing at the address a, in a function of nl locals
 (fn cstm
   ((xs (List (Prod Nat Nat)))
@@ -206,9 +221,9 @@
        (match (cexp 0 e nl)
          (none none)
          ((some ce)
-          (match (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k)
+          (match (cstm xs fs ts p nl (+ a (+ (isize ce) (List.length (encode (st_loc x))))) k)
             (none none)
-            ((some ck) (some (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck)))))))
+            ((some ck) (some (List.append ce (cons (st_loc x) ck)))))))
        none))
     ((SStore q e k)
      (match (cexp 0 q nl)
@@ -228,13 +243,13 @@
           (match (cargs es 0 nl)
             (none none)
             ((some ca)
-             (match (cstm xs fs ts p nl (+ a (+ (isize ca) 8)) k)
+             (match
+               (cstm xs fs ts p nl (+ a (+ (isize ca) (+ 5 (List.length (encode (st_loc x)))))) k)
                (none none)
                ((some ck)
                 (some
                   (List.append ca
-                    (cons (Call (rel (Prod.fst en) (+ a (+ (isize ca) 5))))
-                      (cons (MovRmR (RmReg (kreg x)) 0) ck))))))))))
+                    (cons (Call (rel (Prod.fst en) (+ a (+ (isize ca) 5)))) (cons (st_loc x) ck))))))))))
        none))
     ((SIf x cc y t e)
      (match (jcc_not cc)
@@ -267,20 +282,20 @@
     ((SRet e)
      (match (cexp 0 e nl)
        (none none)
-       ((some ce) (some (List.append ce epi)))))
+       ((some ce) (some (List.append ce (epi nl))))))
     ((STail cal es)
      (match (callee_at xs ts p cal (List.length es))
        (none none)
        ((some en)
         (match (cargs es 0 nl)
           (none none)
-          ((some ca) (some (List.append ca (tail_out (Prod.fst en) (+ a (isize ca))))))))))))
+          ((some ca) (some (List.append ca (tail_out nl (Prod.fst en) (+ a (isize ca))))))))))))
 
 ;; ---- a function, a module ---------------------------------------------------------------------
 ;; local i at entry: the i-th argument, or zero
 (fn init ((i Nat) (np Nat)) Instr
   (if (< i np) (MovRmR (RmReg (kreg i)) (areg i)) (MovRI32 (kreg i) 0)))
-;; into a function of np parameters: the six registers pushed, each local set
+;; into a function of np parameters: the six registers pushed, each of the six locals set
 (fn pro ((np Nat)) (List Instr)
   (cons (Push 3)
     (cons (Push 5)
@@ -291,29 +306,38 @@
               (cons (init 0 np)
                 (cons (init 1 np)
                   (cons (init 2 np) (cons (init 3 np) (cons (init 4 np) (cons (init 5 np) nil)))))))))))))
-;; what a function's body needs under its six registers, a tail call of the function itself
-;; counted as nothing
+;; n zeros pushed: rax, which holds zero
+(fn pushz ((n Nat)) (List Instr) (measure n) (if (= n 0) nil (cons (Push 0) (pushz (- n 1)))))
+(fulfills pushz.dec_1 (by (intro n h) (exact (Nat.sub_one_lt h))))
+;; the frame's locals of a function of nl made, each zero: nothing where there are none
+(fn slots_in ((nl Nat)) (List Instr) (if (<= nl 6) nil (cons (MovRI32 0 0) (pushz (nsl nl)))))
+;; a function's locals: its parameters and the locals it has beside them
+(fn fnl ((g IFn)) Nat (+ (IFn.params g) (IFn.extra g)))
+;; what a function's body needs under the function's own words, a tail call of the function
+;; itself counted as nothing
 (fn fd0 ((xs (List (Prod Nat Nat))) (fs (List (Prod Nat Nat))) (p (List IFn)) (g IFn)) Nat
-  (sneed xs fs fs p (IFn.body g)))
-;; a function's stack need in words: the six registers, and what its body needs under them
+  (sneed xs fs fs p (fnl g) (IFn.body g)))
+;; a function's stack need in words: what its body needs, the locals in its frame, the six
+;; registers
 (fn fneed ((xs (List (Prod Nat Nat))) (fs (List (Prod Nat Nat))) (p (List IFn)) (g IFn)) Nat
-  (+ (fd0 xs fs p g) 6))
+  (+ (+ (fd0 xs fs p g) (nsl (fnl g))) 6))
 ;; the callees of a function's tail calls: the functions before it, and itself at its address a
 (fn fts ((xs (List (Prod Nat Nat))) (fs (List (Prod Nat Nat))) (p (List IFn)) (a Nat) (g IFn))
   (List (Prod Nat Nat))
-  (List.append fs (cons (Prod.mk a (+ (fd0 xs fs p g) 6)) nil)))
-;; a function's code, standing at the address a. The pass checks that the body, its own tail
-;; calls counted, needs no more than was counted without them.
+  (List.append fs (cons (Prod.mk a (fneed xs fs p g)) nil)))
+;; a function's code, standing at the address a: of a function of at most six parameters. The
+;; pass checks that the body, its own tail calls counted, needs no more than was counted
+;; without them.
 (fn cfn ((xs (List (Prod Nat Nat))) (fs (List (Prod Nat Nat))) (p (List IFn)) (a Nat) (g IFn))
   (Option (List Instr))
-  (if (<= (+ (IFn.params g) (IFn.extra g)) 6)
-    (if (<= (sneed xs fs (fts xs fs p a g) p (IFn.body g)) (fd0 xs fs p g))
+  (if (<= (IFn.params g) 6)
+    (if (<= (sneed xs fs (fts xs fs p a g) p (fnl g) (IFn.body g)) (fd0 xs fs p g))
       (match
-        (cstm xs fs (fts xs fs p a g) p (+ (IFn.params g) (IFn.extra g))
-          (+ a (isize (pro (IFn.params g))))
+        (cstm xs fs (fts xs fs p a g) p (fnl g)
+          (+ a (+ (isize (pro (IFn.params g))) (isize (slots_in (fnl g)))))
           (IFn.body g))
         (none none)
-        ((some cb) (some (List.append (pro (IFn.params g)) cb))))
+        ((some cb) (some (List.append (pro (IFn.params g)) (List.append (slots_in (fnl g)) cb)))))
       none)
     none))
 ;; The functions gs — the program p from some index on — compiled one after another from the

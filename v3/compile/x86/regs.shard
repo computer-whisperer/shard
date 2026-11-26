@@ -60,21 +60,6 @@
       (rfl)
       (rfl)
       (exact h))))
-;; a local's register holds the local
-(theorem loc_reg
-  ((c Cpu)
-   (ls (List (BitVec 64)))
-   (nl Nat)
-   (i Nat)
-   (hls (= ls (List.take nl (regs6 c))))
-   (hi (< i nl))
-   (hnl (<= nl 6)))
-  (= (reg c (kreg i)) (nth ls i))
-  (by
-    (have h6 (< i 6) (arith))
-    (rw hls)
-    (rw (nth_take (regs6 c) nl i hi))
-    (exact (Eq.symm (reg_k c i h6)))))
 ;; a local's register set: the six words with that one replaced
 (theorem kset_regs ((c Cpu) (x Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< x 6)))
   (= (regs6 (at_pc (set_reg c (kreg x) w) pc)) (upd (regs6 c) x w))
@@ -116,8 +101,8 @@
       (exact w)
       (exact w)
       (exact hx))))
-;; an argument register set: the six words as they were, the description too, and the argument
-;; registers up to it hold one word more
+;; an argument register set: the six words as they were, and the argument registers up to it
+;; hold one word more
 (theorem aset_regs ((c Cpu) (i Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< i 6)))
   (= (regs6 (at_pc (set_reg c (areg i) w) pc)) (regs6 c))
   (by
@@ -128,33 +113,6 @@
       (rfl)
       (rfl)
       (exact h))))
-(theorem framed_aset
-  ((c0 Cpu)
-   (tbl (List (Prod Nat (Prod Instr Nat))))
-   (clo Nat)
-   (chi Nat)
-   (f Nat)
-   (k Nat)
-   (m0 Mem)
-   (c Cpu)
-   (j Nat)
-   (ws (List (BitVec 64)))
-   (i Nat)
-   (v (BitVec 64))
-   (pc (BitVec 64))
-   (hi (< i 6))
-   (w (framed c0 tbl clo chi f k m0 c j ws)))
-  (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (areg i) v) pc) j ws)
-  (by
-    (apply
-      (six_all (fun ((i Nat)) (framed c0 tbl clo chi f k m0 (at_pc (set_reg c (areg i) v) pc) j ws)))
-      (exact w)
-      (exact w)
-      (exact w)
-      (exact w)
-      (exact w)
-      (exact w)
-      (exact hi))))
 (theorem aset_args ((c Cpu) (i Nat) (w (BitVec 64)) (pc (BitVec 64)) (h (< i 6)))
   (= (regs_of (at_pc (set_reg c (areg i) w) pc) (List.take (+ i 1) arg_regs))
     (app (regs_of c (List.take i arg_regs)) (cons w nil)))
@@ -390,6 +348,126 @@
    (e (= j j2)))
   (framed c0 tbl clo chi f k m0 c j2 ws)
   (by (rw (<- e)) (exact w)))
+
+;; ---- the locals ---------------------------------------------------------------------------------
+;; The locals ls of a function of nl, in the state c: each of the first six in its register;
+;; each past the sixth the word at its place above the stack pointer, mapped to read.
+(def locs ((c Cpu) (nl Nat) (ls (List (BitVec 64)))) Prop
+  (forall ((i Nat))
+    (-> (< i nl)
+      (and (-> (< i 6) (= (reg c (kreg i)) (nth ls i)))
+        (-> (<= 6 i)
+          (and (= (mapped (Cpu.segs c) (ea c 4 (* 8 (- i 6))) 8 4) true)
+            (= (w64 (mem_le64 (Cpu.mem c) (ea c 4 (* 8 (- i 6))))) (nth ls i))))))))
+;; they are the locals of any state with the same mapping, memory, stack pointer and six
+;; registers
+(theorem locs_of
+  ((c Cpu)
+   (c1 Cpu)
+   (nl Nat)
+   (ls (List (BitVec 64)))
+   (h (locs c nl ls))
+   (hsegs (= (Cpu.segs c1) (Cpu.segs c)))
+   (hmem (= (Cpu.mem c1) (Cpu.mem c)))
+   (hsp (= (reg c1 4) (reg c 4)))
+   (hregs (= (regs6 c1) (regs6 c))))
+  (locs c1 nl ls)
+  (by
+    (intro i hi)
+    (apply And.intro
+      ((intro h6)
+       (have g (-> (< i 6) (= (reg c (kreg i)) (nth ls i))) (exact (And.left (h i hi))))
+       (rw (<- (reg_k c1 i h6)))
+       (rw hregs)
+       (rw (reg_k c i h6))
+       (exact (g h6)))
+      ((intro h6)
+       (have g
+         (-> (<= 6 i)
+           (and (= (mapped (Cpu.segs c) (ea c 4 (* 8 (- i 6))) 8 4) true)
+             (= (w64 (mem_le64 (Cpu.mem c) (ea c 4 (* 8 (- i 6))))) (nth ls i))))
+         (exact (And.right (h i hi))))
+       (show
+         (and (= (mapped (Cpu.segs c1) (w64_val (w64_add (reg c1 4) (w64 (* 8 (- i 6))))) 8 4) true)
+           (= (w64 (mem_le64 (Cpu.mem c1) (w64_val (w64_add (reg c1 4) (w64 (* 8 (- i 6)))))))
+             (nth ls i))))
+       (rw hsegs)
+       (rw hmem)
+       (rw hsp)
+       (exact (g h6))))))
+(theorem locs_scratch
+  ((c Cpu) (c1 Cpu) (nl Nat) (ls (List (BitVec 64))) (h (locs c nl ls)) (hs (scratch c c1)))
+  (locs c1 nl ls)
+  (exact
+    (locs_of c c1 nl ls h (And.left hs) (And.left (And.right hs))
+      (And.left (And.right (And.right hs)))
+      (And.right (And.right (And.right hs))))))
+;; A described state inside a function holds the function's locals where the first six words
+;; of them are the six registers' and the rest, sl, stand first from the stack pointer.
+(theorem locs_framed
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (nl Nat)
+   (ls (List (BitVec 64)))
+   (sl (List (BitVec 64)))
+   (w (framed c0 tbl clo chi f k m0 c j (app sl ws)))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl))))
+  (locs c nl ls)
+  (by
+    (intro i hi)
+    (apply And.intro
+      ((intro h6)
+       (have h6r (< i (List.length (regs6 c))) (exact h6))
+       (have hlt (< i (List.length (List.take nl (regs6 c))))
+         (exact (take_lt (regs6 c) nl i hi h6r)))
+       (rw hls)
+       (rw (nth_app_lo (List.take nl (regs6 c)) sl i hlt))
+       (rw (nth_take (regs6 c) nl i hi))
+       (exact (Eq.symm (reg_k c i h6))))
+      ((intro h6)
+       (have hnl (<= 6 nl) (arith))
+       (have hnl6 (<= (List.length (regs6 c)) nl) (exact hnl))
+       (have ht (= (List.take nl (regs6 c)) (regs6 c)) (exact (take_all (regs6 c) nl hnl6)))
+       (have h6r (<= (List.length (regs6 c)) i) (exact h6))
+       (have hk (< (- i 6) (List.length sl))
+         (rw hsl)
+         (show (< (- i 6) (- nl 6)))
+         (arith (Nat.sub_add_cancel h6) (Nat.sub_add_cancel hnl)))
+       (have hk2 (< (- i 6) (List.length (app sl ws))) (rw (app_length sl ws)) (arith))
+       (have hv (= (nth ls i) (nth sl (- i 6)))
+         (rw hls)
+         (rw ht)
+         (exact (nth_app_ge (regs6 c) sl i h6r)))
+       (rw (framed_ea (- i 6) w hk2))
+       (apply And.intro ((exact (framed_word_ok (- i 6) w hk2)))
+         ((rw hv) (rw (<- (nth_app_lo sl ws (- i 6) hk))) (exact (framed_word (- i 6) w hk2))))))))
+;; a memory that holds two lists one after the other holds each
+(theorem holds_app ((m Mem) (ys (List (BitVec 64))) (xs (List (BitVec 64))))
+  (forall ((p Nat))
+    (-> (holds m p (app xs ys)) (and (holds m p xs) (holds m (+ p (* 8 (List.length xs))) ys))))
+  (by
+    (induction xs
+      ((nil () (intro p h) (show (and (holds m p nil) (holds m p ys)))
+         (exact (And.intro (holds_nil m p) h)))
+       (cons (x r ih) (intro p h) (have h0 (holds m p (cons x (app r ys))) (exact h))
+         (have hh (= (w64 (mem_le64 m p)) x) (exact (holds_head m p x (app r ys) h0)))
+         (have ht (holds m (+ p 8) (app r ys)) (exact (holds_tail m p x (app r ys) h0)))
+         (cases (ih (+ p 8) ht)
+           ((intro (h1 h2)
+              (have e (= (+ (+ p 8) (* 8 (List.length r))) (+ p (* 8 (+ (List.length r) 1))))
+                (arith))
+              (have g2 (holds m (+ p (* 8 (+ (List.length r) 1))) ys) (rw (<- e)) (exact h2))
+              (show (and (holds m p (cons x r)) (holds m (+ p (* 8 (+ (List.length r) 1))) ys)))
+              (exact (And.intro (holds_cons m p x r hh h1) g2))))))))))
 
 ;; ---- a function's entry -------------------------------------------------------------------------
 ;; local i as the prologue sets it: the i-th argument, or zero

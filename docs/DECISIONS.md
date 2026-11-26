@@ -858,13 +858,11 @@ entries are explained under "Measured" at the end.
   kept or made again by each build — making three stored proofs again cost 2.0 s against 0.4 s to
   replay them, and gave the same bytes (Measured).
 - Chosen in building the first pass (`v3/compile/x86/pass.shard`), not put to the owner one by
-  one. A local lives in one of the six registers a callee keeps, and an expression is evaluated on
-  a stack of nine temporary registers — every register a caller does not keep —, the left operand
-  in temporary k and the right in k+1; a seventh local and a tenth temporary are refused. Not
-  stack slots for locals — a frame with variables of its own needs a rule for an operand at the
-  stack pointer and a displacement, and a frame's description (`models/x86/frame.shard`) holds
-  return addresses and saved registers only; not a push and a pop around each operand — a
-  function's stack need would then depend on how deep its expressions are. The argument registers
+  one. An expression is evaluated on a stack of nine temporary registers — every register a
+  caller does not keep —, the left operand in temporary k and the right in k+1; a tenth
+  temporary is refused. Not a push and a pop around each operand — a function's stack need
+  would then depend on how deep its expressions are. (Where a function's locals live is the
+  next entry's.) The argument registers
   are among the temporaries, which is sound because a call's arguments are constants and locals,
   moved in after every expression before them has been evaluated; the theorem proves it. Every
   function pushes all six registers and pops them, whatever it uses. A compiled file's data is
@@ -874,6 +872,32 @@ entries are explained under "Measured" at the end.
   function's low form, its code and the proofs above the pass) stand above `x86/`; the
   intermediate still takes its words and its mapped ranges from the x86 model's files, since no
   general form of a machine is designed before a second one exists (`COMPILE.md` §4).
+- ★ A function's locals: the first six in registers, the rest in its frame (ruled 2026-11-25,
+  `LAW.md` §6, 26). Local i < 6 lives in the i-th register a callee keeps; local i >= 6 is the
+  word at the stack pointer and 8 (i - 6) bytes up, read and written by one `mov` with a
+  displacement (`pass.shard` `ld_loc`, `st_loc`). On entry, after the six pushes, a function
+  with such locals sets rax to zero and pushes it once for each (`slots_in`); before the six
+  pops of a return or of a tail call it raises the stack pointer over them (`slots_out`). A
+  function of six locals or fewer has neither, and the same bytes as before. A function's
+  stack need counts the frame's locals, and a tail call's need is the callee's less the six
+  registers and those locals, so a function's tail call of itself still needs nothing. What
+  the proof holds of a state inside a function (`stmt.shard` `sim`): the frame's size is as
+  it was — the words under the six saved registers, the locals of the frame among them —;
+  the stack pointer stands j words up, the frame's locals `sl` stand from it and the saved
+  registers after them; the function's locals are the first of the six registers' words and
+  then `sl`. An expression's code is given the locals as a predicate (`regs.shard` `locs`),
+  word by word: in its register, or mapped to read at its place and equal to the word there.
+  One lemma sets a local from rax (`set_loc`), for a let and for a call's result. Chosen
+  because the bar is no regrets against C: a function that fits its locals in registers pays
+  nothing for the frame. Rejected: every local in a word of the frame — the smaller proof by
+  a fifth to a third, as sized before the work, but each read and write of a local a memory
+  access in every function, to be undone for speed later, and the register form's proof
+  deleted only to be written again. Still a limit: a function takes at most SIX ARGUMENT
+  WORDS, the six argument registers; an argument on the stack needs the seam's statement of
+  where arguments are (`seam.shard` `args_in`) said again. Chosen in building, not put to
+  the owner: the frame's locals are made by pushes of zero — one byte each after five for
+  the zero — and not by one subtraction and a store each; they are given back by one `add`
+  and not by pops.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
@@ -2199,3 +2223,15 @@ measurements; measure again before building on one.
   the five files' theorems, the first program's and the six directories is 116 s for 110. The
   fifteen x86 and compile entrypoints pass natively, 846 checks, the processor's runs among
   them.
+- A function's locals past the sixth in its frame (2026-11-25; natively, CPU seconds, single
+  measurements). The pass, its proof and the laws under it — eighteen files of `x86/` and
+  `models/x86/` — are 11,469 lines for 9,979: the frame's laws 1,044 for 784, the entry and
+  the way out 777 for 487, lists 362 for 122, a local set and a return 577 for 355; the call
+  as a statement is 493 for 547, the copy of a local's set gone from it. `module.shard` did
+  not change, nor one line of a file's proof or of a view: the six run modules loaded with no
+  refusal as they stood, and no byte of the tree's files changed. A load of the module
+  theorem is 26.5 s for 24.5. `compile_calls_cases_test.sh`: nine calls of five functions of
+  7 to 26 locals, where the intermediate machine's word, the model's run of the compiled file
+  and the processor's run of it agree; with the place of a frame's local wrong by a word in a
+  copy of the pass, 18 of its 53 checks fail. The fifteen x86 and compile entrypoints pass
+  natively, 874 checks, the processor's runs among them.

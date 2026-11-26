@@ -1,5 +1,5 @@
 ;;; v3/compile/x86/stmt.shard — the statement proven of every statement of the fragment,
-;;; and its cases for a local set and for a return.
+;;; a local set from rax, and the cases for a return and for a local set.
 (import "pass.shard")
 (import "../ir_laws.shard")
 (import "lists.shard")
@@ -18,6 +18,7 @@
 (use compile.x86.pass)
 (use compile.x86.regs)
 (use compile.x86.seam)
+(use models.x86.asm)
 (use models.x86.frame)
 (use models.x86.laws)
 (use models.x86.word)
@@ -36,12 +37,12 @@
 
 ;; THE STATEMENT-LEVEL FACT, for runs of the fuel n. A statement s of a function of nl locals
 ;; whose code stands in the table at a: from a state c at a, inside a function entered in c0
-;; with room for d + 6 words above f — the six saved registers and the return address standing
-;; from the stack pointer, d words up, the locals in their registers, the base memory m0 as the
-;; run's memory mi on the data ranges and as c0's memory wherever the run may not write — where
-;; the run of s returns v and the memory m2, the processor comes to a state that has returned
-;; to c0's caller with v in rax, the data ranges as m2 has them and every other byte outside
-;; the d + 6 words as c0 had it.
+;; with room for d + 6 words above f — the stack pointer j words up; from it the locals past
+;; the sixth, sl, then the six saved registers and the return address, d words up; the first
+;; six locals in their registers; the base memory m0 as the run's memory mi on the data ranges
+;; and as c0's memory wherever the run may not write — where the run of s returns v and the
+;; memory m2, the processor comes to a state that has returned to c0's caller with v in rax,
+;; the data ranges as m2 has them and every other byte outside the d + 6 words as c0 had it.
 (def sim
   ((p (List IFn))
    (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
@@ -67,18 +68,297 @@
      (f Nat)
      (d Nat)
      (nl Nat)
-     (m0 Mem))
+     (m0 Mem)
+     (j Nat)
+     (sl (List (BitVec 64))))
     (-> (= (irun n p ext rs s ls mi) (some (Prod.mk v m2))) (= (cstm xs fs ts p nl a s) (some code))
       (placed tbl a code)
-      (<= (sneed xs fs ts p s) d)
+      (<= (sneed xs fs ts p nl s) j)
       (= (Cpu.rip c) (w64 a))
-      (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0))
-      (= ls (List.take nl (regs6 c)))
-      (<= nl 6)
+      (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0)))
+      (= ls (app (List.take nl (regs6 c)) sl))
+      (= (List.length sl) (nsl nl))
+      (= (+ j (List.length sl)) d)
       (agree rs mi m0)
       (kept_mem rs f (+ d 6) (Cpu.mem c0) m0)
       (data_ok c0 rs clo chi f (+ d 6))
       (done rs f (+ d 6) c0 c v m2))))
+
+;; ---- a local set from rax -----------------------------------------------------------------------
+;; rax into local x: its register set, or its word of the frame stored. The state after is
+;; described with the frame's locals as they then stand, and the locals are the list with x's
+;; word replaced.
+(theorem set_loc
+  ((c0 Cpu)
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (f Nat)
+   (k Nat)
+   (m0 Mem)
+   (c Cpu)
+   (j Nat)
+   (ws (List (BitVec 64)))
+   (nl Nat)
+   (ls (List (BitVec 64)))
+   (sl (List (BitVec 64)))
+   (x Nat)
+   (v (BitVec 64))
+   (pc Nat)
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (w (framed c0 tbl clo chi f k m0 c j (app sl ws)))
+   (hne (< 0 (List.length ws)))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hx (< x nl))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hv (= (reg c 0) v))
+   (hs (= (site tbl pc) (some (Prod.mk (st_loc x) (List.length (encode (st_loc x))))))))
+  (exists ((c1 Cpu))
+    (exists ((sl1 (List (BitVec 64))))
+      (and (reaches c c1)
+        (and (= (Cpu.rip c1) (w64 (+ pc (List.length (encode (st_loc x))))))
+          (and (framed c0 tbl clo chi f k m0 c1 j (app sl1 ws))
+            (and (= (upd ls x v) (app (List.take nl (regs6 c1)) sl1)) (= (List.length sl1) (nsl nl))))))))
+  (by
+    (cases (Nat.decLt x 6)
+      ((isTrue (h6)
+         (have e (= (st_loc x) (MovRmR (RmReg (kreg x)) 0)) (rw st_loc.eq_1) (rw (if_pos h6)) rfl)
+         (have hs2
+           (= (site tbl pc)
+             (some
+               (Prod.mk (MovRmR (RmReg (kreg x)) 0)
+                 (List.length (encode (MovRmR (RmReg (kreg x)) 0))))))
+           (rw (<- e))
+           (exact hs))
+         (rw e)
+         (have r1
+           (reaches c
+             (at_pc (set_reg c (kreg x) v)
+               (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0)))))))
+           (apply
+             (t_mov tbl clo chi pc (kreg x) 0 (List.length (encode (MovRmR (RmReg (kreg x)) 0))) v)
+             ((exact hall))
+             ((exact hchi))
+             ((exact (framed_code w)))
+             ((exact hrip))
+             ((exact hs2))
+             ((exact hv))
+             ((exact
+                (reaches_refl
+                  (at_pc (set_reg c (kreg x) v)
+                    (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0)))))))))))
+         (have w1
+           (framed c0 tbl clo chi f k m0
+             (at_pc (set_reg c (kreg x) v)
+               (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0))))))
+             j
+             (app sl ws))
+           (exact
+             (framed_kset c0 tbl clo chi f k m0 c j (app sl ws) x v
+               (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0)))))
+               h6
+               w)))
+         (have h6r (< x (List.length (regs6 c))) (exact h6))
+         (have hlt (< x (List.length (List.take nl (regs6 c))))
+           (exact (take_lt (regs6 c) nl x hx h6r)))
+         (have hls1
+           (= (upd ls x v)
+             (app
+               (List.take nl
+                 (regs6
+                   (at_pc (set_reg c (kreg x) v)
+                     (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0))))))))
+               sl))
+           (rw (kset_regs c x v (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0))))) h6))
+           (rw (take_upd (regs6 c) nl x v))
+           (rw (<- (upd_app_lo (List.take nl (regs6 c)) sl x v hlt)))
+           (rw (<- hls))
+           rfl)
+         (have hrip1
+           (=
+             (Cpu.rip
+               (at_pc (set_reg c (kreg x) v)
+                 (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0)))))))
+             (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0))))))
+           rfl)
+         (apply
+           (Exists.intro
+             (at_pc (set_reg c (kreg x) v)
+               (w64 (+ pc (List.length (encode (MovRmR (RmReg (kreg x)) 0)))))))
+           ((apply (Exists.intro sl)
+              ((exact (And.intro r1 (And.intro hrip1 (And.intro w1 (And.intro hls1 hsl))))))))))
+       (isFalse (h6) (have h6b (<= 6 x) (arith))
+         (have e (= (st_loc x) (MovRmR (RmMem 4 (* 8 (- x 6))) 0))
+           (rw st_loc.eq_1)
+           (rw (if_neg h6))
+           rfl)
+         (have hs2
+           (= (site tbl pc)
+             (some
+               (Prod.mk (MovRmR (RmMem 4 (* 8 (- x 6))) 0)
+                 (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0))))))
+           (rw (<- e))
+           (exact hs))
+         (rw e)
+         (have hnl (<= 6 nl) (arith))
+         (have hk (< (- x 6) (List.length sl))
+           (rw hsl)
+           (show (< (- x 6) (- nl 6)))
+           (arith (Nat.sub_add_cancel h6b) (Nat.sub_add_cancel hnl)))
+         (have hk2 (< (- x 6) (List.length (app sl ws))) (rw (app_length sl ws)) (arith))
+         (have hl0 (= (+ j (List.length (app sl ws))) (+ k 1)) (exact (framed_len w)))
+         (have hjk (< (+ j (- x 6)) k) (arith hl0 (app_length sl ws)))
+         (have r1
+           (reaches c
+             (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+               (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))))))
+           (apply
+             (t_store_d tbl clo chi pc 4 (* 8 (- x 6)) 0
+               (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))
+               (+ f (* 8 (+ j (- x 6))))
+               v)
+             ((exact hall))
+             ((exact hchi))
+             ((exact (framed_code w)))
+             ((exact hrip))
+             ((exact hs2))
+             ((exact (framed_ea (- x 6) w hk2)))
+             ((exact hv))
+             ((exact (framed_set_ok (- x 6) w hjk)))
+             ((exact
+                (reaches_refl
+                  (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+                    (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))))))))))
+         (have w1
+           (framed c0 tbl clo chi f k m0
+             (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+               (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0))))))
+             j
+             (upd (app sl ws) (- x 6) v))
+           (exact
+             (framed_set (- x 6) v
+               (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))))
+               w
+               hk2
+               hjk)))
+         (have w2
+           (framed c0 tbl clo chi f k m0
+             (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+               (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0))))))
+             j
+             (app (upd sl (- x 6) v) ws))
+           (rw (<- (upd_app_lo sl ws (- x 6) v hk)))
+           (exact w1))
+         (have hnl6 (<= (List.length (regs6 c)) nl) (exact hnl))
+         (have ht (= (List.take nl (regs6 c)) (regs6 c)) (exact (take_all (regs6 c) nl hnl6)))
+         (have h6r (<= (List.length (regs6 c)) x) (exact h6b))
+         (have hls0 (= (upd ls x v) (app (List.take nl (regs6 c)) (upd sl (- x 6) v)))
+           (rw hls)
+           (rw ht)
+           (exact (upd_app_ge (regs6 c) sl x v h6r)))
+         (have hls1
+           (= (upd ls x v)
+             (app
+               (List.take nl
+                 (regs6
+                   (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+                     (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0))))))))
+               (upd sl (- x 6) v)))
+           (exact hls0))
+         (have hsl1 (= (List.length (upd sl (- x 6) v)) (nsl nl))
+           (rw (upd_length sl (- x 6) v))
+           (exact hsl))
+         (have hrip1
+           (=
+             (Cpu.rip
+               (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+                 (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))))))
+             (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0))))))
+           rfl)
+         (apply
+           (Exists.intro
+             (at_pc (mem_to c (mem_put64 (Cpu.mem c) (+ f (* 8 (+ j (- x 6)))) (w64_val v)))
+               (w64 (+ pc (List.length (encode (MovRmR (RmMem 4 (* 8 (- x 6))) 0)))))))
+           ((apply (Exists.intro (upd sl (- x 6) v))
+              ((exact (And.intro r1 (And.intro hrip1 (And.intro w2 (And.intro hls1 hsl1))))))))))))))
+;; rax into a local, then the rest of the statement by the fact for the fuel below
+(theorem store_k
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (x Nat)
+   (k IStm)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (v (BitVec 64))
+   (m2 Mem)
+   (c Cpu)
+   (pc Nat)
+   (a2 Nat)
+   (ck (List Instr))
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
+   (w0 (BitVec 64))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (ih (sim p ext rs tbl clo chi xs fs ts n1))
+   (hrk (= (irun n1 p ext rs k (upd ls x w0) mi) (some (Prod.mk v m2))))
+   (hx (< x nl))
+   (hck (= (cstm xs fs ts p nl a2 k) (some ck)))
+   (hs (= (site tbl pc) (some (Prod.mk (st_loc x) (List.length (encode (st_loc x)))))))
+   (hp (placed tbl (+ pc (List.length (encode (st_loc x)))) ck))
+   (ea (= (+ pc (List.length (encode (st_loc x)))) a2))
+   (hsn (<= (sneed xs fs ts p nl k) j))
+   (hrip (= (Cpu.rip c) (w64 pc)))
+   (hv (= (reg c 0) w0))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (done rs f (+ d 6) c0 c v m2)
+  (by
+    (have hne (< 0 (List.length (saved c0))) (exact (Nat.zero_lt_succ 6)))
+    (cases
+      (set_loc c0 tbl clo chi f (+ d 6) m0 c j (saved c0) nl ls sl x w0 pc hall hchi w hne hls hsl
+        hx
+        hrip
+        hv
+        hs)
+      ((intro (c7 g)
+         (cases g
+           ((intro (sl7 g7)
+              (have hrip7 (= (Cpu.rip c7) (w64 a2)) (rw (<- ea)) (exact (And.left (And.right g7))))
+              (have p3 (placed tbl a2 ck) (rw (<- ea)) (exact hp))
+              (have hsl7 (= (List.length sl7) (nsl nl))
+                (exact (And.right (And.right (And.right (And.right g7))))))
+              (have hj7 (= (+ j (List.length sl7)) d) (rw hsl7) (rw (<- hsl)) (exact hj))
+              (exact
+                (done_from rs f (+ d 6) c0 c c7 v m2 (And.left g7)
+                  (ih k (upd ls x w0) mi v m2 c7 a2 ck c0 f d nl m0 j sl7 hrk hck p3 hsn hrip7
+                    (And.left (And.right (And.right g7)))
+                    (And.left (And.right (And.right (And.right g7))))
+                    hsl7
+                    hj7
+                    hag
+                    hkm
+                    hdo)))))))))))
 
 ;; ---- a return -----------------------------------------------------------------------------------
 (theorem sim_ret
@@ -105,15 +385,18 @@
    (d Nat)
    (nl Nat)
    (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
    (hrun (= (irun (FS n1) p ext rs (SRet e) ls mi) (some (Prod.mk v m2))))
    (hcs (= (cstm xs fs ts p nl a (SRet e)) (some code)))
    (hpl (placed tbl a code))
    (hrip (= (Cpu.rip c) (w64 a)))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
@@ -124,173 +407,49 @@
     (have hm2 (= m2 mi) (exact (And.right (irun_ret_inv p ext rs n1 e ls mi v m2 hrun))))
     (cases (cstm_ret_inv xs fs ts p nl a e code hcs)
       ((intro (ce g) (have hce (= (cexp 0 e nl) (some ce)) (exact (And.left g)))
-         (have hcd (= code (List.append ce epi)) (exact (And.right g)))
-         (have hpl2 (placed tbl a (List.append ce epi)) (rw (<- hcd)) (exact hpl))
-         (have p1 (placed tbl a ce) (exact (And.left (placed_app tbl ce a epi hpl2))))
-         (have p2 (placed tbl (+ a (isize ce)) epi)
-           (exact (And.right (placed_app tbl ce a epi hpl2))))
+         (have hcd (= code (List.append ce (epi nl))) (exact (And.right g)))
+         (have hpl2 (placed tbl a (List.append ce (epi nl))) (rw (<- hcd)) (exact hpl))
+         (have p1 (placed tbl a ce) (exact (And.left (placed_app tbl ce a (epi nl) hpl2))))
+         (have p2 (placed tbl (+ a (isize ce)) (epi nl))
+           (exact (And.right (placed_app tbl ce a (epi nl) hpl2))))
          (have hst (est tbl rs ls mi nl c)
-           (exact (est_framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0) rs ls mi nl w hls hag hdo)))
-         (cases (cexp_ok tbl clo chi rs ls mi nl c a e ce v hall hchi hnl hrip hst hce hev p1)
+           (exact
+             (est_framed c0 tbl clo chi f (+ d 6) m0 c j (saved c0) rs ls mi nl sl w hls hsl hag hdo)))
+         (cases (cexp_ok tbl clo chi rs ls mi nl c a e ce v hall hchi hrip hst hce hev p1)
            ((intro (c1 g1) (have r1 (reaches c c1) (exact (And.left g1)))
               (have hv1 (= (reg c1 0) v) (exact (And.left (And.right g1))))
               (have hrip1 (= (Cpu.rip c1) (w64 (+ a (isize ce))))
                 (exact (And.left (And.right (And.right g1)))))
               (have hsc (scratch c c1) (exact (And.right (And.right (And.right g1)))))
-              (have w1 (framed c0 tbl clo chi f (+ d 6) m0 c1 d (saved c0))
-                (exact (framed_scratch c0 tbl clo chi f (+ d 6) m0 c d (saved c0) c1 w hsc)))
-              (have r2 (reaches c1 (eout c1 (+ a (isize ce))))
-                (exact
-                  (And.left (epi_ok c0 tbl clo chi f d m0 c1 (+ a (isize ce)) hall hchi w1 hrip1 p2))))
-              (have hret (returned c0 (eout c1 (+ a (isize ce))))
-                (exact
-                  (And.right
-                    (epi_ok c0 tbl clo chi f d m0 c1 (+ a (isize ce)) hall hchi w1 hrip1 p2))))
-              (have hmem (= (Cpu.mem (eout c1 (+ a (isize ce)))) (Cpu.mem c))
-                (show (= (Cpu.mem c1) (Cpu.mem c)))
-                (exact (And.left (And.right hsc))))
-              (have hag2 (agree rs m2 (Cpu.mem (eout c1 (+ a (isize ce)))))
-                (rw hmem)
-                (rw hm2)
-                (exact
-                  (agree_frame c0 rs clo chi f (+ d 6) mi m0 (Cpu.mem c) hdo hag (framed_mem w))))
-              (have hkm2 (kept_mem rs f (+ d 6) (Cpu.mem c0) (Cpu.mem (eout c1 (+ a (isize ce)))))
-                (rw hmem)
-                (exact (kept_frame rs f (+ d 6) (Cpu.mem c0) m0 (Cpu.mem c) hkm (framed_mem w))))
-              (have hv2 (= (reg (eout c1 (+ a (isize ce))) 0) v)
-                (show (= (reg c1 0) v))
-                (exact hv1))
-              (apply (Exists.intro (eout c1 (+ a (isize ce))))
-                ((apply And.intro ((exact (reaches_trans c c1 (eout c1 (+ a (isize ce))) r1 r2)))
-                   ((apply And.intro ((exact hv2))
-                      ((apply And.intro ((exact hag2))
-                         ((apply And.intro ((exact hkm2)) ((exact hret)))))))))))))))))))
+              (have w1 (framed c0 tbl clo chi f (+ d 6) m0 c1 j (app sl (saved c0)))
+                (exact (framed_scratch c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0)) c1 w hsc)))
+              (cases
+                (epi_ok c0 tbl clo chi f d m0 c1 (+ a (isize ce)) nl j sl hall hchi w1 hsl hj hrip1
+                  p2)
+                ((intro (c2 g2) (have r2 (reaches c1 c2) (exact (And.left g2)))
+                   (have hret (returned c0 c2) (exact (And.left (And.right g2))))
+                   (have hmem (= (Cpu.mem c2) (Cpu.mem c))
+                     (rw (And.right (And.right (And.right g2))))
+                     (exact (And.left (And.right hsc))))
+                   (have hag2 (agree rs m2 (Cpu.mem c2))
+                     (rw hmem)
+                     (rw hm2)
+                     (exact
+                       (agree_frame c0 rs clo chi f (+ d 6) mi m0 (Cpu.mem c) hdo hag (framed_mem w))))
+                   (have hkm2 (kept_mem rs f (+ d 6) (Cpu.mem c0) (Cpu.mem c2))
+                     (rw hmem)
+                     (exact (kept_frame rs f (+ d 6) (Cpu.mem c0) m0 (Cpu.mem c) hkm (framed_mem w))))
+                   (have hv2 (= (reg c2 0) v)
+                     (rw (And.left (And.right (And.right g2))))
+                     (exact hv1))
+                   (apply (Exists.intro c2)
+                     ((apply And.intro ((exact (reaches_trans c c1 c2 r1 r2)))
+                        ((apply And.intro ((exact hv2))
+                           ((apply And.intro ((exact hag2))
+                              ((apply And.intro ((exact hkm2)) ((exact hret))))))))))))))))))))))
 
 ;; ---- a local set --------------------------------------------------------------------------------
-;; the machine's part: the expression's code, the move into the local's register, and the rest
-;; of the statement by the fact for runs of the fuel below
-(theorem let_core
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (tbl (List (Prod Nat (Prod Instr Nat))))
-   (clo Nat)
-   (chi Nat)
-   (xs (List (Prod Nat Nat)))
-   (fs (List (Prod Nat Nat)))
-   (ts (List (Prod Nat Nat)))
-   (n1 Fuel)
-   (x Nat)
-   (e IExp)
-   (k IStm)
-   (ls (List (BitVec 64)))
-   (mi Mem)
-   (v (BitVec 64))
-   (m2 Mem)
-   (c Cpu)
-   (a Nat)
-   (c0 Cpu)
-   (f Nat)
-   (d Nat)
-   (nl Nat)
-   (m0 Mem)
-   (w0 (BitVec 64))
-   (ce (List Instr))
-   (ck (List Instr))
-   (hall (= (all_within tbl clo chi) true))
-   (hchi (<= (+ chi 15) 18446744073709551616))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hev (= (ieval rs ls mi e) (some w0)))
-   (hrk (= (irun n1 p ext rs k (upd ls x w0) mi) (some (Prod.mk v m2))))
-   (hx (< x nl))
-   (hce (= (cexp 0 e nl) (some ce)))
-   (hck (= (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k) (some ck)))
-   (hpl (placed tbl a (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck))))
-   (hsn (<= (sneed xs fs ts p k) d))
-   (hrip (= (Cpu.rip c) (w64 a)))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
-   (hag (agree rs mi m0))
-   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
-   (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
-  (by
-    (have p1 (placed tbl a ce)
-      (exact (And.left (placed_app tbl ce a (cons (MovRmR (RmReg (kreg x)) 0) ck) hpl))))
-    (have p2 (placed tbl (+ a (isize ce)) (cons (MovRmR (RmReg (kreg x)) 0) ck))
-      (exact (And.right (placed_app tbl ce a (cons (MovRmR (RmReg (kreg x)) 0) ck) hpl))))
-    (have s (= (site tbl (+ a (isize ce))) (some (Prod.mk (MovRmR (RmReg (kreg x)) 0) 3)))
-      (exact (And.left p2)))
-    (have ea (= (+ (+ a (isize ce)) 3) (+ a (+ (isize ce) 3))) (arith))
-    (have p3 (placed tbl (+ a (+ (isize ce) 3)) ck) (rw (<- ea)) (exact (And.right p2)))
-    (have hx6 (< x 6) (arith))
-    (have hst (est tbl rs ls mi nl c)
-      (exact (est_framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0) rs ls mi nl w hls hag hdo)))
-    (cases (cexp_ok tbl clo chi rs ls mi nl c a e ce w0 hall hchi hnl hrip hst hce hev p1)
-      ((intro (c1 g1) (have r1 (reaches c c1) (exact (And.left g1)))
-         (have hv1 (= (reg c1 0) w0) (exact (And.left (And.right g1))))
-         (have hrip1 (= (Cpu.rip c1) (w64 (+ a (isize ce))))
-           (exact (And.left (And.right (And.right g1)))))
-         (have hsc (scratch c c1) (exact (And.right (And.right (And.right g1)))))
-         (have w1 (framed c0 tbl clo chi f (+ d 6) m0 c1 d (saved c0))
-           (exact (framed_scratch c0 tbl clo chi f (+ d 6) m0 c d (saved c0) c1 w hsc)))
-         (have r7 (reaches c1 (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3))))
-           (apply (t_mov tbl clo chi (+ a (isize ce)) (kreg x) 0 3 w0) ((exact hall)) ((exact hchi))
-             ((exact (framed_code w1)))
-             ((exact hrip1))
-             ((exact s))
-             ((exact hv1))
-             ((exact (reaches_refl (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3))))))))
-         (have w7
-           (framed c0 tbl clo chi f (+ d 6) m0
-             (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3)))
-             d
-             (saved c0))
-           (exact
-             (framed_kset c0 tbl clo chi f (+ d 6) m0 c1 d (saved c0) x w0
-               (w64 (+ (+ a (isize ce)) 3))
-               hx6
-               w1)))
-         (have hls1 (= ls (List.take nl (regs6 c1))) (rw (scratch_regs c c1 hsc)) (exact hls))
-         (have hls7
-           (= (upd ls x w0)
-             (List.take nl (regs6 (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3))))))
-           (rw (kset_regs c1 x w0 (w64 (+ (+ a (isize ce)) 3)) hx6))
-           (rw (take_upd (regs6 c1) nl x w0))
-           (rw (<- hls1))
-           rfl)
-         (have hrip7
-           (= (Cpu.rip (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3))))
-             (w64 (+ a (+ (isize ce) 3))))
-           (rw (<- ea))
-           rfl)
-         (exact
-           (done_from rs f (+ d 6) c0 c
-             (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3)))
-             v
-             m2
-             (reaches_trans c c1 (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3))) r1 r7)
-             (ih k (upd ls x w0) mi v m2
-               (at_pc (set_reg c1 (kreg x) w0) (w64 (+ (+ a (isize ce)) 3)))
-               (+ a (+ (isize ce) 3))
-               ck
-               c0
-               f
-               d
-               nl
-               m0
-               hrk
-               hck
-               p3
-               hsn
-               hrip7
-               w7
-               hls7
-               hnl
-               hag
-               hkm
-               hdo))))))))
+;; the expression's code, then rax into the local and the rest of the statement
 (theorem sim_let
   ((p (List IFn))
    (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
@@ -317,23 +476,26 @@
    (d Nat)
    (nl Nat)
    (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
    (ih (sim p ext rs tbl clo chi xs fs ts n1))
    (hrun (= (irun (FS n1) p ext rs (SLet x e k) ls mi) (some (Prod.mk v m2))))
    (hcs (= (cstm xs fs ts p nl a (SLet x e k)) (some code)))
    (hpl (placed tbl a code))
-   (hsn (<= (sneed xs fs ts p (SLet x e k)) d))
+   (hsn (<= (sneed xs fs ts p nl (SLet x e k)) j))
    (hrip (= (Cpu.rip c) (w64 a)))
-   (w (framed c0 tbl clo chi f (+ d 6) m0 c d (saved c0)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
   (done rs f (+ d 6) c0 c v m2)
   (by
-    (have hsn2 (<= (sneed xs fs ts p k) d) (exact hsn))
+    (have hsn2 (<= (sneed xs fs ts p nl k) j) (exact hsn))
     (have hx (< x nl) (exact (And.left (cstm_let_inv xs fs ts p nl a x e k code hcs))))
     (cases (irun_let_inv p ext rs n1 x e k ls mi (Prod.mk v m2) hrun)
       ((intro (w0 g0) (have hev (= (ieval rs ls mi e) (some w0)) (exact (And.left g0)))
@@ -343,13 +505,73 @@
            ((intro (ce g1) (have hce (= (cexp 0 e nl) (some ce)) (exact (And.left g1)))
               (cases (And.right g1)
                 ((intro (ck g2)
-                   (have hck (= (cstm xs fs ts p nl (+ a (+ (isize ce) 3)) k) (some ck))
+                   (have hck
+                     (=
+                       (cstm xs fs ts p nl (+ a (+ (isize ce) (List.length (encode (st_loc x))))) k)
+                       (some ck))
                      (exact (And.left g2)))
-                   (have hcd (= code (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck)))
-                     (exact (And.right g2)))
-                   (have hpl2 (placed tbl a (List.append ce (cons (MovRmR (RmReg (kreg x)) 0) ck)))
+                   (have hcd (= code (List.append ce (cons (st_loc x) ck))) (exact (And.right g2)))
+                   (have hpl2 (placed tbl a (List.append ce (cons (st_loc x) ck)))
                      (rw (<- hcd))
                      (exact hpl))
-                   (exact
-                     (let_core p ext rs tbl clo chi xs fs ts n1 x e k ls mi v m2 c a c0 f d nl m0 w0
-                       ce ck hall hchi ih hev hrk hx hce hck hpl2 hsn2 hrip w hls hnl hag hkm hdo)))))))))))))
+                   (have p1 (placed tbl a ce)
+                     (exact (And.left (placed_app tbl ce a (cons (st_loc x) ck) hpl2))))
+                   (have p2 (placed tbl (+ a (isize ce)) (cons (st_loc x) ck))
+                     (exact (And.right (placed_app tbl ce a (cons (st_loc x) ck) hpl2))))
+                   (have ea
+                     (= (+ (+ a (isize ce)) (List.length (encode (st_loc x))))
+                       (+ a (+ (isize ce) (List.length (encode (st_loc x))))))
+                     (arith))
+                   (have hst (est tbl rs ls mi nl c)
+                     (exact
+                       (est_framed c0 tbl clo chi f (+ d 6) m0 c j (saved c0) rs ls mi nl sl w hls
+                         hsl
+                         hag
+                         hdo)))
+                   (cases
+                     (cexp_ok tbl clo chi rs ls mi nl c a e ce w0 hall hchi hrip hst hce hev p1)
+                     ((intro (c1 q1) (have r1 (reaches c c1) (exact (And.left q1)))
+                        (have hv1 (= (reg c1 0) w0) (exact (And.left (And.right q1))))
+                        (have hrip1 (= (Cpu.rip c1) (w64 (+ a (isize ce))))
+                          (exact (And.left (And.right (And.right q1)))))
+                        (have hsc (scratch c c1) (exact (And.right (And.right (And.right q1)))))
+                        (have w1 (framed c0 tbl clo chi f (+ d 6) m0 c1 j (app sl (saved c0)))
+                          (exact
+                            (framed_scratch c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0)) c1 w
+                              hsc)))
+                        (have hls1 (= ls (app (List.take nl (regs6 c1)) sl))
+                          (rw (scratch_regs c c1 hsc))
+                          (exact hls))
+                        (exact
+                          (done_from rs f (+ d 6) c0 c c1 v m2 r1
+                            (store_k p ext rs tbl clo chi xs fs ts n1 x k ls mi v m2 c1
+                              (+ a (isize ce))
+                              (+ a (+ (isize ce) (List.length (encode (st_loc x)))))
+                              ck
+                              c0
+                              f
+                              d
+                              nl
+                              m0
+                              j
+                              sl
+                              w0
+                              hall
+                              hchi
+                              ih
+                              hrk
+                              hx
+                              hck
+                              (And.left p2)
+                              (And.right p2)
+                              ea
+                              hsn2
+                              hrip1
+                              hv1
+                              w1
+                              hls1
+                              hsl
+                              hj
+                              hag
+                              hkm
+                              hdo)))))))))))))))))

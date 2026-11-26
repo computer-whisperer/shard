@@ -50,8 +50,7 @@
    (hchi (<= (+ chi 15) 18446744073709551616))
    (hcode (code_in c tbl))
    (hrip (= (Cpu.rip c) (w64 pc)))
-   (hls (= ls (List.take nl (regs6 c))))
-   (hnl (<= nl 6)))
+   (hls (locs c nl ls)))
   (-> (= (ld_atom r e nl) (some ia)) (= (ieval rs ls mi e) (some w))
     (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia)))))
     (reaches c (at_pc (set_reg c r w) (w64 (+ pc (List.length (encode ia)))))))
@@ -77,27 +76,67 @@
               (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
             (isTrue (hi) (rw (if_pos hi)) (intro h1 h2) (rw (<- (Option.some.inj h1)))
               (rw (<- (Option.some.inj h2)))
-              (intro hs)
-              (apply
-                (t_mov tbl clo chi pc r (kreg i) (List.length (encode (MovRmR (RmReg r) (kreg i))))
-                  (nth ls i))
-                ((exact hall))
-                ((exact hchi))
-                ((exact hcode))
-                ((exact hrip))
-                ((exact hs))
-                ((exact (loc_reg c ls nl i hls hi hnl)))
-                ((exact
-                   (reaches_refl
-                     (at_pc (set_reg c r (nth ls i))
-                       (w64 (+ pc (List.length (encode (MovRmR (RmReg r) (kreg i)))))))))))))))
+              (cases (Nat.decLt i 6)
+                ((isTrue (h6)
+                   (have e (= (ld_loc r i) (MovRmR (RmReg r) (kreg i)))
+                     (rw ld_loc.eq_1)
+                     (rw (if_pos h6))
+                     rfl)
+                   (have g (-> (< i 6) (= (reg c (kreg i)) (nth ls i)))
+                     (exact (And.left (hls i hi))))
+                   (rw e)
+                   (intro hs)
+                   (apply
+                     (t_mov tbl clo chi pc r (kreg i)
+                       (List.length (encode (MovRmR (RmReg r) (kreg i))))
+                       (nth ls i))
+                     ((exact hall))
+                     ((exact hchi))
+                     ((exact hcode))
+                     ((exact hrip))
+                     ((exact hs))
+                     ((exact (g h6)))
+                     ((exact
+                        (reaches_refl
+                          (at_pc (set_reg c r (nth ls i))
+                            (w64 (+ pc (List.length (encode (MovRmR (RmReg r) (kreg i))))))))))))
+                 (isFalse (h6) (have h6b (<= 6 i) (arith))
+                   (have e (= (ld_loc r i) (MovRRm r (RmMem 4 (* 8 (- i 6)))))
+                     (rw ld_loc.eq_1)
+                     (rw (if_neg h6))
+                     rfl)
+                   (have g
+                     (-> (<= 6 i)
+                       (and (= (mapped (Cpu.segs c) (ea c 4 (* 8 (- i 6))) 8 4) true)
+                         (= (w64 (mem_le64 (Cpu.mem c) (ea c 4 (* 8 (- i 6))))) (nth ls i))))
+                     (exact (And.right (hls i hi))))
+                   (rw e)
+                   (intro hs)
+                   (apply
+                     (t_load_d tbl clo chi pc r 4 (* 8 (- i 6))
+                       (List.length (encode (MovRRm r (RmMem 4 (* 8 (- i 6))))))
+                       (ea c 4 (* 8 (- i 6)))
+                       (nth ls i))
+                     ((exact hall))
+                     ((exact hchi))
+                     ((exact hcode))
+                     ((exact hrip))
+                     ((exact hs))
+                     (rfl)
+                     ((exact (And.left (g h6b))))
+                     ((exact (And.right (g h6b))))
+                     ((exact
+                        (reaches_refl
+                          (at_pc (set_reg c r (nth ls i))
+                            (w64 (+ pc (List.length (encode (MovRRm r (RmMem 4 (* 8 (- i 6))))))))))))))))))))
        (EOp (o a b) (unfold ld_atom) (intro h1)
          (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))
        (ELoad (q) (unfold ld_atom) (intro h1) (exact (absurd (Eq.symm h1) (Option.some_ne_none ia))))))))
 
 ;; ---- what an expression's code is given, and what it comes to -----------------------------------
 ;; the state an expression's code starts in: the table's code in place, the locals in their
-;; registers, the memory as the run's on the data ranges, and the data ranges mapped as asked
+;; registers and their words of the frame, the memory as the run's on the data ranges, and the
+;; data ranges mapped as asked
 (def est
   ((tbl (List (Prod Nat (Prod Instr Nat))))
    (rs (List Seg))
@@ -107,7 +146,7 @@
    (c Cpu))
   Prop
   (and (code_in c tbl)
-    (and (= ls (List.take nl (regs6 c)))
+    (and (locs c nl ls)
       (and (agree rs mi (Cpu.mem c))
         (forall ((a Nat) (n Nat) (need Nat))
           (-> (= (mapped rs a n need) true) (= (mapped (Cpu.segs c) a n need) true)))))))
@@ -130,9 +169,7 @@
         (-> (= (mapped rs a n need) true) (= (mapped (Cpu.segs c) a n need) true)))
       (exact (And.right (And.right (And.right h)))))
     (have g1 (code_in c1 tbl) (exact (code_in_of c c1 tbl hsegs hmem (And.left h))))
-    (have g2 (= ls (List.take nl (regs6 c1)))
-      (rw (scratch_regs c c1 hs))
-      (exact (And.left (And.right h))))
+    (have g2 (locs c1 nl ls) (exact (locs_scratch c c1 nl ls (And.left (And.right h)) hs)))
     (have g3 (agree rs mi (Cpu.mem c1)) (rw hmem) (exact (And.left (And.right (And.right h)))))
     (have g4
       (forall ((a Nat) (n Nat) (need Nat))
@@ -141,7 +178,8 @@
       (rw hsegs)
       (exact (hmp a n need hm)))
     (exact (And.intro g1 (And.intro g2 (And.intro g3 g4))))))
-;; a described state inside a function is such a state
+;; a described state inside a function, its locals past the sixth the words sl that stand first
+;; from the stack pointer, is such a state
 (theorem est_framed
   ((c0 Cpu)
    (tbl (List (Prod Nat (Prod Instr Nat))))
@@ -157,13 +195,16 @@
    (ls (List (BitVec 64)))
    (mi Mem)
    (nl Nat)
-   (w (framed c0 tbl clo chi f k m0 c j ws))
-   (hls (= ls (List.take nl (regs6 c))))
+   (sl (List (BitVec 64)))
+   (w (framed c0 tbl clo chi f k m0 c j (app sl ws)))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
    (hag (agree rs mi m0))
    (hdo (data_ok c0 rs clo chi f k)))
   (est tbl rs ls mi nl c)
   (by
     (have g1 (code_in c tbl) (exact (framed_code w)))
+    (have g2 (locs c nl ls) (exact (locs_framed c0 tbl clo chi f k m0 c j ws nl ls sl w hls hsl)))
     (have g3 (agree rs mi (Cpu.mem c))
       (exact (agree_frame c0 rs clo chi f k mi m0 (Cpu.mem c) hdo hag (framed_mem w))))
     (have g4
@@ -172,7 +213,7 @@
       (intro a n need hm)
       (rw (framed_segs w))
       (exact (And.left (hdo a n need hm))))
-    (exact (And.intro g1 (And.intro hls (And.intro g3 g4))))))
+    (exact (And.intro g1 (And.intro g2 (And.intro g3 g4))))))
 ;; from c the processor comes to a state at the address pc2 with w in temporary k, which
 ;; differs from c in the temporaries from k on, the flags and the program counter alone
 (def eres ((k Nat) (c Cpu) (pc2 Nat) (w (BitVec 64))) Prop
@@ -233,7 +274,6 @@
    (w (BitVec 64))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hnl (<= nl 6))
    (hk (< k 9))
    (h1 (= (ld_atom (treg k) e nl) (some ia)))
    (h2 (= (ieval rs ls mi e) (some w)))
@@ -243,11 +283,10 @@
   (eres k c (+ pc (isize (cons ia nil))) w)
   (by
     (have hcode (code_in c tbl) (exact (And.left hst)))
-    (have hls (= ls (List.take nl (regs6 c))) (exact (And.left (And.right hst))))
+    (have hls (locs c nl ls) (exact (And.left (And.right hst))))
     (have hs (= (site tbl pc) (some (Prod.mk ia (List.length (encode ia))))) (exact (And.left hp)))
     (have hr (reaches c (at_pc (set_reg c (treg k) w) (w64 (+ pc (List.length (encode ia))))))
-      (exact
-        (ld_ok tbl clo chi rs ls mi nl c pc (treg k) e ia w hall hchi hcode hrip hls hnl h1 h2 hs)))
+      (exact (ld_ok tbl clo chi rs ls mi nl c pc (treg k) e ia w hall hchi hcode hrip hls h1 h2 hs)))
     (have hpc
       (= (Cpu.rip (at_pc (set_reg c (treg k) w) (w64 (+ pc (List.length (encode ia))))))
         (w64 (+ pc (isize (cons ia nil)))))
@@ -776,7 +815,6 @@
    (nl Nat)
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hnl (<= nl 6))
    (e IExp))
   (efact tbl rs ls mi nl e)
   (by
@@ -792,7 +830,6 @@
                 (leaf_ok tbl clo chi rs ls mi nl k c pc (ENum n) (MovRI64 (treg k) (w64_val n)) w
                   hall
                   hchi
-                  hnl
                   hk
                   hl
                   h2
@@ -809,18 +846,13 @@
                    (exact (absurd (Eq.symm h1) (Option.some_ne_none ce))))
                  (isTrue (hi) (rw (if_pos hi)) (intro h1) (rw (<- (Option.some.inj h1)))
                    (intro h2 hp hrip hst)
-                   (have hl
-                     (= (ld_atom (treg k) (EVar i) nl) (some (MovRmR (RmReg (treg k)) (kreg i))))
+                   (have hl (= (ld_atom (treg k) (EVar i) nl) (some (ld_loc (treg k) i)))
                      (unfold ld_atom)
                      (rw (if_pos hi))
                      rfl)
                    (exact
-                     (leaf_ok tbl clo chi rs ls mi nl k c pc (EVar i)
-                       (MovRmR (RmReg (treg k)) (kreg i))
-                       w
-                       hall
+                     (leaf_ok tbl clo chi rs ls mi nl k c pc (EVar i) (ld_loc (treg k) i) w hall
                        hchi
-                       hnl
                        hk
                        hl
                        h2
@@ -846,7 +878,6 @@
    (w (BitVec 64))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hnl (<= nl 6))
    (hce (= (cexp k e nl) (some ce)))
    (hev (= (ieval rs ls mi e) (some w)))
    (hp (placed tbl pc ce))
@@ -854,7 +885,7 @@
    (hst (est tbl rs ls mi nl c)))
   (eres k c (+ pc (isize ce)) w)
   (by
-    (have hf (efact tbl rs ls mi nl e) (exact (cexp_all tbl clo chi rs ls mi nl hall hchi hnl e)))
+    (have hf (efact tbl rs ls mi nl e) (exact (cexp_all tbl clo chi rs ls mi nl hall hchi e)))
     (exact (hf k c pc ce w hce hev hp hrip hst))))
 ;; an expression's code for rax, where it stands in the table at the program counter, puts the
 ;; expression's word in rax and changes scratch registers alone
@@ -873,7 +904,6 @@
    (w (BitVec 64))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hnl (<= nl 6))
    (hrip (= (Cpu.rip c) (w64 pc)))
    (hst (est tbl rs ls mi nl c)))
   (-> (= (cexp 0 e nl) (some ce)) (= (ieval rs ls mi e) (some w)) (placed tbl pc ce)
@@ -882,7 +912,7 @@
         (and (= (reg c1 0) w) (and (= (Cpu.rip c1) (w64 (+ pc (isize ce)))) (scratch c c1))))))
   (by
     (intro hce hev hp)
-    (cases (cexp_at tbl clo chi rs ls mi nl 0 c pc e ce w hall hchi hnl hce hev hp hrip hst)
+    (cases (cexp_at tbl clo chi rs ls mi nl 0 c pc e ce w hall hchi hce hev hp hrip hst)
       ((intro (c1 g) (have v (= (reg c1 0) w) (exact (And.left (And.right g))))
          (have t (tstep 0 c c1) (exact (And.right (And.right (And.right g)))))
          (apply (Exists.intro c1)
