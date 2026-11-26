@@ -1761,7 +1761,8 @@ and of the descent obligations (`F.dec_N`) in the closures of three of the toolc
 | `v3/kernel/expr.shard` | 43 | 14 | 35 |
 | `v3/kernel/json.shard` | 20 | 3 | 18 |
 
-So an obligation of a measure is as a rule left to it: `(fulfills F.dec_N auto)`, then `prove`.
+So an obligation of a measure is as a rule left to it: `(fulfills F.dec_N auto)`, then `prove`
+(v3/examples/auto/descent.shard: twelve obligations of the usual measures, every one delegated).
 Those it misses need a fact of the program's own (a lemma about a helper's result), a case
 split, or a `reduce` before the step.
 

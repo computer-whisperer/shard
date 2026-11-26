@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v3/kernel/test/engine_test.sh — the producers.
-# Four parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
+# Five parts. (1) v3/examples/auto: every theorem delegates with `auto`; the build
 # replays the committed sidecar (auto.auto.shard) — 11 theorems accepted by name, `beyond`
 # pending auto_missing, nothing searched —, and prove.shard regenerates the sidecar into a
 # scratch copy of the example under v3/ (the loader reads repository-relative paths), which
@@ -15,6 +15,9 @@
 # obligation: prove.shard given the directory writes one sidecar, beside the implementation
 # file; a load of a consumer with the directory replays it; a second prove, given the consumer
 # and the directory, searches nothing.
+# (1d) The obligations of a measure (v3/examples/auto/descent.shard): twelve, of the usual
+# measures, every one delegated; the build discharges all twelve from the committed sidecar
+# and prove regenerates it.
 # (2) The engine's reach over calc's 100 claims:
 # prove.shard --measure over the five leaves of tactic_test.sh runs the engine on
 # every hand-written theorem's statement unaided; the names it closes must be exactly
@@ -88,6 +91,22 @@ checks=$((checks+1)); { grep -q "^DISCHARGE $L.pick_le proved$" "$OUT/i_load.txt
 checks=$((checks+1)); grep -q "PROVED" "$OUT/i_load.txt" && bad "the build searched in the implementation (a PROVED record under load.shard)"
 checks=$((checks+1)); grep -q 'proved 0  unsolved 0  sidecars written 0$' "$OUT/i_prove2.txt" || { bad "a second prove, on the consumer and the directory, searched again"; grep -E 'PROVE:' "$OUT/i_prove2.txt" | cut -c1-300; }
 echo "engine_test: auto inside an implementation is proved once into the sidecar beside the implementation file and replayed from it"
+
+# ---- (1d) the obligations of a measure (v3/examples/auto/descent.shard): twelve, of the
+# usual measures — a derived size, a row under two matches, a list's length, Int.natAbs, fuel
+# plain and weighted, a weight beside a count, two parts —, every one delegated. The build
+# replays the committed sidecar: twelve obligations discharged, none pending, nothing searched;
+# and prove regenerates the sidecar into a scratch copy, the committed one but for the keys
+"$EVAL" direct v3/kernel/load.shard --root v3 $INIT v3/examples/auto/descent.shard > "$OUT/d_load.txt" 2>&1 &
+cp v3/examples/auto/descent.shard "$SCRATCH/descent.shard"
+"$EVAL" direct v3/kernel/prove.shard --root v3 $INIT "$SCRATCH/descent.shard" > "$OUT/d_prove.txt" 2>&1 &
+wait
+checks=$((checks+1)); n=$(grep -c '^DISCHARGE examples\.auto\.descent\.[a-z_]*\.dec_[0-9]* proved$' "$OUT/d_load.txt"); [ "$n" = 12 ] || bad "the build discharges $n of descent.shard's 12 obligations from the sidecar"
+checks=$((checks+1)); grep -q 'pending 0 .*errors 0$' "$OUT/d_load.txt" || { bad "descent.shard does not load clean"; grep -E 'ERROR|REFUSE|PENDING|^LOAD:' "$OUT/d_load.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); grep -q "^PROVED" "$OUT/d_load.txt" && bad "the build searched for a descent (a PROVED record under load.shard)"
+checks=$((checks+1)); grep -q 'proved 12  unsolved 0  sidecars written 1$' "$OUT/d_prove.txt" || { bad "prove did not close descent.shard's 12 obligations"; grep -E 'PROVE:|PENDING|ERROR' "$OUT/d_prove.txt" | head -5 | cut -c1-300; }
+checks=$((checks+1)); cmp -s <(mask "$SCRATCH/descent.auto.shard") <(mask v3/examples/auto/descent.auto.shard) || { bad "the regenerated sidecar of descent.shard differs from the committed one"; diff <(mask "$SCRATCH/descent.auto.shard") <(mask v3/examples/auto/descent.auto.shard) | head -6 | cut -c1-300; }
+echo "engine_test: twelve obligations of the usual measures are discharged from the sidecar and prove regenerates it byte-identical"
 
 # ---- (2) the count over calc
 measure() { "$EVAL" direct v3/kernel/prove.shard --root v3 $INIT --measure "v3/examples/calc/$1.shard" > "$OUT/m_$1.txt" 2>&1; }

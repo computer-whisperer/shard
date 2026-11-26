@@ -169,17 +169,24 @@ anything citing their equations stand below it. The recipe, on the formatter's w
 1. Give each function a measure. Where a function hands its argument on unchanged, add a rank:
    `em_if` calls `em_head` on the same list, so their measures are three times the list's size plus
    2 and plus 1. Write the product as a sum, `(+ s (+ s s))`.
-2. Read the obligation: `(fulfills F.dec_K (by sorry))` prints it and lets the load go on —
+2. Leave it to the engine first: `(fulfills F.dec_K auto)`, then `prove` on the file
+   (`LANGUAGE.md` "`prove`"). It closes the usual ones — a derived size, a list's length, an
+   integer through `Int.natAbs`, fuel, a weight, two parts in order
+   (v3/examples/auto/descent.shard has one of each) — and writes the blocks beside the file,
+   where a load replays them. One it leaves is `PENDING F.dec_K.proof auto_unsolved …` with
+   its statement, and is written by hand as below: it needs a fact about a helper's result
+   (step 6), a case split, or a `reduce` first.
+3. Read the obligation: `(fulfills F.dec_K (by sorry))` prints it and lets the load go on —
    `PENDING F.dec_K.proof sorry goals=1 [⊢ (forall ((n Nat)) (-> (Not (< n 2)) (< (Nat.sub n 2)
    n)))]`. A step that fails prints its goal too (`step N: MESSAGE — the goal: GOAL`), so
    `(by (arith))` shows the same statement, but as a `READ-ERROR`, which ends the file's reading.
-3. Introduce its variables in order: the function's parameters; then, for each `match` arm the
+4. Introduce its variables in order: the function's parameters; then, for each `match` arm the
    call stands under, the arm's variables and the equation `SCRUTINEE = PATTERN` (`m` and `h`
    above, then `b1` and `h2`); for each `if`, the branch's condition (`c` in `flat_w.dec_2`); for
    a wildcard arm, one variable and its equation. A `let` takes no name.
-4. `(rw h)` turns the parameter into the pattern, `(rw T.size.eq_K)` opens the size at the K-th
+5. `(rw h)` turns the parameter into the pattern, `(rw T.size.eq_K)` opens the size at the K-th
    constructor, and `(arith)` closes the comparison, which is then linear in the sizes.
-5. Where the argument is a list a helper returned, prove once that the helper returns no more than
+6. Where the argument is a list a helper returned, prove once that the helper returns no more than
    it was given and pass the fact: `(arith (drop_blanks_le rest) (em_keep_rest … h))` (`em_head`).
 
 A function that only calls itself states its obligations over its parameter when it has one, and
