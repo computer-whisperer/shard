@@ -19,7 +19,10 @@ no_chip
 "${LOAD[@]}" $M/hello_run.shard $M/hello_main.shard > "$OUT/load.txt" 2>&1; rc=$?
 checks=$((checks+1)); [ "$rc" = 0 ] || { bad "the files did not load (exit $rc)"; grep -E 'REFUSE|READ-ERROR|LOAD-ERROR|ERROR|POLICY' "$OUT/load.txt" | head -5 | cut -c1-300; }
 checks=$((checks+1)); grep -q '^LOAD: .* refused 0  pending 0 .* errors 0$' "$OUT/load.txt" || { bad "the summary is not 0 refused, 0 pending, 0 errors"; grep '^LOAD:' "$OUT/load.txt"; }
-for f in linux.took linux.mem_bytes linux.write_to linux.on_write linux.on_syscall linux.move linux.run linux.send linux.sends_end write.write_all hello.hello_listing hello.hello_res; do
+for f in took put write_all; do
+  checks=$((checks+1)); grep -q "^DEFINE std.world.$f equations=." "$OUT/load.txt" || bad "std.world.$f is not a definition with its equations"
+done
+for f in linux.mem_bytes linux.write_to linux.on_write linux.on_syscall linux.move linux.run linux.send linux.sends_end write.write_all hello.hello_listing hello.hello_res; do
   checks=$((checks+1)); grep -q "^DEFINE models.x86.$f equations=." "$OUT/load.txt" || bad "models.x86.$f is not a definition with its equations"
 done
 for t in laws.run_of_steps laws.comes_trans laws.comes_of_reaches laws.ends_of_comes laws.comes_of_move laws.ends_of_move laws.run_exit laws.mem_bytes_length laws.mem_bytes_take laws.mem_bytes_drop laws.mem_bytes_split laws.mem_bytes_outside loaded.loaded_byte loaded.loaded_bytes write.took_le write.took_pos write.err_word_big write.write_call write.write_took write.write_err write.write_kill write.wa_code_same write.wa_head write.wa_done write.wa_more write.wa_loop write.wa_fail write.wa_turn write.wa_turn_err write.wa_turn_kill write.returned_frame write.wa_post_step write.wa_zero write.send_took write.send_err write.send_kill write.write_all_ok hello_run.hello_assembled hello_run.hello_laid hello_run.hello_one_in hello_run.hello_two_in hello_run.hello_wa hello_run.piece_of_wa hello_run.hello_piece hello_run.hello_exit hello_run.hello_second hello_run.hello_both hello_run.hello_ends hello_run.hello_exits; do

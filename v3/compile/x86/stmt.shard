@@ -1,7 +1,7 @@
 ;;; v3/compile/x86/stmt.shard — the statement proven of every statement of the fragment,
 ;;; a local set from rax, and the cases for a return and for a local set.
 (import "pass.shard")
-(import "../ir_laws.shard")
+(import "../ir_world.shard")
 (import "lists.shard")
 (import "code.shard")
 (import "mem.shard")
@@ -12,6 +12,9 @@
 (use compile.x86.inv)
 (use compile.ir)
 (use compile.ir_laws)
+(use compile.ir_world)
+(use models.x86.linux)
+(use models.x86.linux.Outcome)
 (use compile.ir.IStm)
 (use compile.x86.lists)
 (use compile.x86.mem)
@@ -40,12 +43,14 @@
 ;; with room for d + 6 words above f — the stack pointer j words up; from it the locals past
 ;; the sixth, sl, then the six saved registers and the return address, d words up; the first
 ;; six locals in their registers; the base memory m0 as the run's memory mi on the data ranges
-;; and as c0's memory wherever the run may not write — where the run of s returns v and the
-;; memory m2, the processor comes to a state that has returned to c0's caller with v in rax,
-;; the data ranges as m2 has them and every other byte outside the d + 6 words as c0 had it.
+;; and as c0's memory wherever the run may not write, and o outside the process — where the
+;; run of s (`wrun`) comes to an outcome, the processor arrives so (seam.shard `arrives`): for a
+;; return of v and the memory m2 with o2 outside, at a state that has returned to c0's caller
+;; with v in rax, the data ranges as m2 has them, every other byte outside the d + 6 words as
+;; c0 had it, and o2 outside; for the process's end in a callee, the run from c ends so.
 (def sim
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -59,8 +64,8 @@
     ((s IStm)
      (ls (List (BitVec 64)))
      (mi Mem)
-     (v (BitVec 64))
-     (m2 Mem)
+     (o Os)
+     (out Outcome)
      (c Cpu)
      (a Nat)
      (code (List Instr))
@@ -71,7 +76,7 @@
      (m0 Mem)
      (j Nat)
      (sl (List (BitVec 64))))
-    (-> (= (irun n p ext rs s ls mi) (some (Prod.mk v m2))) (= (cstm xs fs ts p nl a s) (some code))
+    (-> (= (wrun n p wx rs s ls mi o) (some out)) (= (cstm xs fs ts p nl a s) (some code))
       (placed tbl a code)
       (<= (sneed xs fs ts p nl s) j)
       (= (Cpu.rip c) (w64 a))
@@ -82,7 +87,7 @@
       (agree rs mi m0)
       (kept_mem rs f (+ d 6) (Cpu.mem c0) m0)
       (data_ok c0 rs clo chi f (+ d 6))
-      (done rs f (+ d 6) c0 c v m2))))
+      (arrives rs f (+ d 6) c0 c o out))))
 
 ;; ---- a local set from rax -----------------------------------------------------------------------
 ;; rax into local x: its register set, or its word of the frame stored. The state after is
@@ -286,7 +291,7 @@
 ;; rax into a local, then the rest of the statement by the fact for the fuel below
 (theorem store_k
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -299,8 +304,8 @@
    (k IStm)
    (ls (List (BitVec 64)))
    (mi Mem)
-   (v (BitVec 64))
-   (m2 Mem)
+   (o Os)
+   (out Outcome)
    (c Cpu)
    (pc Nat)
    (a2 Nat)
@@ -315,8 +320,8 @@
    (w0 (BitVec 64))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hrk (= (irun n1 p ext rs k (upd ls x w0) mi) (some (Prod.mk v m2))))
+   (ih (sim p wx rs tbl clo chi xs fs ts n1))
+   (hrk (= (wrun n1 p wx rs k (upd ls x w0) mi o) (some out)))
    (hx (< x nl))
    (hck (= (cstm xs fs ts p nl a2 k) (some ck)))
    (hs (= (site tbl pc) (some (Prod.mk (st_loc x) (List.length (encode (st_loc x)))))))
@@ -332,7 +337,7 @@
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
+  (arrives rs f (+ d 6) c0 c o out)
   (by
     (have hne (< 0 (List.length (saved c0))) (exact (Nat.zero_lt_succ 6)))
     (cases
@@ -350,8 +355,8 @@
                 (exact (And.right (And.right (And.right (And.right g7))))))
               (have hj7 (= (+ j (List.length sl7)) d) (rw hsl7) (rw (<- hsl)) (exact hj))
               (exact
-                (done_from rs f (+ d 6) c0 c c7 v m2 (And.left g7)
-                  (ih k (upd ls x w0) mi v m2 c7 a2 ck c0 f d nl m0 j sl7 hrk hck p3 hsn hrip7
+                (arrives_from rs f (+ d 6) c0 c c7 o out (And.left g7)
+                  (ih k (upd ls x w0) mi o out c7 a2 ck c0 f d nl m0 j sl7 hrk hck p3 hsn hrip7
                     (And.left (And.right (And.right g7)))
                     (And.left (And.right (And.right (And.right g7))))
                     hsl7
@@ -361,9 +366,10 @@
                     hdo)))))))))))
 
 ;; ---- a return -----------------------------------------------------------------------------------
-(theorem sim_ret
+;; the expression's code and the way out of the function, by steps of the processor alone; then
+;; the case of the statement, whose run says the outcome is that return
+(theorem ret_core
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -371,12 +377,11 @@
    (xs (List (Prod Nat Nat)))
    (fs (List (Prod Nat Nat)))
    (ts (List (Prod Nat Nat)))
-   (n1 Fuel)
    (e IExp)
    (ls (List (BitVec 64)))
    (mi Mem)
+   (o Os)
    (v (BitVec 64))
-   (m2 Mem)
    (c Cpu)
    (a Nat)
    (code (List Instr))
@@ -389,7 +394,7 @@
    (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (hrun (= (irun (FS n1) p ext rs (SRet e) ls mi) (some (Prod.mk v m2))))
+   (hev (= (ieval rs ls mi e) (some v)))
    (hcs (= (cstm xs fs ts p nl a (SRet e)) (some code)))
    (hpl (placed tbl a code))
    (hrip (= (Cpu.rip c) (w64 a)))
@@ -400,11 +405,8 @@
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
+  (rets rs f (+ d 6) c0 c o v mi o)
   (by
-    (have hev (= (ieval rs ls mi e) (some v))
-      (exact (And.left (irun_ret_inv p ext rs n1 e ls mi v m2 hrun))))
-    (have hm2 (= m2 mi) (exact (And.right (irun_ret_inv p ext rs n1 e ls mi v m2 hrun))))
     (cases (cstm_ret_inv xs fs ts p nl a e code hcs)
       ((intro (ce g) (have hce (= (cexp 0 e nl) (some ce)) (exact (And.left g)))
          (have hcd (= code (List.append ce (epi nl))) (exact (And.right g)))
@@ -431,9 +433,8 @@
                    (have hmem (= (Cpu.mem c2) (Cpu.mem c))
                      (rw (And.right (And.right (And.right g2))))
                      (exact (And.left (And.right hsc))))
-                   (have hag2 (agree rs m2 (Cpu.mem c2))
+                   (have hag2 (agree rs mi (Cpu.mem c2))
                      (rw hmem)
-                     (rw hm2)
                      (exact
                        (agree_frame c0 rs clo chi f (+ d 6) mi m0 (Cpu.mem c) hdo hag (framed_mem w))))
                    (have hkm2 (kept_mem rs f (+ d 6) (Cpu.mem c0) (Cpu.mem c2))
@@ -442,17 +443,69 @@
                    (have hv2 (= (reg c2 0) v)
                      (rw (And.left (And.right (And.right g2))))
                      (exact hv1))
-                   (apply (Exists.intro c2)
-                     ((apply And.intro ((exact (reaches_trans c c1 c2 r1 r2)))
-                        ((apply And.intro ((exact hv2))
-                           ((apply And.intro ((exact hag2))
-                              ((apply And.intro ((exact hkm2)) ((exact hret))))))))))))))))))))))
+                   (exact (rets_reaches (reaches_trans c c1 c2 r1 r2) hv2 hag2 hkm2 hret)))))))))))))
+(theorem sim_ret
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (xs (List (Prod Nat Nat)))
+   (fs (List (Prod Nat Nat)))
+   (ts (List (Prod Nat Nat)))
+   (n1 Fuel)
+   (e IExp)
+   (ls (List (BitVec 64)))
+   (mi Mem)
+   (o Os)
+   (out Outcome)
+   (c Cpu)
+   (a Nat)
+   (code (List Instr))
+   (c0 Cpu)
+   (f Nat)
+   (d Nat)
+   (nl Nat)
+   (m0 Mem)
+   (j Nat)
+   (sl (List (BitVec 64)))
+   (hall (= (all_within tbl clo chi) true))
+   (hchi (<= (+ chi 15) 18446744073709551616))
+   (hrun (= (wrun (FS n1) p wx rs (SRet e) ls mi o) (some out)))
+   (hcs (= (cstm xs fs ts p nl a (SRet e)) (some code)))
+   (hpl (placed tbl a code))
+   (hrip (= (Cpu.rip c) (w64 a)))
+   (w (framed c0 tbl clo chi f (+ d 6) m0 c j (app sl (saved c0))))
+   (hls (= ls (app (List.take nl (regs6 c)) sl)))
+   (hsl (= (List.length sl) (nsl nl)))
+   (hj (= (+ j (List.length sl)) d))
+   (hag (agree rs mi m0))
+   (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
+   (hdo (data_ok c0 rs clo chi f (+ d 6))))
+  (arrives rs f (+ d 6) c0 c o out)
+  (by
+    (cases (wrun_ret_inv p wx rs n1 e ls mi o out hrun)
+      ((intro (v g) (rw (And.right g)) (show (rets rs f (+ d 6) c0 c o v mi o))
+         (exact
+           (ret_core p rs tbl clo chi xs fs ts e ls mi o v c a code c0 f d nl m0 j sl hall hchi
+             (And.left g)
+             hcs
+             hpl
+             hrip
+             w
+             hls
+             hsl
+             hj
+             hag
+             hkm
+             hdo)))))))
 
 ;; ---- a local set --------------------------------------------------------------------------------
 ;; the expression's code, then rax into the local and the rest of the statement
 (theorem sim_let
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -466,8 +519,8 @@
    (k IStm)
    (ls (List (BitVec 64)))
    (mi Mem)
-   (v (BitVec 64))
-   (m2 Mem)
+   (o Os)
+   (out Outcome)
    (c Cpu)
    (a Nat)
    (code (List Instr))
@@ -480,8 +533,8 @@
    (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hrun (= (irun (FS n1) p ext rs (SLet x e k) ls mi) (some (Prod.mk v m2))))
+   (ih (sim p wx rs tbl clo chi xs fs ts n1))
+   (hrun (= (wrun (FS n1) p wx rs (SLet x e k) ls mi o) (some out)))
    (hcs (= (cstm xs fs ts p nl a (SLet x e k)) (some code)))
    (hpl (placed tbl a code))
    (hsn (<= (sneed xs fs ts p nl (SLet x e k)) j))
@@ -493,14 +546,13 @@
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
+  (arrives rs f (+ d 6) c0 c o out)
   (by
     (have hsn2 (<= (sneed xs fs ts p nl k) j) (exact hsn))
     (have hx (< x nl) (exact (And.left (cstm_let_inv xs fs ts p nl a x e k code hcs))))
-    (cases (irun_let_inv p ext rs n1 x e k ls mi (Prod.mk v m2) hrun)
+    (cases (wrun_let_inv p wx rs n1 x e k ls mi o out hrun)
       ((intro (w0 g0) (have hev (= (ieval rs ls mi e) (some w0)) (exact (And.left g0)))
-         (have hrk (= (irun n1 p ext rs k (upd ls x w0) mi) (some (Prod.mk v m2)))
-           (exact (And.right g0)))
+         (have hrk (= (wrun n1 p wx rs k (upd ls x w0) mi o) (some out)) (exact (And.right g0)))
          (cases (And.right (cstm_let_inv xs fs ts p nl a x e k code hcs))
            ((intro (ce g1) (have hce (= (cexp 0 e nl) (some ce)) (exact (And.left g1)))
               (cases (And.right g1)
@@ -543,8 +595,8 @@
                           (rw (scratch_regs c c1 hsc))
                           (exact hls))
                         (exact
-                          (done_from rs f (+ d 6) c0 c c1 v m2 r1
-                            (store_k p ext rs tbl clo chi xs fs ts n1 x k ls mi v m2 c1
+                          (arrives_from rs f (+ d 6) c0 c c1 o out r1
+                            (store_k p wx rs tbl clo chi xs fs ts n1 x k ls mi o out c1
                               (+ a (isize ce))
                               (+ a (+ (isize ce) (List.length (encode (st_loc x)))))
                               ck

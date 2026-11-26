@@ -33,6 +33,7 @@
 (use models.x86.frame)
 (use models.x86.laws)
 (use models.x86.linux)
+(use models.x86.linux.Outcome)
 (use models.x86.linux.Res)
 (use models.x86.loaded)
 (use models.x86.process)
@@ -974,10 +975,40 @@
                      ((apply And.intro ((apply Or.inr ((arith)))) ((apply Or.inr ((arith))))))))))))))))))
 
 ;; ---- from the function's return to the exit -----------------------------------------------------
-;; From any state c2 the file's run comes to that stands at the address after the call, the
-;; word v in rax and the table in place, where the table from the call on is the call's row and
-;; the exit's: three instructions more, and the process has exited with v's low byte.
-(theorem exit_run
+;; a run from a file's first state that ends is the file's end
+(theorem ends_first
+  ((code (List Nat))
+   (lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (as (List Answer))
+   (res Res)
+   (hsize (<= (+ 4194424 (List.length code)) 140737488355328))
+   (h (ends_at (link_first code lo sp hi r f m) (os_start as) res)))
+  (ends (elf_exec code) (start_at lo sp hi r f m) as res)
+  (by
+    (cases h
+      ((intro (n hn)
+         (apply (Exists.intro n)
+           ((show (= (run_file n (elf_exec code) (start_at lo sp hi r f m) as) res))
+            (rw (run_file_exec n code (start_at lo sp hi r f m) as hsize))
+            (show (= (run n (link_first code lo sp hi r f m) (os_start as)) res))
+            (exact hn))))))))
+;; how a file ends by the outcome of the function its start-up calls: the function returned and
+;; the start-up exits with its word's low byte, the process having written what it then had;
+;; or the process ended in the function
+(fn exit_of ((out Outcome)) Res
+  (match out
+    ((ORet v m o) (RExit (% (w64_val v) 256) (Os.out o)))
+    ((OEnd e) e)))
+;; From any state c2 the file's run comes to, with o2 outside, that stands at the address after
+;; the call, the word v in rax and the table in place, where the table from the call on is the
+;; call's row and the exit's: three instructions more, and the process has exited with v's low
+;; byte, having written what o2 has.
+(theorem exit_ends
   ((code (List Nat))
    (lo Nat)
    (sp Nat)
@@ -988,6 +1019,8 @@
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (chi Nat)
    (c2 Cpu)
+   (o2 Os)
+   (as (List Answer))
    (v (BitVec 64))
    (pc Nat)
    (d Nat)
@@ -996,14 +1029,13 @@
    (hall (= (all_within tbl 4194424 chi) true))
    (hchi (<= (+ chi 15) lo))
    (htop (<= lo 140737488355328))
-   (hrun (reaches (link_first code lo sp hi r f m) c2))
+   (hrun (comes (link_first code lo sp hi r f m) (os_start as) c2 o2))
    (hv (= (reg c2 0) v))
    (hcode2 (code_in c2 tbl))
    (hrip (= (Cpu.rip c2) (w64 (+ pc 5))))
    (ht (tail_at tbl pc (exit_rows pc d xt))))
-  (exits (elf_exec code) (start_at lo sp hi r f m) (% (w64_val v) 256))
+  (ends (elf_exec code) (start_at lo sp hi r f m) as (RExit (% (w64_val v) 256) (Os.out o2)))
   (by
-    (intro as)
     (have hsize (<= (+ 4194424 (List.length code)) 140737488355328) (arith))
     (have ht0
       (tail_at tbl pc
@@ -1096,40 +1128,32 @@
       (= (w64_val (reg (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) 0)) 60)
       rfl)
     (have hexit
-      (=
-        (run (FS FZ) (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) (os_start as))
-        (RExit (% (w64_val (reg c2 0)) 256) nil))
+      (= (run (FS FZ) (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) o2)
+        (RExit (% (w64_val (reg c2 0)) 256) (Os.out o2)))
       (exact
-        (run_exit (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) (+ pc 13) 2
-          (os_start as)
+        (run_exit (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) (+ pc 13) 2 o2
           hrip4
           (hcode4 (+ pc 13) Syscall 2 s3)
           h60)))
-    (cases
-      (reaches_trans (link_first code lo sp hi r f m) c2
-        (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13)))
-        hrun
-        hreach)
-      ((intro (j hj)
-         (cases
-           (run_of_steps j (link_first code lo sp hi r f m)
-             (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13)))
-             (FS FZ)
-             (os_start as)
-             hj)
-           ((intro (n hn)
-              (apply (Exists.intro n)
-                ((show
-                   (= (run_file n (elf_exec code) (start_at lo sp hi r f m) as)
-                     (RExit (% (w64_val v) 256) nil)))
-                 (rw (run_file_exec n code (start_at lo sp hi r f m) as hsize))
-                 (show
-                   (= (run n (link_first code lo sp hi r f m) (os_start as))
-                     (RExit (% (w64_val v) 256) nil)))
-                 (rw hn)
-                 (rw hexit)
-                 (rw hv)
-                 rfl))))))))))
+    (have hexit2
+      (= (run (FS FZ) (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) o2)
+        (RExit (% (w64_val v) 256) (Os.out o2)))
+      (rw (<- hv))
+      (exact hexit))
+    (have he2
+      (ends_at (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) o2
+        (RExit (% (w64_val v) 256) (Os.out o2)))
+      (apply (Exists.intro (FS FZ)) ((exact hexit2))))
+    (exact
+      (ends_first code lo sp hi r f m as (RExit (% (w64_val v) 256) (Os.out o2)) hsize
+        (ends_of_comes (link_first code lo sp hi r f m) (os_start as) c2 o2
+          (RExit (% (w64_val v) 256) (Os.out o2))
+          hrun
+          (ends_of_comes c2 o2 (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) o2
+            (RExit (% (w64_val v) 256) (Os.out o2))
+            (comes_of_reaches c2 (x_mov_ri (x_mov_rr c2 7 0 (w64 (+ pc 8))) 0 60 (w64 (+ pc 13))) o2
+              hreach)
+            he2))))))
 
 ;; the call's row is the first of them
 (theorem exit_rows_call
@@ -1552,7 +1576,7 @@
 ;; is the start's from the stack pointer up, the code's file exits with v's low byte. The answer
 ;; is taken on the machine's own memory, which agrees with itself. That the start-up's code is
 ;; still in place after the call follows from the statement's own memory clause (`kept_code`).
-(theorem start_exits_top
+(theorem start_ends_top
   ((data (List (BitVec 64)))
    (args (List Arg))
    (l Nat)
@@ -1564,8 +1588,9 @@
    (entry Nat)
    (chi Nat)
    (k Nat)
-   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
-   (v (BitVec 64))
+   (ans (-> (List (BitVec 64)) Mem Os Outcome Prop))
+   (res Res)
+   (as (List Answer))
    (lo Nat)
    (sp Nat)
    (hi Nat)
@@ -1583,7 +1608,7 @@
    (f Flags)
    (m Mem)
    (hreal
-     (realizes (start_table data args d xt) 4194424 chi entry k
+     (wrealizes (start_table data args d xt) 4194424 chi entry k
        (cons (MkSeg (start_base sp data) top 6) nil)
        ans))
    (hans
@@ -1591,8 +1616,10 @@
        (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
          (holds m0 (start_base sp data) data)
          (same_outside m m0 0 sp)
-         (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2))))))
-  (exits (elf_exec code) (start_at lo sp hi r f m) (% (w64_val v) 256))
+         (exists ((out Outcome))
+           (and (ans (arg_words (w64 (start_base sp data)) args) m0 (os_start as) out)
+             (= (exit_of out) res)))))))
+  (ends (elf_exec code) (start_at lo sp hi r f m) as res)
   (by
     ;; what `stack_ok` says, a fact at a time
     (have hchi (<= (+ chi 15) lo) (exact (And.left hst)))
@@ -1696,80 +1723,233 @@
                 y1)))
            (rw i1)
            (exact (first_above code lo sp hi r f m x y2))))))
+    (have hsize (<= (+ 4194424 (List.length code)) 140737488355328) (arith))
+    (have hcall
+      (comes (link_first code lo sp hi r f m) (os_start as)
+        (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+        (os_start as))
+      (exact
+        (comes_of_reaches (link_first code lo sp hi r f m)
+          (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+          (os_start as)
+          (And.left ge))))
     (cases
       (hans (Cpu.mem (start_in data args code lo sp hi r f m)) hbnd
         (And.left (And.right (And.right (And.right (And.right (And.right ge))))))
         hsame)
-      ((intro (m2 hma)
-         (cases
-           (hreal (start_in data args code lo sp hi r f m)
-             (arg_words (w64 (start_base sp data)) args)
-             v
-             (Cpu.mem (start_in data args code lo sp hi r f m))
-             m2
+      ((intro (out hma)
+         (have hd
+           (arrives (cons (MkSeg (start_base sp data) top 6) nil)
              (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
-             (And.left (And.right ge))
-             (And.left (And.right (And.right ge)))
-             hroom
-             hdata
-             hag
-             hma)
-           ((intro (c2 h)
-              (have hrun (reaches (link_first code lo sp hi r f m) c2)
+             k
+             (start_in data args code lo sp hi r f m)
+             (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+             (os_start as)
+             out)
+           (exact
+             (hreal (start_in data args code lo sp hi r f m)
+               (arg_words (w64 (start_base sp data)) args)
+               (Cpu.mem (start_in data args code lo sp hi r f m))
+               (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+               (os_start as)
+               out
+               (And.left (And.right ge))
+               (And.left (And.right (And.right ge)))
+               hroom
+               hdata
+               hag
+               (And.left hma))))
+         (have fin
+           (->
+             (arrives (cons (MkSeg (start_base sp data) top 6) nil)
+               (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+               k
+               (start_in data args code lo sp hi r f m)
+               (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+               (os_start as)
+               out)
+             (-> (= (exit_of out) res) (ends (elf_exec code) (start_at lo sp hi r f m) as res)))
+           (cases out
+             ((ORet (v m2 o2)
+                (show
+                  (->
+                    (rets (cons (MkSeg (start_base sp data) top 6) nil)
+                      (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+                      k
+                      (start_in data args code lo sp hi r f m)
+                      (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+                      (os_start as)
+                      v
+                      m2
+                      o2)
+                    (-> (= (RExit (% (w64_val v) 256) (Os.out o2)) res)
+                      (ends (elf_exec code) (start_at lo sp hi r f m) as res))))
+                (intro gg hres)
+                (cases gg
+                  ((intro (c2 h)
+                     (have hrun (comes (link_first code lo sp hi r f m) (os_start as) c2 o2)
+                       (exact
+                         (comes_trans (link_first code lo sp hi r f m) (os_start as)
+                           (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+                           (os_start as)
+                           c2
+                           o2
+                           hcall
+                           (And.left h))))
+                     (have hv (= (reg c2 0) v) (exact (And.left (And.right h))))
+                     (have hkm
+                       (kept_mem (cons (MkSeg (start_base sp data) top 6) nil)
+                         (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+                         k
+                         (Cpu.mem (start_in data args code lo sp hi r f m))
+                         (Cpu.mem c2))
+                       (exact (And.left (And.right (And.right (And.right h))))))
+                     (have hret (returned (start_in data args code lo sp hi r f m) c2)
+                       (exact (And.right (And.right (And.right (And.right h))))))
+                     (have hcode2 (code_in c2 (start_table data args d xt))
+                       (exact
+                         (kept_code (start_in data args code lo sp hi r f m) c2
+                           (start_table data args d xt)
+                           (cons (MkSeg (start_base sp data) top 6) nil)
+                           4194424
+                           chi
+                           (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
+                           k
+                           hw
+                           hroom
+                           hdata
+                           hkm
+                           hret
+                           (And.left (And.right ge)))))
+                     (have hra
+                       (= (ret_addr (start_in data args code lo sp hi r f m))
+                         (w64 (start_ret data args)))
+                       (exact
+                         (ret_addr_pushed (start_moved data args code lo sp hi r f m)
+                           (w64 (start_ret data args)))))
+                     (have hrip2 (= (Cpu.rip c2) (w64 (+ (start_call data args) 5)))
+                       (rw (returned_at (start_in data args code lo sp hi r f m) c2 hret))
+                       (exact hra))
+                     (rw (<- hres))
+                     (exact
+                       (exit_ends code lo sp hi r f m (start_table data args d xt) chi c2 o2 as v
+                         (start_call data args)
+                         d
+                         xt
+                         hsz
+                         hw
+                         hchi
+                         htop
+                         hrun
+                         hv
+                         hcode2
+                         hrip2
+                         (And.left
+                           (And.right (And.right (And.right (And.right (And.right (And.right ge)))))))))))))
+              (OEnd (e0)
+                (show
+                  (->
+                    (ends_at (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+                      (os_start as)
+                      e0)
+                    (-> (= e0 res) (ends (elf_exec code) (start_at lo sp hi r f m) as res))))
+                (intro gg hres)
+                (rw (<- hres))
                 (exact
-                  (reaches_trans (link_first code lo sp hi r f m)
-                    (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
-                    c2
-                    (And.left ge)
-                    (And.left h))))
-              (have hv (= (reg c2 0) v) (exact (And.left (And.right h))))
-              (have hkm
-                (kept_mem (cons (MkSeg (start_base sp data) top 6) nil)
-                  (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
-                  k
-                  (Cpu.mem (start_in data args code lo sp hi r f m))
-                  (Cpu.mem c2))
-                (exact (And.left (And.right (And.right (And.right h))))))
-              (have hret (returned (start_in data args code lo sp hi r f m) c2)
-                (exact (And.right (And.right (And.right (And.right h))))))
-              (have hcode2 (code_in c2 (start_table data args d xt))
-                (exact
-                  (kept_code (start_in data args code lo sp hi r f m) c2
-                    (start_table data args d xt)
-                    (cons (MkSeg (start_base sp data) top 6) nil)
-                    4194424
-                    chi
-                    (- sp (+ (* 8 (List.length data)) (+ (* 8 k) 8)))
-                    k
-                    hw
-                    hroom
-                    hdata
-                    hkm
-                    hret
-                    (And.left (And.right ge)))))
-              (have hra
-                (= (ret_addr (start_in data args code lo sp hi r f m)) (w64 (start_ret data args)))
-                (exact
-                  (ret_addr_pushed (start_moved data args code lo sp hi r f m)
-                    (w64 (start_ret data args)))))
-              (have hrip2 (= (Cpu.rip c2) (w64 (+ (start_call data args) 5)))
-                (rw (returned_at (start_in data args code lo sp hi r f m) c2 hret))
-                (exact hra))
-              (exact
-                (exit_run code lo sp hi r f m (start_table data args d xt) chi c2 v
-                  (start_call data args)
-                  d
-                  xt
-                  hsz
-                  hw
-                  hchi
-                  htop
-                  hrun
-                  hv
-                  hcode2
-                  hrip2
-                  (And.left
-                    (And.right (And.right (And.right (And.right (And.right (And.right ge)))))))))))))))))
+                  (ends_first code lo sp hi r f m as e0 hsize
+                    (ends_of_comes (link_first code lo sp hi r f m) (os_start as)
+                      (at_pc (start_in data args code lo sp hi r f m) (w64 entry))
+                      (os_start as)
+                      e0
+                      hcall
+                      gg)))))))
+         (exact (fin hd (And.right hma))))))))
+
+;; The same for an answer that names nothing outside the process: whatever the kernel would
+;; answer a call, the file exits with v's low byte and writes nothing.
+(theorem start_exits_top
+  ((data (List (BitVec 64)))
+   (args (List Arg))
+   (l Nat)
+   (extra (List Asm))
+   (code (List Nat))
+   (is (List Instr))
+   (d Nat)
+   (xt (List (Prod Nat (Prod Instr Nat))))
+   (entry Nat)
+   (chi Nat)
+   (k Nat)
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (v (BitVec 64))
+   (lo Nat)
+   (sp Nat)
+   (hi Nat)
+   (top Nat)
+   (ha (= (assemble (start_listing data args l extra)) (some code)))
+   (hr (= (resolve (start_listing data args l extra) (start_listing data args l extra) 0) (some is)))
+   (hl (= (layout is 4194424) (start_table data args d xt)))
+   (he (= (w64_add (w64 (start_ret data args)) (w64 d)) (w64 entry)))
+   (hw (= (all_within (start_table data args d xt) 4194424 chi) true))
+   (hce (<= (+ 4194424 (List.length code)) chi))
+   (hst (stack_ok lo sp hi (+ chi 15) (+ (+ (List.length data) k) 1)))
+   (hn (<= (List.length args) 6))
+   (htp (<= top hi))
+   (r Regs)
+   (f Flags)
+   (m Mem)
+   (hreal
+     (realizes (start_table data args d xt) 4194424 chi entry k
+       (cons (MkSeg (start_base sp data) top 6) nil)
+       ans))
+   (hans
+     (forall ((m0 Mem))
+       (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
+         (holds m0 (start_base sp data) data)
+         (same_outside m m0 0 sp)
+         (exists ((m2 Mem)) (ans (arg_words (w64 (start_base sp data)) args) m0 v m2))))))
+  (exits (elf_exec code) (start_at lo sp hi r f m) (% (w64_val v) 256))
+  (by
+    (intro as)
+    (have hans2
+      (forall ((m0 Mem))
+        (-> (<= (+ (start_base sp data) (* 8 (List.length data))) 140737488355328)
+          (holds m0 (start_base sp data) data)
+          (same_outside m m0 0 sp)
+          (exists ((out Outcome))
+            (and (lift_ans ans (arg_words (w64 (start_base sp data)) args) m0 (os_start as) out)
+              (= (exit_of out) (RExit (% (w64_val v) 256) nil))))))
+      (intro m0 hb hh hs)
+      (cases (hans m0 hb hh hs)
+        ((intro (m2 hma)
+           (apply (Exists.intro (ORet v m2 (os_start as)))
+             ((apply And.intro
+                ((apply (Exists.intro v) ((apply (Exists.intro m2) ((exact (And.intro hma rfl)))))))
+                (rfl))))))))
+    (exact
+      (start_ends_top data args l extra code is d xt entry chi k (lift_ans ans)
+        (RExit (% (w64_val v) 256) nil)
+        as
+        lo
+        sp
+        hi
+        top
+        ha
+        hr
+        hl
+        he
+        hw
+        hce
+        hst
+        hn
+        htp
+        r
+        f
+        m
+        (realizes_lift (start_table data args d xt) 4194424 chi entry k
+          (cons (MkSeg (start_base sp data) top 6) nil)
+          ans
+          hreal)
+        hans2))))
 
 ;; The same for the data's range alone, the answer asked of nothing above the data: what a file
 ;; that takes no arguments from its kernel is linked by.

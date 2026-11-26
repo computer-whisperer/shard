@@ -7,13 +7,21 @@
 ;;; function of the same program, or an external one whose answer the run is given: from the
 ;;; argument words and the memory, a result word and the memory after, or nothing.
 ;;; A run is big-step, counted by a fuel no statement mentions: every statement run takes one.
+;;; There are two runs. `irun` is of code that calls nothing outside the process: it returns a
+;;; word and a memory. `wrun` has what is outside a process (models/x86/linux.shard `Os`) as
+;;; well: an external's answer may change it, or end the process, and a run in which a callee
+;;; ends the process has ended (`Outcome`). A run of the first kind is one of the second in
+;;; which what is outside stays as it was (ir_laws.shard `wrun_of_irun`).
 ;;; The machine's laws are ir_laws.shard's.
+(import "../models/x86/linux.shard")
 (import "../models/x86/words.shard")
 (import "../models/x86/x86.shard")
 (use std.mem)
 (use models.x86.word)
 (use models.x86.words)
 (use models.x86.x86)
+(use models.x86.linux)
+(use models.x86.linux.Outcome)
 (use models.x86.x86.Fuel)
 (use Init.Bool false true)
 (use Init.List cons nil)
@@ -194,3 +202,111 @@
 ;; ---- a run with nothing outside ----------------------------------------------------------------
 ;; no external answers
 (fn no_ext ((j Nat) (vs (List (BitVec 64))) (m Mem)) (Option (Prod (BitVec 64) Mem)) none)
+
+;; ---- a run with what is outside -----------------------------------------------------------------
+;; an external that leaves what is outside as it was: its answer, as a run with the outside
+;; takes one
+(fn wlift
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (j Nat)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os))
+  (Option Outcome)
+  (match (ext j vs m)
+    (none none)
+    ((some r) (some (ORet (Prod.fst r) (Prod.snd r) o)))))
+;; The statement s run with the locals ls, the memory m and what is outside o, to its outcome:
+;; it returns, or the process ended in a callee. Nothing where `irun` has nothing.
+(fn wrun
+  ((n Fuel)
+   (p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (s IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os))
+  (Option Outcome)
+  (measure (struct n))
+  (match n
+    (FZ none)
+    ((FS n1)
+     (match s
+       ((SLet x e k)
+        (match (ieval rs ls m e)
+          (none none)
+          ((some v) (wrun n1 p wx rs k (upd ls x v) m o))))
+       ((SStore a e k)
+        (match (ieval rs ls m a)
+          (none none)
+          ((some q)
+           (match (ieval rs ls m e)
+             (none none)
+             ((some v)
+              (if (mapped rs (w64_val q) 8 2)
+                (wrun n1 p wx rs k ls (mem_put64 m (w64_val q) (w64_val v)) o)
+                none))))))
+       ((SCall x f es k)
+        (match (ievals rs ls m es)
+          (none none)
+          ((some vs)
+           (let
+             ((a (Option Outcome)
+                (match f
+                  ((CExt j) (wx j vs m o))
+                  ((CFn i)
+                   (match (fn_at p i)
+                     (none none)
+                     ((some g) (wrun n1 p wx rs (IFn.body g) (enter g vs) m o)))))))
+             (match a
+               (none none)
+               ((some r)
+                (match r
+                  ((ORet v m1 o1) (wrun n1 p wx rs k (upd ls x v) m1 o1))
+                  ((OEnd e) (some (OEnd e))))))))))
+       ((SIf a cc b t e)
+        (match (ieval rs ls m a)
+          (none none)
+          ((some x)
+           (match (ieval rs ls m b)
+             (none none)
+             ((some y) (wrun n1 p wx rs (if (icmp cc x y) t e) ls m o))))))
+       ((SRet e)
+        (match (ieval rs ls m e)
+          (none none)
+          ((some v) (some (ORet v m o)))))
+       ((STail f es)
+        (match (ievals rs ls m es)
+          (none none)
+          ((some vs)
+           (match f
+             ((CExt j) (wx j vs m o))
+             ((CFn i)
+              (match (fn_at p i)
+                (none none)
+                ((some g) (wrun n1 p wx rs (IFn.body g) (enter g vs) m o))))))))))))
+;; the statement s, run with ls, m and o, comes to the outcome `out`
+(def wends
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (s IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (out Outcome))
+  Prop
+  (exists ((n Fuel)) (= (wrun n p wx rs s ls m o) (some out))))
+;; a function's answer with the outside: its body run on the arguments, as many as its parameters
+(def wfn_ans
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (g IFn)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (out Outcome))
+  Prop
+  (and (= (List.length vs) (IFn.params g)) (wends p wx rs (IFn.body g) (enter g vs) m o out)))

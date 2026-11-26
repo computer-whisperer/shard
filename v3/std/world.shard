@@ -1,0 +1,69 @@
+;;; v3/std/world.shard — what is outside a program, as the program has it. A WORLD is one
+;;; caller's conversation with the outside: the answers it will still be given, the bytes it
+;;; has written, and whether its process still runs. It is not the state of a kernel: what a
+;;; kernel holds — a file's contents, a pipe, the order in which processes run — is a kernel's
+;;; model's, and a second thread of control has a World of its own. A function of the
+;;; platform is an ordinary function on a World, with no axiom: a program's `main` on a World
+;;; computes, and a statement about a program is for every list of answers. No compiled code
+;;; holds a World: it is what a theorem states a binary's run with (models/x86/world.shard).
+(import "list.shard")
+(use Init.List cons nil)
+
+;; How the outside answers a call that offers it bytes: it took some of them; it failed, with an
+;; error's number; or it ended the process there — as a kernel does, by a signal, at a write to
+;; a pipe that nobody reads.
+(type How (HTook Nat) (HErr Nat) (HKill))
+;; how many bytes the answer `(HTook a)` takes of the n a call offers: a of them — at least one,
+;; where one is offered, and at most n —, and all of them for a = 0. Every answer so stands for
+;; a count a kernel may return, and every such count has its answer.
+(fn took ((a Nat) (n Nat)) Nat
+  (if (= a 0) n
+  (if (<= n a) n
+  a)))
+
+;; ---- all of some bytes, offered until taken -------------------------------------------------
+;; What offering bytes until all are taken comes to, as the answers decide it: every byte was
+;; taken, and these answers are left; an answer failed, these bytes taken before it; or the
+;; outside ended the process, these taken before.
+(type Put (PAll (List How)) (PFail (List Nat)) (PKill (List Nat)))
+;; the bytes p taken before what followed
+(fn put_after ((p (List Nat)) (s Put)) Put
+  (match s
+    ((PAll l) (PAll l))
+    ((PFail q) (PFail (List.append p q)))
+    ((PKill q) (PKill (List.append p q)))))
+;; the bytes bs offered: nothing is offered where none is left; each call offers all that is
+;; left and takes one answer; answers used up are an outside that takes all it is offered
+(fn put ((hs (List How)) (bs (List Nat))) Put
+  (measure (struct hs))
+  (match hs
+    (nil (PAll nil))
+    ((cons h r)
+     (match bs
+       (nil (PAll hs))
+       ((cons _ _)
+        (match h
+          ((HTook t)
+           (put_after (List.take (took t (List.length bs)) bs)
+             (put r (List.drop (took t (List.length bs)) bs))))
+          ((HErr _) (PFail nil))
+          (HKill (PKill nil))))))))
+
+;; ---- the World --------------------------------------------------------------------------------
+;; whether the process still runs: it does; a call failed, and it stopped with the failure
+;; declared; or the outside ended it
+(type Life (Live) (Failed) (Killed))
+(record World (ans (List How)) (out (List Nat)) (life Life))
+;; ALL OF SOME BYTES WRITTEN to the standard output. In a process that runs: every byte, where
+;; the answers take them all, however few at a time; the bytes taken before a failure, and the
+;; process stopped; those taken before the outside ended it. A process that has stopped writes
+;; nothing more.
+(fn write_all ((bs (List Nat)) (w World)) World
+  (match (World.life w)
+    (Live
+      (match (put (World.ans w) bs)
+        ((PAll left) (MkWorld left (List.append (World.out w) bs) Live))
+        ((PFail q) (MkWorld nil (List.append (World.out w) q) Failed))
+        ((PKill q) (MkWorld nil (List.append (World.out w) q) Killed))))
+    (Failed w)
+    (Killed w)))

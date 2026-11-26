@@ -1,6 +1,6 @@
 ;;; v3/compile/x86/stmt_call.shard — the statement-level case of a call.
 (import "pass.shard")
-(import "../ir_laws.shard")
+(import "../ir_world.shard")
 (import "lists.shard")
 (import "code.shard")
 (import "mem.shard")
@@ -11,6 +11,9 @@
 (use compile.x86.inv)
 (use compile.ir)
 (use compile.ir_laws)
+(use compile.ir_world)
+(use models.x86.linux)
+(use models.x86.linux.Outcome)
 (use compile.ir.IStm)
 (use compile.x86.lists)
 (use compile.x86.pass)
@@ -37,7 +40,7 @@
 ;; after the callee's return: the result into its local, and the rest of the statement
 (theorem call_out
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -49,8 +52,8 @@
    (x Nat)
    (k IStm)
    (ls (List (BitVec 64)))
-   (v (BitVec 64))
-   (m2 Mem)
+   (o Os)
+   (out Outcome)
    (c1 Cpu)
    (c6 Cpu)
    (a Nat)
@@ -66,8 +69,8 @@
    (m1 Mem)
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hrk (= (irun n1 p ext rs k (upd ls x v1) m1) (some (Prod.mk v m2))))
+   (ih (sim p wx rs tbl clo chi xs fs ts n1))
+   (hrk (= (wrun n1 p wx rs k (upd ls x v1) m1 o) (some out)))
    (hx (< x nl))
    (hck
      (= (cstm xs fs ts p nl (+ a (+ (isize ca) (+ 5 (List.length (encode (st_loc x)))))) k)
@@ -88,7 +91,7 @@
    (hag6 (agree rs m1 (Cpu.mem c6)))
    (hkm6 (kept_mem rs f (+ d 6) (Cpu.mem c0) (Cpu.mem c6)))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c6 v m2)
+  (arrives rs f (+ d 6) c0 c6 o out)
   (by
     (have w6b (framed c0 tbl clo chi f (+ d 6) (Cpu.mem c6) c6 j (app sl (saved c0)))
       (exact
@@ -103,7 +106,7 @@
         (+ a (+ (isize ca) (+ 5 (List.length (encode (st_loc x)))))))
       (arith))
     (exact
-      (store_k p ext rs tbl clo chi xs fs ts n1 x k ls m1 v m2 c6 (+ (+ a (isize ca)) 5)
+      (store_k p wx rs tbl clo chi xs fs ts n1 x k ls m1 o out c6 (+ (+ a (isize ca)) 5)
         (+ a (+ (isize ca) (+ 5 (List.length (encode (st_loc x))))))
         ck
         c0
@@ -136,7 +139,7 @@
 ;; the machine's part of a call: the arguments, the law of a call, the way on
 (theorem call_core
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -150,8 +153,8 @@
    (k IStm)
    (ls (List (BitVec 64)))
    (mi Mem)
-   (v (BitVec 64))
-   (m2 Mem)
+   (o Os)
+   (out Outcome)
    (c Cpu)
    (a Nat)
    (c0 Cpu)
@@ -162,20 +165,19 @@
    (j Nat)
    (sl (List (BitVec 64)))
    (vs (List (BitVec 64)))
-   (v1 (BitVec 64))
-   (m1 Mem)
+   (q Outcome)
    (ea Nat)
    (kc Nat)
    (ca (List Instr))
    (ck (List Instr))
-   (A (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (A (-> (List (BitVec 64)) Mem Os Outcome Prop))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hreal (realizes tbl clo chi ea kc rs A))
-   (hans (A vs mi v1 m1))
+   (ih (sim p wx rs tbl clo chi xs fs ts n1))
+   (hreal (wrealizes tbl clo chi ea kc rs A))
+   (hans (A vs mi o q))
    (hvs (= (ievals rs ls mi es) (some vs)))
-   (hrk (= (irun n1 p ext rs k (upd ls x v1) m1) (some (Prod.mk v m2))))
+   (hrk (= (wnext n1 p wx rs x k ls q) (some out)))
    (hx (< x nl))
    (hca (= (cargs es 0 nl) (some ca)))
    (hck
@@ -194,7 +196,7 @@
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
+  (arrives rs f (+ d 6) c0 c o out)
   (by
     (have p1 (placed tbl a ca)
       (exact
@@ -267,74 +269,110 @@
            ((intro (w5 gw)
               (cases gw
                 ((intro (ws5 e5)
-                   (have wx (framed c0 tbl clo chi f (+ d 6) m0 c1 (+ (- j 1) 1) (cons w5 ws5))
+                   (have wfr (framed c0 tbl clo chi f (+ d 6) m0 c1 (+ (- j 1) 1) (cons w5 ws5))
                      (rw (<- e5))
                      (exact
                        (framed_idx c0 tbl clo chi f (+ d 6) m0 c1 j (app sl (saved c0))
                          (+ (- j 1) 1)
                          w1
                          (Eq.symm hd))))
-                   (cases
-                     (call_law c0 tbl clo chi f (+ d 6) m0 c1 (- j 1) w5 ws5 rs mi vs v1 m1 ea kc A
-                       (+ a (isize ca))
-                       (rel ea (+ a (+ (isize ca) 5)))
-                       5
-                       hall
-                       hchi
-                       wx
-                       hdo
-                       hag
-                       hkm
-                       hreal
-                       hans
-                       hargs1
-                       hkc2
-                       hrip1
-                       sC
-                       htgt)
-                     ((intro (c6 g6)
-                        (have w6
-                          (framed c0 tbl clo chi f (+ d 6) (Cpu.mem c6) c6 (+ (- j 1) 1)
-                            (app sl (saved c0)))
-                          (rw e5)
-                          (exact (And.left (And.right (And.right (And.right (And.right g6)))))))
-                        (exact
-                          (done_from rs f (+ d 6) c0 c c6 v m2
-                            (reaches_trans c c1 c6 r1 (And.left g6))
-                            (call_out p ext rs tbl clo chi xs fs ts n1 x k ls v m2 c1 c6 a ca ck c0
-                              f
-                              d
-                              nl
-                              j
-                              sl
-                              v1
-                              m1
-                              hall
-                              hchi
-                              ih
-                              hrk
-                              hx
-                              hck
-                              sM
-                              p3
-                              hsn
-                              hd
-                              hls1
-                              (And.left (And.right g6))
-                              (And.left (And.right (And.right g6)))
-                              (And.left (And.right (And.right (And.right g6))))
-                              w6
-                              hsl
-                              hj
-                              (And.left
-                                (And.right (And.right (And.right (And.right (And.right g6))))))
-                              (And.right
-                                (And.right (And.right (And.right (And.right (And.right g6))))))
-                              hdo)))))))))))))))))
+                   (have hcl
+                     (called c0 tbl clo chi f (+ d 6) c1 (- j 1) w5 ws5 rs (+ a (isize ca)) 5 o q)
+                     (exact
+                       (call_law c0 tbl clo chi f (+ d 6) m0 c1 (- j 1) w5 ws5 rs mi vs o q ea kc A
+                         (+ a (isize ca))
+                         (rel ea (+ a (+ (isize ca) 5)))
+                         5
+                         hall
+                         hchi
+                         wfr
+                         hdo
+                         hag
+                         hkm
+                         hreal
+                         hans
+                         hargs1
+                         hkc2
+                         hrip1
+                         sC
+                         htgt)))
+                   (have fin
+                     (->
+                       (called c0 tbl clo chi f (+ d 6) c1 (- j 1) w5 ws5 rs (+ a (isize ca)) 5 o q)
+                       (-> (= (wnext n1 p wx rs x k ls q) (some out))
+                         (arrives rs f (+ d 6) c0 c o out)))
+                     (cases q
+                       ((ORet (v1 m1 o1)
+                          (show
+                            (->
+                              (call_ret c0 tbl clo chi f (+ d 6) c1 (- j 1) w5 ws5 rs
+                                (+ a (isize ca))
+                                5
+                                o
+                                v1
+                                m1
+                                o1)
+                              (-> (= (wrun n1 p wx rs k (upd ls x v1) m1 o1) (some out))
+                                (arrives rs f (+ d 6) c0 c o out))))
+                          (intro gg hrk1)
+                          (cases gg
+                            ((intro (c6 g6)
+                               (have w6
+                                 (framed c0 tbl clo chi f (+ d 6) (Cpu.mem c6) c6 (+ (- j 1) 1)
+                                   (app sl (saved c0)))
+                                 (rw e5)
+                                 (exact
+                                   (And.left (And.right (And.right (And.right (And.right g6)))))))
+                               (exact
+                                 (arrives_comes rs f (+ d 6) c0 c o c6 o1 out
+                                   (comes_trans c o c1 o c6 o1 (comes_of_reaches c c1 o r1)
+                                     (And.left g6))
+                                   (call_out p wx rs tbl clo chi xs fs ts n1 x k ls o1 out c1 c6 a
+                                     ca
+                                     ck
+                                     c0
+                                     f
+                                     d
+                                     nl
+                                     j
+                                     sl
+                                     v1
+                                     m1
+                                     hall
+                                     hchi
+                                     ih
+                                     hrk1
+                                     hx
+                                     hck
+                                     sM
+                                     p3
+                                     hsn
+                                     hd
+                                     hls1
+                                     (And.left (And.right g6))
+                                     (And.left (And.right (And.right g6)))
+                                     (And.left (And.right (And.right (And.right g6))))
+                                     w6
+                                     hsl
+                                     hj
+                                     (And.left
+                                       (And.right (And.right (And.right (And.right (And.right g6))))))
+                                     (And.right
+                                       (And.right (And.right (And.right (And.right (And.right g6))))))
+                                     hdo)))))))
+                        (OEnd (r)
+                          (show
+                            (-> (ends_at c1 o r)
+                              (-> (= (some (OEnd r)) (some out)) (arrives rs f (+ d 6) c0 c o out))))
+                          (intro gg he)
+                          (rw (<- (Option.some.inj he)))
+                          (show (ends_at c o r))
+                          (exact (ends_of_comes c o c1 o r (comes_of_reaches c c1 o r1) gg))))))
+                   (exact (fin hcl hrk)))))))))))))
 ;; ---- a call -------------------------------------------------------------------------------------
 (theorem sim_call
   ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
    (rs (List Seg))
    (tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -349,8 +387,8 @@
    (k IStm)
    (ls (List (BitVec 64)))
    (mi Mem)
-   (v (BitVec 64))
-   (m2 Mem)
+   (o Os)
+   (out Outcome)
    (c Cpu)
    (a Nat)
    (code (List Instr))
@@ -363,9 +401,9 @@
    (sl (List (BitVec 64)))
    (hall (= (all_within tbl clo chi) true))
    (hchi (<= (+ chi 15) 18446744073709551616))
-   (henv (env_ok p ext rs tbl clo chi xs fs))
-   (ih (sim p ext rs tbl clo chi xs fs ts n1))
-   (hrun (= (irun (FS n1) p ext rs (SCall x cal es k) ls mi) (some (Prod.mk v m2))))
+   (henv (env_ok p wx rs tbl clo chi xs fs))
+   (ih (sim p wx rs tbl clo chi xs fs ts n1))
+   (hrun (= (wrun (FS n1) p wx rs (SCall x cal es k) ls mi o) (some out)))
    (hcs (= (cstm xs fs ts p nl a (SCall x cal es k)) (some code)))
    (hpl (placed tbl a code))
    (hsn (<= (sneed xs fs ts p nl (SCall x cal es k)) j))
@@ -377,117 +415,105 @@
    (hag (agree rs mi m0))
    (hkm (kept_mem rs f (+ d 6) (Cpu.mem c0) m0))
    (hdo (data_ok c0 rs clo chi f (+ d 6))))
-  (done rs f (+ d 6) c0 c v m2)
+  (arrives rs f (+ d 6) c0 c o out)
   (by
     (have hx (< x nl) (exact (And.left (cstm_call_inv xs fs ts p nl a x cal es k code hcs))))
-    (cases (irun_call_inv p ext rs n1 x cal es k ls mi (Prod.mk v m2) hrun)
+    (cases (wrun_call_inv p wx rs n1 x cal es k ls mi o out hrun)
       ((intro (vs g0) (have hvs (= (ievals rs ls mi es) (some vs)) (exact (And.left g0)))
          (cases (And.right g0)
            ((intro (q g1)
-              (cases q
-                ((mk (v1 m1)
-                   (have hq (= (cal_run n1 p ext rs cal vs mi) (some (Prod.mk v1 m1)))
-                     (exact (And.left g1)))
-                   (have hrk (= (irun n1 p ext rs k (upd ls x v1) m1) (some (Prod.mk v m2)))
-                     (exact (And.right g1)))
-                   (cases (And.right (cstm_call_inv xs fs ts p nl a x cal es k code hcs))
-                     ((intro (en g2)
-                        (cases en
-                          ((mk (ea kc)
-                             (have hcal
-                               (= (callee_at xs fs p cal (List.length es)) (some (Prod.mk ea kc)))
-                               (exact (And.left g2)))
-                             (cases (And.right g2)
-                               ((intro (ca g3)
-                                  (have hca (= (cargs es 0 nl) (some ca)) (exact (And.left g3)))
-                                  (cases (And.right g3)
-                                    ((intro (ck g4)
-                                       (have hck
-                                         (=
-                                           (cstm xs fs ts p nl
-                                             (+ a
-                                               (+ (isize ca) (+ 5 (List.length (encode (st_loc x))))))
-                                             k)
-                                           (some ck))
-                                         (exact (And.left g4)))
-                                       (have hcd
-                                         (= code
-                                           (List.append ca
-                                             (cons (Call (rel ea (+ a (+ (isize ca) 5))))
-                                               (cons (st_loc x) ck))))
-                                         (exact (And.right g4)))
-                                       (have hpl2
-                                         (placed tbl a
-                                           (List.append ca
-                                             (cons (Call (rel ea (+ a (+ (isize ca) 5))))
-                                               (cons (st_loc x) ck))))
-                                         (rw (<- hcd))
-                                         (exact hpl))
-                                       (have hlen (= (List.length vs) (List.length es))
-                                         (exact (ievals_len rs ls mi es vs hvs)))
-                                       (have hans
-                                         (cal_ans p ext rs cal (List.length es) vs mi v1 m1)
-                                         (show
-                                           (and (= (List.length vs) (List.length es))
-                                             (exists ((n0 Fuel))
-                                               (= (cal_run n0 p ext rs cal vs mi)
-                                                 (some (Prod.mk v1 m1))))))
-                                         (apply And.intro ((exact hlen))
-                                           ((apply (Exists.intro n1) ((exact hq))))))
-                                       (have hreal
-                                         (realizes tbl clo chi ea kc rs
-                                           (cal_ans p ext rs cal (List.length es)))
-                                         (exact (henv cal (List.length es) (Prod.mk ea kc) hcal)))
-                                       (have hkc (<= (+ kc 1) j)
-                                         (exact
-                                           (And.left
-                                             (sneed_call xs fs ts p nl x cal es k (Prod.mk ea kc) j
-                                               hcal
-                                               hsn))))
-                                       (have hsn2 (<= (sneed xs fs ts p nl k) j)
-                                         (exact
-                                           (And.right
-                                             (sneed_call xs fs ts p nl x cal es k (Prod.mk ea kc) j
-                                               hcal
-                                               hsn))))
-                                       (exact
-                                         (call_core p ext rs tbl clo chi xs fs ts n1 x es k ls mi v
-                                           m2
-                                           c
-                                           a
-                                           c0
-                                           f
-                                           d
-                                           nl
-                                           m0
-                                           j
-                                           sl
-                                           vs
-                                           v1
-                                           m1
-                                           ea
-                                           kc
-                                           ca
-                                           ck
-                                           (cal_ans p ext rs cal (List.length es))
-                                           hall
-                                           hchi
-                                           ih
-                                           hreal
-                                           hans
-                                           hvs
-                                           hrk
-                                           hx
-                                           hca
-                                           hck
-                                           hpl2
-                                           hkc
-                                           hsn2
-                                           hrip
-                                           w
-                                           hls
-                                           hsl
-                                           hj
-                                           hag
-                                           hkm
-                                           hdo)))))))))))))))))))))))))
+              (have hq (= (wcal_run n1 p wx rs cal vs mi o) (some q)) (exact (And.left g1)))
+              (have hrk (= (wnext n1 p wx rs x k ls q) (some out)) (exact (And.right g1)))
+              (cases (And.right (cstm_call_inv xs fs ts p nl a x cal es k code hcs))
+                ((intro (en g2)
+                   (cases en
+                     ((mk (ea kc)
+                        (have hcal
+                          (= (callee_at xs fs p cal (List.length es)) (some (Prod.mk ea kc)))
+                          (exact (And.left g2)))
+                        (cases (And.right g2)
+                          ((intro (ca g3)
+                             (have hca (= (cargs es 0 nl) (some ca)) (exact (And.left g3)))
+                             (cases (And.right g3)
+                               ((intro (ck g4)
+                                  (have hck
+                                    (=
+                                      (cstm xs fs ts p nl
+                                        (+ a (+ (isize ca) (+ 5 (List.length (encode (st_loc x))))))
+                                        k)
+                                      (some ck))
+                                    (exact (And.left g4)))
+                                  (have hcd
+                                    (= code
+                                      (List.append ca
+                                        (cons (Call (rel ea (+ a (+ (isize ca) 5))))
+                                          (cons (st_loc x) ck))))
+                                    (exact (And.right g4)))
+                                  (have hpl2
+                                    (placed tbl a
+                                      (List.append ca
+                                        (cons (Call (rel ea (+ a (+ (isize ca) 5))))
+                                          (cons (st_loc x) ck))))
+                                    (rw (<- hcd))
+                                    (exact hpl))
+                                  (have hlen (= (List.length vs) (List.length es))
+                                    (exact (ievals_len rs ls mi es vs hvs)))
+                                  (have hans (cal_ans p wx rs cal (List.length es) vs mi o q)
+                                    (show
+                                      (and (= (List.length vs) (List.length es))
+                                        (exists ((n0 Fuel))
+                                          (= (wcal_run n0 p wx rs cal vs mi o) (some q)))))
+                                    (apply And.intro ((exact hlen))
+                                      ((apply (Exists.intro n1) ((exact hq))))))
+                                  (have hreal
+                                    (wrealizes tbl clo chi ea kc rs
+                                      (cal_ans p wx rs cal (List.length es)))
+                                    (exact (henv cal (List.length es) (Prod.mk ea kc) hcal)))
+                                  (have hkc (<= (+ kc 1) j)
+                                    (exact
+                                      (And.left
+                                        (sneed_call xs fs ts p nl x cal es k (Prod.mk ea kc) j hcal
+                                          hsn))))
+                                  (have hsn2 (<= (sneed xs fs ts p nl k) j)
+                                    (exact
+                                      (And.right
+                                        (sneed_call xs fs ts p nl x cal es k (Prod.mk ea kc) j hcal
+                                          hsn))))
+                                  (exact
+                                    (call_core p wx rs tbl clo chi xs fs ts n1 x es k ls mi o out c
+                                      a
+                                      c0
+                                      f
+                                      d
+                                      nl
+                                      m0
+                                      j
+                                      sl
+                                      vs
+                                      q
+                                      ea
+                                      kc
+                                      ca
+                                      ck
+                                      (cal_ans p wx rs cal (List.length es))
+                                      hall
+                                      hchi
+                                      ih
+                                      hreal
+                                      hans
+                                      hvs
+                                      hrk
+                                      hx
+                                      hca
+                                      hck
+                                      hpl2
+                                      hkc
+                                      hsn2
+                                      hrip
+                                      w
+                                      hls
+                                      hsl
+                                      hj
+                                      hag
+                                      hkm
+                                      hdo))))))))))))))))))))))

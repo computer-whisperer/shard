@@ -6,10 +6,17 @@
 ;;; as it was. The statement is the same whether a pass wrote the code or an author did, and
 ;;; whether the answer is a run of intermediate code or a shard function; what is assumed of a
 ;;; callee and what is proven of a function are this one statement.
+;;; It has two forms. An answer that names nothing outside the process is realized by code that
+;;; leaves the outside as it was (`realizes`). An answer given on what is outside as well — the
+;;; kernel's answers still to come, what the process has written — is an outcome: the code
+;;; returns, or the process ends in it (`wrealizes`). Both say where the run COMES to
+;;; (models/x86/laws.shard `comes`), so a caller's proof joins either to its own run.
 (import "../../models/x86/frame.shard")
 (use std.mem)
 (use models.x86.frame)
 (use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Outcome)
 (use models.x86.word)
 (use models.x86.x86)
 (use Init.Bool false true)
@@ -49,6 +56,16 @@
    (m2 Mem))
   Prop
   (= (ext j vs m) (some (Prod.mk v m2))))
+;; the same of an external whose answer is given on what is outside the process as well
+(def wext_ans
+  ((wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (j Nat)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (out Outcome))
+  Prop
+  (= (wx j vs m o) (some out)))
 
 ;; ---- the statement ------------------------------------------------------------------------------
 ;; The answer is taken on ANY memory m that the machine's agrees with on the data ranges, not on
@@ -64,13 +81,31 @@
   (forall ((x Nat))
     (-> (or (< x f) (<= (+ f (* 8 k)) x)) (= (mapped rs x 1 2) false)
       (= (mem_get m2 x) (mem_get m1 x)))))
+;; What code that returns comes to. From the state c with o outside the process, in code called
+;; in the state c0 with room for k words above f: the processor comes to a state that has
+;; returned to c0's caller with v in rax, whose memory agrees with m2 on the data ranges and is
+;; c0's at every other byte outside the k words — and what is outside is then o2.
+(def rets ((rs (List Seg)) (f Nat) (k Nat) (c0 Cpu) (c Cpu) (o Os) (v (BitVec 64)) (m2 Mem) (o2 Os))
+  Prop
+  (exists ((c2 Cpu))
+    (and (comes c o c2 o2)
+      (and (= (reg c2 0) v)
+        (and (agree rs m2 (Cpu.mem c2))
+          (and (kept_mem rs f k (Cpu.mem c0) (Cpu.mem c2)) (returned c0 c2)))))))
+;; What a call comes to, by its outcome (models/x86/linux.shard): it returns, as `rets` says; or
+;; the process ends in it, and the run from c ends so.
+(def arrives ((rs (List Seg)) (f Nat) (k Nat) (c0 Cpu) (c Cpu) (o Os) (out Outcome)) Prop
+  (match out
+    ((ORet v m2 o2) (rets rs f k c0 c o v m2 o2))
+    ((OEnd r) (ends_at c o r))))
 ;; The code of the table tbl, in [clo, chi), realizes the answer `ans` at the address `entry`
 ;; with a stack need of k words: from a state c with the code in place, the arguments in their
 ;; registers, room for k words above f and the data ranges as `data_ok` asks, and for any memory
 ;; m that c's memory agrees with on the data ranges: whenever the answer on m is the word v and
 ;; the memory m2, the processor comes from `entry` to a state that has returned to c's caller
 ;; with v in rax, whose memory agrees with m2 on the data ranges and is c's at every other byte
-;; outside the k words.
+;; outside the k words. The answer names nothing outside the process, and the code leaves what
+;; is outside as it was, whatever that is.
 (def realizes
   ((tbl (List (Prod Nat (Prod Instr Nat))))
    (clo Nat)
@@ -80,12 +115,148 @@
    (rs (List Seg))
    (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop)))
   Prop
-  (forall ((c Cpu) (vs (List (BitVec 64))) (v (BitVec 64)) (m Mem) (m2 Mem) (f Nat))
+  (forall ((c Cpu) (vs (List (BitVec 64))) (v (BitVec 64)) (m Mem) (m2 Mem) (f Nat) (o Os))
     (-> (code_in c tbl) (args_in c vs) (room c clo chi f k) (data_ok c rs clo chi f k)
       (agree rs m (Cpu.mem c))
       (ans vs m v m2)
-      (exists ((c2 Cpu))
-        (and (reaches (at_pc c (w64 entry)) c2)
-          (and (= (reg c2 0) v)
-            (and (agree rs m2 (Cpu.mem c2))
-              (and (kept_mem rs f k (Cpu.mem c) (Cpu.mem c2)) (returned c c2)))))))))
+      (rets rs f k c (at_pc c (w64 entry)) o v m2 o))))
+;; The same of code whose answer is given on what is outside the process as well, and is an
+;; outcome: a return with the outside as the code left it, or the process's end.
+(def wrealizes
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem Os Outcome Prop)))
+  Prop
+  (forall ((c Cpu) (vs (List (BitVec 64))) (m Mem) (f Nat) (o Os) (out Outcome))
+    (-> (code_in c tbl) (args_in c vs) (room c clo chi f k) (data_ok c rs clo chi f k)
+      (agree rs m (Cpu.mem c))
+      (ans vs m o out)
+      (arrives rs f k c (at_pc c (w64 entry)) o out))))
+
+;; ---- laws of an arrival -------------------------------------------------------------------------
+;; steps of the processor before it, and a stretch of a run with the outside before it
+(theorem rets_comes
+  ((rs (List Seg))
+   (f Nat)
+   (k Nat)
+   (c0 Cpu)
+   (c Cpu)
+   (o Os)
+   (c1 Cpu)
+   (o1 Os)
+   (v (BitVec 64))
+   (m2 Mem)
+   (o2 Os)
+   (h (comes c o c1 o1))
+   (g (rets rs f k c0 c1 o1 v m2 o2)))
+  (rets rs f k c0 c o v m2 o2)
+  (by
+    (cases g
+      ((intro (c2 g2)
+         (apply (Exists.intro c2)
+           ((apply And.intro ((exact (comes_trans c o c1 o1 c2 o2 h (And.left g2))))
+              ((exact (And.right g2)))))))))))
+(theorem arrives_comes
+  ((rs (List Seg))
+   (f Nat)
+   (k Nat)
+   (c0 Cpu)
+   (c Cpu)
+   (o Os)
+   (c1 Cpu)
+   (o1 Os)
+   (out Outcome)
+   (h (comes c o c1 o1)))
+  (-> (arrives rs f k c0 c1 o1 out) (arrives rs f k c0 c o out))
+  (by
+    (cases out
+      ((ORet (v m2 o2) (show (-> (rets rs f k c0 c1 o1 v m2 o2) (rets rs f k c0 c o v m2 o2)))
+         (intro g)
+         (exact (rets_comes rs f k c0 c o c1 o1 v m2 o2 h g)))
+       (OEnd (r) (show (-> (ends_at c1 o1 r) (ends_at c o r))) (intro g)
+         (exact (ends_of_comes c o c1 o1 r h g)))))))
+(theorem arrives_from
+  ((rs (List Seg))
+   (f Nat)
+   (k Nat)
+   (c0 Cpu)
+   (c Cpu)
+   (c1 Cpu)
+   (o Os)
+   (out Outcome)
+   (h (reaches c c1))
+   (g (arrives rs f k c0 c1 o out)))
+  (arrives rs f k c0 c o out)
+  (exact (arrives_comes rs f k c0 c o c1 o out (comes_of_reaches c c1 o h) g)))
+;; code that returns by steps of the processor alone
+(theorem rets_reaches
+  ((rs (List Seg) implicit)
+   (f Nat implicit)
+   (k Nat implicit)
+   (c0 Cpu implicit)
+   (c Cpu implicit)
+   (o Os implicit)
+   (v (BitVec 64) implicit)
+   (m2 Mem implicit)
+   (c2 Cpu implicit)
+   (h (reaches c c2))
+   (hv (= (reg c2 0) v))
+   (hag (agree rs m2 (Cpu.mem c2)))
+   (hkm (kept_mem rs f k (Cpu.mem c0) (Cpu.mem c2)))
+   (hret (returned c0 c2)))
+  (rets rs f k c0 c o v m2 o)
+  (by
+    (apply (Exists.intro c2)
+      ((apply And.intro ((exact (comes_of_reaches c c2 o h)))
+         ((apply And.intro ((exact hv))
+            ((apply And.intro ((exact hag)) ((apply And.intro ((exact hkm)) ((exact hret)))))))))))))
+;; code that realizes an answer realizes every answer that says no more
+(theorem wrealizes_sub
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem Os Outcome Prop))
+   (ans2 (-> (List (BitVec 64)) Mem Os Outcome Prop))
+   (hs
+     (forall ((vs (List (BitVec 64))) (m Mem) (o Os) (out Outcome))
+       (-> (ans2 vs m o out) (ans vs m o out))))
+   (hr (wrealizes tbl clo chi entry k rs ans)))
+  (wrealizes tbl clo chi entry k rs ans2)
+  (by
+    (intro c vs m f o out hcode hargs hroom hdata hag hans)
+    (exact (hr c vs m f o out hcode hargs hroom hdata hag (hs vs m o out hans)))))
+;; An answer that names nothing outside the process, as an answer with the outside: it returns
+;; that word and that memory and leaves the outside as it was. Code that realizes the one
+;; realizes the other.
+(def lift_ans
+  ((ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os)
+   (out Outcome))
+  Prop
+  (exists ((v (BitVec 64))) (exists ((m2 Mem)) (and (ans vs m v m2) (= out (ORet v m2 o))))))
+(theorem realizes_lift
+  ((tbl (List (Prod Nat (Prod Instr Nat))))
+   (clo Nat)
+   (chi Nat)
+   (entry Nat)
+   (k Nat)
+   (rs (List Seg))
+   (ans (-> (List (BitVec 64)) Mem (BitVec 64) Mem Prop))
+   (hr (realizes tbl clo chi entry k rs ans)))
+  (wrealizes tbl clo chi entry k rs (lift_ans ans))
+  (by
+    (intro c vs m f o out hcode hargs hroom hdata hag hans)
+    (cases hans
+      ((intro (v g)
+         (cases g
+           ((intro (m2 g2) (rw (And.right g2)) (show (rets rs f k c (at_pc c (w64 entry)) o v m2 o))
+              (exact (hr c vs v m m2 f o hcode hargs hroom hdata hag (And.left g2)))))))))))
