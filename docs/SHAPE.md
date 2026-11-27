@@ -109,7 +109,7 @@ tie of the two engines' outputs is 42. It is not run whole on the development ma
 | `v3/pins/` | 488 files | small sources, each stating the outcome it expects; 328 cases for the loader |
 | `v3/std/` | 1,100 lines | the library beyond Init: lists, bytes, a map, a byte memory, facts on division and bits, host calls; and a program's World with the platform's `write_all` as an ordinary function on it |
 | `v3/models/x86/` | 12,400 lines | a model of the x86-64 processor under Linux, begun: a program is bytes, decoded and executed a step at a time; an assembler checked by the model's decoder; the model held to the processor on programs assembled by hand; what is outside a process — the kernel's answers to its calls, an input of a run, and the bytes it has written —, and a file that writes, proven for every list of answers; laws of the model, one rule for each instruction among them, and of a function's stack frame; one demonstration from shard functions to a file that runs, and a trial of low-level code as shard: functions over buffers of machine words, a listing compiled by hand, for each of them the contract of its code, and by those the theorem that the listing's file exits with what the functions compute (§6) |
-| `v3/compile/` | 22,700 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view —, and two compiled programs that write — one in a loop over its arguments —, each proven to end as its value on a World says |
+| `v3/compile/` | 22,000 lines | the compile system's first pieces (§6): an intermediate machine and its laws, the statement that crosses a module's seam, a pass from intermediate code to x86-64 instructions with its theorem, a link theorem, two programs proven from their definitions to the exit status of their files, a compiled caller linked against a hand-written function and against the compiled one, and a caller of that caller — the three functions each a module behind a view —, and two compiled programs that write — one in a loop over its arguments —, each proven to end as its value on a World says |
 | `v3/examples/` | 2,200 lines | `calc`, a calculator with 100 proven claims and a proven contract for its binary; small worked examples of each feature |
 | `v3/tools/shardfmt/` | 1,300 lines | the source formatter, with a proven contract and a gate over every source file |
 | `rust_bootstrap/` | 5,900 lines of Rust | the bootstrap evaluator: its reader of shard sources, the toolchain's and any program's (3,600), the engine (1,600), its tests (700) |
@@ -251,10 +251,10 @@ be built to is `COMPILE.md`.
   (`ir_laws.shard`), among them that a run given more fuel answers the same, and by it a rule
   for a call that returns: a function that calls another is tied to its definition from the
   callee's tie alone;
-- a second run of the intermediate machine, with what is outside a process (`ir.shard` `wrun`,
-  `ir_world.shard`): an outside function's answer may change it or end the process, and a run
-  in which a callee ends the process has ended; a run of code that calls nothing outside is
-  one of these;
+- the intermediate machine's run has what is outside a process (`ir.shard` `wrun`): an outside
+  function's answer may change it or end the process, and a run in which a callee ends the
+  process has ended. It is the machine's one run: the answer of code that names nothing
+  outside is defined over it, for every outside;
 - the one statement about a function's code that crosses a module's seam (`x86/seam.shard`),
   the same for compiled and for hand-written code, in two forms: of an answer that names
   nothing outside the process (`realizes`), and of one given on the outside as well, an

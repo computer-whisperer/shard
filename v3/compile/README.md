@@ -117,15 +117,16 @@ writes nothing in a process that has stopped (`say_each_stopped`).
   the value's — it returned the word, left the memory said and left outside what the World is
   of; or the process ended in it as a World that has stopped says (`models/x86/world.shard`
   `tied`). There is a rule for each statement form a tie uses: a return, a local set, a
-  branch each way, a tail call, a call of a function known to return (`tie_call_ret`), and a
-  call of a function (`tie_call`) or an outside function (`tie_ext`) that is itself tied.
+  branch each way, a tail call, and a call of a function (`tie_call`) or an outside function
+  (`tie_ext`) that is itself tied.
   The last two ask one thing more than a call that returns: where the process stopped in the
   callee, the caller's World is the callee's.
 - The loop's tie (`say_tie2`) is by induction on the arguments, for whatever is outside: the
   line's tie; then, where the process still runs, the function's own tail call on what the
   line left outside; and where the line stopped the process, the code's run has ended, and in
-  the meaning the arguments after it write nothing. A function that calls nothing outside is
-  tied as an exact outcome, the outside as it was (`say_tie0`).
+  the meaning the arguments after it write nothing. A function that calls nothing outside has
+  the same statement, its World the World of what is outside as it was (`say_tie0`), and is
+  called by `tie_call_same`.
 - The file (`x86/say_file.shard`): a start-up that pushes one word, the byte of a line's end,
   and hands over the address the kernel left the stack pointer at and the address of that
   word; `write_all`'s lines; and the four functions compiled after them. The code reads
@@ -259,13 +260,12 @@ the owner.
 
 | file | what it holds |
 |---|---|
-| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load of a word, a load of a byte), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), the run by a fuel (`irun`), a function's answer (`fn_ans`); and the run with what is outside a process (`wrun`, `wfn_ans`), in which an external's answer is an outcome. No proof: the pass reads this file |
-| `ir_world.shard` | the laws of the run with what is outside a process (`wrun`): what such a run of a statement says of its parts and a run from its parts; that a run of `irun` is one of these, the outside left as it was (`wrun_of_irun`); that a run with an outcome has it on any fuel above (`wrun_more`); and the rules of `wends` a tie uses: a return, a local set, a branch each way, a tail call, and a call — of an outside function or of a function of the program — that returns and one in which the process ends |
-| `tie.shard` | a function that writes tied to its code: the statement of a statement's run and of a function's (`ties`, `fn_ties`: the outcome is the value's, a word and a World, with the memory left), and a rule for each statement form a tie uses — `tie_ret`, `tie_let`, `tie_if_true`, `tie_if_false`, `tie_tail`, `tie_call_ret`, and for a call of what is itself tied `tie_call` and `tie_ext` |
+| `ir.shard` | the intermediate machine: expressions (a constant, a local, an operation of two, a load of a word, a load of a byte), statements in tail form (a local set, a store, a call, a two-way branch, and at each leaf a return or a tail call — no loop: a loop is a function's tail call of itself), a function (`IFn`: parameters, further locals, a body), ONE run by a fuel, with what is outside a process (`wrun`, `wends`, `wfn_ans`), in which an external's answer is an outcome; and, for code that names nothing outside, its answer as a word and a memory for every outside (`iends`, `fn_ans`: definitions over that run). No proof: the pass reads this file |
+| `tie.shard` | a function that writes tied to its code: the statement of a statement's run and of a function's (`ties`, `fn_ties`: the outcome is the value's, a word and a World, with the memory left), and a rule for each statement form a tie uses — `tie_ret`, `tie_let`, `tie_if_true`, `tie_if_false`, `tie_tail`, and for a call of what is itself tied `tie_call`, `tie_ext` and `tie_call_same` (a callee that leaves the outside as it was) |
 | `put.shard` | the platform's `write_all` as a function outside a module: its answer on what is outside the process (`put_out`, `put_ext`), that answer as the platform's function on a World (`put_all`, `put_fail`, `put_kill`), that the answer's outcome is tied to it (`put_tied`), the rule for a call of it (`tie_put`, by `tie.shard`'s rule for a call of what is tied), and the outside functions of a module whose one outside function it is (`put_wx`) |
 | `greet_src.shard`, `greet_ir.shard` | a program that writes: its meaning on a World, and its intermediate code — one function that calls `write_all` twice — with its tie and how its file ends by the kernel's answers (`greet_res`) |
 | `say_src.shard`, `say_ir.shard` | a program of its arguments that writes in a loop: its meaning on a World, with what it writes in a process that has stopped (`say_each_stopped`); and its intermediate code — four functions — with a tie for each (`say_tie0` … `say_tie3`, `say_prog_tie`) and how its file ends by the arguments and the kernel's answers (`say_res`) |
-| `ir_laws.shard` | the machine's laws: what a run of a statement says of its parts (`irun_let_inv` and its like), a run of a statement from its parts, that a run given more fuel answers the same (`irun_more`), and a rule of `iends` for each statement form a proof above the pass uses: a return, a local set, a branch each way, a tail call, a store (`iends_store`), a call that returns (`iends_call`), whose two runs — the callee's and what follows — are brought to one fuel, and a call of an outside function (`iends_call_ext`), by that function's answer |
+| `ir_laws.shard` | the machine's laws: an expression's word; what a run of a statement says of its parts (`wrun_let_inv` and its like) and a run of a statement from its parts; that a run with an outcome has it on any fuel above (`wrun_more`); a rule of `wends` for each statement form — a return, a local set, a store, a branch each way, a tail call, and a call, of an outside function or of a function of the program, that returns (the two runs it joins brought to one fuel) and one in which the process ends —; and from those the rules of `iends` for code that names nothing outside (`iends_let`, `iends_call`, `iends_call_ext` and the rest), each its rule of `wends` for every outside |
 | `lo.shard` | what a low form is written with: a read with its evidence (`rd64`), a write with its evidence (`wr64`), a buffer in the ranges (`buf_ok`), the evidence at an index (`at8_ok`), a read's word against a list held in memory (`rd_word`); and an answer given where evidence exists (`ans_on`), by which a low form is the answer of a function called from outside |
 | `calls_lo.shard`, `calls_ir.shard` | the first program: its six functions with the loop's two cases, and their intermediate code with a tie for each |
 | `argsum_src.shard`, `argsum_ir.shard` | a program of its command-line arguments: its meaning over a list of lists of bytes — a string's digits, the sum over the strings, the first argument passed over —, and its intermediate code, three functions, with a tie for each from the meaning straight to the code where a memory holds the arguments (`args_at`) |
@@ -303,11 +303,12 @@ the owner.
 
 ## The theorems proven once
 
-`irun_more` and `iends_call` (`ir_laws.shard`): a run that answers answers the same on any fuel
+`wrun_more` and `wends_call` (`ir_laws.shard`): a run with an outcome has it on any fuel
 above; so where a callee's body answers `w` and leaves `m1`, and what follows the call answers
 with the local set to `w` on `m1`, the call statement answers — the callee's fact used as
-`fn_ans` states it, the same statement the pass's theorem realizes. `iends_call_ext`: the same
-for a function outside the module, by its answer.
+`wfn_ans` states it, the same statement the pass's theorem realizes. `wends_call_ext`: the
+same for a function outside the module, by its answer. The rules of `iends`, for code that
+names nothing outside, are these for every outside (`iends_call`, `iends_call_ext`).
 
 `realizes_sub` and `realizes_part` (`x86/seam_laws.shard`): code that realizes an answer
 realizes every answer that says no more, and realizes it in every table that has the code's
@@ -320,8 +321,9 @@ listing stands in a table (`placed`), and each outside callee realizes its answe
 and with the need `xs` gives, then every function of `p` realizes its own answer — `wfn_ans`,
 the run of its intermediate code with what is outside the process — at the entry and with the
 need the pass answered. The proof is one, over `wrun`: the law of a call is by the callee's
-outcome, a return or the process's end. `module_realizes` is its corollary for code that calls
-nothing outside (`fn_ans`, the run by `irun`), and its statement is as it was. It covers every
+outcome, a return or the process's end. `module_realizes` is its corollary for code that names
+nothing outside (`fn_ans`: the same run, for every outside, the outside left as it was), and
+its statement is as it was. It covers every
 form the pass accepts and nothing else: the pass refuses what it does not compile (a seventh
 parameter, an expression deeper than the temporaries, a comparison other than unsigned below and not
 below, a call's argument that is not a constant or a local, a call of itself that is not a tail

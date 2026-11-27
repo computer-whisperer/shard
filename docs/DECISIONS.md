@@ -1002,9 +1002,10 @@ entries are explained under "Measured" at the end.
   that goes on by what a dead write returns has no answer on any fuel, and its theorem would
   say nothing where a write fails. The two meet at the tie: `tie_put` asks that the rest of
   the program leaves a stopped World as it is.
-  *One proof of the pass, over the run with the outside.* The run of code that calls nothing
-  outside (`irun`) stays, with every tie stated in it; the pass's proof is over `wrun` alone
-  and the module's theorem for `irun` is its corollary (`wrun_of_irun`). Rejected: a second
+  *One proof of the pass, over the run with the outside.* The pass's proof is over `wrun`
+  alone, and the module's theorem for code that names nothing outside is its corollary. (A
+  second run for such code, `irun`, stood beside it at first, every earlier tie stated in it;
+  it is gone: see "One run, one rule set" below.) Rejected: a second
   proof beside the first, as the design of 2026-07-09 was built in the tree before this one —
   half of the pass's proof above expressions written twice. `realizes` is restated to say
   where a run COMES to, with what is outside as it was, for every outside; its text therefore
@@ -1049,12 +1050,11 @@ entries are explained under "Measured" at the end.
   `Os`, so the induction's hypothesis is used on what the line left outside. Where the line
   stopped the process nothing is asked of the hypothesis: the code's run has ended, and the
   meaning's remaining arguments write nothing (`say_each_stopped`, from `write_all_stopped`).
-  *A function that calls nothing outside, inside a program that writes, is tied as an exact
-  outcome* — `(ORet v m o)`, for any outside functions (`say_tie0`) — by the rules of `wends`.
-  Rejected: its tie over `irun` carried across by `wrun_of_irun`, which is for outside
-  functions that leave the outside as it was, and this module's does not. The cost: such a
-  function's tie is written over the run with the outside in a program that writes and over
-  `irun` elsewhere; `argsum`'s digits and `say`'s length are proofs of one shape.
+  *A function that calls nothing outside, inside a program that writes, has the statement of
+  one that writes*, its World the World of what is outside as it was (`say_tie0`), for any
+  outside functions; its caller's rule is `tie_call_same`. (First built as an exact outcome
+  `(ORet v m o)` with a rule of its own; replaced when the two runs became one.) `argsum`'s
+  digits and `say`'s length are still proofs of one shape, the first in the rules of `iends`.
   *One range for the data and the arguments*: from the pushed word to the top of the stack's
   range (`start_ends_top`, its `top` the range's end). The entry is handed two addresses, the
   word after the data — where the kernel left the stack pointer — and the data's word.
@@ -1064,12 +1064,33 @@ entries are explained under "Measured" at the end.
   *The model's runner takes answers and arguments together* (`cases`, the cases between
   arguments `/`), so that a test compares the theorem's right side with the model's run case
   by case in one load.
+- One run, one rule set (2026-11-26; the first step of an order the owner agreed to — "I
+  agree with the proposed order" —, for a tool that is to write a function's intermediate code
+  and prove it; how it is done was chosen in building and not put to the owner).
+  *The machine has one run.* `irun`, the run of code that calls nothing outside, is deleted
+  with its laws; `iends` and `fn_ans` are definitions over `wrun` — the statement returns the
+  word and leaves the memory for EVERY outside, on externals that leave the outside as it was
+  — and the eight rules of `iends` are each its rule of `wends`. Every statement above kept
+  its text: the views, the six modules' ties, `argsum`'s, and the modules a generator outside
+  the tree writes all load as they were. Rejected: keeping two runs and a lemma from one to
+  the other — two sets of inversions and fuel laws for one machine, 1,809 lines where 1,135
+  now stand. The laws are one file, `ir_laws.shard`; `ir_world.shard` is gone.
+  *New work has one statement form*, `fn_ties`, and one rule set, `tie_*`: a function that
+  writes nothing is one whose World is the World of what is outside as it was, and a call of
+  it is `tie_call_same`. Rejected: an exact outcome `(ORet v m o)` for such a function with a
+  rule of its own (`tie_call_ret`, removed) — two statement forms for a tool to choose between.
+  Given up: that the outside after such a call is the very `Os` before it; a caller has the
+  World of it, which is all a tie states.
+  *Why now*: a tool that writes proofs would otherwise write two dialects, and a function that
+  calls nothing outside could not be used by a program that writes without a second proof.
+  The older ties (`argsum`, the six modules) stay in the rules of `iends` until a tool writes
+  them; nothing forces them over.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
   pass's theorem realizes — and the run of what follows the call; the two are given on two
   fuels, and the statement runs both on one, so the rule takes the sum of the two and a run
-  given more fuel answers the same (`irun_more`, by induction on the fuel, a case for each
+  given more fuel answers the same (`wrun_more`, by induction on the fuel, a case for each
   statement form). Not a run that hands the callee and the rest a fuel each — the run would
   have to split its fuel, and the pass's proof, which is by induction on the one fuel, would be
   proven again; not a run stated as a relation with no fuel — the run is a function, which K
@@ -2471,6 +2492,20 @@ measurements; measure again before building on one.
   function and the file's lines —, and the sample's proof is `rfl`, a list of numbers having
   no decision. Outside the tree, as before: the 51 generated modules load and the nine
   generated files' theorems link closed.
+- One run, one rule set (2026-11-26; natively, single measurements). The machine's laws are
+  one file of 1,135 lines where two of 873 and 936 stood; `v3/compile` is 21,900 lines, down
+  from 22,700. No statement above the machine changed its text, and no proof outside the
+  machine's own files but four: the bridge from the module's theorem to its form for code
+  that names nothing outside (now two lines), the test program that runs the machine, and
+  `say`'s first two ties, restated in the one form. The 20 x86 and compile entrypoints: 1,567
+  checks, 0 failed, the count as before. Outside the tree, with nothing generated again: the
+  51 generated modules load and the nine generated files' theorems link closed.
+  Measured for the step after it, on the run's rules as they are: a proof with one rule a
+  statement costs K about the square of a function's length — 40 statements 1 s, 80
+  statements 3 s, 120 statements 7 s and 1.7 GB over a load with no such proof — and nearly
+  the cube where each value is built on the one before (160 statements: 346 s, 34 GB). By
+  call counts the work is building and interning terms: names hashed and compared as lists, a
+  functional map for the table. `say`'s functions have at most six statements.
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above
