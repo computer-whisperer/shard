@@ -2598,16 +2598,24 @@ measurements; measure again before building on one.
   one-character writes of 100,000 and the file exits with a failed write's status. Outside
   the tree, with nothing generated again: the 51 generated modules load and the nine
   generated files' theorems link closed.
-  Measured for a tool's proofs, outside the tree: a proof cut into lemmas of eight statements
-  over the locals as variables, each unfolding the meaning's rest once by name, costs K
-  linear time — 640 statements, each value built on the one before, 3.7 s over a load of
-  5.6 s, where one nested proof took 341 s at 160 —, if the code keeps few locals (a local a
-  statement: 24 s at 160). Two costs of the toolchain met on the way, neither changed here:
-  the elaborator unifies two applications by their heads first, so where the heads are two
-  functions K is asked to refute that they are one and unfolds all that lies under both (a
-  proof step whose sides differ by one unfolding: 9 s, and nothing after an explicit
-  `unfold`); and K compares two equal terms as trees, so a function that is N nested lets,
-  each value used twice, costs about fib(N) to define — 36 lets 16 s, 40 lets 110 s.
+  Measured for a tool's proofs, outside the tree, in instructions of one load (a load of the
+  rules alone is 62.6 G; about 11 G a second on this machine): a proof cut into lemmas of
+  eight statements over the locals as variables costs K linear work — 40 statements 2.3 G,
+  160 statements 6.8 G, 640 statements 29 G, each value built on the one before; with each
+  value used by the two after it, 160 statements 13 G and 640 statements 39 G in lemmas of
+  four —, if the code keeps few locals (a local a statement: 24 s at 160, measured before the
+  two changes below). One nested proof with its values by name is 29 G at 120 statements
+  whose values are of constant size, and 1,353 G at 160 where each is built on the one
+  before: the cut is what makes a long function affordable, not a faster checker.
+  Two costs of the toolchain were met on the way and are gone, changed on `main` by its
+  session at the owner's word ("2: a"): the elaborator took two applications apart by their
+  heads before asking K about the pair, so where the heads were two functions K was asked to
+  refute that they are one and unfolded all that lies under both (a proof step whose sides
+  differ by one unfolding: 62 G over the load, now 0.2 G; a closed pair goes to K whole,
+  `unify.shard`); and K compared two equal terms as trees, so a function that is N nested
+  lets, each value used twice, cost about fib(N) to define (36 lets 16 s, 40 lets 110 s; now
+  40 lets 0.1 G, 640 lets 6.6 G; `expr.shard` `expr_eq` keeps the pairs found equal once a
+  walk runs long).
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above
