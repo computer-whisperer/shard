@@ -671,86 +671,368 @@
 ;; one counter minted, and a term from above K can wear one id on two nodes —
 ;; equal ids on unequal hashes are two nodes, and no answer changes where the
 ;; ids are unique.
-(fn expr_eq ((a Expr) (b Expr)) Bool
+;;
+;; The pin's `check_cache` (its `m_eq_visited`) is here too. A term is a graph: substitution
+;; puts one node wherever a variable stood, so a value used twice is one node reached twice.
+;; Two such graphs of equal structure and different ids — two unfoldings of one definition —
+;; walked as trees cost the number of PATHS, which doubles with every value used twice (a
+;; chain of forty lets: hours). So the walk keeps the pairs of identified nodes it has found
+;; equal, and a pair met again is equal by that. `seen` holds, by the first node's id, the
+;; second's id with the hash the two bear, and only what this very walk has proven: a pair
+;; is noted after its structure was walked to the end and found equal (the pin notes it
+;; before, which is right there because its walk is one conjunction; here nothing rests on
+;; that). A pair is looked up by both ids and the hash, the hash for the reason above: under
+;; it an id names one node, so the pair found is the pair that was walked. Anonymous nodes
+;; (id 0) are never noted and never found. The answer is the tree walk's on every input.
+;;
+;; Noting costs: nearly every comparison is of two small terms, and a table for each would be
+;; paid on every load (measured: 3.7% of one). So the terms are first walked as trees with
+;; nothing kept (`expr_eq_tree`), for at most `eq_budget` nodes; that walk answers equal,
+;; unequal — each final —, or that it ran out, and only then is the pair walked again from the
+;; start with the table.
+(type EqRes (EqNo) (EqYes (IntMap (List (Prod Int Int)))))
+(fn expr_eq ((a Expr) (b Expr)) Bool (eq_decide a b (expr_eq_tree a b (eq_budget))))
+(fn eq_budget () Int 8192)
+;; the tree walk's answer read: the nodes left (0 or more) — equal; -1 — unequal; -2 — it ran
+;; out, and the walk that notes pairs decides
+(fn eq_decide ((a Expr) (b Expr) (r Int)) Bool
+  (if (< r -1) (eq_holds (expr_eq_seen a b IMEmpty)) (<= 0 r)))
+(fn eq_holds ((r EqRes)) Bool
+  (match r
+    ((EqYes _) true)
+    (EqNo false)))
+(fn eq_left ((c Bool) (left Int)) Int (if c left -1))
+;; a and b as trees, at most `left` nodes of them: the nodes left where they are equal, -1
+;; where they are not, -2 where the nodes ran out first
+(fn expr_eq_tree ((a Expr) (b Expr) (left Int)) Int
+  (measure (Expr.size a))
+  (if (< left 1) -2
+  (match (expr_d a)
+    ((D ia ha _ _ _ _)
+     (match (expr_d b)
+       ((D ib hb _ _ _ _)
+        (if (= ha hb)
+          (if (bool_and (= ia ib) (< 0 ia)) left
+          (match a
+            ((BVar _ i)
+             (match b
+               ((BVar _ j) (eq_left (= i j) left))
+               (_ -1)))
+            ((FVar _ i)
+             (match b
+               ((FVar _ j) (eq_left (= i j) left))
+               (_ -1)))
+            ((Sort _ u)
+             (match b
+               ((Sort _ v) (eq_left (level_eq u v) left))
+               (_ -1)))
+            ((Const _ n ls)
+             (match b
+               ((Const _ m ms) (eq_left (if (name_eq n m) (levels_eq ls ms) false) left))
+               (_ -1)))
+            ((App _ f x)
+             (match b
+               ((App _ g y)
+                (match (expr_eq_tree f g (- left 1))
+                  (r (if (< r 0) r (expr_eq_tree x y r)))))
+               (_ -1)))
+            ((Lam _ _ _ d1 b1)
+             (match b
+               ((Lam _ _ _ d2 b2)
+                (match (expr_eq_tree d1 d2 (- left 1))
+                  (r (if (< r 0) r (expr_eq_tree b1 b2 r)))))
+               (_ -1)))
+            ((Pi _ _ _ d1 b1)
+             (match b
+               ((Pi _ _ _ d2 b2)
+                (match (expr_eq_tree d1 d2 (- left 1))
+                  (r (if (< r 0) r (expr_eq_tree b1 b2 r)))))
+               (_ -1)))
+            ((Let _ _ t1 v1 b1)
+             (match b
+               ((Let _ _ t2 v2 b2)
+                (match (expr_eq_tree t1 t2 (- left 1))
+                  (r
+                    (if (< r 0) r
+                    (match (expr_eq_tree v1 v2 r)
+                      (r2 (if (< r2 0) r2 (expr_eq_tree b1 b2 r2))))))))
+               (_ -1)))
+            ((Lit _ l1)
+             (match b
+               ((Lit _ l2) (eq_left (lit_eq l1 l2) left))
+               (_ -1)))
+            ((MVar _ i)
+             (match b
+               ((MVar _ j) (eq_left (= i j) left))
+               (_ -1)))
+            ((Proj _ s1 i1 e1)
+             (match b
+               ((Proj _ s2 i2 e2)
+                (if (name_eq s1 s2) (if (= i1 i2) (expr_eq_tree e1 e2 (- left 1)) -1) -1))
+               (_ -1)))))
+          -1)))))))
+(fn eq_when ((c Bool) (seen (IntMap (List (Prod Int Int))))) EqRes (if c (EqYes seen) EqNo))
+;; the pair of identified nodes (ia, ib), both of hash h, is among those found equal
+(fn eq_seen ((seen (IntMap (List (Prod Int Int)))) (ia Int) (ib Int) (h Int)) Bool
+  (if (bool_and (< 0 ia) (< 0 ib))
+    (match (im_find seen ia)
+      ((some ps) (eq_seen_in ps ib h))
+      (none false))
+    false))
+(fn eq_seen_in ((ps (List (Prod Int Int))) (ib Int) (h Int)) Bool
+  (measure (struct ps))
+  (match ps
+    (nil false)
+    ((cons (Prod.mk j g) r) (if (bool_and (= j ib) (= g h)) true (eq_seen_in r ib h)))))
+;; a pair found equal by its structure is noted, where both nodes are identified
+(fn eq_note ((r EqRes) (ia Int) (ib Int) (h Int)) EqRes
+  (match r
+    (EqNo EqNo)
+    ((EqYes seen)
+     (if (bool_and (< 0 ia) (< 0 ib))
+       (EqYes
+         (im_insert seen ia
+           (cons (Prod.mk ib h)
+             (match (im_find seen ia)
+               ((some ps) ps)
+               (none nil)))))
+       (EqYes seen)))))
+;; a and b given what the walk has found equal: the hash, the one node, a pair seen, the structure
+(fn expr_eq_seen ((a Expr) (b Expr) (seen (IntMap (List (Prod Int Int))))) EqRes
   (measure (+ (* 2 (Expr.size a)) 1))
   (match (expr_d a)
     ((D ia ha _ _ _ _)
      (match (expr_d b)
        ((D ib hb _ _ _ _)
-        (if (= ha hb) (if (= ia ib) (if (< 0 ia) true (expr_eq_core a b)) (expr_eq_core a b)) false))))))
+        (if (= ha hb)
+          (if (= ia ib) (if (< 0 ia) (EqYes seen) (expr_eq_core a b seen))
+          (if (eq_seen seen ia ib ha) (EqYes seen)
+          (eq_note (expr_eq_core a b seen) ia ib ha)))
+          EqNo))))))
 
-(fn expr_eq_core ((a Expr) (b Expr)) Bool
+(fn expr_eq_core ((a Expr) (b Expr) (seen (IntMap (List (Prod Int Int))))) EqRes
   (measure (* 2 (Expr.size a)))
   (match a
     ((BVar _ i)
      (match b
-       ((BVar _ j) (= i j))
-       (_ false)))
+       ((BVar _ j) (eq_when (= i j) seen))
+       (_ EqNo)))
     ((FVar _ i)
      (match b
-       ((FVar _ j) (= i j))
-       (_ false)))
+       ((FVar _ j) (eq_when (= i j) seen))
+       (_ EqNo)))
     ((Sort _ u)
      (match b
-       ((Sort _ v) (level_eq u v))
-       (_ false)))
+       ((Sort _ v) (eq_when (level_eq u v) seen))
+       (_ EqNo)))
     ((Const _ n ls)
      (match b
-       ((Const _ m ms) (if (name_eq n m) (levels_eq ls ms) false))
-       (_ false)))
+       ((Const _ m ms) (eq_when (if (name_eq n m) (levels_eq ls ms) false) seen))
+       (_ EqNo)))
     ((App _ f x)
      (match b
-       ((App _ g y) (if (expr_eq f g) (expr_eq x y) false))
-       (_ false)))
+       ((App _ g y)
+        (match (expr_eq_seen f g seen)
+          (EqNo EqNo)
+          ((EqYes s1) (expr_eq_seen x y s1))))
+       (_ EqNo)))
     ((Lam _ _ _ d1 b1)
      (match b
-       ((Lam _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) false))
-       (_ false)))
+       ((Lam _ _ _ d2 b2)
+        (match (expr_eq_seen d1 d2 seen)
+          (EqNo EqNo)
+          ((EqYes s1) (expr_eq_seen b1 b2 s1))))
+       (_ EqNo)))
     ((Pi _ _ _ d1 b1)
      (match b
-       ((Pi _ _ _ d2 b2) (if (expr_eq d1 d2) (expr_eq b1 b2) false))
-       (_ false)))
+       ((Pi _ _ _ d2 b2)
+        (match (expr_eq_seen d1 d2 seen)
+          (EqNo EqNo)
+          ((EqYes s1) (expr_eq_seen b1 b2 s1))))
+       (_ EqNo)))
     ((Let _ _ t1 v1 b1)
      (match b
-       ((Let _ _ t2 v2 b2) (if (expr_eq t1 t2) (if (expr_eq v1 v2) (expr_eq b1 b2) false) false))
-       (_ false)))
+       ((Let _ _ t2 v2 b2)
+        (match (expr_eq_seen t1 t2 seen)
+          (EqNo EqNo)
+          ((EqYes s1)
+           (match (expr_eq_seen v1 v2 s1)
+             (EqNo EqNo)
+             ((EqYes s2) (expr_eq_seen b1 b2 s2))))))
+       (_ EqNo)))
     ((Lit _ l1)
      (match b
-       ((Lit _ l2) (lit_eq l1 l2))
-       (_ false)))
+       ((Lit _ l2) (eq_when (lit_eq l1 l2) seen))
+       (_ EqNo)))
     ((MVar _ i)
      (match b
-       ((MVar _ j) (= i j))
-       (_ false)))
+       ((MVar _ j) (eq_when (= i j) seen))
+       (_ EqNo)))
     ((Proj _ s1 i1 e1)
      (match b
-       ((Proj _ s2 i2 e2) (if (name_eq s1 s2) (if (= i1 i2) (expr_eq e1 e2) false) false))
-       (_ false)))))
+       ((Proj _ s2 i2 e2) (if (name_eq s1 s2) (if (= i1 i2) (expr_eq_seen e1 e2 seen) EqNo) EqNo))
+       (_ EqNo)))))
 
-;; the descent of the two: `expr_eq` hands its term on whole, paid by the 1 in its measure; each
+;; the descent of the tree walk: each call is on a term under the row's constructor. Of the two
+;; that note pairs: `expr_eq_seen` hands its term on whole, paid by the 1 in its measure; each
 ;; call back is on a term under the row's constructor
-(fulfills expr_eq.dec_1 (by (intro a b ia ha w1 w2 w3 w4 h1 ib hb w5 w6 w7 w8 h2 he hi) (arith)))
-(fulfills expr_eq.dec_2 (by (intro a b ia ha w1 w2 w3 w4 h1 ib hb w5 w6 w7 w8 h2 he hi hp) (arith)))
+(fulfills expr_eq_tree.dec_1
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 f x h_22 h23 g y h_26)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_22 h_26)
+    (arith only h h_17 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_2
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 f x h_22 h23 g y h_26
+      r h_28)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_22 h_26)
+    (arith only h h_17 h_28 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_3
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 h21 d1 b1 h_24 h25
+      h26 h27 d2 b2 h_30)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_4
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 h21 d1 b1 h_24 h25
+      h26 h27 d2 b2 h_30 r h_32)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 h_32 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_5
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 h21 d1 b1 h_24 h25
+      h26 h27 d2 b2 h_30)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_6
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 h21 d1 b1 h_24 h25
+      h26 h27 d2 b2 h_30 r h_32)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 h_32 (farkas 1 0 0 0 1))))
+(fulfills expr_eq_tree.dec_7
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 t1 v1 b1 h_24 h25
+      h26 t2 v2 b2 h_30)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 (farkas 1 0 0 0 1 1))))
+(fulfills expr_eq_tree.dec_8
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 t1 v1 b1 h_24 h25
+      h26 t2 v2 b2 h_30 r h_32)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 h_32 (farkas 1 0 0 0 1 0 1))))
+(fulfills expr_eq_tree.dec_9
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 h20 t1 v1 b1 h_24 h25
+      h26 t2 v2 b2 h_30 r h_32 r2 h_34)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_24 h_30)
+    (arith only h h_17 h_32 h_34 (farkas 1 0 0 0 0 1 1))))
+(fulfills expr_eq_tree.dec_10
+  (by
+    (intro p h ia ha h5 h6 h7 h8 h_9 ib hb h12 h13 h14 h15 h_16 h_17 h_18 h19 s1 i1 e1 h_23 h24 s2
+      i2 e2 h_28 h_29 h_30)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11
+      h_9 h_16 h_17 h_23 h_28 h_29 h_30)
+    (arith only h h_17 h_30 (farkas 1))))
+(fulfills expr_eq_seen.dec_1
+  (by
+    (intro a b seen ia ha h6 h7 h8 h9 h ib hb h13 h14 h15 h16 h_17 h_18 h_19 h_20)
+    (arith only h_18 (farkas 1))))
+(fulfills expr_eq_seen.dec_2
+  (by
+    (intro a b seen ia ha h6 h7 h8 h9 h ib hb h13 h14 h15 h16 h_17 h_18 h_19 h_20)
+    (arith only h_18 h_19 h_20 (farkas 1))))
 (fulfills expr_eq_core.dec_1
-  (by (intro a b w1 f x hA w2 g y hB) (rw hA) (rw Expr.size.eq_5) (arith)))
+  (by
+    (intro a b seen h4 f x h h8 g y h_11)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_11)
+    (arith only (farkas 1 0 2))))
 (fulfills expr_eq_core.dec_2
-  (by (intro a b w1 f x hA w2 g y hB) (rw hA) (rw Expr.size.eq_5) (arith)))
+  (by
+    (intro a b seen h4 f x h h8 g y h_11 s1)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_11)
+    (arith only (farkas 1 2))))
 (fulfills expr_eq_core.dec_3
-  (by (intro a b w1 w2 w3 d1 b1 hA w4 w5 w6 d2 b2 hB) (rw hA) (rw Expr.size.eq_6) (arith)))
+  (by
+    (intro a b seen h4 h5 h6 d1 b1 h h10 h11 h12 d2 b2 h_15)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 0 2))))
 (fulfills expr_eq_core.dec_4
-  (by (intro a b w1 w2 w3 d1 b1 hA w4 w5 w6 d2 b2 hB) (rw hA) (rw Expr.size.eq_6) (arith)))
+  (by
+    (intro a b seen h4 h5 h6 d1 b1 h h10 h11 h12 d2 b2 h_15 s1)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 2))))
 (fulfills expr_eq_core.dec_5
-  (by (intro a b w1 w2 w3 d1 b1 hA w4 w5 w6 d2 b2 hB) (rw hA) (rw Expr.size.eq_7) (arith)))
+  (by
+    (intro a b seen h4 h5 h6 d1 b1 h h10 h11 h12 d2 b2 h_15)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 0 2))))
 (fulfills expr_eq_core.dec_6
-  (by (intro a b w1 w2 w3 d1 b1 hA w4 w5 w6 d2 b2 hB) (rw hA) (rw Expr.size.eq_7) (arith)))
+  (by
+    (intro a b seen h4 h5 h6 d1 b1 h h10 h11 h12 d2 b2 h_15 s1)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 2))))
 (fulfills expr_eq_core.dec_7
-  (by (intro a b w1 w2 t1 v1 b1 hA w3 w4 t2 v2 b2 hB) (rw hA) (rw Expr.size.eq_8) (arith)))
+  (by
+    (intro a b seen h4 h5 t1 v1 b1 h h10 h11 t2 v2 b2 h_15)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 0 2 2))))
 (fulfills expr_eq_core.dec_8
-  (by (intro a b w1 w2 t1 v1 b1 hA w3 w4 t2 v2 b2 hB) (rw hA) (rw Expr.size.eq_8) (arith)))
+  (by
+    (intro a b seen h4 h5 t1 v1 b1 h h10 h11 t2 v2 b2 h_15 s1)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 2 0 2))))
 (fulfills expr_eq_core.dec_9
-  (by (intro a b w1 w2 t1 v1 b1 hA w3 w4 t2 v2 b2 hB) (rw hA) (rw Expr.size.eq_8) (arith)))
+  (by
+    (intro a b seen h4 h5 t1 v1 b1 h h10 h11 t2 v2 b2 h_15 s1 s2)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_15)
+    (arith only (farkas 1 2 2))))
 (fulfills expr_eq_core.dec_10
-  (by (intro a b w1 s1 i1 e1 hA w2 s2 i2 e2 hB hc hd) (rw hA) (rw Expr.size.eq_10) (arith)))
+  (by
+    (intro a b seen h4 s1 i1 e1 h h9 s2 i2 e2 h_13 h_14 h_15)
+    (simp_only Expr.size.eq_1 Expr.size.eq_2 Expr.size.eq_3 Expr.size.eq_4 Expr.size.eq_5
+      Expr.size.eq_6 Expr.size.eq_7 Expr.size.eq_8 Expr.size.eq_9 Expr.size.eq_10 Expr.size.eq_11 h
+      h_13 h_14 h_15)
+    (arith only h_15 (farkas 1))))
 
 (fn exprs_eq ((a (List Expr)) (b (List Expr))) Bool
   (measure (struct a))

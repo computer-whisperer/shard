@@ -63,6 +63,29 @@
 (fn tail_n () Name (Str (Num (Str Anon (sym "a")) 12) (sym "b")))
 (fn whole_n () Name (Str (Num (Str (pre_n) (sym "a")) 12) (sym "b")))
 
+;; ---- two graphs of one structure ---------------------------------------------------------
+;; two values, then each next the application of the two before it: n + 2 nodes whose tree has
+;; about 1.6^n — what a chain of lets whose values are each used twice unfolds to. The nodes are
+;; identified, so a chain built again from a later state is the same structure under other ids
+(fn chain_from ((st St) (a Expr) (b Expr) (n Int)) (Prod St Expr)
+  (measure n)
+  (if (< n 1) (Prod.mk st b)
+  (match (new_app st b a)
+    ((Prod.mk s2 c) (chain_from s2 b c (- n 1))))))
+;; two chains of n steps, built one after the other, over the first values (lit x) and (lit y)
+(fn chains_eq ((x Int) (y Int) (n Int)) Bool
+  (match (chain_from (st1) (lit x) (lit 1) n)
+    ((Prod.mk st a)
+     (match (chain_from st (lit y) (lit 1) n)
+       ((Prod.mk _ b) (expr_eq a b))))))
+;; two equal chains, each applied to one more value: (lit x) on the one, (lit y) on the other —
+;; the difference stands after every pair of the chains has been found equal
+(fn chains_then ((n Int) (x Int) (y Int)) Bool
+  (match (chain_from (st1) (lit 0) (lit 1) n)
+    ((Prod.mk st a)
+     (match (chain_from st (lit 0) (lit 1) n)
+       ((Prod.mk _ b) (expr_eq (mk_app a (lit x)) (mk_app b (lit y))))))))
+
 (fn cases () (List Case)
   (list (Case (utf8 "range closed") (= (loose_bvar_range (k_fn)) 0))
     (Case (utf8 "range #2 under one binder")
@@ -224,6 +247,24 @@
          (match (abstract_fvars st e (list 7))
            ((Prod.mk _ e1)
             (bool_and (bool_not (same_node e e1)) (expr_eq e1 (mk_app (mk_bvar 0) (nat_c)))))))))
+    ;; expr_eq on graphs (expr.shard: the tree walk under its budget, then the walk that notes
+    ;; the pairs found equal). The unequal cases differ in one literal, the hash's modulus
+    ;; apart, so every node of the two bears one hash and no answer is the hash's
+    (Case (utf8 "two literals the modulus apart bear one hash, and are not equal")
+      (bool_and (= (hash_expr (lit 0)) (hash_expr (lit (hash_m))))
+        (bool_not (expr_eq (lit 0) (lit (hash_m))))))
+    (Case (utf8 "graphs of one structure under other ids: equal, within the tree walk")
+      (chains_eq 0 0 10))
+    (Case (utf8 "graphs of one structure: equal past the tree walk's budget") (chains_eq 0 0 24))
+    (Case (utf8 "graphs of one structure: equal where the tree is 10^18 nodes") (chains_eq 0 0 90))
+    (Case (utf8 "graphs that differ in one value of the same hash: unequal, short")
+      (bool_not (chains_eq 0 (hash_m) 10)))
+    (Case (utf8 "graphs that differ in one value of the same hash: unequal, long")
+      (bool_not (chains_eq 0 (hash_m) 90)))
+    (Case (utf8 "equal graphs under one more equal value: equal") (chains_then 90 5 5))
+    (Case (utf8 "a difference after every pair was noted equal: unequal")
+      (bool_not (chains_then 90 0 (hash_m))))
+    (Case (utf8 "the same below the budget: unequal") (bool_not (chains_then 6 0 (hash_m))))
     (Case (utf8 "watermark: st_fresh_node advances the node counter only")
       (match (st_fresh_node (St 5 6 7 (memo_empty)))
         ((Prod.mk (St g t k _) id)

@@ -373,7 +373,11 @@ erasure build terms with), `loader.shard`, `scope.shard`, `initload.shard` and `
 Every term node carries a structural hash and cached flags, and a compound node an id. Ids come
 from a counter in the checker state `St`, which every function takes and returns. An environment
 records the highest id in it, the *watermark*. Equality takes two nodes with one positive id and
-one hash as equal. A change to K must keep these rules ("hostile N" is a case of the battery):
+one hash as equal. Comparing two large terms (past 8,192 nodes walked as trees), it also keeps the
+pairs of nodes it has found equal in that comparison — two positive ids and the hash both bear —
+and takes such a pair as equal when it meets it again: a value used twice is compared once
+(`expr.shard` `expr_eq`; `DECISIONS.md`, "The checker K"). A change to K must keep these rules
+("hostile N" is a case of the battery):
 
 | rule | held by |
 |---|---|
@@ -480,9 +484,10 @@ of `T` is derivable in Lean 4's type theory from the axioms `A` (the parameters 
    76 cases of declarations that must be refused); the tests in `k/test/`.
    Two beliefs inside this item are easy to miss:
    - *Node identity.* Two terms with the same positive node id and the same hash are taken as
-     equal without being compared. This is right only while an id names one node within an
-     environment: the state discipline ("The state discipline" above), held by `state_test.sh` to
-     the limits stated there.
+     equal without being compared, and within one comparison a pair of nodes found equal once —
+     by their two ids and one hash — is not compared again. This is right only while an id names
+     one node within an environment: the state discipline ("The state discipline" above), held
+     by `state_test.sh` to the limits stated there.
    - *Accelerated primitives.* K computes fourteen `Nat` operations on literals, types literals
      and expands string literals itself. One believes each computes what the pinned definition
      defines (`k/test/tc_test.shard`: results, large operands, a wrong result for each).
