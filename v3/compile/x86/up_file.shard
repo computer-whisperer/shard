@@ -1,0 +1,112 @@
+;;; v3/compile/x86/up_file.shard — `up` compiled, in a file with the platform's `write_all`.
+;;; The start-up (startup.shard) pushes two words — the byte of a line's end, and a word of 0
+;;; that is the code's scratch word — and hands the function it calls three addresses: of the
+;;; word after those two — the stack pointer as the kernel left it, where a process's
+;;; arguments stand —, of the scratch word, and of the line's end. After the start-up stand
+;;; the sixteen instructions of `write_all` (put.shard), at 4194509; the four functions of
+;;; ../up_ir.shard go through the pass at 4194569, the address after them, with `write_all` as
+;;; the module's one outside function: entered at 4194509, no word of stack. Here are the
+;;; listing, the table, the file's bytes, and every fact of the assembled file that the
+;;; theorems ask for, each closed by computation. That the file ends as `up` says is
+;;; up_run.shard's.
+(import "pass.shard")
+(import "code.shard")
+(import "startup.shard")
+(import "put.shard")
+(import "../up_ir.shard")
+(use compile.up_ir)
+(use compile.x86.code)
+(use compile.x86.put)
+(use compile.x86.startup)
+(use compile.x86.startup.Arg)
+(use compile.x86.pass)
+(use models.x86.asm)
+(use models.x86.laws)
+(use models.x86.loaded)
+(use models.x86.word)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the start-up ---------------------------------------------------------------------------------
+;; two words of data: a line's end with seven bytes of 0 — the first byte the least
+;; significant —, and after it a word of 0, the scratch word the code stores in. The function's
+;; three arguments: the address of the word after the data, where the kernel left the stack
+;; pointer; the address of the scratch word; and the address of the line's end. The call
+;; returns to 4194499 and the lines after the start-up stand from 4194509.
+(fn up_data () (List (BitVec 64)) (list (w64 10) (w64 0)))
+(fn up_argd () (List Arg) (list (AAddr 2) (AAddr 1) (AAddr 0)))
+
+;; ---- compiled -----------------------------------------------------------------------------------
+;; the module's outside functions, each by its entry and its stack need: `write_all`
+(fn up_outs () (List (Prod Nat Nat)) (cons (Prod.mk 4194509 0) nil))
+(fn up_listing () (List Instr)
+  (match (compile up_outs up_prog 4194569)
+    (none nil)
+    ((some (Prod.mk l f)) l)))
+;; each function's entry and its stack need
+(fn up_entries () (List (Prod Nat Nat))
+  (match (compile up_outs up_prog 4194569)
+    (none nil)
+    ((some (Prod.mk l f)) f)))
+(theorem up_compiled () (= (compile up_outs up_prog 4194569) (some (Prod.mk up_listing up_entries)))
+  (by rfl))
+;; the entry of function 3 as the pass answered it, and the words of stack it needs
+(fn up_at () Nat
+  (match (pair_at up_entries 3)
+    (none 0)
+    ((some en) (Prod.fst en))))
+(fn up_need () Nat
+  (match (pair_at up_entries 3)
+    (none 0)
+    ((some en) (Prod.snd en))))
+(theorem up_entry () (= (pair_at up_entries 3) (some (Prod.mk up_at up_need))) (by rfl))
+
+;; ---- the file's lines -----------------------------------------------------------------------------
+;; `write_all`'s instructions as lines, then the compiled instructions, label 1 before the one
+;; at the entry of function 3
+(fn up_lines () (List Asm) (List.append (lines put_code) (label_at up_listing 4194569 up_at 1)))
+;; the file's table: the start-up's rows, its call's displacement d, `write_all`'s rows, then
+;; the compiled instructions laid out from 4194569
+(fn up_d () Nat (rel up_at 4194499))
+(fn up_xt () (List (Prod Nat (Prod Instr Nat)))
+  (List.append (layout put_code 4194509) (layout up_listing 4194569)))
+(fn up_tbl () (List (Prod Nat (Prod Instr Nat))) (start_table up_data up_argd up_d up_xt))
+(fn up_chi () Nat (+ 4194569 (isize up_listing)))
+
+;; ---- assembled: the facts of the file, each by computation ----------------------------------------
+(fn up_image () (List Nat)
+  (match (assemble (start_listing up_data up_argd 1 up_lines))
+    (none nil)
+    ((some code) code)))
+(fn up_instrs () (List Instr)
+  (match
+    (resolve (start_listing up_data up_argd 1 up_lines) (start_listing up_data up_argd 1 up_lines) 0)
+    (none nil)
+    ((some is) is)))
+(theorem up_assembled () (= (assemble (start_listing up_data up_argd 1 up_lines)) (some up_image))
+  (by rfl))
+(theorem up_resolved ()
+  (=
+    (resolve (start_listing up_data up_argd 1 up_lines) (start_listing up_data up_argd 1 up_lines) 0)
+    (some up_instrs))
+  (by rfl))
+;; the assembler's instructions lay out to the table: the start-up's call reaches function 3,
+;; `write_all`'s lines are its rows, and the lines after them the compiled listing
+(theorem up_laid () (= (layout up_instrs 4194424) up_tbl) (by rfl))
+(theorem up_target () (= (w64_add (w64 (start_ret up_data up_argd)) (w64 up_d)) (w64 up_at))
+  (by rfl))
+(theorem up_within () (= (all_within up_tbl 4194424 up_chi) true) (by rfl))
+;; the code ends at or below the table's end, and the table's end below 2^47
+(theorem up_code_end () (<= (+ 4194424 (List.length up_image)) up_chi) (by decide))
+(theorem up_chi_word () (<= (+ up_chi 15) 18446744073709551616) (by decide))
+(theorem up_chi_top () (<= (+ up_chi 15) 140737488355328) (by decide))
+(theorem up_nargs () (<= (List.length up_argd) 6) (by decide))
+;; the compiled listing stands in the table at 4194569, and `write_all`'s code at 4194509
+(theorem up_placedb () (= (placedb up_tbl 4194569 up_listing) true) (by decide))
+(theorem up_placed () (placed up_tbl 4194569 up_listing)
+  (exact (placedb_ok up_tbl up_listing 4194569 up_placedb)))
+(theorem up_put_placedb () (= (placedb up_tbl 4194509 put_code) true) (by decide))
+(theorem up_put_placed () (placed up_tbl 4194509 put_code)
+  (exact (placedb_ok up_tbl put_code 4194509 up_put_placedb)))

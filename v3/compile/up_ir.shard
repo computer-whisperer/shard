@@ -1,0 +1,525 @@
+;;; v3/compile/up_ir.shard — `up` (up_src.shard) in the intermediate language, by hand, and the
+;;; code tied to the program's value: code that STORES. Four functions: 0 a string — a byte
+;;; is loaded, the next character's word is stored in a scratch word, one byte is written from
+;;; there, and the function goes on at the next address; 1 a line — the string, then the
+;;; line's end; 2 the arguments — a line for the string at each address; 3 the entry — the
+;;; count, then the arguments after the name. Each is tied in one form (tie.shard): its word,
+;;; its World, and the condition that the memory left is the memory given but for the scratch
+;;; word (`changed_in`). A tie has one rule for each statement of the code; every fact it needs
+;;; is a lemma of a value's representation (rep.shard), cited by name; a value that must
+;;; outlive a store or a call that stores is carried over by its `_keep` lemma, on the evidence
+;;; that the scratch word's region is apart from the value's. The regions are a tie's
+;;; hypotheses: the arguments in [sp, hi), read; the scratch word in [clo, chi), read and
+;;; written; the line's end in [nlo, nhi), read. That the file of this code ends as `up` says
+;;; is x86/up_run.shard's.
+(import "put.shard")
+(import "rep.shard")
+(import "up_src.shard")
+(use std.mem)
+(use std.world)
+(use std.world.World)
+(use compile.ir)
+(use compile.ir_laws)
+(use compile.ir.ICallee)
+(use compile.ir.ICmp)
+(use compile.ir.IExp)
+(use compile.ir.IFn)
+(use compile.ir.IOp)
+(use compile.ir.IStm)
+(use compile.put)
+(use compile.rep)
+(use compile.tie)
+(use compile.up_src)
+(use models.x86.laws)
+(use models.x86.linux)
+(use models.x86.linux.Answer)
+(use models.x86.linux.Os)
+(use models.x86.linux.Outcome)
+(use models.x86.linux.Res)
+(use models.x86.word)
+(use models.x86.words)
+(use models.x86.world)
+(use models.x86.x86)
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+
+;; ---- the code -------------------------------------------------------------------------------------
+;; 0: a string — load a byte; 0 ends it; else STORE the next character's word in the scratch
+;;    word, write one byte from there, go on at the next address
+(fn up_code0 () IFn
+  (MkIFn 2 2
+    (SLet 2 (ELoad8 (EVar 0))
+      (SIf (EVar 2) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+        (SStore (EVar 1) (EOp OAdd (EVar 2) (ENum (w64 1)))
+          (SCall 3 (CExt 0) (cons (EVar 1) (cons (ENum (w64 1)) nil))
+            (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 1)))
+              (STail (CFn 0) (cons (EVar 0) (cons (EVar 1) nil))))))))))
+;; 1: a line — the string, then the line's end
+(fn up_code1 () IFn
+  (MkIFn 3 1
+    (SCall 3 (CFn 0) (cons (EVar 0) (cons (EVar 1) nil))
+      (SCall 3 (CExt 0) (cons (EVar 2) (cons (ENum (w64 1)) nil)) (SRet (ENum (w64 0)))))))
+;; 2: the arguments — a line for the string at each address
+(fn up_code2 () IFn
+  (MkIFn 4 2
+    (SIf (EVar 1) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+      (SLet 4 (ELoad (EVar 0))
+        (SCall 5 (CFn 1) (cons (EVar 4) (cons (EVar 2) (cons (EVar 3) nil)))
+          (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 8)))
+            (SLet 1 (EOp OSub (EVar 1) (ENum (w64 1)))
+              (STail (CFn 2) (cons (EVar 0) (cons (EVar 1) (cons (EVar 2) (cons (EVar 3) nil))))))))))))
+;; 3: the entry — the count, then the arguments after the name
+(fn up_code3 () IFn
+  (MkIFn 3 1
+    (SLet 3 (ELoad (EVar 0))
+      (SIf (EVar 3) CLtu (ENum (w64 1)) (SRet (ENum (w64 0)))
+        (SLet 0 (EOp OAdd (EVar 0) (ENum (w64 16)))
+          (SLet 3 (EOp OSub (EVar 3) (ENum (w64 1)))
+            (STail (CFn 2) (cons (EVar 0) (cons (EVar 3) (cons (EVar 1) (cons (EVar 2) nil)))))))))))
+
+;; the four as one program
+(fn up_prog () (List IFn) (cons up_code0 (cons up_code1 (cons up_code2 (cons up_code3 nil)))))
+
+;; ---- the ties ---------------------------------------------------------------------------------------
+(theorem up_tie0
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (clo Nat)
+   (chi Nat)
+   (sp Nat)
+   (hi Nat)
+   (cell (BitVec 64))
+   (f0 (= (fn_at p 0) (some up_code0)))
+   (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx 0 vs m0 o0) (put_ext rs vs m0 o0))))
+   (hrs (readable rs sp hi))
+   (hhi (<= hi 140737488355328))
+   (hrc (readable rs clo chi))
+   (hwc (writable rs clo chi))
+   (hchi (<= chi 140737488355328))
+   (hc (cell_rep clo chi cell))
+   (hAC (or (<= chi sp) (<= hi clo)))
+   (s (List Nat)))
+  (forall ((q (BitVec 64)) (m Mem) (o Os))
+    (-> (str_rep sp hi m q s)
+      (fn_ties p wx rs up_code0 (cons q (cons cell nil)) m o (w64 0)
+        (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+        (up_each s (os_world o)))))
+  (by
+    (induction s
+      ((nil () (intro q m o h)
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 (mem_get m (w64_val q))))
+              ((apply str_load ((exact hrs)) (rfl) ((exact h))))
+              ((apply tie_if_true (rfl) (rfl) ((exact (str_nil_test sp hi m q h)))
+                 ((apply tie_ret (rfl)
+                    ((exact (same_outside_refl m (w64_val cell) (+ (w64_val cell) 8))))
+                    (rfl)))))))))
+       (cons (c r ih) (intro q m o h)
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 (mem_get m (w64_val q))))
+              ((apply str_load ((exact hrs)) (rfl) ((exact h))))
+              ((apply tie_if_false (rfl) (rfl) ((exact (str_cons_test sp hi m q c r h)))
+                 ((apply (tie_store cell (w64_add (w64 (mem_get m (w64_val q))) (w64 1))) (rfl)
+                    (rfl)
+                    ((exact (cell_store rs clo chi cell hwc hc)))
+                    ((have hf
+                       (same_outside m
+                         (mem_put64 m (w64_val cell)
+                           (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                         (w64_val cell)
+                         (+ (w64_val cell) 8))
+                       (exact
+                         (cell_frame m cell
+                           (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))))
+                     (have h1
+                       (str_rep sp hi
+                         (mem_put64 m (w64_val cell)
+                           (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                         q
+                         (cons c r))
+                       (exact
+                         (str_keep sp hi m
+                           (mem_put64 m (w64_val cell)
+                             (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                           q
+                           (cons c r)
+                           (w64_val cell)
+                           (+ (w64_val cell) 8)
+                           h
+                           hf
+                           (cell_apart clo chi cell sp hi hc hAC))))
+                     (have k1 (< 1 256) (decide))
+                     (have hb
+                       (= (% (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))) 256)
+                         (% (+ c 1) 256))
+                       (exact
+                         (chr_add_low (w64 (mem_get m (w64_val q))) c 1 k1
+                           (str_cons_chr sp hi m q c r h))))
+                     (have hbs
+                       (=
+                         (mem_bytes
+                           (mem_put64 m (w64_val cell)
+                             (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                           (w64_val cell)
+                           (w64_val (w64 1)))
+                         (cons (% (+ c 1) 256) nil))
+                       (rw (<- hb))
+                       (exact
+                         (And.right
+                           (And.right
+                             (cell_put1 rs clo chi m cell
+                               (w64_add (w64 (mem_get m (w64_val q))) (w64 1))
+                               hrc
+                               hchi
+                               hc)))))
+                     (apply (tie_put cell (w64 1) (cons (% (+ c 1) 256) nil)) ((exact hx)) (rfl)
+                       ((exact
+                          (And.left
+                            (cell_put1 rs clo chi m cell
+                              (w64_add (w64 (mem_get m (w64_val q))) (w64 1))
+                              hrc
+                              hchi
+                              hc))))
+                       ((exact
+                          (And.left
+                            (And.right
+                              (cell_put1 rs clo chi m cell
+                                (w64_add (w64 (mem_get m (w64_val q))) (w64 1))
+                                hrc
+                                hchi
+                                hc)))))
+                       ((exact hbs))
+                       ((intro o1 ho1)
+                        (apply (tie_let (w64_add q (w64 1))) (rfl)
+                          ((apply
+                             (tie_weaken
+                               (changed_in
+                                 (mem_put64 m (w64_val cell)
+                                   (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                                 (w64_val cell)
+                                 (+ (w64_val cell) 8)))
+                             ((intro m2 g2)
+                              (exact
+                                (same_outside_trans m
+                                  (mem_put64 m (w64_val cell)
+                                    (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                                  m2
+                                  (w64_val cell)
+                                  (+ (w64_val cell) 8)
+                                  hf
+                                  g2)))
+                             ((apply (tie_tail up_code0 (cons (w64_add q (w64 1)) (cons cell nil)))
+                                (rfl)
+                                ((exact f0))
+                                ((have e
+                                   (= (up_each (cons c r) (os_world o)) (up_each r (os_world o1)))
+                                   (rw ho1)
+                                   rfl)
+                                 (rw e)
+                                 (exact
+                                   (ih (w64_add q (w64 1))
+                                     (mem_put64 m (w64_val cell)
+                                       (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                                     o1
+                                     (str_cons_tail sp hi
+                                       (mem_put64 m (w64_val cell)
+                                         (w64_val (w64_add (w64 (mem_get m (w64_val q))) (w64 1))))
+                                       q
+                                       c
+                                       r
+                                       hhi
+                                       h1))))))))))
+                       ((intro hst)
+                        (exact
+                          (up_each_stopped r (write_all (cons (% (+ c 1) 256) nil) (os_world o)) hst)))))))))))))))))
+(theorem up_tie1
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (nlo Nat)
+   (nhi Nat)
+   (clo Nat)
+   (chi Nat)
+   (sp Nat)
+   (hi Nat)
+   (cell (BitVec 64))
+   (f0 (= (fn_at p 0) (some up_code0)))
+   (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx 0 vs m0 o0) (put_ext rs vs m0 o0))))
+   (hrs (readable rs sp hi))
+   (hhi (<= hi 140737488355328))
+   (hrc (readable rs clo chi))
+   (hwc (writable rs clo chi))
+   (hchi (<= chi 140737488355328))
+   (hc (cell_rep clo chi cell))
+   (hAC (or (<= chi sp) (<= hi clo)))
+   (hrn (readable rs nlo nhi))
+   (hnhi (<= nhi 140737488355328))
+   (hNC (or (<= chi nlo) (<= nhi clo)))
+   (s (List Nat))
+   (q (BitVec 64))
+   (nl (BitVec 64))
+   (m Mem)
+   (o Os)
+   (hs (str_rep sp hi m q s))
+   (hnl (bytes_rep nlo nhi m nl 1 (list 10))))
+  (fn_ties p wx rs up_code1 (cons q (cons cell (cons nl nil))) m o (w64 0)
+    (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+    (up_line s (os_world o)))
+  (by
+    (apply tie_fn (rfl)
+      ((apply
+         (tie_call up_code0 (cons q (cons cell nil)) (w64 0)
+           (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+           (up_each s (os_world o)))
+         (rfl)
+         ((exact f0))
+         ((exact (up_tie0 p wx rs clo chi sp hi cell f0 hx hrs hhi hrc hwc hchi hc hAC s q m o hs)))
+         ((intro m1 o1 hk1 ho1)
+          (have hf (same_outside m m1 (w64_val cell) (+ (w64_val cell) 8)) (exact hk1))
+          (have hnl1 (bytes_rep nlo nhi m1 nl 1 (list 10))
+            (exact
+              (bytes_keep nlo nhi m m1 nl 1 (list 10) (w64_val cell) (+ (w64_val cell) 8) hnl hf
+                (cell_apart clo chi cell nlo nhi hc hNC))))
+          (apply (tie_put nl (w64 1) (list 10)) ((exact hx)) (rfl)
+            ((exact (And.left (bytes_put rs nlo nhi m1 nl 1 (list 10) hrn hnhi hnl1))))
+            ((exact (And.left (And.right (bytes_put rs nlo nhi m1 nl 1 (list 10) hrn hnhi hnl1)))))
+            ((exact (And.right (And.right (bytes_put rs nlo nhi m1 nl 1 (list 10) hrn hnhi hnl1)))))
+            ((intro o2 ho2) (apply tie_ret (rfl) ((exact hf)) ((rw ho2) (rw ho1) rfl)))
+            ((intro hst2) (rw ho1) rfl)))
+         ((intro hst) (exact (write_all_stopped (list 10) (up_each s (os_world o)) hst))))))))
+(theorem up_tie2
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (nlo Nat)
+   (nhi Nat)
+   (clo Nat)
+   (chi Nat)
+   (sp Nat)
+   (hi Nat)
+   (cell (BitVec 64))
+   (f0 (= (fn_at p 0) (some up_code0)))
+   (f1 (= (fn_at p 1) (some up_code1)))
+   (f2 (= (fn_at p 2) (some up_code2)))
+   (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx 0 vs m0 o0) (put_ext rs vs m0 o0))))
+   (hrs (readable rs sp hi))
+   (hhi (<= hi 140737488355328))
+   (hrc (readable rs clo chi))
+   (hwc (writable rs clo chi))
+   (hchi (<= chi 140737488355328))
+   (hc (cell_rep clo chi cell))
+   (hAC (or (<= chi sp) (<= hi clo)))
+   (hrn (readable rs nlo nhi))
+   (hnhi (<= nhi 140737488355328))
+   (hNC (or (<= chi nlo) (<= nhi clo)))
+   (nl (BitVec 64))
+   (ss (List (List Nat))))
+  (forall ((q (BitVec 64)) (n (BitVec 64)) (m Mem) (o Os))
+    (-> (argv_rep sp hi m q n ss) (bytes_rep nlo nhi m nl 1 (list 10))
+      (fn_ties p wx rs up_code2 (cons q (cons n (cons cell (cons nl nil)))) m o (w64 0)
+        (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+        (up_all ss (os_world o)))))
+  (by
+    (induction ss
+      ((nil () (intro q n m o h hnl)
+         (apply tie_fn (rfl)
+           ((apply tie_if_true (rfl) (rfl) ((exact (argv_nil_test sp hi m q n h)))
+              ((apply tie_ret (rfl)
+                 ((exact (same_outside_refl m (w64_val cell) (+ (w64_val cell) 8))))
+                 (rfl)))))))
+       (cons (s r ih) (intro q n m o h hnl)
+         (apply tie_fn (rfl)
+           ((apply tie_if_false (rfl) (rfl) ((exact (argv_cons_test sp hi m q n s r h)))
+              ((apply (tie_let (w64 (mem_le64 m (w64_val q))))
+                 ((apply argv_cons_load ((exact hrs)) (rfl) ((exact h))))
+                 ((apply
+                    (tie_call up_code1
+                      (cons (w64 (mem_le64 m (w64_val q))) (cons cell (cons nl nil)))
+                      (w64 0)
+                      (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+                      (up_line s (os_world o)))
+                    (rfl)
+                    ((exact f1))
+                    ((exact
+                       (up_tie1 p wx rs nlo nhi clo chi sp hi cell f0 hx hrs hhi hrc hwc hchi hc hAC
+                         hrn
+                         hnhi
+                         hNC
+                         s
+                         (w64 (mem_le64 m (w64_val q)))
+                         nl
+                         m
+                         o
+                         (argv_cons_head sp hi m q n s r hhi h)
+                         hnl)))
+                    ((intro m1 o1 hk1 ho1)
+                     (have hf (same_outside m m1 (w64_val cell) (+ (w64_val cell) 8)) (exact hk1))
+                     (have ha1 (argv_rep sp hi m1 q n (cons s r))
+                       (exact
+                         (argv_keep sp hi m m1 q n (cons s r) (w64_val cell) (+ (w64_val cell) 8) h
+                           hf
+                           (cell_apart clo chi cell sp hi hc hAC))))
+                     (have hnl1 (bytes_rep nlo nhi m1 nl 1 (list 10))
+                       (exact
+                         (bytes_keep nlo nhi m m1 nl 1 (list 10) (w64_val cell) (+ (w64_val cell) 8)
+                           hnl
+                           hf
+                           (cell_apart clo chi cell nlo nhi hc hNC))))
+                     (apply (tie_let (w64_add q (w64 8))) (rfl)
+                       ((apply (tie_let (w64_sub n (w64 1))) (rfl)
+                          ((apply (tie_weaken (changed_in m1 (w64_val cell) (+ (w64_val cell) 8)))
+                             ((intro m2 g2)
+                              (exact
+                                (same_outside_trans m m1 m2 (w64_val cell) (+ (w64_val cell) 8) hf
+                                  g2)))
+                             ((apply
+                                (tie_tail up_code2
+                                  (cons (w64_add q (w64 8))
+                                    (cons (w64_sub n (w64 1)) (cons cell (cons nl nil)))))
+                                (rfl)
+                                ((exact f2))
+                                ((have e
+                                   (= (up_all (cons s r) (os_world o)) (up_all r (os_world o1)))
+                                   (rw ho1)
+                                   rfl)
+                                 (rw e)
+                                 (exact
+                                   (ih (w64_add q (w64 8)) (w64_sub n (w64 1)) m1 o1
+                                     (argv_cons_tail sp hi m1 q n s r hhi ha1)
+                                     hnl1)))))))))))
+                    ((intro hst) (exact (up_all_stopped r (up_line s (os_world o)) hst)))))))))))))))
+(theorem up_tie3
+  ((p (List IFn))
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
+   (rs (List Seg))
+   (nlo Nat)
+   (nhi Nat)
+   (clo Nat)
+   (chi Nat)
+   (sp Nat)
+   (hi Nat)
+   (cell (BitVec 64))
+   (f0 (= (fn_at p 0) (some up_code0)))
+   (f1 (= (fn_at p 1) (some up_code1)))
+   (f2 (= (fn_at p 2) (some up_code2)))
+   (hx (forall ((vs (List (BitVec 64))) (m0 Mem) (o0 Os)) (= (wx 0 vs m0 o0) (put_ext rs vs m0 o0))))
+   (hrs (readable rs sp hi))
+   (hhi (<= hi 140737488355328))
+   (hrc (readable rs clo chi))
+   (hwc (writable rs clo chi))
+   (hchi (<= chi 140737488355328))
+   (hc (cell_rep clo chi cell))
+   (hAC (or (<= chi sp) (<= hi clo)))
+   (hrn (readable rs nlo nhi))
+   (hnhi (<= nhi 140737488355328))
+   (hNC (or (<= chi nlo) (<= nhi clo)))
+   (nl (BitVec 64))
+   (q (BitVec 64))
+   (m Mem)
+   (o Os)
+   (args (List (List Nat))))
+  (-> (args_rep sp hi m q args) (bytes_rep nlo nhi m nl 1 (list 10))
+    (fn_ties p wx rs up_code3 (cons q (cons cell (cons nl nil))) m o (w64 0)
+      (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+      (Prod.snd (up args (os_world o)))))
+  (by
+    (cases args
+      ((nil () (intro h hnl)
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 (mem_le64 m (w64_val q))))
+              ((apply args_load ((exact hrs)) (rfl) ((exact h))))
+              ((apply tie_if_true (rfl) (rfl) ((exact (args_nil_test sp hi m q h)))
+                 ((apply tie_ret (rfl)
+                    ((exact (same_outside_refl m (w64_val cell) (+ (w64_val cell) 8))))
+                    (rfl)))))))))
+       (cons (name r) (intro h hnl)
+         (apply tie_fn (rfl)
+           ((apply (tie_let (w64 (mem_le64 m (w64_val q))))
+              ((apply args_load ((exact hrs)) (rfl) ((exact h))))
+              ((apply tie_if_false (rfl) (rfl) ((exact (args_cons_test sp hi m q name r hhi h)))
+                 ((apply (tie_let (w64_add q (w64 16))) (rfl)
+                    ((apply (tie_let (w64_sub (w64 (mem_le64 m (w64_val q))) (w64 1))) (rfl)
+                       ((apply
+                          (tie_tail up_code2
+                            (cons (w64_add q (w64 16))
+                              (cons (w64_sub (w64 (mem_le64 m (w64_val q))) (w64 1))
+                                (cons cell (cons nl nil)))))
+                          (rfl)
+                          ((exact f2))
+                          ((exact
+                             (up_tie2 p wx rs nlo nhi clo chi sp hi cell f0 f1 f2 hx hrs hhi hrc hwc
+                               hchi
+                               hc
+                               hAC
+                               hrn
+                               hnhi
+                               hNC
+                               nl
+                               r
+                               (w64_add q (w64 16))
+                               (w64_sub (w64 (mem_le64 m (w64_val q))) (w64 1))
+                               m
+                               o
+                               (args_cons_tail sp hi m q name r hhi h)
+                               hnl)))))))))))))))))))
+;; the four as one program, its one outside function the platform's `write_all`: the outcome of
+;; its function 3 is the value of `up`
+(theorem up_prog_tie
+  ((rs (List Seg))
+   (nlo Nat)
+   (nhi Nat)
+   (clo Nat)
+   (chi Nat)
+   (sp Nat)
+   (hi Nat)
+   (cell (BitVec 64))
+   (hrs (readable rs sp hi))
+   (hhi (<= hi 140737488355328))
+   (hrc (readable rs clo chi))
+   (hwc (writable rs clo chi))
+   (hchi (<= chi 140737488355328))
+   (hc (cell_rep clo chi cell))
+   (hAC (or (<= chi sp) (<= hi clo)))
+   (hrn (readable rs nlo nhi))
+   (hnhi (<= nhi 140737488355328))
+   (hNC (or (<= chi nlo) (<= nhi clo)))
+   (nl (BitVec 64))
+   (q (BitVec 64))
+   (m Mem)
+   (o Os)
+   (args (List (List Nat)))
+   (ha (args_rep sp hi m q args))
+   (hnl (bytes_rep nlo nhi m nl 1 (list 10))))
+  (fn_ties up_prog (put_wx rs) rs up_code3 (cons q (cons cell (cons nl nil))) m o (w64 0)
+    (changed_in m (w64_val cell) (+ (w64_val cell) 8))
+    (Prod.snd (up args (os_world o))))
+  (exact
+    (up_tie3 up_prog (put_wx rs) rs nlo nhi clo chi sp hi cell (Eq.refl (some up_code0))
+      (Eq.refl (some up_code1))
+      (Eq.refl (some up_code2))
+      (put_wx_is rs)
+      hrs
+      hhi
+      hrc
+      hwc
+      hchi
+      hc
+      hAC
+      hrn
+      hnhi
+      hNC
+      nl
+      q
+      m
+      o
+      args
+      ha
+      hnl)))
+
+;; ---- how its file ends -----------------------------------------------------------------------------
+;; by the arguments and the kernel's answers: as the program's value on the World a process
+;; starts with says
+(fn up_res ((args (List (List Nat))) (as (List Answer))) Res
+  (world_res (Prod.fst (up args (world_of as))) (Prod.snd (up args (world_of as)))))

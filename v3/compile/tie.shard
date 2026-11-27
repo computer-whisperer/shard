@@ -1,16 +1,21 @@
-;;; v3/compile/tie.shard — the rules by which a function that writes is tied to its code. A
-;;; program's function on a World has a value: a word and a World. Its intermediate code, run
-;;; with what is outside a process (`wrun`, ir.shard), has an outcome; the code is TIED to the
-;;; value where that outcome is the value's (`tied`, models/x86/world.shard): the code
-;;; returned the word, left the memory said and left outside what the World is of — or the
-;;; process ended in it as a World that has stopped says. Here is that statement of a
-;;; statement's run (`ties`) and of a function's (`fn_ties`), and a rule for each statement
-;;; form a tie uses: a return, a local set, a branch each way, a tail call, and a call — of a
-;;; function or an outside function that is itself tied, where the process may have ended in
-;;; the callee: then the caller's World is the callee's, the rest of the program writing
-;;; nothing in a process that has stopped. A function that calls nothing outside is tied in
-;;; the same form, its World the World of what is outside as it was (`tie_call_same`).
+;;; v3/compile/tie.shard — the rules by which a function is tied to its code. A program's
+;;; function on a World has a value: a word and a World. Its intermediate code, run with what
+;;; is outside a process (`wrun`, ir.shard), has an outcome; the code is TIED to the value
+;;; where that outcome is the value's (`tied`, models/x86/world.shard): the code returned the
+;;; word, left a memory the function's CONDITION holds of, and left outside what the World is
+;;; of — or the process ended in it as a World that has stopped says. A condition and not a
+;;; memory: code that stores cannot name the memory it leaves ahead of its run, it can say what
+;;; is true of it — that it is the memory given (`unchanged`), or that memory but for a range
+;;; (`changed_in`), or that a result stands in it. Here is that statement of a statement's run
+;;; (`ties`) and of a function's (`fn_ties`), and a rule for each statement form: a return, a
+;;; local set, a store, a branch each way, a tail call, and a call — of a function or an
+;;; outside function that is itself tied, where what follows the call runs on ANY memory the
+;;; callee's condition holds of, and where the process may have ended in the callee: then the
+;;; caller's World is the callee's, the rest of the program writing nothing in a process that
+;;; has stopped. A condition may be weakened (`tie_weaken`): a loop's tail call gives one on
+;;; the memory it was entered with, its function owes one on its own.
 (import "ir_laws.shard")
+(import "../models/x86/laws.shard")
 (import "../models/x86/world.shard")
 (use std.mem)
 (use std.world)
@@ -20,6 +25,7 @@
 (use compile.ir.ICallee)
 (use compile.ir.IExp)
 (use compile.ir.IStm)
+(use models.x86.laws)
 (use models.x86.linux)
 (use models.x86.linux.Os)
 (use models.x86.linux.Outcome)
@@ -32,9 +38,15 @@
 (use Init.List cons nil)
 (use Init.Option none some)
 
+;; ---- the two conditions a function gives most -------------------------------------------------------
+;; the memory it was given
+(def unchanged ((m Mem) (m2 Mem)) Prop (= m2 m))
+;; that memory but for the range [lo, hi)
+(def changed_in ((m Mem) (lo Nat) (hi Nat) (m2 Mem)) Prop (same_outside m m2 lo hi))
+
 ;; ---- the statement --------------------------------------------------------------------------------
 ;; the statement s, run with ls, m and o, has an outcome that is the value's: the word v and
-;; the World w, the memory m2 left
+;; the World w, the memory left one K holds of
 (def ties
   ((p (List IFn))
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
@@ -44,10 +56,10 @@
    (m Mem)
    (o Os)
    (v (BitVec 64))
-   (m2 Mem)
+   (K (-> Mem Prop))
    (w World))
   Prop
-  (exists ((out Outcome)) (and (wends p wx rs s ls m o out) (tied out v m2 w))))
+  (exists ((out Outcome)) (and (wends p wx rs s ls m o out) (tied out v K w))))
 ;; the same of a function on its arguments
 (def fn_ties
   ((p (List IFn))
@@ -58,11 +70,27 @@
    (m Mem)
    (o Os)
    (v (BitVec 64))
-   (m2 Mem)
+   (K (-> Mem Prop))
    (w World))
   Prop
-  (exists ((out Outcome)) (and (wfn_ans p wx rs g vs m o out) (tied out v m2 w))))
-;; a function by its body: as many arguments as its parameters
+  (exists ((out Outcome)) (and (wfn_ans p wx rs g vs m o out) (tied out v K w))))
+
+;; ---- conditions on the memory left ------------------------------------------------------------------
+;; the process ended in a callee: the caller's outcome is that end where its World is the callee's
+(theorem tied_end
+  ((r Res)
+   (v1 (BitVec 64))
+   (K1 (-> Mem Prop))
+   (w1 World)
+   (v (BitVec 64))
+   (K (-> Mem Prop))
+   (w World)
+   (h (tied (OEnd r) v1 K1 w1))
+   (hw (= w w1)))
+  (tied (OEnd r) v K w)
+  (by (rw hw) (exact h)))
+
+;; ---- a rule for each statement form -----------------------------------------------------------------
 (theorem tie_fn
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -72,18 +100,36 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
-   (m2 Mem implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (hl (= (List.length vs) (IFn.params g)))
-   (hb (ties p wx rs (IFn.body g) (enter g vs) m o v m2 w)))
-  (fn_ties p wx rs g vs m o v m2 w)
+   (hb (ties p wx rs (IFn.body g) (enter g vs) m o v K w)))
+  (fn_ties p wx rs g vs m o v K w)
   (by
     (cases hb
       ((intro (out gg)
          (apply (Exists.intro out) ((exact (And.intro (And.intro hl (And.left gg)) (And.right gg))))))))))
-
-;; ---- a rule for each statement form -----------------------------------------------------------------
-;; a return of a word, where the program's value is that word and the World of what is outside
+(theorem tie_weaken
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (s IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (v (BitVec 64) implicit)
+   (K2 (-> Mem Prop) implicit)
+   (w World implicit)
+   (K (-> Mem Prop))
+   (h (forall ((m2 Mem)) (-> (K m2) (K2 m2))))
+   (hr (ties p wx rs s ls m o v K w)))
+  (ties p wx rs s ls m o v K2 w)
+  (by
+    (cases hr
+      ((intro (out gg)
+         (apply (Exists.intro out)
+           ((exact (And.intro (And.left gg) (tied_weaken out v K K2 w h (And.right gg)))))))))))
+;; a return: the condition holds of the memory as it is
 (theorem tie_ret
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -93,16 +139,17 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (he (= (ieval rs ls m e) (some v)))
+   (hk (K m))
    (hw (= (os_world o) w)))
-  (ties p wx rs (SRet e) ls m o v m w)
+  (ties p wx rs (SRet e) ls m o v K w)
   (by
     (apply (Exists.intro (ORet v m o))
       ((apply And.intro ((exact (wends_ret p wx rs e ls m o v he)))
-         ((show (and (= v v) (and (= m m) (= (os_world o) w))))
-          (exact (And.intro (Eq.refl v) (And.intro (Eq.refl m) hw)))))))))
-;; a local set: the word given
+         ((show (and (= v v) (and (K m) (= (os_world o) w))))
+          (exact (And.intro (Eq.refl v) (And.intro hk hw)))))))))
 (theorem tie_let
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -114,18 +161,43 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
-   (m2 Mem implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (w0 (BitVec 64))
    (he (= (ieval rs ls m e) (some w0)))
-   (hk (ties p wx rs k (upd ls x w0) m o v m2 w)))
-  (ties p wx rs (SLet x e k) ls m o v m2 w)
+   (hk (ties p wx rs k (upd ls x w0) m o v K w)))
+  (ties p wx rs (SLet x e k) ls m o v K w)
   (by
     (cases hk
       ((intro (out gg)
          (apply (Exists.intro out)
            ((exact (And.intro (wends_let w0 he (And.left gg)) (And.right gg))))))))))
-;; a branch, each way
+;; a store of a word at an address the run may write: what follows runs on the memory with it
+(theorem tie_store
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (a IExp implicit)
+   (e IExp implicit)
+   (k IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (v (BitVec 64) implicit)
+   (K (-> Mem Prop) implicit)
+   (w World implicit)
+   (q (BitVec 64))
+   (w0 (BitVec 64))
+   (ha (= (ieval rs ls m a) (some q)))
+   (he (= (ieval rs ls m e) (some w0)))
+   (hm (= (mapped rs (w64_val q) 8 2) true))
+   (hk (ties p wx rs k ls (mem_put64 m (w64_val q) (w64_val w0)) o v K w)))
+  (ties p wx rs (SStore a e k) ls m o v K w)
+  (by
+    (cases hk
+      ((intro (out gg)
+         (apply (Exists.intro out)
+           ((exact (And.intro (wends_store q w0 ha he hm (And.left gg)) (And.right gg))))))))))
 (theorem tie_if_true
   ((p (List IFn))
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)))
@@ -141,13 +213,13 @@
    (x (BitVec 64))
    (y (BitVec 64))
    (v (BitVec 64))
-   (m2 Mem)
+   (K (-> Mem Prop))
    (w World)
    (ha (= (ieval rs ls m a) (some x)))
    (hb (= (ieval rs ls m b) (some y)))
    (hc (= (icmp cc x y) true))
-   (hr (ties p wx rs t ls m o v m2 w)))
-  (ties p wx rs (SIf a cc b t e) ls m o v m2 w)
+   (hr (ties p wx rs t ls m o v K w)))
+  (ties p wx rs (SIf a cc b t e) ls m o v K w)
   (by
     (cases hr
       ((intro (out gg)
@@ -170,13 +242,13 @@
    (x (BitVec 64))
    (y (BitVec 64))
    (v (BitVec 64))
-   (m2 Mem)
+   (K (-> Mem Prop))
    (w World)
    (ha (= (ieval rs ls m a) (some x)))
    (hb (= (ieval rs ls m b) (some y)))
    (hc (= (icmp cc x y) false))
-   (hr (ties p wx rs e ls m o v m2 w)))
-  (ties p wx rs (SIf a cc b t e) ls m o v m2 w)
+   (hr (ties p wx rs e ls m o v K w)))
+  (ties p wx rs (SIf a cc b t e) ls m o v K w)
   (by
     (cases hr
       ((intro (out gg)
@@ -184,7 +256,6 @@
            ((exact
               (And.intro (wends_if_false p wx rs a cc b t e ls m o x y out ha hb hc (And.left gg))
                 (And.right gg))))))))))
-;; a tail call to a function of the program: the callee's value is the statement's
 (theorem tie_tail
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -195,38 +266,21 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
-   (m2 Mem implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (g IFn)
    (vs (List (BitVec 64)))
    (hes (= (ievals rs ls m es) (some vs)))
    (hg (= (fn_at p i) (some g)))
-   (hr (fn_ties p wx rs g vs m o v m2 w)))
-  (ties p wx rs (STail (CFn i) es) ls m o v m2 w)
+   (hr (fn_ties p wx rs g vs m o v K w)))
+  (ties p wx rs (STail (CFn i) es) ls m o v K w)
   (by
     (cases hr
       ((intro (out gg)
          (apply (Exists.intro out)
            ((exact (And.intro (wends_tail g vs hes hg (And.left gg)) (And.right gg))))))))))
-;; ---- a call of what is itself tied ------------------------------------------------------------------
-;; the process ended in a callee whose value has the World w1: the caller's outcome is that
-;; end, and it is the caller's value's where the caller's World is w1
-(theorem tied_end
-  ((r Res)
-   (v1 (BitVec 64))
-   (m1 Mem)
-   (w1 World)
-   (v (BitVec 64))
-   (m2 Mem)
-   (w World)
-   (h (tied (OEnd r) v1 m1 w1))
-   (hw (= w w1)))
-  (tied (OEnd r) v m2 w)
-  (by (rw hw) (exact h)))
-;; A call of a function of the program whose value is the word v1 and the World w1, the memory
-;; m1 left. The call and what follows it have an outcome that is the caller's value's, if:
-;; wherever the process still runs after the call, what follows has such an outcome on what
-;; the call left; and where the process stopped in the callee, the caller's World is w1.
+;; a call of a function of the program that is itself tied, its condition K1: what follows runs
+;; on ANY memory K1 holds of
 (theorem tie_call
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -239,100 +293,46 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
-   (m2 Mem implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (g IFn)
    (vs (List (BitVec 64)))
    (v1 (BitVec 64))
-   (m1 Mem)
+   (K1 (-> Mem Prop))
    (w1 World)
    (hes (= (ievals rs ls m es) (some vs)))
    (hg (= (fn_at p i) (some g)))
-   (hc (fn_ties p wx rs g vs m o v1 m1 w1))
-   (hlive (forall ((o1 Os)) (-> (= (os_world o1) w1) (ties p wx rs k (upd ls x v1) m1 o1 v m2 w))))
+   (hc (fn_ties p wx rs g vs m o v1 K1 w1))
+   (hlive
+     (forall ((m1 Mem) (o1 Os))
+       (-> (K1 m1) (= (os_world o1) w1) (ties p wx rs k (upd ls x v1) m1 o1 v K w))))
    (hdead (-> (= (runs (World.life w1)) false) (= w w1))))
-  (ties p wx rs (SCall x (CFn i) es k) ls m o v m2 w)
+  (ties p wx rs (SCall x (CFn i) es k) ls m o v K w)
   (by
     (cases hc
       ((intro (q gq)
          (have fin
-           (-> (wfn_ans p wx rs g vs m o q) (tied q v1 m1 w1)
-             (ties p wx rs (SCall x (CFn i) es k) ls m o v m2 w))
+           (-> (wfn_ans p wx rs g vs m o q) (tied q v1 K1 w1)
+             (ties p wx rs (SCall x (CFn i) es k) ls m o v K w))
            (cases q
              ((ORet (v0 m0 o0) (intro hq0 ht0) (have e1 (= v0 v1) (exact (And.left ht0)))
-                (have e2 (= m0 m1) (exact (And.left (And.right ht0))))
+                (have e2 (K1 m0) (exact (And.left (And.right ht0))))
                 (have e3 (= (os_world o0) w1) (exact (And.right (And.right ht0))))
-                (have hq1 (wfn_ans p wx rs g vs m o (ORet v1 m1 o0))
-                  (rw (<- e1))
-                  (rw (<- e2))
-                  (exact hq0))
-                (cases (hlive o0 e3)
+                (have hq1 (wfn_ans p wx rs g vs m o (ORet v1 m0 o0)) (rw (<- e1)) (exact hq0))
+                (cases (hlive m0 o0 e2 e3)
                   ((intro (out gk)
                      (apply (Exists.intro out)
                        ((exact
-                          (And.intro (wends_call g vs v1 m1 o0 hes hg hq1 (And.left gk))
+                          (And.intro (wends_call g vs v1 m0 o0 hes hg hq1 (And.left gk))
                             (And.right gk)))))))))
               (OEnd (r) (intro hq0 ht0)
                 (have hst (= (runs (World.life w1)) false) (exact (And.left ht0)))
                 (apply (Exists.intro (OEnd r))
                   ((exact
                      (And.intro (wends_call_end g vs r hes hg hq0)
-                       (tied_end r v1 m1 w1 v m2 w ht0 (hdead hst))))))))))
+                       (tied_end r v1 K1 w1 v K w ht0 (hdead hst))))))))))
          (exact (fin (And.left gq) (And.right gq))))))))
-;; the same of an outside function, whose answer on the arguments is an outcome that is tied
-(theorem tie_ext
-  ((p (List IFn) implicit)
-   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
-   (rs (List Seg) implicit)
-   (x Nat implicit)
-   (j Nat implicit)
-   (es (List IExp) implicit)
-   (k IStm implicit)
-   (ls (List (BitVec 64)) implicit)
-   (m Mem implicit)
-   (o Os implicit)
-   (v (BitVec 64) implicit)
-   (m2 Mem implicit)
-   (w World implicit)
-   (vs (List (BitVec 64)))
-   (v1 (BitVec 64))
-   (m1 Mem)
-   (w1 World)
-   (hes (= (ievals rs ls m es) (some vs)))
-   (hc (exists ((q Outcome)) (and (= (wx j vs m o) (some q)) (tied q v1 m1 w1))))
-   (hlive (forall ((o1 Os)) (-> (= (os_world o1) w1) (ties p wx rs k (upd ls x v1) m1 o1 v m2 w))))
-   (hdead (-> (= (runs (World.life w1)) false) (= w w1))))
-  (ties p wx rs (SCall x (CExt j) es k) ls m o v m2 w)
-  (by
-    (cases hc
-      ((intro (q gq)
-         (have fin
-           (-> (= (wx j vs m o) (some q)) (tied q v1 m1 w1)
-             (ties p wx rs (SCall x (CExt j) es k) ls m o v m2 w))
-           (cases q
-             ((ORet (v0 m0 o0) (intro hq0 ht0) (have e1 (= v0 v1) (exact (And.left ht0)))
-                (have e2 (= m0 m1) (exact (And.left (And.right ht0))))
-                (have e3 (= (os_world o0) w1) (exact (And.right (And.right ht0))))
-                (have hq1 (= (wx j vs m o) (some (ORet v1 m1 o0)))
-                  (rw (<- e1))
-                  (rw (<- e2))
-                  (exact hq0))
-                (cases (hlive o0 e3)
-                  ((intro (out gk)
-                     (apply (Exists.intro out)
-                       ((exact
-                          (And.intro (wends_call_ext vs v1 m1 o0 hes hq1 (And.left gk))
-                            (And.right gk)))))))))
-              (OEnd (r) (intro hq0 ht0)
-                (have hst (= (runs (World.life w1)) false) (exact (And.left ht0)))
-                (apply (Exists.intro (OEnd r))
-                  ((exact
-                     (And.intro (wends_call_ext_end vs r hes hq0)
-                       (tied_end r v1 m1 w1 v m2 w ht0 (hdead hst))))))))))
-         (exact (fin (And.left gq) (And.right gq))))))))
-;; the same of a function that leaves the outside as it was — one that calls nothing outside —:
-;; its value's World is the World of what is outside, and the process cannot have stopped in
-;; it. What follows is on an outside that World is of
+;; the same of a callee that leaves the outside as it was
 (theorem tie_call_same
   ((p (List IFn) implicit)
    (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
@@ -345,21 +345,71 @@
    (m Mem implicit)
    (o Os implicit)
    (v (BitVec 64) implicit)
-   (m2 Mem implicit)
+   (K (-> Mem Prop) implicit)
    (w World implicit)
    (g IFn)
    (vs (List (BitVec 64)))
    (v1 (BitVec 64))
-   (m1 Mem)
+   (K1 (-> Mem Prop))
    (hes (= (ievals rs ls m es) (some vs)))
    (hg (= (fn_at p i) (some g)))
-   (hc (fn_ties p wx rs g vs m o v1 m1 (os_world o)))
+   (hc (fn_ties p wx rs g vs m o v1 K1 (os_world o)))
    (hk
-     (forall ((o1 Os))
-       (-> (= (os_world o1) (os_world o)) (ties p wx rs k (upd ls x v1) m1 o1 v m2 w)))))
-  (ties p wx rs (SCall x (CFn i) es k) ls m o v m2 w)
+     (forall ((m1 Mem) (o1 Os))
+       (-> (K1 m1) (= (os_world o1) (os_world o)) (ties p wx rs k (upd ls x v1) m1 o1 v K w)))))
+  (ties p wx rs (SCall x (CFn i) es k) ls m o v K w)
   (by
-    (apply (tie_call g vs v1 m1 (os_world o)) ((exact hes)) ((exact hg)) ((exact hc)) ((exact hk))
+    (apply (tie_call g vs v1 K1 (os_world o)) ((exact hes)) ((exact hg)) ((exact hc)) ((exact hk))
       ((intro hst)
        (have h1 (= true false) (exact hst))
        (exact (absurd (Eq.symm h1) Bool.false_ne_true))))))
+;; an outside function whose answer on the arguments is an outcome that is tied
+(theorem tie_ext
+  ((p (List IFn) implicit)
+   (wx (-> Nat (List (BitVec 64)) Mem Os (Option Outcome)) implicit)
+   (rs (List Seg) implicit)
+   (x Nat implicit)
+   (j Nat implicit)
+   (es (List IExp) implicit)
+   (k IStm implicit)
+   (ls (List (BitVec 64)) implicit)
+   (m Mem implicit)
+   (o Os implicit)
+   (v (BitVec 64) implicit)
+   (K (-> Mem Prop) implicit)
+   (w World implicit)
+   (vs (List (BitVec 64)))
+   (v1 (BitVec 64))
+   (K1 (-> Mem Prop))
+   (w1 World)
+   (hes (= (ievals rs ls m es) (some vs)))
+   (hc (exists ((q Outcome)) (and (= (wx j vs m o) (some q)) (tied q v1 K1 w1))))
+   (hlive
+     (forall ((m1 Mem) (o1 Os))
+       (-> (K1 m1) (= (os_world o1) w1) (ties p wx rs k (upd ls x v1) m1 o1 v K w))))
+   (hdead (-> (= (runs (World.life w1)) false) (= w w1))))
+  (ties p wx rs (SCall x (CExt j) es k) ls m o v K w)
+  (by
+    (cases hc
+      ((intro (q gq)
+         (have fin
+           (-> (= (wx j vs m o) (some q)) (tied q v1 K1 w1)
+             (ties p wx rs (SCall x (CExt j) es k) ls m o v K w))
+           (cases q
+             ((ORet (v0 m0 o0) (intro hq0 ht0) (have e1 (= v0 v1) (exact (And.left ht0)))
+                (have e2 (K1 m0) (exact (And.left (And.right ht0))))
+                (have e3 (= (os_world o0) w1) (exact (And.right (And.right ht0))))
+                (have hq1 (= (wx j vs m o) (some (ORet v1 m0 o0))) (rw (<- e1)) (exact hq0))
+                (cases (hlive m0 o0 e2 e3)
+                  ((intro (out gk)
+                     (apply (Exists.intro out)
+                       ((exact
+                          (And.intro (wends_call_ext vs v1 m0 o0 hes hq1 (And.left gk))
+                            (And.right gk)))))))))
+              (OEnd (r) (intro hq0 ht0)
+                (have hst (= (runs (World.life w1)) false) (exact (And.left ht0)))
+                (apply (Exists.intro (OEnd r))
+                  ((exact
+                     (And.intro (wends_call_ext_end vs r hes hq0)
+                       (tied_end r v1 K1 w1 v K w ht0 (hdead hst))))))))))
+         (exact (fin (And.left gq) (And.right gq))))))))

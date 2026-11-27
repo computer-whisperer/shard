@@ -1,0 +1,68 @@
+;;; v3/compile/up_src.shard — the program `up`, as a function of its arguments and a World
+;;; (std/world.shard): each argument after the name it is run by, every character replaced by
+;;; the one after it (`up HAL` writes IBM), a line's end after each. It writes ONE CHARACTER
+;;; A WRITE: a World has how each write went, so which writes a program makes is part of what
+;;; it means. Where a write stops the process nothing after it is written (`up_all_stopped`).
+;;; Its code stores (up_ir.shard): the character to write is computed, not found in memory.
+(import "../std/world.shard")
+(import "../models/x86/word.shard")
+(use std.world)
+(use std.world.Life)
+(use std.world.World)
+(use models.x86.word)
+(use Init.Bool false true)
+(use Init.List cons nil)
+
+;; the character after c, as a byte
+(fn up_char ((c Nat)) Nat (% (+ c 1) 256))
+;; a string's characters, each changed and written by itself
+(fn up_each ((s (List Nat)) (w World)) World
+  (measure (struct s))
+  (match s
+    (nil w)
+    ((cons c r) (up_each r (write_all (cons (up_char c) nil) w)))))
+;; one argument: its characters, then a line's end
+(fn up_line ((s (List Nat)) (w World)) World (write_all (list 10) (up_each s w)))
+;; each of a list of arguments
+(fn up_all ((ss (List (List Nat))) (w World)) World
+  (measure (struct ss))
+  (match ss
+    (nil w)
+    ((cons s r) (up_all r (up_line s w)))))
+;; the program: the arguments after the name; its status is 0
+(fn up ((args (List (List Nat))) (w World)) (Prod (BitVec 64) World)
+  (match args
+    (nil (Prod.mk (w64 0) w))
+    ((cons name r) (Prod.mk (w64 0) (up_all r w)))))
+;; the status is 0 whatever the arguments
+(theorem up_status ((args (List (List Nat))) (w World)) (= (Prod.fst (up args w)) (w64 0))
+  (by (cases args ((nil () rfl) (cons (name r) rfl)))))
+;; in a process that has stopped nothing more is written
+(theorem up_each_stopped ((s (List Nat)))
+  (forall ((w World)) (-> (= (runs (World.life w)) false) (= (up_each s w) w)))
+  (by
+    (induction s
+      ((nil () (intro w h) rfl)
+       (cons (c r ih) (intro w h) (show (= (up_each r (write_all (cons (up_char c) nil) w)) w))
+         (rw (write_all_stopped (cons (up_char c) nil) w h))
+         (exact (ih w h)))))))
+(theorem up_line_stopped ((s (List Nat)) (w World) (h (= (runs (World.life w)) false)))
+  (= (up_line s w) w)
+  (by
+    (show (= (write_all (list 10) (up_each s w)) w))
+    (rw (up_each_stopped s w h))
+    (exact (write_all_stopped (list 10) w h))))
+(theorem up_all_stopped ((ss (List (List Nat))))
+  (forall ((w World)) (-> (= (runs (World.life w)) false) (= (up_all ss w) w)))
+  (by
+    (induction ss
+      ((nil () (intro w h) rfl)
+       (cons (s r ih) (intro w h) (show (= (up_all r (up_line s w)) w)) (rw (up_line_stopped s w h))
+         (exact (ih w h)))))))
+;; of `up HAL az`, where the outside takes all it is offered: IBM and b{ on a line each
+(theorem sample_up ()
+  (=
+    (World.out
+      (Prod.snd (up (list (list 117 112) (list 72 65 76) (list 97 122)) (MkWorld nil nil Live))))
+    (list 73 66 77 10 98 123 10))
+  (by rfl))
