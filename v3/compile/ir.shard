@@ -7,11 +7,10 @@
 ;;; function of the same program, or an external one whose answer the run is given: from the
 ;;; argument words and the memory, a result word and the memory after, or nothing.
 ;;; A run is big-step, counted by a fuel no statement mentions: every statement run takes one.
-;;; There are two runs. `irun` is of code that calls nothing outside the process: it returns a
-;;; word and a memory. `wrun` has what is outside a process (models/x86/linux.shard `Os`) as
-;;; well: an external's answer may change it, or end the process, and a run in which a callee
-;;; ends the process has ended (`Outcome`). A run of the first kind is one of the second in
-;;; which what is outside stays as it was (ir_laws.shard `wrun_of_irun`).
+;;; A run has what is outside a process (models/x86/linux.shard `Os`): an external's answer may
+;;; change it, or end the process, and a run in which a callee ends the process has ended
+;;; (`Outcome`). Code that calls nothing outside is the case in which what is outside stays as
+;;; it was: its answer is a word and a memory (`iends`, `fn_ans`), for every outside.
 ;;; The machine's laws are ir_laws.shard's.
 (import "../models/x86/linux.shard")
 (import "../models/x86/words.shard")
@@ -107,117 +106,10 @@
 (fn enter ((g IFn) (vs (List (BitVec 64)))) (List (BitVec 64)) (app vs (zeros (IFn.extra g))))
 
 ;; ---- a run ------------------------------------------------------------------------------------
-;; The statement s run to its return, with the locals ls and the memory m: the word returned and
-;; the memory after. Nothing where the fuel runs out, an access lies outside the ranges, a callee
-;; is not there, or an external answers nothing.
-(fn irun
-  ((n Fuel)
-   (p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (s IStm)
-   (ls (List (BitVec 64)))
-   (m Mem))
-  (Option (Prod (BitVec 64) Mem))
-  (measure (struct n))
-  (match n
-    (FZ none)
-    ((FS n1)
-     (match s
-       ((SLet x e k)
-        (match (ieval rs ls m e)
-          (none none)
-          ((some v) (irun n1 p ext rs k (upd ls x v) m))))
-       ((SStore a e k)
-        (match (ieval rs ls m a)
-          (none none)
-          ((some q)
-           (match (ieval rs ls m e)
-             (none none)
-             ((some v)
-              (if (mapped rs (w64_val q) 8 2)
-                (irun n1 p ext rs k ls (mem_put64 m (w64_val q) (w64_val v)))
-                none))))))
-       ((SCall x f es k)
-        (match (ievals rs ls m es)
-          (none none)
-          ((some vs)
-           (let
-             ((a (Option (Prod (BitVec 64) Mem))
-                (match f
-                  ((CExt j) (ext j vs m))
-                  ((CFn i)
-                   (match (fn_at p i)
-                     (none none)
-                     ((some g) (irun n1 p ext rs (IFn.body g) (enter g vs) m)))))))
-             (match a
-               (none none)
-               ((some r) (irun n1 p ext rs k (upd ls x (Prod.fst r)) (Prod.snd r))))))))
-       ((SIf a cc b t e)
-        (match (ieval rs ls m a)
-          (none none)
-          ((some x)
-           (match (ieval rs ls m b)
-             (none none)
-             ((some y) (irun n1 p ext rs (if (icmp cc x y) t e) ls m))))))
-       ((SRet e)
-        (match (ieval rs ls m e)
-          (none none)
-          ((some v) (some (Prod.mk v m)))))
-       ((STail f es)
-        (match (ievals rs ls m es)
-          (none none)
-          ((some vs)
-           (match f
-             ((CExt j) (ext j vs m))
-             ((CFn i)
-              (match (fn_at p i)
-                (none none)
-                ((some g) (irun n1 p ext rs (IFn.body g) (enter g vs) m))))))))))))
-;; the statement s, run with ls and m, returns v and leaves the memory m2
-(def iends
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (s IStm)
-   (ls (List (BitVec 64)))
-   (m Mem)
-   (v (BitVec 64))
-   (m2 Mem))
-  Prop
-  (exists ((n Fuel)) (= (irun n p ext rs s ls m) (some (Prod.mk v m2)))))
-;; a function's answer: its body run on the arguments, as many as its parameters
-(def fn_ans
-  ((p (List IFn))
-   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (rs (List Seg))
-   (g IFn)
-   (vs (List (BitVec 64)))
-   (m Mem)
-   (v (BitVec 64))
-   (m2 Mem))
-  Prop
-  (and (= (List.length vs) (IFn.params g)) (iends p ext rs (IFn.body g) (enter g vs) m v m2)))
-
-;; ---- a run with nothing outside ----------------------------------------------------------------
-;; no external answers
-(fn no_ext ((j Nat) (vs (List (BitVec 64))) (m Mem)) (Option (Prod (BitVec 64) Mem)) none)
-
-;; ---- a run with what is outside -----------------------------------------------------------------
-;; an external that leaves what is outside as it was: its answer, as a run with the outside
-;; takes one
-(fn wlift
-  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
-   (j Nat)
-   (vs (List (BitVec 64)))
-   (m Mem)
-   (o Os))
-  (Option Outcome)
-  (match (ext j vs m)
-    (none none)
-    ((some r) (some (ORet (Prod.fst r) (Prod.snd r) o)))))
 ;; The statement s run with the locals ls, the memory m and what is outside o, to its outcome:
-;; it returns, or the process ended in a callee. Nothing where `irun` has nothing.
+;; it returns a word and leaves a memory and an outside, or the process ended in a callee.
+;; Nothing where the fuel runs out, an access lies outside the ranges, a callee is not there,
+;; or an external answers nothing.
 (fn wrun
   ((n Fuel)
    (p (List IFn))
@@ -310,3 +202,43 @@
    (out Outcome))
   Prop
   (and (= (List.length vs) (IFn.params g)) (wends p wx rs (IFn.body g) (enter g vs) m o out)))
+
+;; ---- code that names nothing outside ---------------------------------------------------------
+;; an external that leaves what is outside as it was: its answer, as a run takes one
+(fn wlift
+  ((ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (j Nat)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (o Os))
+  (Option Outcome)
+  (match (ext j vs m)
+    (none none)
+    ((some r) (some (ORet (Prod.fst r) (Prod.snd r) o)))))
+;; no external answers
+(fn no_ext ((j Nat) (vs (List (BitVec 64))) (m Mem)) (Option (Prod (BitVec 64) Mem)) none)
+;; the statement s, run with ls and m on such externals, returns v and leaves the memory m2,
+;; whatever is outside, and leaves that as it was
+(def iends
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (s IStm)
+   (ls (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem))
+  Prop
+  (forall ((o Os)) (wends p (wlift ext) rs s ls m o (ORet v m2 o))))
+;; a function's answer: its body run on the arguments, as many as its parameters
+(def fn_ans
+  ((p (List IFn))
+   (ext (-> Nat (List (BitVec 64)) Mem (Option (Prod (BitVec 64) Mem))))
+   (rs (List Seg))
+   (g IFn)
+   (vs (List (BitVec 64)))
+   (m Mem)
+   (v (BitVec 64))
+   (m2 Mem))
+  Prop
+  (and (= (List.length vs) (IFn.params g)) (iends p ext rs (IFn.body g) (enter g vs) m v m2)))

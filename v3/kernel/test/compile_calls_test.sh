@@ -2,7 +2,7 @@
 # v3/kernel/test/compile_calls_test.sh — the first program through every layer of the compile
 # system (v3/compile; docs/COMPILE.md §5, §8): six functions over machine words with calls, a
 # test and a loop. Held here: the functions are definitions (calls_lo.shard); a run of the
-# intermediate machine answers the same given more fuel (ir_laws.shard `irun_more`), whence the
+# intermediate machine answers the same given more fuel (ir_laws.shard `wrun_more`), whence the
 # rule of a call that returns (`iends_call`); the intermediate code of each function, written
 # by hand, answers with the function's value, a call by its callee's tie (calls_ir.shard
 # `calls_prog_tie`); the code the pass answers for the module realizes each function's answer
@@ -22,7 +22,7 @@ checks=$((checks+1)); [ "$(grep -c '^RUNNABLE fn ' "$OUT/calls.txt")" = 0 ] || {
 for f in calls_lo.calls_f2 calls_lo.calls_f3 calls_lo.calls_f5 ir_laws.fadd; do
   checks=$((checks+1)); grep -q "^DEFINE compile.$f equations=." "$OUT/calls.txt" || bad "compile.$f is not a definition with its equations"
 done
-for t in calls_lo.calls_f3_turn calls_lo.calls_f3_done calls_lo.sample_f5 ir_laws.irun_more ir_laws.iends_call calls_ir.calls_tie2 calls_ir.calls_tie3 calls_ir.calls_tie5 calls_ir.calls_prog_tie x86.link.link_exits x86.module.module_realizes x86.calls_file.calls_compiled x86.calls_file.calls_laid x86.calls_file.calls_placed x86.calls_run.calls_realizes x86.calls_run.calls_code_realizes x86.calls_run.calls_file_exits; do
+for t in calls_lo.calls_f3_turn calls_lo.calls_f3_done calls_lo.sample_f5 ir_laws.wrun_more ir_laws.iends_call calls_ir.calls_tie2 calls_ir.calls_tie3 calls_ir.calls_tie5 calls_ir.calls_prog_tie x86.link.link_exits x86.module.module_realizes x86.calls_file.calls_compiled x86.calls_file.calls_laid x86.calls_file.calls_placed x86.calls_run.calls_realizes x86.calls_run.calls_code_realizes x86.calls_run.calls_file_exits; do
   checks=$((checks+1)); grep -q "^ACCEPT compile.$t " "$OUT/calls.txt" || bad "compile.$t is not accepted"
   axs=$(grep "^ACCEPT compile.$t " "$OUT/calls.txt" | sed -E 's/.*axioms=([^ ]*).*/\1/')
   other=$(echo "$axs" | tr ',' '\n' | grep -v -x -e propext -e Quot.sound -e Classical.choice | tr '\n' ' ')
