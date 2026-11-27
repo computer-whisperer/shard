@@ -1216,8 +1216,47 @@
   (PdEraseOk ESt EDecl (List Lifted) (List Demand))
   (PdEraseTemplate ESt (List TBind) EType)
   (PdEraseErr Symbol (List Int)))
-(fn erase_predef ((es ESt) (sc Scope) (pd PreDef)) PdErase
-  (match (predef_binds (el_w (pd_state pd)) es sc (pd_binders pd) nil nil)
+;; a hole's constant (elab.shard elab_hole) has for its program an extern of the same
+;; signature — its binders that are data, in order —, so a body with a hole in it runs to the
+;; hole and stops there (ev.shard), and a search fills it (v3/search). Each hole among a
+;; pre-definition's generated declarations is given its extern in the table, once, with the
+;; names of those binders (etable.shard es_add_hole). A binder the program cannot hold — a type
+;; that is no E type — refuses the function
+(type HoleEs (HoleEsOk W ESt) (HoleEsErr Symbol (List Int)))
+(fn hole_externs ((w W) (es ESt) (sc Scope) (ds (List Declaration))) HoleEs
+  (measure (struct ds))
+  (match ds
+    (nil (HoleEsOk w es))
+    ((cons (OpaqueDecl (ConstantVal n _ _) _ _ _) r)
+     (if (es_is_hole es n) (hole_externs w es sc r)
+     (match (env_find (w_env w) n)
+       (none (hole_externs w es sc r))
+       ((some info)
+        (match (tele_of w es sc info)
+          ((TeleErr _ m)
+           (HoleEsErr (sym "hole_signature")
+             (append (show_name n)
+               (append (utf8 ": a name the hole is handed, or its type, has no program — ") m))))
+          ((TeleOk w1 es1 (Tele _ binds rt _))
+           (let ((d (EExtern n (count_types binds) (bind_ptypes binds) rt)))
+             (hole_externs w1
+               (es_add_hole (es_add_decl (es_register_all es1 (sc_module sc) (decl_infos d)) d) n
+                 (data_names binds))
+               sc
+               r))))))))
+    ((cons _ r) (hole_externs w es sc r))))
+(fn data_names ((binds (List TBind))) (List Name)
+  (measure (struct binds))
+  (match binds
+    (nil nil)
+    ((cons (TBind n (BData _) _) r) (cons n (data_names r)))
+    ((cons _ r) (data_names r))))
+(fn erase_predef ((es_in ESt) (sc Scope) (pd PreDef)) PdErase
+  (match (hole_externs (el_w (pd_state pd)) es_in sc (pd_aux pd))
+    ((HoleEsErr r m) (PdEraseErr r m))
+    ((HoleEsOk wh es) (erase_predef_at wh es sc pd))))
+(fn erase_predef_at ((wh W) (es ESt) (sc Scope) (pd PreDef)) PdErase
+  (match (predef_binds wh es sc (pd_binders pd) nil nil)
     ((Prod.mk (Prod.mk w1 es1) none)
      (PdEraseErr (sym "no_l_identity") (utf8 "a binder whose type is not an E type")))
     ((Prod.mk (Prod.mk w1 es1) (some binds))

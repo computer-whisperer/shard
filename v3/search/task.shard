@@ -345,52 +345,76 @@
        ((some vs) (if (replay_one hd vs yes) (replay_tests pb hd r yes) false))))))
 
 ;; ---- the text ------------------------------------------------------------------------------------
-;; a closed body over n parameters as source text: the parameters are x0 … in order
-(fn show_body ((lk Linked) (n Int) (t LTerm)) (List Int)
-  (match t
-    ((LBVar i) (cons 120 (show_nat (- (- n 1) i))))
-    ((LLit (IVInt k)) (show_int k))
-    ((LCtor tag nil) (show_name (tag_name lk tag)))
-    ((LCtor tag args)
-     (append (utf8 "(")
-       (append (show_name (tag_name lk tag)) (append (show_bodies lk n args) (utf8 ")")))))
-    ((LCall id args)
-     (append (utf8 "(")
-       (append (show_name (fn_name lk id)) (append (show_bodies lk n args) (utf8 ")")))))
-    ((LMatch s arms)
-     (append (utf8 "(match ") (append (show_body lk n s) (append (show_arms lk n arms) (utf8 ")")))))
-    (_ (utf8 "?"))))
+;; a closed body over n variables as source text. `names`: the first variables' names, where
+;; the body stands among names its author wrote (a hole's: the names it is handed); a variable
+;; past them is xK, K its place — with `_` after it for as long as that is one of the names
+(type Shown (Shown Linked (List (List Int))))
+(fn show_body ((sh Shown) (n Int) (t LTerm)) (List Int)
+  (match sh
+    ((Shown.Shown lk names)
+     (match t
+       ((LBVar i) (var_name names (- (- n 1) i)))
+       ((LLit (IVInt k)) (show_int k))
+       ((LCtor tag nil) (show_name (tag_name lk tag)))
+       ((LCtor tag args)
+        (append (utf8 "(")
+          (append (show_name (tag_name lk tag)) (append (show_bodies sh n args) (utf8 ")")))))
+       ((LCall id args)
+        (append (utf8 "(")
+          (append (show_name (fn_name lk id)) (append (show_bodies sh n args) (utf8 ")")))))
+       ((LMatch s arms)
+        (append (utf8 "(match ")
+          (append (show_body sh n s) (append (show_arms sh n arms) (utf8 ")")))))
+       (_ (utf8 "?"))))))
+(fn var_name ((names (List (List Int))) (pos Int)) (List Int)
+  (match (nth names pos)
+    ((some nm) nm)
+    (none (fresh_var names (cons 120 (show_nat pos)) names))))
+(fn fresh_var ((names (List (List Int))) (c (List Int)) (left (List (List Int)))) (List Int)
+  (measure (struct left))
+  (match left
+    (nil c)
+    ((cons _ r) (if (text_in c names) (fresh_var names (append c (utf8 "_")) r) c))))
+(fn text_in ((c (List Int)) (names (List (List Int)))) Bool
+  (measure (struct names))
+  (match names
+    (nil false)
+    ((cons nm r) (if (int_list_eq nm c) true (text_in c r)))))
 ;; a row: its pattern — a constructor over new variables, numbered on from the frame's — and its
 ;; body in the frame with them
-(fn show_arms ((lk Linked) (n Int) (arms (List LArm))) (List Int)
+(fn show_arms ((sh Shown) (n Int) (arms (List LArm))) (List Int)
   (match arms
     (nil nil)
     ((cons (LArm.LArm p b) r)
      (append (utf8 " (")
-       (append (show_pat lk n p)
+       (append (show_pat sh n p)
          (append (utf8 " ")
-           (append (show_body lk (+ n (row_vars p)) b) (append (utf8 ")") (show_arms lk n r)))))))))
+           (append (show_body sh (+ n (row_vars p)) b) (append (utf8 ")") (show_arms sh n r)))))))))
 (fn row_vars ((p LPat)) Int
   (match p
     ((LPCtor _ subs) (len subs))
     (LPVar 1)
     (_ 0)))
-(fn show_pat ((lk Linked) (n Int) (p LPat)) (List Int)
-  (match p
-    ((LPCtor tag nil) (show_name (tag_name lk tag)))
-    ((LPCtor tag subs)
-     (append (utf8 "(")
-       (append (show_name (tag_name lk tag)) (append (show_pat_vars n (len subs)) (utf8 ")")))))
-    ((LPInt k) (show_int k))
-    (LPVar (cons 120 (show_nat n)))))
-(fn show_pat_vars ((n Int) (k Int)) (List Int)
+(fn show_pat ((sh Shown) (n Int) (p LPat)) (List Int)
+  (match sh
+    ((Shown.Shown lk names)
+     (match p
+       ((LPCtor tag nil) (show_name (tag_name lk tag)))
+       ((LPCtor tag subs)
+        (append (utf8 "(")
+          (append (show_name (tag_name lk tag))
+            (append (show_pat_vars names n (len subs)) (utf8 ")")))))
+       ((LPInt k) (show_int k))
+       (LPVar (var_name names n))))))
+(fn show_pat_vars ((names (List (List Int))) (n Int) (k Int)) (List Int)
   (measure (Int.natAbs k))
-  (if (< k 1) nil (append (utf8 " x") (append (show_nat n) (show_pat_vars (+ n 1) (- k 1))))))
+  (if (< k 1) nil
+  (append (utf8 " ") (append (var_name names n) (show_pat_vars names (+ n 1) (- k 1))))))
 (fulfills show_pat_vars.dec_1 (by (intro p h) (apply natAbs_pred (arith))))
-(fn show_bodies ((lk Linked) (n Int) (ts (List LTerm))) (List Int)
+(fn show_bodies ((sh Shown) (n Int) (ts (List LTerm))) (List Int)
   (match ts
     (nil nil)
-    ((cons t r) (cons 32 (append (show_body lk n t) (show_bodies lk n r))))))
+    ((cons t r) (cons 32 (append (show_body sh n t) (show_bodies sh n r))))))
 ;; a value as source text
 (fn show_val ((v Val)) (List Int)
   (match v
@@ -419,8 +443,25 @@
                        ((some q)
                         (append (utf8 " (measure (struct x") (append (show_nat q) (utf8 "))"))))
                        (none nil))
-                     (append (utf8 " ") (append (show_body (Problem.lk pb) ar body) (utf8 ")"))))))))))))
+                     (append (utf8 " ")
+                       (append (show_body (Shown.Shown (Problem.lk pb) nil) ar body) (utf8 ")"))))))))))))
     (none (utf8 "?"))))
+;; a hole's filling as the expression that stands in its place: over the names it is handed
+(fn show_filling ((pb Problem) (m Mach) (id Int) (names (List Name))) (List Int)
+  (match (im_find (mach_holes m) id)
+    ((some (Hole.Hole ptys _ _ _))
+     (show_body (Shown.Shown (Problem.lk pb) (last_names names)) (len ptys) (closed_body pb m id)))
+    (none (utf8 "?"))))
+(fn last_names ((ns (List Name))) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons n r) (cons (show_last n) (last_names r)))))
+;; the calls of the function `owner` (index, arity) in a hole's filling, as `rec_calls` gives them
+(fn filling_calls ((pb Problem) (m Mach) (id Int) (owner (Prod Int Int))) (List (List Bool))
+  (match (im_find (mach_holes m) id)
+    ((some (Hole.Hole ptys _ _ _)) (rec_calls (closed_body pb m id) owner (len ptys) nil))
+    (none nil)))
 ;; the calls of the function `root` (its index and number of parameters) in a body, each as its
 ;; arguments' answers to: is this a variable that is none of the function's own parameters — by
 ;; the way such calls are made (drive.shard `prod_rec`) a proper part of one. `n` is the frame

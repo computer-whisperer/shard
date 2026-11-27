@@ -6,15 +6,17 @@ is unknown is stated with what the language already has:
 
 - **an unknown value** is a parameter of the goal: `(fn rev_is ((x (List Nat))) Bool (list_eq
   (rev x) (list 3 1 2)))` asks for the list that reverses to `3 1 2`;
-- **an unknown function body** is a function the program names and does not define — an
-  `extern`, or a view's `sig fn` with no implementation among the roots. A sketch is a function
-  written as far as its author knows it, the rest left as such calls over what they may read.
+- **an unknown part of a function** is a hole, `(hole NAME)`, written where the part belongs
+  (`docs/LANGUAGE.md`, "Terms"). A sketch is a function written as far as its author knows
+  it. Nothing is declared for a hole: the load gives it its type and the names in scope there;
+- **an unknown function** is a function the program names and does not define — an `extern`,
+  or a view's `sig fn` with no implementation among the roots —, named by `--hole`.
 
 A goal can also be a **property** (`--spec`): a function that must answer yes on *every*
 argument, tried on all the small ones. Nothing of it is unknown; what is searched for is the
-hole functions that make it hold. That is how a whole function is asked for in one line —
-the inverse of `rev` is `(fn unrev_spec ((xs (List Nat))) Bool (list_eq (unrev (rev xs)) xs))`
-over `(extern unrev ((xs (List Nat))) (List Nat))`.
+holes and hole functions that make it hold. That is how a whole function is asked for in one
+line — the inverse of `rev` is `(fn unrev_spec ((xs (List Nat))) Bool (list_eq (unrev (rev
+xs)) xs))` over `(fn unrev ((xs (List Nat))) (List Nat) (hole))`.
 
 Nobody writes a grammar. The ways to settle an unknown are read off the types the program
 states: an unknown of an inductive type is one of its constructors over new unknowns; an
@@ -28,6 +30,13 @@ proper part of what it was given (a variable a `match` bound under a parameter):
 language's own structural rule, so what is found is printed with its `(measure (struct x))`
 and loads as a definition.
 
+A hole says more than a signature does, and the search uses it. Its filling is read off the
+same types — the names in scope are its parameters — and the function it stands in, its
+*owner*, is the function being found: from the owner's own body the search knows which of
+those names are the owner's parameters, which are proper parts of one (bound by a match the
+author wrote) and which the author has already taken apart. So a filling calls the owner only
+on a proper part, and matches no name a second time.
+
 ```
 v3/build.sh v3/search/find.shard v3/bin/find --native        # ~20 s
 read EXPORT INDEX < <(v3/kernel/test/init_index.sh)
@@ -39,6 +48,23 @@ $F --goal $T.inv.rev_is --ints 0,1,2,3 v3/search/test/tasks/inv.shard
 #    ARG 0 (List Nat) = (List.cons 2 (List.cons 1 (List.cons 3 List.nil)))
 #  FIND: found size=7 work=163 …
 
+# a sketch: (fn rev_acc ((xs (List Nat)) (acc (List Nat))) (List Nat)
+#             (match xs (nil (hole at_nil)) ((cons x r) (hole at_cons))))
+$F --goal $T.holes.rev_goal --use $T.holes.rev_acc v3/search/test/tasks/holes.shard
+#  FOUND size=5
+#    HOLE ….rev_acc.at_nil = acc
+#    HOLE ….rev_acc.at_cons = (….rev_acc r (List.cons x acc))
+#    MEASURE ….rev_acc (struct xs)
+
+# the case analysis written, the answers left out — (match ys (nil (hole empty))
+#   ((cons y r) (if (leq x y) (hole before) (hole after)))) — and a property:
+$F --spec $T.holes.insert_spec --use $T.holes.insert --ints 0,1,2 v3/search/test/tasks/holes.shard
+#    HOLE ….insert.empty = (List.cons x ys)
+#    HOLE ….insert.before = (List.cons x ys)
+#    HOLE ….insert.after = (List.cons y (….insert x r))
+#    MEASURE ….insert (struct ys)
+
+# the same with nothing in scope stated: the parts declared as externs over what they read
 $F --goal $T.sketch.rev_goal --hole $T.sketch.at_nil --hole $T.sketch.at_cons \
    --use $T.sketch.rev_acc v3/search/test/tasks/sketch.shard
 #  FOUND size=6
@@ -61,8 +87,11 @@ $F --spec $W.insert_spec --hole $W.insert --use $W.insert --use $W.le --ints 0,1
 #                                                  (Bool.true (List.cons x0 x1))))))
 ```
 
-An `FN` line is source text: it stands in the place of the hole function's `extern`, or in the
-implementation of its view. `find` writes no file. The options and the records are in
+A `HOLE` line is the expression to write in the hole's place, in the names of its scope (a
+variable the filling binds itself is `xK`); `MEASURE F (struct x)` follows where the fillings
+make `F` call itself — the recursion clause `F` then takes. An `FN` line is source text too:
+it stands in the place of the hole function's `extern`, or in the implementation of its view.
+`find` writes no file. The options and the records are in
 `find.shard`'s header.
 
 ## How it works
@@ -72,8 +101,8 @@ implementation of its view. `find` writes no file. The options and the records a
 | `narrow.shard` | the **narrowing machine**: `ev`'s machine (`v3/kernel/ev.shard` — the same linked program, the same primitives) over values that may be references to cells of a heap: an unknown, a suspended call of a hole function, or a settled value. It passes references around unread and stops, with the cell and the rest of the run in hand, where the program reads one that is not settled. Heap and continuation are values, so a stopped run is resumed in as many ways as there are ways to settle the cell, and all of them share what ran before |
 | `task.shard` | the problem, and what makes a stopped search's state an answer: what is still undecided is filled with the first thing of its type, the hole functions are written into the program, and the goal is **replayed under `ev`**. Only an answer `ev` gives the same yes to is reported |
 | `drive.shard` | the ways to settle a cell, and the walks. For a goal: depth first under a size bound raised one at a time. For a property: its tests, made from the parameter types by size, run in order, a branch ending at the first no; the bound is a depth (how deep a row's expression nests, and one less, how deep matches do); and a failure carries its *conflict* — the hole functions whose bodies the failing run entered — so a level whose hole function is no part of it is not tried another way: a function whose rows are reached by different tests is found row by row. A round's fuel is set by what the costliest answer so far took. Also the comparison walk, `--enum`: every candidate decided whole before it is run |
-| `find.shard` | the command line and the records |
-| `test/` | `find_test.sh` (an entrypoint of `v3/test.sh`): the problems of `problems.txt` over the task files, against `expected.txt` |
+| `find.shard` | the command line and the records; the holes of the load (`placed_holes`): each hole a run of the goal reaches, with what its owner's body says of the names it is handed |
+| `test/` | `find_test.sh` (an entrypoint of `v3/test.sh`): the problems of `problems.txt` over the task files, against `expected.txt`. `tasks/holes.shard`: sketches with holes in place; `tasks/sketch.shard`: the same with externs; `tasks/whole.shard`: whole functions from properties |
 
 ## What a verdict claims
 
@@ -99,8 +128,12 @@ engine.
 | reverse with an accumulator, whole, against the plain one | 12,672 | 26,966 |
 | a tree's flattening with an accumulator, whole | 22,499 | 29,664 |
 | insertion into a sorted list, whole, from three things it must keep | 4,437,150 (2 s) | not within 20 million |
-| a sketch of reverse: two hole functions from two examples | 17,497 | 1,881 |
-| a sketch of append: one hole function from two examples | 3,704 | 833 |
+| a sketch of reverse, two holes in place, from two examples | 923 | 3,412 |
+| a sketch of append, one hole in place, from two examples | 360 | 542 |
+| the inverse of a tree's mirror, the whole body one hole | 4,104 | 12,170 |
+| insertion into a sorted list, the case analysis written and three holes | 14,847 | 13,339,528 |
+| the sketch of reverse with its parts declared as externs | 17,497 | 1,881 |
+| the sketch of append with its part declared as an extern | 3,704 | 833 |
 
 Every search but the insertion is well under a second on the binary; a process is 2.3 s,
 nearly all of it the load. Running a goal on something half decided pays where the unknown
@@ -108,10 +141,15 @@ is data and where a function is found whole: the rows of a match are decided by 
 that reach them, and a failure revisits only what its run entered. The insertion shows it:
 a match on a parameter, under it a match on a comparison, three rows — generate and test
 does not reach it. Most of its four million entries go to the rounds before its own (deep
-expressions under one match, which no body of that shape satisfies). On the two sketches the
-lazy walk costs: there a hole function calls the sketch's own function with nothing saying
-on what, a half-decided body can loop without asking for anything more, and each such
-branch is run to the round's fuel.
+expressions under one match, which no body of that shape satisfies). With the case analysis
+written and the three answers left as holes it is found in fifteen thousand: what the author
+knows of the shape is the costly part of the search.
+
+Where a sketch's parts are holes in place, the search knows the owner and calls it on proper
+parts alone. Where they are declared as externs it knows a signature and no more: a hole
+function calls the sketch's own function with nothing saying on what, a half-decided body
+can loop without asking for anything more, and each such branch is run to the round's fuel —
+the last two rows, the same two sketches as the first two of the four above them.
 
 ## On a machine model (2026-11-26, by hand: `test/tasks/span.shard`)
 
@@ -140,6 +178,8 @@ suite's problems: a load of the model is too long for the bootstrap.
   that tells a found body from the wanted one, and nothing proves the property.
 - A primitive (`+`, `<`) is in a body only through a function of the vocabulary that wraps it.
 - An unknown integer is tried at the listed values only; nothing solves for one.
+- A hole is filled where its function has no type parameter and the place gives it a type
+  (`docs/LANGUAGE.md`); a filling binds no `let` and uses a function-typed parameter not at all.
 - The goal is a program the author writes. Nothing yet turns a `requirement` into one, and
   nothing proves the property of what was found: that is `prove`'s part. A property's tests
   are all the small arguments in generation order; a found function that fails a larger one

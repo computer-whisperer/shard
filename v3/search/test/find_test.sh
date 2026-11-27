@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # v3/search/test/find_test.sh — the search's gate: `find` (v3/search/find.shard) over the
-# problems of problems.txt, one run and one load of the four task files, on the engine under
+# problems of problems.txt, one run and one load of the five task files, on the engine under
 # test; its records are expected.txt byte for byte. What that holds:
 #   (1) UNKNOWN VALUES: a function inverted at a point (a list by its reversal; a stack
 #       machine's program by its result, and with its start), every answer of a size, a goal
 #       with no answer under a size bound (`bounded`) and one with none at all (`none`).
 #   (2) UNKNOWN CODE: a sketch's hole functions found from examples (reverse with an
 #       accumulator, append, a constant), as source text.
+#   (2b) HOLES IN PLACE: the same sketches with `(hole NAME)` written where a part is left out
+#       (tasks/holes.shard) and nothing named on the command line — each filling printed as
+#       the expression for the hole's place, in the names in scope there, with the owner's
+#       `MEASURE`; a whole body as one hole, from a property; and insertion into a sorted list
+#       with its case analysis written and three holes — found at a few hundredths of the
+#       work the whole function takes in (3).
 #   (3) WHOLE FUNCTIONS FROM PROPERTIES (`--spec`): each function an `extern` and one line that
 #       must hold on every small argument — the inverse of reverse, of a map and of a tree's
 #       mirror; reverse and a tree's flattening with an accumulator, stated against the plain
@@ -34,14 +40,14 @@ fail=0; checks=0
 bad() { echo "find_test: $*"; fail=$((fail+1)); }
 s=$(date +%s)
 "$EVAL" direct v3/search/find.shard --root v3 --init "$EXPORT" --init-index "$INDEX" \
-  --batch $T/problems.txt $T/tasks/inv.shard $T/tasks/sketch.shard $T/tasks/closed.shard $T/tasks/whole.shard > "$out" 2>&1; rc=$?
+  --batch $T/problems.txt $T/tasks/inv.shard $T/tasks/sketch.shard $T/tasks/closed.shard $T/tasks/whole.shard $T/tasks/holes.shard > "$out" 2>&1; rc=$?
 [ "${V3_FIND_WRITE:-0}" = 1 ] && { cp "$out" $T/expected.txt; echo "find_test: $T/expected.txt written"; }
 checks=$((checks+1)); [ "$rc" = 2 ] || bad "the run exits $rc, not 2 (the batch ends in problems that do not read)"
 checks=$((checks+1)); cmp -s "$out" $T/expected.txt || { bad "the records are not $T/expected.txt:"; diff $T/expected.txt "$out" | head -12 | cut -c1-200; }
 checks=$((checks+1)); n=$(grep -c '^SAME ' "$out"); [ "$n" = 10 ] || bad "$n SAME lines, not 10"
 checks=$((checks+1)); ! grep -q '^DIFFER ' "$out" || bad "the narrowing machine and ev differ: $(grep -m1 '^DIFFER ' "$out" | cut -c1-200)"
 checks=$((checks+1)); n=$(grep -c '^FIND-ERROR ' "$out"); [ "$n" = 5 ] || bad "$n FIND-ERROR lines, not 5"
-checks=$((checks+1)); n=$(grep -c '^FIND: found ' "$out"); [ "$n" = 20 ] || bad "$n problems found, not 20"
+checks=$((checks+1)); n=$(grep -c '^FIND: found ' "$out"); [ "$n" = 27 ] || bad "$n problems found, not 27"
 # the two walks answer alike on a goal: each --enum goal's FOUND block is its lazy twin's (a
 # property has many bodies that pass, and the two walks order them differently: sizes there,
 # depths here)

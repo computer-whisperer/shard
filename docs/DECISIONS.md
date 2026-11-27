@@ -41,6 +41,15 @@ entries are explained under "Measured" at the end.
 - `if` tests a two-constructor type's second constructor, by the type's declaration; not the cell's
   tag — on a view's opaque type (`private_if`) the tag would leak the hidden constructor order.
   (The evaluator and a native binary both do: `v3/pins/emit/if_second`.)
+- ★ A value still to be found is written where it stands, `(hole NAME)` in a `fn`'s body, and reads
+  as a generated opaque constant applied to the names in scope there (an extern in the program);
+  not an `extern` the author declares beside the function — its signature restates what the
+  elaborator knows, type and scope, and a search then cannot tell a parameter from a part of one;
+  not an unknown kept open through the load — every declaration K checks is closed (`LAW.md` rule
+  1 stands, K has no new kind); not Lean's `_` and `?x` — `_` is the wildcard pattern here. A
+  function with a hole is defined and theorems name the hole's constant; a build refuses it.
+  (Approved 2026-11-26 as "Yes, build provision 2 next", on a lean put as one paragraph: a
+  checkpoint.)
 - ★ A specification is a `def` into `Prop`, a comparison a proposition, a length or address a `Nat`;
   not `Bool` functions with `(= (le a b) True)` over `Int` — Init's lemmas and `arith` then apply.
 
@@ -1218,6 +1227,13 @@ entries are explained under "Measured" at the end.
   environment; not the statement's hash alone — a cited body can change under its name.
 - ★ A new tactic is an ordinary `fn` over text (the goal in as one form, steps out), named by
   `(auto (tactic M.FN))` and replayed before acceptance; not a metaprogram over `Expr`.
+- A search for programs and data is a tool beside the build (`find`, `v3/search/`), as `prove` is
+  for proofs, with a machine of its own that reads `ev.shard`'s linked program and stops where a
+  run reads something undecided; not unknowns carried by `ev` itself — the canonical evaluator
+  stays the one that decides what a program does, and every answer is replayed under it before it
+  is printed. What is found is printed as source text; no tool writes a source file. (Built
+  2026-11-26 under "I think this should be good to push and implement": both choices were leans
+  given without the owner's reasons — checkpoints.)
 - ★ `simp_only` rewrites by the lemmas listed (256 rewrites) and `reduce` runs functions by their
   equations (2,000 rewrites, 64 unfoldings); not one `simp` over a database.
 - `(reduce (using FACT…))` takes its facts in order and finds none itself; it holds the functions

@@ -313,7 +313,8 @@
   (RState Name Symbol (List Int))  ; the state's check on a function that takes or returns the checker's state, under --state: ok (with its resumptions), primitive, reused or unsupported with its detail
   (RBoth Name Symbol (List Int))  ; under --both, a fn the typed route gave a program: the classifier's reading of the same form gives the same program (same), another (differs, with both), or none (unread, with its refusal)
   (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked: its name, entry, externs, trusted axioms' count, requirements, requirements met
-  (RBinErr Name Symbol (List Int)))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
+  (RBinErr Name Symbol (List Int))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
+  (RHole Name (List Int)))  ; a hole of a fn's body: its constant, the names it is handed with their types and its own type — a value still to be found
 
 ;; the caches the load keeps beside its checked environment, each of a function of what the
 ;; environment holds of a declaration: K's closures of axioms, and the declarations' parts of
@@ -2142,20 +2143,26 @@
       ((PdSkip r m) (Prod.mk (ld_rec l1 (RClassify k r m)) f))
       ((PdErr r m) (Prod.mk (ld_rec l1 (RClassify k r m)) f))
       ((PdOk pd)
-       (match (define_pd (Load.etab l1) sc pd)
-         ((DfSkip why m) (Prod.mk (ld_rec l1 (RClassify k why m)) f))
-         ((DfAux es2 auxs)
-          (if (< fuel 1)
-            (Prod.mk
-              (ld_rec l1 (RClassify k (sym "define_loop") (utf8 "the auxiliaries did not settle")))
-              f)
-            (match (admit_forms (ld_with_e l1 es2) f s auxs)
-              ((Prod.mk l2 f2)
-               (if (ld_last_accepted l2) (load_ldef l2 f2 s (- fuel 1)) (Prod.mk l2 f2))))))
-         ((DfOk es2 obls dd eqs wf)
-          (match (admit_matchers (ld_with_e l1 es2) f s (pd_aux pd))
-            ((Prod.mk l2 (some f2)) (load_ldefined l2 f2 k obls dd eqs wf))
-            ((Prod.mk l2 none) (Prod.mk l2 f)))))))))
+       (if (has_hole (pd_aux pd))
+         (Prod.mk
+           (ld_rec l1
+             (RClassify k (sym "hole_outside")
+               (utf8 "a hole stands in the body of a fn: a def has no program to find a value for")))
+           f)
+         (match (define_pd (Load.etab l1) sc pd)
+           ((DfSkip why m) (Prod.mk (ld_rec l1 (RClassify k why m)) f))
+           ((DfAux es2 auxs)
+            (if (< fuel 1)
+              (Prod.mk
+                (ld_rec l1 (RClassify k (sym "define_loop") (utf8 "the auxiliaries did not settle")))
+                f)
+              (match (admit_forms (ld_with_e l1 es2) f s auxs)
+                ((Prod.mk l2 f2)
+                 (if (ld_last_accepted l2) (load_ldef l2 f2 s (- fuel 1)) (Prod.mk l2 f2))))))
+           ((DfOk es2 obls dd eqs wf)
+            (match (admit_matchers (ld_with_e l1 es2) f s (pd_aux pd))
+              ((Prod.mk l2 (some f2)) (load_ldefined l2 f2 k obls dd eqs wf))
+              ((Prod.mk l2 none) (Prod.mk l2 f))))))))))
 ;; the definition, its equations and its obligations admitted; DEFINE with no program roots
 (fn load_ldefined
   ((l0 Load)
@@ -2239,7 +2246,10 @@
                   ((DfSkip why m)
                    (both_noted
                      (Prod.mk
-                       (ld_rec (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s)
+                       (ld_rec
+                         (ld_rec_all
+                           (ld_add_typed (ld_with_e l1b (es_add_decl (Load.etab l1b) d)) k sc s)
+                           (hole_recs (pd_aux pd)))
                          (RRun (sym "fn") k why (sym "typed") m))
                        f1b)
                      l1
@@ -2614,7 +2624,20 @@
     (_
       (match (admit_core l f ds)
         ((Prod.mk l1 none) (Prod.mk l1 none))
-        ((Prod.mk l1 (some recs)) (Prod.mk l1 (some (mix_recs f recs))))))))
+        ((Prod.mk l1 (some recs)) (Prod.mk (ld_rec_all l1 (hole_recs ds)) (some (mix_recs f recs))))))))
+;; the holes among a body's generated declarations (elab.shard elab_hole: the opaque ones),
+;; each HOLE with the names it is handed and its type as a goal is shown
+(fn hole_recs ((ds (List Declaration))) (List Rec)
+  (measure (struct ds))
+  (match ds
+    (nil nil)
+    ((cons (OpaqueDecl (ConstantVal n _ ty) _ _ _) r)
+     (cons (RHole n (show_goal_go ty 4096 nil)) (hole_recs r)))
+    ((cons _ r) (hole_recs r))))
+(fn has_hole ((ds (List Declaration))) Bool
+  (match (hole_recs ds)
+    (nil false)
+    (_ true)))
 ;; the parked fns tried again, to a fixpoint: each attempt re-parks or settles
 (fn retry_parked ((l Load) (f Fx) (fuel Int)) (Prod Load Fx)
   (measure (Int.natAbs fuel))
@@ -2980,7 +3003,8 @@
          ((Prod.mk (Prod.mk l1 f1) none) (Prod.mk l1 f1))
          ((Prod.mk (Prod.mk l1 f1) (some ds))
           (match (define_group (Load.etab l1) sc pds)
-            ((GrpSkip why m) (Prod.mk (group_runnable l1 sc g ds why m) f1))
+            ((GrpSkip why m)
+             (Prod.mk (group_runnable (ld_rec_all l1 (hole_recs (group_aux pds))) sc g ds why m) f1))
             ((GrpOk es2 obls core defs)
              (match (admit_matchers (ld_with_e l1 es2) f1 (group_form g) (group_aux pds))
                ((Prod.mk l2 none) (Prod.mk l2 f1))
@@ -5199,7 +5223,7 @@
     (nil none)
     ((cons x _) (some x))))
 (fulfills load_ldef.dec_1
-  (by (intro p pd h1 es2 auxs h2 h3 l2 f2 h4 h5) (apply natAbs_pred (arith))))
+  (by (intro p pd h1 hh es2 auxs h2 h3 l2 f2 h4 h5) (apply natAbs_pred (arith))))
 (fulfills load_fn_with.dec_1
   (by
     (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
@@ -5945,6 +5969,8 @@
              (match m
                (nil (utf8 ""))
                (_ (append (utf8 ": ") m))))))))
+    ((RHole n goal)
+     (append (utf8 "HOLE ") (append (show_name n) (append (utf8 " [") (append goal (utf8 "]"))))))
     ((RBoth n k m)
      (append (utf8 "BOTH ")
        (append (show_name n)
@@ -6023,6 +6049,7 @@
        ((RThread _ _ _) acc)
        ((RState _ _ _) acc)
        ((RBoth _ _ _) acc)
+       ((RHole _ _) (list a b u c (+ d 1) e f g))
        ((RBin _ _ _ _ _ _) acc)
        ((RBinErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))

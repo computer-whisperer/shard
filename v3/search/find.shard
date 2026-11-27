@@ -13,8 +13,12 @@
 ;;;             400). Nothing of it is unknown: what is searched
 ;;;             for is the hole functions that make it hold on all of them
 ;;;   --hole    a function the program names and does not define — an `extern`, a view's `sig fn`
-;;;             with no implementation among the roots — whose body is to be found
-;;;   --use     a function a found body may call (a hole function among them: recursion)
+;;;             with no implementation among the roots — whose body is to be found. A hole
+;;;             written in a function's body, `(hole NAME)`, needs no option: every one a run
+;;;             of the goal can reach is searched for
+;;;   --use     a function a found body may call (a hole function among them: recursion; the
+;;;             function a hole stands in among them: its fillings call it on a proper part of
+;;;             what it was given, as a function being found calls itself)
 ;;;   --ints    the integers an unknown `Int` or `Nat` is tried at, and a body may hold
 ;;;             (default 0,1)
 ;;;   --size    the last bound tried. For a goal: a size, one unit for each constructor,
@@ -31,9 +35,12 @@
 ;;;             `enum_walk`) — the same answers at many times the work
 ;;; The records: `FIND …` (the problem as read), then for each answer `FOUND size=N` (for a
 ;;; property `FOUND depth=E matches=D`) with one
-;;; `ARG i TYPE = VALUE` a goal parameter and one `FN (fn NAME ((x0 T) …) RET BODY)` a hole
-;;; function — source text: a hole function's line stands in the place of its `extern`, or in
-;;; the implementation of its view —, then the verdict and the tally (drive.shard):
+;;; `ARG i TYPE = VALUE` a goal parameter, one `HOLE F.NAME = EXPRESSION` a hole of a function's
+;;; body — the expression to write in the hole's place, over the names in scope there —, with
+;;; `MEASURE F (struct x)` where the fillings make F call itself (its recursion clause), and one
+;;; `FN (fn NAME ((x0 T) …) RET BODY)` a hole function named by --hole — source text: its line
+;;; stands in the place of its `extern`, or in the implementation of its view —, then the
+;;; verdict and the tally (drive.shard):
 ;;;   FIND: found|none|bounded|gave_up size=N work=W settled=… no=… out=… stuck=… cut=… dead=… unverified=…
 ;;; (for a property `depth=E matches=D` in the place of `size=N`).
 ;;; Every answer printed was replayed under `ev` (task.shard). Exit 0: found; 1: not found
@@ -207,26 +214,34 @@
                    (exit 2
                      (write_line (append (utf8 "FIND-ERROR load: ") (show_counts_load cs))
                        (print_frecs (ld_recs l) w2)))
-                   (main_loaded a (es_prog (Load.etab l)) w2))))))))))))
-;; the program linked once; one problem from the command line, or each line of the batch file
-(fn main_loaded ((a FArgs) (p Prog) (w World)) World
+                   (main_loaded a (es_prog (Load.etab l)) (es_holes (Load.etab l)) w2))))))))))))
+;; the program linked once; one problem from the command line, or each line of the batch file.
+;; `th`: the holes the load's functions hold (etable.shard es_holes), each with the names it is
+;; handed
+(fn main_loaded ((a FArgs) (p Prog) (th (List (Prod Name (List Name)))) (w World)) World
   (match (link p)
     ((LkErr e m)
      (exit 2
        (write_line (append (utf8 "FIND-ERROR link: ") (append (chars_of_sym e) (cons 32 m))) w)))
     ((LkOk lk)
      (if (= (len (FArgs.batch a)) 0)
-       (match (solve a p lk w)
+       (match (solve a p lk th w)
          ((Prod.mk st w1) (exit st w1)))
        (match (read_file (FArgs.batch a) w)
          ((Prod.mk none w1)
           (exit 2 (write_line (append (utf8 "FIND-ERROR --batch: cannot read ") (FArgs.batch a)) w1)))
          ((Prod.mk (some bs) w1)
-          (match (solve_lines a p lk (lines_of bs nil nil) (Prod.mk 0 w1))
+          (match (solve_lines a p lk th (lines_of bs nil nil) (Prod.mk 0 w1))
             ((Prod.mk st w2) (exit st w2)))))))))
 ;; a batch: each line a problem — the command line's options, over the command line's own. The
 ;; status is 2 where a line does not read, else 0: what each problem came to is in its records
-(fn solve_lines ((a FArgs) (p Prog) (lk Linked) (lines (List (List Int))) (acc (Prod Int World)))
+(fn solve_lines
+  ((a FArgs)
+   (p Prog)
+   (lk Linked)
+   (th (List (Prod Name (List Name))))
+   (lines (List (List Int)))
+   (acc (Prod Int World)))
   (Prod Int World)
   (measure (struct lines))
   (match lines
@@ -236,12 +251,13 @@
        ((Prod.mk st w)
         (let ((words (words_of ln nil nil)))
           (match words
-            (nil (solve_lines a p lk r acc))
-            ((cons (cons 35 _) _) (solve_lines a p lk r acc))
+            (nil (solve_lines a p lk th r acc))
+            ((cons (cons 35 _) _) (solve_lines a p lk th r acc))
             (_
               (match
-                (solve (parse_fargs words (with FArgs a (holes nil) (uses nil) (files nil))) p lk w)
-                ((Prod.mk st1 w1) (solve_lines a p lk r (Prod.mk (if (= st1 2) 2 st) w1))))))))))))
+                (solve (parse_fargs words (with FArgs a (holes nil) (uses nil) (files nil))) p lk th
+                  w)
+                ((Prod.mk st1 w1) (solve_lines a p lk th r (Prod.mk (if (= st1 2) 2 st) w1))))))))))))
 (fn lines_of ((bs (List Int)) (cur (List Int)) (acc (List (List Int)))) (List (List Int))
   (measure (struct bs))
   (match bs
@@ -295,6 +311,221 @@
         (holes_of lk p r
           (im_insert hs id (Hole.Hole ps rt none (HCtx.HCtx id (len ps) nil nil 0 0)))
           (cons (Prod.mk id (fn_name lk id)) acc)))))))
+;; ---- the holes of the load ---------------------------------------------------------------------
+;; a hole written in a function's body (`(hole NAME)`, elab.shard) is an extern of the program
+;; that the load's table names with the names it is handed. Those a run of the goal can reach
+;; are searched for without being named on the command line. Where a hole stands in its owner
+;; — the function whose body holds it — says more than a signature: which of the names it is
+;; handed are the owner's parameters, which are proper parts of one (bound by a match under
+;; it) and which the owner has already taken apart. So a filling calls the owner as a function
+;; being found calls itself — on a proper part alone (drive.shard `prod_rec`; the owner named
+;; by --use) — and matches no name twice.
+;; a hole in its place: its index, the names it is handed, its owner's index and number of
+;; parameters (0 where the hole's first parameters are not the owner's in order: a parameter
+;; hidden there by a later name)
+(type Place1 (Place1 Int (List Name) Int Int))
+(type Placed (PlacedOk (IntMap Hole) (List (Prod Int Name)) (List Place1)) (PlacedNo (List Int)))
+(fn placed_holes
+  ((lk Linked) (p Prog) (th (List (Prod Name (List Name)))) (reach (List Int)) (acc Placed))
+  Placed
+  (measure (struct th))
+  (match th
+    (nil
+      (match acc
+        ((Placed.PlacedOk hs named places) (Placed.PlacedOk hs (rev named) (rev places)))
+        (no no)))
+    ((cons (Prod.mk n names) r)
+     (match acc
+       ((Placed.PlacedNo m) (Placed.PlacedNo m))
+       ((Placed.PlacedOk hs named places)
+        (match (nmap_find (lk_ids lk) n)
+          (none (placed_holes lk p r reach acc))
+          ((some id)
+           (if (bool_or (bool_not (mem_int id reach)) (hole_known hs id))
+             (placed_holes lk p r reach acc)
+             (match (prog_find p n)
+               ((some (EExtern _ k ps rt))
+                (if (bool_not (= k 0))
+                  (Placed.PlacedNo
+                    (append (show_name n)
+                      (utf8
+                        ": its function has type parameters — a search fills a hole of plain types")))
+                  (match (site_of lk n id)
+                    ((Site.Site oid oar matched smaller)
+                     (placed_holes lk p r reach
+                       (Placed.PlacedOk
+                         (im_insert hs id
+                           (Hole.Hole ps rt none (HCtx.HCtx oid oar matched smaller 0 0)))
+                         (cons (Prod.mk id n) named)
+                         (cons (Place1.Place1 id names oid oar) places)))))))
+               (_ (placed_holes lk p r reach acc)))))))))))
+(fn hole_known ((hs (IntMap Hole)) (id Int)) Bool
+  (match (im_find hs id)
+    ((some _) true)
+    (none false)))
+;; the functions a run from these can reach, by index: calls and extern calls
+(fn reach_fns ((lk Linked) (todo (List Int)) (seen (List Int))) (List Int)
+  (match todo
+    (nil seen)
+    ((cons id r)
+     (if (mem_int id seen) (reach_fns lk r seen)
+     (match (im_find (lk_fns lk) id)
+       ((some (LFn.LBody _ _ b)) (reach_fns lk (heads_of b r) (cons id seen)))
+       (_ (reach_fns lk r (cons id seen))))))))
+(fn heads_of ((t LTerm) (acc (List Int))) (List Int)
+  (match t
+    ((LCall id as) (heads_all as (cons id acc)))
+    ((LExt id as) (heads_all as (cons id acc)))
+    ((LCtor _ as) (heads_all as acc))
+    ((LPrim _ as) (heads_all as acc))
+    ((LMatch s arms) (heads_arms arms (heads_of s acc)))
+    ((LLet rs b) (heads_of b (heads_all rs acc)))
+    ((LIf c x y) (heads_of y (heads_of x (heads_of c acc))))
+    (_ acc)))
+(fn heads_all ((ts (List LTerm)) (acc (List Int))) (List Int)
+  (match ts
+    (nil acc)
+    ((cons t r) (heads_all r (heads_of t acc)))))
+(fn heads_arms ((arms (List LArm)) (acc (List Int))) (List Int)
+  (match arms
+    (nil acc)
+    ((cons (LArm.LArm _ b) r) (heads_arms r (heads_of b acc)))))
+;; where a hole stands: its owner's index and number of parameters, the hole's parameters the
+;; owner has matched, and those that are proper parts of an owner's parameter (the hole's
+;; position, the owner's). The owner is the function the hole's name hangs under; a hole whose
+;; owner the program lacks, or whose call is not found in it, stands nowhere: itself the root,
+;; as a hole function named on the command line is
+(type Site (Site Int Int (List Int) (List (Prod Int Int))))
+;; what a variable of the owner's body is of the owner's parameters: a proper part of one, or not
+(type Org (OPart Int) (ONone))
+(type Seen (Seen (List Org) (List Int) (List LTerm)))  ; at the hole's call: the frame, the positions matched, the arguments
+(fn site_of ((lk Linked) (n Name) (id Int)) Site
+  (match n
+    ((Str owner _)
+     (match (nmap_find (lk_ids lk) owner)
+       ((some oid)
+        (match (im_find (lk_fns lk) oid)
+          ((some (LFn.LBody _ oar b))
+           (match (find_site b id (Prod.mk (params_orgs oar 0) nil) oar)
+             ((some (Seen.Seen env matched args))
+              (Site.Site oid (if (own_prefix args (len env) 0 oar) oar 0)
+                (matched_args args (len env) matched 0)
+                (part_args args env 0)))
+             (none (Site.Site id 0 nil nil))))
+          (_ (Site.Site id 0 nil nil))))
+       (none (Site.Site id 0 nil nil))))
+    (_ (Site.Site id 0 nil nil))))
+;; the owner's own parameters: each the whole of itself — a variable at a position below the
+;; owner's arity is a parameter, and a match on it binds its parts
+(fn params_orgs ((oar Int) (i Int)) (List Org)
+  (if (<= oar i) nil (cons Org.ONone (params_orgs oar (+ i 1)))))
+;; the hole's first arguments are the owner's parameters, in order
+(fn own_prefix ((args (List LTerm)) (n Int) (q Int) (oar Int)) Bool
+  (if (<= oar q) true
+  (match args
+    ((cons (LBVar i) r) (if (= (- (- n 1) i) q) (own_prefix r n (+ q 1) oar) false))
+    (_ false))))
+(fn matched_args ((args (List LTerm)) (n Int) (matched (List Int)) (a Int)) (List Int)
+  (match args
+    (nil nil)
+    ((cons (LBVar i) r)
+     (if (mem_int (- (- n 1) i) matched) (cons a (matched_args r n matched (+ a 1)))
+     (matched_args r n matched (+ a 1))))
+    ((cons _ r) (matched_args r n matched (+ a 1)))))
+(fn part_args ((args (List LTerm)) (env (List Org)) (a Int)) (List (Prod Int Int))
+  (match args
+    (nil nil)
+    ((cons (LBVar i) r)
+     (match (nth env (- (- (len env) 1) i))
+       ((some (Org.OPart q)) (cons (Prod.mk a q) (part_args r env (+ a 1))))
+       (_ (part_args r env (+ a 1)))))
+    ((cons _ r) (part_args r env (+ a 1)))))
+;; the walk to the hole's call. `st`: the frame — each variable's origin, in the order bound —
+;; and the positions a match has taken apart on the way
+(fn find_site ((t LTerm) (id Int) (st (Prod (List Org) (List Int))) (oar Int)) (Option Seen)
+  (match st
+    ((Prod.mk env matched)
+     (match t
+       ((LExt x args)
+        (if (= x id) (some (Seen.Seen env matched args)) (find_site_all args id st oar)))
+       ((LCall _ args) (find_site_all args id st oar))
+       ((LCtor _ args) (find_site_all args id st oar))
+       ((LPrim _ args) (find_site_all args id st oar))
+       ((LMatch s arms)
+        (match (find_site s id st oar)
+          ((some x) (some x))
+          (none
+            (match s
+              ((LBVar i)
+               (let ((pos (- (- (len env) 1) i)))
+                 (find_site_arms arms id (Prod.mk env (cons pos matched))
+                   (if (< pos oar) (Org.OPart pos)
+                   (match (nth env pos)
+                     ((some o) o)
+                     (none Org.ONone)))
+                   oar)))
+              (_ (find_site_arms arms id st Org.ONone oar))))))
+       ((LLet rs b) (find_site_let rs b id st oar))
+       ((LIf c x y)
+        (match (find_site c id st oar)
+          ((some v) (some v))
+          (none
+            (match (find_site x id st oar)
+              ((some v) (some v))
+              (none (find_site y id st oar))))))
+       (_ none)))))
+(fn find_site_all ((ts (List LTerm)) (id Int) (st (Prod (List Org) (List Int))) (oar Int))
+  (Option Seen)
+  (match ts
+    (nil none)
+    ((cons t r)
+     (match (find_site t id st oar)
+       ((some v) (some v))
+       (none (find_site_all r id st oar))))))
+;; a row binds its pattern's variables: under a scrutinee that is a parameter or a part of one,
+;; each a proper part of that parameter — a row that binds the scrutinee whole (a variable
+;; pattern) binds no part
+(fn find_site_arms ((arms (List LArm)) (id Int) (st (Prod (List Org) (List Int))) (o Org) (oar Int))
+  (Option Seen)
+  (match arms
+    (nil none)
+    ((cons (LArm.LArm p b) r)
+     (match st
+       ((Prod.mk env matched)
+        (match
+          (find_site b id
+            (Prod.mk
+              (append env
+                (orgs_n (pat_count p)
+                  (match p
+                    ((LPCtor _ _) o)
+                    (_ Org.ONone))))
+              matched)
+            oar)
+          ((some v) (some v))
+          (none (find_site_arms r id st o oar))))))))
+(fn find_site_let ((rs (List LTerm)) (b LTerm) (id Int) (st (Prod (List Org) (List Int))) (oar Int))
+  (Option Seen)
+  (match rs
+    (nil (find_site b id st oar))
+    ((cons x r)
+     (match (find_site x id st oar)
+       ((some v) (some v))
+       (none
+         (match st
+           ((Prod.mk env matched)
+            (find_site_let r b id (Prod.mk (append env (list Org.ONone)) matched) oar))))))))
+(fn orgs_n ((k Int) (o Org)) (List Org) (if (< k 1) nil (cons o (orgs_n (- k 1) o))))
+;; the variables a pattern binds
+(fn pat_count ((p LPat)) Int
+  (match p
+    (LPVar 1)
+    ((LPCtor _ subs) (pat_count_all subs))
+    (_ 0)))
+(fn pat_count_all ((ps (List LPat))) Int
+  (match ps
+    (nil 0)
+    ((cons p r) (+ (pat_count p) (pat_count_all r)))))
 (type Vocs (VocsOk (List Voc)) (VocsNo (List Int)))
 (fn vocs_of ((lk Linked) (p Prog) (texts (List (List Int))) (acc (List Voc))) Vocs
   (measure (struct texts))
@@ -304,7 +535,8 @@
      (match (sig_of lk p x false)
        ((SigNo m) (VocsNo m))
        ((SigOk id ps rt) (vocs_of lk p r (cons (Voc.Voc id ps rt) acc)))))))
-(fn solve ((a FArgs) (p Prog) (lk Linked) (w World)) (Prod Int World)
+(fn solve ((a FArgs) (p Prog) (lk Linked) (th (List (Prod Name (List Name)))) (w World))
+  (Prod Int World)
   (match (sig_of lk p (FArgs.goal a) false)
     ((SigNo m) (fail (append (utf8 "--goal ") m) w))
     ((SigOk gid gps _)
@@ -313,45 +545,50 @@
        (fail (utf8 "--goal: a parameter's type names a type parameter") w)
        (match (holes_of lk p (FArgs.holes a) IMEmpty nil)
          ((HolesNo m) (fail (append (utf8 "--hole ") m) w))
-         ((HolesOk hs named)
-          (match (vocs_of lk p (FArgs.uses a) nil)
-            ((VocsNo m) (fail (append (utf8 "--use ") m) w))
-            ((VocsOk voc)
-             (match p
-               ((Prog.Prog ds)
-                (let
-                  ((pb0
-                     (problem_of (Given.Given lk ds voc (FArgs.ints a) (FArgs.fuel a))
-                       (fn_name lk gid)
-                       gid
-                       (if (FArgs.spec a) nil gps)
-                       named))
-                   (tests
-                     (if (FArgs.spec a)
-                       (tests_of pb0 gps 0
-                         (Prod.mk
-                           (if (= (FArgs.test_size a) 0) (+ 10 (* 2 (- (len gps) 1)))
-                           (FArgs.test_size a))
-                           (FArgs.tests a))
-                         nil)
-                       nil)))
-                  (if (bool_and (FArgs.spec a) (= (len tests) 0))
-                    (fail
-                      (utf8
-                        "--spec: no test: no tuple of values of the parameter types under --test-size")
-                      w)
-                    (let ((pb (problem_tests pb0 tests)))
-                      (report a pb
-                        (deepen pb
-                          (Lim.Lim (size_of a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
-                            (FArgs.fuel a)
-                            (FArgs.budget a)
-                            (FArgs.all a)
-                            (FArgs.eager a))
-                          (Start.Start (Mach.Mach lk hs (Problem.base pb)))
-                          1
-                          (tally_zero))
-                        w)))))))))))))))
+         ((HolesOk hs0 named0)
+          (match
+            (placed_holes lk p th (reach_fns lk (list gid) nil)
+              (Placed.PlacedOk hs0 (rev named0) nil))
+            ((Placed.PlacedNo m) (fail (append (utf8 "hole ") m) w))
+            ((Placed.PlacedOk hs named places)
+             (match (vocs_of lk p (FArgs.uses a) nil)
+               ((VocsNo m) (fail (append (utf8 "--use ") m) w))
+               ((VocsOk voc)
+                (match p
+                  ((Prog.Prog ds)
+                   (let
+                     ((pb0
+                        (problem_of (Given.Given lk ds voc (FArgs.ints a) (FArgs.fuel a))
+                          (fn_name lk gid)
+                          gid
+                          (if (FArgs.spec a) nil gps)
+                          named))
+                      (tests
+                        (if (FArgs.spec a)
+                          (tests_of pb0 gps 0
+                            (Prod.mk
+                              (if (= (FArgs.test_size a) 0) (+ 10 (* 2 (- (len gps) 1)))
+                              (FArgs.test_size a))
+                              (FArgs.tests a))
+                            nil)
+                          nil)))
+                     (if (bool_and (FArgs.spec a) (= (len tests) 0))
+                       (fail
+                         (utf8
+                           "--spec: no test: no tuple of values of the parameter types under --test-size")
+                         w)
+                       (let ((pb (problem_tests pb0 tests)))
+                         (report a pb places
+                           (deepen pb
+                             (Lim.Lim (size_of a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
+                               (FArgs.fuel a)
+                               (FArgs.budget a)
+                               (FArgs.all a)
+                               (FArgs.eager a))
+                             (Start.Start (Mach.Mach lk hs (Problem.base pb)))
+                             1
+                             (tally_zero))
+                           w)))))))))))))))))
 ;; --closed: a function with no parameter and nothing unknown, run by the narrowing machine and
 ;; by `ev`: the two answers must be the same value, or the same kind of end
 (fn closed_run ((a FArgs) (p Prog) (lk Linked) (gid Int) (gps (List EType)) (w World))
@@ -398,7 +635,7 @@
     ((EvExhausted why _) (append (utf8 "exhausted ") (chars_of_sym why)))))
 
 ;; ---- the records ---------------------------------------------------------------------------------
-(fn report ((a FArgs) (pb Problem) (o Ending) (w World)) (Prod Int World)
+(fn report ((a FArgs) (pb Problem) (places (List Place1)) (o Ending) (w World)) (Prod Int World)
   (match o
     ((Ending.Ending verdict size sols y)
      (Prod.mk (if (< 0 (len sols)) 0 1)
@@ -406,7 +643,7 @@
          (append (utf8 "FIND: ")
            (append (chars_of_sym verdict)
              (append (bound_text a pb size) (show_tally (tally_counts y)))))
-         (print_sols a pb sols size
+         (print_sols a pb places sols size
            (write_line
              (append (utf8 "FIND goal=")
                (append (show_name (Problem.goal pb))
@@ -455,15 +692,18 @@
                              (append (utf8 " dead=")
                                (append (show_nat n) (append (utf8 " unverified=") (show_nat u)))))))))))))))))
     (_ nil)))
-(fn print_sols ((a FArgs) (pb Problem) (sols (List Sol)) (size Int) (w World)) World
+(fn print_sols
+  ((a FArgs) (pb Problem) (places (List Place1)) (sols (List Sol)) (size Int) (w World))
+  World
   (measure (struct sols))
   (match sols
     (nil w)
     ((cons (Sol.Sol m h) r)
-     (print_sols a pb r size
-       (print_fns pb m (Problem.holes pb)
-         (print_args pb h (Problem.goal_tys pb) 0
-           (write_line (append (utf8 "FOUND") (bound_text a pb size)) w)))))))
+     (print_sols a pb places r size
+       (print_measures pb m places (owners_of places nil)
+         (print_fns pb m places (Problem.holes pb)
+           (print_args pb h (Problem.goal_tys pb) 0
+             (write_line (append (utf8 "FOUND") (bound_text a pb size)) w))))))))
 (fn print_args ((pb Problem) (h Heap) (tys (List EType)) (i Int) (w World)) World
   (measure (struct tys))
   (match tys
@@ -480,9 +720,74 @@
                      ((some v) (show_val v))
                      (none (utf8 "?"))))))))
          w)))))
-(fn print_fns ((pb Problem) (m Mach) (hs (List (Prod Int Name))) (w World)) World
+;; a hole function as a definition; a hole of a function's body as the expression that stands
+;; in its place, over the names in scope there
+(fn print_fns ((pb Problem) (m Mach) (places (List Place1)) (hs (List (Prod Int Name))) (w World))
+  World
   (measure (struct hs))
   (match hs
     (nil w)
     ((cons (Prod.mk id n) r)
-     (print_fns pb m r (write_line (append (utf8 "  FN ") (show_fn pb m id n)) w)))))
+     (print_fns pb m places r
+       (write_line
+         (match (place_of places id)
+           ((some (Place1.Place1 _ names _ _))
+            (append (utf8 "  HOLE ")
+              (append (show_name n) (append (utf8 " = ") (show_filling pb m id names)))))
+           (none (append (utf8 "  FN ") (show_fn pb m id n))))
+         w)))))
+;; a function whose holes' fillings call it: the parameter every such call passes a proper
+;; part at — `MEASURE F (struct x)`, the recursion clause the filled function takes
+(fn print_measures
+  ((pb Problem) (m Mach) (places (List Place1)) (owners (List (Prod Int Int))) (w World))
+  World
+  (measure (struct owners))
+  (match owners
+    (nil w)
+    ((cons (Prod.mk oid oar) r)
+     (print_measures pb m places r
+       (let ((calls (owner_calls pb m places (Prod.mk oid oar) nil)))
+         (match (struct_pos calls 0 oar)
+           ((some q)
+            (match (owner_param places oid q)
+              ((some nm)
+               (write_line
+                 (append (utf8 "  MEASURE ")
+                   (append (show_name (fn_name (Problem.lk pb) oid))
+                     (append (utf8 " (struct ") (append (show_last nm) (utf8 ")")))))
+                 w))
+              (none w)))
+           (none w)))))))
+(fn owner_calls
+  ((pb Problem) (m Mach) (places (List Place1)) (owner (Prod Int Int)) (acc (List (List Bool))))
+  (List (List Bool))
+  (measure (struct places))
+  (match places
+    (nil acc)
+    ((cons (Place1.Place1 id _ oid oar) r)
+     (owner_calls pb m r owner
+       (match owner
+         ((Prod.mk o _) (if (= o oid) (append (filling_calls pb m id owner) acc) acc)))))))
+;; the owner's q-th parameter's name: a hole of it is handed its parameters first
+(fn owner_param ((places (List Place1)) (oid Int) (q Int)) (Option Name)
+  (measure (struct places))
+  (match places
+    (nil none)
+    ((cons (Place1.Place1 _ names o _) r) (if (= o oid) (nth names q) (owner_param r oid q)))))
+(fn owners_of ((places (List Place1)) (acc (List (Prod Int Int)))) (List (Prod Int Int))
+  (measure (struct places))
+  (match places
+    (nil (rev acc))
+    ((cons (Place1.Place1 _ _ oid oar) r)
+     (owners_of r (if (bool_or (< oar 1) (has_owner acc oid)) acc (cons (Prod.mk oid oar) acc))))))
+(fn has_owner ((os (List (Prod Int Int))) (oid Int)) Bool
+  (measure (struct os))
+  (match os
+    (nil false)
+    ((cons (Prod.mk o _) r) (if (= o oid) true (has_owner r oid)))))
+(fn place_of ((places (List Place1)) (id Int)) (Option Place1)
+  (measure (struct places))
+  (match places
+    (nil none)
+    ((cons (Place1.Place1 i names o a) r)
+     (if (= i id) (some (Place1.Place1 i names o a)) (place_of r id)))))

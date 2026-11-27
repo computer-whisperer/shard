@@ -279,6 +279,7 @@ speaks of rests on building it from the file the contract imports. The contract
 | close `n / k < n`, `k` a numeral above 1 | `(apply Nat.div_lt_self (arith) (decide))`: `0 < n`, then `1 < k` | — |
 | use a truncated subtraction in arithmetic, where `(- n 2)` is an atom to `arith` | `(have hs (= (+ (- n 2) 2) n) (apply Nat.sub_add_cancel (arith)))`, then `(arith FACT… hs)` | — |
 | find a lemma of Init and read its statement | section 15 | |
+| leave a part of a function to be found | `(hole NAME)` in its body, then `find`: section 16 | `search/test/tasks/holes.shard` |
 | give a witness; open one | `(apply (Exists.intro W) ((exact h)))`; `(cases h ((intro (x hx) STEP…)))` | `models/x86/exit42.shard`; `models/x86/laws.shard` `reaches_step` |
 | restate the goal, then rewrite backwards | `(show G) (rw (<- h))` | `layout.shard` `opt_trail_rest` |
 | run a function over given facts | `(reduce lhs (using hb h))`; with a lemma given its premise, `(reduce lhs (using (if_pos h)))` | `pins/loader/reduce_using` |
@@ -489,3 +490,52 @@ the operators. Two limits:
   `#K` is the K-th binder outward).
 - A lemma with no argument is not a `forall`, and `cases` answers something else. The `exact`
   form prints any lemma's type.
+
+## 16. Leaving a part of a function to be found: a hole
+
+Write the function as far as you know it and put `(hole NAME)` where a part is missing
+(`v3/search/test/tasks/holes.shard`):
+
+```
+(fn insert ((x Nat) (ys (List Nat))) (List Nat)
+  (match ys
+    (nil (hole empty))
+    ((cons y r) (if (leq x y) (hole before) (hole after)))))
+```
+
+Nothing is declared for a hole. A load prints, for each, the names in scope there with their types
+and the hole's own type —
+`HOLE M.insert.after [(x : Nat) (ys : (List Nat)) (y : Nat) (r : (List Nat)) ⊢ (List Nat)]` — and
+goes on: the file's other functions load and run, and a theorem may name `insert.after`. A build
+refuses the function until its holes are filled.
+
+Then say what the function must do, as a function that answers a `Bool`: examples (no parameter,
+`--goal`), or a property that must hold of every argument (`--spec`: it is tried on every small
+one) —
+
+```
+(fn insert_spec ((x Nat) (y Nat) (xs (List Nat))) Bool
+  (if (sorted xs) (if (sorted (insert x xs)) … false) true))
+```
+
+— and run `find` (`v3/search/README.md`), with `EXPORT` and `INDEX` as in section 13:
+
+```
+v3/bin/find --root v3 --init $EXPORT --init-index $INDEX \
+  --spec M.insert_spec --use M.insert --ints 0,1,2 FILE
+#   HOLE M.insert.empty = (List.cons x ys)
+#   HOLE M.insert.before = (List.cons x ys)
+#   HOLE M.insert.after = (List.cons y (M.insert x r))
+#   MEASURE M.insert (struct ys)
+```
+
+Each `HOLE` line is the expression to write in the hole's place; `MEASURE` is the recursion clause
+the function takes now that it calls itself (section 6). `--use` names what a filling may call —
+the function itself, for a recursive one — and `--ints` the numbers it may hold.
+
+| to | do | why |
+|---|---|---|
+| make the search cheap | write the case analysis yourself and leave the answers as holes | the shape is the costly part: this insertion is found in 15 thousand steps with its rows written, and in 4 million from `(hole)` as the whole body |
+| keep it cheap | name few functions under `--use` | each is tried wherever its type fits |
+| trust a filling | read it, and prove the property | it is right on the tests that ran and on nothing more: too few tests are met by a wrong function (`v3/search/README.md`) |
+| mend `hole_type` | bind the hole with its type: `(let ((k Nat (hole shift))) …)` | a hole takes its type from its place, and a `match`'s scrutinee or an operator's first operand gives none |
