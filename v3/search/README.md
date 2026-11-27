@@ -87,12 +87,55 @@ $F --spec $W.insert_spec --hole $W.insert --use $W.insert --use $W.le --ints 0,1
 #                                                  (Bool.true (List.cons x0 x1))))))
 ```
 
-A `HOLE` line is the expression to write in the hole's place, in the names of its scope (a
-variable the filling binds itself is `xK`); `MEASURE F (struct x)` follows where the fillings
-make `F` call itself — the recursion clause `F` then takes. An `FN` line is source text too:
-it stands in the place of the hole function's `extern`, or in the implementation of its view.
-`find` writes no file. The options and the records are in
-`find.shard`'s header.
+A `HOLE` line is the expression for the hole's place, in the names of its scope (a variable
+the filling binds itself is `xK`); `MEASURE F (struct x)` follows where the fillings make `F`
+call itself — the recursion clause `F` then takes. An `FN` line is source text too: it stands
+in the place of the hole function's `extern`, or in the implementation of its view. The
+options are in `find.shard`'s header, the parts of a problem and the records in
+`finder.shard`'s.
+
+## Where what is found goes: the sidecar
+
+```
+$F --goal $T.holes.rev_goal --use $T.holes.rev_acc --write v3/search/test/tasks/holes.shard
+#  …
+#  WROTE v3/search/test/tasks/holes.auto.shard fill-for rev_acc holes=at_nil,at_cons
+```
+
+With `--write` the first answer's code for the holes of functions' bodies goes to the sidecar
+of each function's file, `FILE.auto.shard`, the file `prove` writes proofs to
+(`docs/LANGUAGE.md`, "A function's code in the sidecar"):
+
+```
+(fill-for rev_acc (fn 1631611479201210237) ((at_nil acc) (at_cons (….rev_acc r (List.cons x acc)))) (measure (struct xs)))
+```
+
+One entry a function: its name, the fingerprint of its form as the source has it, each hole's
+code, and the measure where the code makes it call itself. The next load reads the function
+with the code where its holes stand (`FILLED ….rev_acc holes=at_nil,at_cons (measure (struct
+xs))`): it is defined, built and run as a function written that way, a theorem about it is
+proven of it as filled, and `find` over the file meets no hole of it. Once the function's text
+changes the entry is not its any more — `PENDING ….rev_acc fill_stale` — and its holes are
+holes until `find --write` runs again. No source file is written, and the file's proofs in the
+same sidecar are kept. What is not written, with its line: a hole without a name
+(`NOT-WRITTEN F: …` — an entry stands under its hole's name); a function named by `--hole`
+(its `FN` line is for its author to place).
+
+## The search as a library
+
+`finder.shard` is the search without a command line. A program that has a load asks it the same
+question `find` does and gets a value back:
+
+| call | gives |
+|---|---|
+| `(ground_of l)` | the load's program linked once, with the holes its functions hold — many problems are asked of one |
+| `(ask_for GOAL SPEC)` | a problem with every part at its default: the goal's name as text, whether it is a property; `ask_option` and `ask_flag` set the other parts by the command line's words |
+| `(find_in g ask)` | `FindNo WHY`, or `FindOk` with the verdict, the tally and the answers: for each, the unknown values as text, each hole's code and the function it stands in, each function's measure |
+| `(found_lines r)` | the records `find` prints |
+| `(write_fills l an w)` | an answer's code written to the sidecars; the `WROTE` and `NOT-WRITTEN` lines, and whether every function was written |
+
+`find.shard` is that program: arguments, a load, these five calls, an exit code. No second
+caller exists yet.
 
 ## How it works
 
@@ -101,7 +144,8 @@ it stands in the place of the hole function's `extern`, or in the implementation
 | `narrow.shard` | the **narrowing machine**: `ev`'s machine (`v3/kernel/ev.shard` — the same linked program, the same primitives) over values that may be references to cells of a heap: an unknown, a suspended call of a hole function, or a settled value. It passes references around unread and stops, with the cell and the rest of the run in hand, where the program reads one that is not settled. Heap and continuation are values, so a stopped run is resumed in as many ways as there are ways to settle the cell, and all of them share what ran before |
 | `task.shard` | the problem, and what makes a stopped search's state an answer: what is still undecided is filled with the first thing of its type, the hole functions are written into the program, and the goal is **replayed under `ev`**. Only an answer `ev` gives the same yes to is reported |
 | `drive.shard` | the ways to settle a cell, and the walks. For a goal: depth first under a size bound raised one at a time. For a property: its tests, made from the parameter types by size, run in order, a branch ending at the first no; the bound is a depth (how deep a row's expression nests, and one less, how deep matches do); and a failure carries its *conflict* — the hole functions whose bodies the failing run entered — so a level whose hole function is no part of it is not tried another way: a function whose rows are reached by different tests is found row by row. A round's fuel is set by what the costliest answer so far took. Also the comparison walk, `--enum`: every candidate decided whole before it is run |
-| `find.shard` | the command line and the records; the holes of the load (`placed_holes`): each hole a run of the goal reaches, with what its owner's body says of the names it is handed |
+| `finder.shard` | the search as a library: the problem as asked (`Ask`), the holes of the load (`placed_holes`: each hole a run of the goal reaches, with what its owner's body says of the names it is handed), the answer as a value (`find_in`), the records (`found_lines`), the code into the sidecars (`write_fills`) |
+| `find.shard` | the command over it: arguments, the load, `--batch`, `--closed`, `--write`, the exit code |
 | `test/` | `find_test.sh` (an entrypoint of `v3/test.sh`): the problems of `problems.txt` over the task files, against `expected.txt`. `tasks/holes.shard`: sketches with holes in place; `tasks/sketch.shard`: the same with externs; `tasks/whole.shard`: whole functions from properties |
 
 ## What a verdict claims
@@ -180,8 +224,12 @@ suite's problems: a load of the model is too long for the bootstrap.
 - An unknown integer is tried at the listed values only; nothing solves for one.
 - A hole is filled where its function has no type parameter and the place gives it a type
   (`docs/LANGUAGE.md`); a filling binds no `let` and uses a function-typed parameter not at all.
-- The goal is a program the author writes. Nothing yet turns a `requirement` into one, and
-  nothing proves the property of what was found: that is `prove`'s part. A property's tests
+- Code is stored for a named hole of a function in a file of the load's root; not for a bare
+  `(hole)`, and not for a function inside a sealed directory. A function with stored code is
+  searched again only once its text changes or its sidecar's entry is removed.
+- The goal is a program the author writes. Nothing yet turns a `requirement` or a `theorem`
+  into one, and `find` does not prove the property of what it found: with the code in the
+  sidecar that is `prove`'s part, over a `theorem … auto` the author states. A property's tests
   are all the small arguments in generation order; a found function that fails a larger one
   is not caught here.
 - The functions of this directory are programs without definitions, a handful of helpers

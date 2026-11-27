@@ -529,13 +529,25 @@ v3/bin/find --root v3 --init $EXPORT --init-index $INDEX \
 #   MEASURE M.insert (struct ys)
 ```
 
-Each `HOLE` line is the expression to write in the hole's place; `MEASURE` is the recursion clause
-the function takes now that it calls itself (section 6). `--use` names what a filling may call —
-the function itself, for a recursive one — and `--ints` the numbers it may hold.
+Each `HOLE` line is the expression for the hole's place; `MEASURE` is the recursion clause the
+function takes now that it calls itself (section 6). `--use` names what a filling may call — the
+function itself, for a recursive one — and `--ints` the numbers it may hold.
+
+Do not paste the lines into the source. Add `--write` and `find` stores them in the file's sidecar,
+`FILE.auto.shard` (`WROTE … fill-for insert holes=empty,before,after`). The next load reads the
+function with the code in the holes' places — `FILLED M.insert holes=empty,before,after (measure
+(struct ys))` — and from then on it is an ordinary function: defined, built, run. State what must
+hold of it as a `theorem` with `auto` and run `prove` (section 13): the proof goes to the same
+sidecar and is checked against the function with the code in it. The source keeps the shape you
+wrote and the theorem you stated; code and proof are the tools'.
+
+Edit the function and its stored code no longer belongs to it: the load says `PENDING M.insert
+fill_stale`, the holes are holes again, and `find --write` makes a new entry.
 
 | to | do | why |
 |---|---|---|
 | make the search cheap | write the case analysis yourself and leave the answers as holes | the shape is the costly part: this insertion is found in 15 thousand steps with its rows written, and in 4 million from `(hole)` as the whole body |
 | keep it cheap | name few functions under `--use` | each is tried wherever its type fits |
-| trust a filling | read it, and prove the property | it is right on the tests that ran and on nothing more: too few tests are met by a wrong function (`v3/search/README.md`) |
+| trust a filling | state the property as a `theorem … auto` and run `prove`; read the code in the sidecar | it is right on the tests that ran and on nothing more: too few tests are met by a wrong function (`v3/search/README.md`) |
+| have it written | name the hole: `(hole NAME)` | a sidecar's entry stands under the hole's name; for a bare `(hole)` the code is printed and nothing is stored |
 | mend `hole_type` | bind the hole with its type: `(let ((k Nat (hole shift))) …)` | a hole takes its type from its place, and a `match`'s scrutinee or an operator's first operand gives none |

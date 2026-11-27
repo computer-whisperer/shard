@@ -28,8 +28,17 @@
 #   (6) THE MACHINE IS `ev` WHERE NOTHING IS UNKNOWN (`--closed`): ten closed functions —
 #       recursion, `let`, rows, a tree, `Nat.sub`, a negative integer, a run out of fuel, an
 #       extern — end alike under both: ten SAME lines, no DIFFER.
-# After a change that moves the records on purpose: V3_FIND_WRITE=1 writes expected.txt anew
-# (review the difference). Exit = the checks that failed.
+#   (7) WHAT IS FOUND GOES TO THE SIDECAR (`--write`, write.txt): over a copy of
+#       tasks/holes.shard under v3/.cache/find_test, the code found for the holes of two
+#       functions is written to the copy's sidecar — expected_sidecar.txt byte for byte: one
+#       `fill-for` a function, the fingerprint of its form, each hole's code, its measure —;
+#       a hole without a name is `NOT-WRITTEN` and the run's exit 2. Then the file is loaded
+#       again (filled.txt): the loader reads both functions with the code in the holes' places
+#       — no hole of theirs is left to search for — and each goal holds of the program as it
+#       now stands. No source file is written.
+# After a change that moves the records on purpose: V3_FIND_WRITE=1 writes expected.txt,
+# expected_write.txt and expected_sidecar.txt anew (review the difference). Exit = the checks
+# that failed.
 set -u
 cd "$(dirname "$0")/../../.."
 EVAL=${EVAL:-./rust_bootstrap/target/release/eval}
@@ -54,5 +63,21 @@ checks=$((checks+1)); n=$(grep -c '^FIND: found ' "$out"); [ "$n" = 27 ] || bad 
 checks=$((checks+1))
 blocks() { awk -v want="$1" '/^FIND goal=/ { on = (($0 ~ / enum$/) == want) && !($0 ~ / tests=/); next } /^FIND: / { on = 0 } on' "$out"; }
 [ -z "$(blocks 1 | sort -u | comm -23 - <(blocks 0 | sort -u))" ] || bad "generate and test printed an answer the lazy walk did not"
+# (7) the sidecar: written, then read
+W=v3/.cache/find_test
+mkdir -p $W; cp $T/tasks/holes.shard $W/holes.shard; rm -f v3/.cache/find_test/holes.auto.shard
+"$EVAL" direct v3/search/find.shard --root $W --init "$EXPORT" --init-index "$INDEX" \
+  --batch $T/write.txt $W/holes.shard > "$out" 2>&1; rc=$?
+"$EVAL" direct v3/search/find.shard --root $W --init "$EXPORT" --init-index "$INDEX" \
+  --batch $T/filled.txt $W/holes.shard >> "$out" 2>&1; rc2=$?
+[ "${V3_FIND_WRITE:-0}" = 1 ] && { cp "$out" $T/expected_write.txt; cp $W/holes.auto.shard $T/expected_sidecar.txt; echo "find_test: $T/expected_write.txt and $T/expected_sidecar.txt written"; }
+checks=$((checks+1)); [ "$rc" = 2 ] || bad "the --write run exits $rc, not 2 (its last problem's hole has no name to be written under)"
+checks=$((checks+1)); [ "$rc2" = 0 ] || bad "the run over the filled file exits $rc2, not 0"
+checks=$((checks+1)); cmp -s "$out" $T/expected_write.txt || { bad "the records of the two runs are not $T/expected_write.txt:"; diff $T/expected_write.txt "$out" | head -12 | cut -c1-200; }
+checks=$((checks+1)); cmp -s $W/holes.auto.shard $T/expected_sidecar.txt || { bad "the sidecar written is not $T/expected_sidecar.txt:"; diff $T/expected_sidecar.txt $W/holes.auto.shard | head -8 | cut -c1-200; }
+checks=$((checks+1)); n=$(grep -c '^WROTE ' "$out"); [ "$n" = 2 ] || bad "$n WROTE lines, not 2"
+checks=$((checks+1)); n=$(grep -c '^NOT-WRITTEN ' "$out"); [ "$n" = 1 ] || bad "$n NOT-WRITTEN lines, not 1"
+checks=$((checks+1)); n=$(grep -c '^FIND goal=.* holes=0 ' "$out"); [ "$n" = 2 ] || bad "$n goals over the filled file with no hole left, not 2"
+checks=$((checks+1)); cmp -s $W/holes.shard $T/tasks/holes.shard || bad "the source file was written"
 echo "find_test: $checks checks, $fail failed, in $(( $(date +%s) - s )) s"
 exit $fail
