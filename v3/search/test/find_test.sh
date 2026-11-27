@@ -10,8 +10,9 @@
 #   (3) WHOLE FUNCTIONS FROM PROPERTIES (`--spec`): each function an `extern` and one line that
 #       must hold on every small argument — the inverse of reverse, of a map and of a tree's
 #       mirror; reverse and a tree's flattening with an accumulator, stated against the plain
-#       ones. The bodies found match on a parameter and call themselves on a proper part, and
-#       are printed with their `(measure (struct x))`. And what too few tests are worth: on
+#       ones; insertion into a sorted list, from what it must keep. The bodies found match on
+#       a parameter — the insertion also on what a comparison answers —, call themselves on a
+#       proper part, and are printed with their `(measure (struct x))`. And what too few tests are worth: on
 #       trees of 7 units or less a swap that does not recurse passes as the mirror's inverse.
 #   (4) THE TWO WALKS: the same problems by generate and test (`--enum`) give the same
 #       answers; the work of both is in the records, so a change of either walk shows here.
@@ -40,10 +41,12 @@ checks=$((checks+1)); cmp -s "$out" $T/expected.txt || { bad "the records are no
 checks=$((checks+1)); n=$(grep -c '^SAME ' "$out"); [ "$n" = 10 ] || bad "$n SAME lines, not 10"
 checks=$((checks+1)); ! grep -q '^DIFFER ' "$out" || bad "the narrowing machine and ev differ: $(grep -m1 '^DIFFER ' "$out" | cut -c1-200)"
 checks=$((checks+1)); n=$(grep -c '^FIND-ERROR ' "$out"); [ "$n" = 5 ] || bad "$n FIND-ERROR lines, not 5"
-checks=$((checks+1)); n=$(grep -c '^FIND: found ' "$out"); [ "$n" = 19 ] || bad "$n problems found, not 19"
-# the two walks answer alike: each --enum problem's FOUND block is its lazy twin's
+checks=$((checks+1)); n=$(grep -c '^FIND: found ' "$out"); [ "$n" = 20 ] || bad "$n problems found, not 20"
+# the two walks answer alike on a goal: each --enum goal's FOUND block is its lazy twin's (a
+# property has many bodies that pass, and the two walks order them differently: sizes there,
+# depths here)
 checks=$((checks+1))
-blocks() { awk -v want="$1" '/^FIND goal=/ { on = (($0 ~ / enum$/) == want); next } /^FIND: / { on = 0 } on' "$out"; }
+blocks() { awk -v want="$1" '/^FIND goal=/ { on = (($0 ~ / enum$/) == want) && !($0 ~ / tests=/); next } /^FIND: / { on = 0 } on' "$out"; }
 [ -z "$(blocks 1 | sort -u | comm -23 - <(blocks 0 | sort -u))" ] || bad "generate and test printed an answer the lazy walk did not"
 echo "find_test: $checks checks, $fail failed, in $(( $(date +%s) - s )) s"
 exit $fail

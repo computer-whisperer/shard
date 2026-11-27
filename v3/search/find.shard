@@ -8,16 +8,20 @@
 ;;;             VALUES, each of its stated type
 ;;;   --spec    in place of --goal: a PROPERTY. The function must answer yes on every argument
 ;;;             tuple, and is tried on the small ones: every tuple of closed values of its
-;;;             parameter types by size, smallest first, up to --test-size units (default 10)
-;;;             and --tests of them (default 200). Nothing of it is unknown: what is searched
+;;;             parameter types by size, smallest first, up to --test-size units (default: 10,
+;;;             and 2 more for each parameter after the first) and --tests of them (default
+;;;             400). Nothing of it is unknown: what is searched
 ;;;             for is the hole functions that make it hold on all of them
 ;;;   --hole    a function the program names and does not define — an `extern`, a view's `sig fn`
 ;;;             with no implementation among the roots — whose body is to be found
 ;;;   --use     a function a found body may call (a hole function among them: recursion)
 ;;;   --ints    the integers an unknown `Int` or `Nat` is tried at, and a body may hold
 ;;;             (default 0,1)
-;;;   --size    the last size bound tried (default 12): one unit for each constructor,
-;;;             integer, parameter or call decided
+;;;   --size    the last bound tried. For a goal: a size, one unit for each constructor,
+;;;             integer, parameter or call decided (default 12). For a property: the number
+;;;             of rounds (default 28), a round bounded by how deep a row's expression nests
+;;;             and under how many matches a row stands — every pair by its sum, 28 rounds
+;;;             the pairs of sum 7 or less
 ;;;   --fuel    the most function entries allowed one branch (default 20000). A round walks at
 ;;;             four times what the costliest answer so far took, between --fuel-min (default
 ;;;             64) and this; a replay gets eight times the round's
@@ -25,11 +29,13 @@
 ;;;   --all     every answer of the first size that has one, not the first alone
 ;;;   --enum    the comparison: every candidate decided whole before it is run (drive.shard
 ;;;             `enum_walk`) — the same answers at many times the work
-;;; The records: `FIND …` (the problem as read), then for each answer `FOUND size=N` with one
+;;; The records: `FIND …` (the problem as read), then for each answer `FOUND size=N` (for a
+;;; property `FOUND depth=E matches=D`) with one
 ;;; `ARG i TYPE = VALUE` a goal parameter and one `FN (fn NAME ((x0 T) …) RET BODY)` a hole
 ;;; function — source text: a hole function's line stands in the place of its `extern`, or in
 ;;; the implementation of its view —, then the verdict and the tally (drive.shard):
 ;;;   FIND: found|none|bounded|gave_up size=N work=W settled=… no=… out=… stuck=… cut=… dead=… unverified=…
+;;; (for a property `depth=E matches=D` in the place of `size=N`).
 ;;; Every answer printed was replayed under `ev` (task.shard). Exit 0: found; 1: not found
 ;;; (the verdict says what that claims); 2: the load failed, or the problem does not read.
 ;;; No file is written.
@@ -178,7 +184,7 @@
             (make FArgs (root nil) (export nil) (index nil) (files nil) (goal nil) (holes nil)
               (uses nil)
               (ints (list 0 1))
-              (size 12)
+              (size 0)
               (fuel 20000)
               (fuel_min 64)
               (budget 20000000)
@@ -187,8 +193,8 @@
               (closed false)
               (batch nil)
               (spec false)
-              (tests 200)
-              (test_size 10)))))
+              (tests 400)
+              (test_size 0)))))
        (match (parts_of (FArgs.root a))
          (none (exit 2 (write_line (utf8 "FIND-ERROR usage: --root DIR is required") w1)))
          ((some rootp)
@@ -286,7 +292,8 @@
      (match (sig_of lk p x true)
        ((SigNo m) (HolesNo m))
        ((SigOk id ps rt)
-        (holes_of lk p r (im_insert hs id (Hole.Hole ps rt none (HCtx.HCtx id (len ps) nil nil)))
+        (holes_of lk p r
+          (im_insert hs id (Hole.Hole ps rt none (HCtx.HCtx id (len ps) nil nil 0 0)))
           (cons (Prod.mk id (fn_name lk id)) acc)))))))
 (type Vocs (VocsOk (List Voc)) (VocsNo (List Int)))
 (fn vocs_of ((lk Linked) (p Prog) (texts (List (List Int))) (acc (List Voc))) Vocs
@@ -297,16 +304,6 @@
      (match (sig_of lk p x false)
        ((SigNo m) (VocsNo m))
        ((SigOk id ps rt) (vocs_of lk p r (cons (Voc.Voc id ps rt) acc)))))))
-(fn no_type_params ((ts (List EType))) Bool
-  (measure (List_EType.size ts))
-  (match ts
-    (nil true)
-    ((cons (ETVar _) _) false)
-    ((cons (ETCon _ as) r) (bool_and (no_type_params as) (no_type_params r)))))
-(fulfills no_type_params.dec_1
-  (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (rw EType.size.eq_1) (arith)))
-(fulfills no_type_params.dec_2 (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (arith)))
-
 (fn solve ((a FArgs) (p Prog) (lk Linked) (w World)) (Prod Int World)
   (match (sig_of lk p (FArgs.goal a) false)
     ((SigNo m) (fail (append (utf8 "--goal ") m) w))
@@ -331,7 +328,12 @@
                        named))
                    (tests
                      (if (FArgs.spec a)
-                       (tests_of pb0 gps 0 (Prod.mk (FArgs.test_size a) (FArgs.tests a)) nil)
+                       (tests_of pb0 gps 0
+                         (Prod.mk
+                           (if (= (FArgs.test_size a) 0) (+ 10 (* 2 (- (len gps) 1)))
+                           (FArgs.test_size a))
+                           (FArgs.tests a))
+                         nil)
                        nil)))
                   (if (bool_and (FArgs.spec a) (= (len tests) 0))
                     (fail
@@ -341,7 +343,7 @@
                     (let ((pb (problem_tests pb0 tests)))
                       (report a pb
                         (deepen pb
-                          (Lim.Lim (FArgs.size a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
+                          (Lim.Lim (size_of a) (min_int (FArgs.fuel_min a) (FArgs.fuel a))
                             (FArgs.fuel a)
                             (FArgs.budget a)
                             (FArgs.all a)
@@ -403,8 +405,8 @@
        (write_line
          (append (utf8 "FIND: ")
            (append (chars_of_sym verdict)
-             (append (utf8 " size=") (append (show_nat size) (show_tally (tally_counts y))))))
-         (print_sols pb sols size
+             (append (bound_text a pb size) (show_tally (tally_counts y)))))
+         (print_sols a pb sols size
            (write_line
              (append (utf8 "FIND goal=")
                (append (show_name (Problem.goal pb))
@@ -413,7 +415,7 @@
                      (append (utf8 " use=")
                        (append (show_nat (len (Problem.voc pb)))
                          (append (utf8 " size<=")
-                           (append (show_nat (FArgs.size a))
+                           (append (show_nat (size_of a))
                              (append (utf8 " fuel<=")
                                (append (show_nat (FArgs.fuel a))
                                  (append (utf8 " budget=")
@@ -425,6 +427,16 @@
                                          nil)
                                        (if (FArgs.eager a) (utf8 " enum") nil))))))))))))))
              w)))))))
+;; what the round reached was bounded by: the size of what is decided; for a property walked
+;; lazily, the depth of a row's expression and the matches above a row (drive.shard `round_of`)
+(fn bound_text ((a FArgs) (pb Problem) (b Int)) (List Int)
+  (if (bool_and (< 0 (len (Problem.tests pb))) (bool_not (FArgs.eager a)))
+    (match (round_of b 1)
+      ((Prod.mk d e)
+       (append (utf8 " depth=") (append (show_nat e) (append (utf8 " matches=") (show_nat d))))))
+    (append (utf8 " size=") (show_nat b))))
+;; the last bound tried: --size, or by default 12 units for a goal and 28 rounds for a property
+(fn size_of ((a FArgs)) Int (if (= (FArgs.size a) 0) (if (FArgs.spec a) 28 12) (FArgs.size a)))
 (fn show_tally ((cs (List Int))) (List Int)
   (match cs
     ((cons wk (cons e (cons f (cons o (cons s (cons c (cons n (cons u nil))))))))
@@ -443,15 +455,15 @@
                              (append (utf8 " dead=")
                                (append (show_nat n) (append (utf8 " unverified=") (show_nat u)))))))))))))))))
     (_ nil)))
-(fn print_sols ((pb Problem) (sols (List Sol)) (size Int) (w World)) World
+(fn print_sols ((a FArgs) (pb Problem) (sols (List Sol)) (size Int) (w World)) World
   (measure (struct sols))
   (match sols
     (nil w)
     ((cons (Sol.Sol m h) r)
-     (print_sols pb r size
+     (print_sols a pb r size
        (print_fns pb m (Problem.holes pb)
          (print_args pb h (Problem.goal_tys pb) 0
-           (write_line (append (utf8 "FOUND size=") (show_nat size)) w)))))))
+           (write_line (append (utf8 "FOUND") (bound_text a pb size)) w)))))))
 (fn print_args ((pb Problem) (h Heap) (tys (List EType)) (i Int) (w World)) World
   (measure (struct tys))
   (match tys

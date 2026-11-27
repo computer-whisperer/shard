@@ -15,7 +15,8 @@
 ;;;                                           whose result type fits — each over new hole
 ;;;                                           functions for its arguments, which take the same
 ;;;                                           parameters and are decided when a run needs them
-;;;                                           —, or a match on a parameter, a row a constructor,
+;;;                                           —, or a match on a parameter or on a call of a
+;;;                                           function of the vocabulary, a row a constructor,
 ;;;                                           each row's body a new hole function over the
 ;;;                                           parameters and the constructor's fields.
 ;;; Each way costs one unit of SIZE. The walk is depth first under a size bound, the bound
@@ -136,13 +137,22 @@
     ((cons ty r) (push_unknowns (heap_push h (CUnk ty)) r (cons (NRef (heap_next h)) acc)))))
 
 ;; a hole function with no body: its productions, in this order — parameters, constructors,
-;; integers, the vocabulary, matches
+;; integers, the vocabulary, matches on a parameter, matches on a call. A body is in normal
+;; form: a match stands as a row's whole body or the function's, never inside an expression,
+;; so the case analysis comes first and each row ends in an expression without one. A round
+;; bounds both: how deep an expression nests (`Problem.depth`) and under how many matches a
+;; row stands (`Problem.matches`) — a hole function at the first bound has no production, a
+;; row's body at the second no match
 (fn alts_hole ((t Problem) (m Mach) (h Heap) (id Int)) (List Alt)
   (match (im_find (mach_holes m) id)
-    ((some (Hole.Hole ptys rty none _))
+    ((some (Hole.Hole ptys rty none (HCtx.HCtx _ _ _ _ md ed)))
+     (if (<= (Problem.depth t) ed) nil
      (append (prod_vars m h id ptys rty ptys (- (len ptys) 1))
        (append (prod_data t m h id)
-         (append (prod_calls t m h id (Problem.voc t)) (prod_matches t m h id ptys 0)))))
+         (append (prod_calls t m h id (Problem.voc t))
+           (if (bool_and (= ed 0) (< md (Problem.matches t)))
+             (append (prod_matches t m h id ptys 0) (prod_tests t m h id (Problem.voc t)))
+             nil))))))
     (_ nil)))
 ;; the hole function `id` given the body `b`
 (fn bind_hole ((m Mach) (id Int) (b LTerm)) Mach
@@ -205,7 +215,7 @@
     (nil nil)
     ((cons (Voc.Voc f ps rt) rest)
      (match (im_find (mach_holes m) id)
-       ((some (Hole.Hole ptys rty _ (HCtx.HCtx root ar matched smaller)))
+       ((some (Hole.Hole ptys rty _ (HCtx.HCtx root ar matched smaller md ed)))
         (if (= f root)
           (append (if (etype_eq rt rty) (prod_rec m h id ps smaller) nil) (prod_calls t m h id rest))
           (match (ty_match rt rty nil)
@@ -214,7 +224,7 @@
              (match (ty_insts s ps nil)
                (none (prod_calls t m h id rest))
                ((some ps1)
-                (match (add_holes m ptys (HCtx.HCtx root ar matched smaller) ps1 nil)
+                (match (add_holes m ptys (HCtx.HCtx root ar matched smaller md ed) ps1 nil)
                   ((Prod.mk m1 calls)
                    (cons (Alt.Alt (bind_hole m1 id (LCall f calls)) h) (prod_calls t m h id rest))))))))))
        (none nil)))))
@@ -228,10 +238,10 @@
     (nil nil)
     ((cons (Prod.mk j q) rest)
      (match (im_find (mach_holes m) id)
-       ((some (Hole.Hole ptys _ _ (HCtx.HCtx root ar matched smaller)))
+       ((some (Hole.Hole ptys _ _ (HCtx.HCtx root ar matched smaller md ed)))
         (if (same_type (nth ptys j) (nth ps q))
           (match
-            (rec_args m (Prod.mk ptys (HCtx.HCtx root ar matched smaller)) ps 0
+            (rec_args m (Prod.mk ptys (HCtx.HCtx root ar matched smaller md ed)) ps 0
               (Prod.mk q (LBVar (- (- (len ptys) 1) j)))
               nil)
             ((Prod.mk m1 args)
@@ -284,13 +294,13 @@
     ((Prod.mk n targs)
      (if (ty_is_int n) none
      (match (im_find (mach_holes m) id)
-       ((some (Hole.Hole ptys rty none (HCtx.HCtx root ar matched smaller)))
+       ((some (Hole.Hole ptys rty none (HCtx.HCtx root ar matched smaller md ed)))
         (if (mem_int j matched) none
         (match (decl_index_find (Problem.inds t) n)
           ((some (EInd _ _ (cons c0 cs)))
            (match
              (match_rows t m
-               (Rows.Rows ptys rty targs (HCtx.HCtx root ar (cons j matched) smaller)
+               (Rows.Rows ptys rty targs (HCtx.HCtx root ar (cons j matched) smaller md ed)
                  (if (< j ar) (some j) (part_of smaller j)))
                (cons c0 cs)
                nil)
@@ -298,6 +308,49 @@
               (some (bind_hole m1 id (LMatch (LBVar (- (- (len ptys) 1) j)) arms))))))
           (_ none))))
        (_ none))))))
+;; a match on what a function of the vocabulary answers — an `if` where that is a `Bool` —: the
+;; function over new hole functions for its arguments, then a row for each constructor of its
+;; result type, as a match on a parameter has. The function being found is not tested so (it
+;; calls itself by `prod_rec` alone); one whose signature names a type parameter is passed over
+(fn prod_tests ((t Problem) (m Mach) (h Heap) (id Int) (vs (List Voc))) (List Alt)
+  (measure (struct vs))
+  (match vs
+    (nil nil)
+    ((cons v rest)
+     (match (test_at t m id v)
+       ((some m1) (cons (Alt.Alt m1 h) (prod_tests t m h id rest)))
+       (none (prod_tests t m h id rest))))))
+(fn test_at ((t Problem) (m Mach) (id Int) (v Voc)) (Option Mach)
+  (match v
+    ((Voc.Voc f ps (ETCon n targs))
+     (if (ty_is_int n) none
+     (if (bool_not (no_type_params (cons (ETCon n targs) ps))) none
+     (match (im_find (mach_holes m) id)
+       ((some (Hole.Hole ptys rty none (HCtx.HCtx root ar matched smaller md ed)))
+        (if (= f root) none
+        (match (decl_index_find (Problem.inds t) n)
+          ((some (EInd _ _ (cons c0 cs)))
+           (match (add_holes m ptys (HCtx.HCtx root ar matched smaller md ed) ps nil)
+             ((Prod.mk m1 args)
+              (match
+                (match_rows t m1
+                  (Rows.Rows ptys rty targs (HCtx.HCtx root ar matched smaller md ed) none)
+                  (cons c0 cs)
+                  nil)
+                ((Prod.mk m2 arms) (some (bind_hole m2 id (LMatch (LCall f args) arms))))))))
+          (_ none))))
+       (_ none)))))
+    (_ none)))
+;; types that name no type parameter
+(fn no_type_params ((ts (List EType))) Bool
+  (measure (List_EType.size ts))
+  (match ts
+    (nil true)
+    ((cons (ETVar _) _) false)
+    ((cons (ETCon _ as) r) (bool_and (no_type_params as) (no_type_params r)))))
+(fulfills no_type_params.dec_1
+  (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (rw EType.size.eq_1) (arith)))
+(fulfills no_type_params.dec_2 (by (intro ts n as r h) (rw h) (rw List_EType.size.eq_2) (arith)))
 (fn part_of ((sm (List (Prod Int Int))) (j Int)) (Option Int)
   (measure (struct sm))
   (match sm
@@ -314,7 +367,7 @@
     (nil (Prod.mk m (rev acc)))
     ((cons (ECtorDef.ECtorDef c fts) rest)
      (match rw
-       ((Rows.Rows ptys rty targs (HCtx.HCtx root ar matched smaller) part)
+       ((Rows.Rows ptys rty targs (HCtx.HCtx root ar matched smaller md ed) part)
         (match (nmap_find (lk_tags (Problem.lk t)) c)
           (none (match_rows t m rw rest acc))
           ((some tag)
@@ -325,7 +378,7 @@
                   (Mach.Mach lk
                     (im_insert hs nx
                       (Hole.Hole (append ptys fts1) rty none
-                        (HCtx.HCtx root ar matched (append (parts_from part n k) smaller))))
+                        (HCtx.HCtx root ar matched (append (parts_from part n k) smaller) (+ md 1) 0)))
                     (+ nx 1))
                   rw
                   rest
@@ -342,7 +395,11 @@
   (measure (Int.natAbs k))
   (if (< k 1) nil (cons LPVar (lpvars (- k 1)))))
 (fulfills lpvars.dec_1 (by (intro k h) (apply natAbs_pred (arith))))
-;; new hole functions over the parameters `ptys` and with the context `cx`, one for each result
+;; a context one level deeper in the expression of its row
+(fn deeper ((cx HCtx)) HCtx
+  (match cx
+    ((HCtx.HCtx root ar matched smaller md ed) (HCtx.HCtx root ar matched smaller md (+ ed 1)))))
+;; new hole functions over the parameters `ptys`, one level under the context `cx`, one for each result
 ;; type: the machine with them, and a call of each on the parameters in order — the frame a body
 ;; over them stands in
 (fn add_holes ((m Mach) (ptys (List EType)) (cx HCtx) (tys (List EType)) (acc (List LTerm)))
@@ -353,7 +410,9 @@
     ((cons ty r)
      (match m
        ((Mach.Mach lk hs n)
-        (add_holes (Mach.Mach lk (im_insert hs n (Hole.Hole ptys ty none cx)) (+ n 1)) ptys cx r
+        (add_holes (Mach.Mach lk (im_insert hs n (Hole.Hole ptys ty none (deeper cx))) (+ n 1)) ptys
+          cx
+          r
           (cons (LCall n (frame_vars (- (len ptys) 1))) acc)))))))
 ;; the parameters of a frame of i+1, first to last: indices i down to 0
 (fn frame_vars ((i Int)) (List LTerm)
@@ -559,10 +618,19 @@
                 (append (cell_items 0 (len (Problem.goal_tys t))) (hole_items (Problem.holes t)))
                 0))
             (Ran.Ran nil nil y))
-          (match (first_run t m h0 (Ran.Ran nil nil y) 0)
-            ((Ran.Ran nodes sols y1)
-             (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y1 false)
-             (walk t lim nodes sols y1))))))))))
+          (match (Problem.tests t)
+            ((cons args more)
+             (match
+               (dfs_run t lim m (nv_start m (heap_empty) (Problem.goal_id t) args (Problem.fuel t))
+                 (Problem.fuel t)
+                 (Place.Place 0 more)
+                 y)
+               ((Dfs.Dfs sols _ y1 over) (Walk.Walk sols y1 over))))
+            (nil
+              (match (first_run t m h0 (Ran.Ran nil nil y) 0)
+                ((Ran.Ran nodes sols y1)
+                 (if (bool_and (bool_not (lim_all lim)) (< 0 (len sols))) (Walk.Walk sols y1 false)
+                 (walk t lim nodes sols y1))))))))))))
 ;; the verdict (found, none, bounded, gave_up), the size bound it was reached at, the answers
 ;; (first found first), the tally over every round
 (type Ending (Ending Symbol Int (List Sol) Tally))
@@ -575,7 +643,15 @@
 (fn deepen ((t Problem) (lim Lim) (s Start) (b Int) (y Tally)) Ending
   (if (< (lim_size lim) b) (Ending.Ending (sym "bounded") (lim_size lim) nil y)
   (let ((fuel (min_int (lim_fuel_max lim) (max_int (lim_fuel lim) (* 4 (tally_peak y))))))
-    (match (search_at (problem_fuel t fuel) (lim_at lim b fuel) s (tally_round y))
+    (match
+      (search_at
+        (if (bool_and (< 0 (len (Problem.tests t))) (bool_not (lim_eager lim)))
+          (match (round_of b 1)
+            ((Prod.mk d e) (problem_round t fuel e d)))
+          (problem_round t fuel 1000000 1000000))
+        (lim_at lim b fuel)
+        s
+        (tally_round y))
       ((Walk.Walk sols y1 over)
        (if (< 0 (len sols)) (Ending.Ending (sym "found") b (rev sols) y1)
        (if over (Ending.Ending (sym "gave_up") b nil y1)
@@ -586,9 +662,115 @@
            (Ending.Ending (sym "none") b nil y1)
          (if (= (tally_cut y1) 0) (Ending.Ending (sym "bounded") b nil y1)
          (deepen t lim s (+ b 1) y1)))))))))))
+;; the bounds of a property's round b, matches and depth: every pair by its sum, the sums in
+;; order and in each the fewer matches first — (0,1); (0,2) (1,1); (0,3) (1,2) (2,1); … A body
+;; of few rows and a deep expression, and one of many rows each shallow, are both reached
+;; before the bodies that are both
+(fn round_of ((b Int) (s Int)) (Prod Int Int)
+  (measure (Int.natAbs b))
+  (if (<= b s) (Prod.mk (- b 1) (- s (- b 1)))
+  (if (< s 1) (Prod.mk 0 1)
+  (round_of (- b s) (+ s 1)))))
+(fulfills round_of.dec_1 (by (intro p h hs) (apply natAbs_lt (arith) (arith))))
 (fn min_int ((a Int) (b Int)) Int (if (< a b) a b))
 ;; a tally carried into the next round: the work and the peak stay, the counts are the round's own
 (fn tally_round ((y Tally)) Tally (Tally.Tally (tally_work y) 0 0 0 0 0 0 0 (tally_peak y)))
+
+;; ---- the walk of a property ---------------------------------------------------------------------
+;; A property's tests are run one after another, each from an empty heap, and a run enters the
+;; bodies of some hole functions and not of others; the heap notes which (`heap_reads`). So
+;; when a run answers no, or no way to settle what it needs leads on, the hole functions it
+;; entered are a CONFLICT: no other choice for a hole function outside them makes that run end
+;; otherwise. This walk is depth first and gives a failure its conflict. Where the hole
+;; function a level decided is not in the conflict of what failed below it, the level's other
+;; ways are not tried — the failure is theirs too — and the conflict goes on up. A function
+;; whose rows are reached by different tests is then found row by row, at the cost of the
+;; rows' sum where the plain walk pays their product.
+;; The bounds of a round are here DEPTHS (`round_of`: how deep a row's expression nests, under
+;; how many matches a row stands), not a size: a size is shared by every choice, and a branch
+;; cut by it would make every choice a conflict; what a depth cuts depends on the choices
+;; above the cut alone, which the run entered. In a conflict -1 stands for every choice: the budget's end, a run that ended
+;; without its heap (out of fuel, stuck), a yes the replay did not give.
+;; answers (latest first); the conflict of a failure; the tally; whether the budget ended it
+(type Dfs (Dfs (List Sol) (List Int) Tally Bool))
+;; a stopped run: each way to settle what it needs, in turn
+(fn dfs_stop ((t Problem) (lim Lim) (nd Stopped) (y Tally)) Dfs
+  (match nd
+    ((Stopped.Stopped m h r _ _ _)
+     (if (<= (lim_budget lim) (tally_work y)) (Dfs.Dfs nil (cons -1 nil) y true)
+     (match (alts t m h r)
+       (nil (Dfs.Dfs nil (heap_reads h) (tally_add y 0 (if (at_depth t m h r) 5 6)) false))
+       ;; where the round withheld productions the walk goes on with the others, and the
+       ;; branch counts as cut: the round has not seen everything
+       (as
+         (dfs_alts t lim nd as
+           (Dfs.Dfs nil nil (tally_add (if (at_depth t m h r) (tally_add y 0 5) y) 0 1) false))))))))
+;; the hole function a stopped run needs a body for; -1 where it needs a value settled
+(fn need_of ((nd Stopped)) Int
+  (match nd
+    ((Stopped.Stopped _ h r _ _ _)
+     (match (heap_find h r)
+       ((some (CSusp id _)) id)
+       (_ -1)))))
+;; is what the run needs a hole function the round's bound withholds productions from: one
+;; standing as deep as an expression may, or a row's body under as many matches as there may be
+(fn at_depth ((t Problem) (m Mach) (h Heap) (r Int)) Bool
+  (match (heap_find h r)
+    ((some (CSusp id _))
+     (match (im_find (mach_holes m) id)
+       ((some (Hole.Hole _ _ _ (HCtx.HCtx _ _ _ _ md ed)))
+        (bool_or (<= (Problem.depth t) ed) (bool_and (= ed 0) (<= (Problem.matches t) md))))
+       (none false)))
+    (_ false)))
+(fn dfs_alts ((t Problem) (lim Lim) (nd Stopped) (as (List Alt)) (acc Dfs)) Dfs
+  (match acc
+    ((Dfs.Dfs sols conf y over)
+     (match as
+       (nil (Dfs.Dfs sols (without conf (need_of nd)) y over))
+       ((cons (Alt.Alt m1 h1) rest)
+        (match nd
+          ((Stopped.Stopped _ _ r k fuel pl)
+           (match (dfs_run t lim m1 (nv_resume m1 h1 r k fuel) fuel pl y)
+             ((Dfs.Dfs sols1 c1 y1 over1)
+              (if over1 (Dfs.Dfs (append sols1 sols) (cons -1 nil) y1 true)
+              (if (< 0 (len sols1))
+                (if (lim_all lim)
+                  (dfs_alts t lim nd rest (Dfs.Dfs (append sols1 sols) conf y1 false))
+                  (Dfs.Dfs sols1 nil y1 false))
+              (if (outside c1 (need_of nd)) (Dfs.Dfs sols c1 y1 false)
+              (dfs_alts t lim nd rest (Dfs.Dfs sols (append c1 conf) y1 false))))))))))))))
+;; a conflict that this level's hole function is no part of
+(fn outside ((c (List Int)) (id Int)) Bool
+  (bool_and (<= 0 id) (bool_and (bool_not (mem_int -1 c)) (bool_not (mem_int id c)))))
+(fn without ((c (List Int)) (id Int)) (List Int)
+  (measure (struct c))
+  (match c
+    (nil nil)
+    ((cons x r) (if (= x id) (without r id) (cons x (without r id))))))
+;; one run's end: an answer yes goes on to the next test, and after the last is an answer when
+;; the replay says so too; a no, or an end without an answer, is a failure with its conflict; a
+;; stop is walked
+(fn dfs_run ((t Problem) (lim Lim) (m Mach) (st Stop) (fuel Int) (pl Place) (y Tally)) Dfs
+  (match st
+    ((SVal (NCtor tag _) h f)
+     (let ((y1 (tally_add (tally_answered y (- (Problem.fuel t) f)) (- fuel f) 0)))
+       (if (= (band tag 1) 1)
+         (match pl
+           ((Place.Place _ nil)
+            (if (replay t m h (tag_name (Problem.lk t) tag) (* 8 (Problem.fuel t)))
+              (Dfs.Dfs (cons (Sol.Sol m h) nil) nil y1 false)
+              (Dfs.Dfs nil (cons -1 nil) (tally_add y1 0 7) false)))
+           ((Place.Place size (cons args more))
+            (dfs_run t lim m (nv_start m (heap_empty) (Problem.goal_id t) args (Problem.fuel t))
+              (Problem.fuel t)
+              (Place.Place size more)
+              y1)))
+         (Dfs.Dfs nil (heap_reads h) (tally_add y1 0 2) false))))
+    ((SVal _ h f) (Dfs.Dfs nil (heap_reads h) (tally_add y (- fuel f) 4) false))
+    ((SNeed r k h f) (dfs_stop t lim (Stopped.Stopped m h r k f pl) (tally_add y (- fuel f) 0)))
+    (SOut (Dfs.Dfs nil (cons -1 nil) (tally_add y fuel 3) false))
+    ((SStuck _ f) (Dfs.Dfs nil (cons -1 nil) (tally_add y (- fuel f) 4) false))
+    ((SExh _ f) (Dfs.Dfs nil (cons -1 nil) (tally_add y (- fuel f) 4) false))))
 
 ;; ---- the comparison: generate and test ------------------------------------------------------------
 ;; The same ways to settle, the same sizes, the same goal — and nothing left for a run to ask

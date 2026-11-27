@@ -20,8 +20,10 @@ Nobody writes a grammar. The ways to settle an unknown are read off the types th
 states: an unknown of an inductive type is one of its constructors over new unknowns; an
 unknown `Int` or `Nat` is one of a list of integers (`--ints`); a hole function's body is a
 parameter of its result type, a constructor of that type, an integer, a call of a function
-of the vocabulary (`--use`) whose result type fits, or a `match` on a parameter — each over new
-hole functions for its arguments or its rows. A function being found calls itself only on a
+of the vocabulary (`--use`) whose result type fits, or a `match` — on a parameter, or on what
+a function of the vocabulary answers (an `if`, where that is a `Bool`) — each over new hole
+functions for its arguments or its rows. A body is in normal form: the matches come first,
+each row ends in an expression without one. A function being found calls itself only on a
 proper part of what it was given (a variable a `match` bound under a parameter): the
 language's own structural rule, so what is found is printed with its `(measure (struct x))`
 and loads as a definition.
@@ -51,6 +53,12 @@ $F --spec $W.rev_onto_spec --hole $W.rev_onto --use $W.rev_onto v3/search/test/t
 $F --spec $W.unmirror_spec --hole $W.unmirror --use $W.unmirror v3/search/test/tasks/whole.shard
 #    FN (fn unmirror ((x0 ….Tree)) ….Tree (measure (struct x0))
 #         (match x0 (….Leaf x0) ((….Fork x1 x2 x3) (….Fork (….unmirror x3) x2 (….unmirror x1)))))
+# from what it must keep — sorted stays sorted, one more x, every other as often as before:
+$F --spec $W.insert_spec --hole $W.insert --use $W.insert --use $W.le --ints 0,1,2 v3/search/test/tasks/whole.shard
+#    FN (fn insert ((x0 Nat) (x1 (List Nat))) (List Nat) (measure (struct x1))
+#         (match x1 (List.nil (List.cons x0 x1))
+#           ((List.cons x2 x3) (match (….le x0 x2) (Bool.false (List.cons x2 (….insert x0 x3)))
+#                                                  (Bool.true (List.cons x0 x1))))))
 ```
 
 An `FN` line is source text: it stands in the place of the hole function's `extern`, or in the
@@ -63,7 +71,7 @@ implementation of its view. `find` writes no file. The options and the records a
 |---|---|
 | `narrow.shard` | the **narrowing machine**: `ev`'s machine (`v3/kernel/ev.shard` — the same linked program, the same primitives) over values that may be references to cells of a heap: an unknown, a suspended call of a hole function, or a settled value. It passes references around unread and stops, with the cell and the rest of the run in hand, where the program reads one that is not settled. Heap and continuation are values, so a stopped run is resumed in as many ways as there are ways to settle the cell, and all of them share what ran before |
 | `task.shard` | the problem, and what makes a stopped search's state an answer: what is still undecided is filled with the first thing of its type, the hole functions are written into the program, and the goal is **replayed under `ev`**. Only an answer `ev` gives the same yes to is reported |
-| `drive.shard` | the ways to settle a cell, and the walk: depth first under a size bound raised one at a time, a round's fuel set by what the costliest answer so far took. A property's tests, made from the parameter types by size; a branch runs them in order and ends at the first no. Also the comparison walk, `--enum`: every candidate decided whole before it is run |
+| `drive.shard` | the ways to settle a cell, and the walks. For a goal: depth first under a size bound raised one at a time. For a property: its tests, made from the parameter types by size, run in order, a branch ending at the first no; the bound is a depth (how deep a row's expression nests, and one less, how deep matches do); and a failure carries its *conflict* — the hole functions whose bodies the failing run entered — so a level whose hole function is no part of it is not tried another way: a function whose rows are reached by different tests is found row by row. A round's fuel is set by what the costliest answer so far took. Also the comparison walk, `--enum`: every candidate decided whole before it is run |
 | `find.shard` | the command line and the records |
 | `test/` | `find_test.sh` (an entrypoint of `v3/test.sh`): the problems of `problems.txt` over the task files, against `expected.txt` |
 
@@ -85,20 +93,25 @@ engine.
 |---|---|---|
 | a list of four values by its reversal | 163 | 963 |
 | a stack program by its result | 1,119 | 3,012 |
-| the inverse of `rev`, whole | 2,644 | 3,073 |
-| the inverse of a map, whole | 1,604 | 4,142 |
-| the inverse of a tree's mirror, whole | 4,960 | 11,053 |
-| reverse with an accumulator, whole, against the plain one | 10,212 | 21,934 |
-| a tree's flattening with an accumulator, whole | 27,942 | 41,547 |
-| a sketch of reverse: two hole functions from two examples | 11,985 | 2,673 |
-| a sketch of append: one hole function from two examples | 3,185 | 833 |
+| the inverse of `rev`, whole | 1,832 | 2,777 |
+| the inverse of a map, whole | 1,393 | 3,502 |
+| the inverse of a tree's mirror, whole | 3,578 | 10,573 |
+| reverse with an accumulator, whole, against the plain one | 12,672 | 26,966 |
+| a tree's flattening with an accumulator, whole | 22,499 | 29,664 |
+| insertion into a sorted list, whole, from three things it must keep | 4,437,150 (2 s) | not within 20 million |
+| a sketch of reverse: two hole functions from two examples | 17,497 | 1,881 |
+| a sketch of append: one hole function from two examples | 3,704 | 833 |
 
-Each search is under a tenth of a second on the binary; a process is 2.3 s, nearly all of it
-the load. Running a goal on something half decided pays where the unknown is data and where a
-function is found whole: the rows of a match are decided by the tests that reach them, one at
-a time. On the two sketches it costs: there a hole function calls the sketch's own function
-with nothing saying on what, a half-decided body can loop without asking for anything more,
-and each such branch is run to the round's fuel.
+Every search but the insertion is well under a second on the binary; a process is 2.3 s,
+nearly all of it the load. Running a goal on something half decided pays where the unknown
+is data and where a function is found whole: the rows of a match are decided by the tests
+that reach them, and a failure revisits only what its run entered. The insertion shows it:
+a match on a parameter, under it a match on a comparison, three rows — generate and test
+does not reach it. Most of its four million entries go to the rounds before its own (deep
+expressions under one match, which no body of that shape satisfies). On the two sketches the
+lazy walk costs: there a hole function calls the sketch's own function with nothing saying
+on what, a half-decided body can loop without asking for anything more, and each such
+branch is run to the round's fuel.
 
 ## On a machine model (2026-11-26, by hand: `test/tasks/span.shard`)
 
@@ -121,9 +134,10 @@ suite's problems: a load of the model is too long for the bootstrap.
 
 ## What is not here yet
 
-- A `match` is on a parameter only: no production tests the result of a call (an `if` on a
-  comparison), so a function that decides by comparing is not found yet.
 - A function calls itself structurally or not at all; recursion on a number is not made.
+- A found function is as good as its tests. They are every small argument in generation
+  order, more of them where the property has more parameters; nothing looks for the argument
+  that tells a found body from the wanted one, and nothing proves the property.
 - A primitive (`+`, `<`) is in a body only through a function of the vocabulary that wraps it.
 - An unknown integer is tried at the listed values only; nothing solves for one.
 - The goal is a program the author writes. Nothing yet turns a `requirement` into one, and

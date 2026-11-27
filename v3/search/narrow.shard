@@ -51,22 +51,30 @@
   (CUnk EType)  ; an unknown value of this type (closed: no type variable)
   (CSusp Int (List NVal))  ; a call of the hole function, its arguments last first (its body's frame), not run yet
   (CVal NVal))  ; settled: this value, which may be or hold further references
-;; the cells by reference, and the next reference
-(type Heap (Heap (IntMap Cell) Int))
-(fn heap_empty () Heap (Heap.Heap IMEmpty 0))
+;; the cells by reference, the next reference, and the hole functions whose bodies the run
+;; entered so far, latest first (`heap_reads`): what a run's end depends on, and nothing else
+;; of what was decided
+(type Heap (Heap (IntMap Cell) Int (List Int)))
+(fn heap_empty () Heap (Heap.Heap IMEmpty 0 nil))
 (fn heap_find ((h Heap) (r Int)) (Option Cell)
   (match h
-    ((Heap.Heap cs _) (im_find cs r))))
+    ((Heap.Heap cs _ _) (im_find cs r))))
 (fn heap_set ((h Heap) (r Int) (c Cell)) Heap
   (match h
-    ((Heap.Heap cs n) (Heap.Heap (im_insert cs r c) n))))
+    ((Heap.Heap cs n rs) (Heap.Heap (im_insert cs r c) n rs))))
 (fn heap_next ((h Heap)) Int
   (match h
-    ((Heap.Heap _ n) n)))
+    ((Heap.Heap _ n _) n)))
 ;; a new cell: the heap with it, under the reference `heap_next` gave
 (fn heap_push ((h Heap) (c Cell)) Heap
   (match h
-    ((Heap.Heap cs n) (Heap.Heap (im_insert cs n c) (+ n 1)))))
+    ((Heap.Heap cs n rs) (Heap.Heap (im_insert cs n c) (+ n 1) rs))))
+(fn heap_reads ((h Heap)) (List Int)
+  (match h
+    ((Heap.Heap _ _ rs) rs)))
+(fn heap_read ((h Heap) (id Int)) Heap
+  (match h
+    ((Heap.Heap cs n rs) (Heap.Heap cs n (cons id rs)))))
 ;; a hole function: the types of its parameters, its result type, its body once it has one — a
 ;; term over the parameters as a function's body is (the last parameter is index 0)
 ;; and what a driver keeps of it (`HCtx`, drive.shard), of which the machine reads nothing
@@ -74,8 +82,10 @@
 ;; the program's hole function whose body this one is part of (itself, for one of the
 ;; program's) and that function's number of parameters; the positions among this one's
 ;; parameters that a match above has taken apart; and which of this one's parameters are proper
-;; parts of which of that function's: (position here, position there)
-(type HCtx (HCtx Int Int (List Int) (List (Prod Int Int))))
+;; parts of which of that function's: (position here, position there); and where in that
+;; function's body it stands — under how many matches, and how deep in the expression of its
+;; row (0: it is a row's whole body, or the function's)
+(type HCtx (HCtx Int Int (List Int) (List (Prod Int Int)) Int Int))
 ;; the linked program, the hole functions by function index, the next index free for one
 (type Mach (Mach Linked (IntMap Hole) Int))
 (fn mach_lk ((m Mach)) Linked
@@ -215,7 +225,8 @@
     ((some (CUnk _)) (SNeed r k h fuel))
     ((some (CSusp id args))
      (match (hole_body m id)
-       ((some body) (if (< fuel 1) SOut (nv_term m h args body (NUpd r k) (- fuel 1))))
+       ((some body)
+        (if (< fuel 1) SOut (nv_term m (heap_read h id) args body (NUpd r k) (- fuel 1))))
        (none (SNeed r k h fuel))))
     (none (SStuck (sym "no_cell") fuel))))
 ;; a function over its arguments' values (last first): a hole function's call is suspended, a
