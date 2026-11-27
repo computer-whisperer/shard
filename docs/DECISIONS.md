@@ -57,6 +57,38 @@ entries are explained under "Measured" at the end.
   function with a hole is defined and theorems name the hole's constant; a build refuses it.
   (Approved 2026-11-26 as "Yes, build provision 2 next", on a lean put as one paragraph: a
   checkpoint.)
+- ★ What a tool finds for a function's holes is stored in the file's sidecar and put into the
+  function's form by the loader, before either reading of the file sees it (`sidecar.shard`
+  `fill_form`: `(hole NAME)` becomes `(hole NAME is CODE)`, which the elaborator and the plain
+  reader take for CODE where a hole may stand); the function is then ordinary — defined, built,
+  its theorems about the body with the code in it (`LAW.md` §6, 30: "it makes more sense for it
+  to emit to a sidecar"). The choices inside that, the agent's, each a checkpoint:
+  - One entry a function, `(fill-for FN (fn FP) ((HOLE CODE)…) (measure M…))`; not one a hole —
+    the holes of a function are found by one search and code that makes the function call itself
+    brings the function's measure, which belongs to no single hole.
+  - The key is the fingerprint of the function's form as written; not a key from the elaborated
+    type and the declarations it cites, as a proof's is — the reading that builds a program does
+    not elaborate, and rule 24 wants both readings to give one program, so the key must be one
+    both can compute. What it misses (a callee's change) a theorem about the function catches.
+  - The code is put in by marking the form, not by the two readers looking an entry up when they
+    meet a hole — the plain reader's functions are measured by the size of the form they are
+    given, and code from outside the form has no size relation to it. The marking walk knows no
+    grammar, so the mark is a list of four, which is refused wherever it is not a hole (a binder,
+    a pattern, a field): a sidecar cannot change what stands outside a hole.
+  - An entry made for another text of its function is `PENDING fill_stale` and its holes stay
+    holes; not "try the code anyway" — as for a proof, a stale entry is not tried even where it
+    would still fit.
+  - Only a named hole takes an entry; not the K-th unnamed one — the elaborator numbers unnamed
+    holes as it meets them, which the marking walk cannot reproduce.
+  - The blank stays spelled `(hole NAME)`; not a term-level `auto` — the owner's words were "an
+    auto blank", but a function may hold several blanks and each needs the name its entry
+    stands under, and `(auto HINT…)` already reads its arguments as hints.
+  - The sidecar's schema number stays 3; not 4 — a new kind of entry beside the proofs changes
+    no proof entry, and a bump would make every committed sidecar report an older schema.
+  - A function's own full name in its body is the function (`predef.shard` `el_self_named`); not
+    a second function it forms a group with — stored code names functions in full so that it
+    reads the same whatever its file opens, and a group cannot be defined by a structural
+    measure.
 - ★ A specification is a `def` into `Prop`, a comparison a proposition, a length or address a `Nat`;
   not `Bool` functions with `(= (le a b) True)` over `Int` — Init's lemmas and `arith` then apply.
 
@@ -1243,6 +1275,11 @@ entries are explained under "Measured" at the end.
   is printed. What is found is printed as source text; no tool writes a source file. (Built
   2026-11-26 under "I think this should be good to push and implement": both choices were leans
   given without the owner's reasons — checkpoints.)
+- The search is a library (`v3/search/finder.shard`: a problem asked of a loaded program, the
+  answer a value) and `find` the command over it; with `--write` what was found for the holes of
+  functions' bodies goes to their files' sidecars (`LAW.md` §6, 30, the owner's ruling with its
+  reason). Not written: a function named by `--hole` — it has no blank in a source file to stand
+  in; its definition is printed for its author to place.
 - ★ `simp_only` rewrites by the lemmas listed (256 rewrites) and `reduce` runs functions by their
   equations (2,000 rewrites, 64 unfoldings); not one `simp` over a database.
 - `(reduce (using FACT…))` takes its facts in order and finds none itself; it holds the functions

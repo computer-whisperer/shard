@@ -62,10 +62,11 @@ to is `COMPILE.md`.
     externs that have no definition (`v3/std/host.shard`): what such a call does is stated as
     axioms, and a binary's contract names the axioms it trusts.
 11. The evaluator defines what "run" means. Every other way of running is compared with it.
-24. What runs is written. A program is fixed by the source text and the types its binders state:
-    elaboration fills in types and proofs, never an argument that exists at run time. A program
-    can therefore be read without elaboration, and the reading that elaborates gives the same
-    program.
+24. What runs is written. A program is fixed by the source text, by the code its sidecar holds
+    for the holes the source marks, and by the types its binders state: elaboration fills in types
+    and proofs, never an argument that exists at run time. A program can therefore be read
+    without elaboration, and the reading that elaborates gives the same program. A sidecar's code
+    stands in a hole's place and nowhere else, and belongs to one text of its function.
 25. A function that reads and whose types check has a program. Where it cannot be given a
     definition — its recursion is not justified, a function it calls has none, an operation it
     uses has no meaning in the logic — it is a program alone and carries the reason. A function
@@ -84,8 +85,9 @@ to is `COMPILE.md`.
     result is stored beside the source, and a build only replays it. A stored proof that is missing
     or out of date is reported pending, never searched for during a build.
 15. `sorry` admits nothing. It is reported, and citing a result that rests on it is refused.
-16. No tool edits a source file an author wrote, except the layout fix an author runs on it. A
-    proof a tool finds goes to a file beside the source.
+16. No tool edits a source file an author wrote, except the layout fix an author runs on it. What
+    a tool finds for a blank the source leaves — a proof (`auto`), a value in a function's body
+    (`hole`) — goes to a file beside the source, the sidecar.
 17. The surface is fixed: no user notation, macros or syntax extensions. One spelling per concept,
     and Lean's name wherever Lean has one.
 
@@ -309,8 +311,9 @@ admitted that the logic does not derive.
     — a source file states everything that is claimed, and nothing an author writes names
     anything in a file a tool wrote beside it — as the intent of those files: "yes, this
     matches my intent." (Rule 16 has the file beside the source; the rule is stated in
-    `COMPILE.md` §5 and is in no rule's text here. What else a tool may write there, and
-    whether it is kept or made again by each build, is not ruled.)
+    `COMPILE.md` §5 and is in no rule's text here. What else a tool may write there is
+    answered for code by ruling 30; whether it is kept or made again by each build is not
+    ruled.)
 22. *The answer at a seam.* On what a caller's proof is given of a function outside its
     module, first what it must not become: "my main thought is how this will scale with
     program complexity. The hope has been for modules to establish their own proofs on their
@@ -431,6 +434,19 @@ admitted that the logic does not derive.
     step, "one thread, one conversation", agrees with. That the World is in no compiled code,
     a parameter only a proof has, was named to the owner as a dependency and answered by the
     same "Agreed"; nothing in the language marks such a parameter.)
+
+30. *What a search finds goes to the sidecar; the search is a library.* Asked where a function
+    that `find` found should live — the agent leaned toward the tool rewriting the hole in the
+    source (which rule 16 already forbade) and named a sidecar as colliding with rule 24 as it
+    then read, "a program is fixed by the source text" —: "About 1, I think it's important for
+    find to be a module that other things can import and use. As a standalone tool, it makes
+    more sense for it to emit to a sidecar. The whole point of the sidecar is to absorbe
+    generated shard code that fills in an auto blank set elsewhere -- if we have a rule
+    prohibiting that, then we need to revise the rule." (Rules 16 and 24 are reworded for it.
+    The wording is the agent's, put to the owner with the result of the build and not yet read
+    by them; so are the choices inside the build — an entry a function, keyed by the function's
+    text; the blank spelled `(hole NAME)` where the owner said "an auto blank" — which
+    `DECISIONS.md` records as checkpoints.)
 
 The text of rules 25 and 26, written from rulings 12 and 13: "LAW 25 and 26 look good to ratify."
 

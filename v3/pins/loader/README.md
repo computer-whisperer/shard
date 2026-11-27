@@ -34,6 +34,7 @@ program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape
 | `;; expect: NAME policy AXIOM…` | `NAME`'s assumptions reach `AXIOM…`, outside the file's policy |
 | `;; expect: NAME pending REASON…` | `NAME` is pending: `sorry` (with `goals=N` and the goals), `measure`, `auto_missing fp=…`, `auto_stale PART fp=…` |
 | `;; expect: NAME hole [GOAL]` | the first record that is no acceptance is the hole `NAME`, shown with the names it is handed, their types and its own |
+| `;; expect: NAME filled HOLE,…` | every record accepted, and the function `NAME` was read with the code its sidecar holds for those holes |
 | `;; expect: NAME runnable REASON` | every record accepted, and the function `NAME` is a program without a definition for `REASON` |
 | `;; expect: NAME param KIND` | every record accepted, and `NAME` is a declared parameter of `KIND` |
 | `;; expect: NAME threaded` | every record accepted, and `NAME`'s use of the `World` is judged `ok` |
@@ -159,6 +160,9 @@ the reason its name spells, less a leading `by_`.
 |---|---|
 | `hole` (`hole [(xs : (List Nat)) (acc : (List Nat)) ⊢ (List Nat)]`), `hole_names`, `hole_poly`, `hole_runnable` | a hole in a `fn`'s body is a generated constant over the names in scope, the function defined around it and a theorem naming it; what is handed and what is not (a hidden name; a let-bound name; a hypothesis); a type parameter; a function that is a program alone |
 | refused: `hole_type`, `hole_outside` (a read error), `hole_name`, `hole_generated` (`hole_name`), `hole_uninhabited`, `hole_proposition`, `hole_untyped` | a position that gives no type; a hole outside a `fn`'s body; a name taken, or one the toolchain makes; a type with no value to stand for it; a proposition; a function read as a program alone |
+| `fill` (`filled at_nil,at_cons`), `fill_auto`, `fill_gone` | a function's holes with code in the sidecar (`fill-for`): read with the code where the holes stand and with the entry's measure, defined, a theorem about the body with the code in it; a proof about the filled function replayed from the same sidecar; an entry whose function asks for none of it passed over |
+| `fill_stale` (`pending fill_stale fp=…`), `fill_refused` (`type_mismatch`), `fill_binder` (`bad_shape`) | an entry made for another text of its function is not put in and the hole stays a hole; code that does not check refuses the function as source written there would; an entry aimed at a list that is no hole (a `let`'s binder) refuses the function — nothing outside a hole is read differently for a sidecar |
+| `self_full_name` | a function that names itself in full calls itself: one function by structural recursion, not a group |
 
 ### Proof steps and sidecars
 

@@ -11,7 +11,8 @@
 ;;; reconstruction version (the restamp), is rewritten whole — FILE.auto.shard, machine-owned:
 ;;; the entries it held that were not superseded, then the new ones in the file's order, one
 ;;; `(proof-for NAME (req S D P E) (by STEP…))` per theorem — the key the resolved
-;;; requirement's —, under a header naming the engine's version; a
+;;; requirement's —, under a header naming the engine's version, and the code it held for
+;;; fns' holes (`fill-for`, `find`'s to write: sidecar.shard) as it was; a
 ;;; schema-2 entry that replays is re-keyed so (the restamp, no search). The file's form is
 ;;; `(sidecar SCHEMA RECON)`, RECON the reconstruction version (tactic.shard). The records are
 ;;; printed as the loader's are (PROVED NAME req=S.D.P.E (by …) for each solved theorem; an
@@ -41,6 +42,8 @@
 (use kernel.sexpr.RAll)
 (use kernel.reader.Auto)
 (use kernel.reader.Req)
+(use kernel.sidecar)
+(use kernel.sidecar.Side)
 
 (type PArgs (PArgs (List Int) (List Int) (List Int) (List (List Int)) Bool Int))  ; root, the export, its index, files, measure, the fuel for a tactic's run
 (fn parse_pargs ((args (List (List Int))) (a PArgs)) PArgs
@@ -230,20 +233,24 @@
        (match (read_file path w)
          ((Prod.mk bytes w1)
           (let
-            ((olds (List Auto)
+            ((olds Side
                (match bytes
                  ((some src)
                   (match (read_all src)
                     ((RAOk es)
                      (match (sidecar_split es)
                        ((Prod.mk (some (Prod.mk (Prod.mk _ _) rest)) _)
-                        (match (sidecar_entries rest nil)
-                          ((Prod.mk (some as) _) as)
-                          (_ nil)))
-                       (_ nil)))
-                    (_ nil)))
-                 (none nil))))
-            (match (write_file path (render_sidecar (append (not_superseded olds news) news)) w1)
+                        (match (sidecar_entries rest nil nil)
+                          ((Prod.mk (some side) _) side)
+                          (_ (Side nil nil))))
+                       (_ (Side nil nil))))
+                    (_ (Side nil nil))))
+                 (none (Side nil nil)))))
+            (match
+              (write_file path
+                (render_sidecar (sidecar_schema) (reconstruction_version)
+                  (Side (append (not_superseded (side_autos olds) news) news) (side_fills olds)))
+                w1)
               ((Prod.mk ok w2)
                (match (write_sidecars l r w2)
                  ((Prod.mk k w3)
@@ -260,39 +267,6 @@
   (match as
     (nil false)
     ((cons (Auto m _ _) r) (if (name_eq m n) true (names_has r n)))))
-;; the file whole: the header comment (the engine's version, the producer's), the schema form
-;; (I's schema the entries are written in — the loader refuses a newer one —
-;; and the reconstruction version), then the entries
-(fn render_sidecar ((as (List Auto))) (List Int)
-  (append (utf8 ";; machine-owned: written by v3/kernel/prove.shard (engine version ")
-    (append (show_nat (engine_version))
-      (append
-        (utf8
-          "); one entry per theorem, keyed by the resolved requirement it proves (req STATEMENT DEPS POLICY ENV)\n(sidecar ")
-        (append (show_nat (sidecar_schema))
-          (append (utf8 " ")
-            (append (show_nat (reconstruction_version)) (append (utf8 ")\n") (render_entries as)))))))))
-(fn render_entries ((as (List Auto))) (List Int)
-  (measure (struct as))
-  (match as
-    (nil nil)
-    ((cons (Auto n k steps) r)
-     (append (utf8 "(proof-for ")
-       (append (show_name n)
-         (append (utf8 " ")
-           (append (render_key k)
-             (append (utf8 " (by ")
-               (append (show_sexprs steps) (append (utf8 "))\n") (render_entries r)))))))))))
-;; (req S D P E); a statement-only key (an entry kept from an older schema) as it was
-(fn render_key ((k Req)) (List Int)
-  (match k
-    ((ReqFull s d p e)
-     (append (utf8 "(req ")
-       (append (show_int s)
-         (cons 32
-           (append (show_int d)
-             (cons 32 (append (show_int p) (cons 32 (append (show_int e) (utf8 ")"))))))))))
-    ((ReqStmt s) (show_int s))))
 
 ;; ---- measure -----------------------------------------------------------------------------------
 (fn main_measure ((l0 Load) (files (List (List Int))) (w World)) World

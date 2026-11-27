@@ -1,0 +1,362 @@
+;;; v3/kernel/sidecar.shard — the file a tool writes beside a source file, FILE.auto.shard:
+;;; what was found for the blanks FILE.shard leaves. Under a first form
+;;; (sidecar SCHEMA RECON) it holds two kinds of entry:
+;;;   (proof-for NAME (req S D P E) (by STEP…))          the block of an `auto` proof
+;;;   (fill-for FN (fn FP) ((HOLE CODE)…) (measure M…))  the code of a fn's named holes
+;;; Here: the file's forms read into entries (sidecar_split, sidecar_entries), the entries
+;;; written back whole (render_sidecar) — `prove` writes the proofs and `find` the code, each
+;;; keeping the other's —, and a fn's form with its code put in (fill_form), which the loader
+;;; hands to both readings of the file. Nothing in such a file is trusted: a block is replayed
+;;; and what it builds is K's to check; code is read where its hole stands exactly as source
+;;; written there is, so a function is its source and its entry and nothing else
+;;; (docs/LAW.md rule 24).
+(import "reader.shard")
+(import "engine.shard")
+(import "tactic.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(use kernel.engine)
+(use kernel.name)
+(use kernel.reader)
+(use kernel.scope)
+(use kernel.sexpr)
+(use kernel.sym)
+(use kernel.tactic)
+(use kernel.util)
+(use kernel.name.Name)
+(use kernel.reader.Auto)
+(use kernel.reader.Req)
+(use kernel.sexpr.SExpr)
+
+;; the code a tool found for a fn's named holes: the fn's name as its file writes it, the
+;; fingerprint of its form as written (form_fp: the entry was made for that text and stands for
+;; no other), each hole's name with its code, and the measure clause where the code makes the
+;; fn call itself
+(type Fill (Fill Symbol Int (List (Prod Symbol SExpr)) (Option SExpr)))
+;; a sidecar's entries
+(type Side (Side (List Auto) (List Fill)))
+(fn side_autos ((s Side)) (List Auto)
+  (match s
+    ((Side as _) as)))
+(fn side_fills ((s Side)) (List Fill)
+  (match s
+    ((Side _ fs) fs)))
+(fn fill_owner ((f Fill)) Symbol
+  (match f
+    ((Fill o _ _ _) o)))
+(fn fill_names ((hs (List (Prod Symbol SExpr)))) (List Symbol)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (Prod.mk n _) r) (cons n (fill_names r)))))
+
+;; ---- reading -------------------------------------------------------------------------
+;; the schema of the entry syntax this toolchain writes; an older one is replayed and reported,
+;; a newer one is refused (loader.shard read_sidecar)
+(fn sidecar_schema () Int 3)
+;; the first form, (sidecar N) or (sidecar N RECON), and the forms after it: the schema the
+;; entries are written in (no form = schema 1) and the reconstruction version they were last
+;; replayed under (-1: none stated)
+(fn sidecar_split ((es (List SExpr))) (Prod (Option (Prod (Prod Int Int) (List SExpr))) (List Int))
+  (match es
+    ((cons (SList (cons (SSym h) more)) r)
+     (if (sym_eq h (sym "sidecar"))
+       (match more
+         ((cons (SNum n) nil)
+          (if (< n 1) (Prod.mk none (utf8 "(sidecar N): N counts from 1"))
+          (Prod.mk (some (Prod.mk (Prod.mk n -1) r)) nil)))
+         ((cons (SNum n) (cons (SNum v) nil))
+          (if (< n 1) (Prod.mk none (utf8 "(sidecar N RECON): N counts from 1"))
+          (Prod.mk (some (Prod.mk (Prod.mk n v) r)) nil)))
+         (_ (Prod.mk none (utf8 "the schema form is (sidecar N) or (sidecar N RECON)"))))
+       (Prod.mk (some (Prod.mk (Prod.mk 1 -1) es)) nil)))
+    (_ (Prod.mk (some (Prod.mk (Prod.mk 1 -1) es)) nil))))
+;; FILE.shard → FILE (the sidecar is FILE.auto.shard); another suffix is kept
+(fn drop_shard_suffix ((path (List Int))) (List Int)
+  (let ((n (len path)))
+    (if (bool_and (< 6 n) (int_list_eq (drop (- n 6) path) (utf8 ".shard"))) (take (- n 6) path)
+    path)))
+;; the entries, in the file's order; a form of another shape is the reason
+(fn sidecar_entries ((es (List SExpr)) (as (List Auto)) (fs (List Fill)))
+  (Prod (Option Side) (List Int))
+  (measure (struct es))
+  (match es
+    (nil (Prod.mk (some (Side (rev as) (rev fs))) nil))
+    ((cons (SList (cons (SSym h) args)) r)
+     (if (sym_eq h (sym "fill-for"))
+       (match (sidecar_fill args)
+         ((some f) (sidecar_entries r as (cons f fs)))
+         (none
+           (Prod.mk none
+             (utf8
+               "a fn's code is (fill-for FN (fn FINGERPRINT) ((HOLE CODE)…)), a (measure …) after it where the code calls FN"))))
+       (match (sidecar_proof h args)
+         ((Prod.mk (some a) _) (sidecar_entries r (cons a as) fs))
+         ((Prod.mk none why) (Prod.mk none why)))))
+    ((cons _ r) (Prod.mk none (utf8 "an entry is (proof-for NAME (req S D P E) (by STEP…))")))))
+(fn sidecar_proof ((h Symbol) (args (List SExpr))) (Prod (Option Auto) (List Int))
+  (match args
+    ((cons (SSym nm) (cons key (cons (SList (cons (SSym by) steps)) nil)))
+     (if (bool_and (sym_eq h (sym "proof-for")) (sym_eq by (sym "by")))
+       (match (name_of_sym nm)
+         ((some n)
+          (match (sidecar_key key)
+            ((some k) (Prod.mk (some (Auto n k steps)) nil))
+            (none (Prod.mk none (utf8 "an entry's key is (req S D P E) or a FINGERPRINT")))))
+         (none (Prod.mk none (append (utf8 "not a name: ") (chars_of_sym nm)))))
+       (Prod.mk none (utf8 "an entry is (proof-for NAME (req S D P E) (by STEP…))"))))
+    (_ (Prod.mk none (utf8 "an entry is (proof-for NAME (req S D P E) (by STEP…))")))))
+;; an entry's key: (req S D P E), or a bare fingerprint (the statement's; schemas 1 and 2)
+(fn sidecar_key ((s SExpr)) (Option Req)
+  (match s
+    ((SNum fp) (some (ReqStmt fp)))
+    ((SList (cons (SSym h) (cons (SNum a) (cons (SNum b) (cons (SNum c) (cons (SNum d) nil))))))
+     (if (sym_eq h (sym "req")) (some (ReqFull a b c d)) none))
+    (_ none)))
+;; FN (fn FP) ((HOLE CODE)…), then nothing or one (measure M…); a hole named twice is no entry
+(fn sidecar_fill ((args (List SExpr))) (Option Fill)
+  (match args
+    ((cons (SSym o) (cons (SList (cons (SSym k) (cons (SNum fp) nil))) (cons (SList hs) more)))
+     (if (sym_eq k (sym "fn"))
+       (match (fill_pairs hs nil)
+         ((some pairs)
+          (match more
+            (nil (some (Fill o fp pairs none)))
+            ((cons (SList (cons (SSym m) (cons m1 ms))) nil)
+             (if (sym_eq m (sym "measure"))
+               (some (Fill o fp pairs (some (SList (cons (SSym m) (cons m1 ms))))))
+               none))
+            (_ none)))
+         (none none))
+       none))
+    (_ none)))
+(fn fill_pairs ((hs (List SExpr)) (acc (List (Prod Symbol SExpr))))
+  (Option (List (Prod Symbol SExpr)))
+  (measure (struct hs))
+  (match hs
+    (nil (some (rev acc)))
+    ((cons (SList (cons (SSym n) (cons code nil))) r)
+     (if (syms_has (fill_names acc) n) none (fill_pairs r (cons (Prod.mk n code) acc))))
+    ((cons _ r) none)))
+(fn syms_has ((xs (List Symbol)) (n Symbol)) Bool
+  (measure (struct xs))
+  (match xs
+    (nil false)
+    ((cons x r) (if (sym_eq x n) true (syms_has r n)))))
+
+;; ---- writing -------------------------------------------------------------------------
+;; the file whole: the header comment (the engine's version: the producer's of the proofs), the
+;; schema form — the schema the entries are written in and the reconstruction version the
+;; proofs were last replayed under: a tool that replayed none writes back the numbers it read —,
+;; the code, then the proofs. A file without code is byte for byte what `prove` has always
+;; written: a committed sidecar is compared with one made again (engine_test.sh)
+(fn render_sidecar ((schema Int) (recon Int) (s Side)) (List Int)
+  (append (utf8 ";; machine-owned: written by v3/kernel/prove.shard (engine version ")
+    (append (show_nat (engine_version))
+      (append
+        (utf8
+          "); one entry per theorem, keyed by the resolved requirement it proves (req STATEMENT DEPS POLICY ENV)")
+        (append
+          (match (side_fills s)
+            (nil nil)
+            (_
+              (utf8
+                "; and by v3/search/find.shard, one entry per fn for the code of its holes, keyed by the fn's form as written")))
+          (append (utf8 "\n(sidecar ")
+            (append (show_nat schema)
+              (append (if (< recon 0) nil (cons 32 (show_nat recon)))
+                (append (utf8 ")\n")
+                  (append (render_fills (side_fills s)) (render_entries (side_autos s))))))))))))
+(fn render_fills ((fs (List Fill))) (List Int)
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons (Fill o fp hs m) r)
+     (append (utf8 "(fill-for ")
+       (append (chars_of_sym o)
+         (append (utf8 " (fn ")
+           (append (show_int fp)
+             (append (utf8 ") (")
+               (append (render_pairs hs)
+                 (append (utf8 ")")
+                   (append
+                     (match m
+                       ((some c) (cons 32 (show_sexpr c)))
+                       (none nil))
+                     (append (utf8 ")\n") (render_fills r)))))))))))))
+(fn render_pairs ((hs (List (Prod Symbol SExpr)))) (List Int)
+  (measure (struct hs))
+  (match hs
+    (nil nil)
+    ((cons (Prod.mk n c) r)
+     (append (utf8 "(")
+       (append (chars_of_sym n)
+         (cons 32
+           (append (show_sexpr c)
+             (append (utf8 ")")
+               (match r
+                 (nil nil)
+                 (_ (cons 32 (render_pairs r))))))))))))
+(fn render_entries ((as (List Auto))) (List Int)
+  (measure (struct as))
+  (match as
+    (nil nil)
+    ((cons (Auto n k steps) r)
+     (append (utf8 "(proof-for ")
+       (append (show_name n)
+         (append (utf8 " ")
+           (append (render_key k)
+             (append (utf8 " (by ")
+               (append (show_sexprs steps) (append (utf8 "))\n") (render_entries r)))))))))))
+;; (req S D P E); a statement-only key (an entry kept from an older schema) as it was
+(fn render_key ((k Req)) (List Int)
+  (match k
+    ((ReqFull s d p e)
+     (append (utf8 "(req ")
+       (append (show_int s)
+         (cons 32
+           (append (show_int d)
+             (cons 32 (append (show_int p) (cons 32 (append (show_int e) (utf8 ")"))))))))))
+    ((ReqStmt s) (show_int s))))
+;; a file's entries with one fn's code put in: the entry the fn had is replaced
+(fn side_with_fill ((s Side) (f Fill)) Side
+  (match s
+    ((Side as fs) (Side as (append (fills_without fs (fill_owner f)) (list f))))))
+(fn fills_without ((fs (List Fill)) (o Symbol)) (List Fill)
+  (measure (struct fs))
+  (match fs
+    (nil nil)
+    ((cons f r) (if (sym_eq (fill_owner f) o) (fills_without r o) (cons f (fills_without r o))))))
+
+;; ---- a fn's form with its code ---------------------------------------------------------
+;; the fingerprint of a form as written: its tree — layout and comments are no part of it
+(fn form_fp ((s SExpr)) Int (sexpr_fp s 7))
+(fn sexpr_fp ((s SExpr) (acc Int)) Int
+  (measure (SExpr.size s))
+  (match s
+    ((SNum k) (mix (mix acc 1) k))
+    ((SSym x) (hash_bytes (chars_of_sym x) (mix acc 2)))
+    ((SSymU x ls) (mix (sexprs_fp ls (hash_bytes (chars_of_sym x) (mix acc 3))) 6))
+    ((SStr bs) (hash_bytes bs (mix (mix acc 4) (len bs))))
+    ((SList xs) (mix (sexprs_fp xs (mix acc 5)) 6))))
+(fn sexprs_fp ((xs (List SExpr)) (acc Int)) Int
+  (measure (List_SExpr.size xs))
+  (match xs
+    (nil acc)
+    ((cons x r) (sexprs_fp r (sexpr_fp x acc)))))
+(fulfills sexpr_fp.dec_1 (by (intro s acc x ls h) (rw h) (rw SExpr.size.eq_3) (arith)))
+(fulfills sexpr_fp.dec_2 (by (intro s acc xs h) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills sexprs_fp.dec_1 (by (intro xs acc x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills sexprs_fp.dec_2 (by (intro xs acc x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+;; the hole a list is: (hole NAME), the form as an author writes it
+(fn hole_written ((xs (List SExpr))) (Option Symbol)
+  (match xs
+    ((cons (SSym h) (cons (SSym n) nil)) (if (sym_eq h (sym "hole")) (some n) none))
+    (_ none)))
+;; how many holes of a name a tree holds
+(fn holes_named ((s SExpr) (n Symbol)) Int
+  (measure (SExpr.size s))
+  (match s
+    ((SList xs)
+     (match (hole_written xs)
+       ((some m) (if (sym_eq m n) 1 0))
+       (none (holes_named_in xs n))))
+    (_ 0)))
+(fn holes_named_in ((xs (List SExpr)) (n Symbol)) Int
+  (measure (List_SExpr.size xs))
+  (match xs
+    (nil 0)
+    ((cons x r) (+ (holes_named x n) (holes_named_in r n)))))
+(fulfills holes_named.dec_1 (by (intro s n xs h hn) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills holes_named_in.dec_1 (by (intro xs n x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills holes_named_in.dec_2 (by (intro xs n x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+;; the code an entry holds for a hole
+(fn pair_code ((hs (List (Prod Symbol SExpr))) (n Symbol)) (Option SExpr)
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons (Prod.mk m c) r) (if (sym_eq m n) (some c) (pair_code r n)))))
+;; a tree with code where its holes stand: (hole NAME) → (hole NAME is CODE), which both
+;; readings take for CODE where a hole may stand and refuse anywhere else (elab.shard
+;; elab_hole, classify.shard read_filled). The walk knows no grammar: it marks every list of
+;; that shape, and a list of four is no binder, no pattern of a constructor of one field and
+;; no pair of a `with`
+(fn fill_sexpr ((s SExpr) (hs (List (Prod Symbol SExpr)))) SExpr
+  (measure (SExpr.size s))
+  (match s
+    ((SList xs)
+     (match (hole_written xs)
+       ((some n)
+        (match (pair_code hs n)
+          ((some c) (SList (list (SSym (sym "hole")) (SSym n) (SSym (sym "is")) c)))
+          (none s)))
+       (none (SList (fill_sexprs xs hs)))))
+    (_ s)))
+(fn fill_sexprs ((xs (List SExpr)) (hs (List (Prod Symbol SExpr)))) (List SExpr)
+  (measure (List_SExpr.size xs))
+  (match xs
+    (nil nil)
+    ((cons x r) (cons (fill_sexpr x hs) (fill_sexprs r hs)))))
+(fulfills fill_sexpr.dec_1 (by (intro s hs xs h hn) (rw h) (rw SExpr.size.eq_5) (arith)))
+(fulfills fill_sexprs.dec_1 (by (intro xs hs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+(fulfills fill_sexprs.dec_2 (by (intro xs hs x r h) (rw h) (rw List_SExpr.size.eq_2) (arith)))
+;; every hole the entry names stands once in the tree
+(fn holes_once ((b SExpr) (hs (List (Prod Symbol SExpr)))) Bool
+  (measure (struct hs))
+  (match hs
+    (nil true)
+    ((cons (Prod.mk n _) r) (if (= (holes_named b n) 1) (holes_once b r) false))))
+;; one of them stands in it
+(fn holes_any ((b SExpr) (hs (List (Prod Symbol SExpr)))) Bool
+  (measure (struct hs))
+  (match hs
+    (nil false)
+    ((cons (Prod.mk n _) r) (if (< 0 (holes_named b n)) true (holes_any b r)))))
+;; what an entry is to a form
+(type Fit
+  (FitOther)  ; another fn's, or a form that asks for none of it: the entry is not this form's
+  (FitStale Int)  ; made for another text of this fn — the form's fingerprint; or one that does not go in: a hole it names is missing or stands twice, a measure where the source states one
+  (FitOk SExpr))  ; the form with the code in, and the entry's measure where it has one
+;; (fn NAME PARAMS RET BODY) or (fn NAME PARAMS RET (measure …) BODY): the code goes into BODY
+;; alone — nothing a sidecar says reaches the signature —, the entry's measure before it
+(fn fill_form ((s SExpr) (f Fill)) Fit
+  (match f
+    ((Fill o fp hs m)
+     (match s
+       ((SList (cons (SSym h) (cons (SSym n) (cons ps (cons rt rest)))))
+        (if (bool_not (bool_and (sym_eq h (sym "fn")) (sym_eq n o))) FitOther
+        (match (fn_rest rest)
+          (none FitOther)
+          ((some (Prod.mk own b))
+           (if (bool_not (holes_any b hs)) FitOther
+           (if
+             (bool_not
+               (bool_and (= (form_fp s) fp)
+                 (bool_and (holes_once b hs)
+                   (match (Prod.mk own m)
+                     ((Prod.mk (some _) (some _)) false)
+                     (_ true)))))
+             (FitStale (form_fp s))
+             (FitOk
+               (SList
+                 (cons (SSym h)
+                   (cons (SSym n)
+                     (cons ps
+                       (cons rt
+                         (append
+                           (match own
+                             ((some c) (list c))
+                             (none
+                               (match m
+                                 ((some c) (list c))
+                                 (none nil))))
+                           (list (fill_sexpr b hs)))))))))))))))
+       (_ FitOther)))))
+;; the forms after RET: the source's measure clause, where it states one, and the body
+(fn fn_rest ((rest (List SExpr))) (Option (Prod (Option SExpr) SExpr))
+  (match rest
+    ((cons b nil) (some (Prod.mk none b)))
+    ((cons (SList (cons (SSym m) ms)) (cons b nil))
+     (if (sym_eq m (sym "measure")) (some (Prod.mk (some (SList (cons (SSym m) ms))) b)) none))
+    (_ none)))

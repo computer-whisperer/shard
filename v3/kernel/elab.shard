@@ -495,8 +495,14 @@
        (if (sym_eq h (sym "match")) (elab_match e args expected (- depth 1))
        (if (sym_eq h (sym "list")) (elab_list e args expected (- depth 1))
        (if (sym_eq h (sym "exists")) (elab_exists e args expected (- depth 1))
-       (if (sym_eq h (sym "hole")) (elab_hole e args expected)
-       (elab_app e (SSym h) args expected (- depth 1)))))))))))))))))
+       (if (sym_eq h (sym "hole"))
+         (match (hole_code args)
+           (none (elab_hole e args expected))
+           ((some (Prod.mk nm code))
+            (match (hole_at e (list nm) expected)
+              ((HoleErr r) r)
+              ((HoleOk e1 _ t0 _) (elab e1 code (some t0) (- depth 1))))))
+         (elab_app e (SSym h) args expected (- depth 1)))))))))))))))))
       ((SList (cons h args)) (elab_app e h args expected (- depth 1))))))
 
 ;; ---- a hole ------------------------------------------------------------------------------
@@ -511,37 +517,54 @@
 ;; type mentions one of these. The type must be known where the hole stands and K's opaque
 ;; kind wants a value of it, never looked at again: the type's default (inhabit.shard)
 (fn elab_hole ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match (hole_at e args expected)
+    ((HoleErr r) r)
+    ((HoleOk e1 name t0 hidden)
+     (hole_close (hole_tele e1 (visible_locals (cx_bound (el_cx e1)) nil nil) hidden nil nil nil)
+       name
+       t0))))
+;; where a hole may stand: in the body of a fn, under a name of its own, at a type the place
+;; fixes, and that type no proposition. The place: the state after the question, the hole's
+;; constant name, its type, and the fn's locals it is not handed
+(type HoleAt (HoleErr ERes) (HoleOk El Name Expr (List Int)))
+(fn hole_at ((e El) (args (List SExpr)) (expected (Option Expr))) HoleAt
   (match (el_holes e)
     (none
-      (EErr (sym "hole_outside")
-        (utf8 "a hole stands in the body of a fn (a proof still to be written is sorry)")))
+      (HoleErr
+        (EErr (sym "hole_outside")
+          (utf8 "a hole stands in the body of a fn (a proof still to be written is sorry)"))))
     ((some hidden)
      (match (hole_name e args)
-       (none (EErr (sym "bad_shape") (utf8 "(hole) or (hole NAME)")))
+       (none (HoleErr (EErr (sym "bad_shape") (utf8 "(hole) or (hole NAME)"))))
        ((some name)
         (if (bool_or (hole_declared e name) (generated_written args))
-          (EErr (sym "hole_name")
-            (append (show_name name)
-              (utf8
-                " is declared, or is a name the toolchain makes (eq_N, dec_N, match_N, lam_N, hole_N): give the hole another name")))
+          (HoleErr
+            (EErr (sym "hole_name")
+              (append (show_name name)
+                (utf8
+                  " is declared, or is a name the toolchain makes (eq_N, dec_N, match_N, lam_N, hole_N): give the hole another name"))))
           (match expected
-            (none (hole_untyped name))
+            (none (HoleErr (hole_untyped name)))
             ((some x)
              (let ((t0 (el_zonk e x)))
-               (if (has_mvar t0) (hole_untyped name)
+               (if (has_mvar t0) (HoleErr (hole_untyped name))
                (match (w_is_prop (el_w e) t0)
                  ((Prod.mk _ (some true))
-                  (EErr (sym "hole_proposition")
-                    (append (show_name name)
-                      (utf8 ": a hole is a value; a proof still to be written is sorry"))))
-                 ((Prod.mk w1 _)
-                  (hole_close
-                    (hole_tele (el_set_w e w1) (visible_locals (cx_bound (el_cx e)) nil nil) hidden
-                      nil
-                      nil
-                      nil)
-                    name
-                    t0)))))))))))))
+                  (HoleErr
+                    (EErr (sym "hole_proposition")
+                      (append (show_name name)
+                        (utf8 ": a hole is a value; a proof still to be written is sorry")))))
+                 ((Prod.mk w1 _) (HoleOk (el_set_w e w1) name t0 hidden)))))))))))))
+;; a hole with its code, (hole NAME is CODE): what the loader makes of (hole NAME) in a fn
+;; whose sidecar holds code for it (sidecar.shard fill_form). `elab` reads it where a hole may
+;; stand and nowhere else — what a hole is refused for, it is refused for — and then reads
+;; CODE in its place, as source written there, against the type the hole would have had: no
+;; constant is made, the fn's body holds the code
+(fn hole_code ((args (List SExpr))) (Option (Prod SExpr SExpr))
+  (match args
+    ((cons (SSym n) (cons (SSym w) (cons code nil)))
+     (if (sym_eq w (sym "is")) (some (Prod.mk (SSym n) code)) none))
+    (_ none)))
 (fn hole_untyped ((name Name)) ERes
   (EErr (sym "hole_type")
     (append (show_name name)
@@ -2537,41 +2560,46 @@
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_4
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24
+      a25 a26 a27 a28 a29 a30)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_5
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_6
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_7
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_8
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_9
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_10
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_11
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_12
-  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+  (by
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+    (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_13
-  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_14
+  (by (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
+(fulfills elab.dec_15
   (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab_sym.dec_1
   (by

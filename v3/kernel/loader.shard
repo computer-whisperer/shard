@@ -20,6 +20,7 @@
 
 (import "host.shard")
 (import "reader.shard")
+(import "sidecar.shard")
 (import "k")
 (import "realize.shard")
 (import "define.shard")
@@ -113,6 +114,10 @@
 (use kernel.reader.RDecl)
 (use kernel.reader.Auto)
 (use kernel.reader.Req)
+(use kernel.sidecar)
+(use kernel.sidecar.Fill)
+(use kernel.sidecar.Fit)
+(use kernel.sidecar.Side)
 (use kernel.reader.ReqCtx)
 (use kernel.reader.Producers)
 (use kernel.scope.Resolved)
@@ -314,7 +319,8 @@
   (RBoth Name Symbol (List Int))  ; under --both, a fn the typed route gave a program: the classifier's reading of the same form gives the same program (same), another (differs, with both), or none (unread, with its refusal)
   (RBin Name Name (List Name) Int (List Name) Int)  ; a bin checked: its name, entry, externs, trusted axioms' count, requirements, requirements met
   (RBinErr Name Symbol (List Int))  ; a bin's failure, an error: unmet (the requirement), unthreaded (the function and its verdict), bad_entry, extern_undeclared, extern_outside, unknown_requirement, unknown_trust, untrusted
-  (RHole Name (List Int)))  ; a hole of a fn's body: its constant, the names it is handed with their types and its own type — a value still to be found
+  (RHole Name (List Int))  ; a hole of a fn's body: its constant, the names it is handed with their types and its own type — a value still to be found
+  (RFilled Name Fill))  ; a fn read with the code its sidecar holds for its holes: the fn and the entry
 
 ;; the caches the load keeps beside its checked environment, each of a function of what the
 ;; environment holds of a declaration: K's closures of axioms, and the declarations' parts of
@@ -523,25 +529,32 @@
   (match cs
     (nil l)
     ((cons (Prod.mk n o) r) (ld_add_inits (with Load l (inits (ords_add (Load.inits l) n o))) r))))
-;; the sidecar FILE.auto.shard beside a file whose forms hold an `auto` proof — a module's
-;; file, or the implementation file of a view, read where its check begins (check_impl):
-;; its (proof-for NAME FINGERPRINT (by STEP…)) forms as entries; absent = no entries; a sidecar
-;; that does not read, or a form of another shape, is the file's load error and no entries.
-;; Its first form may be the schema (sidecar N) the entries are written in (no form = schema
-;; 1): an older schema is replayed and reported SIDECAR; a newer one is the load error
-;; sidecar_schema (this loader cannot read it).
-;; At schema 3 an entry's key is (req S D P E), the resolved requirement's; a bare
-;; FINGERPRINT (schemas 1 and 2) is the statement's alone and still stands on replay. The form's
-;; second number, (sidecar N RECON), is the reconstruction version the entries were last replayed
-;; under (tactic.shard): another one is replayed and reported RECON
-(fn sidecar_schema () Int 3)
-(fn read_sidecar ((l Load) (rel (List (List Int))) (forms (List SExpr)) (w World))
-  (Prod (Prod Load (List Auto)) World)
-  (if (bool_not (forms_want_auto forms)) (Prod.mk (Prod.mk l nil) w)
+;; the sidecar FILE.auto.shard beside a file — a module's file, or the implementation file of
+;; a view, read where its check begins (check_impl) —: its entries (sidecar.shard), the proofs
+;; for the file's `auto`s and the code for its fns' holes; absent = no entries; a sidecar that
+;; does not read, or a form of another shape, is the file's load error and no entries. Its
+;; first form may be the schema (sidecar N) the entries are written in (no form = schema 1):
+;; an older schema is replayed and reported SIDECAR; a newer one is the load error
+;; sidecar_schema (this loader cannot read it). At schema 3 a proof's key is (req S D P E), the
+;; resolved requirement's; a bare FINGERPRINT (schemas 1 and 2) is the statement's alone and
+;; still stands on replay. The form's second number, (sidecar N RECON), is the reconstruction
+;; version the proofs were last replayed under (tactic.shard): another one is replayed and
+;; reported RECON.
+;; What comes back: the proofs, and the file's forms with the code put in (apply_fills) — from
+;; here on a fn whose holes have code is read as a fn written with that code
+(type Sided (Sided (List Auto) (List SExpr)))
+(fn sided_autos ((s Sided)) (List Auto)
+  (match s
+    ((Sided as _) as)))
+(fn sided_forms ((s Sided)) (List SExpr)
+  (match s
+    ((Sided _ fs) fs)))
+(fn read_sidecar ((l Load) (ident Name) (rel (List (List Int))) (forms (List SExpr)) (w World))
+  (Prod (Prod Load Sided) World)
   (let
     ((path (append (drop_shard_suffix (join_path (append (Load.root l) rel))) (utf8 ".auto.shard"))))
     (match (read_file path w)
-      ((Prod.mk none w1) (Prod.mk (Prod.mk l nil) w1))
+      ((Prod.mk none w1) (Prod.mk (Prod.mk l (Sided nil forms)) w1))
       ((Prod.mk (some src) w1)
        (match (read_all src)
          ((RAErr e off)
@@ -552,7 +565,7 @@
                   (append path
                     (append (utf8 ": ")
                       (append (chars_of_sym e) (append (utf8 " at byte ") (show_nat off)))))))
-              nil)
+              (Sided nil forms))
             w1))
          ((RAOk es)
           (match (sidecar_split es)
@@ -562,7 +575,7 @@
                  (ld_rec l
                    (RLoadErr (join_path rel) (sym "sidecar_malformed")
                      (append path (append (utf8 ": ") m))))
-                 nil)
+                 (Sided nil forms))
                w1))
             ((Prod.mk (some (Prod.mk (Prod.mk schema recon) rest)) _)
              (if (< (sidecar_schema) schema)
@@ -576,90 +589,65 @@
                              (append (utf8 " is past this loader's ")
                                (append (show_nat (sidecar_schema))
                                  (utf8 " — regenerate the sidecar with prove.shard"))))))))
-                   nil)
+                   (Sided nil forms))
                  w1)
-               (match (sidecar_entries rest nil)
-                 ((Prod.mk (some autos) _)
-                  (Prod.mk (Prod.mk (sidecar_reports l (join_path rel) schema recon) autos) w1))
+               (match (sidecar_entries rest nil nil)
+                 ((Prod.mk (some side) _)
+                  (match
+                    (apply_fills (sidecar_reports l (join_path rel) schema recon side) ident
+                      (side_fills side)
+                      forms)
+                    ((Prod.mk l1 forms1) (Prod.mk (Prod.mk l1 (Sided (side_autos side) forms1)) w1))))
                  ((Prod.mk none m)
                   (Prod.mk
                     (Prod.mk
                       (ld_rec l
                         (RLoadErr (join_path rel) (sym "sidecar_malformed")
                           (append path (append (utf8 ": ") m))))
-                      nil)
-                    w1)))))))))))))
-;; the reports of a sidecar read — an older schema; at the current schema, another
-;; reconstruction version —: reports, never refusals, the entries standing on replay
-(fn sidecar_reports ((l Load) (file (List Int)) (schema Int) (recon Int)) Load
-  (if (< schema (sidecar_schema)) (ld_rec l (RSidecar file schema (sidecar_schema)))
-  (if (= recon (reconstruction_version)) l
-  (ld_rec l (RRecon file recon (reconstruction_version))))))
-;; the schema form at the head of a sidecar — (sidecar N), or (sidecar N RECON) with the
-;; reconstruction version its entries were last replayed under (-1 when not stated) —, and the
-;; forms after it; no form = schema 1
-(fn sidecar_split ((es (List SExpr))) (Prod (Option (Prod (Prod Int Int) (List SExpr))) (List Int))
-  (match es
-    ((cons (SList (cons (SSym h) more)) r)
-     (if (sym_eq h (sym "sidecar"))
-       (match more
-         ((cons (SNum n) nil)
-          (if (< n 1) (Prod.mk none (utf8 "(sidecar N): N counts from 1"))
-          (Prod.mk (some (Prod.mk (Prod.mk n -1) r)) nil)))
-         ((cons (SNum n) (cons (SNum v) nil))
-          (if (< n 1) (Prod.mk none (utf8 "(sidecar N RECON): N counts from 1"))
-          (Prod.mk (some (Prod.mk (Prod.mk n v) r)) nil)))
-         (_ (Prod.mk none (utf8 "the schema form is (sidecar N) or (sidecar N RECON)"))))
-       (Prod.mk (some (Prod.mk (Prod.mk 1 -1) es)) nil)))
-    (_ (Prod.mk (some (Prod.mk (Prod.mk 1 -1) es)) nil))))
-;; FILE.shard → FILE (the sidecar is FILE.auto.shard); another suffix is kept
-(fn drop_shard_suffix ((path (List Int))) (List Int)
-  (let ((n (len path)))
-    (if (bool_and (< 6 n) (int_list_eq (drop (- n 6) path) (utf8 ".shard"))) (take (- n 6) path)
-    path)))
-;; a form whose proof is delegated: (theorem NAME BINDERS PROP auto), (fulfills NAME auto)
-(fn forms_want_auto ((forms (List SExpr))) Bool
+                      (Sided nil forms))
+                    w1))))))))))))
+;; the code a sidecar holds for the file's fns, each entry put into the form it was made for
+;; (sidecar.shard fill_form): FILLED for one that went in — the fn is read with the code where
+;; its holes stood, and with the entry's measure —; PENDING fill_stale for one made for
+;; another text of its fn, whose holes stay holes; an entry no form asks for (its fn is gone,
+;; or holds none of its holes any more) is passed over as a proof no `auto` asks for is
+(fn apply_fills ((l Load) (ident Name) (fills (List Fill)) (forms (List SExpr)))
+  (Prod Load (List SExpr))
+  (measure (struct fills))
+  (match fills
+    (nil (Prod.mk l forms))
+    ((cons fl r)
+     (match (fill_forms l ident fl forms nil)
+       ((Prod.mk l1 forms1) (apply_fills l1 ident r forms1))))))
+(fn fill_forms ((l Load) (ident Name) (fl Fill) (forms (List SExpr)) (acc (List SExpr)))
+  (Prod Load (List SExpr))
   (measure (struct forms))
   (match forms
-    (nil false)
-    ((cons (SList (cons (SSym h) args)) r)
-     (let
-       ((auto Bool
-          (match args
-            ((cons _ (cons _ (cons _ (cons p nil))))
-             (bool_and (sym_eq h (sym "theorem")) (proof_is_auto p)))
-            ((cons _ (cons p nil)) (bool_and (sym_eq h (sym "fulfills")) (proof_is_auto p)))
-            (_ false))))
-       (if auto true (forms_want_auto r))))
-    ((cons _ r) (forms_want_auto r))))
-(fn proof_is_auto ((p SExpr)) Bool
-  (match p
-    ((SSym x) (sym_eq x (sym "auto")))
-    ((SList (cons (SSym x) _)) (sym_eq x (sym "auto")))
-    (_ false)))
-(fn sidecar_entries ((es (List SExpr)) (acc (List Auto))) (Prod (Option (List Auto)) (List Int))
-  (measure (struct es))
-  (match es
-    (nil (Prod.mk (some (rev acc)) nil))
-    ((cons
-       (SList (cons (SSym h) (cons (SSym nm) (cons key (cons (SList (cons (SSym by) steps)) nil)))))
-       r)
-     (if (bool_and (sym_eq h (sym "proof-for")) (sym_eq by (sym "by")))
-       (match (name_of_sym nm)
-         ((some n)
-          (match (sidecar_key key)
-            ((some k) (sidecar_entries r (cons (Auto n k steps) acc)))
-            (none (Prod.mk none (utf8 "an entry's key is (req S D P E) or a FINGERPRINT")))))
-         (none (Prod.mk none (append (utf8 "not a name: ") (chars_of_sym nm)))))
-       (Prod.mk none (utf8 "an entry is (proof-for NAME (req S D P E) (by STEP…))"))))
-    ((cons _ r) (Prod.mk none (utf8 "an entry is (proof-for NAME (req S D P E) (by STEP…))")))))
-;; an entry's key: (req S D P E), or a bare fingerprint (the statement's; schemas 1 and 2)
-(fn sidecar_key ((s SExpr)) (Option Req)
-  (match s
-    ((SNum fp) (some (ReqStmt fp)))
-    ((SList (cons (SSym h) (cons (SNum a) (cons (SNum b) (cons (SNum c) (cons (SNum d) nil))))))
-     (if (sym_eq h (sym "req")) (some (ReqFull a b c d)) none))
-    (_ none)))
+    (nil (Prod.mk l (rev acc)))
+    ((cons s r)
+     (match (fill_form s fl)
+       (FitOther (fill_forms l ident fl r (cons s acc)))
+       ((FitStale fp)
+        (Prod.mk
+          (ld_rec l
+            (RPending (fill_fn_name ident fl)
+              (sym_of_chars (append (utf8 "fill_stale fp=") (show_int fp)))))
+          (rev_onto acc (cons s r))))
+       ((FitOk s1)
+        (Prod.mk (ld_rec l (RFilled (fill_fn_name ident fl) fl)) (rev_onto acc (cons s1 r))))))))
+(fn fill_fn_name ((ident Name) (fl Fill)) Name
+  (match (name_of_sym (fill_owner fl))
+    ((some n) (name_append ident n))
+    (none ident)))
+;; the reports of a sidecar read — an older schema; at the current schema, another
+;; reconstruction version —: reports, never refusals, the entries standing on replay
+(fn sidecar_reports ((l Load) (file (List Int)) (schema Int) (recon Int) (side Side)) Load
+  (match (side_autos side)
+    (nil l)
+    (_
+      (if (< schema (sidecar_schema)) (ld_rec l (RSidecar file schema (sidecar_schema)))
+      (if (= recon (reconstruction_version)) l
+      (ld_rec l (RRecon file recon (reconstruction_version))))))))
 (fn ld_add_pending ((l Load) (n Name)) Load (with Load l (pending (cons n (Load.pending l)))))
 (fn ld_with_stack ((l Load) (s (List Name))) Load (with Load l (stack s)))
 ;; a record added. The words of a refusal that may name a constant are kept beside it until
@@ -3920,20 +3908,20 @@
           ((Prod.mk ip w1s)
            (match (split_directives forms nil)
              ((Prod.mk dirs rest)
-              (match (read_sidecar l rel rest w1s)
-                ((Prod.mk (Prod.mk l0a autos) w1s2)
+              (match (read_sidecar l ip rel rest w1s)
+                ((Prod.mk (Prod.mk l0a sd) w1s2)
                  (match
                    (pre_register_file l0a
                      (make Fx (module mp) (ident ip) (parts rel) (opened nil) (vis (list mp))
                        (trusts nil)
                        (hash (hash_name mp))
                        (view view)
-                       (autos autos)
+                       (autos (sided_autos sd))
                        (impl false)
                        (taken nil)
                        (ecount 0)
                        (bins nil))
-                     rest)
+                     (sided_forms sd))
                    ((Prod.mk none l0) (Prod.mk (Prod.mk (ld_add_failed l0 mp rel) none) w1s2))  ; the World after the sidecar's read, not the one sealed_ident consumed
                    ((Prod.mk (some f0) l0)
                     (match
@@ -3943,26 +3931,27 @@
                          (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) none)
                          w2))
                       ((Prod.mk (Prod.mk l1p (some f1p)) w2p)
-                       (match (init_prepare_base l1p f1p rest fuel w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names
+                       (match (init_prepare_base l1p f1p (sided_forms sd) fuel w2p)  ; the E count after the imports: the file's own declarations from here (rec_threads)   ; the Init demand of the file's forms, its taken names
                          ((Prod.mk (Prod.mk l1 none) w2)
                           (Prod.mk
                             (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel) none)
                             w2))
                          ((Prod.mk (Prod.mk l1a (some f1)) w2)
-                          (match (pre_register_late l1a f1 rest)
+                          (match (pre_register_late l1a f1 (sided_forms sd))
                             ((Prod.mk none l1)
                              (Prod.mk
                                (Prod.mk (ld_add_failed (ld_with_stack l1 (Load.stack l)) mp rel)
                                  none)
                                w2))
                             ((Prod.mk (some _) l1)
-                             (match (load_forms l1 f1 rest fuel w2)
+                             (match (load_forms l1 f1 (sided_forms sd) fuel w2)
                                ((Prod.mk (Prod.mk l2 (some f)) w3)
                                 (let
                                   ((fp
                                      (if view
                                        (some
-                                         (ForkPt.ForkPt (ld_with_stack l1 (Load.stack l)) f1 rest))
+                                         (ForkPt.ForkPt (ld_with_stack l1 (Load.stack l)) f1
+                                           (sided_forms sd)))
                                        none)))
                                   (Prod.mk
                                     (Prod.mk
@@ -4725,21 +4714,24 @@
               (match (expand_records iforms0)
                 ((RxErr e m) (Prod.mk (ld_rec l1 (RReadErr (join_path ifile) e m)) w2))
                 ((RxOk iforms)
-                 (match (read_sidecar (ld_with_recs_raw lf nil) ifile iforms w2)
-                   ((Prod.mk (Prod.mk lfs autos) w2s)
+                 (match (read_sidecar (ld_with_recs_raw lf nil) (Fx.ident f) ifile iforms w2)
+                   ((Prod.mk (Prod.mk lfs sd) w2s)
                     (match (ld_recs_head lfs)
                       ((some (RLoadErr _ _ _)) (Prod.mk (merge_impl_recs l1 (ld_recs lfs)) w2s))  ; the implementation's sidecar does not read: its load error, and the check ends
                       (_
-                        (match (pre_register_file lfs (fx_as_impl f ifile autos) iforms)
+                        (match
+                          (pre_register_file lfs (fx_as_impl f ifile (sided_autos sd))
+                            (sided_forms sd))
                           ((Prod.mk none lf0) (Prod.mk (merge_impl_recs l1 (ld_recs lf0)) w2s))
                           ((Prod.mk (some f0) lf0)
-                           (match (impl_demand lf0 f0 iforms w2s)
+                           (match (impl_demand lf0 f0 (sided_forms sd) w2s)
                              ((Prod.mk (Prod.mk lf1 false) w2d)
                               (Prod.mk (merge_impl_recs l1 (ld_recs lf1)) w2d))
                              ((Prod.mk (Prod.mk lf1 true) w2d)
                               (match
                                 (impl_replay lf1
-                                  (make Im (view rest) (impl iforms) (done nil) (fx f0) (file ifile)
+                                  (make Im (view rest) (impl (sided_forms sd)) (done nil) (fx f0)
+                                    (file ifile)
                                     (vparts (Fx.parts f))
                                     (all rest)
                                     (main (Load.env l1)))
@@ -5827,6 +5819,12 @@
     (nil nil)
     ((cons n nil) (show_name n))
     ((cons n r) (append (show_name n) (cons 44 (show_names_c r))))))
+(fn show_syms_c ((ns (List Symbol))) (List Int)
+  (measure (struct ns))
+  (match ns
+    (nil nil)
+    ((cons n nil) (chars_of_sym n))
+    ((cons n r) (append (chars_of_sym n) (cons 44 (show_syms_c r))))))
 (fn show_rec ((x Rec)) (List Int)
   (measure (struct x))
   (match x
@@ -5971,6 +5969,14 @@
                (_ (append (utf8 ": ") m))))))))
     ((RHole n goal)
      (append (utf8 "HOLE ") (append (show_name n) (append (utf8 " [") (append goal (utf8 "]"))))))
+    ((RFilled n (Fill _ _ hs m))
+     (append (utf8 "FILLED ")
+       (append (show_name n)
+         (append (utf8 " holes=")
+           (append (show_syms_c (fill_names hs))
+             (match m
+               ((some c) (cons 32 (show_sexpr c)))
+               (none nil)))))))
     ((RBoth n k m)
      (append (utf8 "BOTH ")
        (append (show_name n)
@@ -6050,6 +6056,7 @@
        ((RState _ _ _) acc)
        ((RBoth _ _ _) acc)
        ((RHole _ _) (list a b u c (+ d 1) e f g))
+       ((RFilled _ _) acc)
        ((RBin _ _ _ _ _ _) acc)
        ((RBinErr _ _ _) (list a b u c d e f (+ g 1)))
        ((RInstance _ _ _ _) (list a b u c d e (+ f 1) g))))

@@ -285,7 +285,9 @@ meet through the seam's statement and through nothing else.
 the lemmas those proofs need. One rule holds for it (`LAW.md` §6, 21): a source file states
 everything that is claimed, and nothing an author writes names anything in a file a tool wrote
 beside it. To delete such a file loses proofs and no statement's meaning; what stands in it needs
-no trust, K checking each piece, and no lasting name. A statement that an author's text does cite
+no trust, K checking each piece, and no lasting name. (Since `LAW.md` §6, 30 a sidecar may also
+hold the code of a function's holes; to delete it then makes those holes holes again, and a
+theorem about the function pending. No compile step writes such code today.) A statement that an author's text does cite
 — a function's equations, the seam's statement of a function — comes from a form in the source
 with a fixed shape and name, as a `fn`'s `F.eq_N` and a `derive`'s functions do. Not decided:
 whether what a tool writes is kept in a file or made again by each build; the name under which a

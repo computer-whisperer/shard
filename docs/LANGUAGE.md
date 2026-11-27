@@ -785,11 +785,17 @@ TYPE]`, the names the hole is handed with their types and then its own, as a goa
 The constant is what an `extern` is — opaque in the logic, an extern call in the program (see
 "`extern` and `opaque`") — so the function loads as it would with the hole filled: it is defined
 with its equations, which name the constant, a theorem may speak of `F.NAME`, and nothing can be
-proven of the constant's value. A run that reaches a hole stops there. `find` (see "`find`")
-searches for the holes a goal reaches and prints each filling as the expression to write in the
-hole's place, over the same names. A hole counts as pending on the `LOAD:` line; a load that reads
-programs alone (`--unchecked`: a build) refuses the function, so nothing with a hole in it is
-built.
+proven of the constant's value. A run that reaches a hole stops there. A hole counts as pending on
+the `LOAD:` line; a load that reads programs alone (`--unchecked`: a build) refuses the function,
+so nothing with a hole in it is built.
+
+**A hole's code.** `find` (see "`find`") searches for the holes a goal reaches and, with
+`--write`, stores what it found in the file's sidecar (see "A function's code in the sidecar"). A
+load that finds code there for a function's named holes reads the function with the code where
+each hole stands, exactly as source written there is read: no constant is made for those holes,
+the function is the ordinary one its author would have written — defined, runnable, built —, and
+a theorem about it is checked against the body with the code in it. A hole without a name
+(`(hole)`) has no entry to stand under: `find` prints its code and writes nothing for it.
 
 What a hole is handed: every name visible where it stands — parameters, a row's pattern
 variables, `let`-bound names (the value is what is handed), hypotheses. Not handed: a name that a
@@ -1661,6 +1667,7 @@ PENDING main.t sorry goals=2 [(n : Nat) ⊢ (= n n)] [(n : Nat) ⊢ (= 1 1)]
 | `PENDING NAME auto_missing fp=S` | The proof is `auto` and the sidecar has no entry for NAME. |
 | `PENDING NAME auto_stale CAUSE,… fp=S` | The sidecar's entry was made for another requirement. |
 | `PENDING NAME auto_unsolved fp=S REASON` | Under `prove` only: no producer found a block. |
+| `PENDING NAME fill_stale fp=FP` | The sidecar's code for the function NAME was made for another text of it (see "A function's code in the sidecar"). |
 | `PENDING NAME measure` | A function defined under a measure, with a descent obligation `NAME.dec_N` not yet proven. |
 
 Pending is not failure. The `LOAD:` line counts it (`pending N`); the load's exit code, the number
@@ -1678,9 +1685,14 @@ A discharge that rests on the obligation it discharges, directly or through anot
 
 ## `auto`, the engine and sidecars
 
-`auto` delegates a proof to a tool. The source says only `auto` or `(auto HINT…)`; the block lives
-beside the source in a *sidecar* file that tools write and people do not edit. No tool writes into
-a source file.
+A source file leaves two kinds of blank for a tool: a proof (`auto`) and a value in a function's
+body (`(hole NAME)`, see "Terms"). What a tool finds for a blank lives beside the source in a
+*sidecar* file, `FILE.auto.shard`, that tools write and people do not edit. No tool writes into a
+source file. A file is its source and its sidecar: delete the sidecar and every blank is a blank
+again — pending, never anything else.
+
+`auto` delegates a proof. The source says only `auto` or `(auto HINT…)`; the block is in the
+sidecar.
 
 ```
 (theorem le_chain ((x Int) (y Int) (z Int) (h1 (<= x y)) (h2 (<= y z))) (<= x z) auto)
@@ -1694,9 +1706,8 @@ a source file.
 
 ### At load time
 
-A load never searches. When a file has a `theorem` or a `fulfills` whose proof is `auto`, the
-loader reads `FILE.auto.shard` beside `FILE.shard`; no such file means no entries. For each `auto`
-proof it computes the key of the statement and looks up the entry under the name the source
+A load never searches. The loader reads `FILE.auto.shard` beside `FILE.shard`; no such file means
+no entries. For each `auto` proof — a `theorem`'s or a `fulfills`'s — it computes the key of the statement and looks up the entry under the name the source
 writes: a theorem's own, and for `(fulfills dn.dec_1 auto)` the obligation's, `dn.dec_1`. Where
 the key agrees in every part, the entry's block is elaborated exactly as a block written in the
 source would be: the theorem is accepted, or the step's refusal is the file's read error. Where
@@ -1726,19 +1737,70 @@ checks the result.
 | P | `policy` | The axioms the file `trusts`, and every parameter the file can see that the load has admitted so far: view parameters and descent obligations, discharged or not, of the file and of the modules in its closure. A parameter of another root is no part of it. | auto_stale_policy, auto_other_root |
 | E | `env` | The identity of the Init export (its record count and byte length). | auto_stale_env |
 
+### A function's code in the sidecar
+
+```
+(fn app ((xs (List Nat)) (ys (List Nat))) (List Nat)
+  (match xs
+    (nil ys)
+    ((cons x r) (hole at_cons))))
+(theorem app_nil ((xs (List Nat))) (= (app xs nil) xs) auto)
+```
+(v3/pins/loader/fill_auto/main.shard)
+```
+(sidecar 3 2)
+(fill-for app (fn 64006459242075293) ((at_cons (List.cons x (main.app r ys)))) (measure (struct xs)))
+(proof-for app_nil (req 1640791131180708631 845013073372488084 0 58324888111) (by (induction xs …)))
+```
+(v3/pins/loader/fill_auto/main.auto.shard: the code as `find --write` stores it, the proof as
+`prove` found it for the function with that code)
+
+An entry `(fill-for FN (fn FP) ((HOLE CODE)…))` holds the code for the named holes of the `fn` the
+file writes as FN, with `(measure M…)` after it where the code makes FN call itself. FP is the
+fingerprint of FN's whole form as the source has it — its tree, so layout and comments are outside
+it. The loader puts an entry in where three things hold: the file has a `(fn FN …)` whose form has
+that fingerprint; each hole the entry names stands in the body exactly once; and the source states
+no measure of its own where the entry brings one. The record is
+`FILLED M.FN holes=A,B (measure …)`, and from there on the function is read by both readings of a
+file — the one that elaborates and the one that reads programs alone — as the same source text
+with CODE in each hole's place and the entry's measure before the body.
+
+| Condition | What the load does |
+|---|---|
+| The fingerprint differs (the function was edited since), a named hole is missing or stands twice, or both state a measure | `PENDING M.FN fill_stale fp=FP` with the form's present fingerprint; nothing is put in, the function's holes are holes (pin `fill_stale`). Run `find` again. |
+| The function has none of the entry's holes any more, or the file no `fn` of that name | The entry is passed over without a record, as a proof no `auto` asks for is (pin `fill_gone`). |
+| The code does not elaborate where its hole stands | The function's refusal, as for source written there (pin `fill_refused`: `type_mismatch`). |
+| The entry names a list `(hole X)` that is no hole — a binder, a pattern | The function is refused: code goes where a hole may stand and nowhere else, and nothing outside a hole is read differently for a sidecar (pin `fill_binder`). |
+
+What the fingerprint does and does not say: it ties the code to the text of the one function. It
+does not see a change in a function the code calls, or in the goal the code was found for. A
+theorem about the function does — its proof is checked against the body with the code in it, and
+a stored proof's key takes in the function's content, so a changed code makes the proofs about it
+`auto_stale`. Code that passed a search's tests and has no theorem is tested code, as it would be
+had its author typed it.
+
+The code names functions and constructors in full (`main.app`, `List.cons`), so it reads the same
+whatever the file opens; a function's own full name inside its body is the function being defined
+(pin `self_full_name`). Internally the loader hands the function on with each hole written
+`(hole NAME is CODE)`; that form reads as CODE and an author has no use for it.
+
 ### The sidecar file
 
 The first form is `(sidecar SCHEMA RECON)`. SCHEMA is the version of the entry syntax (3). RECON
 is the *reconstruction version*, the version of the elaboration from a block to a term (2), under
-which the entries were last replayed. Every other form is
-`(proof-for NAME (req S D P E) (by STEP…))`, NAME as the source writes it.
+which the proofs were last replayed. Every other form is a proof,
+`(proof-for NAME (req S D P E) (by STEP…))`, NAME as the source writes it, or a function's code,
+`(fill-for FN (fn FP) ((HOLE CODE)…))` with an optional `(measure M…)` last. `prove` writes the
+proofs and `find` the code; each keeps the other's entries.
 
 | Condition | Report |
 |---|---|
 | An older schema (no first form is schema 1; schemas 1 and 2 key an entry by S alone) | `SIDECAR FILE schema=N current=3`; the entries are replayed. |
 | A newer schema | `LOAD-ERROR FILE sidecar_schema: PATH: schema 4 is past this loader's 3 — regenerate the sidecar with prove.shard` |
 | Another reconstruction version | `RECON FILE version=N current=2`; the entries are replayed. |
-| A form of another shape | `LOAD-ERROR FILE sidecar_malformed: PATH: an entry is (proof-for NAME (req S D P E) (by STEP…))` |
+| A form of another shape | `LOAD-ERROR FILE sidecar_malformed: PATH: an entry is (proof-for NAME (req S D P E) (by STEP…))`, or for a `fill-for`, its own shape |
+
+The schema and reconstruction reports are made only where the file holds a proof.
 
 ### `prove`
 
@@ -1831,10 +1893,14 @@ reaches (`(hole NAME)` in a function's body, see "Terms"), and the bodies of the
 program names and does not define (an `extern`, a view's `sig fn` with no implementation among
 the roots) that the command line names. It is a tool beside the build, as `prove` is: a load never
 searches. What it finds it prints as source text after replaying it under the evaluator — a
-value; for a hole `HOLE F.NAME = EXPRESSION`, the expression to write in the hole's place, over
-the names in scope there, with `MEASURE F (struct x)` where the fillings make `F` call itself; a
-`(fn …)` for a function named on the command line. It writes no file. The command line, the
-records and what each verdict claims are in `v3/search/README.md`.
+value; for a hole `HOLE F.NAME = EXPRESSION`, the expression for the hole's place, over
+the names in scope there, with `MEASURE F (struct x)` where the code makes `F` call itself; a
+`(fn …)` for a function named on the command line. With `--write` the code for the holes of
+functions' bodies goes to the sidecar of each function's file (`WROTE PATH fill-for FN holes=…`),
+where the next load reads it; a `(fn …)` for a function named on the command line is printed for
+its author to place. No source file is written. The search is a library, `v3/search/finder.shard`
+— a problem asked of a loaded program, the answer a value — and `find` the command over it. The
+command line, the records and what each verdict claims are in `v3/search/README.md`.
 
 ## Fingerprints and versions
 
@@ -1852,7 +1918,7 @@ only, the key of the previous section.
 |---|---|---|---|
 | Sidecar schema | 3 | `(sidecar 3 …)` | older: the `SIDECAR` report; newer: `sidecar_schema` |
 | Reconstruction version | 2 | `(sidecar … 2)` | the `RECON` report |
-| Engine version | 1 | the sidecar's first comment line; the `PROVE` header | none: it is not read back |
+| Engine version | 2 | the sidecar's first comment line; the `PROVE` header | none: it is not read back |
 
 Each tool runs under the bootstrap evaluator (`eval direct v3/kernel/load.shard ARGS…`) and as a
 native binary under `v3/bin/`. The tests: v3/kernel/test/tactic_test.sh (blocks), engine_test.sh
@@ -2003,7 +2069,7 @@ trusted because two fingerprints agree.
 | `TEMPLATE` | `N static=P,… equations=E,…` | a function with function-typed parameters, defined; it has no program until instantiated | defined |
 | `INSTANCE` | `N of=T shapes=S,… equations=E,…` | the template T built at particular function arguments | defined |
 | `DERIVE` | `N type=T cap=C policy=P fields=F,…` | the derived procedure N registered for type T and capability C | — |
-| `PENDING` | `N REASON …` | read, nothing admitted: `sorry` (with its open goals), `measure` (descent obligations open), `auto_missing`, `auto_stale`, `auto_unsolved` | pending |
+| `PENDING` | `N REASON …` | read, nothing admitted: `sorry` (with its open goals), `measure` (descent obligations open), `auto_missing`, `auto_stale`, `auto_unsolved`, `fill_stale` (a function's stored code made for another text of it) | pending |
 | `HOLE` | `N [(x : T)… ⊢ TYPE]` | a hole of a function's body: its constant N, the names it is handed with their types, its own type — a value still to be found (see "Terms") | pending |
 | `REFUSE` | `N REASON[: MESSAGE]` | the checker refused N (a bare reason), or the program reader or the definer did (with a message) | refused |
 | `POLICY` | `N outside the policy: A,…` | N rests on axioms its file does not trust; N is dropped | refused |
@@ -2020,6 +2086,7 @@ trusted because two fingerprints agree.
 | `BOTH` | `N VERDICT[: DETAIL]` | under `--both`, N's program read without elaboration beside the erasure of its elaborated body — N a `fn`, a supplied `realize`, or a lambda lifted out of one (`F.lam_1`): `same`; `differs: typed: TEXT \| plain: TEXT`; `unread: REASON: MESSAGE`, the refusal of the reading without elaboration | — |
 | `BIN` | `N entry F externs K trusts K requires MET/TOTAL` | a `bin` form checked | — |
 | `UNMET`, `UNTHREADED`, `BAD-BIN` | `REQUIREMENT`; `FN VERDICT: DETAIL`; `N REASON: MESSAGE` | a bin's failure: a requirement still pending; a function it reaches is not threaded; any other (`bad_entry`, `extern_undeclared`, `extern_outside`, `unknown_requirement`, `unknown_trust`, `untrusted`) | errors |
+| `FILLED` | `N holes=A,B (measure …)` | the function N was read with the code its sidecar holds for those holes, and with the entry's measure where it brings one | — |
 | `SIDECAR` | `FILE schema=N current=M` | the file's proof sidecar is of an older schema; it is replayed all the same | — |
 | `RECON` | `FILE version=V current=W` | the sidecar was made under another reconstruction version; replayed all the same | — |
 | `PROVED`, `ENGINE`, `TACTIC` | `N req=… (by …)`; `N solved`; `N FN solved` | never under `load.shard`; printed by `v3/kernel/prove.shard`, which searches for proofs | — |
