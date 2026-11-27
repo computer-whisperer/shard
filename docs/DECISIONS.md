@@ -17,6 +17,13 @@ entries are explained under "Measured" at the end.
   30,611 `let` groups, 162 with two or more names, none citing an earlier binder: no source differs.
 - ★ Type parameters are written `((T Type) …)` binders and universes `NAME.{u}`; not auto-bound
   names or a `universe` line — one binder rule for every form, nothing bound by spelling.
+- The unifier takes two applications apart only while one of them holds something to solve; a
+  pair with no metavariable goes to K whole (`unify.shard` `unify_struct`); not head first, then
+  the arguments — the parts went to K one by one, and two different functions as the heads made
+  K refute them equal by unfolding both to the bottom, where the whole pair costs K one
+  unfolding: a `rfl` across one unfolding of a function with four more under it doubled its
+  file's load (124.5 against 62.2 billion instructions), and costs nothing now. (2026-11-27,
+  the same ruling as the comparison's entry under "The checker K".)
 - ★ What the inputs leave open is refused with a pointer (`unsolved_implicit`, `unsolved_universe`,
   `instance_needed`); not defaulted — the one default is a numeral's `Nat`. Unification first-order.
 - ★ Between data types the only inserted coercion is `Nat` to `Int` (`Int.ofNat`); not coercion
@@ -208,7 +215,9 @@ entries are explained under "Measured" at the end.
   table holds what the sources' forms name.
 - Two functions that call each other over a term are measured by the term's derived size:
   `(derive Expr size)` beside the type, `expr.shard` `expr_eq` at one above twice its term's
-  size and `expr_eq_core` at twice, the 12 descents proven beside them; not the two written
+  size and `expr_eq_core` at twice, the 12 descents proven beside them (since 2026-11-27 the
+  two are `expr_eq_seen` and `expr_eq_core`, with the tree walk `expr_eq_tree` before them and
+  `expr_eq` their caller: "The checker K" below); not the two written
   as one structural function — no body changes, and the program of the loader's closure is
   byte for byte what it was. Assent, of the two ways put to them (this group as a pilot, or
   the types that name each other first): "Good. Let's continue with the expr_eq group of
@@ -1313,6 +1322,21 @@ entries are explained under "Measured" at the end.
 
 - K implements the pinned Lean kernel rule for rule (structure eta, nested inductives, literals,
   lazy delta, `eagerReduce`); not a smaller theory — the gate is all of `Init`, verdict for verdict.
+- Two terms are compared (`expr.shard` `expr_eq`) as trees for up to 8,192 nodes, and past that
+  again from the start with a table of the pairs of identified nodes already found equal; not
+  the tree walk alone — a term is a graph, and two unfoldings of one definition are two graphs
+  of one structure under other ids, whose tree is the number of paths: a function of 32 lets,
+  each value used twice, cost 46 billion instructions to define and one of 40 minutes (the
+  pinned kernel has pointer equality and its `m_eq_visited` there). Not the table on every
+  comparison — 3.7% of an ordinary load against 1.1% with the budget before it (62.6 against
+  61.9 billion instructions on the compile arc's `tie.shard`). Not one id for one structure (a
+  table of nodes in the checker's state): every function that builds a term would change. A
+  pair is noted only after its structure was walked to the end, and found by both ids and the
+  hash the two bear — the rule that an id is confirmed by its hash; the answer is the tree
+  walk's on every input, and `expr_test` holds it on graphs of 10^18 paths, equal and unequal
+  under equal hashes. (2026-11-27. The owner's word, given to the compile arc's session on its
+  two findings: "1: a, 2: a. -- proceed", 2a being that this session fix both. The shape is
+  this session's: a checkpoint.)
 - ★ Where a structure's recursor meets a major premise that reduces to no constructor, K takes
   the structure apart as the projections of the major as it was written; not, as the pinned
   kernel does, as the projections of what reduction made of it (`k/tc.shard`
