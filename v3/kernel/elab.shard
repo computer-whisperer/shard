@@ -32,12 +32,14 @@
 (import "unify.shard")
 (import "matcher.shard")
 (import "base.shard")
+(import "inhabit.shard")
 (use Init.Bool false true)
 (use Init.List cons nil)
 (use Init.Option none some)
 (use kernel.k)
 (use kernel.base)
 (use kernel.expr)
+(use kernel.inhabit)
 (use kernel.kw)
 (use kernel.level)
 (use kernel.matcher)
@@ -51,6 +53,8 @@
 (use kernel.descent)
 (use kernel.util)
 (use kernel.decl.ConstantInfo)
+(use kernel.decl.ConstantVal)
+(use kernel.decl.Declaration)
 (use kernel.expr.BinderInfo)
 (use kernel.expr.Expr)
 (use kernel.expr.Literal)
@@ -70,8 +74,10 @@
 
 ;; what elaboration generates beside the term: the owner the names hang under, the next
 ;; matcher's number, the declarations made so far in admission order (already checked into
-;; the walk's environment; the reader hands them to the loader before the owner)
-(type Gen (Gen Name Int (List Declaration)))
+;; the walk's environment; the reader hands them to the loader before the owner), and where a
+;; hole may stand — Some in the body of a fn (predef.shard): the locals there that are no
+;; values, the function's own name and its callee-locals, which a hole is not handed
+(type Gen (Gen Name Int (List Declaration) (Option (List Int))))
 ;; the elaboration state: K's world (environment, locals, checker state), the
 ;; metavariable context, the scope context, the generated declarations
 (type El (El W MCtx Cx Gen))
@@ -98,18 +104,29 @@
     ((El w m _ g) (El w m c g))))
 (fn el_aux ((e El)) (List Declaration)
   (match (el_gen e)
-    ((Gen _ _ ds) ds)))
+    ((Gen _ _ ds _) ds)))
 (fn el_owner ((e El)) Name
   (match (el_gen e)
-    ((Gen o _ _) o)))
+    ((Gen o _ _ _) o)))
 (fn el_next_matcher ((e El)) Int
   (match (el_gen e)
-    ((Gen _ k _) k)))
+    ((Gen _ k _ _) k)))
+(fn el_holes ((e El)) (Option (List Int))
+  (match (el_gen e)
+    ((Gen _ _ _ h) h)))
 (fn el_add_aux ((e El) (d Declaration)) El
   (match e
-    ((El w m c (Gen o k ds)) (El w m c (Gen o (+ k 1) (append ds (list d)))))))
+    ((El w m c (Gen o k ds h)) (El w m c (Gen o (+ k 1) (append ds (list d)) h)))))
+;; a hole's constant among the generated declarations (the matchers' numbering is theirs)
+(fn el_add_hole ((e El) (d Declaration)) El
+  (match e
+    ((El w m c (Gen o k ds h)) (El w m c (Gen o k (append ds (list d)) h)))))
+;; from here a hole may stand — a fn's body —, with the locals no hole is handed
+(fn el_open_holes ((e El) (hidden (List Int))) El
+  (match e
+    ((El w m c (Gen o k ds _)) (El w m c (Gen o k ds (some hidden))))))
 (fn el0 ((sc Scope) (env CheckedEnv) (lps (List Name)) (defining (List Defd)) (owner Name)) El
-  (El (w0 env) (mc0) (cx0 sc env lps defining) (Gen owner 1 nil)))
+  (El (w0 env) (mc0) (cx0 sc env lps defining) (Gen owner 1 nil none)))
 (fn el_env ((e El)) CheckedEnv (w_env (el_w e)))
 (fn el_with_etype ((e El) (t Bool)) El (el_set_cx e (cx_with_etype (el_cx e) t)))
 (fn el_with_defining ((e El) (d (List Defd))) El (el_set_cx e (cx_with_defining (el_cx e) d)))
@@ -478,8 +495,209 @@
        (if (sym_eq h (sym "match")) (elab_match e args expected (- depth 1))
        (if (sym_eq h (sym "list")) (elab_list e args expected (- depth 1))
        (if (sym_eq h (sym "exists")) (elab_exists e args expected (- depth 1))
-       (elab_app e (SSym h) args expected (- depth 1))))))))))))))))
+       (if (sym_eq h (sym "hole")) (elab_hole e args expected)
+       (elab_app e (SSym h) args expected (- depth 1)))))))))))))))))
       ((SList (cons h args)) (elab_app e h args expected (- depth 1))))))
+
+;; ---- a hole ------------------------------------------------------------------------------
+;; (hole) / (hole NAME), in the body of a fn: a value still to be found. It reads as a call
+;; of a generated opaque constant — OWNER.NAME, unnamed OWNER.hole_K — over the names visible
+;; where it stands: each a plain binder of the constant's type, in the order they were bound,
+;; with the name itself the argument (so a let-bound name hands its value). The constant is
+;; checked into the walk's environment as a matcher is and handed on with the declarations
+;; (`el_aux`); the erasure gives it an extern for its program (erasure.shard hole_externs) and
+;; the loader its HOLE record. Not handed: a name another binding hides, the function's own
+;; name and its callee-locals, a function-typed local (it is no value), and a local whose
+;; type mentions one of these. The type must be known where the hole stands and K's opaque
+;; kind wants a value of it, never looked at again: the type's default (inhabit.shard)
+(fn elab_hole ((e El) (args (List SExpr)) (expected (Option Expr))) ERes
+  (match (el_holes e)
+    (none
+      (EErr (sym "hole_outside")
+        (utf8 "a hole stands in the body of a fn (a proof still to be written is sorry)")))
+    ((some hidden)
+     (match (hole_name e args)
+       (none (EErr (sym "bad_shape") (utf8 "(hole) or (hole NAME)")))
+       ((some name)
+        (if (bool_or (hole_declared e name) (generated_written args))
+          (EErr (sym "hole_name")
+            (append (show_name name)
+              (utf8
+                " is declared, or is a name the toolchain makes (eq_N, dec_N, match_N, lam_N, hole_N): give the hole another name")))
+          (match expected
+            (none (hole_untyped name))
+            ((some x)
+             (let ((t0 (el_zonk e x)))
+               (if (has_mvar t0) (hole_untyped name)
+               (match (w_is_prop (el_w e) t0)
+                 ((Prod.mk _ (some true))
+                  (EErr (sym "hole_proposition")
+                    (append (show_name name)
+                      (utf8 ": a hole is a value; a proof still to be written is sorry"))))
+                 ((Prod.mk w1 _)
+                  (hole_close
+                    (hole_tele (el_set_w e w1) (visible_locals (cx_bound (el_cx e)) nil nil) hidden
+                      nil
+                      nil
+                      nil)
+                    name
+                    t0)))))))))))))
+(fn hole_untyped ((name Name)) ERes
+  (EErr (sym "hole_type")
+    (append (show_name name)
+      (utf8
+        ": the type of the hole is not determined where it stands — bind it with its type: (let ((x TYPE (hole))) …)"))))
+;; the constant's name: the written one under the owner, or hole_K — K one more than the
+;; holes the owner has so far
+(fn hole_name ((e El) (args (List SExpr))) (Option Name)
+  (match args
+    (nil
+      (some
+        (Str (el_owner e)
+          (sym_of_chars
+            (append (utf8 "hole_") (show_nat (+ 1 (holes_under (el_owner e) (el_aux e)))))))))
+    ((cons (SSym x) nil)
+     (match (name_of_sym x)
+       ((some (Str Anon a)) (some (Str (el_owner e) a)))
+       (_ none)))
+    (_ none)))
+;; a written name that is one the toolchain makes
+(fn generated_written ((args (List SExpr))) Bool
+  (match args
+    ((cons (SSym x) nil)
+     (match (name_of_sym x)
+       ((some n) (generated_name n))
+       (none false)))
+    (_ false)))
+;; a name under an owner that the toolchain makes: an equation, an obligation, a matcher, a
+;; lifted lambda, an unnamed hole
+(fn generated_name ((n Name)) Bool
+  (match n
+    ((Str _ a)
+     (let ((cs (chars_of_sym a)))
+       (bool_or (numbered (utf8 "eq_") cs)
+         (bool_or (numbered (utf8 "dec_") cs)
+           (bool_or (numbered (utf8 "match_") cs)
+             (bool_or (numbered (utf8 "lam_") cs) (numbered (utf8 "hole_") cs)))))))
+    (_ false)))
+(fn numbered ((prefix (List Int)) (cs (List Int))) Bool
+  (bool_and (int_list_eq (take (len prefix) cs) prefix)
+    (bool_and (< (len prefix) (len cs)) (all_digits (drop (len prefix) cs)))))
+(fn holes_under ((owner Name) (ds (List Declaration))) Int
+  (measure (struct ds))
+  (match ds
+    (nil 0)
+    ((cons (OpaqueDecl (ConstantVal (Str o _) _ _) _ _ _) r)
+     (+ (if (name_eq o owner) 1 0) (holes_under owner r)))
+    ((cons _ r) (holes_under owner r))))
+(fn hole_declared ((e El) (name Name)) Bool
+  (match (env_find (el_env e) name)
+    ((some _) true)
+    (none false)))
+;; a value of the hole's type over its binders: the type's default, else a binder of that
+;; very type (a type parameter has no default; a name in scope of it is a value of it)
+(fn hole_witness ((w W) (ps (List Expr)) (t Expr)) (Prod W (Option Expr))
+  (match (inhabit w t 32)
+    ((Prod.mk w1 (some v)) (Prod.mk w1 (some v)))
+    ((Prod.mk w1 none) (Prod.mk w1 (local_of_type w1 ps t)))))
+(fn local_of_type ((w W) (ps (List Expr)) (t Expr)) (Option Expr)
+  (measure (struct ps))
+  (match ps
+    (nil none)
+    ((cons p r)
+     (match (w_local_type w (fvar_id_of p))
+       ((some ty) (if (expr_eq ty t) (some p) (local_of_type w r t)))
+       (none (local_of_type w r t))))))
+;; the names visible at a point with their locals, outermost first: of each name the
+;; innermost binding (the bound names stand innermost first)
+(fn visible_locals ((bs (List (Prod Name Expr))) (seen (List Name)) (acc (List (Prod Name Expr))))
+  (List (Prod Name Expr))
+  (measure (struct bs))
+  (match bs
+    (nil acc)
+    ((cons (Prod.mk n fv) r)
+     (if (mem_name n seen) (visible_locals r seen acc)
+     (visible_locals r (cons n seen) (cons (Prod.mk n fv) acc))))))
+;; the telescope: the state, the binders — a fresh plain local for each local handed, of its
+;; type with the earlier ones in place —, the arguments, and the locals handed with their
+;; binders (the substitution)
+(type HTele (HTele El (List Expr) (List Expr) (List (Prod Int Expr))))
+(fn hole_tele
+  ((e El)
+   (xs (List (Prod Name Expr)))
+   (hidden (List Int))
+   (ps (List Expr))
+   (as (List Expr))
+   (sub (List (Prod Int Expr))))
+  HTele
+  (measure (struct xs))
+  (match xs
+    (nil (HTele e (rev ps) (rev as) sub))
+    ((cons (Prod.mk n x) r)
+     (match (w_local_type (el_w e) (fvar_id_of x))
+       (none (hole_tele e r hidden ps as sub))
+       ((some ty0)
+        (let ((ty (el_zonk e ty0)))
+          (if
+            (bool_or (mem_int (fvar_id_of x) hidden)
+              (bool_or (has_mvar ty) (bool_not (all_in (expr_fvars ty nil) (sub_ids sub)))))
+            (hole_tele e r hidden ps as sub)
+            (match (el_whnf e ty)
+              ((Prod.mk e1 tw)
+               (if (is_pi tw) (hole_tele e1 r hidden ps as sub)
+               (match (hole_subst (el_w e1) ty sub)
+                 ((Prod.mk w1 ty1)
+                  (match (w_local w1 n ty1)
+                    ((Prod.mk w2 p)
+                     (hole_tele (el_set_w e1 w2) r hidden (cons p ps) (cons x as)
+                       (cons (Prod.mk (fvar_id_of x) p) sub))))))))))))))))
+(fn sub_ids ((sub (List (Prod Int Expr)))) (List Int)
+  (measure (struct sub))
+  (match sub
+    (nil nil)
+    ((cons (Prod.mk i _) r) (cons i (sub_ids r)))))
+;; a term with each handed local replaced by its binder
+(fn hole_subst ((w W) (t Expr) (sub (List (Prod Int Expr)))) (Prod W Expr)
+  (measure (struct sub))
+  (match sub
+    (nil (Prod.mk w t))
+    ((cons (Prod.mk i p) r)
+     (if (mem_int i (expr_fvars t nil))
+       (match (w_subst w t i p)
+         ((Prod.mk w1 t1) (hole_subst w1 t1 r)))
+       (hole_subst w t r)))))
+(fn hole_close ((h HTele) (name Name) (t0 Expr)) ERes
+  (match h
+    ((HTele e ps as sub)
+     (if (bool_not (all_in (expr_fvars t0 nil) (sub_ids sub)))
+       (EErr (sym "hole_scope")
+         (append (show_name name) (utf8 ": the hole's type mentions a name the hole is not handed")))
+       (match (hole_subst (el_w e) t0 sub)
+         ((Prod.mk w1 t1)
+          (match (hole_witness w1 ps t1)
+            ((Prod.mk _ none)
+             (EErr (sym "hole_uninhabited")
+               (append (show_name name)
+                 (utf8
+                   ": no value of the hole's type can be built to stand for it (a type without a closing constructor, or one over a type parameter with no name of it in scope)"))))
+            ((Prod.mk w2 (some body))
+             (match (w_pis w2 ps t1)
+               ((Prod.mk w3 T)
+                (match (w_lams w3 ps body)
+                  ((Prod.mk w4 v)
+                   (let
+                     ((lps (cx_lps (el_cx e)))
+                      (decl (OpaqueDecl (ConstantVal name (cx_lps (el_cx e)) T) v false (list name))))
+                     (match (w_admit w4 decl)
+                       ((Prod.mk _ (some why))
+                        (EErr (sym "hole_refused")
+                          (append (show_name name)
+                            (append (utf8 ": K refused the hole's constant (")
+                              (append (chars_of_sym why) (utf8 ")"))))))
+                       ((Prod.mk w5 none)
+                        (EOk (el_add_hole (el_set_w e w5) decl)
+                          (mk_app_n (mk_const name (lparam_levels lps)) as)
+                          t0))))))))))))))))
 
 ;; a numeral: at an expected `Int`, `Int.ofNat n` / `Int.negSucc (-n-1)` (where Init's
 ;; Int.ofNat is in scope); else K's Nat literal
@@ -2315,7 +2533,7 @@
   (by (intro a1 a2 a3 a4 a5 a6 a7 a8) (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_3
   (by
-    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21)
+    (intro a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22)
     (apply Prod.Lex.left (apply natAbs_pred (arith)))))
 (fulfills elab.dec_4
   (by

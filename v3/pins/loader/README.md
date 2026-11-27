@@ -33,6 +33,7 @@ program and compare values: `entry_test.shard` (`entry`, `entry_s`, `entry_shape
 | `;; expect: NAME refuses REASON` | some record refuses `NAME` for `REASON`, not necessarily the first bad one |
 | `;; expect: NAME policy AXIOM…` | `NAME`'s assumptions reach `AXIOM…`, outside the file's policy |
 | `;; expect: NAME pending REASON…` | `NAME` is pending: `sorry` (with `goals=N` and the goals), `measure`, `auto_missing fp=…`, `auto_stale PART fp=…` |
+| `;; expect: NAME hole [GOAL]` | the first record that is no acceptance is the hole `NAME`, shown with the names it is handed, their types and its own |
 | `;; expect: NAME runnable REASON` | every record accepted, and the function `NAME` is a program without a definition for `REASON` |
 | `;; expect: NAME param KIND` | every record accepted, and `NAME` is a declared parameter of `KIND` |
 | `;; expect: NAME threaded` | every record accepted, and `NAME`'s use of the `World` is judged `ok` |
@@ -151,6 +152,13 @@ the reason its name spells, less a leading `by_`.
 | `derive_size`, `derive_size_plain`, `derive_size_group`; refused: `derive_size_mixed` (`bad_shape`), `derive_size_twice` (`name_taken`) | a size derived for a type nested through `List`, for a plain type and for types that name each other (a size each, whichever the form names), used as measures |
 | `template_lift`, `template_named`, `template_partial`, `template_passed`, `template_package`; `package_recursive` | a function-typed binder: a lambda lifted, a named function, a partial application, a parameter passed on, a structure of functions; a structure of functions with a field of its own type, no package: the function over it a program |
 | `template_e_first` (`runnable no_l_identity`); refused: `template_escape`, `template_transform` (`function_value`), `template_growth` (`realize_descent`), `template_budget` (`specialization_budget`) | a lambda elsewhere; a template calling itself at a growing type; the instance budget; an instance taken by a body with no logical reading |
+
+### Holes
+
+| cases | what they pin |
+|---|---|
+| `hole` (`hole [(xs : (List Nat)) (acc : (List Nat)) ⊢ (List Nat)]`), `hole_names`, `hole_poly`, `hole_runnable` | a hole in a `fn`'s body is a generated constant over the names in scope, the function defined around it and a theorem naming it; what is handed and what is not (a hidden name; a let-bound name; a hypothesis); a type parameter; a function that is a program alone |
+| refused: `hole_type`, `hole_outside` (a read error), `hole_name`, `hole_generated` (`hole_name`), `hole_uninhabited`, `hole_proposition`, `hole_untyped` | a position that gives no type; a hole outside a `fn`'s body; a name taken, or one the toolchain makes; a type with no value to stand for it; a proposition; a function read as a program alone |
 
 ### Proof steps and sidecars
 

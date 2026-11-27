@@ -169,17 +169,24 @@ anything citing their equations stand below it. The recipe, on the formatter's w
 1. Give each function a measure. Where a function hands its argument on unchanged, add a rank:
    `em_if` calls `em_head` on the same list, so their measures are three times the list's size plus
    2 and plus 1. Write the product as a sum, `(+ s (+ s s))`.
-2. Read the obligation: `(fulfills F.dec_K (by sorry))` prints it and lets the load go on —
+2. Leave it to the engine first: `(fulfills F.dec_K auto)`, then `prove` on the file
+   (`LANGUAGE.md` "`prove`"). It closes the usual ones — a derived size, a list's length, an
+   integer through `Int.natAbs`, fuel, a weight, two parts in order
+   (v3/examples/auto/descent.shard has one of each) — and writes the blocks beside the file,
+   where a load replays them. One it leaves is `PENDING F.dec_K.proof auto_unsolved …` with
+   its statement, and is written by hand as below: it needs a fact about a helper's result
+   (step 6), a case split, or a `reduce` first.
+3. Read the obligation: `(fulfills F.dec_K (by sorry))` prints it and lets the load go on —
    `PENDING F.dec_K.proof sorry goals=1 [⊢ (forall ((n Nat)) (-> (Not (< n 2)) (< (Nat.sub n 2)
    n)))]`. A step that fails prints its goal too (`step N: MESSAGE — the goal: GOAL`), so
    `(by (arith))` shows the same statement, but as a `READ-ERROR`, which ends the file's reading.
-3. Introduce its variables in order: the function's parameters; then, for each `match` arm the
+4. Introduce its variables in order: the function's parameters; then, for each `match` arm the
    call stands under, the arm's variables and the equation `SCRUTINEE = PATTERN` (`m` and `h`
    above, then `b1` and `h2`); for each `if`, the branch's condition (`c` in `flat_w.dec_2`); for
    a wildcard arm, one variable and its equation. A `let` takes no name.
-4. `(rw h)` turns the parameter into the pattern, `(rw T.size.eq_K)` opens the size at the K-th
+5. `(rw h)` turns the parameter into the pattern, `(rw T.size.eq_K)` opens the size at the K-th
    constructor, and `(arith)` closes the comparison, which is then linear in the sizes.
-5. Where the argument is a list a helper returned, prove once that the helper returns no more than
+6. Where the argument is a list a helper returned, prove once that the helper returns no more than
    it was given and pass the fact: `(arith (drop_blanks_le rest) (em_keep_rest … h))` (`em_head`).
 
 A function that only calls itself states its obligations over its parameter when it has one, and
@@ -272,6 +279,7 @@ speaks of rests on building it from the file the contract imports. The contract
 | close `n / k < n`, `k` a numeral above 1 | `(apply Nat.div_lt_self (arith) (decide))`: `0 < n`, then `1 < k` | — |
 | use a truncated subtraction in arithmetic, where `(- n 2)` is an atom to `arith` | `(have hs (= (+ (- n 2) 2) n) (apply Nat.sub_add_cancel (arith)))`, then `(arith FACT… hs)` | — |
 | find a lemma of Init and read its statement | section 15 | |
+| leave a part of a function to be found | `(hole NAME)` in its body, then `find`: section 16 | `search/test/tasks/holes.shard` |
 | give a witness; open one | `(apply (Exists.intro W) ((exact h)))`; `(cases h ((intro (x hx) STEP…)))` | `models/x86/exit42.shard`; `models/x86/laws.shard` `reaches_step` |
 | restate the goal, then rewrite backwards | `(show G) (rw (<- h))` | `layout.shard` `opt_trail_rest` |
 | run a function over given facts | `(reduce lhs (using hb h))`; with a lemma given its premise, `(reduce lhs (using (if_pos h)))` | `pins/loader/reduce_using` |
@@ -482,3 +490,52 @@ the operators. Two limits:
   `#K` is the K-th binder outward).
 - A lemma with no argument is not a `forall`, and `cases` answers something else. The `exact`
   form prints any lemma's type.
+
+## 16. Leaving a part of a function to be found: a hole
+
+Write the function as far as you know it and put `(hole NAME)` where a part is missing
+(`v3/search/test/tasks/holes.shard`):
+
+```
+(fn insert ((x Nat) (ys (List Nat))) (List Nat)
+  (match ys
+    (nil (hole empty))
+    ((cons y r) (if (leq x y) (hole before) (hole after)))))
+```
+
+Nothing is declared for a hole. A load prints, for each, the names in scope there with their types
+and the hole's own type —
+`HOLE M.insert.after [(x : Nat) (ys : (List Nat)) (y : Nat) (r : (List Nat)) ⊢ (List Nat)]` — and
+goes on: the file's other functions load and run, and a theorem may name `insert.after`. A build
+refuses the function until its holes are filled.
+
+Then say what the function must do, as a function that answers a `Bool`: examples (no parameter,
+`--goal`), or a property that must hold of every argument (`--spec`: it is tried on every small
+one) —
+
+```
+(fn insert_spec ((x Nat) (y Nat) (xs (List Nat))) Bool
+  (if (sorted xs) (if (sorted (insert x xs)) … false) true))
+```
+
+— and run `find` (`v3/search/README.md`), with `EXPORT` and `INDEX` as in section 13:
+
+```
+v3/bin/find --root v3 --init $EXPORT --init-index $INDEX \
+  --spec M.insert_spec --use M.insert --ints 0,1,2 FILE
+#   HOLE M.insert.empty = (List.cons x ys)
+#   HOLE M.insert.before = (List.cons x ys)
+#   HOLE M.insert.after = (List.cons y (M.insert x r))
+#   MEASURE M.insert (struct ys)
+```
+
+Each `HOLE` line is the expression to write in the hole's place; `MEASURE` is the recursion clause
+the function takes now that it calls itself (section 6). `--use` names what a filling may call —
+the function itself, for a recursive one — and `--ints` the numbers it may hold.
+
+| to | do | why |
+|---|---|---|
+| make the search cheap | write the case analysis yourself and leave the answers as holes | the shape is the costly part: this insertion is found in 15 thousand steps with its rows written, and in 4 million from `(hole)` as the whole body |
+| keep it cheap | name few functions under `--use` | each is tried wherever its type fits |
+| trust a filling | read it, and prove the property | it is right on the tests that ran and on nothing more: too few tests are met by a wrong function (`v3/search/README.md`) |
+| mend `hole_type` | bind the hole with its type: `(let ((k Nat (hole shift))) …)` | a hole takes its type from its place, and a `match`'s scrutinee or an operator's first operand gives none |

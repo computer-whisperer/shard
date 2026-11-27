@@ -6,7 +6,9 @@
 #      no other toolchain source names Linked, IVal, the linker's results or the handle's
 #      own fields, and none makes or restates a handle (the record's constructor MkHandle and
 #      its updaters Handle.with_FIELD are ordinary declarations any file could call: this
-#      check is what holds the convention, no view seals ev.shard).
+#      check is what holds the convention, no view seals ev.shard). The one reader outside
+#      the toolchain, by design, is the search's narrowing machine (v3/search/narrow.shard,
+#      task.shard, drive.shard: ev.shard's header); its directory is not among those looked at.
 #   2. the link-once ratio, printed: N invocations of one entry through `ev` — N links of a
 #      program of D functions — against one `prepare` and N `invoke`s; the two sums of the
 #      answers must agree and be the sum the entry's definition gives.

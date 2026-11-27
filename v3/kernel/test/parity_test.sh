@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reader parity over the toolchain: for every toolchain entrypoint — the four drivers, the
-# calc harness, every test — the V3 loader's program (`load.shard --unchecked --dump`,
+# search's driver (v3/search/find.shard), the calc harness, every test — the V3 loader's program (`load.shard --unchecked --dump`,
 # kernel/dump.shard) and the Rust bootstrap's reading of the same closure (`eval dump`,
 # rust_bootstrap/src/plain/) printed as one canonical text, compared byte for byte. The
 # bootstrap reads the toolchain's sources to run them — it is what every other check here
@@ -71,7 +71,7 @@ one() {
   rm -f "$a" "$b"
 }
 export -f one; export EVAL INIT d
-entries=(v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/kernel/initindex.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard)
+entries=(v3/kernel/load.shard v3/kernel/t0.shard v3/kernel/prove.shard v3/kernel/initindex.shard v3/search/find.shard v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard)
 for i in "${!entries[@]}"; do echo "$i ${entries[$i]}"; done | xargs -P "$JOBS" -L 1 bash -c 'one "$0" "$1"'
 n=${#entries[@]}; decls=0; failed=0; all=$d/all.facts; : > "$all"
 for i in "${!entries[@]}"; do

@@ -1,0 +1,315 @@
+;;; v3/search/narrow.shard — the narrowing machine: `ev`'s machine (kernel/ev.shard) over
+;;; values that may be unknown.
+;;;
+;;; A value is a cell, an integer, or a REFERENCE into a heap. A heap cell is an UNKNOWN of a
+;;; stated type, a SUSPENDED call of a hole function, or a value that has settled. The machine
+;;; runs a linked program as `ev` does — the same linked terms, the same primitives
+;;; (`prim_ii`), arguments left to right, a unit of fuel at every function entry — and passes
+;;; references around unread. It looks at one only where the program does: a `match`, an `if`,
+;;; a primitive, the answer at the end. There a settled cell is read through; a suspended call
+;;; of a hole function that has a body is run and its value kept; and an unknown, or a call of a
+;;; hole function with no body yet, STOPS the machine with the cell and the rest of the run in
+;;; hand (`SNeed`). Whoever drives it (drive.shard) settles the cell one way and resumes, as
+;;; often and in as many ways as it likes: the heap and the continuation are values, so two
+;;; resumptions share everything before the stop.
+;;;
+;;; A HOLE FUNCTION is a function the program names and does not define — an `extern`, a view's
+;;; `sig fn` with no implementation linked — or one the driver adds beside those. A call of one
+;;; is never run where it stands: it becomes a suspended cell, so what is unknown is decided as
+;;; late as the program's own reading of it allows, and never when nothing reads it.
+;;;
+;;; On a program with no hole function and no unknown argument the machine is `ev`: nothing is
+;;; suspended, no cell is unknown, and each step is `ev`'s (v3/search/test: the two are run on
+;;; the same closed entries and compared). It is a search instrument and no definition of
+;;; "run": what a search reports is replayed by `ev` before it is printed as found.
+;;;
+;;; This file and drive.shard read ev.shard's linked representation (`Linked`, `LTerm`): the
+;;; machine is `ev`'s sibling and stands on the same linking. No function of the machine takes
+;;; more than six parameters, for ev.shard's reason: compiled through C, a tail call is a jump
+;;; only where the arguments fit in registers.
+
+(import "../kernel/ev.shard")
+(use Init.Bool false true)
+(use Init.List cons nil)
+(use Init.Option none some)
+(use kernel.ev)
+(use kernel.intmap)
+(use kernel.prog)
+(use kernel.sym)
+(use kernel.util)
+(use kernel.intmap.IntMap)
+(use kernel.ev.IVal)
+(use kernel.ev.LArm)
+(use kernel.ev.LFn)
+(use kernel.ev.LPat)
+(use kernel.ev.LTerm)
+(use kernel.ev.PrimRes)
+
+;; ---- values, the heap, the hole functions --------------------------------------------------
+(type NVal (NCtor Int (List NVal)) (NInt Int) (NRef Int))
+(type Cell
+  (CUnk EType)  ; an unknown value of this type (closed: no type variable)
+  (CSusp Int (List NVal))  ; a call of the hole function, its arguments last first (its body's frame), not run yet
+  (CVal NVal))  ; settled: this value, which may be or hold further references
+;; the cells by reference, the next reference, and the hole functions whose bodies the run
+;; entered so far, latest first (`heap_reads`): what a run's end depends on, and nothing else
+;; of what was decided
+(type Heap (Heap (IntMap Cell) Int (List Int)))
+(fn heap_empty () Heap (Heap.Heap IMEmpty 0 nil))
+(fn heap_find ((h Heap) (r Int)) (Option Cell)
+  (match h
+    ((Heap.Heap cs _ _) (im_find cs r))))
+(fn heap_set ((h Heap) (r Int) (c Cell)) Heap
+  (match h
+    ((Heap.Heap cs n rs) (Heap.Heap (im_insert cs r c) n rs))))
+(fn heap_next ((h Heap)) Int
+  (match h
+    ((Heap.Heap _ n _) n)))
+;; a new cell: the heap with it, under the reference `heap_next` gave
+(fn heap_push ((h Heap) (c Cell)) Heap
+  (match h
+    ((Heap.Heap cs n rs) (Heap.Heap (im_insert cs n c) (+ n 1) rs))))
+(fn heap_reads ((h Heap)) (List Int)
+  (match h
+    ((Heap.Heap _ _ rs) rs)))
+(fn heap_read ((h Heap) (id Int)) Heap
+  (match h
+    ((Heap.Heap cs n rs) (Heap.Heap cs n (cons id rs)))))
+;; a hole function: the types of its parameters, its result type, its body once it has one — a
+;; term over the parameters as a function's body is (the last parameter is index 0)
+;; and what a driver keeps of it (`HCtx`, drive.shard), of which the machine reads nothing
+(type Hole (Hole (List EType) EType (Option LTerm) HCtx))
+;; the program's hole function whose body this one is part of (itself, for one of the
+;; program's) and that function's number of parameters; the positions among this one's
+;; parameters that a match above has taken apart; and which of this one's parameters are proper
+;; parts of which of that function's: (position here, position there); and where in that
+;; function's body it stands — under how many matches, and how deep in the expression of its
+;; row (0: it is a row's whole body, or the function's)
+(type HCtx (HCtx Int Int (List Int) (List (Prod Int Int)) Int Int))
+;; the linked program, the hole functions by function index, the next index free for one
+(type Mach (Mach Linked (IntMap Hole) Int))
+(fn mach_lk ((m Mach)) Linked
+  (match m
+    ((Mach.Mach lk _ _) lk)))
+(fn mach_holes ((m Mach)) (IntMap Hole)
+  (match m
+    ((Mach.Mach _ hs _) hs)))
+(fn mach_next ((m Mach)) Int
+  (match m
+    ((Mach.Mach _ _ n) n)))
+(fn hole_body ((m Mach) (id Int)) (Option LTerm)
+  (match (im_find (mach_holes m) id)
+    ((some (Hole.Hole _ _ b _)) b)
+    (none none)))
+
+;; ---- the machine -----------------------------------------------------------------------------
+(type NKont
+  (NHalt)
+  (NArg Int Int (List NVal) (List LTerm) (List NVal) NKont)  ; kind, head, the values so far (last first), the terms to go, env, next — ev's KArg
+  (NMatch (List LArm) (List NVal) NKont)
+  (NRematch NVal (List LArm) (List NVal) NKont)  ; the scrutinee kept: the match is read again when a cell it needed has settled
+  (NLet (List LTerm) LTerm (List NVal) NKont)
+  (NIf LTerm LTerm (List NVal) NKont)
+  (NPrim Int (List NVal) NKont)  ; a primitive and its arguments (last first), applied again when a cell it needed has settled
+  (NUpd Int NKont))  ; the value of a suspended call that was run: read through, kept in its cell, then passed on
+(type Stop
+  (SVal NVal Heap Int)  ; the answer, read through to a cell or an integer; the heap; the fuel left
+  (SNeed Int NKont Heap Int)  ; the run needs this cell settled: the cell, the rest of the run, the heap, the fuel left
+  (SOut)  ; out of fuel
+  (SStuck Symbol Int)  ; ev's stuck: the reason, the fuel left
+  (SExh Symbol Int))  ; ev's exhausted: a primitive's resource, the fuel left
+
+(fn nv_of_ival ((v IVal)) NVal
+  (measure (IVal.size v))
+  (match v
+    ((IVInt k) (NInt k))
+    ((IVCtor tag vs) (NCtor tag (nv_of_ivals vs)))))
+(fn nv_of_ivals ((vs (List IVal))) (List NVal)
+  (measure (List_IVal.size vs))
+  (match vs
+    (nil nil)
+    ((cons v r) (cons (nv_of_ival v) (nv_of_ivals r)))))
+(fulfills nv_of_ival.dec_1 (by (intro v tag vs h) (rw h) (rw IVal.size.eq_1) (arith)))
+(fulfills nv_of_ivals.dec_1 (by (intro vs v r h) (rw h) (rw List_IVal.size.eq_2) (arith)))
+(fulfills nv_of_ivals.dec_2 (by (intro vs v r h) (rw h) (rw List_IVal.size.eq_2) (arith)))
+;; a value read through the settled cells: a cell, an integer, or the reference of a cell that
+;; is not settled
+(fn nv_deref ((h Heap) (v NVal)) NVal
+  (match v
+    ((NRef r)
+     (match (heap_find h r)
+       ((some (CVal w)) (nv_deref h w))
+       (_ v)))
+    (_ v)))
+
+(fn nv_term ((m Mach) (h Heap) (env (List NVal)) (t LTerm) (k NKont) (fuel Int)) Stop
+  (match t
+    ((LBVar i)
+     (match (nth env i)
+       ((some v) (nv_ret m h v k fuel))
+       (none (SStuck (sym "unbound") fuel))))
+    ((LLit v) (nv_ret m h (nv_of_ival v) k fuel))
+    ((LCtor tag args)
+     (match args
+       (nil (nv_ret m h (NCtor tag nil) k fuel))
+       ((cons a more) (nv_term m h env a (NArg 0 tag nil more env k) fuel))))
+    ((LCall id args)
+     (match args
+       (nil (nv_call m h id nil k fuel))
+       ((cons a more) (nv_term m h env a (NArg 1 id nil more env k) fuel))))
+    ((LPrim op args)
+     (match args
+       (nil (nv_prim m h op nil k fuel))
+       ((cons a more) (nv_term m h env a (NArg 2 op nil more env k) fuel))))
+    ((LExt id args)
+     (match args
+       (nil (nv_ext m h id nil k fuel))
+       ((cons a more) (nv_term m h env a (NArg 3 id nil more env k) fuel))))
+    ((LMatch s arms) (nv_term m h env s (NMatch arms env k) fuel))
+    ((LLet rhss body)
+     (match rhss
+       (nil (nv_term m h env body k fuel))
+       ((cons r1 rest) (nv_term m h env r1 (NLet rest body env k) fuel))))
+    ((LIf c a b) (nv_term m h env c (NIf a b env k) fuel))
+    (LAbsurd (SStuck (sym "unreachable") fuel))))
+(fn nv_ret ((m Mach) (h Heap) (v NVal) (k NKont) (fuel Int)) Stop
+  (match k
+    ;; the answer is read: an unsettled cell is needed first, and its value comes back here
+    (NHalt
+      (match (nv_deref h v)
+        ((NRef r) (nv_force m h r k fuel))
+        (w (SVal w h fuel))))
+    ((NArg kind head done rest env next)
+     (match rest
+       ((cons a more) (nv_term m h env a (NArg kind head (cons v done) more env next) fuel))
+       (nil
+         (if (= kind 0) (nv_ret m h (NCtor head (rev (cons v done))) next fuel)
+         (if (= kind 1) (nv_call m h head (cons v done) next fuel)
+         (if (= kind 2) (nv_prim m h head (cons v done) next fuel)
+         (nv_ext m h head (cons v done) next fuel)))))))
+    ((NMatch arms env next) (nv_ret m h v (NRematch v arms env next) fuel))
+    ;; the rows in order against the scrutinee kept: a row that cannot be decided before a cell
+    ;; is settled needs that cell, and the match is read again after it
+    ((NRematch s arms env next)
+     (match (nv_pick h s arms env)
+       ((NArmAt env1 body) (nv_term m h env1 body next fuel))
+       (NArmNone (SStuck (sym "no_arm") fuel))
+       ((NArmNeed r) (nv_force m h r k fuel))))
+    ((NLet rest body env next)
+     (let ((env1 (cons v env)))
+       (match rest
+         (nil (nv_term m h env1 body next fuel))
+         ((cons r1 more) (nv_term m h env1 r1 (NLet more body env1 next) fuel)))))
+    ((NIf a b env next)
+     (match (nv_deref h v)
+       ((NRef r) (nv_force m h r k fuel))
+       ((NCtor tag _) (nv_term m h env (if (= (band tag 1) 1) a b) next fuel))
+       (_ (SStuck (sym "if_tag") fuel))))
+    ((NPrim op done next) (nv_prim m h op done next fuel))
+    ;; a cell is settled by a value that can be read: where the call's value is itself a cell
+    ;; not settled, that one is needed first and its value comes back here — so a settled cell
+    ;; never leads to an unsettled one, and reading through is one step however long the chain
+    ;; of calls was
+    ((NUpd r next)
+     (match (nv_deref h v)
+       ((NRef r2) (nv_force m h r2 k fuel))
+       (w (nv_ret m (heap_set h r (CVal w)) w next fuel))))))
+;; a cell that is needed, its value to the continuation: a settled one is passed on; a
+;; suspended call of a hole function with a body is run in the frame of its arguments, a unit
+;; of fuel, and its value kept; an unknown, or a call of a hole function with no body, stops
+;; the machine. A driver that has settled the cell — or given the hole function a body —
+;; resumes by this same call
+(fn nv_force ((m Mach) (h Heap) (r Int) (k NKont) (fuel Int)) Stop
+  (match (heap_find h r)
+    ((some (CVal v)) (nv_ret m h v k fuel))
+    ((some (CUnk _)) (SNeed r k h fuel))
+    ((some (CSusp id args))
+     (match (hole_body m id)
+       ((some body)
+        (if (< fuel 1) SOut (nv_term m (heap_read h id) args body (NUpd r k) (- fuel 1))))
+       (none (SNeed r k h fuel))))
+    (none (SStuck (sym "no_cell") fuel))))
+;; a function over its arguments' values (last first): a hole function's call is suspended, a
+;; function of the program is entered for one unit of fuel
+(fn nv_call ((m Mach) (h Heap) (head Int) (done (List NVal)) (k NKont) (fuel Int)) Stop
+  (match (im_find (mach_holes m) head)
+    ((some _) (nv_ret m (heap_push h (CSusp head done)) (NRef (heap_next h)) k fuel))
+    (none
+      (match (im_find (lk_fns (mach_lk m)) head)
+        ((some (LBody _ _ body)) (if (< fuel 1) SOut (nv_term m h done body k (- fuel 1))))
+        ((some (LUnlinked _)) (SStuck (sym "unlinked") fuel))
+        (_ (SStuck (sym "unknown_head") fuel))))))
+;; an extern: a hole function's call is suspended as a call's is; any other is where `ev` stops
+(fn nv_ext ((m Mach) (h Heap) (head Int) (done (List NVal)) (k NKont) (fuel Int)) Stop
+  (match (im_find (mach_holes m) head)
+    ((some _) (nv_ret m (heap_push h (CSusp head done)) (NRef (heap_next h)) k fuel))
+    (none (SStuck (sym "extern") fuel))))
+;; a primitive over its arguments' values (last first): two integers, as ev's — an unsettled
+;; cell among them is needed first
+(fn nv_prim ((m Mach) (h Heap) (op Int) (done (List NVal)) (k NKont) (fuel Int)) Stop
+  (match done
+    ((cons b0 (cons a0 nil))
+     (match (nv_deref h a0)
+       ((NRef r) (nv_force m h r (NPrim op done k) fuel))
+       ((NInt x)
+        (match (nv_deref h b0)
+          ((NRef r) (nv_force m h r (NPrim op done k) fuel))
+          ((NInt y)
+           (match (prim_ii (mach_lk m) op x y)
+             ((PrimVal iv) (nv_ret m h (nv_of_ival iv) k fuel))
+             (PrimGuard (SStuck (sym "guard") fuel))
+             ((PrimOut why) (SExh why fuel))))
+          (_ (SStuck (sym "guard") fuel))))
+       (_ (SStuck (sym "guard") fuel))))
+    (_ (SStuck (sym "guard") fuel))))
+
+;; ---- the rows of a match ---------------------------------------------------------------------
+;; the first row whose pattern takes the value, as ev's `pick_arm` — or the cell a row needs
+;; settled before it can be told to take the value or not
+(type NArm (NArmNone) (NArmAt (List NVal) LTerm) (NArmNeed Int))
+(type NTook (TYes (List NVal)) (TNo) (TNeed Int))
+(fn nv_pick ((h Heap) (v NVal) (arms (List LArm)) (env (List NVal))) NArm
+  (measure (struct arms))
+  (match arms
+    (nil NArmNone)
+    ((cons (LArm.LArm p body) rest)
+     (match (nv_match_pat h p v env)
+       ((TYes env1) (NArmAt env1 body))
+       (TNo (nv_pick h v rest env))
+       ((TNeed r) (NArmNeed r))))))
+(fn nv_match_pat ((h Heap) (p LPat) (v NVal) (env (List NVal))) NTook
+  (measure (LPat.size p))
+  (match p
+    (LPVar (TYes (cons v env)))
+    ((LPInt n)
+     (match (nv_deref h v)
+       ((NInt k) (if (= n k) (TYes env) TNo))
+       ((NRef r) (TNeed r))
+       (_ TNo)))
+    ((LPCtor tag subs)
+     (match (nv_deref h v)
+       ((NCtor t2 fields) (if (= tag t2) (nv_match_fields h subs fields env) TNo))
+       ((NRef r) (TNeed r))
+       (_ TNo)))))
+(fn nv_match_fields ((h Heap) (ps (List LPat)) (vs (List NVal)) (env (List NVal))) NTook
+  (measure (List_LPat.size ps))
+  (match ps
+    (nil
+      (match vs
+        (nil (TYes env))
+        (_ TNo)))
+    ((cons p pr)
+     (match vs
+       (nil TNo)
+       ((cons v vr)
+        (match (nv_match_pat h p v env)
+          ((TYes env1) (nv_match_fields h pr vr env1))
+          (TNo TNo)
+          ((TNeed r) (TNeed r))))))))
+
+;; ---- the doors ---------------------------------------------------------------------------------
+;; the function `entry` on arguments in order, to its answer or the first stop
+(fn nv_start ((m Mach) (h Heap) (entry Int) (args (List NVal)) (fuel Int)) Stop
+  (nv_call m h entry (rev args) NHalt fuel))
+;; a stopped run, after the cell it needs was settled or its hole function given a body
+(fn nv_resume ((m Mach) (h Heap) (r Int) (k NKont) (fuel Int)) Stop (nv_force m h r k fuel))

@@ -625,6 +625,7 @@ TERM ::= NAME | NAME.{LEVEL…} | @NAME            a variable, else a constant; 
        | (if TERM TERM TERM) | (dif h TERM TERM TERM)
        | (OP TERM TERM) | (not TERM)
        | (list TERM…) | NUMERAL | "…" | (proj STRUCT i TERM)
+       | (hole) | (hole NAME)                    in a fn's body: a value still to be found
        | Prop | Type | (Type LEVEL) | (Sort LEVEL)
 PAT   ::= _ | NAME | (CTOR PAT…) | NUMERAL       a NUMERAL only as a whole row
 LEVEL ::= NUMERAL | NAME | (succ LEVEL) | (max LEVEL LEVEL) | (imax LEVEL LEVEL)
@@ -763,6 +764,48 @@ constructor — …`, though a `def` accepts it; a program takes a `Nat` apart b
 `if`. When the scrutinee is a variable
 that the expected type or other variables' types mention, each row is read with its pattern in
 the variable's place, so a row can be typed or refuted by its constructor (pin `dependent_match`).
+
+**`hole`.** `(hole)` or `(hole NAME)`, in the body of a `fn`, stands where a value is still to be
+found. Nothing is declared for it: the elaborator knows the type the position wants and the names
+in scope there, and makes of them a constant under the function's name — `F.NAME`, or `F.hole_K`
+for the K-th unnamed hole of `F` — whose parameters are those names in the order they were bound.
+The hole reads as that constant applied to the names. The record is `HOLE F.NAME [(x : T)… ⊢
+TYPE]`, the names the hole is handed with their types and then its own, as a goal is shown:
+
+```
+(fn rev_onto ((xs (List Nat)) (acc (List Nat))) (List Nat)
+  (match xs
+    (nil (hole at_nil))
+    ((cons x r) (hole at_cons))))
+;; HOLE main.rev_onto.at_nil [(xs : (List Nat)) (acc : (List Nat)) ⊢ (List Nat)]
+;; HOLE main.rev_onto.at_cons [(xs : (List Nat)) (acc : (List Nat)) (x : Nat) (r : (List Nat)) ⊢ (List Nat)]
+;; DEFINE main.rev_onto equations=…                          v3/pins/loader/hole/main.shard
+```
+
+The constant is what an `extern` is — opaque in the logic, an extern call in the program (see
+"`extern` and `opaque`") — so the function loads as it would with the hole filled: it is defined
+with its equations, which name the constant, a theorem may speak of `F.NAME`, and nothing can be
+proven of the constant's value. A run that reaches a hole stops there. `find` (see "`find`")
+searches for the holes a goal reaches and prints each filling as the expression to write in the
+hole's place, over the same names. A hole counts as pending on the `LOAD:` line; a load that reads
+programs alone (`--unchecked`: a build) refuses the function, so nothing with a hole in it is
+built.
+
+What a hole is handed: every name visible where it stands — parameters, a row's pattern
+variables, `let`-bound names (the value is what is handed), hypotheses. Not handed: a name that a
+later binding of the same name hides; the function's own name and the functions it calls; a
+function-typed parameter; a name whose type mentions one of these (pin `hole_names`).
+
+| refusal | cause | what to do |
+|---|---|---|
+| `hole_type` | the position gives the hole no type: a `match`'s scrutinee, an operator's first operand, an argument that decides an implicit one | bind it with its type: `(let ((x TYPE (hole))) …)` |
+| `hole_outside` | a hole in a `def`, a statement, a proof, a signature or a measure | a hole stands in a `fn`'s body; a proof still to be written is `sorry` |
+| `hole_proposition` | the hole's type is a proposition | `sorry` is the proof-side form |
+| `hole_name` | the name is taken under the function — a second hole of that name, a declared constant — or is one the toolchain makes (`eq_N`, `dec_N`, `match_N`, `lam_N`, `hole_N`) | another name |
+| `hole_uninhabited` | no value of the hole's type can be built to stand for it: a type parameter with no name of that type in scope, a type with no closing constructor | hand it a value of the type, or state the function at a plain type |
+| `hole_scope` | the hole's type mentions a name the hole is not handed | — |
+| `hole_signature` | a name the hole is handed has a type no program holds (see "Erasure, and what has no program") | — |
+| `hole_untyped` | the function is read as a program alone (`route=e_first`, `--unchecked`): that reading has no types to give a hole | give the function a signature and body the logic reads |
 
 ## From a function to a definition
 
@@ -1726,19 +1769,45 @@ total `ENGINE: solved S of N`.
 The default producer is the *engine* (`v3/kernel/engine.shard`). It tries the following, cheapest
 first, and confirms every step by running it:
 
-1. `intro` over every leading binder (named after the binder, else `h1`, `h2`, …), then the rest;
+1. `intro` over every leading binder (named after the binder, else `h1`, `h2`, …; a name an
+   earlier binder of the same statement took gets its binder's number, `h_7`), then the rest;
 2. `rfl`; then `(reduce)` and `rfl`; then `decide`;
 3. `(arith only FACT… (farkas K…))` over the context's comparisons and the hinted lemmas, the
-   certificate written out;
-4. `(simp_only RULE…)` over the equations of the functions in the target, the context's equations
-   (an induction hypothesis among them) and the hinted lemmas, then `rfl` or step 3;
-5. `(induction X (…))` on the hinted local, then on each local of an inductive type that the
-   target mentions, every arm by this same list; inductions nest two deep.
+   certificate written out — a denied equation (`x ≠ k`) is no fact;
+4. `(simp_only RULE…)` over the equations of the functions in the target, Init's equations of
+   `List.length` where the target has it, the context's equations (an induction hypothesis
+   among them) and the hinted lemmas, then `rfl` or step 3; where neither closes what is left,
+   once more with the rules read from what is left;
+5. the steps of a *descent*, each premise by this same list — where the target is a `Prod.Lex`
+   (a measure in several parts) `(apply Prod.Lex.right …)`, `.left`, `.right'` in turn; where
+   it compares two `Int.natAbs`, `(apply Int.natAbs_lt_natAbs_of_nonneg_of_lt …)`; where it has
+   a `Nat.sub`, `(apply Nat.sub_lt …)`; where it weighs or adds `Int.natAbs` terms, a `(have
+   abs_K …)` for each fact that holds between two of them, or of one over a numeral, and then
+   steps 2 to 4 with the facts in the context;
+6. `(induction X (…))` on the hinted local, then on each local of an inductive type that the
+   target mentions, every arm by this same list; inductions nest two deep, and a descent's
+   steps take two levels more.
 
-It emits no `cases`, `have`, `rw`, `unfold`, `apply`, `exact` or `wf`. The hints are `(induct X)`,
-`(lemmas NAME…)` and `(budget N)`, the number of steps it may try, 400 by default; any other hint
-is `auto_unsolved`. Over the 100 theorems of v3/examples/calc the engine closes 54 unaided
-(v3/kernel/test/engine_calc.txt).
+It emits no `cases`, `rw`, `unfold`, `exact` or `wf`. The lemmas of Init that steps 4 and 5 name
+are asked of Init for every file under `prove`, whether or not its source names them; a block
+cites one only where it is used, and a build fetches it then as it fetches whatever a sidecar's
+block cites. The hints are `(induct X)`, `(lemmas NAME…)` and `(budget N)`, the number of steps
+it may try, 400 by default; any other hint is `auto_unsolved`.
+
+What it reaches, measured by `prove --measure` (every hand-written proof's statement given to
+the engine unaided): 54 of the 100 theorems of v3/examples/calc (v3/kernel/test/engine_calc.txt);
+and of the descent obligations (`F.dec_N`) in the closures of three of the toolchain's files —
+
+| closure of | obligations | engine version 1 | version 2 |
+|---|---|---|---|
+| `v3/kernel/ev.shard` | 147 | 68 | 140 |
+| `v3/kernel/expr.shard` | 43 | 14 | 35 |
+| `v3/kernel/json.shard` | 20 | 3 | 18 |
+
+So an obligation of a measure is as a rule left to it: `(fulfills F.dec_N auto)`, then `prove`
+(v3/examples/auto/descent.shard: twelve obligations of the usual measures, every one delegated).
+Those it misses need a fact of the program's own (a lemma about a helper's result), a case
+split, or a `reduce` before the step.
 
 ### A tactic library
 
@@ -1752,6 +1821,20 @@ evaluator, under `--fuel` (10^12 by default); a load replays the sidecar and nev
 library. A failure is `PENDING NAME auto_unsolved fp=S tactic=M.FN: REASON`: an unknown name, a
 wrong signature, no answer, an answer that is not one block, a refused step, an evaluator stuck or
 out of fuel. One delegation names one tactic.
+
+### `find`: a search for values and bodies
+
+`prove` looks for proofs. `find` (`v3/search/`, built as `v3/bin/find`) looks for programs and
+data: given a goal — a function that answers a `Bool` or a decision — it searches for what makes
+the goal answer yes: the values of the goal's parameters, the fillings of the holes the goal
+reaches (`(hole NAME)` in a function's body, see "Terms"), and the bodies of the functions the
+program names and does not define (an `extern`, a view's `sig fn` with no implementation among
+the roots) that the command line names. It is a tool beside the build, as `prove` is: a load never
+searches. What it finds it prints as source text after replaying it under the evaluator — a
+value; for a hole `HOLE F.NAME = EXPRESSION`, the expression to write in the hole's place, over
+the names in scope there, with `MEASURE F (struct x)` where the fillings make `F` call itself; a
+`(fn …)` for a function named on the command line. It writes no file. The command line, the
+records and what each verdict claims are in `v3/search/README.md`.
 
 ## Fingerprints and versions
 
@@ -1921,6 +2004,7 @@ trusted because two fingerprints agree.
 | `INSTANCE` | `N of=T shapes=S,… equations=E,…` | the template T built at particular function arguments | defined |
 | `DERIVE` | `N type=T cap=C policy=P fields=F,…` | the derived procedure N registered for type T and capability C | — |
 | `PENDING` | `N REASON …` | read, nothing admitted: `sorry` (with its open goals), `measure` (descent obligations open), `auto_missing`, `auto_stale`, `auto_unsolved` | pending |
+| `HOLE` | `N [(x : T)… ⊢ TYPE]` | a hole of a function's body: its constant N, the names it is handed with their types, its own type — a value still to be found (see "Terms") | pending |
 | `REFUSE` | `N REASON[: MESSAGE]` | the checker refused N (a bare reason), or the program reader or the definer did (with a message) | refused |
 | `POLICY` | `N outside the policy: A,…` | N rests on axioms its file does not trust; N is dropped | refused |
 | `DISCHARGE` | `N KIND` | a view parameter met by the implementation (`type`, `fn`, `defined`, `proved`, `pending`), or an obligation proved by a `fulfills` (`proved`) | — |

@@ -25,8 +25,8 @@
 #                        command line over the binaries — `direct FILE` runs v3/bin/STEM when its
 #                        stamp is current and fails loudly otherwise; `dump` the bootstrap's
 #
-# THE INVENTORY: the four drivers, calc_harness, every *_test.shard of kernel/test/ and of
-# k/test/ — parity's list (kernel/test/parity_test.sh).
+# THE INVENTORY: the four drivers, the search's driver (v3/search/find.shard), calc_harness,
+# every *_test.shard of kernel/test/ and of k/test/ — parity's list (kernel/test/parity_test.sh).
 # A root outside K's directory whose closure consumes K's view is loaded with v3/kernel/k as a
 # second root, so the directory's own check links the implementation into the program (as
 # parity and k_clients_test do; the bootstrap's dump shows env_empty when K is in the closure).
@@ -94,6 +94,7 @@ CFLAGS="-O2"
 
 inventory() {   # NAME SRC per root, parity's list
   for f in v3/kernel/load.shard v3/kernel/prove.shard v3/kernel/t0.shard v3/kernel/initindex.shard \
+           v3/search/find.shard \
            v3/kernel/test/calc_harness.shard v3/kernel/test/*_test.shard v3/kernel/k/test/*_test.shard; do
     echo "$(basename "$f" .shard) $f"
   done

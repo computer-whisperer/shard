@@ -41,30 +41,53 @@
   (EISigType Int)  ; a view's sig type: arity
   (EITemplate Int (List EBind) EType Int))  ; a template: its static parameters' count, its written binders' E signatures, its result, its type parameters' count — an E-first body takes an instance by them; no program of its own — its instances have them
 (type EEnt (EEnt Name Name Name EInfo))  ; suffix, identity, module, info
-;; declarations (reversed), the suffix table, the declarations by identity.
+;; declarations (reversed), the suffix table, the declarations by identity, the holes.
 ;; An identity registered again overrides (newest first): the implementation
 ;; check's fork substitutes the implementation's fn and type under the view's
 ;; sig fn and sig type, and its merge into the main line does the
 ;; same — that substitution is the link `run` needs.
-(type ESt (ESt (List EDecl) (IntMap (List EEnt)) (IntMap (List (Prod Name EDecl)))))
-(fn es0 () ESt (ESt nil IMEmpty IMEmpty))
+;; A hole (elab.shard elab_hole) is an extern among the declarations and an entry here: its
+;; identity with the names it is handed, its extern's parameters in order
+(type ESt
+  (ESt (List EDecl) (IntMap (List EEnt)) (IntMap (List (Prod Name EDecl)))
+    (List (Prod Name (List Name)))))
+(fn es0 () ESt (ESt nil IMEmpty IMEmpty nil))
 (fn es_decls ((e ESt)) (List EDecl)
   (match e
-    ((ESt ds _ _) (rev ds))))
+    ((ESt ds _ _ _) (rev ds))))
+;; the holes, oldest first
+(fn es_holes ((e ESt)) (List (Prod Name (List Name)))
+  (match e
+    ((ESt _ _ _ hs) (rev hs))))
+(fn es_hole ((e ESt) (n Name)) (Option (List Name))
+  (match e
+    ((ESt _ _ _ hs) (hole_named hs n))))
+(fn hole_named ((hs (List (Prod Name (List Name)))) (n Name)) (Option (List Name))
+  (measure (struct hs))
+  (match hs
+    (nil none)
+    ((cons (Prod.mk m ps) r) (if (name_eq m n) (some ps) (hole_named r n)))))
+(fn es_is_hole ((e ESt) (n Name)) Bool
+  (match (es_hole e n)
+    ((some _) true)
+    (none false)))
+(fn es_add_hole ((e ESt) (n Name) (ps (List Name))) ESt
+  (match e
+    ((ESt ds t x hs) (ESt ds t x (if (es_is_hole e n) hs (cons (Prod.mk n ps) hs))))))
 ;; how many declarations the table holds, and the k newest, newest first — a file's own, from
 ;; the count at its start (for the threading verdicts at the file's end)
 (fn es_count ((e ESt)) Int
   (match e
-    ((ESt ds _ _) (len ds))))
+    ((ESt ds _ _ _) (len ds))))
 (fn es_newest ((e ESt) (k Int)) (List EDecl)
   (match e
-    ((ESt ds _ _) (take k ds))))
+    ((ESt ds _ _ _) (take k ds))))
 (fn es_tbl ((e ESt)) (IntMap (List EEnt))
   (match e
-    ((ESt _ t _) t)))
+    ((ESt _ t _ _) t)))
 (fn es_idx ((e ESt)) (IntMap (List (Prod Name EDecl)))
   (match e
-    ((ESt _ _ x) x)))
+    ((ESt _ _ x _) x)))
 ;; the program: the declarations in order, a sig fn or sig type dropped where
 ;; the implementation was substituted under its identity
 (fn es_prog ((e ESt)) Prog (Prog (live_decls e (es_decls e))))
@@ -104,7 +127,7 @@
 ;; register an identity under every suffix
 (fn es_register ((e ESt) (id Name) (m Name) (info EInfo)) ESt
   (match e
-    ((ESt ds t x) (ESt ds (tbl_put_all t (name_suffixes id) id m info) x))))
+    ((ESt ds t x hs) (ESt ds (tbl_put_all t (name_suffixes id) id m info) x hs))))
 (fn tbl_put_all ((t (IntMap (List EEnt))) (sufs (List Name)) (id Name) (m Name) (info EInfo))
   (IntMap (List EEnt))
   (measure (struct sufs))
@@ -158,7 +181,7 @@
 ;; a declaration reached: recorded, findable by identity
 (fn es_add_decl ((e ESt) (d EDecl)) ESt
   (match e
-    ((ESt ds t x) (ESt (cons d ds) t (decl_index_add x d)))))
+    ((ESt ds t x hs) (ESt (cons d ds) t (decl_index_add x d) hs))))
 (fn es_find_decl ((e ESt) (n Name)) (Option EDecl) (decl_index_find (es_idx e) n))
 ;; the info a declaration registers (the fork's declarations merged into the main line)
 (fn decl_infos ((d EDecl)) (List (Prod Name EInfo))
@@ -185,7 +208,13 @@
     ((cons (Prod.mk n i) r) (es_register_all (es_register e n m i) m r))))
 ;; the fork's state merged into the main line: its declarations the main line
 ;; lacks, and its fn / type under a sig fn / sig type the main line holds (the substitution)
-(fn es_merge ((main ESt) (fork ESt)) ESt (es_merge_decls main (es_decls fork) (es_tbl fork)))
+(fn es_merge ((main ESt) (fork ESt)) ESt
+  (es_merge_holes (es_merge_decls main (es_decls fork) (es_tbl fork)) (es_holes fork)))
+(fn es_merge_holes ((main ESt) (hs (List (Prod Name (List Name))))) ESt
+  (measure (struct hs))
+  (match hs
+    (nil main)
+    ((cons (Prod.mk n ps) r) (es_merge_holes (es_add_hole main n ps) r))))
 (fn es_merge_decls ((main ESt) (ds (List EDecl)) (ftbl (IntMap (List EEnt)))) ESt
   (measure (struct ds))
   (match ds
