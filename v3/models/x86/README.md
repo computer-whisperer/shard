@@ -18,7 +18,7 @@ it.
 | `asm.shard` | the assembler: `encode`, an instruction's bytes; a listing with labels, `Asm`, and instructions as its lines (`lines`); `assemble`, a listing's bytes, checked by the model's decoder; the fact `assemble_decodes` |
 | `elf.shard` | an executable file written: `elf_exec code`, the smallest file Linux runs |
 | `write.shard` | writing bytes out: the rules of the system call `write` by the kernel's next answer (`write_took`, `write_err`, `write_kill`), and `write_all` — fourteen instructions by hand that offer a range's bytes to descriptor 1 until all are taken — with its contract for any address, any range and every list of answers (`write_all_ok`); where it returns, rax holds 1 |
-| `world.shard` | a program's World (`v3/std/world.shard`) against what is outside a process: the World of an `Os` (`os_world`) and of a process's start (`world_of`), with of each answer how the call went and nothing of the registers; that the model's loop is the platform's `write_all` (`send_put`); how a file ends by a program's value, a word and a World (`world_res`); and when the outcome of code is such a value, with the memory left (`tied`, `tied_exit`) |
+| `world.shard` | a program's World (`v3/std/world.shard`) against what is outside a process: the World of an `Os` (`os_world`) and of a process's start (`world_of`), with of each answer how the call went and nothing of the registers; that the model's loop is the platform's `write_all` (`send_put`); how a file ends by a program's value, a word and a World (`world_res`); and when the outcome of code is such a value, under a condition on the memory the code left (`tied`, `tied_weaken`, `tied_exit`) |
 | `bytes.shard` | the bytes of a word that stands in memory: the eight bytes from an address are the eight low bytes of the number read there (`le64_bytes`), which is below 2^64 (`le64_lt`); so where a number's word is read, its bytes are known (`held_bytes`) |
 | `hello.shard` | a file that writes: a listing by hand that writes two pieces of text with `write_all` and exits with 0; what its process ends as, on a list of answers (`hello_res`) |
 | `hello_run.shard` | that file from end to end: started with its stack anywhere and on any list of answers, it ends as `hello_res` says (`hello_ends`) |
@@ -132,7 +132,9 @@ its own conversation with the outside — of each answer how the call went, and 
 registers —, and the platform's `write_all` is a function on it. `world.shard` joins the two:
 `send` on the kernel's answers is `write_all`'s loop on the World's (`send_put`), and the
 outcome of code that was called — a return with what is outside as the code left it, or the
-process's end (`Outcome`) — is a program's value, a word and a World, when it is `tied` to it.
+process's end (`Outcome`) — is a program's value, a word and a World, when it is `tied` to it,
+under a condition on the memory the code left: code that stores cannot name that memory, it
+can say what is true of it.
 A file whose function's outcome is tied to its program's value ends as `world_res` says of
 that value. The compile system's files that write are stated so (`v3/compile/README.md`, "A
 program that writes").

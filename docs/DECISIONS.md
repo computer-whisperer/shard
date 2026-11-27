@@ -1043,11 +1043,11 @@ entries are explained under "Measured" at the end.
   One line is a function of its own, so that the tree has a call, not in tail position, of a
   function that writes. Not chosen: one write an argument from a buffer the program fills —
   no code here fills a buffer and writes it.
-  *A tie carries the memory left.* `tied out v m w` (`models/x86/world.shard`): the code
-  returned the word, left the memory m and left outside what the World is of. A caller reads
+  *A tie says what the code left in memory* (`models/x86/world.shard` `tied`). A caller reads
   memory after a call, so a callee's tie must say what it left; `greet`'s tie had no caller
-  and the relation had no memory. This changes what the entry above chose, and was not put to
-  the owner either.
+  and the relation said nothing of memory. This changes what the entry above chose, and was
+  not put to the owner either. (Built as the memory itself, `tied out v m w`; it is a
+  condition on that memory since a program stores — "A tie has a condition" below.)
   *One statement of a tie, and a rule a statement form* (`tie.shard`): `ties` of a
   statement's run and `fn_ties` of a function's. The rule for a call of what is itself tied
   (`tie_call`, `tie_ext`) asks, beside what follows where the process still runs, that where
@@ -1094,6 +1094,41 @@ entries are explained under "Measured" at the end.
   calls nothing outside could not be used by a program that writes without a second proof.
   The older ties (`argsum`, the six modules) stay in the rules of `iends` until a tool writes
   them; nothing forces them over.
+- A tie has a condition on the memory left, a representation a region (2026-11-27; the second
+  step of the same order — a storing program and a long function by hand, to settle what a
+  tool is to be given for a function. The owner ruled the form: of "One form. Every function
+  states a condition on the memory left; 'unchanged' is the simplest case. `greet` and `say`
+  get restated." against a second form kept beside the first, "1: a". The rest was chosen in
+  building.)
+  *A condition, not a memory.* `tied out v K w`: the code returned the word, left a memory K
+  holds of, and left outside what the World is of. Code that stores cannot name the memory it
+  leaves ahead of its run; it can say that it is the memory given but for a range, and that a
+  result stands in it. The rule for a call of what is tied (`tie_call`, `tie_ext`) gives what
+  follows the call ANY memory the callee's condition holds of. The two conditions the tree's
+  functions give have names (`tie.shard` `unchanged`, `changed_in`), so that a statement
+  writes out no function where it needs none. Rejected: the memory left as a term — a
+  function of the arguments written beside the code, which every caller would unfold —; and
+  an existential outside the tie — no rule could step under it before the memory was chosen.
+  *A loop owes a condition on the memory it was entered with.* After a store its tail call
+  gives one on the memory it was called with; the condition is weakened there (`tie_weaken`)
+  by the store's own frame.
+  *A representation says where its value stands* (`rep.shard`): a relation with a region
+  [lo, hi); the lemmas a match on the value gives, in the terms code computes — the word
+  loaded, the test's outcome, the rest at the next address —; and one `_keep` lemma: the value
+  stands in any memory that is the first outside a range apart from the region. What a run
+  may read or write is a fact of its range list (`readable`, `writable`), not a stack's range
+  by name. A tie's own text is then a rule a statement, a lemma cited for each load and test,
+  and one line for each value carried over a store. Rejected: those facts proven inside each
+  tie, as `say`'s and `argsum`'s ties have them — the same arithmetic a third time. `say`'s
+  ties are restated in the one form and are NOT moved onto these lemmas.
+  *The program.* `up` writes each argument with every character replaced by the next, ONE
+  WRITE A CHARACTER, from a scratch word of the file's data in which the code stores the
+  character's word. One write a character is the meaning's and not only the code's: a World
+  has how each write went, so a program that offered an argument's characters in one call
+  would be another function of its World. A buffer filled and written once is here a
+  different program, not another representation of this one.
+  *Not added*: a store of one byte, division. The program needed neither — the word is
+  stored and its first byte written.
 - Chosen in closing the first program (`v3/compile/ir_laws.shard`, `calls_lo.shard`,
   `calls_ir.shard`), not put to the owner one by one. The rule of a call that returns
   (`iends_call`) takes the callee's fact as `fn_ans` states it — what a tie proves and what the
@@ -2522,6 +2557,33 @@ measurements; measure again before building on one.
   the cube where each value is built on the one before (160 statements: 346 s, 34 GB). By
   call counts the work is building and interning terms: names hashed and compared as lists, a
   functional map for the table. `say`'s functions have at most six statements.
+- A condition on the memory left, and a program that stores (2026-11-27; natively, single
+  measurements, the suite's gate running on the same machine). `tie.shard` is 415 lines for
+  365, with a store's rule and the weakening; `rep.shard` is new, 638 lines. `greet`'s and
+  `say`'s ties changed where they state the memory (six statements), at each return (the
+  condition, by `rfl`) and after a call of a function (two lines: the memory the callee left
+  is the one given). The program: a meaning of 68 lines, code and four ties 525, the file's
+  facts 112, its theorem 316; the file is 856 bytes; its theorem with all it rests on loads
+  in 96 s. The rules, the representations, the four ties and the file's theorem each loaded
+  as first written, parentheses apart. Its test: 239 checks; the 21 x86 and compile
+  entrypoints together 1,806 checks, 0 failed. Refused when planted: the store aimed at
+  the string's address (at the store's address); a string's fact from before the store used
+  after it; the scratch word handed over being the line's end's word (at the file's theorem).
+  The processor: `up HAL` writes IBM; the character 255 gives 0; with the output closed, to a
+  full device and at a pipe nobody reads as `say`; a pipe that does not block takes 65,536
+  one-character writes of 100,000 and the file exits with a failed write's status. Outside
+  the tree, with nothing generated again: the 51 generated modules load and the nine
+  generated files' theorems link closed.
+  Measured for a tool's proofs, outside the tree: a proof cut into lemmas of eight statements
+  over the locals as variables, each unfolding the meaning's rest once by name, costs K
+  linear time — 640 statements, each value built on the one before, 3.7 s over a load of
+  5.6 s, where one nested proof took 341 s at 160 —, if the code keeps few locals (a local a
+  statement: 24 s at 160). Two costs of the toolchain met on the way, neither changed here:
+  the elaborator unifies two applications by their heads first, so where the heads are two
+  functions K is asked to refute that they are one and unfolds all that lies under both (a
+  proof step whose sides differ by one unfolding: 9 s, and nothing after an explicit
+  `unfold`); and K compares two equal terms as trees, so a function that is N nested lets,
+  each value used twice, costs about fib(N) to define — 36 lets 16 s, 40 lets 110 s.
 - A process's arguments (2026-11-25; natively, CPU seconds, single measurements). The stage
   without the trial and the demonstration: 38 files, 1,769 lines added and 314 removed. The
   link theorem's file is 1,898 lines for 1,756 — the theorem for a range that reaches above

@@ -307,14 +307,19 @@ Only the two ends are fixed. The chain between them is assembled from facts: def
 (the erasure, believed today) → passes → instructions → bytes.
 
 §5's chain for one function starts at its definition and passes through no program and no
-erasure. It reaches a function that returns, and two functions that write. `greet`
+erasure. It reaches a function that returns, and three functions that write. `greet`
 (`v3/compile/greet_src.shard`) is a function on a World whose file is proven to end as its value
 on the World a process starts with says, for every list of the kernel's answers — the text
 written and status 0, or a failed write's reserved status with the bytes taken before it, or
 the process ended by the kernel. `say` (`v3/compile/say_src.shard`) writes each of its
 arguments on a line of its own in a loop, and its file is proven so for every list of
 arguments and every list of answers: a write that stops the process ends the loop in the
-code, and in the function the arguments after it write nothing. The host call there is the
+code, and in the function the arguments after it write nothing. `up`
+(`v3/compile/up_src.shard`) writes each argument with every character replaced by the one
+after it: the character is computed, so its code stores — in a scratch word of the file's
+data — and its file is proven so too. What code says of the memory it leaves is a condition
+on it, and what it reads is stated by representations that say where a value stands
+(`v3/compile/README.md`, "A program whose code stores"). The host call there is the
 platform's `write_all`, an ordinary function on the World and no extern (`LAW.md` §3, 10).
 How this section's fact, which names `main`'s program and the evaluator's host calls, is
 assembled from §5's is open (§8).
@@ -380,8 +385,10 @@ Open in §5's form, each found by the trial or by the review before it:
   machine's run with what is outside a process, the pass's theorem and the link have a call's
   outcome — a return, or the process's end — and `write_all` is the one function with an
   answer on the outside (`v3/compile/README.md`, "A program that writes"). Not in the form: a
-  function that reads; a file other than the standard output; a program that writes bytes it
-  computed, from memory it filled; a World a program splits or
+  function that reads; a file other than the standard output; a program that fills a buffer
+  and writes it in one call (one that writes a computed character a call is in the tree, and
+  a World has how each write went: the two are different functions of it); a World a program
+  splits or
   hands to a second thread of control; an outcome at a seam of a function behind a view —
   the views state answers that name nothing outside; and how a definition's World parameter,
   which no code holds, is dropped by a tool: the tie is by hand and nothing in the language
